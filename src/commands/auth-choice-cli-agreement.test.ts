@@ -3,6 +3,7 @@ import { assert, expect, it, vi } from "vitest";
 import { applyNonInteractiveAuthChoice } from "./onboard-non-interactive/local/auth-choice.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
+// mock-isolation: A fixed provider catalog makes advertised and accepted CLI choices deterministic.
 vi.mock("../flows/provider-flow.js", () => ({
   resolveProviderSetupFlowContributions: () => [
     { option: { value: "demo-api-key" } },
@@ -13,6 +14,7 @@ vi.mock("../flows/provider-flow.js", () => ({
 // The legacy alias must normalize before either advertised/accepted list is consulted.
 const DEPRECATED_ALIAS = "claude-cli";
 
+// mock-isolation: Synthetic aliases and flags avoid consulting installed provider manifests.
 vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveProviderOnboardAuthFlags: () => [],
   resolveManifestDeprecatedProviderAuthChoice: (choiceId: string) =>
@@ -43,7 +45,10 @@ async function readHelpAuthChoices(): Promise<string[]> {
   const description = onboard?.options.find(
     (option) => option.long === "--auth-choice",
   )?.description;
-  assert(description?.startsWith("Auth: "), `unexpected --auth-choice help text: ${description}`);
+  assert(
+    description && description.startsWith("Auth: "),
+    `unexpected --auth-choice help text: ${description}`,
+  );
   return description.slice("Auth: ".length).split("|");
 }
 

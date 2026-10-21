@@ -9,7 +9,9 @@ const { loadMedia, guardedFetch } = vi.hoisted(() => ({
   guardedFetch: vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
 }));
 
+// mock-isolation: Synthetic media bytes avoid filesystem/network I/O during upload custody checks.
 vi.mock("openclaw/plugin-sdk/outbound-media", () => ({ loadOutboundMediaFromUrl: loadMedia }));
+// mock-isolation: Controlled HTTP settlement exercises upload authority without real requests.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard: guardedFetch }));
 
 const { uploadSlackFile } = await import("./client-delivery.js");

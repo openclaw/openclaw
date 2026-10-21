@@ -6,6 +6,7 @@ const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() => vi.fn());
 const resolveProviderPluginChoiceCore = vi.hoisted(() => vi.fn());
 const resolvePluginProvidersCore = vi.hoisted(() => vi.fn(() => []));
 
+// mock-isolation: Each case controls manifest choices independently of installed providers.
 vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
   resolveManifestDeprecatedProviderAuthChoice,

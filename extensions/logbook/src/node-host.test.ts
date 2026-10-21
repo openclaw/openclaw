@@ -33,14 +33,21 @@ function runExecSignal(callIndex: number): AbortSignal {
 
 function rejectWhenAborted(signal: AbortSignal): Promise<never> {
   return new Promise((_resolve, reject) => {
-    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    const rejectAbort = () =>
+      reject(signal.reason instanceof Error ? signal.reason : new Error("command aborted"));
+    if (signal.aborted) {
+      rejectAbort();
+      return;
+    }
+    signal.addEventListener("abort", rejectAbort, { once: true });
   });
 }
 
+let timeoutSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-  vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
+  timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
     const controller = new AbortController();
     setTimeout(() => {
       controller.abort(new DOMException("snapshot command timed out", "TimeoutError"));
@@ -73,7 +80,7 @@ it.each([0, 20_000])(
     await vi.advanceTimersByTimeAsync(0);
     const captureSignal = runExecSignal(0);
     expect(runExecMock).toHaveBeenCalledTimes(1);
-    expect(AbortSignal.timeout).toHaveBeenCalledWith(25_000);
+    expect(timeoutSpy).toHaveBeenCalledWith(25_000);
     expect(captureSignal.aborted).toBe(false);
     if (captureMs) {
       await vi.advanceTimersByTimeAsync(captureMs - 1);

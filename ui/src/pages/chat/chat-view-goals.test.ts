@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
+import type { ChatGoalAction, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatInto as renderNativeChatInto } from "./chat-view.test-helpers.ts";
@@ -12,11 +12,11 @@ import {
 } from "./components/chat-transcript.test-support.ts";
 
 let container: HTMLElement;
-let onGoalAction: ReturnType<typeof vi.fn>;
+let onGoalAction = vi.fn<(goalId: string, action: ChatGoalAction) => void>();
 beforeEach(() => {
   installTranscriptDomMocks();
   container = createComposerContainer();
-  onGoalAction = vi.fn();
+  onGoalAction = vi.fn<(goalId: string, action: ChatGoalAction) => void>();
 });
 
 afterEach(() => {

@@ -21,13 +21,16 @@ vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
       vi.spyOn(database, "prepare").mockImplementation((sql) => {
         const statement = prepare(sql);
         if (/^select\b.*\bfrom "frames"/i.test(sql)) {
-          for (const method of ["all", "get"] as const) {
-            const read = statement[method].bind(statement);
-            vi.spyOn(statement, method).mockImplementation((...bindings) => {
-              reads.queries += 1;
-              return read(...bindings);
-            });
-          }
+          const all = statement.all.bind(statement);
+          vi.spyOn(statement, "all").mockImplementation((...bindings) => {
+            reads.queries += 1;
+            return all(...bindings);
+          });
+          const get = statement.get.bind(statement);
+          vi.spyOn(statement, "get").mockImplementation((...bindings) => {
+            reads.queries += 1;
+            return get(...bindings);
+          });
           const iterate = statement.iterate.bind(statement);
           vi.spyOn(statement, "iterate").mockImplementation(function* (...bindings) {
             reads.queries += 1;

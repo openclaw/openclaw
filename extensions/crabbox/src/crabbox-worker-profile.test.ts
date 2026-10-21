@@ -55,7 +55,7 @@ it("keys snapshots by resolved disk inputs while ignoring allocation policy", ()
       },
     }),
   ).toBe(key);
-  for (const changed of [
+  const changedProfiles: Partial<typeof profile>[] = [
     { provider: "hetzner" },
     { class: "fast" },
     { setup: "install-other-tools" },
@@ -63,7 +63,8 @@ it("keys snapshots by resolved disk inputs while ignoring allocation policy", ()
     { setupSecrets: { FIRST: storeRef("FIRST", "other") } },
     { desktop: true },
     { target: "macos" as const },
-  ]) {
+  ];
+  for (const changed of changedProfiles) {
     expect(keyFor(changed)).not.toBe(key);
   }
   expect(resolveCrabboxWarmImageProfileKey(profile, "project-b")).not.toBe(key);
@@ -109,8 +110,11 @@ it.each([
   expect(() => parseCrabboxProfile({ ...PROFILE, setupSecrets })).toThrow(message);
 });
 
-it("refuses retired setupEnv before provisioning", () => {
-  expect(() =>
-    resolveCrabboxProvisionProfile({ ...PROFILE, setupEnv: ["TOKEN"] }, undefined),
-  ).toThrow("run openclaw doctor --fix");
-});
+it.each([{ setupEnv: [] }, { setupEnv: ["TOKEN"] }, { setupEnv: "TOKEN" }])(
+  "refuses retired setupEnv $setupEnv before provisioning",
+  ({ setupEnv }) => {
+    expect(() => resolveCrabboxProvisionProfile({ ...PROFILE, setupEnv }, undefined)).toThrow(
+      "run openclaw doctor --fix",
+    );
+  },
+);

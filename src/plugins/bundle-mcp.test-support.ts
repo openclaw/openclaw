@@ -4,8 +4,8 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 export function createBundleMcpTempHarness() {
-  const { make, cleanup } = createTrackedTempDirs();
-  return { createTempDir: make, cleanup };
+  const dirs = createTrackedTempDirs();
+  return { createTempDir: (prefix: string) => dirs.make(prefix), cleanup: () => dirs.cleanup() };
 }
 
 export function resolveBundlePluginRoot(homeDir: string, pluginId: string) {

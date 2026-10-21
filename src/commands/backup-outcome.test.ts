@@ -50,10 +50,11 @@ async function fixture(bootstrap = true) {
 
 async function receive(params: Record<string, unknown>, authority = true) {
   const respond = vi.fn<RespondFn>();
+  const config = {};
   await backupHandlers["backup.recordOutcome"]!({
     req: { type: "req", id: "outcome", method: "backup.recordOutcome" },
     params,
-    context: createDirectChatContext({ getRuntimeConfig: () => ({}) }),
+    context: createDirectChatContext({ getRuntimeConfig: () => config }),
     client: null,
     isWebchatConnect: () => false,
     hasCurrentClientAuthority: () => authority,

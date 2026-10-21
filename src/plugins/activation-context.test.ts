@@ -42,7 +42,7 @@ afterEach(() => {
   withBundledPluginEnablementCompatMock.mockClear();
 });
 
-it.each([
+it.each<{ name: string; pluginIds: string[]; plugins: NonNullable<OpenClawConfig["plugins"]> }>([
   {
     name: "global and explicit disablement",
     pluginIds: ["owner"],

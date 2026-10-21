@@ -56,10 +56,19 @@ describe.each([
     spawnSync.mockReset().mockReturnValue(successfulProbe);
   });
 
-  it("shares one deadline across sequential probes", async () => {
-    mockClock([0, 0, 6_000, 8_000]);
+  it.each([
+    [
+      [0, 0, 6_000, 8_000],
+      [10_000, 4_000, 2_000],
+    ],
+    [
+      [1_000, 1_000, 4_000, 8_000],
+      [10_000, 7_000, 3_000],
+    ],
+  ])("shares one deadline across sequential probes from %j", async (clock, timeouts) => {
+    mockClock(clock);
     await expect(plugin.nodeHandler(setupParams())).resolves.toBe(ready);
-    expect(spawnSync.mock.calls.map((call) => call[2].timeout)).toEqual([10_000, 4_000, 2_000]);
+    expect(spawnSync.mock.calls.map((call) => call[2].timeout)).toEqual(timeouts);
   });
 
   it("probes the default sox executable only once", async () => {

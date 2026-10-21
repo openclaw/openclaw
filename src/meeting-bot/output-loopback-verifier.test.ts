@@ -65,7 +65,7 @@ describe("meeting output loopback verifier", () => {
     );
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const verifier = createVerifier({ audioFormat: "g711-ulaw-8khz" }, output);
-    const health = verifier.getHealth;
+    const health = () => verifier.getHealth();
     verifier.recordInput(output);
     const verified = health();
     expect(verified.verifiedOutputGeneration).toBe(1);
