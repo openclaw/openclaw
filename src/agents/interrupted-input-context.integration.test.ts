@@ -45,7 +45,12 @@ it("shows interrupted accepted input to a continuation without replaying or cons
       isRawModelRun: false,
       messages: [],
       preparedUserTurnMessage: { role: "user", content: "cont", timestamp: 200 },
-      prompt: { effectivePrompt: "cont", effectiveTranscriptPrompt: "cont" },
+      prompt: {
+        // Legacy fold: this turn has no hook prompt-build context to carry.
+        routePromptBuildContextThroughRuntimeCarrier: false,
+        effectivePrompt: "cont",
+        effectiveTranscriptPrompt: "cont",
+      },
       replaceSessionMessages: () => {
         throw new Error("Must not rewrite history");
       },
