@@ -132,7 +132,6 @@ export function restoreRoleRefsForTarget(opts: {
   if (state.roleRefs) {
     return;
   }
-  state.roleRefsTargetKey = cacheKey;
   state.roleRefs = cached.refs;
   state.roleRefsMode = cached.mode;
 }
@@ -326,9 +325,7 @@ export function armObservedDialogResponseOnPage(opts: {
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
   };
   response.timer = setTimeout(() => {
-    if (state.armedDialogResponse === response) {
-      state.armedDialogResponse = undefined;
-    }
+    state.armedDialogResponse = undefined;
   }, timeoutMs);
   state.armedDialogResponse = response;
 }
