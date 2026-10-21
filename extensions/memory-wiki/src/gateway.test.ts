@@ -66,20 +66,6 @@ vi.mock("./vault.js", () => ({ initializeMemoryWikiVault: vi.fn() }));
 
 const { createPluginApi, createVault } = createMemoryWikiTestHarness();
 
-function requireGatewayHandler(
-  registerGatewayMethod: ReturnType<typeof vi.fn>,
-  method: string,
-): (ctx: {
-  params: Record<string, unknown>;
-  respond: (ok: boolean, payload?: unknown, error?: unknown) => void;
-}) => Promise<void> {
-  const handler = registerGatewayMethod.mock.calls.find((call) => call[0] === method)?.[1];
-  if (!handler) {
-    throw new Error(`${method} handler missing`);
-  }
-  return handler;
-}
-
 function readRespondPayload(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
   const call = respond.mock.calls[0];
   expect(call?.[0]).toBe(true);
@@ -135,7 +121,15 @@ async function createGateway(
       resolveMemoryWikiAgentConfig({ config, appConfig, agentId }),
     ...(typeof options === "function" ? options(vault) : options),
   });
-  const handler = requireGatewayHandler(registerGatewayMethod, method);
+  const handler:
+    | ((ctx: {
+        params: Record<string, unknown>;
+        respond: (ok: boolean, payload?: unknown, error?: unknown) => void;
+      }) => Promise<void>)
+    | undefined = registerGatewayMethod.mock.calls.find(([name]) => name === method)?.[1];
+  if (!handler) {
+    throw new Error(`${method} handler missing`);
+  }
   const respond = vi.fn();
   return {
     rootDir,

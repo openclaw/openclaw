@@ -13,36 +13,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-type PageSpec = {
-  path: string;
-  id?: string;
-  title: string;
-  pageType: string;
-  sourceIds?: string[];
-  links?: string[];
-};
-
-function pageSpec(
-  file: string,
-  id: string,
-  title: string,
-  sourceIds?: string[],
-  links: string[] = [],
-): PageSpec {
-  return { path: file, id, title, pageType: id.slice(0, id.indexOf(".")), sourceIds, links };
-}
+type PageSpec = [file: string, id: string, title: string, sourceIds?: string[], links?: string[]];
 
 async function writePages(vault: Awaited<ReturnType<typeof createVault>>, pages: PageSpec[]) {
-  for (const page of pages) {
+  for (const [file, id, title, sourceIds, links = []] of pages) {
     await vault.page(
-      page.path,
-      {
-        pageType: page.pageType,
-        ...(page.id ? { id: page.id } : {}),
-        title: page.title,
-        ...(page.sourceIds ? { sourceIds: page.sourceIds } : {}),
-      },
-      `# ${page.title}\n\n${(page.links ?? []).map((link) => `See [[${link}]].`).join("\n")}\n`,
+      file,
+      { pageType: id.slice(0, id.indexOf(".")), id, title, ...(sourceIds ? { sourceIds } : {}) },
+      `# ${title}\n\n${links.map((link) => `See [[${link}]].`).join("\n")}\n`,
     );
   }
 }
@@ -61,42 +39,35 @@ describe("compile related blocks", () => {
       config: { vault: { renderMode: "obsidian" } },
     });
     const { rootDir, config } = vault;
-    const hubPages: PageSpec[] = Array.from({ length: 26 }, (_, index) => ({
-      path: `concepts/hub-user-${String(index).padStart(2, "0")}.md`,
-      id: `concept.hub-user-${index}`,
-      title: `Hub User ${String(index).padStart(2, "0")}`,
-      pageType: "concept",
-      sourceIds: ["source.hub", ...(index === 0 ? ["source.beta"] : [])],
-    }));
+    const hubPages: PageSpec[] = Array.from({ length: 26 }, (_, index): PageSpec => [
+      `concepts/hub-user-${String(index).padStart(2, "0")}.md`,
+      `concept.hub-user-${index}`,
+      `Hub User ${String(index).padStart(2, "0")}`,
+      ["source.hub", ...(index === 0 ? ["source.beta"] : [])],
+    ]);
     // Exactly 24 other pages share this source: the last count that still relates them.
-    const edgePages: PageSpec[] = Array.from({ length: 25 }, (_, index) => ({
-      path: `concepts/edge-${String(index).padStart(2, "0")}.md`,
-      id: `concept.edge-${index}`,
-      title: `Edge ${String(index).padStart(2, "0")}`,
-      pageType: "concept",
-      sourceIds: ["source.edge"],
-    }));
+    const edgePages: PageSpec[] = Array.from({ length: 25 }, (_, index): PageSpec => [
+      `concepts/edge-${String(index).padStart(2, "0")}.md`,
+      `concept.edge-${index}`,
+      `Edge ${String(index).padStart(2, "0")}`,
+      ["source.edge"],
+    ]);
     await writePages(vault, [
-      pageSpec("sources/alpha.md", "source.alpha", "Alpha"),
-      pageSpec("sources/beta.md", "source.beta", "Beta"),
-      pageSpec("sources/hub.md", "source.hub", "Hub"),
-      pageSpec("concepts/one.md", "concept.one", "Concept One", ["source.alpha"], ["concepts/two"]),
-      pageSpec("concepts/two.md", "concept.two", "Concept Two", [
-        "source.alpha",
-        "source.alpha",
-        "source.beta",
-      ]),
-      pageSpec("entities/ent.md", "entity.ent", "Entity", ["source.beta"], ["Concept One"]),
-      pageSpec("syntheses/synth.md", "synthesis.synth", "Synth", ["source.alpha", "concept.one"]),
-      pageSpec("concepts/dup-a.md", "concept.dup", "Dup A", [], ["concepts/lonely"]),
-      pageSpec(
-        "concepts/dup-b.md",
-        "concept.dup",
-        "Dup B",
-        [],
-        ["concepts/dup-a", "concepts/lonely"],
-      ),
-      pageSpec("concepts/lonely.md", "concept.lonely", "Lonely"),
+      ["sources/alpha.md", "source.alpha", "Alpha"],
+      ["sources/beta.md", "source.beta", "Beta"],
+      ["sources/hub.md", "source.hub", "Hub"],
+      ["concepts/one.md", "concept.one", "Concept One", ["source.alpha"], ["concepts/two"]],
+      [
+        "concepts/two.md",
+        "concept.two",
+        "Concept Two",
+        ["source.alpha", "source.alpha", "source.beta"],
+      ],
+      ["entities/ent.md", "entity.ent", "Entity", ["source.beta"], ["Concept One"]],
+      ["syntheses/synth.md", "synthesis.synth", "Synth", ["source.alpha", "concept.one"]],
+      ["concepts/dup-a.md", "concept.dup", "Dup A", [], ["concepts/lonely"]],
+      ["concepts/dup-b.md", "concept.dup", "Dup B", [], ["concepts/dup-a", "concepts/lonely"]],
+      ["concepts/lonely.md", "concept.lonely", "Lonely"],
       ...hubPages,
       ...edgePages,
     ]);
@@ -105,19 +76,9 @@ describe("compile related blocks", () => {
 
     const blocks = Object.fromEntries(
       await Promise.all(
-        [
-          "sources/alpha.md",
-          "concepts/one.md",
-          "concepts/two.md",
-          "entities/ent.md",
-          "syntheses/synth.md",
-          "concepts/dup-a.md",
-          "concepts/lonely.md",
-          "sources/hub.md",
-          "concepts/hub-user-00.md",
-          "concepts/hub-user-01.md",
-          "concepts/edge-00.md",
-        ].map(async (page) => [page, await readRelatedBlock(rootDir, page)] as const),
+        Object.keys(EXPECTED_BLOCKS).map(
+          async (page) => [page, await readRelatedBlock(rootDir, page)] as const,
+        ),
       ),
     );
     expect(blocks).toEqual(EXPECTED_BLOCKS);
@@ -133,12 +94,7 @@ describe("compile related blocks", () => {
     const sourceCount = 36;
     const specs: PageSpec[] = [];
     for (let index = 0; index < sourceCount; index++) {
-      specs.push({
-        path: `sources/s${index}.md`,
-        id: `source.s${index}`,
-        title: `Source ${index}`,
-        pageType: "source",
-      });
+      specs.push([`sources/s${index}.md`, `source.s${index}`, `Source ${index}`]);
     }
     // Path, filename-only, aliased heading and block links resolve to the same backlink.
     const linkForms = [
@@ -152,14 +108,13 @@ describe("compile related blocks", () => {
       const [prefix, suffix] = linkForms[index % linkForms.length] ?? ["", ""];
       const pick = (salt: number) =>
         Math.floor(((index * 31 + salt * 17) % 97) ** 2 / 97) % sourceCount;
-      specs.push({
-        path: `concepts/p${index}.md`,
-        id: `concept.p${index}`,
-        title: `Page ${index}`,
-        pageType: "concept",
-        sourceIds: [...new Set([`source.s${pick(1)}`, `source.s${pick(2)}`])],
-        links: [`${prefix}p${(index * 7 + 3) % (pageCount - sourceCount)}${suffix}`],
-      });
+      specs.push([
+        `concepts/p${index}.md`,
+        `concept.p${index}`,
+        `Page ${index}`,
+        [...new Set([`source.s${pick(1)}`, `source.s${pick(2)}`])],
+        [`${prefix}p${(index * 7 + 3) % (pageCount - sourceCount)}${suffix}`],
+      ]);
     }
     await writePages(vault, specs);
 
@@ -190,11 +145,11 @@ describe("compile related blocks", () => {
     expect(relationReads).toBeLessThan(pageCount * 20);
 
     const digest = createHash("sha256");
-    for (const spec of specs) {
+    for (const [file] of specs) {
       digest
-        .update(spec.path)
+        .update(file)
         .update("\0")
-        .update(await readRelatedBlock(rootDir, spec.path));
+        .update(await readRelatedBlock(rootDir, file));
     }
     expect(digest.digest("hex")).toBe(EXPECTED_RELATED_DIGEST);
   });

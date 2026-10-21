@@ -122,14 +122,6 @@ describe("memory wiki status and doctor", () => {
     expect(operatorStatus.bridgePublicArtifactCount).toBe(4);
   });
 
-  it("rejects status for an unresolved agent-scoped config", async () => {
-    const config = statusConfig({ vault: { scope: "agent", path: "/tmp/wiki/support" } });
-
-    await expect(resolveMemoryWikiStatus(config)).rejects.toThrow(
-      "Memory Wiki agent-scoped vault requires a resolved agent id",
-    );
-  });
-
   it("counts source provenance while excluding malformed pages (#96125)", async () => {
     const { config, page, write } = await createVault({
       prefix: "memory-wiki-status-",

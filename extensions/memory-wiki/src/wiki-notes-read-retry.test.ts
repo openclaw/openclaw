@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,46 +12,21 @@ import { buildSourcePage } from "./source-page.test-helpers.js";
 import { createChatGptConversation, createMemoryWikiTestHarness } from "./test-helpers.js";
 import { isMissingWikiPageError, readExistingWikiPage } from "./vault-page-write.js";
 
-const securityRuntimeMock = vi.hoisted(() => ({
-  failReadTextOnceFor: undefined as string | undefined,
-  failReadTextAlwaysFor: undefined as string | undefined,
-  readTextOnceError: new Error("transient existing-page read failure"),
-  readTextError: new Error("persistent existing-page read failure"),
-  readTextFailureInjected: false,
-}));
-
-vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
-  return {
-    ...actual,
-    root: async (...args: Parameters<typeof actual.root>) => {
-      const vault = await actual.root(...args);
-      return new Proxy(vault, {
-        get(target, prop, receiver) {
-          if (prop !== "readText" && prop !== "readBytes") {
-            return Reflect.get(target, prop, receiver);
-          }
-          return async (relativePath: string) => {
-            if (securityRuntimeMock.failReadTextAlwaysFor === relativePath) {
-              securityRuntimeMock.readTextFailureInjected = true;
-              throw securityRuntimeMock.readTextError;
-            }
-            if (
-              securityRuntimeMock.failReadTextOnceFor === relativePath &&
-              !securityRuntimeMock.readTextFailureInjected
-            ) {
-              securityRuntimeMock.readTextFailureInjected = true;
-              throw securityRuntimeMock.readTextOnceError;
-            }
-            return target[prop](relativePath);
-          };
-        },
-      });
-    },
-  };
-});
-
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
+
+async function failPageReads(pagePath: string, error: Error, once = false) {
+  const target = await fs.realpath(pagePath);
+  let failures = 0;
+  __setFsSafeTestHooksForTest({
+    afterRootReadPathResolution(filePath) {
+      if (filePath === target && (!once || failures === 0)) {
+        failures++;
+        throw error;
+      }
+    },
+  });
+  return () => failures;
+}
 
 async function addNotes(pagePath: string, note: string) {
   const page = (await fs.readFile(pagePath, "utf8")).replace(
@@ -225,11 +201,7 @@ describe("memory-wiki existing-page read retry", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    securityRuntimeMock.failReadTextOnceFor = undefined;
-    securityRuntimeMock.failReadTextAlwaysFor = undefined;
-    securityRuntimeMock.readTextOnceError = new Error("transient existing-page read failure");
-    securityRuntimeMock.readTextError = new Error("persistent existing-page read failure");
-    securityRuntimeMock.readTextFailureInjected = false;
+    __setFsSafeTestHooksForTest();
   });
 
   it("retries a transient I/O failure before classifying an existing page as missing", async () => {
@@ -278,16 +250,16 @@ describe("memory-wiki existing-page read retry", () => {
     );
     await fs.writeFile(pagePath, edited, "utf8");
 
-    securityRuntimeMock.failReadTextOnceFor = "syntheses/release-plan.md";
-    securityRuntimeMock.readTextOnceError = new FsSafeError(
-      "not-found",
-      "page temporarily missing",
+    const failures = await failPageReads(
+      pagePath,
+      new FsSafeError("not-found", "page temporarily missing"),
+      true,
     );
 
     await update("Updated summary v2.");
 
     const after = await fs.readFile(pagePath, "utf8");
-    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
+    expect(failures()).toBe(1);
     expect(after).toContain("Updated summary v2.");
     expect(after).toContain(userNote);
     expect(after).toContain("privacyTier: sensitive");
@@ -296,15 +268,14 @@ describe("memory-wiki existing-page read retry", () => {
   it("does not treat a path-alias policy failure as a missing synthesis page", async () => {
     const { pagePath, update } = await createSynthesisFixture("Initial summary.");
     const before = await fs.readFile(pagePath, "utf8");
-    securityRuntimeMock.failReadTextAlwaysFor = "syntheses/release-plan.md";
-    securityRuntimeMock.readTextError = new FsSafeError(
-      "path-alias",
-      "page resolved outside the vault root",
+    const failures = await failPageReads(
+      pagePath,
+      new FsSafeError("path-alias", "page resolved outside the vault root"),
     );
 
     await expect(update("Replacement summary.")).rejects.toMatchObject({ code: "path-alias" });
 
-    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
+    expect(failures()).toBeGreaterThan(0);
     await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(before);
   });
 

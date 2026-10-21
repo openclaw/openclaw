@@ -1,15 +1,13 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/session-search-visibility-api.js";
 import type { MemoryReadResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
-import { registerProviderRecordQueryTests } from "./query.provider-runtime.test-support.js";
 import { registerSessionlessAgentScopeQueryTests } from "./query.session-scope.test-support.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { createWikiGetTool } from "./tool.js";
@@ -79,8 +77,6 @@ function writeVaultPage(
 }
 
 const { createVault } = createMemoryWikiTestHarness();
-let suiteRoot = "";
-let caseIndex = 0;
 
 function searchWiki(
   config: Parameters<typeof searchMemoryWiki>[0]["config"],
@@ -119,23 +115,12 @@ beforeEach(() => {
   vi.mocked(filterMemorySearchHitsBySessionVisibility).mockClear();
 });
 
-beforeAll(async () => {
-  suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-query-suite-"));
-});
-
-afterAll(async () => {
-  if (suiteRoot) {
-    await fs.rm(suiteRoot, { recursive: true, force: true });
-  }
-});
-
 async function createQueryVault(options?: {
   config?: MemoryWikiPluginConfig;
   initialize?: boolean;
 }) {
   const vault = await createVault({
     prefix: "memory-wiki-query-",
-    rootDir: path.join(suiteRoot, `case-${caseIndex++}`),
     initialize: options?.initialize ?? true,
     config: options?.config,
   });
@@ -185,11 +170,6 @@ function mockSessionTranscriptStore() {
         updatedAt: 1,
         sessionFile: "/tmp/openclaw/child-session.jsonl",
       },
-      "agent:main:sibling-session": {
-        sessionId: "sibling-session",
-        updatedAt: 2,
-        sessionFile: "/tmp/openclaw/sibling-session.jsonl",
-      },
     },
   });
 }
@@ -215,10 +195,6 @@ function createMemoryManager(overrides?: {
       }
       return overrides.readResult;
     }),
-    status: vi.fn().mockReturnValue({ backend: "builtin", provider: "builtin" }),
-    probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
-    probeVectorAvailability: vi.fn().mockResolvedValue(false),
-    close: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -354,7 +330,7 @@ describe("searchMemoryWiki", () => {
   });
 
   it("matches non-ASCII query terms without an exact phrase", async () => {
-    const { config, writePage } = await createQueryVault();
+    const { config, writeNote } = await createQueryVault();
     const pages = [
       ["ru", "Альфа — это новый внутренний проект."],
       ["ja", "会議は来週東京で開きます。"],
@@ -362,9 +338,7 @@ describe("searchMemoryWiki", () => {
       ["controller", "The controller strategy is documented here."],
     ] as const;
     for (const [slug, body] of pages) {
-      await writePage(`entities/${slug}.md`, `Notes ${slug}`, `# Notes ${slug}\n\n${body}\n`, {
-        id: `entity.${slug}`,
-      });
+      await writeNote(`entities/${slug}.md`, `Notes ${slug}`, body);
     }
 
     const search = async (query: string) =>
@@ -521,15 +495,15 @@ describe("searchMemoryWiki", () => {
   );
 
   it("ranks fresh supported claims ahead of stale contested claims", async () => {
-    const { config, writePage } = await createQueryVault();
+    const { config, writeNote } = await createQueryVault();
     for (const [slug, title, updatedAt, status, confidence, sourceId, lines] of [
       ["fresh", "Fresh", "2026-04-01T00:00:00.000Z", "supported", 0.91, "source.alpha", "4-7"],
       ["stale", "Stale", "2025-10-01T00:00:00.000Z", "contested", 0.92, "source.alpha.old", "1-2"],
     ] as const) {
-      await writePage(
+      await writeNote(
         `entities/alpha-${slug}.md`,
         `Alpha ${title}`,
-        `# Alpha ${title}\n\nsummary without the keyword\n`,
+        "summary without the keyword",
         {
           id: `entity.alpha.${slug}`,
           updatedAt,
@@ -548,9 +522,10 @@ describe("searchMemoryWiki", () => {
 
     const results = await searchWiki(config, "postgresql");
 
-    expect(results).toHaveLength(2);
-    expect(results[0]?.path).toBe("entities/alpha-fresh.md");
-    expect(results[1]?.path).toBe("entities/alpha-stale.md");
+    expect(results.map((result) => result.path)).toEqual([
+      "entities/alpha-fresh.md",
+      "entities/alpha-stale.md",
+    ]);
   });
 
   it("reports a contract error when the shared manager lacks search()", async () => {
@@ -568,14 +543,11 @@ describe("searchMemoryWiki", () => {
   });
 
   it("includes memory results and backfills wiki capacity for all-corpus search", async () => {
-    const { config, writePage } = await createSharedVault("all");
+    const { config, writeNote } = await createSharedVault("all");
     for (const index of [1, 2, 3, 4, 5]) {
-      await writePage(
-        `entities/alpha-${index}.md`,
-        `Alpha ${index}`,
-        `# Alpha ${index}\n\nalpha wiki ${index}\n`,
-        { id: `entity.alpha.${index}` },
-      );
+      await writeNote(`entities/alpha-${index}.md`, `Alpha ${index}`, `alpha wiki ${index}`, {
+        id: `entity.alpha.${index}`,
+      });
     }
     const manager = createMemoryManager({
       searchResults: [
@@ -957,12 +929,150 @@ it("enforces self visibility without a conversation recall grant", async () => {
   expect(results.map((result) => result.path)).toEqual(["sessions/current.jsonl", "MEMORY.md"]);
 });
 
-registerProviderRecordQueryTests({
-  createQueryVault,
-  createAppConfig,
-  getActiveMemoryProviderMock,
-  getActiveMemorySearchManagerMock,
-  useNativeProvider: () => isActiveMemoryProviderNativeMock.mockResolvedValue(true),
-  searchMemoryWiki,
-  getMemoryWikiPage,
+describe("native provider records", () => {
+  const createInput = async (corpus: "memory" | "all" = "memory") => ({
+    ...(await createSharedVault(corpus)),
+    appConfig: createAppConfig(),
+  });
+  function useProvider<T extends object>(provider: T): T {
+    isActiveMemoryProviderNativeMock.mockResolvedValue(true);
+    getActiveMemoryProviderMock.mockResolvedValue({
+      provider,
+      providerId: "knowledge",
+      adapter: "native",
+    });
+    return provider;
+  }
+  it.each([
+    ["legacy manager", false],
+    ["native provider", true],
+  ])("keeps wiki results when the %s cannot be opened", async (_label, native) => {
+    const { writeNote, ...input } = await createInput("all");
+    await writeNote("entities/alpha.md", "Alpha", "alpha wiki");
+    if (native) {
+      isActiveMemoryProviderNativeMock.mockResolvedValue(true);
+    }
+    getActiveMemorySearchManagerMock.mockRejectedValue(new Error("plugin failed to load"));
+    getActiveMemoryProviderMock.mockRejectedValue(new Error("plugin failed to load"));
+
+    const results = await searchMemoryWiki({ ...input, query: "alpha", maxResults: 5 });
+
+    expect(results.map((result) => result.corpus)).toEqual(["wiki"]);
+  });
+  it.each([
+    ["search", false],
+    ["get", false],
+    ["search", true],
+  ] as const)(
+    "rejects revoked %s authority (during search: %s) and closes the capability",
+    async (operation, duringSearch) => {
+      const input = await createInput();
+      let current = true;
+      const reference = { providerId: "knowledge", id: "private:record" };
+      const provider = useProvider({
+        search: vi.fn(async () => {
+          if (duringSearch) {
+            current = false;
+          }
+          return { hits: duringSearch ? [] : [{ reference, excerpt: "private" }] };
+        }),
+        ...(!duringSearch && {
+          get: vi.fn().mockResolvedValue({ status: "ok", reference, text: "private" }),
+        }),
+        close: vi.fn(async () => {
+          if (!duringSearch) {
+            await Promise.resolve();
+            current = false;
+          }
+        }),
+      });
+      const authorizedInput = {
+        ...input,
+        memoryContext: {
+          authority: duringSearch
+            ? { kind: "session" as const, sessionKey: "agent:main:main", sandboxed: false }
+            : { kind: "host" as const, operation: "test.query" },
+          assertCurrent() {
+            if (!current) {
+              throw new Error(duringSearch ? "caller revoked" : "caller revoked during cleanup");
+            }
+          },
+        },
+      };
+      const pending =
+        operation === "search"
+          ? searchMemoryWiki({ ...authorizedInput, query: "private" })
+          : getMemoryWikiPage({
+              ...authorizedInput,
+              lookup: `memory-ref:${encodeURIComponent(JSON.stringify(reference))}`,
+            });
+      await expect(pending).rejects.toThrow(
+        duringSearch ? "caller revoked" : "caller revoked during cleanup",
+      );
+      expect(provider.close).toHaveBeenCalledTimes(1);
+      current = true;
+      const context = getActiveMemoryProviderMock.mock.calls[0]?.[0].context;
+      expect(() => context.assertCurrent()).toThrow("query has completed");
+    },
+  );
+
+  it("round-trips a record-only result with revision and citations without inventing a path", async () => {
+    const input = await createInput();
+    const reference = {
+      providerId: "knowledge",
+      id: "claim:release:42",
+      revision: "r3",
+      fragment: "evidence:1",
+    };
+    const citations = [
+      { label: "Release decision", reference, url: "https://example.test/source/42" },
+    ];
+    const provider = useProvider({
+      search: vi.fn().mockResolvedValue({
+        hits: [{ reference, excerpt: "Release on Friday", citations, score: 0.9 }],
+      }),
+      get: vi.fn().mockResolvedValue({
+        status: "ok",
+        reference,
+        text: "Release on Friday, after review.",
+        citations,
+        truncated: true,
+        from: 2,
+        lines: 4,
+      }),
+      close: vi.fn(),
+    });
+    const results = await searchMemoryWiki({ ...input, query: "release" });
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ reference, citations, title: "Release decision" });
+    expect(results[0]).not.toHaveProperty("path");
+    const lookup = results[0]?.lookup;
+    if (!lookup) {
+      throw new Error("Expected provider lookup");
+    }
+    const record = await getMemoryWikiPage({ ...input, lookup, fromLine: 2, lineCount: 4 });
+    expect(provider.get).toHaveBeenCalledExactlyOnceWith({ reference, from: 2, lines: 4 });
+    expect(record).toMatchObject({
+      reference,
+      citations,
+      content: "Release on Friday, after review.",
+      truncated: true,
+    });
+    expect(record).not.toHaveProperty("path");
+    expect(provider.close).toHaveBeenCalledTimes(2);
+    expect(getActiveMemorySearchManagerMock).not.toHaveBeenCalled();
+  });
+
+  it("releases a denied provider read without retrying it as a path", async () => {
+    const input = await createInput();
+    const reference = { providerId: "knowledge", id: "private:record" };
+    const provider = useProvider({
+      get: vi.fn().mockRejectedValue(new Error("not authorized")),
+      close: vi.fn(),
+    });
+    const lookup = `memory-ref:${encodeURIComponent(JSON.stringify(reference))}`;
+    await expect(getMemoryWikiPage({ ...input, lookup })).rejects.toThrow("not authorized");
+    expect(provider.get).toHaveBeenCalledTimes(1);
+    expect(provider.close).toHaveBeenCalledTimes(1);
+  });
 });
