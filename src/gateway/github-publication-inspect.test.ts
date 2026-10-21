@@ -43,13 +43,14 @@ async function fixture(
         authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
       });
     } else {
+      // The Enterprise identity write binds its proof to the profile that currently holds the alias.
+      await linkCanonicalUserProfileEmail(`github:${host}:101`, f.guestProfile);
       await ensureCanonicalEnterpriseGitHubProfile(
         `github:${host}:101`,
         "Contributor",
         {},
         { login: "contributor" },
       );
-      await linkCanonicalUserProfileEmail(`github:${host}:101`, f.guestProfile);
     }
   }
   mocks.prepareIdentity.mockResolvedValue({
@@ -364,6 +365,34 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     await expect(
       f.invoke({ pullRequestUrl: "https://other.example.test/example/repository/pull/7" }),
     ).rejects.toThrow("Link a verified");
+  });
+
+  it("refuses Enterprise aliases without a current proof-validated identity", async () => {
+    const host = "git.example.test";
+    const f = await fixture({ host, linked: false });
+    // Generic admission can bind a principal-shaped alias without Enterprise verification.
+    await linkCanonicalUserProfileEmail(`github:${host}:101`, f.guestProfile);
+    await expect(f.invoke()).rejects.toThrow("Link a verified");
+    // Verification recorded on another profile does not travel with a transferred alias.
+    await ensureCanonicalEnterpriseGitHubProfile(
+      `github:${host}:202`,
+      "Other",
+      {},
+      { login: "other" },
+    );
+    await linkCanonicalUserProfileEmail(`github:${host}:202`, f.guestProfile);
+    f.pr.user = { id: 202, login: "other" };
+    await expect(f.invoke()).rejects.toThrow("Link a verified");
+    expect(f.requests).toEqual([]);
+    // Current verification of the guest's own binding admits exactly that account.
+    await ensureCanonicalEnterpriseGitHubProfile(
+      `github:${host}:101`,
+      "Contributor",
+      {},
+      { login: "contributor" },
+    );
+    f.pr.user = { id: 101, login: "contributor" };
+    expect(await f.invoke()).toMatchObject({ host, author: { accountId: 101 } });
   });
 
   it("rejects arbitrary hosts, credential URLs and non-PR paths before network access", async () => {

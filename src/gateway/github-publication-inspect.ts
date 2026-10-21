@@ -8,7 +8,6 @@ import {
 import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { parseEnterpriseGitHubPrincipal } from "../shared/enterprise-github-principal.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import {
   currentGitHubPublicationConfig,
@@ -146,12 +145,12 @@ export async function inspectOwnGitHubPullRequest(params: {
   const profile = captureResidentUserProfileAccess(actor.profileId);
   const accountIds = () => {
     const facts = profile.readCurrentFacts();
+    // Enterprise identity comes from the catalog's proof-validated binding; a principal-shaped alias alone never qualifies.
     return host === "github.com"
       ? [...(facts.githubAccountIds ?? [])]
-      : facts.emails.flatMap((alias) => {
-          const principal = parseEnterpriseGitHubPrincipal(alias);
-          return principal?.host === host ? [principal.accountId] : [];
-        });
+      : facts.enterpriseGitHubAccount?.host === host
+        ? [facts.enterpriseGitHubAccount.accountId]
+        : [];
   };
   const admittedIds = accountIds();
   if (!admittedIds.length) {

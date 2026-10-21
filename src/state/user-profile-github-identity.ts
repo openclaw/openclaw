@@ -190,23 +190,27 @@ export function selectProfileAccessEntries(
     return rows;
   }
   const identities = selectStoredGitHubIdentities(db, profileIds);
-  const githubIdentities = projectUserProfileGitHubIdentities(
-    identities,
-    selectEnterpriseGitHubIdentities(db, profileIds),
-  );
+  const enterprise = selectEnterpriseGitHubIdentities(db, profileIds);
+  const githubIdentities = projectUserProfileGitHubIdentities(identities, enterprise);
   return rows.map(([id, row]) => {
     const identity = identities.get(id);
     const accounts = identity?.accounts;
+    const verified = enterprise.get(id);
     return [
       id,
-      accounts?.length
-        ? {
-            ...row,
-            githubAccountIds: accounts.map(({ accountId }) => accountId),
-            githubLogin: identity?.primary?.login ?? null,
-            githubIdentity: githubIdentities.get(id) ?? null,
-          }
-        : { ...row, githubIdentity: githubIdentities.get(id) ?? null },
+      {
+        ...row,
+        ...(accounts?.length
+          ? {
+              githubAccountIds: accounts.map(({ accountId }) => accountId),
+              githubLogin: identity?.primary?.login ?? null,
+            }
+          : {}),
+        githubIdentity: githubIdentities.get(id) ?? null,
+        ...(verified
+          ? { enterpriseGitHubAccount: { host: verified.host, accountId: verified.accountId } }
+          : {}),
+      },
     ];
   });
 }
