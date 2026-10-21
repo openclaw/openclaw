@@ -178,7 +178,7 @@ describe("plugin management Gateway handlers", () => {
       label: "public plugin fields and valid download stats",
       score: 0.91,
       query: { query: "diff", limit: 12 },
-      expected: {
+      fields: {
         name: "@openclaw/diffs",
         displayName: "Diffs",
         family: "code-plugin",
@@ -188,15 +188,15 @@ describe("plugin management Gateway handlers", () => {
         latestVersion: "1.2.3",
         runtimeId: "diffs",
         verificationTier: "source-linked",
-        downloads: 149263,
       },
       stats: { downloads: 149263, installs: 280, stars: 0, versions: 83 },
+      downloads: { downloads: 149263 },
     },
     {
       label: "malformed download stats",
       score: 0.5,
       query: { query: "demo" },
-      expected: {
+      fields: {
         name: "community/demo",
         displayName: "Demo",
         family: "code-plugin",
@@ -204,14 +204,14 @@ describe("plugin management Gateway handlers", () => {
         isOfficial: false,
       },
       stats: { downloads: Number.NaN },
+      downloads: {},
     },
-  ])("maps $label to the public DTO", async ({ score, query, expected, stats }) => {
-    const { downloads: _downloads, ...fields } = expected;
+  ])("maps $label to the public DTO", async ({ score, query, fields, stats, downloads }) => {
     searchMock.mockResolvedValue([
       { score, package: { ...fields, ownerHandle: "openclaw", stats } },
     ]);
     expect((await callHandler("plugins.search", query)).response).toEqual({
-      results: [{ score, package: expected }],
+      results: [{ score, package: { ...fields, ...downloads } }],
     });
     expect(searchMock).toHaveBeenCalledWith({ query: query.query, limit: query.limit });
   });
@@ -321,18 +321,7 @@ describe("plugin management Gateway handlers", () => {
       const matches = identityField === "clawhubPackage";
       inventory([{ ...workboard, [identityField]: "memory-plus" }]);
       managementMocks.inspect.mockResolvedValue({
-        declared: {
-          tools: ["workboard_read"],
-          providers: [],
-          channels: [],
-          mcpServers: ["workboard", "unsupported"],
-          skills: ["Local planning"],
-        },
-        components: {
-          ...emptyInstalledPluginComponents(),
-          skills: ["Local planning"],
-          mcpServers: ["workboard"],
-        },
+        components: { ...emptyInstalledPluginComponents(), skills: ["Local planning"] },
       });
       catalogMocks.detail.mockRejectedValue(new Error("ClawHub offline"));
 
@@ -357,8 +346,6 @@ describe("plugin management Gateway handlers", () => {
             downloadability: { status: "unknown" },
             remoteError: expect.stringContaining("ClawHub offline"),
             registry: expect.any(String),
-            contracts: { tools: ["workboard_read"] },
-            mcpServers: ["workboard"],
             skills: [{ name: "Local planning" }],
           },
         });

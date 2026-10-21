@@ -122,17 +122,15 @@ describe("controlUi.githubPreview", () => {
       vi.fn<typeof fetch>(async (input) => {
         const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
         if (path.endsWith("/pulls/7")) {
-          return Response.json({
-            title: "Early body",
-            body: "Available before CI",
-            state: "open",
-            created_at: "2026-10-01T00:00:00Z",
-            updated_at: "2026-10-02T00:00:00Z",
-            comments: 1,
-            review_comments: 1,
-            changed_files: 1,
-            head: { sha: revision },
-          });
+          return json(
+            issueFields("Early body", {
+              body: "Available before CI",
+              comments: 1,
+              review_comments: 1,
+              changed_files: 1,
+              head: { sha: revision },
+            }),
+          );
         }
         if (path.endsWith("/progressive-adapter")) {
           return Response.json({ id: 771, private: false, visibility: "public" });
@@ -270,20 +268,14 @@ describe("controlUi.githubPreview", () => {
       if (mode === "anonymous") {
         return anonymousResponse;
       }
-      const authorization = new Headers(init?.headers).get("Authorization");
-      if (mode === "managed" && authorization !== `Bearer ${identity.token}`) {
-        return new Response(JSON.stringify({ message: "Bad credentials" }), { status: 401 });
-      }
-      if (mode === "service" && authorization !== "Bearer configured-reader-token") {
-        return new Response(null, { status: 403, headers: { "x-ratelimit-remaining": "0" } });
-      }
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        `Bearer ${mode === "managed" ? identity.token : "configured-reader-token"}`,
+      );
       const url = input instanceof Request ? input.url : input.toString();
       const issue = mode === "managed" ? url.endsWith("/issues/88120") : url.includes("/issues/");
       return json(
         issue
           ? issueFields(mode === "service" ? "Authenticated reader" : title, {
-              created_at: mode === "service" ? "2026-09-20T08:00:00Z" : "2026-09-01T08:00:00Z",
-              updated_at: mode === "service" ? "2026-09-20T09:00:00Z" : "2026-09-01T09:00:00Z",
               ...(mode === "managed"
                 ? { repository_url: "https://api.github.com/repos/openclaw/openclaw" }
                 : {}),
