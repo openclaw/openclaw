@@ -96,14 +96,8 @@ suite.define(() => {
           "chat.startup": historyPage(recent, true, 2),
           "chat.history": {
             cases: [
-              {
-                match: { offset: 2 },
-                response: historyPage(firstOlderPage, true, 6),
-              },
-              {
-                match: { offset: 6 },
-                response: historyPage(secondOlderPage, false),
-              },
+              { match: { offset: 2 }, response: historyPage(firstOlderPage, true, 6) },
+              { match: { offset: 6 }, response: historyPage(secondOlderPage, false) },
             ],
           },
         },

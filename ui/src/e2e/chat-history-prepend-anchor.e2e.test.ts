@@ -6,11 +6,14 @@ import {
   waitForChatScrollIdle,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import {
+  type AnchorWindow,
+  historyMessageCount,
+  sampleHistoryAnchor,
+} from "./chat-history-pagination-probe.test-support.ts";
 import { layoutBox, twoFrames } from "./chat-presentation.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-type AnchorFrames = { frame: number; positions: Array<number | null>; readerDelta: number };
-type AnchorWindow = typeof window & { prependFrames: AnchorFrames };
 
 function touchGesture(
   element: Element,
@@ -212,38 +215,14 @@ suite.define(() => {
       const anchor = thread.locator(".chat-bubble").filter({ hasText: "Transcript entry 1001." });
       await anchor.waitFor();
       const before = await layoutBox(anchor);
-      await page.evaluate(
-        (messageKey) => {
-          const frames: AnchorFrames = { frame: 0, positions: [], readerDelta: 0 };
-          (window as AnchorWindow).prependFrames = frames;
-          const sample = () => {
-            const bubble = document.querySelector<HTMLElement>(
-              `.chat-pane-cache__pane--active .chat-bubble[data-message-id="${CSS.escape(messageKey!)}"]`,
-            );
-            frames.positions.push(
-              bubble ? bubble.getBoundingClientRect().top + frames.readerDelta : null,
-            );
-            frames.frame = requestAnimationFrame(sample);
-          };
-          sample();
-        },
-        await anchor.getAttribute("data-message-id"),
-      );
+      const probe = await sampleHistoryAnchor(anchor);
       const scrollTop = () => thread.evaluate((element) => element.scrollTop);
       const heldOffset = await scrollTop();
       if (activeTouch) {
         await thread.evaluate(touchGesture, { start: true, momentum });
       }
       await gateway.resolveDeferred("chat.history");
-      await expect
-        .poll(() =>
-          pane.evaluate(
-            (element) =>
-              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                .length,
-          ),
-        )
-        .toBe(loadedCount);
+      await expect.poll(() => historyMessageCount(pane)).toBe(loadedCount);
       if (activeTouch) {
         await twoFrames(page); // Let the projection commit before checking touch deferral.
         expect(
@@ -255,11 +234,8 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
       // Require the fetched page to reach the viewport, not just pane state.
       await expect.poll(scrollTop).toBeGreaterThan(heldOffset + (momentum ? 40 : 0) + 100);
-      const frames = await page.evaluate(() => {
-        const probe = (window as AnchorWindow).prependFrames;
-        cancelAnimationFrame(probe.frame);
-        return probe.positions;
-      });
+      const frames = await probe.evaluate((stop) => stop());
+      await probe.dispose();
       const after = await layoutBox(anchor);
       expect(
         Math.abs(after.y + (momentum ? 40 : 0) - before.y),

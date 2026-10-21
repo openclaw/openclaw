@@ -64,6 +64,13 @@ const selectRpc = (metrics: readonly RpcMetric[], method: string, sessionKey?: s
     (metric) =>
       metric.method === method && (sessionKey === undefined || metric.sessionKey === sessionKey),
   );
+const writeEvidence = (name: string, evidence: unknown) =>
+  writeFile(path.join(suite.artifactDir, `${name}.json`), JSON.stringify(evidence, null, 2));
+const redactFixtureTokens = (text: string, owner: OpenClawTestInstance) =>
+  [owner.gatewayToken, owner.hookToken].reduce(
+    (redacted, token) => redacted.replaceAll(token, "[redacted fixture token]"),
+    text,
+  );
 
 function syntheticAvatar(): Buffer {
   const width = 1254;
@@ -136,10 +143,10 @@ const suite = createControlUiE2eSuite({
       return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
     } catch (error) {
       const diagnosticPath = path.join(suite.artifactDir, "gateway-setup.log");
-      const diagnostic =
-        `${error instanceof Error ? error.message : String(error)}\n${owner.logs()}`
-          .replaceAll(owner.gatewayToken, "[redacted fixture token]")
-          .replaceAll(owner.hookToken, "[redacted fixture token]");
+      const diagnostic = redactFixtureTokens(
+        `${error instanceof Error ? error.message : String(error)}\n${owner.logs()}`,
+        owner,
+      );
       const failure = new Error(
         `Gateway fixture setup failed; sanitized diagnostics: ${diagnosticPath}`,
       );
@@ -164,10 +171,7 @@ suite.define(() => {
     const cliJson = async (args: string[]): Promise<Record<string, unknown>> => {
       const result = await owner.cli(["--no-color", ...args]);
       if (result.code !== 0) {
-        const diagnostic = [result.stderr, result.stdout]
-          .join("\n")
-          .replaceAll(owner.gatewayToken, "[redacted fixture token]")
-          .replaceAll(owner.hookToken, "[redacted fixture token]");
+        const diagnostic = redactFixtureTokens([result.stderr, result.stdout].join("\n"), owner);
         throw new Error(
           `${args.slice(0, 3).join(" ")} failed (exit ${String(result.code)}): ${diagnostic}`,
         );
@@ -573,33 +577,26 @@ suite.define(() => {
           .click();
         const narrowHomeClosed = await captureNarrowReload("05-narrow-home-closed", false);
         measuring = false;
-        await writeFile(
-          path.join(artifactDir, "loading-evidence.json"),
-          JSON.stringify(
-            {
-              fixture: { synthetic: true, originalAvatarBytes, transcriptLength },
-              entryScripts,
-              ...desktopTiming,
-              startup: startupMetrics,
-              startupIdentity,
-              pagination: paginationMetrics,
-              paginationLoadedMs,
-              paginationRenderedMs,
-              browserPagination,
-              initialLoadedMessages,
-              olderPageCommits,
-              olderPageMessageCounts,
-              narrowHomeOpen,
-              narrowHomeClosed,
-              images,
-              avatarResource,
-              cache,
-              resources,
-            },
-            null,
-            2,
-          ),
-        );
+        await writeEvidence("loading-evidence", {
+          fixture: { synthetic: true, originalAvatarBytes, transcriptLength },
+          entryScripts,
+          ...desktopTiming,
+          startup: startupMetrics,
+          startupIdentity,
+          pagination: paginationMetrics,
+          paginationLoadedMs,
+          paginationRenderedMs,
+          browserPagination,
+          initialLoadedMessages,
+          olderPageCommits,
+          olderPageMessageCounts,
+          narrowHomeOpen,
+          narrowHomeClosed,
+          images,
+          avatarResource,
+          cache,
+          resources,
+        });
 
         // Save measurements before asserting budgets so failures retain their evidence.
         expect(olderPages).toHaveLength(olderPageCommits);
@@ -774,10 +771,7 @@ suite.define(() => {
             ...dimensions,
           });
           await capture(fixture.stage);
-          await writeFile(
-            path.join(artifactDir, "avatar-format-evidence.json"),
-            JSON.stringify(avatarFormats, null, 2),
-          );
+          await writeEvidence("avatar-format-evidence", avatarFormats);
         }
       },
     );

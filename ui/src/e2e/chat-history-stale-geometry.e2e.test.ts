@@ -13,6 +13,7 @@ import {
   waitForChatScrollIdle,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { historyMessageCount } from "./chat-history-pagination-probe.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const sessionId = "durable-geometry-session";
@@ -165,14 +166,7 @@ suite.define(() => {
       offset: compactRecentMessages.length,
       sessionKey: "agent:main:main",
     });
-    await expect
-      .poll(() =>
-        pane.evaluate((element) => {
-          const host = element as HTMLElement & { state?: { chatMessages?: unknown[] } };
-          return host.state?.chatMessages?.length ?? 0;
-        }),
-      )
-      .toBe(totalMessages);
+    await expect.poll(() => historyMessageCount(pane)).toBe(totalMessages);
     await waitForChatScrollIdle(page);
     await page.getByText("Older 1", { exact: true }).waitFor();
     await page.getByText("Restored message 3", { exact: true }).waitFor();

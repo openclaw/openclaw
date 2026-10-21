@@ -7,10 +7,13 @@ import {
   textContent,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import {
+  historyMessageCount,
+  sampleHistoryAnchor,
+} from "./chat-history-pagination-probe.test-support.ts";
 import { layoutBox, twoFrames } from "./chat-presentation.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-type HistoryPane = HTMLElement & { state: { chatMessages: unknown[] } };
 const historyPage = (messages: unknown[], nextOffset: number) => ({
   messages,
   nextOffset,
@@ -81,26 +84,11 @@ suite.define(() => {
     await expect.poll(() => anchor.isVisible()).toBe(true);
     await page.keyboard.press("Home");
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
-    const count = () => pane.evaluate((element: HistoryPane) => element.state.chatMessages.length);
+    const count = () => historyMessageCount(pane);
     expect(await count()).toBe(72);
     const before = await layoutBox(anchor);
     expect(before.y).toBeGreaterThan(0);
-    const probe = await anchor.evaluateHandle((original) => {
-      const host = original.closest("openclaw-chat-pane")!;
-      const selector = `.chat-bubble[data-message-id="${CSS.escape(original.getAttribute("data-message-id")!)}"]`;
-      const tops: Array<number | null> = [];
-      let frame = 0;
-      const sample = () => {
-        const bubble = host.querySelector(selector);
-        tops.push(bubble?.getBoundingClientRect().top ?? null);
-        frame = requestAnimationFrame(sample);
-      };
-      sample();
-      return () => {
-        cancelAnimationFrame(frame);
-        return tops;
-      };
-    });
+    const probe = await sampleHistoryAnchor(anchor);
     if (split) {
       const sibling = page.locator("openclaw-chat-pane.chat-split-view__pane").nth(0);
       await sibling.locator(".chat-pane__header").click();

@@ -3,6 +3,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { exactButton } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -91,24 +92,24 @@ suite.define(() => {
           const initial = await nested.getAttribute("open");
           await nested.locator(":scope > summary").click();
           expect(await nested.getAttribute("open")).not.toBe(initial);
-          await message.getByRole("button", { name: "Raw", exact: true }).click();
+          await exactButton(message, "Raw").click();
           expect(await tree.isVisible()).toBe(false);
           expect(await message.locator("pre code").textContent()).toBe(
             source + (message === fenced ? "\n" : ""),
           );
-          await message.getByRole("button", { name: "Copy code", exact: true }).click();
+          await exactButton(message, "Copy code").click();
           expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(source);
-          await message.getByRole("button", { name: "Tree", exact: true }).click();
+          await exactButton(message, "Tree").click();
           expect(await tree.isVisible()).toBe(true);
           expect(await nested.getAttribute("open")).not.toBe(initial);
         }
-        await bare.getByRole("button", { name: "Raw", exact: true }).click();
+        await exactButton(bare, "Raw").click();
         if (captureUiProof) {
           await bare.scrollIntoViewIfNeeded();
           await capture(page, theme + "-raw");
         }
         await page.setViewportSize({ width: 400, height: 900 });
-        await bare.getByRole("button", { name: "Tree", exact: true }).click();
+        await exactButton(bare, "Tree").click();
         expect(
           await page.evaluate(
             () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -121,16 +122,11 @@ suite.define(() => {
   it("bounds long user JSON with message disclosure and no JSON controls", async () => {
     await withPage("dark", async (page) => {
       const capture = createCapture("chat-user-json-disclosure");
-      const text = JSON.stringify(
-        {
-          rows: Array.from({ length: 45 }, (_, index) => ({
-            item: "Entry " + index,
-            enabled: true,
-          })),
-        },
-        null,
-        2,
-      );
+      const rows = Array.from({ length: 45 }, (_, index) => ({
+        item: "Entry " + index,
+        enabled: true,
+      }));
+      const text = JSON.stringify({ rows }, null, 2);
       const gateway = await installMockGateway(page, {
         historyMessages: history(
           ["user", "long-json-user", text],
@@ -158,7 +154,6 @@ suite.define(() => {
           .toBe(!expanded);
       };
       await expect.poll(() => toggle.isVisible()).toBe(true);
-      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
       await expectDisclosure(false);
       expect(
         await bubble

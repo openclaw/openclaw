@@ -1,4 +1,4 @@
-import type { BrowserContext, Page } from "playwright";
+import type { BrowserContext, Locator, Page } from "playwright";
 import { expect } from "vitest";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { readOutboxPayloadAttachments } from "./chat-flow.test-support.ts";
@@ -11,10 +11,27 @@ export const outboxPayloadFile = {
 export const outboxPayloadHistory = [
   { role: "assistant", content: "Mock Gateway: payload lifecycle proof." },
 ];
+export const outboxPageOptions = {
+  serviceWorkers: "block" as const,
+  viewport: { width: 1280, height: 900 },
+};
+export const outboxButton = (target: Page | Locator, name: string) =>
+  target.getByRole("button", { name, exact: true });
 export const outboxPaneFor = (page: Page) =>
   page.locator('openclaw-chat-pane[aria-hidden="false"]');
 export const outboxComposerFor = (page: Page) =>
   outboxPaneFor(page).locator(".agent-chat__composer-combobox textarea");
+export const sendOutboxMessage = (page: Page) =>
+  outboxButton(outboxPaneFor(page), "Send message").click();
+export const outboxAttachment = {
+  type: "file",
+  mimeType: outboxPayloadFile.mimeType,
+  fileName: outboxPayloadFile.name,
+  origin: "file",
+  content: outboxPayloadFile.buffer.toString("base64"),
+};
+export const expectOutboxPayload = async (page: Page, key: string) =>
+  expect(await readOutboxPayloadBytes(page, key)).toEqual([outboxAttachment.content]);
 
 export async function readOutboxQueue(page: Page): Promise<ChatQueueItem[]> {
   return page.evaluate(() =>

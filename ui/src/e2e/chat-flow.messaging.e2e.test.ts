@@ -30,6 +30,20 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
+const emitSession = (gateway: Gateway, ...args: Parameters<typeof sessionMessage>) =>
+  gateway.emitGatewayEvent("session.message", sessionMessage(...args));
+const emitDelta = (gateway: Gateway, runId: string, text: string) =>
+  gateway.emitGatewayEvent("chat", chatDelta(runId, text, "agent:main:main", { seq: 1 }));
+const assistantText = (page: Page, text: string) =>
+  page.locator(".chat-group.assistant .chat-text", { hasText: text });
+const streamingText = (page: Page, text: string) =>
+  page.locator(".chat-bubble.streaming", { hasText: text });
+const runIdFrom = async (gateway: Gateway) =>
+  requireString(
+    requireRecord((await gateway.waitForRequest("chat.send")).params).idempotencyKey,
+    "chat send idempotency key",
+  );
 
 const userPrecedesReply = (
   page: Page,
@@ -109,21 +123,18 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     await sendMessage(page, prompt);
 
-    const request = await gateway.waitForRequest("chat.send");
-    const runId = requireString(requireRecord(request.params).idempotencyKey, "chat run id");
+    const runId = await runIdFrom(gateway);
     await gateway.resolveDeferred("chat.send", { runId, status: "started" });
     const userRow = page.locator(".chat-group.user", { hasText: prompt });
     await userRow.waitFor({ timeout: 10_000 });
 
-    await gateway.emitGatewayEvent(
-      "session.message",
-      sessionMessage(
-        timedText("user", prompt),
-        "browser-local-authoritative-user",
-        1,
-        sessionState([runId], true, "running"),
-        { clientRunId: runId },
-      ),
+    await emitSession(
+      gateway,
+      timedText("user", prompt),
+      "browser-local-authoritative-user",
+      1,
+      sessionState([runId], true, "running"),
+      { clientRunId: runId },
     );
 
     await expectCount(userRow, 1);
@@ -141,9 +152,7 @@ suite.define(() => {
       }),
     ]);
     await gateway.emitChatFinal({ runId, text: finalText });
-    await page
-      .locator(".chat-group.assistant .chat-text", { hasText: finalText })
-      .waitFor({ timeout: 10_000 });
+    await assistantText(page, finalText).waitFor({ timeout: 10_000 });
     await expectCount(userRow, 1);
   });
 
@@ -160,49 +169,36 @@ suite.define(() => {
 
     await page.goto(`${suite.server.baseUrl}chat`);
     await gateway.waitForRequest("chat.startup");
-    await gateway.emitGatewayEvent(
-      "session.message",
-      sessionMessage(
-        timedText("user", previousPrompt),
-        "previous-user",
-        1,
-        sessionState([], false, "done"),
-        { clientRunId: previousRunId },
-      ),
+    await emitSession(
+      gateway,
+      timedText("user", previousPrompt),
+      "previous-user",
+      1,
+      sessionState([], false, "done"),
+      { clientRunId: previousRunId },
     );
 
     await sendMessage(page, currentPrompt);
-    const sendRequest = await gateway.waitForRequest("chat.send");
-    const currentRunId = requireString(
-      requireRecord(sendRequest.params).idempotencyKey,
-      "current chat run id",
-    );
+    const currentRunId = await runIdFrom(gateway);
     // This scenario owns the exact transcript sequence, including a prior
     // final that arrives late. Keep its ACK distinct from those source events.
     await gateway.resolveDeferred("chat.send", { runId: currentRunId, status: "started" });
-    await gateway.emitGatewayEvent(
-      "session.message",
-      sessionMessage(
-        timedText("user", currentPrompt),
-        "current-user",
-        3,
-        sessionState([currentRunId], true, "running"),
-        { clientRunId: currentRunId },
-      ),
+    await emitSession(
+      gateway,
+      timedText("user", currentPrompt),
+      "current-user",
+      3,
+      sessionState([currentRunId], true, "running"),
+      { clientRunId: currentRunId },
     );
-    await gateway.emitGatewayEvent(
-      "chat",
-      chatDelta(currentRunId, currentPartial, "agent:main:main", { seq: 1 }),
-    );
-    await gateway.emitGatewayEvent(
-      "session.message",
-      sessionMessage(
-        timedText("assistant", previousFinal),
-        "previous-final",
-        2,
-        sessionState([currentRunId], true, "running"),
-        { clientRunId: previousRunId },
-      ),
+    await emitDelta(gateway, currentRunId, currentPartial);
+    await emitSession(
+      gateway,
+      timedText("assistant", previousFinal),
+      "previous-final",
+      2,
+      sessionState([currentRunId], true, "running"),
+      { clientRunId: previousRunId },
     );
 
     const visibleTexts = [previousPrompt, previousFinal, currentPrompt, currentPartial];
@@ -243,14 +239,12 @@ suite.define(() => {
 
     const emitPersistedMessage = async (index: number) => {
       const message = persistedMessages[index];
-      await gateway.emitGatewayEvent(
-        "session.message",
-        sessionMessage(
-          message,
-          `conflicting-envelope-${index + 1}`,
-          100 + index,
-          sessionState([], false, "done"),
-        ),
+      await emitSession(
+        gateway,
+        message,
+        `conflicting-envelope-${index + 1}`,
+        100 + index,
+        sessionState([], false, "done"),
       );
     };
 
@@ -309,13 +303,8 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       // Even an envelope-only event reads back with its canonical transcript identity.
       await gateway.setHistoryMessages([persistedUserMessage]);
-      await gateway.emitGatewayEvent(
-        "chat",
-        chatDelta(runId, partial, "agent:main:main", { seq: 1 }),
-      );
-      await page
-        .locator(".chat-bubble.streaming", { hasText: partial })
-        .waitFor({ timeout: 10_000 });
+      await emitDelta(gateway, runId, partial);
+      await streamingText(page, partial).waitFor({ timeout: 10_000 });
 
       const sharedUserEvent = sessionMessage(
         includeMessageMetadata ? persistedUserMessage : userMessage,
@@ -352,9 +341,7 @@ suite.define(() => {
         persistedText("assistant", finalText, { id: "shared-session-assistant", seq: 3, runId }),
       ]);
       await gateway.emitChatFinal({ runId, text: finalText });
-      await page
-        .locator(".chat-group.assistant .chat-text", { hasText: finalText })
-        .waitFor({ timeout: 10_000 });
+      await assistantText(page, finalText).waitFor({ timeout: 10_000 });
       await expectCount(userRow, 1);
       await expectCount(secondUserRow, 1);
     },
@@ -381,17 +368,10 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      await gateway.emitGatewayEvent(
-        "chat",
-        chatDelta(runId, finalText, "agent:main:main", { seq: 1 }),
-      );
-      await page
-        .locator(".chat-bubble.streaming", { hasText: finalText })
-        .waitFor({ timeout: 10_000 });
+      await emitDelta(gateway, runId, finalText);
+      await streamingText(page, finalText).waitFor({ timeout: 10_000 });
       await gateway.emitChatFinal({ runId, text: finalText });
-      await page
-        .locator(".chat-group.assistant .chat-text", { hasText: finalText })
-        .waitFor({ timeout: 10_000 });
+      await assistantText(page, finalText).waitFor({ timeout: 10_000 });
       await gateway.setHistoryMessages([userMessage, assistantMessage]);
       await gateway.deferNext("chat.history");
       await gateway.emitGatewayEvent(
@@ -438,11 +418,7 @@ suite.define(() => {
     await gateway.deferNext("chat.send");
     await sendMessage(page, prompt);
 
-    const sendRequest = await gateway.waitForRequest("chat.send");
-    const runId = requireString(
-      requireRecord(sendRequest.params).idempotencyKey,
-      "chat send idempotency key",
-    );
+    const runId = await runIdFrom(gateway);
     const browserTimestamp = await page.evaluate(() => Date.now());
     const gatewayTimestamp = browserTimestamp - 60_000;
     await gateway.emitGatewayEvent(
@@ -452,7 +428,7 @@ suite.define(() => {
         message: textMessage("assistant", partial, { timestamp: gatewayTimestamp }),
       }),
     );
-    await page.locator(".chat-bubble.streaming", { hasText: partial }).waitFor({ timeout: 10_000 });
+    await streamingText(page, partial).waitFor({ timeout: 10_000 });
     expect(await appearsBefore(".chat-bubble.streaming", partial)).toBe(true);
 
     await gateway.emitGatewayEvent(
@@ -461,9 +437,7 @@ suite.define(() => {
         message: textMessage("assistant", reply, { timestamp: gatewayTimestamp }),
       }),
     );
-    await page
-      .locator(".chat-group.assistant .chat-text", { hasText: reply })
-      .waitFor({ timeout: 10_000 });
+    await assistantText(page, reply).waitFor({ timeout: 10_000 });
     expect(await appearsBefore(".chat-group.assistant", reply)).toBe(true);
     await gateway.resolveDeferred("chat.send", { runId, status: "started" });
     expect(await appearsBefore(".chat-group.assistant", reply)).toBe(true);
@@ -474,16 +448,12 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
 
     await sendMessage(page, "reconcile the terminal event ordering");
-    const send = await gateway.waitForRequest("chat.send");
-    const runId = requireString(
-      requireRecord(send.params).idempotencyKey,
-      "chat send idempotency key",
-    );
+    const runId = await runIdFrom(gateway);
     const finalText = "One authoritative final response.";
     const messageId = "assistant-authoritative-final";
     const authoritative = persistedText("assistant", finalText, { id: messageId, seq: 2 });
     await gateway.emitGatewayEvent("chat", chatDelta(runId, finalText, "agent:main:main"));
-    await page.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor();
+    await streamingText(page, finalText).waitFor();
     await gateway.setHistoryMessages([
       {
         __openclaw: { id: `mock-user:${runId}`, idempotencyKey: `${runId}:user`, seq: 1 },
@@ -504,14 +474,14 @@ suite.define(() => {
       .poll(async () => (await gateway.getRequests("chat.history")).length)
       .toBeGreaterThan(historyRequestsBefore);
     await chatTranscript(page).getByText(finalText, { exact: true }).waitFor();
-    await expectCount(page.locator(".chat-group.assistant .chat-text", { hasText: finalText }), 1);
+    await expectCount(assistantText(page, finalText), 1);
 
     await gateway.emitChatFinal({ runId, text: finalText });
     await expectCount(page.locator(".chat-group.assistant .chat-duplicate-count"), 0);
-    await expectCount(page.locator(".chat-group.assistant .chat-text", { hasText: finalText }), 1);
+    await expectCount(assistantText(page, finalText), 1);
 
     await gateway.emitChatFinal({ runId: "a-different-legitimate-run", text: finalText });
-    await expectCount(page.locator(".chat-group.assistant .chat-text", { hasText: finalText }), 2);
+    await expectCount(assistantText(page, finalText), 2);
   });
 
   it("restores the selected session transcript after a hard reload", async () => {

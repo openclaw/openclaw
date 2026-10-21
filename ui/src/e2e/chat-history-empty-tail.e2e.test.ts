@@ -15,18 +15,13 @@ const historyPage = (messages: unknown[], nextOffset?: number) => ({
   sessionId,
   sessionInfo,
 });
-const olderMessages = [
-  {
-    role: "user",
-    content: "Can you check the report?",
-    __openclaw: { id: "earlier-user", seq: 1 },
-  },
-  {
-    role: "assistant",
-    content: "The report is ready for review.",
-    __openclaw: { id: "earlier-assistant", seq: 2 },
-  },
-];
+const olderMessages = ["Can you check the report?", "The report is ready for review."].map(
+  (content, index) => ({
+    role: index ? "assistant" : "user",
+    content,
+    __openclaw: { id: index ? "earlier-assistant" : "earlier-user", seq: index + 1 },
+  }),
+);
 const hiddenActivity = Array.from({ length: 80 }, (_, index) => ({
   role: "toolResult",
   toolName: "read",

@@ -5,11 +5,15 @@ import path from "node:path";
 import { crc32 } from "node:zlib";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiE2eWaitTimeoutMs, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createChatFlowE2eSuite } from "./chat-flow.test-support.ts";
+import {
+  chatMessage,
+  createChatFlowE2eSuite,
+  requireRecord,
+  requireString,
+} from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const viewport = { height: 900, width: 1280 };
@@ -19,15 +23,6 @@ type RecordedPage = {
   page: Page;
   rawVideoDir: string;
 };
-
-const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
-
-function requireString(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value) {
-    throw new Error(`Expected non-empty ${label}`);
-  }
-  return value;
-}
 
 function chunk(type: string, payload: Uint8Array): Buffer {
   const result = Buffer.alloc(12 + payload.length);
@@ -113,16 +108,11 @@ suite.define(() => {
     try {
       const gateway = await installMockGateway(page, {
         historyMessages: [
-          {
-            content: [
-              {
-                text: `${previousReply}\n\n${["First", "Second", "Third", "Fourth", "Fifth"].map((ordinal) => `- ${ordinal} line of the existing answer.`).join("\n")}`,
-                type: "text",
-              },
-            ],
-            role: "assistant",
-            timestamp: Date.now(),
-          },
+          chatMessage(
+            "assistant",
+            `${previousReply}\n\n${["First", "Second", "Third", "Fourth", "Fifth"].map((ordinal) => `- ${ordinal} line of the existing answer.`).join("\n")}`,
+            { timestamp: Date.now() },
+          ),
         ],
       });
 
@@ -144,7 +134,7 @@ suite.define(() => {
 
       await recorded.page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
-      const params = requireRecord(sendRequest.params, "chat.send params");
+      const params = requireRecord(sendRequest.params);
       expect(params).toMatchObject({
         message: prompt,
         attachments: [
