@@ -125,6 +125,23 @@ describe("agents bind/unbind commands", () => {
     expect(writeConfigFileMock).toHaveBeenLastCalledWith({ ...config, bindings: undefined });
   });
 
+  it("matches normalized channel identities for conflicts, repeats, and removal", async () => {
+    const config = { agents: explicitAgents, bindings: [route(" Telegram ", "work", "ops")] };
+    setConfig(config);
+    await update("bind", { agent: "main", bind: ["telegram:work"], json: true });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(json.mock.lastCall).toEqual([
+      expect.objectContaining({ conflicts: ["telegram accountId=work (agent=ops)"] }),
+      2,
+    ]);
+
+    await update("bind", { agent: "ops", bind: ["telegram:work"] });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    await update("unbind", { agent: "ops", bind: ["telegram:work"] });
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith({ ...config, bindings: undefined });
+  });
+
   it("binds a mixed batch using one manifest inventory per invocation", async () => {
     await update("bind", {
       bind: ["telegram", "whatsapp", "signal", "external-chat:work", "external-chat:home"],
