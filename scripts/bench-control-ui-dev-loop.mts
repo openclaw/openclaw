@@ -83,7 +83,9 @@ try {
       throw new Error("No isolated dev-server port");
     }
     const port = address.port;
-    await new Promise<void>((resolve) => reservation.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      reservation.close(() => resolve());
+    });
     const started = performance.now();
     const call = createPnpmRunnerSpawnSpec({
       pnpmArgs: [
@@ -100,7 +102,9 @@ try {
       stdio: ["ignore", "pipe", "pipe"],
     });
     const child = spawn(call.command, call.args, call.options);
-    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
     let spawnError: Error | undefined;
     child.on("error", (error) => {
       spawnError = error;
@@ -128,7 +132,10 @@ try {
     const watcher = watch(component, () => sample.fileEvents++);
     try {
       const deadline = performance.now() + 600_000;
-      while (readyMs === undefined) {
+      while (true) {
+        if (readyMs !== undefined) {
+          break;
+        }
         if (
           spawnError ||
           child.exitCode !== null ||
@@ -137,7 +144,9 @@ try {
         ) {
           throw spawnError ?? new Error(`Dev server did not become ready: ${log}`);
         }
-        await new Promise((resolve) => setTimeout(resolve, 25));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 25);
+        });
       }
       await page.goto(`http://127.0.0.1:${port}/${name}.html`, { timeout: 120_000 });
       const selector = ".chat-conversation-loading__lines > span:first-child";
@@ -157,9 +166,9 @@ try {
       const editStarted = performance.now();
       await fs.writeFile(component, edited);
       await page.waitForFunction(
-        ({ selector, width }) => {
-          const node = document.querySelector(selector);
-          return node !== null && node.getBoundingClientRect().width < width * 0.75;
+        ({ selector: targetSelector, width: originalWidth }) => {
+          const node = document.querySelector(targetSelector);
+          return node !== null && node.getBoundingClientRect().width < originalWidth * 0.75;
         },
         { selector, width },
         { polling: "raf", timeout: 30_000 },
