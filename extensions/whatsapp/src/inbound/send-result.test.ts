@@ -60,7 +60,7 @@ describe("WhatsApp send receipts", () => {
     const delivery = {
       messageIds: [accepted.messageId],
       receipt: incompleteReceipt,
-      visibleReplySent: true,
+      visibleReplySent: true as const,
     };
     const partial = createChannelPartialDeliveryError(originalCause, delivery);
     const wrapped = createChannelPartialDeliveryError(partial, delivery);

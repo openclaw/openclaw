@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { assembleMSTeamsInboundFacts, prepareMSTeamsDebounceEntry } from "./inbound-facts.js";
 
-function prepare(activity: MSTeamsTurnContext["activity"]) {
+function prepare(activity: Omit<MSTeamsTurnContext["activity"], "type">) {
   return prepareMSTeamsDebounceEntry({
     accountId: "default",
     context: { activity: { type: "message", ...activity } } as MSTeamsTurnContext,

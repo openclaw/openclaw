@@ -6,12 +6,12 @@ import { CustomEditor } from "./custom-editor.js";
 
 describe("CustomEditor", () => {
   let editor: CustomEditor;
-  let onSubmit: ReturnType<typeof vi.fn>;
-  let onCtrlD: ReturnType<typeof vi.fn>;
+  let onSubmit: ReturnType<typeof vi.fn<(text: string) => void>>;
+  let onCtrlD: ReturnType<typeof vi.fn<() => void>>;
   beforeEach(() => {
     editor = new CustomEditor({ requestRender: vi.fn() } as unknown as TUI, editorTheme);
-    editor.onSubmit = onSubmit = vi.fn();
-    editor.onCtrlD = onCtrlD = vi.fn();
+    editor.onSubmit = onSubmit = vi.fn<(text: string) => void>();
+    editor.onCtrlD = onCtrlD = vi.fn<() => void>();
   });
   afterEach(() => vi.restoreAllMocks());
 

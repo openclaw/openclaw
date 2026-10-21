@@ -67,8 +67,9 @@ it("keeps per-model limits and canonical billing facts during V1 catalog enrichm
     NonNullable<DecisionProviderContextV2["model"]["inference"]>["decision"]
   >;
   const entry = (id: string, decision: Decision) => ({
-    ...preparedContext().model,
     id,
+    name: id,
+    provider: "onnx",
     inference: { chat: false as const, decision },
   });
   const native = entry("pinned", {

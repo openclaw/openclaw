@@ -41,8 +41,9 @@ const assignment: CodexNativeSubagentPendingAssignment = {
   owner,
 };
 const duplicateAssignments = [assignment, { ...assignment }];
-const migration = stateMigrations.find((entry) => entry.id === "codex-native-assignment-repair");
-assert(migration, "Codex must register its native assignment repair");
+const migration =
+  stateMigrations.find((entry) => entry.id === "codex-native-assignment-repair") ??
+  assert.fail("Codex must register its native assignment repair");
 const unchanged = { changes: [], warnings: [] };
 const completion = {
   childThreadId: "child",

@@ -124,6 +124,6 @@ it("surfaces delivery-record failures without deleting the delivered widget", as
     "Discord widget was delivered, but its delivery state could not be saved",
   );
   expect(createWidget).toHaveBeenCalledOnce();
-  const widgetId = await createWidget.mock.results[0].value;
+  const widgetId = await createWidget.mock.results[0]!.value;
   await expect(store.lookupWidget(widgetId)).resolves.toHaveProperty("deliveredMessageId", null);
 });

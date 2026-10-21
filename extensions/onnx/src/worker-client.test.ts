@@ -81,7 +81,9 @@ process.on('message', async (request) => {
   const findEvent = (match: (event: FixtureEvent) => boolean, failure?: unknown) => {
     const found = events().find(match);
     if (!found) {
-      throw failure ?? new Error("Fixture did not reach the requested IPC boundary");
+      throw failure instanceof Error
+        ? failure
+        : new Error("Fixture did not reach the requested IPC boundary", { cause: failure });
     }
     return found;
   };
