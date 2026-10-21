@@ -122,7 +122,22 @@ import {
   readVerifiedGitUpdateReceipt,
   writeRestartSentinel,
   writeRestartSentinelIfUnchanged,
+  type RestartSentinelPayload,
 } from "./restart-sentinel.js";
+
+const restartPayload = (
+  overrides: Partial<RestartSentinelPayload> = {},
+): RestartSentinelPayload => ({
+  kind: "restart",
+  status: "ok",
+  ts: 1,
+  ...overrides,
+});
+
+const writeUpdate = (
+  stats: RestartSentinelPayload["stats"],
+  overrides: Partial<RestartSentinelPayload> = {},
+) => writeRestartSentinel(restartPayload({ kind: "update", ts: Date.now(), stats, ...overrides }));
 
 beforeEach(() => {
   mockWarn.mockClear();
@@ -230,7 +245,7 @@ describe("restart sentinel", () => {
         await expect(fs.access(resolveOpenClawStateSqlitePath())).rejects.toMatchObject({
           code: "ENOENT",
         });
-        const written = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+        const written = await writeRestartSentinel(restartPayload());
         await expect(readRestartSentinel()).resolves.toEqual(written);
         await expect(readRestartSentinelReadOnly()).resolves.toEqual(written);
         await expect(clearRestartSentinelIfRevision(written.revision)).resolves.toBe(true);
@@ -297,11 +312,9 @@ describe("restart sentinel", () => {
         stats: null,
       });
 
-      expect(written.payload).toEqual({ kind: "restart", status: "ok", ts: 1 });
+      expect(written.payload).toEqual(restartPayload());
       await expect(readRestartSentinel()).resolves.toEqual(written);
-      expect(readSentinelRow()?.payload_json).toBe(
-        JSON.stringify({ kind: "restart", status: "ok", ts: 1 }),
-      );
+      expect(readSentinelRow()?.payload_json).toBe(JSON.stringify(restartPayload()));
     });
   });
 
@@ -431,7 +444,7 @@ describe("restart sentinel", () => {
     "publishes an absent-row fallback only when the sentinel remains missing (%s)",
     async (state) => {
       await withRestartSentinelStateDir(async () => {
-        const first = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+        const first = await writeRestartSentinel(restartPayload());
         if (state === "missing") {
           await clearRestartSentinelIfRevision(first.revision);
         } else if (state === "invalid") {
@@ -512,7 +525,7 @@ describe("restart sentinel", () => {
 
   it("upgrades pre-floor rows only when the captured revision still exists", async () => {
     await withRestartSentinelStateDir(async () => {
-      const written = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+      const written = await writeRestartSentinel(restartPayload());
       // Persist a future revision so the worker must advance the floor independently of its clock.
       const first = { ...written, revision: Number.MAX_SAFE_INTEGER - 100 };
       updateSentinelRow({ updated_at_ms: first.revision });
@@ -609,7 +622,7 @@ describe("restart sentinel", () => {
     "preserves the notification when its producer loses authority at %s admission",
     async (stage) => {
       await withRestartSentinelStateDir(async () => {
-        const first = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+        const first = await writeRestartSentinel(restartPayload());
         const snapshot = await readRestartSentinelSnapshot();
         let current = true;
         const observed: string[] = [];
@@ -757,31 +770,17 @@ describe("restart sentinel", () => {
   it("does not rewrite update sentinels when the running version is already current", async () => {
     await withRestartSentinelStateDir(async () => {
       const ts = Date.now();
-      await writeRestartSentinel({
+      const payload = restartPayload({
         kind: "update",
-        status: "ok",
         ts,
-        stats: {
-          after: { version: "actual-version" },
-        },
+        stats: { after: { version: "actual-version" } },
       });
+      await writeRestartSentinel(payload);
 
       await expect(
         finalizeUpdateRestartSentinelRunningVersion("actual-version"),
       ).resolves.toBeNull();
-      await expect(readRestartSentinel()).resolves.toMatchObject({
-        version: 1,
-        payload: {
-          kind: "update",
-          status: "ok",
-          ts,
-          stats: {
-            after: {
-              version: "actual-version",
-            },
-          },
-        },
-      });
+      await expect(readRestartSentinel()).resolves.toMatchObject({ version: 1, payload });
     });
   });
 
@@ -800,11 +799,8 @@ describe("restart sentinel", () => {
         await fs.mkdir(installRoot);
         await fs.symlink(installRoot, installAlias, "dir");
         const ts = Date.now();
-        await writeRestartSentinel({
-          kind: "update",
-          status: testCase.status,
-          ts,
-          stats: {
+        await writeUpdate(
+          {
             mode: "git",
             ...(testCase.reason ? { reason: testCase.reason } : {}),
             root: installAlias,
@@ -815,7 +811,8 @@ describe("restart sentinel", () => {
               version: "expected-version",
             },
           },
-        });
+          { status: testCase.status, ts },
+        );
 
         const finalized = await finalizeUpdateRestartSentinelRunningVersion(
           "actual-version",
@@ -841,18 +838,15 @@ describe("restart sentinel", () => {
   it("keeps the verified update outcome when optional install history cannot be written", async () => {
     await withRestartSentinelStateDir(async () => {
       const root = process.cwd();
-      await writeRestartSentinel({
-        kind: "update",
-        status: "ok",
-        ts: Date.now(),
-        continuation: { kind: "agentTurn", message: "Continue after the update." },
-        stats: {
+      await writeUpdate(
+        {
           mode: "git",
           root,
           before: { sha: "aaaaaaaa" },
           after: { sha: "bbbbbbbb", version: "expected-version" },
         },
-      });
+        { continuation: { kind: "agentTurn", message: "Continue after the update." } },
+      );
       const { db } = openOpenClawStateDatabase();
       db.exec(`
         CREATE TRIGGER reject_install_history BEFORE INSERT ON gateway_restart_sentinel
@@ -886,16 +880,11 @@ describe("restart sentinel", () => {
 
   it("does not advance install time when a successful Git run keeps the same revision", async () => {
     await withRestartSentinelStateDir(async () => {
-      await writeRestartSentinel({
-        kind: "update",
-        status: "ok",
-        ts: Date.now(),
-        stats: {
-          mode: "git",
-          root: process.cwd(),
-          before: { sha: "aaaaaaaa" },
-          after: { sha: "aaaaaaaa", version: "expected-version" },
-        },
+      await writeUpdate({
+        mode: "git",
+        root: process.cwd(),
+        before: { sha: "aaaaaaaa" },
+        after: { sha: "aaaaaaaa", version: "expected-version" },
       });
 
       await finalizeUpdateRestartSentinelRunningVersion(
@@ -926,18 +915,16 @@ describe("restart sentinel", () => {
     },
   ] as const)("rejects a $name whose running Git revision does not match", async (testCase) => {
     await withRestartSentinelStateDir(async () => {
-      await writeRestartSentinel({
-        kind: "update",
-        status: testCase.status,
-        ts: Date.now(),
-        stats: {
+      await writeUpdate(
+        {
           mode: "git",
           root: process.cwd(),
           ...(testCase.beforeSha ? { before: { sha: testCase.beforeSha } } : {}),
           ...(testCase.status === "error" ? { reason: "managed-service-handoff-failed" } : {}),
           after: { sha: "bbbbbbbb", version: "expected-version" },
         },
-      });
+        { status: testCase.status },
+      );
 
       await finalizeUpdateRestartSentinelRunningVersion(
         "actual-version",
@@ -963,16 +950,11 @@ describe("restart sentinel", () => {
         const runningRoot = path.join(tempDir, "running");
         await fs.mkdir(expectedRoot);
         await fs.mkdir(runningRoot);
-        await writeRestartSentinel({
-          kind: "update",
-          status: "ok",
-          ts: Date.now(),
-          stats: {
-            mode: "git",
-            root: expectedRoot,
-            before: { sha: "aaaaaaaa" },
-            after: { sha: "bbbbbbbb", version: "expected-version" },
-          },
+        await writeUpdate({
+          mode: "git",
+          root: expectedRoot,
+          before: { sha: "aaaaaaaa" },
+          after: { sha: "bbbbbbbb", version: "expected-version" },
         });
 
         await finalizeUpdateRestartSentinelRunningVersion(
@@ -996,12 +978,7 @@ describe("restart sentinel", () => {
   it("marks update restart failures with a stable reason", async () => {
     await withRestartSentinelStateDir(async () => {
       const ts = Date.now();
-      await writeRestartSentinel({
-        kind: "update",
-        status: "ok",
-        ts,
-        stats: {},
-      });
+      await writeUpdate({}, { ts });
 
       await markUpdateRestartSentinelFailure("restart-unhealthy");
 
@@ -1023,7 +1000,7 @@ describe("restart sentinel", () => {
 describe("restart sentinel error visibility", () => {
   it("throws when revision-owned cleanup cannot durably delete the row", async () => {
     await withRestartSentinelStateDir(async () => {
-      const written = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+      const written = await writeRestartSentinel(restartPayload());
       mockThrowWorkerWrite.mockImplementationOnce(() => {
         throw new Error("SQLITE_IOERR: disk I/O error");
       });

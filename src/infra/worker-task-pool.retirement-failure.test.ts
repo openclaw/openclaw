@@ -7,7 +7,7 @@ import * as nativeSections from "../../packages/worker-runtime/src/worker-task-n
 import { resolveSessionHistoryUnavailableMessage } from "../gateway/session-history-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOwnedWorkerTaskPool, WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
-import { holdExit, type MockWorker } from "./worker-task-pool.owned.test-support.js";
+import { expectCalls, holdExit, type MockWorker } from "./worker-task-pool.owned.test-support.js";
 import type { WorkerTaskOptions, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
 
 type PostedTask = { taskId: number; responseId?: number; nativeSections?: SharedArrayBuffer };
@@ -51,11 +51,6 @@ function taskId(worker: FakeWorker) {
 const caught = (promise: Promise<unknown>) => promise.catch((error: unknown) => error);
 function send(worker: FakeWorker, message: { status: string; value?: string; id?: number }) {
   worker.emit("message", { taskId: taskId(worker), ...message });
-}
-function expectCalls(count: number, ...callbacks: ReturnType<typeof vi.fn>[]) {
-  for (const callback of callbacks) {
-    expect(callback).toHaveBeenCalledTimes(count);
-  }
 }
 function expectAggregate(failure: unknown, errors: Error[], cause: Error) {
   assert.ok(failure instanceof AggregateError, "aggregate failure");

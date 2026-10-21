@@ -1,8 +1,9 @@
 import { EventEmitter } from "node:events";
 import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
-import { afterEach, beforeEach, expect, it, onTestFinished, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
+import { expectCalls } from "./worker-task-pool.owned.test-support.js";
 import type { WorkerTaskContext } from "./worker-task-transport.js";
 
 const boundary = vi.hoisted(() => {
@@ -57,12 +58,6 @@ afterEach(() => {
 
 function taskContext(databaseAdmissionPort?: MessagePort): WorkerTaskContext {
   return { deletedAgentDatabaseFences: [], databaseAdmissionPort };
-}
-
-function expectCalls(count: number, ...mocks: MockInstance[]) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
 }
 
 function resourceReceipt() {

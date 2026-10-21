@@ -22,6 +22,17 @@ import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payloa
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import type { UpdateRunResult } from "./update-run-result.js";
+
+const updateResult = (overrides: Partial<UpdateRunResult> = {}): UpdateRunResult => ({
+  status: "ok",
+  mode: "npm",
+  steps: [],
+  durationMs: 1,
+  ...overrides,
+});
+const writeResult = (result: UpdateRunResult, meta: UpdateRestartSentinelMeta = {}) =>
+  writeRestartSentinel(buildUpdateRestartSentinelPayload({ result, meta }));
 
 // Frozen v2026.9.4 reader contract; do not replace with the current recovery schema.
 // https://github.com/openclaw/openclaw/blob/3a9d69db306cd7f081e06254cb89c4bcc14a7107/src/infra/update-recovery.ts
@@ -109,40 +120,31 @@ describe("control-plane update restart sentinel", () => {
     },
   );
 
-  it.each(["handoff", "restart", "rollback", "unsafe", "success"] as const)(
+  it.each([
+    ["handoff", "skipped", "managed-service-handoff-started"],
+    ["restart", "skipped", "restart-health-pending"],
+    ["rollback", "error", "restart-unhealthy"],
+    ["unsafe", "error", "restart-unhealthy"],
+    ["success", "ok", "restart-unhealthy"],
+  ] as const)(
     "does not publish a targetless CLI %s notice for a restored runtime",
-    async (phase) => {
+    async (phase, status, reason) => {
       await withRestartSentinelStateDir(async () => {
         const run = createUpdateRun({ trigger: "cli" });
-        const status =
-          phase === "handoff" || phase === "restart"
-            ? "skipped"
-            : phase === "success"
-              ? "ok"
-              : "error";
-        const reason =
-          phase === "handoff"
-            ? "managed-service-handoff-started"
-            : phase === "restart"
-              ? "restart-health-pending"
-              : "restart-unhealthy";
         if (phase === "rollback") {
           finishUpdateRun(run.runId, { status: "rolled-back", reason });
         }
         const before = getUpdateRun(run.runId);
         await writeControlPlaneUpdateRestartSentinel({
           meta: { runId: run.runId, handoffId: "owned-handoff", root: "/owned/package" },
-          result: {
+          result: updateResult({
             runId: run.runId,
             status,
             reason,
-            mode: "npm",
-            steps: [],
-            durationMs: 1,
             ...(phase === "unsafe"
               ? { recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" } }
               : {}),
-          },
+          }),
         });
         expect(await readRestartSentinel()).toBeNull();
         expect(getUpdateRun(run.runId)).toEqual(before);
@@ -175,7 +177,7 @@ describe("control-plane update restart sentinel", () => {
       const run = unknown ? undefined : createUpdateRun({ trigger: trigger ?? "cli", origin });
       await writeControlPlaneUpdateRestartSentinel({
         meta: { ...meta, runId: run?.runId },
-        result: { status: "ok", mode: "npm", steps: [], durationMs: 1 },
+        result: updateResult(),
       });
       const payload = (await readRestartSentinel())?.payload;
       expect(payload).toMatchObject({ kind: "update", status: "ok" });
@@ -204,17 +206,12 @@ describe("control-plane update restart sentinel", () => {
       await withRestartSentinelStateDir(async () => {
         const run = createUpdateRun({ trigger });
         const noticeOwner = trigger === "cli" ? createUpdateRun({ trigger: "api" }) : run;
-        await writeRestartSentinel(
-          buildUpdateRestartSentinelPayload({
-            result: {
-              status: "skipped",
-              mode: "npm",
-              reason: "restart-health-pending",
-              steps: [],
-              durationMs: 1,
-            },
-            meta: { runId: noticeOwner.runId, sessionKey: "agent:ops:main" },
+        await writeResult(
+          updateResult({
+            status: "skipped",
+            reason: "restart-health-pending",
           }),
+          { runId: noticeOwner.runId, sessionKey: "agent:ops:main" },
         );
         const before = await readRestartSentinel();
         const marked = await markControlPlaneUpdateRestartSentinelFailure("restart-unhealthy", {
@@ -234,9 +231,33 @@ describe("control-plane update restart sentinel", () => {
     },
   );
 
-  it.each(["recorded", "explicit", "other-session", "other-delivery", "same-route"] as const)(
+  it.each([
+    ["recorded", {}],
+    [
+      "explicit",
+      {
+        sessionKey: "agent:other:slack:channel:room2",
+        deliveryContext: { channel: "slack", to: "room2", accountId: "explicit-account" },
+        threadId: "explicit-thread",
+      },
+    ],
+    ["other-session", { sessionKey: "agent:other:main" }],
+    [
+      "other-delivery",
+      {
+        deliveryContext: { channel: "slack", to: "room2", accountId: "explicit-account" },
+      },
+    ],
+    [
+      "same-route",
+      {
+        sessionKey: "agent:ops:telegram:group:room",
+        deliveryContext: { channel: "telegram" },
+      },
+    ],
+  ] satisfies [string, UpdateRestartSentinelMeta][])(
     "carries the complete %s notice route without mixing destinations",
-    async (route) => {
+    async (route, overrides) => {
       await withRestartSentinelStateDir(async () => {
         const origin = {
           sessionKey: "agent:ops:telegram:group:room",
@@ -253,29 +274,11 @@ describe("control-plane update restart sentinel", () => {
           handoffId: "owner",
           note: "Requested note",
           continuationMessage: "Requested continuation",
-          ...(route === "explicit"
-            ? {
-                sessionKey: "agent:other:slack:channel:room2",
-                deliveryContext: { channel: "slack", to: "room2", accountId: "explicit-account" },
-                threadId: "explicit-thread",
-              }
-            : route === "other-session"
-              ? { sessionKey: "agent:other:main" }
-              : route === "other-delivery"
-                ? {
-                    deliveryContext: {
-                      channel: "slack",
-                      to: "room2",
-                      accountId: "explicit-account",
-                    },
-                  }
-                : route === "same-route"
-                  ? { sessionKey: origin.sessionKey, deliveryContext: { channel: "telegram" } }
-                  : {}),
+          ...overrides,
         };
         await writeControlPlaneUpdateRestartSentinel({
           meta,
-          result: { status: "ok", mode: "npm", steps: [], durationMs: 1 },
+          result: updateResult(),
         });
         const payload = (await readRestartSentinel())?.payload;
         expect(payload?.sessionKey).toBe(meta.sessionKey ?? origin.sessionKey);
@@ -311,17 +314,12 @@ describe("control-plane update restart sentinel", () => {
       await withRestartSentinelStateDir(async () => {
         const run = createUpdateRun({ trigger: "api", origin: { sessionKey: "agent:ops:main" } });
         const other = createUpdateRun({ trigger: "api" });
-        await writeRestartSentinel(
-          buildUpdateRestartSentinelPayload({
-            result: { status: "ok", mode: "npm", steps: [], durationMs: 1 },
-            meta: {
-              runId: owner === "other-run" ? other.runId : run.runId,
-              handoffId: owner === "other-handoff" ? "successor" : "original",
-              sessionKey: "agent:ops:main",
-              continuationMessage: "Do not lose the requested continuation",
-            },
-          }),
-        );
+        await writeResult(updateResult(), {
+          runId: owner === "other-run" ? other.runId : run.runId,
+          handoffId: owner === "other-handoff" ? "successor" : "original",
+          sessionKey: "agent:ops:main",
+          continuationMessage: "Do not lose the requested continuation",
+        });
         const before = await readRestartSentinel();
         const marked = await markControlPlaneUpdateRestartSentinelFailure("restart-unhealthy", {
           runId: run.runId,
@@ -357,27 +355,22 @@ describe("control-plane update restart sentinel", () => {
 
   it("preserves advisory step classification through the typed sentinel round trip", async () => {
     await withRestartSentinelStateDir(async () => {
-      await writeRestartSentinel(
-        buildUpdateRestartSentinelPayload({
-          result: {
-            status: "error",
-            mode: "npm",
-            steps: [
-              {
-                name: "post-install doctor",
-                command: "openclaw doctor",
-                cwd: "/tmp/openclaw",
-                durationMs: 1,
-                exitCode: 86,
-                advisory: {
-                  kind: "package-post-install-doctor",
-                  message: "private advisory detail",
-                },
+      await writeResult(
+        updateResult({
+          status: "error",
+          steps: [
+            {
+              name: "post-install doctor",
+              command: "openclaw doctor",
+              cwd: "/tmp/openclaw",
+              durationMs: 1,
+              exitCode: 86,
+              advisory: {
+                kind: "package-post-install-doctor",
+                message: "private advisory detail",
               },
-            ],
-            durationMs: 1,
-          },
-          meta: {},
+            },
+          ],
         }),
       );
 
@@ -427,14 +420,11 @@ describe("control-plane update restart sentinel", () => {
           buildId: "restored-build",
           ...(service ? { service } : {}),
         };
-        const result = {
-          status: "error" as const,
-          mode: "npm" as const,
+        const result = updateResult({
+          status: "error",
           reason: "readyz-unhealthy",
           recovery: { ...persisted, packageRollbackVerified: true as const, reason },
-          steps: [],
-          durationMs: 1,
-        };
+        });
         await writeControlPlaneUpdateRestartSentinel({
           result,
           meta: { sessionKey: "agent:main:main" },
@@ -479,7 +469,7 @@ describe("control-plane update restart sentinel", () => {
         packageRollbackVerified,
       };
       const payload = buildUpdateRestartSentinelPayload({
-        result: { status: "error", mode: "npm", recovery, steps: [], durationMs: 1 },
+        result: updateResult({ status: "error", recovery }),
         meta: {},
       });
 

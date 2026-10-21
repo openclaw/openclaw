@@ -248,17 +248,7 @@ export async function runNativeResourceLifecycle(
     observer.exec("BEGIN IMMEDIATE");
     assert.equal(observer.prepare("SELECT COUNT(*) AS count FROM proof").get()?.count, 1);
     observer.exec("ROLLBACK");
-    console.log(
-      JSON.stringify({
-        ending: edge ? `resource-${edge}` : "native-resource",
-        ...idleBrokerProof?.result,
-        ...(edge === "late-attachment" ? { lateSameBrokerAttached: true } : {}),
-        firstCloseRejected: true,
-        sameOwnerRetried: true,
-        childClosedBeforeStopped: true,
-        sqliteReusable: true,
-      }),
-    );
+    console.log(JSON.stringify({ ending: edge ? `resource-${edge}` : "native-resource" }));
   } finally {
     permit();
     database?.close();
