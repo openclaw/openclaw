@@ -88,6 +88,11 @@ next update's admission can record the failed outcome without waiting for the
 inactivity grace period. Live or unverifiable drivers and retained recovery
 continue to preserve their ownership.
 
+A successful foreground update hands completion to the replacement Gateway.
+Automatic history reconciliation preserves that handoff while startup verifies
+the running build. If the replacement never starts, `openclaw update repair`
+can recover the abandoned handoff explicitly.
+
 Handoff repair uses recorded boot sessions and process creation times to exclude
 prior-boot families and unrelated processes with reused parent PIDs. On Windows,
 a legacy handoff without a boot identity also qualifies as prior-boot when its
