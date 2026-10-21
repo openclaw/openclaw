@@ -10,11 +10,17 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import type { createQaGatewayChild, QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import type { McpServerConfig } from "../../../../src/config/types.mcp.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import type { GatewayClient } from "../../../../src/gateway/client.js";
 import { hasErrnoCode } from "../../../../src/infra/errno.js";
 import { signalProcessTree } from "../../../../src/process/kill-tree.js";
+import { acquireGatewayTestClient } from "../../../helpers/gateway-client.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../helpers/promise.js";
 
 export const TEST_TIMEOUT_MS = 180_000;
@@ -62,6 +68,88 @@ export type ToolsEffectiveResult = {
 
 const CHILD_ENV_KEYS = ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "ComSpec"] as const;
 
+const CONTROL_TIMEOUT_MS = 20_000;
+type ControlGateway = Pick<GatewayHandle, "logs" | "runtimeEnv" | "token" | "wsUrl">;
+export function connectControlClient(
+  params: { gateway: ControlGateway } & Omit<
+    Parameters<typeof acquireGatewayTestClient>[0],
+    "url" | "token" | "env"
+  >,
+): Promise<GatewayClient> {
+  const { gateway, ...options } = params;
+  return acquireGatewayTestClient(
+    {
+      ...options,
+      url: gateway.wsUrl,
+      token: gateway.token,
+      env: gateway.runtimeEnv,
+      clientVersion: "1.0.0",
+      platform: options.platform ?? process.platform,
+      requestTimeoutMs: CONTROL_TIMEOUT_MS,
+    },
+    {
+      timeoutMs: CONTROL_TIMEOUT_MS,
+      timeoutMessage: `Gateway client connection timed out:\n${gateway.logs()}`,
+      closeMessage: "Gateway closed",
+      unrefTimeout: true,
+    },
+  );
+}
+
+export function connectControlOperator(gateway: ControlGateway, clientDisplayName: string) {
+  return connectControlClient({
+    gateway,
+    clientDisplayName,
+    role: "operator",
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
+    scopes: ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
+    deviceIdentity: null,
+  });
+}
+
+export function isNodePairingRequired(error: unknown): boolean {
+  const details =
+    error && typeof error === "object"
+      ? (error as { details?: { code?: unknown } }).details
+      : undefined;
+  return details?.code === "PAIRING_REQUIRED" || String(error).includes("PAIRING_REQUIRED");
+}
+
+export async function approveControlNodePairing(operator: GatewayClient, nodeId: string) {
+  for (const kind of ["device", "node"] as const) {
+    let requestId: string | undefined;
+    await vi.waitFor(
+      async () => {
+        const { pending } = await operator.request<{
+          pending?: Array<{
+            requestId?: string;
+            deviceId?: string;
+            nodeId?: string;
+            role?: string;
+          }>;
+        }>(`${kind}.pair.list`, {}, { timeoutMs: CONTROL_TIMEOUT_MS });
+        requestId = pending?.find((entry) =>
+          kind === "device"
+            ? entry.deviceId === nodeId || entry.role === "node"
+            : entry.nodeId === nodeId,
+        )?.requestId;
+        expect(requestId).toBeTruthy();
+      },
+      { timeout: CONTROL_TIMEOUT_MS, interval: 100 },
+    );
+    const result = await operator.request(
+      `${kind}.pair.approve`,
+      { requestId },
+      { timeoutMs: CONTROL_TIMEOUT_MS },
+    );
+    if (kind === "node") {
+      return { requestId, result };
+    }
+  }
+  throw new Error("node pairing approval was not attempted");
+}
+
 export async function createMcpPlacement(root: string, placement: "node" | "session") {
   const at = (name: string) => path.join(root, placement, name);
   const home = at("home"),
@@ -107,23 +195,9 @@ export function startMcpGateway(
   owner: ReturnType<typeof createQaGatewayChild>,
   configure: (cfg: OpenClawConfig) => OpenClawConfig = (cfg) => cfg,
 ): Promise<GatewayHandle> {
-  const repoRoot = process.cwd();
-  return owner.start({
-    repoRoot,
-    command: {
-      executablePath: process.execPath,
-      argsPrefix: ["dist/index.js"],
-      cwd: repoRoot,
-      usePackagedPlugins: true,
-    },
-    transportBaseUrl: "http://127.0.0.1",
-    controlUiEnabled: false,
-    runtimeEnvPatch: {
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-    },
-    mutateConfig: (cfg) =>
+  return startNodeGateway(
+    owner,
+    (cfg) =>
       configure({
         ...cfg,
         plugins: { enabled: false },
@@ -136,6 +210,36 @@ export function startMcpGateway(
           },
         },
       }),
+    "index",
+  );
+}
+
+export function startNodeGateway(
+  owner: ReturnType<typeof createQaGatewayChild>,
+  configure: (cfg: OpenClawConfig) => OpenClawConfig,
+  entry?: "index" | "entry",
+): Promise<GatewayHandle> {
+  const repoRoot = process.cwd();
+  return owner.start({
+    repoRoot,
+    ...(entry
+      ? {
+          command: {
+            executablePath: process.execPath,
+            argsPrefix: [`dist/${entry}.js`],
+            cwd: repoRoot,
+            usePackagedPlugins: true,
+          },
+        }
+      : {}),
+    transportBaseUrl: "http://127.0.0.1",
+    controlUiEnabled: false,
+    runtimeEnvPatch: {
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_PROVIDERS: "1",
+      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+    },
+    mutateConfig: configure,
   });
 }
 

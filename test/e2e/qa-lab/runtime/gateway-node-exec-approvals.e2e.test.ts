@@ -12,8 +12,14 @@ import {
   loadOrCreateDeviceIdentity,
   type DeviceIdentity,
 } from "../../../../src/infra/device-identity.js";
-import { acquireGatewayTestClient } from "../../../helpers/gateway-client.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import {
+  approveControlNodePairing,
+  connectControlClient as connectClient,
+  connectControlOperator,
+  isNodePairingRequired as isPairingRequired,
+  startNodeGateway,
+} from "./gateway-node-mcp.test-support.js";
 
 const TEST_TIMEOUT_MS = 180_000;
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -51,28 +57,18 @@ it(
   async ({ onTestFinished }) => {
     const gatewayOwner = createQaGatewayChild();
     onTestFinished(() => stopQaGatewayFixture(gatewayOwner));
-    const gateway = await gatewayOwner.start({
-      repoRoot: process.cwd(),
-      transportBaseUrl: "http://127.0.0.1",
-      controlUiEnabled: false,
-      runtimeEnvPatch: {
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-      },
-      mutateConfig: (cfg) => {
-        const { plugins: _plugins, ...withoutPlugins } = cfg;
-        return {
-          ...withoutPlugins,
-          gateway: {
-            ...cfg.gateway,
-            nodes: {
-              ...cfg.gateway?.nodes,
-              commands: { allow: NODE_COMMANDS },
-            },
+    const gateway = await startNodeGateway(gatewayOwner, (cfg) => {
+      const { plugins: _plugins, ...withoutPlugins } = cfg;
+      return {
+        ...withoutPlugins,
+        gateway: {
+          ...cfg.gateway,
+          nodes: {
+            ...cfg.gateway?.nodes,
+            commands: { allow: NODE_COMMANDS },
           },
-        };
-      },
+        },
+      };
     });
     const identity = loadOrCreateDeviceIdentity({
       path: path.join(gateway.tempRoot, "node-exec-approvals", "client", "credentials.sqlite"),
@@ -183,16 +179,8 @@ it(
   },
 );
 
-async function connectOperator(gateway: GatewayHandle): Promise<GatewayClient> {
-  return await connectClient(gateway, {
-    role: "operator",
-    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-    clientDisplayName: "Gateway node approval QA operator",
-    mode: GATEWAY_CLIENT_MODES.BACKEND,
-    scopes: ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
-    deviceIdentity: null,
-  });
-}
+const connectOperator = (gateway: GatewayHandle) =>
+  connectControlOperator(gateway, "Gateway node approval QA operator");
 
 async function connectNode(params: {
   gateway: GatewayHandle;
@@ -201,7 +189,8 @@ async function connectNode(params: {
   onEvent: (event: GatewayEvent) => void;
 }): Promise<GatewayClient> {
   const connect = () =>
-    connectClient(params.gateway, {
+    connectClient({
+      gateway: params.gateway,
       role: "node",
       clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
       clientDisplayName: "Windows exec approval node",
@@ -225,59 +214,12 @@ async function connectNode(params: {
   }
 }
 
-async function connectClient(
-  gateway: GatewayHandle,
-  options: Parameters<typeof acquireGatewayTestClient>[0],
-): Promise<GatewayClient> {
-  return await acquireGatewayTestClient(
-    {
-      url: gateway.wsUrl,
-      token: gateway.token,
-      env: gateway.runtimeEnv,
-      clientVersion: "1.0.0",
-      platform: process.platform,
-      requestTimeoutMs: REQUEST_TIMEOUT_MS,
-      ...options,
-    },
-    {
-      timeoutMs: REQUEST_TIMEOUT_MS,
-      timeoutMessage: `Gateway client connection timed out:\n${gateway.logs()}`,
-      closeMessage: "Gateway closed",
-      unrefTimeout: true,
-    },
-  );
-}
-
-function isPairingRequired(error: unknown): boolean {
-  const details =
-    error && typeof error === "object"
-      ? (error as { details?: { code?: unknown } }).details
-      : undefined;
-  return details?.code === "PAIRING_REQUIRED" || String(error).includes("PAIRING_REQUIRED");
-}
-
 async function approvePendingNodePairing(operator: GatewayClient, nodeId: string): Promise<void> {
-  type Pending = { requestId?: string; deviceId?: string; nodeId?: string; role?: string };
-  const waitPending = async (method: string, matches: (entry: Pending) => boolean) => {
-    let requestId: string | undefined;
-    await vi.waitFor(
-      async () => {
-        const result = await request<{ pending?: Pending[] }>(operator, method, {});
-        requestId = result.pending?.find(matches)?.requestId;
-        expect(requestId).toBeTruthy();
-      },
-      { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
-    );
-    return requestId;
-  };
-  const deviceRequestId = await waitPending(
-    "device.pair.list",
-    (entry) => entry.deviceId === nodeId || entry.role === "node",
-  );
-  await request(operator, "device.pair.approve", { requestId: deviceRequestId });
-  const nodeRequestId = await waitPending("node.pair.list", (entry) => entry.nodeId === nodeId);
-  const approval = await approveNodeRequest(operator, nodeId, nodeRequestId);
-  expect(approval).toMatchObject({ requestId: nodeRequestId });
+  const { requestId, result } = await approveControlNodePairing(operator, nodeId);
+  expect(result).toMatchObject({
+    requestId,
+    node: { nodeId, commands: NODE_COMMANDS, approvedAtMs: expect.any(Number) },
+  });
 }
 
 async function approveNodeRequest(operator: GatewayClient, nodeId: string, requestId?: string) {

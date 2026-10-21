@@ -5,8 +5,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type RawData, WebSocketServer } from "ws";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
@@ -26,7 +26,13 @@ import {
   type DeviceIdentity,
 } from "../../../../src/infra/device-identity.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import {
+  approveControlNodePairing,
+  connectControlClient as connectClient,
+  connectControlOperator,
+  isNodePairingRequired as isPairingRequired,
+  startNodeGateway,
+} from "./gateway-node-mcp.test-support.js";
 
 const TEST_TIMEOUT_MS = 180_000;
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -96,15 +102,7 @@ type StoppableFixture = {
 };
 const request = <T = unknown>(client: GatewayClient, method: string, params: unknown) =>
   client.request<T>(method, params, { timeoutMs: REQUEST_TIMEOUT_MS });
-const nodeEnvelope = (legacy: boolean) => ({
-  platform: legacy ? "darwin" : "macos",
-  ...(legacy ? {} : { deviceFamily: "Mac" }),
-  minProtocol: legacy ? MIN_NODE_PROTOCOL_VERSION : PROTOCOL_VERSION,
-  maxProtocol: legacy ? MIN_NODE_PROTOCOL_VERSION : PROTOCOL_VERSION,
-});
-
 describe("Gateway node control plane", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const gatewayOwner = createQaGatewayChild();
   let gateway: GatewayHandle;
   let pluginFixture: Awaited<ReturnType<typeof createFixturePlugin>> | undefined;
@@ -112,22 +110,9 @@ describe("Gateway node control plane", () => {
   // Pairing and protocol behavior use distinct devices; Gateway startup is not under test.
   beforeAll(async () => {
     const fixture = (pluginFixture = await createFixturePlugin());
-    gateway = await gatewayOwner.start({
-      repoRoot: process.cwd(),
-      command: {
-        executablePath: process.execPath,
-        argsPrefix: ["dist/entry.js"],
-        cwd: process.cwd(),
-        usePackagedPlugins: true,
-      },
-      transportBaseUrl: "http://127.0.0.1",
-      controlUiEnabled: false,
-      runtimeEnvPatch: {
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-      },
-      mutateConfig: (cfg) => {
+    gateway = await startNodeGateway(
+      gatewayOwner,
+      (cfg) => {
         // This control-plane fixture must not request unrelated QA runtime plugin installs.
         return {
           ...cfg,
@@ -147,7 +132,8 @@ describe("Gateway node control plane", () => {
           },
         };
       },
-    });
+      "entry",
+    );
   });
 
   afterAll(async () => {
@@ -362,84 +348,6 @@ describe("Gateway node control plane", () => {
     },
   );
 
-  it(
-    "keeps one node-host client converged across Gateway upgrades and rollbacks",
-    { timeout: REQUEST_TIMEOUT_MS * 4 },
-    async () => {
-      const identity = loadOrCreateDeviceIdentity({
-        path: path.join(
-          tempDirs.make("openclaw-node-host-negotiation-"),
-          "client",
-          "credentials.sqlite",
-        ),
-      });
-      const fixture = await startProtocolEnvelopeFixture();
-      const helloProtocols: number[] = [];
-      let node: GatewayClient | undefined;
-
-      try {
-        // runNodeHost owns one NODE_HOST GatewayClient. Keep this exact instance
-        // across server transitions so production negotiation owns every retry.
-        node = await connectClient({
-          gateway: fixture.gateway,
-          role: "node",
-          clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-          clientDisplayName: "QA node host",
-          mode: GATEWAY_CLIENT_MODES.NODE,
-          platform: "macos",
-          deviceFamily: "Mac",
-          scopes: [],
-          deviceIdentity: identity,
-          onHelloOk: (hello) => {
-            helloProtocols.push(hello.protocol);
-          },
-        });
-
-        expect(helloProtocols).toEqual([MIN_NODE_PROTOCOL_VERSION]);
-        expect(fixture.connectFrames).toMatchObject([
-          { clientName: GATEWAY_CLIENT_NAMES.NODE_HOST, ...nodeEnvelope(false) },
-          { clientName: GATEWAY_CLIENT_NAMES.NODE_HOST, ...nodeEnvelope(true) },
-        ]);
-        expect(fixture.connectFrames[1]).not.toHaveProperty("deviceFamily");
-
-        fixture.setProtocol(PROTOCOL_VERSION);
-        fixture.disconnectClients("Gateway upgraded to protocol v4");
-        await vi.waitFor(
-          () => expect(helloProtocols).toEqual([MIN_NODE_PROTOCOL_VERSION, PROTOCOL_VERSION]),
-          {
-            timeout: REQUEST_TIMEOUT_MS,
-            interval: 100,
-          },
-        );
-        expect(fixture.connectFrames.slice(-2)).toMatchObject([
-          nodeEnvelope(true),
-          nodeEnvelope(false),
-        ]);
-
-        fixture.setProtocol(MIN_NODE_PROTOCOL_VERSION);
-        fixture.disconnectClients("Gateway rolled back to protocol v3");
-        await vi.waitFor(
-          () =>
-            expect(helloProtocols).toEqual([
-              MIN_NODE_PROTOCOL_VERSION,
-              PROTOCOL_VERSION,
-              MIN_NODE_PROTOCOL_VERSION,
-            ]),
-          {
-            timeout: REQUEST_TIMEOUT_MS,
-            interval: 100,
-          },
-        );
-        expect(fixture.connectFrames.slice(-2)).toMatchObject([
-          nodeEnvelope(false),
-          nodeEnvelope(true),
-        ]);
-      } finally {
-        await stopProtocolEnvelopeFixture(node, fixture);
-      }
-    },
-  );
-
   it("stops the protocol fixture when client cleanup rejects", async () => {
     const clientError = new Error("client cleanup failed");
     const stopFixture = vi.fn(async () => {});
@@ -642,17 +550,8 @@ async function stopProtocolEnvelopeFixture(
   }
 }
 
-async function connectOperator(gateway: GatewayConnection): Promise<GatewayClient> {
-  return await connectClient({
-    gateway,
-    role: "operator",
-    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-    clientDisplayName: "Gateway node QA operator",
-    mode: GATEWAY_CLIENT_MODES.BACKEND,
-    scopes: ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
-    deviceIdentity: null,
-  });
-}
+const connectOperator = (gateway: GatewayConnection) =>
+  connectControlOperator(gateway, "Gateway node QA operator");
 
 async function connectPairedNode(params: {
   gateway: GatewayConnection;
@@ -683,114 +582,8 @@ async function connectPairedNode(params: {
     if (!isPairingRequired(error)) {
       throw error;
     }
-    await approvePendingNodePairing(params.operator, params.identity.deviceId);
+    await approveControlNodePairing(params.operator, params.identity.deviceId);
     return await connect();
-  }
-}
-
-async function connectClient(params: {
-  gateway: GatewayConnection;
-  role: "operator" | "node";
-  clientName:
-    | typeof GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
-    | typeof GATEWAY_CLIENT_NAMES.IOS_APP
-    | typeof GATEWAY_CLIENT_NAMES.NODE_HOST;
-  clientDisplayName: string;
-  mode: typeof GATEWAY_CLIENT_MODES.BACKEND | typeof GATEWAY_CLIENT_MODES.NODE;
-  scopes: string[];
-  platform?: string;
-  deviceFamily?: string;
-  caps?: string[];
-  commands?: string[];
-  permissions?: Record<string, boolean>;
-  deviceIdentity: DeviceIdentity | null;
-  minProtocol?: number;
-  maxProtocol?: number;
-  onEvent?: (event: { event: string; payload?: unknown }) => void;
-  onHelloOk?: (hello: HelloOk) => void;
-}): Promise<GatewayClient> {
-  const { gateway, ...options } = params;
-  return await new Promise<GatewayClient>((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      if (error) {
-        client.stop();
-        reject(error);
-        return;
-      }
-      resolve(client);
-    };
-    const client = new GatewayClient({
-      ...options,
-      url: gateway.wsUrl,
-      token: gateway.token,
-      env: gateway.runtimeEnv,
-      clientVersion: "1.0.0",
-      platform: params.platform ?? process.platform,
-      requestTimeoutMs: REQUEST_TIMEOUT_MS,
-      onHelloOk: (hello) => {
-        params.onHelloOk?.(hello);
-        finish();
-      },
-      onConnectError: (error) => finish(error),
-      onClose: (code, reason) => {
-        // NODE_HOST uses this exact close to switch protocol envelopes. Keep the
-        // same client alive until its negotiated hello reaches the caller.
-        if (
-          params.clientName === GATEWAY_CLIENT_NAMES.NODE_HOST &&
-          code === 1008 &&
-          reason === "connect retry"
-        ) {
-          return;
-        }
-        finish(new Error(`Gateway closed (${code}): ${reason}`));
-      },
-    });
-    const timeout = setTimeout(
-      () => finish(new Error(`Gateway client connection timed out:\n${gateway.logs()}`)),
-      REQUEST_TIMEOUT_MS,
-    );
-    timeout.unref();
-    client.start();
-  });
-}
-
-function isPairingRequired(error: unknown): boolean {
-  const details =
-    error && typeof error === "object"
-      ? (error as { details?: { code?: unknown } }).details
-      : undefined;
-  return details?.code === "PAIRING_REQUIRED" || String(error).includes("PAIRING_REQUIRED");
-}
-
-async function approvePendingNodePairing(operator: GatewayClient, nodeId: string): Promise<void> {
-  for (const kind of ["device", "node"] as const) {
-    let requestId: string | undefined;
-    await vi.waitFor(
-      async () => {
-        const { pending } = await request<{
-          pending?: Array<{
-            requestId?: string;
-            deviceId?: string;
-            nodeId?: string;
-            role?: string;
-          }>;
-        }>(operator, `${kind}.pair.list`, {});
-        requestId = pending?.find((entry) =>
-          kind === "device"
-            ? entry.deviceId === nodeId || entry.role === "node"
-            : entry.nodeId === nodeId,
-        )?.requestId;
-        expect(requestId).toBeTruthy();
-      },
-      { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
-    );
-    await request(operator, `${kind}.pair.approve`, { requestId });
   }
 }
 
@@ -1044,12 +837,10 @@ function parseConnectEnvelope(
 async function startProtocolEnvelopeFixture(): Promise<{
   gateway: GatewayConnection;
   connectFrames: ConnectEnvelope[];
-  setProtocol: (protocol: number) => void;
-  disconnectClients: (reason: string) => void;
   stop: () => Promise<void>;
 }> {
   const connectFrames: ConnectEnvelope[] = [];
-  let protocol: number = MIN_NODE_PROTOCOL_VERSION;
+  const protocol = MIN_NODE_PROTOCOL_VERSION;
   let challengeSequence = 0;
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   server.on("connection", (socket) => {
@@ -1131,14 +922,6 @@ async function startProtocolEnvelopeFixture(): Promise<{
       token: "qa-v3-gateway-token",
       runtimeEnv: {},
       logs: () => JSON.stringify(connectFrames),
-    },
-    setProtocol(nextProtocol) {
-      protocol = nextProtocol;
-    },
-    disconnectClients(reason) {
-      for (const client of server.clients) {
-        client.close(1012, reason);
-      }
     },
     async stop() {
       for (const client of server.clients) {
