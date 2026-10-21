@@ -7,8 +7,11 @@ import {
   nodeWorkspaceTransferManifestPath,
   nodeWorkspaceTransferReconcilePath,
 } from "../../worker/node-workspace-transfer-protocol.js";
-import { environment, workspaceCommandResult } from "./node-worker-tunnel.test-support.js";
-import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
+import {
+  environment,
+  workspaceActions,
+  workspaceCommandResult,
+} from "./node-worker-tunnel.test-support.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -34,12 +37,9 @@ function repositoryFixture(closeAt?: ClosingBoundary) {
   let closedAtBoundary = false;
   let effectsAfterClosure = 0;
   let downloadStatus: number | undefined;
-  const actions = createNodeWorkerWorkspaceActions({
+  const actions = workspaceActions({
     environmentId: record.environmentId,
     ownerEpoch: record.ownerEpoch,
-    sessionId: "session-1",
-    ownerSignal: new AbortController().signal,
-    isOwnerCurrent: () => true,
     workspaceTransfer: transfer,
     runWorkspaceCommand: async (command) => {
       if (closeAt === "upload" && command.transfer?.direction === "upload") {

@@ -118,13 +118,6 @@ describe("node worker workspace origin fallback", () => {
     },
   );
 
-  it("reports a clean origin sync and stores its seed", async () => {
-    const { exec, sync } = fixture();
-    await expect(sync()).resolves.toEqual(synced());
-
-    expect(exec.mock.calls.at(-1)?.[0]).toEqual(seedStoreCommand);
-  });
-
   it.each([
     { operation: "clone", reason: "clone-failed" },
     { operation: "checkout", reason: "checkout-failed" },

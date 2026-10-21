@@ -1,9 +1,29 @@
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { transferOwner } from "./node-workspace-transfer.test-support.js";
+
+export function interceptUploadFile(
+  name: string,
+  onOpen: (handle: FileHandle, file: string) => void | Promise<void>,
+) {
+  const open = fs.open.bind(fs);
+  return vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    const file = args[0];
+    if (
+      typeof file === "string" &&
+      file.includes(`${path.sep}upload-`) &&
+      path.basename(file) === name &&
+      args[1] === "wx"
+    ) {
+      await onOpen(handle, file);
+    }
+    return handle;
+  });
+}
 
 export async function transferFixture(
   root: string,

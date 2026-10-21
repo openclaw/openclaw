@@ -8,7 +8,7 @@ import {
   startRequest,
   transport,
   withWorkspaceDrain,
-  workspaceCommandPayload,
+  workspaceReply,
   workspaceTransfer,
 } from "./node-worker-tunnel.test-support.js";
 
@@ -93,7 +93,7 @@ it.each([300_000, -300_000])(
           return { ok: false, error: { code: "DISCONNECTED" } };
         }
       }
-      return { ok: true, payloadJSON: workspaceCommandPayload("/node/workspace") };
+      return workspaceReply("/node/workspace");
     });
     const manager = createRestoredManager({
       getTransport: () => nodeTransport,
