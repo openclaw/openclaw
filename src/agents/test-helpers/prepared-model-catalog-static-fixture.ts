@@ -46,7 +46,7 @@ export function createStaticCatalogSnapshotFixture(params: {
     const isCurrent = () => !retirement.signal.aborted;
     const supersede = () => retirement.abort();
     retireAfterTest(supersede);
-    const loadedMetadataSnapshot = options?.metadataWorkspace
+    let metadataSnapshot = options?.metadataWorkspace
       ? loadPluginMetadataSnapshot({
           config:
             options.metadataWorkspace === "activation"
@@ -55,10 +55,9 @@ export function createStaticCatalogSnapshotFixture(params: {
           env: fixture.env,
         })
       : undefined;
-    const providedMetadataSnapshot =
-      options?.provideMetadataToWorker && loadedMetadataSnapshot
-        ? markPluginMetadataSnapshotProvided(loadedMetadataSnapshot)
-        : loadedMetadataSnapshot;
+    if (options?.provideMetadataToWorker && metadataSnapshot) {
+      metadataSnapshot = markPluginMetadataSnapshotProvided(metadataSnapshot);
+    }
     const results = await startSerializedSnapshotBuildBatch(
       [
         {
@@ -74,7 +73,7 @@ export function createStaticCatalogSnapshotFixture(params: {
       30_000,
       "static",
       undefined,
-      providedMetadataSnapshot,
+      metadataSnapshot,
     ).pending;
     const build = results[0]!;
     const releaseGeneration = retainPreparedPluginGeneration(build.pluginGeneration);

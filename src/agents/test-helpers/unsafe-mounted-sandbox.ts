@@ -87,14 +87,13 @@ export async function withUnsafeMountedSandboxHarness(
     (options?.includeSkillsWorkspace ? path.join(stateDir, "skills-state") : undefined);
   await fs.mkdir(sandboxRoot, { recursive: true });
   await fs.mkdir(agentRoot, { recursive: true });
+  const context = { sandboxRoot, agentRoot, skillsWorkspaceDir };
   const sandbox = createUnsafeMountedSandbox({
-    sandboxRoot,
-    agentRoot,
-    skillsWorkspaceDir,
+    ...context,
     workspaceAccess: options?.workspaceAccess,
   });
   try {
-    await run({ sandboxRoot, agentRoot, skillsWorkspaceDir, sandbox });
+    await run({ ...context, sandbox });
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true });
   }

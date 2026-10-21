@@ -18,8 +18,7 @@ export async function startPromptCacheMcpServer(signal: AbortSignal) {
       http.createServer((request, response) => {
         const finish = (status: number, body?: string) => response.writeHead(status).end(body);
         if (request.method !== "POST") {
-          finish(request.method === "DELETE" ? 204 : 405);
-          return;
+          return finish(request.method === "DELETE" ? 204 : 405);
         }
         const respond = async () => {
           const message = JSON.parse(await text(request)) as {
@@ -27,11 +26,10 @@ export async function startPromptCacheMcpServer(signal: AbortSignal) {
             method: string;
             params?: { protocolVersion?: string };
           };
-          const reply = (result: unknown) => {
+          const reply = (result: unknown) =>
             response
               .writeHead(200, { "content-type": "application/json" })
               .end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
-          };
           if (message.method === "initialize") {
             generation++;
             if (generation > 1) {
@@ -47,8 +45,7 @@ export async function startPromptCacheMcpServer(signal: AbortSignal) {
             });
           }
           if (request.headers["mcp-session-id"] !== activeSessionId || !activeSessionId) {
-            finish(404, "Session not found");
-            return;
+            return finish(404, "Session not found");
           }
           if (message.method === "notifications/initialized") {
             finish(202);
