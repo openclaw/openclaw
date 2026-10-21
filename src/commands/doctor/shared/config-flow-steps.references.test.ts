@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
+import { createSnapshot } from "../../../config/mutate.test-support.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolvePluginDoctorProviderRenames } from "../../../plugins/doctor-contract-registry.js";
-import type * as DoctorContractRegistry from "../../../plugins/doctor-contract-registry.js";
 import {
   prepareDoctorConfigReferenceSource,
   restoreDoctorConfigEnvRefs,
@@ -9,37 +9,26 @@ import {
 import { applyProviderRenames } from "./provider-rename.js";
 
 vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof DoctorContractRegistry>()),
-  resolvePluginDoctorProviderRenames: vi.fn<
-    typeof DoctorContractRegistry.resolvePluginDoctorProviderRenames
-  >(() => []),
+  ...(await importOriginal<typeof import("../../../plugins/doctor-contract-registry.js")>()),
+  resolvePluginDoctorProviderRenames: vi.fn<typeof resolvePluginDoctorProviderRenames>(() => []),
 }));
 
-function pairedSnapshot(authored: OpenClawConfig, resolved: OpenClawConfig): ConfigFileSnapshot {
-  return {
-    path: "/fixture/openclaw.json",
-    exists: true,
-    raw: JSON.stringify(authored),
-    parsed: authored,
+function referenceSource(authored: OpenClawConfig, resolved: OpenClawConfig) {
+  return prepareDoctorConfigReferenceSource({
+    ...createSnapshot({ hash: "fixture", sourceConfig: resolved, parsed: authored }),
     authoredConfig: authored,
     sourceConfigBeforeMigrations: resolved,
-    sourceConfig: resolved,
-    resolved,
-    config: resolved,
-    runtimeConfig: resolved,
-    valid: true,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  };
+  });
+}
+
+function legacyMemory(apiKey: string): OpenClawConfig {
+  return { agents: { defaults: { memorySearch: { remote: { apiKey } } } } } as OpenClawConfig;
 }
 
 describe("Doctor planning reference intent", () => {
   it("preserves an explicitly activated reference at an unchanged path", () => {
     const candidate = { browser: { executablePath: "${BROWSER_BIN}" } };
-    const source = prepareDoctorConfigReferenceSource(
-      pairedSnapshot({ browser: { executablePath: "$${BROWSER_BIN}" } }, candidate),
-    );
+    const source = referenceSource({ browser: { executablePath: "$${BROWSER_BIN}" } }, candidate);
     expect(restoreDoctorConfigEnvRefs(candidate, source, [["browser", "executablePath"]])).toEqual(
       candidate,
     );
@@ -49,16 +38,7 @@ describe("Doctor planning reference intent", () => {
   });
 
   it("preserves an explicitly activated reference at a migrated destination", () => {
-    const source = prepareDoctorConfigReferenceSource(
-      pairedSnapshot(
-        {
-          agents: { defaults: { memorySearch: { remote: { apiKey: "$${MEMORY_KEY}" } } } },
-        } as OpenClawConfig,
-        {
-          agents: { defaults: { memorySearch: { remote: { apiKey: "${MEMORY_KEY}" } } } },
-        } as OpenClawConfig,
-      ),
-    );
+    const source = referenceSource(legacyMemory("$${MEMORY_KEY}"), legacyMemory("${MEMORY_KEY}"));
     const candidate = { memory: { search: { remote: { apiKey: "${MEMORY_KEY}" } } } };
     expect(
       restoreDoctorConfigEnvRefs(candidate, source, [["memory", "search", "remote", "apiKey"]]),
@@ -70,25 +50,17 @@ describe("Doctor planning reference intent", () => {
 
   it("preserves moved provider templates when the routing URL is environment-backed", () => {
     const renames = [{ from: "ollama", to: "ollama-cloud", baseUrl: "https://ollama.com" }];
+    const ollama = { baseUrl: "${OLLAMA_BASE_URL}", apiKey: "${OLLAMA_API_KEY}", models: [] };
     const authored: OpenClawConfig = {
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "${OLLAMA_BASE_URL}",
-            apiKey: "${OLLAMA_API_KEY}",
-            models: [],
-          },
-        },
-      },
+      models: { providers: { ollama } },
       agents: { defaults: { model: "ollama/example" } },
     };
     const resolved = structuredClone(authored);
     resolved.models!.providers!.ollama!.baseUrl = "https://ollama.com/api";
     resolved.models!.providers!.ollama!.apiKey = "synthetic-rotating-key";
-    const source = prepareDoctorConfigReferenceSource(pairedSnapshot(authored, resolved));
+    const source = referenceSource(authored, resolved);
     vi.mocked(resolvePluginDoctorProviderRenames).mockReturnValueOnce(renames);
-    const preflight = restoreDoctorConfigEnvRefs(resolved, source);
-    expect(preflight).toEqual(authored);
+    expect(restoreDoctorConfigEnvRefs(resolved, source)).toEqual(authored);
     const candidate = applyProviderRenames(resolved, renames).config;
     vi.mocked(resolvePluginDoctorProviderRenames).mockReturnValueOnce(renames);
 

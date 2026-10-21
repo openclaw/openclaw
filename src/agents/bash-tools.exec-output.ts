@@ -1,9 +1,8 @@
 /**
- * Rendering helpers for exec output/status updates.
  * Keeps no-output placeholders and warning placement consistent across exec
  * progress, polling, and completion surfaces.
  */
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import type { TerminationReason } from "../process/supervisor/types.js";
 
 export const EXEC_NO_OUTPUT_PLACEHOLDER = "(no output)";
@@ -30,7 +29,7 @@ export function renderExecExitLabel(exit: {
   if (exit.exitSignal != null) {
     return `signal ${exit.exitSignal}`;
   }
-  return typeof exit.exitCode === "number" ? `code ${exit.exitCode}` : "unknown exit code";
+  return exit.exitCode != null ? `code ${exit.exitCode}` : "unknown exit code";
 }
 
 /** Render the text shown in exec progress updates, including warnings first. */
@@ -52,19 +51,14 @@ export function appendExecTimeoutRetryGuidance(
 
 const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
 
-/** Normalizes notification snippets to a compact single-line form. */
 export function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-export function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS) {
-  const normalized = normalizeNotifyOutput(value);
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-  const safe = Math.max(1, maxChars - 1);
-  return `${truncateUtf16Safe(normalized, safe)}…`;
+export function compactNotifyOutput(value: string) {
+  return truncateWithMarker(normalizeNotifyOutput(value), DEFAULT_NOTIFY_SNIPPET_CHARS, {
+    marker: "…",
+    reserve: 1,
+    trimEnd: false,
+  });
 }

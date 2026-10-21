@@ -1,4 +1,4 @@
-import { createEffect, createSignal } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginControlUiDiagnostic } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import {
@@ -11,12 +11,12 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import * as staleChunkReload from "../../app/stale-chunk-reload.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { getLogbookState, stopLogbookPolling } from "./logbook-controller.ts";
-import { BUNDLED_TAB_VIEWS } from "./plugin-page-lifecycle.ts";
 import { PluginPage, type PluginPageProps } from "./plugin-page.tsx";
+import { page as pluginRoute } from "./route.ts";
 
 type ApplicationConfig = ApplicationConfigCapability["current"];
 const cleanups: Array<() => void> = [];
@@ -39,7 +39,6 @@ function externalPluginConfig(
       agentId: null,
       name: "Assistant",
       avatar: null,
-      avatarSource: null,
       avatarStatus: null,
       avatarReason: null,
     },
@@ -188,6 +187,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanups.splice(0).forEach((cleanup) => cleanup());
+  vi.doUnmock("./logbook-view.tsx");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -217,29 +217,51 @@ describe("PluginPage", () => {
       plugins,
       gateway: { snapshot: { phase: "connected" }, subscribe: () => () => undefined },
     } as unknown as ApplicationContext;
-    const fixture = mountPage(context, {
+    const route = await pluginRoute.component();
+    const [data, setData] = createSignal({
       pluginId,
-      tabId: "notes",
+      id: "notes",
       params: { document: "saved-draft" },
     });
+    const provider = createSolidApplicationContextProvider(context);
+    const view = mountSolid(
+      () =>
+        route.renderSolid({
+          get data() {
+            return data();
+          },
+          loaderPending: false,
+          presented: true,
+        }),
+      { wrapper: provider.wrapper },
+    );
+    cleanups.push(view.unmount);
+    const page = view.container.querySelector("openclaw-plugin-page")!;
     await settle();
-    expect(fixture.page.querySelector('[aria-label="Loading…"]')).not.toBeNull();
-    expect(fixture.page.textContent).not.toContain("Open Labs");
+    expect(page.querySelector('[aria-label="Loading…"]')).not.toBeNull();
+    expect(page.textContent).not.toContain("Open Labs");
     loading = false;
     listeners.forEach((listener) => listener());
     await settle();
-    expect(fixture.page.textContent).toContain("Custom plugin UI is off");
-    expect(fixture.page.params).toEqual({ document: "saved-draft" });
-    const link = fixture.page.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
+    expect(page.textContent).toContain("Custom plugin UI is off");
+    expect(page.params).toEqual({ document: "saved-draft" });
+    const link = page.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
     expect(link?.textContent?.trim()).toBe("Open Labs");
     link?.click();
     expect(navigate).toHaveBeenCalledExactlyOnceWith("labs");
     plugins.errors = [{ pluginId, message: "Custom plugin UI is off" }];
     listeners.forEach((listener) => listener());
     await settle();
-    expect(fixture.page.textContent).toContain("Plugin panel unavailable");
-    expect(fixture.page.textContent).toContain("Custom plugin UI is off");
-    expect(fixture.page.textContent).not.toContain("Open Labs");
+    expect(page.textContent).toContain("Plugin panel unavailable");
+    expect(page.textContent).toContain("Custom plugin UI is off");
+    expect(page.textContent).not.toContain("Open Labs");
+    setData({ pluginId: "other-review", id: "details", params: { document: "next-draft" } });
+    await settle();
+    expect(view.container.querySelector("openclaw-plugin-page")).toBe(page);
+    expect(page.pluginId).toBe("other-review");
+    expect(page.tabId).toBe("details");
+    expect(page.params).toEqual({ document: "next-draft" });
+    expect(page.textContent).not.toContain("Custom plugin UI is off");
   });
 
   it("refreshes parent auth before mounting an external plugin frame", async () => {
@@ -411,11 +433,23 @@ describe("PluginPage", () => {
 });
 
 type BundledView = (typeof import("./logbook-view.tsx"))["Logbook"];
-function setBundledLoad(load: Promise<BundledView>, stop = stopLogbookPolling) {
-  vi.spyOn(BUNDLED_TAB_VIEWS, "logbook/logbook").mockImplementationOnce(async () => ({
-    render: await load,
-    stop,
-  }));
+function setBundledLoad(load: Promise<BundledView>) {
+  const started = createDeferred();
+  // mock-isolation: Control lazy import settlement without initializing the real Logbook module.
+  vi.doMock("./logbook-view.tsx", async () => {
+    started.resolve();
+    return { Logbook: await load };
+  });
+  return started.promise;
+}
+
+function interpretMockImportError(importError: Error) {
+  const isStale = staleChunkReload.isStaleChunkImportError;
+  // Vitest wraps mock-factory failures; browsers reject import() with the original error.
+  vi.spyOn(staleChunkReload, "isStaleChunkImportError").mockImplementation(
+    (error): error is Error =>
+      isStale(error) || (error instanceof Error && error.cause === importError),
+  );
 }
 
 function createBundledPage(client: GatewayBrowserClient | null = null, includeExternal = false) {
@@ -475,9 +509,6 @@ function logbookResponse(method: string) {
       timeZone: "UTC",
     };
   }
-  if (method === "logbook.days") {
-    return { days: [] };
-  }
   return {
     day: "2026-07-05",
     cards: [],
@@ -488,68 +519,58 @@ function logbookResponse(method: string) {
 describe("bundled plugin views", () => {
   it("stops a bundled view when its advertised descriptor disappears", async () => {
     const loaded = createDeferred<BundledView>();
-    let renderedHost: object | undefined;
-    const stop = vi.fn();
-    setBundledLoad(loaded.promise, stop);
+    const disposed = vi.fn();
+    const started = setBundledLoad(loaded.promise);
     const fixture = createBundledPage();
-    loaded.resolve((props) => {
-      createEffect(
-        () => props.host,
-        (host) => {
-          renderedHost = host;
-        },
-      );
+    await started;
+    loaded.resolve(() => {
+      onCleanup(disposed);
       return "Logbook view";
     });
     await waitForSolid(() => expect(fixture.page.textContent).toContain("Logbook view"));
     fixture.hello.controlUiTabs = [];
     fixture.notify();
-    expect(stop).toHaveBeenCalledWith(renderedHost);
+    expect(disposed).toHaveBeenCalledOnce();
     expect(fixture.page.textContent).not.toContain("Logbook view");
   });
 
   it("isolates an in-flight bundled load across a same-client reconnect", async () => {
     await import("./logbook-view.tsx");
+    vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 6, 5, 12));
     const staleStatus = createDeferred<unknown>();
-    const staleDays = createDeferred<unknown>();
     const staleTimeline = createDeferred<unknown>();
     const pending = new Map([
       ["logbook.status", staleStatus],
-      ["logbook.days", staleDays],
       ["logbook.timeline", staleTimeline],
     ]);
     const request = vi.fn(
       (method: string) => pending.get(method)?.promise ?? Promise.resolve(logbookResponse(method)),
     );
-    const controller = await import("./logbook-controller.ts");
-    const stop = vi.spyOn(controller, "stopLogbookPolling");
     const fixture = createBundledPage({ request } as unknown as GatewayBrowserClient);
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
     fixture.snapshot.phase = "stopped";
     fixture.notify();
-    const oldHost = stop.mock.calls.at(-1)?.[0];
-    expect(oldHost).toBeDefined();
-    expect(getLogbookState(oldHost!).pollTimer).toBeNull();
     pending.clear();
     staleStatus.resolve(logbookResponse("logbook.status"));
-    staleDays.resolve(logbookResponse("logbook.days"));
     staleTimeline.resolve(logbookResponse("logbook.timeline"));
-    await Promise.all([staleStatus.promise, staleDays.promise, staleTimeline.promise]);
+    await Promise.all([staleStatus.promise, staleTimeline.promise]);
     flush();
     expect(fixture.page.querySelector(".logbook__chips")).toBeNull();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(request).toHaveBeenCalledTimes(2);
     fixture.snapshot.phase = "connected";
     fixture.notify();
     await waitForSolid(() => expect(fixture.page.querySelector(".logbook__chips")).not.toBeNull());
     expect(fixture.page.querySelector(".logbook__day")?.textContent).toBe("2026-07-05");
-    expect(request).toHaveBeenCalledTimes(6);
+    expect(request).toHaveBeenCalledTimes(4);
   });
 
-  it("retries the rejected view immediately and recovers without a Gateway update", async () => {
+  it("retries the rejected view and recovers without a Gateway update", async () => {
     const failed = createDeferred<BundledView>();
-    setBundledLoad(failed.promise);
+    const started = setBundledLoad(failed.promise);
     const fixture = createBundledPage();
-    await settle();
+    await started;
     expect(fixture.page.querySelector('[role="status"]')).not.toBeNull();
     failed.reject(new Error("Logbook chunk failed"));
     await waitForSolid(() =>
@@ -558,32 +579,71 @@ describe("bundled plugin views", () => {
       ),
     );
     const retry = createDeferred<BundledView>();
-    setBundledLoad(retry.promise);
+    const retryStarted = setBundledLoad(retry.promise);
     fixture.page.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    await retryStarted;
     await settle();
-    expect(fixture.page.querySelector('[role="alert"]')).toBeNull();
-    expect(fixture.page.querySelector('[role="status"][aria-label="Loading…"]')).not.toBeNull();
+    expect(fixture.page.querySelector('[role="alert"]')?.textContent).toContain(
+      "Logbook chunk failed",
+    );
     retry.resolve(() => "recovered Logbook view");
     await waitForSolid(() => expect(fixture.page.textContent).toContain("recovered Logbook view"));
     expect(fixture.page.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it("ignores a stale rejection after switching away and back", async () => {
+  it("ignores a retired import rejection before loading a fresh descriptor", async () => {
+    const recover = vi.spyOn(staleChunkReload, "scheduleStaleChunkReload").mockResolvedValue(false);
+    const failure = new Error("Failed to fetch dynamically imported module");
+    interpretMockImportError(failure);
     const stale = createDeferred<BundledView>();
-    setBundledLoad(stale.promise);
+    const started = setBundledLoad(stale.promise);
     const fixture = createBundledPage(null, true);
-    await settle();
+    await started;
     fixture.setProps({ pluginId: "external-plugin", tabId: "panel" });
     await settle();
-    const current = createDeferred<BundledView>();
-    setBundledLoad(current.promise);
-    fixture.setProps({ pluginId: "logbook", tabId: "logbook" });
+    stale.reject(failure);
+    await vi.dynamicImportSettled();
     await settle();
+    expect(fixture.page.pluginId).toBe("external-plugin");
+    expect(fixture.page.querySelector('[role="alert"]')).toBeNull();
+    expect(recover).not.toHaveBeenCalled();
+    const current = createDeferred<BundledView>();
+    const currentStarted = setBundledLoad(current.promise);
+    fixture.setProps({ pluginId: "logbook", tabId: "logbook" });
+    await currentStarted;
     current.resolve(() => "current Logbook view");
     await waitForSolid(() => expect(fixture.page.textContent).toContain("current Logbook view"));
-    stale.reject(new Error("Failed to fetch dynamically imported module"));
-    await settle();
+    expect(fixture.page.pluginId).toBe("logbook");
     expect(fixture.page.querySelector('[role="alert"]')).toBeNull();
     expect(fixture.page.textContent).toContain("current Logbook view");
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it("recovers a stale retry only while its descriptor remains advertised", async () => {
+    const recover = vi.spyOn(staleChunkReload, "scheduleStaleChunkReload").mockResolvedValue(false);
+    const reload = vi
+      .spyOn(staleChunkReload, "retryStaleChunkReloadWhenReachable")
+      .mockResolvedValue(false);
+    const failure = new Error("Failed to fetch dynamically imported module");
+    interpretMockImportError(failure);
+    const failed = createDeferred<BundledView>();
+    const started = setBundledLoad(failed.promise);
+    const fixture = createBundledPage();
+    await started;
+    failed.reject(new Error("Logbook chunk failed"));
+    await waitForSolid(() => expect(fixture.page.querySelector('[role="alert"]')).not.toBeNull());
+    const stale = createDeferred<BundledView>();
+    const staleStarted = setBundledLoad(stale.promise);
+    fixture.page.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    await staleStarted;
+    stale.reject(failure);
+    await waitForSolid(() => expect(recover).toHaveBeenCalledOnce());
+    const mayRecover = recover.mock.calls[0]?.[0]?.canReload;
+    expect(mayRecover?.()).toBe(true);
+    fixture.page.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    expect(reload).toHaveBeenCalledOnce();
+    fixture.hello.controlUiTabs = [];
+    fixture.notify();
+    expect(mayRecover?.()).toBe(false);
   });
 });

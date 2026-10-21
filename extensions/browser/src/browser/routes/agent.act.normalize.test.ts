@@ -4,6 +4,10 @@ import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.norma
 
 const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 
+function rejects(body: Record<string, unknown>, message: string) {
+  expect(() => normalizeActRequest(body)).toThrow(message);
+}
+
 it("projects nested actions without leaking caller control fields or dropping false and empty values", () => {
   expect(
     normalizeActRequest({
@@ -60,13 +64,10 @@ describe("canonicalizeActTargetIds", () => {
       ],
     } satisfies Parameters<typeof canonicalizeActTargetIds>[0];
     expect(canonicalizeActTargetIds(action, tab, [tab])).toBeNull();
-    expect(action.targetId).toBe(canonical);
-    const [first, nested] = action.actions;
-    expect(first?.targetId).toBe(canonical);
-    if (nested?.kind !== "batch") {
-      throw new Error("expected nested batch");
-    }
-    expect(nested.actions[0]?.targetId).toBe(canonical);
+    expect(action).toMatchObject({
+      targetId: canonical,
+      actions: [{ targetId: canonical }, { kind: "batch", actions: [{ targetId: canonical }] }],
+    });
   });
 
   it("rejects ids that resolve to a different tab", () => {
@@ -103,9 +104,7 @@ describe("normalizeActRequest keyboard keys", () => {
   });
 
   it("rejects non-text insertion payloads without echoing content", () => {
-    expect(() =>
-      normalizeActRequest({ kind: "insertText", text: { secret: "synthetic" } }),
-    ).toThrow("insertText requires text");
+    rejects({ kind: "insertText", text: { secret: "synthetic" } }, "insertText requires text");
   });
 
   it.each([
@@ -118,8 +117,8 @@ describe("normalizeActRequest keyboard keys", () => {
   });
 
   it("still rejects an empty press key after trimming", () => {
-    expect(() => normalizeActRequest({ kind: "press", key: "" })).toThrow("press requires key");
-    expect(() => normalizeActRequest({ kind: "press", key: "\t" })).toThrow("press requires key");
+    rejects({ kind: "press", key: "" }, "press requires key");
+    rejects({ kind: "press", key: "\t" }, "press requires key");
   });
 });
 
@@ -140,50 +139,33 @@ describe("normalizeActRequest numeric fields", () => {
   });
 
   it("rejects loose integer tokens for action durations and timeouts", () => {
-    expect(() =>
-      normalizeActRequest({
-        kind: "click",
-        ref: "button-1",
-        delayMs: "0x10",
-      }),
-    ).toThrow("delayMs must be a non-negative integer.");
-
-    expect(() =>
-      normalizeActRequest({
-        kind: "wait",
-        timeMs: "1e3",
-      }),
-    ).toThrow("timeMs must be a non-negative integer.");
-
-    expect(() =>
-      normalizeActRequest({
-        kind: "hover",
-        ref: "button-1",
-        timeoutMs: "1000ms",
-      }),
-    ).toThrow("timeoutMs must be a positive integer.");
+    rejects(
+      { kind: "click", ref: "1", delayMs: "0x10" },
+      "delayMs must be a non-negative integer.",
+    );
+    rejects({ kind: "wait", timeMs: "1e3" }, "timeMs must be a non-negative integer.");
+    rejects(
+      { kind: "hover", ref: "1", timeoutMs: "1000ms" },
+      "timeoutMs must be a positive integer.",
+    );
   });
 
   it("rejects fractional viewport dimensions before dispatch", () => {
-    expect(() =>
-      normalizeActRequest({
-        kind: "resize",
-        width: "800.5",
-        height: 600,
-      }),
-    ).toThrow("resize requires positive width and height");
+    rejects(
+      { kind: "resize", width: "800.5", height: 600 },
+      "resize requires positive width and height",
+    );
   });
 });
 
-describe("normalizeActRequest fill fields", () => {
-  it("validates fill fields inside batch sub-actions", () => {
-    expect(() =>
-      normalizeActRequest({
-        kind: "batch",
-        actions: [{ kind: "fill", fields: [{ ref: "e1", value: "Neo", text: "unsupported" }] }],
-      }),
-    ).toThrow('fields[0] unsupported field key "text"');
-  });
+it("normalizeActRequest validates fill fields inside batch sub-actions", () => {
+  rejects(
+    {
+      kind: "batch",
+      actions: [{ kind: "fill", fields: [{ ref: "e1", value: "Neo", text: "unsupported" }] }],
+    },
+    'fields[0] unsupported field key "text"',
+  );
 });
 
 describe("normalizeActRequest batch nesting depth", () => {
@@ -195,7 +177,7 @@ describe("normalizeActRequest batch nesting depth", () => {
     return action;
   };
 
-  it("normalizes batches nested up to the executor depth limit", () => {
+  it("normalizes batches nested up to the depth limit", () => {
     const normalized = normalizeActRequest(buildNestedBatch(ACT_MAX_BATCH_DEPTH + 1));
     expect(normalized).toMatchObject({ kind: "batch" });
   });
@@ -212,10 +194,8 @@ describe("normalizeActRequest batch nesting depth", () => {
 });
 
 it("rejects non-action commands inside batches", () => {
-  expect(() =>
-    normalizeActRequest({
-      kind: "batch",
-      actions: [{ kind: "navigate", url: "https://example.com" }],
-    }),
-  ).toThrow("kind is required");
+  rejects(
+    { kind: "batch", actions: [{ kind: "navigate", url: "https://example.com" }] },
+    "kind is required",
+  );
 });

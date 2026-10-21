@@ -9,6 +9,7 @@ import {
 } from "../messages.js";
 import type { SessionContext, SessionTreeEntry } from "../types.js";
 import { selectResetKeptEntries } from "./tool-result-pairing.js";
+import { isTranscriptArtifactProvider } from "./transcript-model.js";
 
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
 
@@ -160,9 +161,13 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
   for (const entry of pathEntries) {
     if (entry.type === "thinking_level_change") {
       thinkingLevel = entry.thinkingLevel;
-    } else if (entry.type === "model_change") {
+    } else if (entry.type === "model_change" && !isTranscriptArtifactProvider(entry.provider)) {
       model = { provider: entry.provider, modelId: entry.modelId };
-    } else if (entry.type === "message" && entry.message.role === "assistant") {
+    } else if (
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      !isTranscriptArtifactProvider(entry.message.provider)
+    ) {
       model = { provider: entry.message.provider, modelId: entry.message.model };
     }
   }

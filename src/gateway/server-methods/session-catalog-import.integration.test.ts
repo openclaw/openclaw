@@ -23,6 +23,7 @@ import {
   captureSessionUpstreamLinkReadSource,
   prepareSessionUpstreamLink,
 } from "../../sessions/session-upstream-links-runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
@@ -46,6 +47,13 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let nextCatalog = 0;
+function expectSuccess(response: ReturnType<typeof vi.fn<RespondFn>>, fields: object) {
+  expect(response).toHaveBeenCalledWith(true, expect.objectContaining(fields));
+}
+
+function expectFailure(response: ReturnType<typeof vi.fn<RespondFn>>, fields: object) {
+  expect(response).toHaveBeenCalledWith(false, undefined, expect.objectContaining(fields));
+}
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal", label: "catalog-import" });
 });
@@ -71,23 +79,21 @@ async function withCatalog(
 async function createCatalog(restricted: boolean) {
   const config: OpenClawConfig = {
     plugins: { enabled: false },
-    ...(restricted
-      ? {
-          gateway: {
-            roles: {
-              default: "reader",
-              definitions: {
-                reader: {
-                  sessions: { others: "view" as const },
-                  agents: "*" as const,
-                  scopes: ["operator.read", "operator.write"],
-                },
-              },
-            },
-          },
-        }
-      : {}),
   };
+  if (restricted) {
+    config.gateway = {
+      roles: {
+        default: "reader",
+        definitions: {
+          reader: {
+            sessions: { others: "view" },
+            agents: "*",
+            scopes: ["operator.read", "operator.write"],
+          },
+        },
+      },
+    };
+  }
   setRuntimeConfigSnapshot(config);
   const id = ++nextCatalog;
   const client = createSessionMutationTestClient(
@@ -98,21 +104,23 @@ async function createCatalog(restricted: boolean) {
     ensureProfileForEmail("other-importer@example.test").id,
   );
   const nativeKey = `agent:main:native-adopted-${id}`;
+  const actor = (owner = client) => ({
+    type: "human" as const,
+    source: "profile" as const,
+    id: owner.authenticatedUserProfile!.profileId,
+  });
+  const entryRef = (sessionKey = key) => ({ agentId: "main", sessionKey });
+  const entry = () => loadSessionEntryReadOnly(entryRef());
+  const updateNative = (update: Parameters<typeof upsertSessionEntryCore>[1]) =>
+    upsertSessionEntryCore(entryRef(nativeKey), update);
   const seedNative = () =>
-    upsertSessionEntryCore(
-      { agentId: "main", sessionKey: nativeKey },
-      {
-        sessionId: "native-source",
-        updatedAt: 1,
-        pluginOwnerId: "fixture",
-        createdVia: "operator",
-        createdActor: {
-          type: "human",
-          source: "profile",
-          id: client.authenticatedUserProfile!.profileId,
-        },
-      },
-    );
+    updateNative({
+      sessionId: "native-source",
+      updatedAt: 1,
+      pluginOwnerId: "fixture",
+      createdVia: "operator",
+      createdActor: actor(),
+    });
   if (restricted) {
     await seedNative();
   }
@@ -231,16 +239,25 @@ async function createCatalog(restricted: boolean) {
     return respond;
   };
   const transcriptFor = async (sessionKey: string) => {
-    const entry = loadSessionEntryReadOnly({ agentId: "main", sessionKey });
-    return entry
+    const stored = loadSessionEntryReadOnly(entryRef(sessionKey));
+    return stored
       ? transcriptRuntime.readVisibleSessionTranscriptMessageEntries({
           agentId: "main",
           sessionKey,
-          sessionId: entry.sessionId,
+          sessionId: stored.sessionId,
         })
       : [];
   };
   const transcript = () => transcriptFor(key);
+  const expectImport = async (created: boolean, importedItems = 2, totalItems = 2) => {
+    expect(await call()).toHaveBeenCalledWith(true, {
+      sessionKey: key,
+      importedItems,
+      totalItems,
+      complete: true,
+      created,
+    });
+  };
   const precreate = async (owner = client) => {
     const created = await sessionCreation.createGatewaySession({
       cfg: config,
@@ -250,11 +267,7 @@ async function createCatalog(restricted: boolean) {
       operatorRoleActor: { kind: "system" },
       creation: {
         via: "operator",
-        actor: {
-          type: "human",
-          source: "profile",
-          id: owner.authenticatedUserProfile!.profileId,
-        },
+        actor: actor(owner),
       },
     });
     expect(created.ok).toBe(true);
@@ -262,6 +275,11 @@ async function createCatalog(restricted: boolean) {
     await projection.prepareMembership();
   };
   return {
+    actor,
+    entry,
+    entryRef,
+    updateNative,
+    expectImport,
     context,
     other,
     nativeKey,
@@ -287,47 +305,30 @@ async function createCatalog(restricted: boolean) {
 }
 
 describe("sessions.catalog.import with durable Gateway owners", () => {
-  it("imports and re-imports without waiting on model catalog publication", async () => {
-    await withCatalog(async (fixture) => {
+  it("imports and re-imports without waiting on model catalog publication", () =>
+    withCatalog(async (fixture) => {
       const loadCatalog = vi
         .spyOn(fixture.context, "loadGatewayModelCatalogSnapshot")
         .mockImplementation(() => new Promise(() => {}));
-      expect(await fixture.call()).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ created: true, importedItems: 2 }),
-      );
+      expectSuccess(await fixture.call(), { created: true, importedItems: 2 });
       const selection = {
         providerOverride: "openai",
         modelOverride: "gpt-4.1",
         thinkingLevel: "low",
         contextWindow: "large",
       };
-      await upsertSessionEntryCore({ agentId: "main", sessionKey: fixture.key }, selection);
-      expect(await fixture.call()).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ created: false, importedItems: 0 }),
-      );
-      expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey: fixture.key })).toMatchObject(
-        selection,
-      );
+      await upsertSessionEntryCore(fixture.entryRef(), selection);
+      expectSuccess(await fixture.call(), { created: false, importedItems: 0 });
+      expect(fixture.entry()).toMatchObject(selection);
       expect(loadCatalog).not.toHaveBeenCalled();
       expect(JSON.stringify(await fixture.transcript())).toContain("Synthetic imported question");
-    });
-  });
+    }));
 
-  it("keeps a copied draft hidden from another viewer until publication and preserves publication on re-import", async () => {
-    await withCatalog(async (fixture) => {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: fixture.nativeKey },
-        { visibility: "draft" },
-      );
-      expect(await fixture.call()).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ created: true, importedItems: 2 }),
-      );
-      expect(
-        loadSessionEntryReadOnly({ agentId: "main", sessionKey: fixture.key })?.visibility,
-      ).toBe("draft");
+  it("keeps a copied draft hidden from another viewer until publication and preserves publication on re-import", () =>
+    withCatalog(async (fixture) => {
+      await fixture.updateNative({ visibility: "draft" });
+      expectSuccess(await fixture.call(), { created: true, importedItems: 2 });
+      expect(fixture.entry()?.visibility).toBe("draft");
       const listFor = (client: GatewayClient) =>
         listProjectedSessions({
           projection: fixture.projection,
@@ -356,11 +357,7 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expect((await canReadHistory(fixture.client)).allowed).toBe(true);
       const hiddenHistory = await canReadHistory(fixture.other);
       expect(hiddenHistory.allowed).toBe(false);
-      expect(hiddenHistory.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
+      expectFailure(hiddenHistory.respond, { code: "INVALID_REQUEST" });
 
       const respond = vi.fn<RespondFn>();
       await sessionSharingHandlers["session.visibility.set"]!({
@@ -381,58 +378,31 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
         type: "agentMessage",
         text: "A published reply",
       });
-      expect(await fixture.call()).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ created: false, importedItems: 1 }),
-      );
-      expect(
-        loadSessionEntryReadOnly({ agentId: "main", sessionKey: fixture.key })?.visibility,
-      ).toBe("shared");
+      expectSuccess(await fixture.call(), { created: false, importedItems: 1 });
+      expect(fixture.entry()?.visibility).toBe("shared");
       expect(await fixture.transcript()).toHaveLength(4);
       expect((await listFor(fixture.other)).sessions).toEqual(
         expect.arrayContaining([expect.objectContaining({ key: fixture.key })]),
       );
       expect((await canReadHistory(fixture.other)).allowed).toBe(true);
-    }, true);
-  });
+    }, true));
 
-  it("creates and syncs an ordinary durable session through real creation, projection, and transcript owners", async () => {
-    await withCatalog(async (fixture) => {
-      expect(await fixture.call()).toHaveBeenCalledWith(true, {
-        sessionKey: fixture.key,
-        importedItems: 2,
-        totalItems: 2,
-        complete: true,
-        created: true,
-      });
+  it("creates and syncs an ordinary durable session through real creation, projection, and transcript owners", () =>
+    withCatalog(async (fixture) => {
+      await fixture.expectImport(true);
       const first = await fixture.transcript();
       expect(first).toHaveLength(3);
       expect(JSON.stringify(first)).toContain("Synthetic imported question");
       expect(JSON.stringify(first)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
-      expect(
-        loadSessionEntryReadOnly({ agentId: "main", sessionKey: fixture.key })?.displayName,
-      ).toBe("Preserved investigation");
+      expect(fixture.entry()?.displayName).toBe("Preserved investigation");
       fixture.locator.displayName = "Changed source title";
-      expect(await fixture.call()).toHaveBeenCalledWith(true, {
-        sessionKey: fixture.key,
-        importedItems: 0,
-        totalItems: 2,
-        complete: true,
-        created: false,
-      });
+      await fixture.expectImport(false, 0);
       expect(await fixture.transcript()).toEqual(first);
       fixture.source.push({ type: "agentMessage", text: "A later preserved reply" });
-      expect(await fixture.call()).toHaveBeenCalledWith(true, {
-        sessionKey: fixture.key,
-        importedItems: 1,
-        totalItems: 3,
-        complete: true,
-        created: false,
-      });
+      await fixture.expectImport(false, 1, 3);
       expect(await fixture.transcript()).toHaveLength(4);
-      const entry = loadSessionEntryReadOnly({ agentId: "main", sessionKey: fixture.key });
-      expect(entry?.displayName).toBe("Preserved investigation");
-      expect(entry?.visibility).toBe("draft");
+      const entry = fixture.entry();
+      expect(entry).toMatchObject({ displayName: "Preserved investigation", visibility: "draft" });
       for (const binding of [
         "pluginOwnerId",
         "modelSelectionLocked",
@@ -476,11 +446,10 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expect(continueSession).toHaveBeenCalledOnce();
       expect(fixture.nativeKey).not.toBe(fixture.key);
       expect(await fixture.transcript()).toHaveLength(4);
-    });
-  });
+    }));
 
-  it("cancels a stalled Gateway copy without durable artifacts and succeeds on retry", async () => {
-    await withCatalog(async (fixture) => {
+  it("cancels a stalled Gateway copy without durable artifacts and succeeds on retry", () =>
+    withCatalog(async (fixture) => {
       fixture.provider.copyToGatewaySession = vi.fn(async () => ({
         displayName: "Copied catalog session",
         preferredModel: "openai/gpt-5.6-sol",
@@ -490,19 +459,11 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
           .map(({ sessionKey }) => sessionKey)
           .toSorted();
       const before = sessionKeys();
-      let releasePreparedCatalog!: (snapshot: typeof fixture.readyModelCatalogSnapshot) => void;
-      const stalledPreparedCatalog = new Promise<typeof fixture.readyModelCatalogSnapshot>(
-        (resolve) => {
-          releasePreparedCatalog = resolve;
-        },
-      );
-      let markPreparedCatalogReadStarted!: () => void;
-      const preparedCatalogReadStarted = new Promise<void>((resolve) => {
-        markPreparedCatalogReadStarted = resolve;
-      });
+      const stalledPreparedCatalog = createDeferredCore<typeof fixture.readyModelCatalogSnapshot>();
+      const preparedCatalogReadStarted = createDeferredCore();
       const readPreparedModelCatalog = vi.fn(async () => {
-        markPreparedCatalogReadStarted();
-        return await stalledPreparedCatalog;
+        preparedCatalogReadStarted.resolve();
+        return await stalledPreparedCatalog.promise;
       });
       fixture.setPreparedModelCatalogReader(readPreparedModelCatalog);
 
@@ -512,19 +473,15 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
         fixture.client,
         controller.signal,
       );
-      await preparedCatalogReadStarted;
+      await preparedCatalogReadStarted.promise;
       expect(fixture.provider.copyToGatewaySession).toHaveBeenCalledOnce();
       expect(readPreparedModelCatalog).toHaveBeenCalledOnce();
       controller.abort(new Error("request closed"));
-      expect(await cancelledCall).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, retryable: true }),
-      );
+      expectFailure(await cancelledCall, { code: ErrorCodes.UNAVAILABLE, retryable: true });
       expect(sessionKeys()).toEqual(before);
       expect(fixture.read).not.toHaveBeenCalled();
 
-      releasePreparedCatalog(fixture.readyModelCatalogSnapshot);
+      stalledPreparedCatalog.resolve(fixture.readyModelCatalogSnapshot);
       fixture.setPreparedModelCatalogReader(async () => fixture.readyModelCatalogSnapshot);
       const retried = await fixture.call("sessions.catalog.continue");
       expect(retried).toHaveBeenCalledWith(true, {
@@ -550,140 +507,76 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expect((await listSessionStateEventsSince(sessionKey, "main", 0)).events).toEqual(
         expect.arrayContaining([expect.objectContaining({ kind: "adopted" })]),
       );
-    });
-  });
+    }));
 
   it.each([undefined, "   "])(
     "uses a generic title instead of the host label when displayName is %j",
     async (displayName) => {
       await withCatalog(async (fixture) => {
         fixture.locator.displayName = displayName;
-        expect(await fixture.call()).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ created: true, importedItems: 2 }),
-        );
-        expect(
-          loadSessionEntryReadOnly({ agentId: "main", sessionKey: fixture.key })?.displayName,
-        ).toBe("Imported Claude session");
+        expectSuccess(await fixture.call(), { created: true, importedItems: 2 });
+        expect(fixture.entry()?.displayName).toBe("Imported Claude session");
       });
     },
   );
 
-  it("appends to a pre-existing import target while its ordinary projection publications advance", async () => {
-    await withCatalog(async (fixture) => {
-      await fixture.precreate();
-
-      expect(await fixture.call()).toHaveBeenCalledWith(true, {
-        sessionKey: fixture.key,
-        importedItems: 2,
-        totalItems: 2,
-        complete: true,
-        created: false,
-      });
-      expect(await fixture.transcript()).toHaveLength(3);
-    });
-  });
-
-  it.each(["owner", "other"] as const)(
-    "respects existing-target write access in a restricted multi-user Gateway (%s target)",
-    async (targetOwner) => {
+  it.each([
+    { restricted: false, targetOwner: "owner" },
+    { restricted: true, targetOwner: "owner" },
+    { restricted: true, targetOwner: "other" },
+  ])(
+    "respects existing-target write access (restricted=$restricted, target=$targetOwner)",
+    async ({ restricted, targetOwner }) => {
       await withCatalog(async (fixture) => {
         await fixture.precreate(targetOwner === "owner" ? fixture.client : fixture.other!);
-        const response = await fixture.call();
         if (targetOwner === "owner") {
-          expect(response).toHaveBeenCalledWith(true, {
-            sessionKey: fixture.key,
-            importedItems: 2,
-            totalItems: 2,
-            complete: true,
-            created: false,
-          });
+          await fixture.expectImport(false);
           expect(await fixture.transcript()).toHaveLength(3);
         } else {
-          expect(response).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({
-              message: "session is shared for this connection",
-            }),
-          );
+          expectFailure(await fixture.call(), { message: "session is shared for this connection" });
           expect(await fixture.transcript()).toEqual([]);
         }
-      }, true);
+      }, restricted);
     },
   );
 
-  it("forbids a restricted caller who cannot read the source without creating a session", async () => {
-    await withCatalog(async (fixture) => {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: fixture.nativeKey },
-        { visibility: "draft" },
-      );
-      expect(await fixture.call("sessions.catalog.import", fixture.other)).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
+  it("forbids a restricted caller who cannot read the source without creating a session", () =>
+    withCatalog(async (fixture) => {
+      await fixture.updateNative({ visibility: "draft" });
+      expectFailure(await fixture.call("sessions.catalog.import", fixture.other), {
+        code: "FORBIDDEN",
+      });
       expect(fixture.read).not.toHaveBeenCalled();
-      expect(
-        loadSessionEntryReadOnly({ agentId: "main", sessionKey: fixture.key }),
-      ).toBeUndefined();
+      expect(fixture.entry()).toBeUndefined();
       expect(await fixture.transcript()).toEqual([]);
-    }, true);
-  });
+    }, true));
 
-  it("rejects source sharing revocation after history read before creating the destination", async () => {
-    await withCatalog(async (fixture) => {
+  it("rejects source sharing revocation after history read before creating the destination", () =>
+    withCatalog(async (fixture) => {
       const createGatewaySession = sessionCreation.createGatewaySession;
       const create = vi
         .spyOn(sessionCreation, "createGatewaySession")
         .mockImplementationOnce(async (params) => {
           expect(fixture.read).toHaveBeenCalledOnce();
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey: fixture.nativeKey },
-            {
-              visibility: "draft",
-              createdActor: {
-                type: "human",
-                source: "profile",
-                id: fixture.other.authenticatedUserProfile!.profileId,
-              },
-            },
-          );
+          await fixture.updateNative({
+            visibility: "draft",
+            createdActor: fixture.actor(fixture.other),
+          });
           await fixture.projection.ensureMaterialized();
           await fixture.projection.prepareMembership();
           return createGatewaySession(params);
         });
       const response = await fixture.call();
       expect(create).toHaveBeenCalledOnce();
-      expect(response).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("source visibility changed") }),
-      );
-      expect(
-        loadSessionEntryReadOnly({ agentId: "main", sessionKey: fixture.key }),
-      ).toBeUndefined();
+      expectFailure(response, { message: expect.stringContaining("source visibility changed") });
+      expect(fixture.entry()).toBeUndefined();
       expect(await fixture.transcript()).toEqual([]);
-    }, true);
-  });
+    }, true));
 
-  it("rejects remaining re-import appends when source visibility is revoked mid-append", async () => {
-    await withCatalog(async (fixture) => {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: fixture.nativeKey },
-        {
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: fixture.other.authenticatedUserProfile!.profileId,
-          },
-        },
-      );
-      expect(await fixture.call()).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ importedItems: 2 }),
-      );
+  it("rejects remaining re-import appends when source visibility is revoked mid-append", () =>
+    withCatalog(async (fixture) => {
+      await fixture.updateNative({ createdActor: fixture.actor(fixture.other) });
+      expectSuccess(await fixture.call(), { importedItems: 2 });
       fixture.source.push(
         { id: "later-1", type: "agentMessage", text: "First later reply" },
         { id: "later-2", type: "agentMessage", text: "Revoked later reply" },
@@ -710,15 +603,10 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       );
       const response = await fixture.call();
       expect(revoked).toBe(true);
-      expect(response).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("source visibility changed") }),
-      );
+      expectFailure(response, { message: expect.stringContaining("source visibility changed") });
       const transcript = await fixture.transcript();
       expect(transcript).toHaveLength(4);
       expect(JSON.stringify(transcript)).toContain("First later reply");
       expect(JSON.stringify(transcript)).not.toContain("Revoked later reply");
-    }, true);
-  });
+    }, true));
 });

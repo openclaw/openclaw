@@ -662,6 +662,45 @@ process.exitCode = errors.length ? 1 : 0;
     ).toThrow("references non-main PR #104905");
   });
 
+  it("validates release provenance PRs that shipped-ref subtraction left unresolved", () => {
+    const releaseCommit = "a".repeat(40);
+    const mainCommit = "b".repeat(40);
+    const overrides = new Map([[releaseCommit, [104905]]]);
+    const mainNode = {
+      __typename: "PullRequest",
+      baseRefName: "main",
+      mergeCommit: { oid: "c".repeat(40) },
+      mergedAt: "2026-07-12T00:00:00Z",
+    };
+    const requested: number[][] = [];
+    const resolveWith = (node?: unknown) => (numbers: number[]) => {
+      requested.push(numbers);
+      return new Map(node ? [[104905, node]] : []);
+    };
+
+    expect(() =>
+      validateReleaseProvenanceOverrides(
+        overrides,
+        new Map(),
+        mainCommit,
+        () => true,
+        resolveWith(mainNode),
+      ),
+    ).not.toThrow();
+    expect(requested).toEqual([[104905]]);
+    for (const node of [{ ...mainNode, baseRefName: "release/2026.7.1" }, undefined]) {
+      expect(() =>
+        validateReleaseProvenanceOverrides(
+          overrides,
+          new Map(),
+          mainCommit,
+          () => true,
+          resolveWith(node),
+        ),
+      ).toThrow("references non-main PR #104905");
+    }
+  });
+
   it.each(["backports", "ambiguous", "direct"])(
     "resolves canonical main provenance: %s",
     (mode) => {

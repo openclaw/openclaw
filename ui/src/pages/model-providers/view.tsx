@@ -1,5 +1,6 @@
 import { createMemo, For, Show } from "solid-js";
 import type { ModelsProbeResult } from "../../api/types.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { renderProviderUsageDetails } from "../../components/solid/provider-usage.tsx";
@@ -25,14 +26,10 @@ import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
-import type {
-  DefaultModelSelection,
-  ModelPickerEntry,
-  ModelProviderCard,
-  ProviderOption,
-} from "./data.ts";
+import type { DefaultModelSelection, ModelProviderCard } from "./data.ts";
 import { DefaultModels, type DefaultModelsViewProps } from "./default-models-view.tsx";
 import { MODEL_PROVIDERS_COST_DAYS } from "./load.ts";
+import type { ModelProvidersOwner } from "./model-providers-controller.ts";
 import {
   apiKeySource,
   ProviderProfiles,
@@ -48,59 +45,35 @@ import {
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-export type ModelProvidersViewProps = Omit<
-  DefaultModelsViewProps,
-  "models" | "selection" | "message"
-> &
-  Omit<ProviderProfilesViewProps, "onAddAccount" | "addAccountDisabled"> & {
-    connected: boolean;
-    loading: boolean;
-    refreshing: boolean;
-    error: string | null;
-    providerUsageFailed: boolean;
-    supplementalLoading: boolean;
-    updatedAt: number | null;
-    credentialAgentLabel: string;
-    cards: ModelProviderCard[];
-    configuredModels: ModelPickerEntry[];
-    defaultModels: DefaultModelSelection;
-    catalogDiscovering: boolean;
-    /** Retryable error from a picker-triggered catalog discovery. */
-    catalogDiscoveryError: string | null;
-    configBusy: boolean;
-    unconfiguredProviders: ProviderOption[];
-    canViewProfiles: boolean;
-    defaultsMutationBlockedReason: string | null;
-    /** Usage never converged before the retry budget ran out; cards lack usage. */
-    providerUsageStalled: boolean;
-    probeAvailable: boolean;
-    messages: Record<string, ModelProviderRowMessage>;
-    probeResults: Record<string, ModelsProbeResult>;
-    keyEditorProvider: string | null;
-    keyDraft: string;
-    addProviderOpen: boolean;
-    addProviderId: string;
-    addProviderKey: string;
-    installedAgents: JSX.Element | typeof undefined;
-    onRefresh: () => void;
-    onOpenKeyEditor: (provider: string) => void;
-    onCloseKeyEditor: () => void;
-    onKeyDraftChange: (value: string) => void;
-    onSaveKey: (provider: string, configKey: string) => void;
-    onRemoveKey: (provider: string, configKey: string) => void;
-    onProbe: (cardId: string, providers: string[]) => void;
-    onAddProviderToggle: () => void;
-    onAddProviderKeyChange: (value: string) => void;
-    onAddProvider: () => void;
-    providerScope?: JSX.Element;
-    accountRecovery?: JSX.Element | typeof undefined;
-    providerQuery?: string;
-    onProviderQueryChange?: (value: string) => void;
-    onConnectProvider: () => void;
-    onConnect: (card: ModelProviderCard) => void;
-    canConnect: (card: ModelProviderCard) => boolean;
-    loginBusy: boolean;
-  };
+type SharedModelProvidersProps = Omit<DefaultModelsViewProps, "models" | "selection" | "message"> &
+  Omit<ProviderProfilesViewProps, "onAddAccount" | "addAccountDisabled">;
+type ModelProvidersOwnerProps = Omit<
+  ReturnType<ModelProvidersOwner["viewProps"]>["props"],
+  | keyof SharedModelProvidersProps
+  | "installedAgents"
+  | "defaultModels"
+  | "providerQuery"
+  | "onProviderQueryChange"
+>;
+
+export type ModelProvidersViewProps = SharedModelProvidersProps & {
+  [Key in keyof ModelProvidersOwnerProps]: Key extends "canConnect"
+    ? ModelProvidersOwnerProps[Key]
+    : ModelProvidersOwnerProps[Key] extends (...args: infer Args) => unknown
+      ? (...args: Args) => void
+      : ModelProvidersOwnerProps[Key];
+} & {
+  defaultModels: DefaultModelSelection;
+  loading: boolean;
+  catalogDiscovering: boolean;
+  catalogDiscoveryError: string | null;
+  providerDetailsReady?: boolean;
+  installedAgents: JSX.Element | typeof undefined;
+  providerScope?: JSX.Element;
+  accountRecovery?: JSX.Element | typeof undefined;
+  providerQuery?: string;
+  onProviderQueryChange?: (value: string) => void;
+};
 
 function configMutationDisabled(state: ModelProvidersViewProps): boolean {
   return !state.canMutate || state.configBusy;
@@ -175,7 +148,10 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
     result.status === "ok" && result.results.some((target) => target.status !== "ok");
   const presentation = hasWarnings ? "warning" : result.status === "ok" ? "success" : "error";
   return (
-    <div class={"model-providers__probe model-providers__probe--" + presentation} role="status">
+    <div
+      class={["model-providers__probe", `model-providers__probe--${presentation}`]}
+      role="status"
+    >
       <div class="model-providers__probe-summary">
         <strong>
           {hasWarnings
@@ -426,7 +402,7 @@ function AddProvider(props: ModelProvidersViewProps) {
             />
             {renderMutationMessage(props.messages.add)}
           </div>
-          <div class="model-setup-wizard__footer">
+          <openclaw-modal-actions class="model-setup-wizard__footer">
             <button class="btn" disabled={busy()} onClick={() => props.onAddProviderToggle()}>
               {t("common.cancel")}
             </button>
@@ -437,7 +413,7 @@ function AddProvider(props: ModelProvidersViewProps) {
             >
               {busy() ? t("modelProviders.saving") : t("modelProviders.add.save")}
             </button>
-          </div>
+          </openclaw-modal-actions>
         </div>
       </openclaw-modal-dialog>
     </Show>
@@ -446,24 +422,31 @@ function AddProvider(props: ModelProvidersViewProps) {
 
 function ModelReadiness(props: ModelProvidersViewProps) {
   const signedIn = () => props.cards.some(hasVerifiedProvider);
+  const ready = () => props.configuredModels.some((model) => model.available !== false);
   return (
-    <div class="model-providers__setup" data-model-readiness="model-required">
+    <div class="model-providers__setup" data-model-readiness={ready() ? "ready" : "model-required"}>
       <SettingsSection title={t("modelProviders.readiness.title")}>
         <SettingsRow
-          title={t("modelProviders.readiness.heading")}
+          title={t(
+            ready() ? "modelProviders.readiness.readyHeading" : "modelProviders.readiness.heading",
+          )}
           description={
-            signedIn()
-              ? t("modelProviders.readiness.signedInNoModels")
-              : t("modelProviders.readiness.notConfigured")
+            ready()
+              ? t("modelProviders.readiness.readyDescription")
+              : signedIn()
+                ? t("modelProviders.readiness.signedInNoModels")
+                : t("modelProviders.readiness.notConfigured")
           }
           control={
             <>
               <SettingsStatus
-                kind={"warn"}
+                kind={ready() ? "ok" : "warn"}
                 label={
-                  signedIn()
-                    ? t("modelProviders.readiness.noModels")
-                    : t("modelProviders.readiness.modelRequired")
+                  ready()
+                    ? t("modelProviders.status.ready")
+                    : signedIn()
+                      ? t("modelProviders.readiness.noModels")
+                      : t("modelProviders.readiness.modelRequired")
                 }
               />
               <button
@@ -494,29 +477,12 @@ function renderProviderNoticeRow(text: string) {
 
 export function ModelProviders(props: ModelProvidersViewProps) {
   return (
-    <Show
-      when={props.connected}
-      fallback={
-        <SettingsPage>
-          <SettingsGroup>
-            <SettingsEmpty message={t("modelProviders.disconnected")} />
-          </SettingsGroup>
-        </SettingsPage>
-      }
-    >
-      <ConnectedModelProviders {...props} />
-    </Show>
-  );
-}
-
-function ConnectedModelProviders(props: ModelProvidersViewProps) {
-  const needsModelSetup = () =>
-    !props.loading && !props.configuredModels.some((model) => model.available !== false);
-  return (
     <>
       <SettingsPage>
         <>
-          {needsModelSetup() ? <ModelReadiness {...props} /> : undefined}
+          <Show when={props.connected || !props.loading}>
+            <ModelReadiness {...props} />
+          </Show>
           <div id={MODEL_SETTINGS_TARGET_IDS.behavior}>
             <DefaultModels
               {...props}
@@ -527,13 +493,22 @@ function ConnectedModelProviders(props: ModelProvidersViewProps) {
               message={props.messages.defaults}
             />
           </div>
-          {props.installedAgents}
-          <ProviderAccess {...props} />
-          {props.providerUsageStalled ? (
-            <div class="callout warning" role="status">
-              {t("usage.providerUsage.stalled")}
-            </div>
-          ) : undefined}
+          <Show
+            when={props.providerDetailsReady !== false}
+            fallback={
+              <div class="model-providers__loading">
+                <SettingsLoadingSkeleton rows={1} />
+              </div>
+            }
+          >
+            {props.installedAgents}
+            <ProviderAccess {...props} />
+            {props.providerUsageStalled ? (
+              <div class="callout warning" role="status">
+                {t("usage.providerUsage.stalled")}
+              </div>
+            ) : undefined}
+          </Show>
         </>
       </SettingsPage>
       <AddProvider {...props} />
@@ -563,7 +538,17 @@ function ProviderAccess(props: ModelProvidersViewProps) {
       </label>
       <div class="model-providers__provider-list">
         {props.error ? (
-          <SettingsGroup>{renderProviderNoticeRow(props.error)}</SettingsGroup>
+          <SettingsGroup>
+            {renderProviderNoticeRow(props.error)}
+            <button
+              type="button"
+              class="btn btn--sm"
+              disabled={props.refreshing}
+              onClick={() => props.onRefresh()}
+            >
+              {t("common.retry")}
+            </button>
+          </SettingsGroup>
         ) : undefined}
         {props.providerUsageFailed ? (
           <SettingsGroup>
@@ -671,7 +656,7 @@ export function renderModelProvidersPageShell(props: {
   loginMessage?: ModelProviderRowMessage;
 }): JSX.Element {
   return (
-    <>
+    <ShellLayoutBoundary traits={{ settingsPage: true }}>
       <SettingsPageHeader
         title={t("routeTitles.modelProviders")}
         subtitle={
@@ -688,6 +673,6 @@ export function renderModelProvidersPageShell(props: {
         </>
       </SettingsWorkspace>
       {props.login}
-    </>
+    </ShellLayoutBoundary>
   );
 }

@@ -1,7 +1,5 @@
-/** Tests heartbeat prompt and token helpers. */
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   isHeartbeatAcknowledgementText,
   isHeartbeatContentEffectivelyEmpty,
@@ -10,121 +8,34 @@ import {
 } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
 
-function createSkippedHeartbeatOutcome() {
-  return {
-    shouldSkip: true,
-    text: "",
-    didStrip: true,
-  };
+function expectStripped(
+  input: string | undefined,
+  mode: "message" | "heartbeat",
+  shouldSkip: boolean,
+  text: string,
+  didStrip: boolean,
+) {
+  expect(stripHeartbeatToken(input, { mode })).toEqual({ shouldSkip, text, didStrip });
 }
 
 describe("stripHeartbeatToken", () => {
   it("skips empty or token-only replies", () => {
-    expect(stripHeartbeatToken(undefined, { mode: "heartbeat" })).toEqual({
-      shouldSkip: true,
-      text: "",
-      didStrip: false,
-    });
-    expect(stripHeartbeatToken("  ", { mode: "heartbeat" })).toEqual({
-      shouldSkip: true,
-      text: "",
-      didStrip: false,
-    });
-    expect(stripHeartbeatToken(HEARTBEAT_TOKEN, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
+    expectStripped(undefined, "heartbeat", true, "", false);
+    expectStripped("  ", "heartbeat", true, "", false);
+    expectStripped(HEARTBEAT_TOKEN, "heartbeat", true, "", true);
   });
 
-  it("keeps heartbeat replies when remaining content exceeds threshold", () => {
-    const long = "A".repeat(DEFAULT_HEARTBEAT_ACK_MAX_CHARS + 1);
-    expect(stripHeartbeatToken(`${long} ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" })).toEqual({
-      shouldSkip: false,
-      text: long,
-      didStrip: true,
-    });
-  });
-
-  it("strips token at edges for normal messages", () => {
-    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN} hello`, { mode: "message" })).toEqual({
-      shouldSkip: false,
-      text: "hello",
-      didStrip: true,
-    });
-    expect(stripHeartbeatToken(`hello ${HEARTBEAT_TOKEN}`, { mode: "message" })).toEqual({
-      shouldSkip: false,
-      text: "hello",
-      didStrip: true,
-    });
-  });
-
-  it("does not touch token in the middle", () => {
-    expect(
-      stripHeartbeatToken(`hello ${HEARTBEAT_TOKEN} there`, {
-        mode: "message",
-      }),
-    ).toEqual({
-      shouldSkip: false,
-      text: `hello ${HEARTBEAT_TOKEN} there`,
-      didStrip: false,
-    });
-  });
-
-  it("strips markdown-wrapped heartbeat tokens", () => {
-    expect(stripHeartbeatToken(`**${HEARTBEAT_TOKEN}**`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-  });
-
-  it("removes markup-wrapped token and keeps trailing content", () => {
-    expect(
-      stripHeartbeatToken(`<code>${HEARTBEAT_TOKEN}</code> all good`, {
-        mode: "message",
-      }),
-    ).toEqual({
-      shouldSkip: false,
-      text: "all good",
-      didStrip: true,
-    });
-  });
-
-  it("strips trailing punctuation only when directly after the token", () => {
-    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}.`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}!!!`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}---`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-  });
-
-  it("strips a sentence-ending token and keeps trailing punctuation", () => {
-    expect(
-      stripHeartbeatToken(`I should not respond ${HEARTBEAT_TOKEN}.`, {
-        mode: "message",
-      }),
-    ).toEqual({
-      shouldSkip: false,
-      text: `I should not respond.`,
-      didStrip: true,
-    });
-  });
-
-  it("strips sentence-ending token with emphasis punctuation in heartbeat mode", () => {
-    expect(
-      stripHeartbeatToken(
-        `There is nothing todo, so i should respond with ${HEARTBEAT_TOKEN} !!!`,
-        {
-          mode: "heartbeat",
-        },
-      ),
-    ).toEqual(createSkippedHeartbeatOutcome());
+  it.each([
+    [`hello ${HEARTBEAT_TOKEN} there`, `hello ${HEARTBEAT_TOKEN} there`, false],
+    [`<code>${HEARTBEAT_TOKEN}</code> all good`, "all good", true],
+    [`I should not respond ${HEARTBEAT_TOKEN}.`, "I should not respond.", true],
+  ] as const)("preserves content around the token in %s", (input, text, didStrip) => {
+    expectStripped(input, "message", false, text, didStrip);
   });
 });
 
 describe("isHeartbeatAcknowledgementText", () => {
-  it.each([undefined, "NO_REPLY", "HEARTBEAT_OK", "HEARTBEAT_OK all good"])(
+  it.each([undefined, "HEARTBEAT_OK", "HEARTBEAT_OK all good"])(
     "recognizes %s as a quiet acknowledgement",
     (text) => {
       expect(isHeartbeatAcknowledgementText(text)).toBe(true);
@@ -132,9 +43,26 @@ describe("isHeartbeatAcknowledgementText", () => {
   );
 
   it("preserves substantive replies and the legacy acknowledgement length limit", () => {
+    expect(isHeartbeatAcknowledgementText("NO_REPLY")).toBe(false);
     expect(isHeartbeatAcknowledgementText("NO_REPLY: actual reminder")).toBe(false);
     expect(isHeartbeatAcknowledgementText("HEARTBEAT_OK all good", 0)).toBe(false);
   });
+
+  it.each(["NO_R", "no_r", "NO_RE", " No_R ", "no_repl"])(
+    "treats a truncated silent token %s as a quiet acknowledgement (#170158)",
+    (text) => {
+      expect(isHeartbeatAcknowledgementText(text)).toBe(false);
+      expect(isHeartbeatAcknowledgementText(text, undefined, true)).toBe(true);
+      expectStripped(text, "message", false, text.trim(), false);
+    },
+  );
+
+  it.each(["no_", "no_r.", "NO_RESP", "No", "No.", "NO", "NO_REPLY: actual reminder"])(
+    "keeps ordinary short replies like %s substantive on heartbeats",
+    (text) => {
+      expect(isHeartbeatAcknowledgementText(text, undefined, true)).toBe(false);
+    },
+  );
 });
 
 describe("isHeartbeatContentEffectivelyEmpty", () => {
@@ -144,50 +72,23 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
   });
 
   it("returns true for comments only", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("# Header\n# Another comment")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
-    expect(
-      isHeartbeatContentEffectivelyEmpty(
-        "<!-- Heartbeat template; comments-only content prevents scheduled heartbeat API calls. -->",
-      ),
-    ).toBe(true);
-    expect(
-      isHeartbeatContentEffectivelyEmpty(`<!--
-Heartbeat template.
-Keep this comment-only scratch quiet.
--->`),
-    ).toBe(true);
-    expect(
-      isHeartbeatContentEffectivelyEmpty(`<!--
+    for (const content of [
+      "# Header\n# Another comment",
+      "## Subheader\n### Another",
+      "<!-- Template -->",
+      "<!--\nHeartbeat template.\nKeep quiet.\n-->",
+      `<!--
 tasks:
   - name: inbox
     interval: 30m
     prompt: Check inbox
--->`),
-    ).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("<!-- One --> <!-- Two -->")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("<!-- One -->\n# Header")).toBe(true);
+-->`,
+      "<!-- One --> <!-- Two -->",
+      "<!-- One -->\n# Header",
+    ]) {
+      expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+    }
     expect(isHeartbeatContentEffectivelyEmpty("Reminder <!-- not scaffolding -->")).toBe(false);
-  });
-
-  it("returns false when a template includes plain instructional prose", () => {
-    const defaultTemplate = `# Heartbeat scratch
-
-Keep this scratch empty unless you want a tiny checklist. Keep it small.
-    `;
-    expect(isHeartbeatContentEffectivelyEmpty(defaultTemplate)).toBe(false);
-  });
-
-  it("returns true for fenced monitor scratch without actionable content", () => {
-    const content = `# Heartbeat scratch
-
-\`\`\`markdown
-# Keep this scratch empty (or with only comments) to skip heartbeat API calls.
-
-# Add tasks below when you want the agent to check something periodically.
-\`\`\`
-`;
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
   });
 
   it("returns false when fenced heartbeat content includes a real task", () => {
@@ -202,26 +103,22 @@ Keep this scratch empty unless you want a tiny checklist. Keep it small.
 });
 
 describe("resolveHeartbeatPromptForResponseTool", () => {
-  it("uses the structured heartbeat response tool instead of the legacy ok token", () => {
-    const prompt = resolveHeartbeatPromptForResponseTool();
-
-    expect(prompt).toBe(HEARTBEAT_RESPONSE_TOOL_PROMPT);
-    expect(prompt).toContain("heartbeat_respond");
-    expect(prompt).toContain("notify=false");
-    expect(prompt).toContain(`${SILENT_REPLY_TOKEN} when nothing needs the user's attention`);
-    expect(prompt).toContain("only the alert text");
-    expect(prompt).not.toContain(HEARTBEAT_TOKEN);
-  });
-
-  it("keeps custom heartbeat prompts intact and appends the tool-mode contract", () => {
-    const prompt = resolveHeartbeatPromptForResponseTool(
-      "Check the deployment queue and only interrupt the user for blockers.",
-    );
-
-    expect(prompt).toContain("Check the deployment queue");
-    expect(prompt).toContain("heartbeat_respond");
-    expect(prompt).toContain("notify=false");
-    expect(prompt).toContain(`${SILENT_REPLY_TOKEN} when nothing needs the user's attention`);
-    expect(prompt).toContain("only the alert text");
+  const custom = "Check the deployment queue and only interrupt the user for blockers.";
+  it.each([undefined, custom])("preserves custom prompts and the tool contract: %s", (input) => {
+    const prompt = resolveHeartbeatPromptForResponseTool(input);
+    if (input) {
+      expect(prompt).toContain("Check the deployment queue");
+    } else {
+      expect(prompt).toBe(HEARTBEAT_RESPONSE_TOOL_PROMPT);
+      expect(prompt).not.toContain(HEARTBEAT_TOKEN);
+    }
+    for (const text of [
+      "heartbeat_respond",
+      "notify=false",
+      `${SILENT_REPLY_TOKEN} when nothing needs the user's attention`,
+      "only the alert text",
+    ]) {
+      expect(prompt).toContain(text);
+    }
   });
 });

@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 import { flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import { cleanupSolid } from "../test-helpers/mount-solid.ts";
+import { mountSolid } from "../test-helpers/solid-render.tsx";
 import { GatewayUrlConfirmation } from "./solid/gateway-url-confirmation.tsx";
 
 const modalModule = vi.hoisted(() => ({ load: vi.fn() }));
@@ -12,34 +14,31 @@ vi.mock("./modal-dialog.ts", () => {
   return {};
 });
 
-afterEach(() => document.body.replaceChildren());
+afterEach(cleanupSolid);
 
 it("loads the modal only for a pending gateway and retains its confirmation actions", async () => {
-  const container = document.createElement("div");
-  document.body.append(container);
   const confirm = vi.fn();
   const cancel = vi.fn();
-  const host = new GatewayUrlConfirmation.Element();
+  const view = mountSolid<Parameters<typeof GatewayUrlConfirmation>[0]>(GatewayUrlConfirmation, {});
+  const host = view.container;
   const show = (pendingGatewayUrl: string | null) => {
-    host.props = {
-      pendingGatewayUrl,
-      currentGatewayUrl: "https://current.example",
-      linkCarriesToken: false,
-      onConfirm: confirm,
-      onCancel: cancel,
-    };
+    view.update({
+      props: {
+        pendingGatewayUrl,
+        currentGatewayUrl: "https://current.example",
+        linkCarriesToken: false,
+        onConfirm: confirm,
+        onCancel: cancel,
+      },
+    });
   };
 
   show(null);
-  container.append(host);
-  await host.updateComplete;
   expect(modalModule.load).not.toHaveBeenCalled();
   expect(host.querySelector("openclaw-modal-dialog")).toBeNull();
 
   show("https://next.example");
-  await host.updateComplete;
   await vi.dynamicImportSettled();
-  await host.updateComplete;
   flush();
   expect(modalModule.load).toHaveBeenCalledOnce();
   const modal = host.querySelector("openclaw-modal-dialog");
@@ -53,6 +52,5 @@ it("loads the modal only for a pending gateway and retains its confirmation acti
   expect(cancel).toHaveBeenCalledTimes(2);
 
   show(null);
-  await host.updateComplete;
   expect(host.querySelector("openclaw-modal-dialog")).toBeNull();
 });

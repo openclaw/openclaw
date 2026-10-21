@@ -9,6 +9,7 @@ import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -97,6 +98,7 @@ it.each([
                   pid: servingPid,
                   host: kind === "foreign-host" ? "other-host.invalid" : hostname(),
                   startedAt,
+                  processNamespace: readGatewayLockProcessNamespace(),
                 },
                 port: 19483,
                 mode: "supervised",
@@ -111,6 +113,7 @@ it.each([
           databasePath,
           payload: {
             pid: process.pid,
+            processNamespace: readGatewayLockProcessNamespace(),
             role: "gateway",
             createdAt: new Date().toISOString(),
             configPath: state.configPath,
@@ -162,11 +165,7 @@ it.each([
             expect(leaseQueries().length).toBeGreaterThan(0);
           }
           sql.queries.length = 0;
-          const held =
-            kind === "revoked" ||
-            kind === "cancelled" ||
-            kind === "selected-source" ||
-            kind === "process-exited";
+          const held = ["revoked", "cancelled", "selected-source", "process-exited"].includes(kind);
           const entered = createDeferredCore();
           const resume = createDeferredCore();
           const controller = new AbortController();
@@ -179,12 +178,7 @@ it.each([
                 if (args[1].type !== "gatewayOwnerLease.read") {
                   return execute(...args);
                 }
-                if (kind === "selected-source") {
-                  entered.resolve();
-                  await resume.promise;
-                  return execute(...args);
-                }
-                const reply = await execute(...args);
+                const reply = kind === "selected-source" ? undefined : await execute(...args);
                 if (kind === "process-exited") {
                   expect(reply).toMatchObject({
                     ok: true,
@@ -193,7 +187,7 @@ it.each([
                 }
                 entered.resolve();
                 await resume.promise;
-                return reply;
+                return reply ?? execute(...args);
               },
             );
           }
@@ -211,17 +205,8 @@ it.each([
               }),
             controller.signal,
           );
-          const settled = operation.then(
-            () => undefined,
-            (error: unknown) => error,
-          );
-          const live = ![
-            "missing",
-            "foreign-host",
-            "revoked",
-            "cancelled",
-            "process-exited",
-          ].includes(kind);
+          const settled = operation.catch(() => undefined);
+          const live = kind === "current" || kind === "selected-source";
           try {
             if (held) {
               await Promise.race([

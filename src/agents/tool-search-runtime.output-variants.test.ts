@@ -86,6 +86,20 @@ function createFixture(
 }
 
 describe("Tool Search input-dependent output contracts", () => {
+  it("preserves explicit failures without applying the success output contract", async () => {
+    const { runtime, execute } = createFixture();
+    const failure = {
+      ...jsonResult({ status: "error", error: "Operation refused" }),
+      isError: true,
+    };
+    execute.mockResolvedValueOnce(failure);
+
+    await expect(runtime.callValue("records", { operation: "remove" })).resolves.toEqual(
+      failure.details,
+    );
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { validateInput: true, operation: "legacy", output: { removed: true }, accepted: true },
     { validateInput: false, operation: "list", output: { records: ["R-1"] }, accepted: false },

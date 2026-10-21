@@ -28,11 +28,9 @@ import {
   requireProvisionedEnvironment,
 } from "./placement-dispatch-provisioning.js";
 import { reportPlacementTransition } from "./placement-record.js";
+import type { WorkerPlacementRecoveryBarrier } from "./placement-recovery-contract.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
-import {
-  readWorkerPreparation,
-  readWorkerProjectPreparation,
-} from "./preparation-identity.schema.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { runWorkerProjectLifecycle } from "./project-setup-script.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
@@ -45,17 +43,6 @@ import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerEnvironmentReconcileCore } from "./service.types.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
-
-export type WorkerPlacementRecoveryBarrier = (params: {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  executionMode: WorkerPlacementDispatchRequest["executionMode"];
-  environmentId: string;
-  expectedGeneration: number;
-  signal?: AbortSignal;
-  run: (workspace: WorkerSessionWorkspace, assertCurrent?: () => void) => Promise<void>;
-}) => Promise<void>;
 
 export type WorkerDevicePlacementRequirementResolver = (
   identity: Pick<
@@ -148,8 +135,10 @@ export function createWorkerPlacementDispatchStartup(options: {
     intent: WorkerProviderPreparedIntent;
     assertCurrent: WorkerPlacementAuthorization;
   }) => {
-    const preparation = readWorkerPreparation(params.intent.profileSnapshot);
-    if (!preparation || params.intent.preparationKey !== preparation.key) {
+    const preparation =
+      params.intent.profileSnapshot.runtimePreparation ??
+      params.intent.profileSnapshot.project?.preparation;
+    if (!preparation) {
       return undefined;
     }
     const assertCurrent = composePlacementAuthorization(params.assertCurrent, () => {
@@ -229,11 +218,13 @@ export function createWorkerPlacementDispatchStartup(options: {
     signal?: AbortSignal;
     recovery?: true;
     admittedNode?: WorkerNodePlacementAdmission;
+    markPhase?: (phase: string) => void;
   }): Promise<WorkerActiveDispatchPlacement> => {
     if (params.placement.state !== "provisioning") {
       throw new Error("Worker dispatch continuation requires a provisioning placement");
     }
     const { request } = params;
+    params.markPhase?.("attach");
     if (
       params.workspace.kind === "device-folder" &&
       (params.environment.nodeDeviceId !== params.workspace.deviceId ||
@@ -302,6 +293,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       environmentId: provisioned.environmentId,
       ownerEpoch: provisioned.ownerEpoch,
       sessionId: request.sessionId,
+      assertCurrent: assertAttachmentCurrent,
       ...(params.environment.preparation
         ? {
             placementBinding: {
@@ -328,6 +320,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     };
     params.signal?.addEventListener("abort", stopAttemptTunnel, { once: true });
     try {
+      params.markPhase?.("tunnel");
       const tunnel = await environments.startTunnel({
         environmentId: provisioned.environmentId,
         ownerEpoch,
@@ -358,10 +351,13 @@ export function createWorkerPlacementDispatchStartup(options: {
         requireAttachedEnvironment();
       };
       const preparation = readWorkerProjectPreparation(params.environment.profileSnapshot.project);
+      let lifecycleHomeDir: string | undefined;
+      let assertPreparedBindingCurrent: (() => void) | undefined;
       let preparedRepository: Parameters<
         typeof syncSessionRepositoryWorkspace
       >[0]["preparedRepository"];
       if (preparation) {
+        params.markPhase?.("bind");
         const prepared = await environments.bindPreparedWorkspace({
           environmentId: provisioned.environmentId,
           ownerEpoch,
@@ -373,6 +369,8 @@ export function createWorkerPlacementDispatchStartup(options: {
           assertCurrent: assertSyncOwner,
         });
         assertSyncOwner();
+        lifecycleHomeDir = prepared.homeDir;
+        assertPreparedBindingCurrent = prepared.assertCurrent;
         if (project && "source" in project) {
           if (
             params.workspace.kind !== "repository" ||
@@ -388,6 +386,7 @@ export function createWorkerPlacementDispatchStartup(options: {
           };
         }
       }
+      params.markPhase?.("repositoryStartup");
       const synced =
         params.workspace.kind === "device-folder"
           ? await tunnel.syncWorkspace({
@@ -399,6 +398,7 @@ export function createWorkerPlacementDispatchStartup(options: {
             })
           : params.workspace.kind === "repository"
             ? await syncSessionRepositoryWorkspace({
+                markPhase: params.markPhase,
                 repository: params.workspace.repository,
                 preparedRepository,
                 tunnel,
@@ -432,17 +432,29 @@ export function createWorkerPlacementDispatchStartup(options: {
         );
       }
       assertSyncOwner();
+      const runProjectLifecycleCommand = environments.runProjectLifecycleCommand;
       if (preparation?.recipe && preparation.runSetupScript !== false) {
+        params.markPhase?.("lifecycleCommands");
         await runWorkerProjectLifecycle({
           recipe: preparation.recipe,
           tunnel,
+          workspaceDir: synced.remoteWorkspaceDir,
+          homeDir: lifecycleHomeDir,
+          runSetupCommand: runProjectLifecycleCommand
+            ? (command) =>
+                runProjectLifecycleCommand(provisioned.environmentId, ownerEpoch, command)
+            : undefined,
           // A completed activation is the existing durable witness. An interrupted
           // first binding retries declared setup; commands should be idempotent.
           postCreate: params.environment.lastActivatedAtMs === null,
-          assertCurrent: assertSyncOwner,
+          assertCurrent: () => {
+            assertSyncOwner();
+            assertPreparedBindingCurrent?.();
+          },
           signal: params.signal,
         });
       }
+      params.markPhase?.("activation");
       const assertActivationCurrent = () => {
         assertRequestCurrent();
         requireAttachedEnvironment();
@@ -526,6 +538,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       activationIndeterminate = error instanceof AcceptedWorkspacePublicationIndeterminateError;
       throw error;
     } finally {
+      params.markPhase?.("cleanup");
       params.signal?.removeEventListener("abort", stopAttemptTunnel);
       if (!activated && !activationIndeterminate && params.signal?.aborted) {
         // Start may publish its owner after the first abort. Join that exact epoch as well

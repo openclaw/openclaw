@@ -1,11 +1,11 @@
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { isCronTimeoutErrorText } from "../execution-error-constants.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
+import { createCronSourceIdentity } from "../source-schedule.js";
 import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
 } from "../store/delivery-codec.js";
-import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type {
   CronJob,
   CronDeliveryTrace,
@@ -49,6 +49,7 @@ type DisabledHeartbeatOneShotRetryDecision = {
 type QueuedSystemEventHandle = {
   accepted: boolean;
   remove?: () => boolean | void;
+  adopted?: Promise<boolean>;
 };
 
 /** Persists non-busy trigger evaluation state without touching payload-run history. */
@@ -92,7 +93,7 @@ export function applyTriggerRunResult(
     result.status === "ok"
   ) {
     if (job.schedule.kind === "stream") {
-      job.state.streamSourceIdentity = createCronStreamSourceIdentity();
+      job.state.streamSourceIdentity = createCronSourceIdentity();
     }
     job.enabled = false;
     job.state.nextRunAtMs = undefined;
@@ -231,10 +232,11 @@ export function normalizeQueuedSystemEventHandle(
   if (typeof result === "boolean") {
     return { accepted: result };
   }
-  if (result && typeof result === "object") {
+  if (result) {
     return {
       accepted: result.accepted !== false,
       ...(result.remove ? { remove: result.remove } : {}),
+      ...(result.adopted ? { adopted: result.adopted } : {}),
     };
   }
   return { accepted: true };

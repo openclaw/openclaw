@@ -699,7 +699,7 @@ describe("sessions.dispatch", () => {
 
       expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(
         ["git", "-C", "/repo/worktree", "config", "--get", "remote.origin.url"],
-        { timeoutMs: 4_000 },
+        { timeoutMs: 4_000, env: { GIT_NO_LAZY_FETCH: "1" } },
       );
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({ profileId: "mapped" }),
@@ -925,7 +925,6 @@ describe("sessions.dispatch", () => {
           });
           const context = reclaimContext(() => placement, reclaim, {
             broadcastToConnIds: vi.fn(),
-            chatAbortControllers: new Map(),
             getSessionEventSubscriberConnIds: () => new Set(["another-client"]),
           });
           const cfg = context.getRuntimeConfig();

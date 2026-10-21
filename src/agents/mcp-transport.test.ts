@@ -1,5 +1,6 @@
-// Covers MCP HTTP transport redirects, SSRF guardrails, and auth/TLS handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
@@ -16,153 +17,98 @@ type OAuthBearerParams = {
   identity: McpOAuthIdentity;
 };
 
-const {
-  lookupMock,
-  runtimeFetchMock,
-  oauthBearerMock,
-  streamableTransportConstructorMock,
-  sseTransportConstructorMock,
-} = vi.hoisted(() => ({
-  lookupMock: vi.fn(),
-  runtimeFetchMock: vi.fn(),
-  oauthBearerMock: vi.fn((params: OAuthBearerParams) => params.fetchFn),
-  streamableTransportConstructorMock: vi.fn(),
-  sseTransportConstructorMock: vi.fn(),
-}));
-
-vi.mock("./mcp-oauth-fetch.js", () => ({
-  withMcpOAuthBearer: oauthBearerMock,
-}));
-
-vi.mock("node:dns/promises", () => ({
-  lookup: lookupMock,
-}));
-
-vi.mock("../infra/net/undici-runtime.js", () => ({
-  createHttp1Agent: (options: unknown) => ({ options }),
-  createHttp1EnvHttpProxyAgent: (options: unknown) => ({ options }),
-  createHttp1ProxyAgent: (options: unknown) => ({ options }),
-  loadUndiciRuntimeDeps: () => ({
-    fetch: runtimeFetchMock,
-  }),
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: function MockStreamableHTTPClientTransport(
-    this: unknown,
-    url: URL,
-    options?: StreamableTransportOptions,
-  ) {
-    streamableTransportConstructorMock(url, options);
-  },
-}));
+type EnterpriseBearerParams = {
+  fetchFn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  createAuthenticatedFetches: (assertCurrent: () => void) => {
+    resourceFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    authFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  };
+};
 
 type SseTransportOptions = {
   eventSourceInit?: { fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> };
 };
 
-vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: function MockSSEClientTransport(
-    this: unknown,
-    url: URL,
-    options?: SseTransportOptions,
-  ) {
-    sseTransportConstructorMock(url, options);
-  },
+const {
+  lookupMock,
+  runtimeFetchMock,
+  oauthBearerMock,
+  enterpriseBearerMock,
+  streamableTransportConstructorMock,
+  sseTransportConstructorMock,
+} = vi.hoisted(() => ({
+  lookupMock: vi.fn(),
+  runtimeFetchMock: vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(),
+  oauthBearerMock: vi.fn((params: OAuthBearerParams) => params.fetchFn),
+  enterpriseBearerMock: vi.fn((params: EnterpriseBearerParams) => params.fetchFn),
+  streamableTransportConstructorMock:
+    vi.fn<(url: URL, options?: StreamableTransportOptions) => void>(),
+  sseTransportConstructorMock: vi.fn<(url: URL, options?: SseTransportOptions) => void>(),
+}));
+
+// mock-isolation: OAuth fetch is fixture-owned; never read real credentials in transport tests.
+vi.mock("./mcp-oauth-fetch.js", () => ({ withMcpOAuthBearer: oauthBearerMock }));
+// mock-isolation: Inspect transport wiring here; the composed test runs the real enterprise bearer owner.
+vi.mock("./mcp-enterprise-fetch.js", () => ({ withMcpEnterpriseBearer: enterpriseBearerMock }));
+vi.mock("node:dns/promises", () => ({ lookup: lookupMock }));
+
+// mock-isolation: Keep transport requests on the synthetic fetch and agent fixtures.
+vi.mock("../infra/net/undici-runtime.js", () => ({
+  createHttp1Agent: (options: unknown) => ({ options }),
+  createHttp1EnvHttpProxyAgent: (options: unknown) => ({ options }),
+  createHttp1ProxyAgent: (options: unknown) => ({ options }),
+  loadUndiciRuntimeDeps: () => ({ fetch: runtimeFetchMock }),
+}));
+
+// mock-isolation: These tests inspect transport selection and guarded fetch options.
+vi.mock("./mcp-http-transport.js", () => ({
+  OpenClawStreamableHTTPClientTransport: streamableTransportConstructorMock,
+  OpenClawSSEClientTransport: sseTransportConstructorMock,
 }));
 
 function redirectResponse(location: string, status = 302): Response {
-  return new Response(null, {
-    status,
-    headers: { location },
-  });
+  return new Response(null, { status, headers: { location } });
 }
 
 function latestStreamableTransportOptions(): StreamableTransportOptions {
-  // The SDK transport is constructor-injected; tests inspect the most recent
-  // options to exercise OpenClaw's wrapped fetch implementation directly.
-  const latestCall = streamableTransportConstructorMock.mock.calls[
-    streamableTransportConstructorMock.mock.calls.length - 1
-  ] as unknown[] | undefined;
-  const options = latestCall?.[1];
-  if (!options || typeof options !== "object") {
-    throw new Error("Expected streamable HTTP transport options");
-  }
-  return options as StreamableTransportOptions;
+  return streamableTransportConstructorMock.mock.calls.at(-1)![1]!;
 }
 
-function latestStreamableFetch() {
-  const fetch = latestStreamableTransportOptions().fetch;
-  if (typeof fetch !== "function") {
-    throw new Error("Expected streamable HTTP transport fetch");
-  }
-  return fetch;
+function runtimeFetchCall(index: number) {
+  return runtimeFetchMock.mock.calls[index]!;
 }
 
-function latestSseEventSourceFetch() {
-  const latestCall = sseTransportConstructorMock.mock.calls[
-    sseTransportConstructorMock.mock.calls.length - 1
-  ] as unknown[] | undefined;
-  const options = latestCall?.[1] as SseTransportOptions | undefined;
-  const fetch = options?.eventSourceInit?.fetch;
-  if (typeof fetch !== "function") {
-    throw new Error("Expected SSE event-source fetch");
-  }
-  return fetch;
-}
-
-function runtimeFetchCall(index: number): [RequestInfo | URL, RequestInit | undefined] {
-  const call = runtimeFetchMock.mock.calls[index] as
-    | [RequestInfo | URL, RequestInit | undefined]
-    | undefined;
-  if (!call) {
-    throw new Error(`Expected runtime fetch call ${index}`);
-  }
-  return call;
-}
-
-function latestOAuthBearerParams(): OAuthBearerParams {
-  const params = oauthBearerMock.mock.calls.at(-1)?.[0];
-  if (!params) {
-    throw new Error("Expected native OAuth bearer wrapper parameters");
-  }
-  return params;
+const resourceUrl = "https://mcp.example.com/mcp";
+function resolveHttp(server: Record<string, unknown> = {}) {
+  return resolveMcpTransport("probe", {
+    url: resourceUrl,
+    transport: "streamable-http",
+    ...server,
+  });
 }
 
 describe("resolveMcpTransport", () => {
   beforeEach(() => {
-    lookupMock.mockReset();
-    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    lookupMock.mockReset().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     runtimeFetchMock.mockReset();
     oauthBearerMock.mockClear();
+    enterpriseBearerMock.mockClear();
     streamableTransportConstructorMock.mockClear();
     sseTransportConstructorMock.mockClear();
   });
 
   it("scrubs custom headers when streamable HTTP follows a cross-origin redirect", async () => {
-    // Cross-origin redirects keep safe protocol headers but drop operator
-    // secrets such as API keys before following the Location target.
     runtimeFetchMock
       .mockResolvedValueOnce(redirectResponse("https://redirect.example/next"))
       .mockResolvedValueOnce(new Response("ok"));
 
-    resolveMcpTransport("probe", {
-      url: "https://mcp.example.com/mcp",
-      transport: "streamable-http",
-      headers: {
-        "X-Api-Key": "secret",
-      },
-    });
+    resolveHttp({ headers: { "X-Api-Key": "secret" } });
 
     const options = latestStreamableTransportOptions();
-    expect(options.requestInit).toEqual({
-      headers: {
-        "X-Api-Key": "secret",
-      },
-    });
+    expect(options.requestInit).toEqual({ headers: { "X-Api-Key": "secret" } });
     expect(options.fetch).toBeTypeOf("function");
 
-    await options.fetch?.("https://mcp.example.com/mcp", {
+    await options.fetch?.(resourceUrl, {
       method: "GET",
       headers: {
         accept: "application/json, text/event-stream",
@@ -172,10 +118,10 @@ describe("resolveMcpTransport", () => {
     });
 
     expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
-    expect(runtimeFetchCall(0)?.[0]).toBe("https://mcp.example.com/mcp");
-    expect(runtimeFetchCall(0)?.[1]?.redirect).toBe("manual");
-    expect(runtimeFetchCall(1)?.[0]).toBe("https://redirect.example/next");
-    expect(runtimeFetchCall(1)?.[1]?.redirect).toBe("manual");
+    expect(runtimeFetchCall(0)[0]).toBe(resourceUrl);
+    expect(runtimeFetchCall(0)[1]?.redirect).toBe("manual");
+    expect(runtimeFetchCall(1)[0]).toBe("https://redirect.example/next");
+    expect(runtimeFetchCall(1)[1]?.redirect).toBe("manual");
 
     const redirectedHeaders = new Headers(runtimeFetchCall(1)?.[1]?.headers);
     expect(redirectedHeaders.get("x-api-key")).toBeNull();
@@ -186,12 +132,9 @@ describe("resolveMcpTransport", () => {
   it("blocks streamable HTTP redirects to private network targets", async () => {
     runtimeFetchMock.mockResolvedValueOnce(redirectResponse("http://169.254.169.254/latest"));
 
-    resolveMcpTransport("probe", {
-      url: "https://mcp.example.com/mcp",
-      transport: "streamable-http",
-    });
+    resolveHttp();
 
-    await expect(latestStreamableFetch()("https://mcp.example.com/mcp")).rejects.toThrow(
+    await expect(latestStreamableTransportOptions().fetch!(resourceUrl)).rejects.toThrow(
       "Blocked hostname or private/internal/special-use IP address",
     );
 
@@ -199,9 +142,7 @@ describe("resolveMcpTransport", () => {
   });
 
   it("routes native OAuth through the host fetch coordinator instead of the SDK provider", () => {
-    resolveMcpTransport("probe", {
-      url: "https://mcp.example.com/mcp",
-      transport: "streamable-http",
+    resolveHttp({
       auth: "oauth",
       headers: {
         Authorization: "Bearer static",
@@ -223,6 +164,52 @@ describe("resolveMcpTransport", () => {
       }),
     );
   });
+
+  it.each(["resource", "authorization"] as const)(
+    "rechecks the enterprise credential at final %s HTTP dispatch after DNS preparation",
+    async (destination) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      lookupMock.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return [{ address: "93.184.216.34", family: 4 }];
+      });
+      resolveHttp({
+        auth: "enterprise",
+        enterprise: {
+          identity: "shared",
+          idpIssuer: "https://idp.example.com",
+          idpClientId: "fixture-idp-client",
+          resourceIssuer: "https://auth.example.com",
+          resourceClientId: "fixture-resource-client",
+          scope: "mcp.read",
+          redirectUrl: "http://localhost:3097/callback",
+        },
+      });
+      const params = enterpriseBearerMock.mock.calls.at(-1)?.[0];
+      expect(params).toBeDefined();
+      let current = true;
+      const { resourceFetch, authFetch } = params!.createAuthenticatedFetches(() => {
+        if (!current) {
+          throw new Error("enterprise credential changed");
+        }
+      });
+      const pending =
+        destination === "resource"
+          ? resourceFetch(resourceUrl)
+          : authFetch("https://idp.example.com/token");
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        "Enterprise HTTP dispatch settled before DNS preparation finished",
+      );
+      current = false;
+      release.resolve();
+      await expect(pending).rejects.toThrow("enterprise credential changed");
+      expect(runtimeFetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("selects distinct requester OAuth identities for the same configured server", () => {
     const server = {
@@ -260,9 +247,7 @@ describe("resolveMcpTransport", () => {
   });
 
   it("does not create an operator transport for per-requester OAuth", () => {
-    const transport = resolveMcpTransport("probe", {
-      url: "https://mcp.example.com/mcp",
-      transport: "streamable-http",
+    const transport = resolveHttp({
       auth: "oauth",
       oauth: { identity: "per-requester" },
     });
@@ -275,20 +260,13 @@ describe("resolveMcpTransport", () => {
   it("keeps OAuth runtime headers scoped to the MCP resource origin", async () => {
     runtimeFetchMock.mockImplementation(async () => new Response("ok"));
 
-    resolveMcpTransport("probe", {
-      url: "https://mcp.example.com/mcp",
-      transport: "streamable-http",
-      auth: "oauth",
-      headers: {
-        "X-Tenant": "docs",
-      },
-    });
+    resolveHttp({ auth: "oauth", headers: { "X-Tenant": "docs" } });
 
     const options = latestStreamableTransportOptions();
-    await options.fetch?.("https://mcp.example.com/mcp");
+    await options.fetch?.(resourceUrl);
     await options.fetch?.("https://auth.example.com/token");
 
-    const oauthParams = latestOAuthBearerParams();
+    const oauthParams = oauthBearerMock.mock.calls.at(-1)![0];
     await oauthParams.authFetchFn("https://mcp.example.com/.well-known/oauth-protected-resource");
     await oauthParams.authFetchFn("https://auth.example.com/token");
 
@@ -298,51 +276,40 @@ describe("resolveMcpTransport", () => {
     expect(new Headers(runtimeFetchCall(3)?.[1]?.headers).get("x-tenant")).toBeNull();
   });
 
-  it.each([307])(
-    "rejects cross-origin OAuth %s redirects that would replay a POST body",
-    async (status) => {
-      runtimeFetchMock
-        .mockResolvedValueOnce(redirectResponse("https://redirect.example/token", status))
-        .mockResolvedValueOnce(new Response("ok"));
+  it("rejects cross-origin OAuth 307 redirects that would replay a POST body", async () => {
+    runtimeFetchMock
+      .mockResolvedValueOnce(redirectResponse("https://redirect.example/token", 307))
+      .mockResolvedValueOnce(new Response("ok"));
 
-      resolveMcpTransport("probe", {
-        url: "https://mcp.example.com/mcp",
-        transport: "streamable-http",
-        auth: "oauth",
-      });
+    resolveHttp({ auth: "oauth" });
 
-      const oauthParams = latestOAuthBearerParams();
-      const tokenBody = new URLSearchParams({
-        code: "synthetic-code",
-        code_verifier: "synthetic-verifier",
-      }).toString();
+    const oauthParams = oauthBearerMock.mock.calls.at(-1)![0];
+    const tokenBody = new URLSearchParams({
+      code: "synthetic-code",
+      code_verifier: "synthetic-verifier",
+    }).toString();
 
-      await expect(
-        oauthParams.authFetchFn("https://auth.example.com/token", {
-          method: "POST",
-          headers: { "content-type": "application/x-www-form-urlencoded" },
-          body: tokenBody,
-        }),
-      ).rejects.toThrow("Refusing to follow cross-origin redirect for POST request body");
+    await expect(
+      oauthParams.authFetchFn("https://auth.example.com/token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: tokenBody,
+      }),
+    ).rejects.toThrow("Refusing to follow cross-origin redirect for POST request body");
 
-      expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
-    },
-  );
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
+  });
 
   it("merges SSE event-source headers case-insensitively so auth is not duplicated", async () => {
-    // The SDK's EventSource can supply lowercase `authorization` while operator
-    // config uses `Authorization`; the runtime fetch should see one header.
     runtimeFetchMock.mockResolvedValue(new Response("ok"));
 
-    resolveMcpTransport("probe", {
+    resolveHttp({
       url: "https://mcp.example.com/sse",
       transport: "sse",
-      headers: {
-        Authorization: "Bearer operator",
-      },
+      headers: { Authorization: "Bearer operator" },
     });
 
-    const sseFetch = latestSseEventSourceFetch();
+    const sseFetch = sseTransportConstructorMock.mock.calls.at(-1)![1]!.eventSourceInit!.fetch!;
     await sseFetch("https://mcp.example.com/sse", {
       headers: { authorization: "Bearer sdk" },
     });

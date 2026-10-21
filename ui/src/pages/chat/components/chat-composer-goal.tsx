@@ -1,10 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createEffect, untrack } from "solid-js";
+import { For, Show, createSignal } from "solid-js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { useScrollState } from "../../../components/solid/scroll-state.ts";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalAction, ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createInterval } from "../../../lib/reactive/timers.ts";
 import {
   formatGoalDetail,
   formatGoalElapsed,
@@ -12,26 +15,16 @@ import {
   formatGoalUsage,
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
-import { composerScrollStateRef } from "./chat-composer-menu.tsx";
 
 registerEnglishCatalog(registerChatGoalsEnglish);
 
-function GoalIcon() {
+export function GoalIcon() {
   return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-    >
+    <StrokeIcon aria-hidden="true">
       <path d="M12 13V2l8 4-8 4" />
       <path d="M20.561 10.222a9 9 0 1 1-12.55-5.29" />
       <path d="M8.002 9.997a5 5 0 1 0 8.9 2.02" />
-    </svg>
+    </StrokeIcon>
   );
 }
 
@@ -44,32 +37,14 @@ const goalStatusIcons = {
 } as const;
 
 // Keep the one-second clock local to its span; it must not invalidate the composer.
-function createGoalElapsedRef(goal: () => SessionGoal) {
-  let element: HTMLElement | undefined;
-  const sync = () => {
-    if (element) {
-      element.textContent = formatGoalElapsed(goalElapsedMs(untrack(goal), Date.now()));
-    }
-  };
-  createEffect(
-    () => ({ active: goal().status === "active", elapsed: goalElapsedMs(goal(), Date.now()) }),
-    (clock) => {
-      if (!element) {
-        return undefined;
-      }
-      const bound = element;
-      bound.textContent = formatGoalElapsed(clock.elapsed);
-      if (!clock.active) {
-        return undefined;
-      }
-      const timer = setInterval(sync, 1000);
-      return () => clearInterval(timer);
-    },
+function GoalElapsed(props: { goal: SessionGoal; class?: string }) {
+  // Resuming samples the current clock before the next interval tick.
+  const [now, setNow] = createSignal(() => (props.goal.status === "active" ? Date.now() : 0));
+  createInterval(
+    () => setNow(Date.now()),
+    () => (props.goal.status === "active" ? 1000 : undefined),
   );
-  return (next: HTMLElement) => {
-    element = next;
-    sync();
-  };
+  return <span class={props.class}>{formatGoalElapsed(goalElapsedMs(props.goal, now()))}</span>;
 }
 
 type ChatGoalProps = {
@@ -91,15 +66,13 @@ const goalActionIcons = {
   clear: "trash",
 } as const;
 
-function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
-  const canResume = () =>
-    ["paused", "blocked", "usage_limited", "budget_limited"].includes(props.goal.status);
-  const pauseReason = () =>
-    canResume() && !props.expanded && !props.resumeRecovery ? props.goal.lastStatusNote : undefined;
-  const statusLabel = () =>
-    props.resumeRecovery
-      ? t(props.resumeRecovery.pending ? "chat.goals.resuming" : "chat.goals.resumeUnconfirmed")
-      : formatGoalStatusLabel(props.goal.status);
+type GoalPresentationProps = Pick<
+  ChatGoalProps,
+  "canAct" | "resumeRecovery" | "connected" | "onGoalAction" | "onGoalEdit"
+> & { goal: SessionGoal };
+
+/** Shared eligibility and callbacks; the parent supplies native write availability. */
+export function ChatGoalActions(props: GoalPresentationProps) {
   const visibleAction = (action: (typeof goalActions)[number]) =>
     !props.resumeRecovery &&
     props.canAct &&
@@ -109,11 +82,103 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
       : action === "pause"
         ? props.goal.status === "active"
         : action === "resume"
-          ? canResume()
+          ? props.goal.status !== "active"
           : true);
   return (
+    <span class="agent-chat__goal-command-actions">
+      <Show when={props.resumeRecovery && !props.resumeRecovery.pending}>
+        <button
+          class="agent-chat__goal-action agent-chat__goal-resume"
+          type="button"
+          disabled={!props.connected}
+          onClick={() => void props.resumeRecovery?.onCheck()}
+        >
+          <Icon name="play" />
+          <span class="agent-chat__goal-action-label">{t("chat.goals.retryResume")}</span>
+        </button>
+      </Show>
+      <For each={goalActions}>
+        {(action) => (
+          <>
+            {visibleAction(action) ? (
+              <openclaw-tooltip content={t(`chat.goals.${action}`)}>
+                <button
+                  class={["agent-chat__goal-action", `agent-chat__goal-${action}`]}
+                  type="button"
+                  aria-label={t(`chat.goals.${action}`)}
+                  onClick={() => {
+                    if (action === "edit") {
+                      props.onGoalEdit?.(props.goal);
+                    } else {
+                      props.onGoalAction?.(props.goal.id, action);
+                    }
+                  }}
+                >
+                  <Icon name={goalActionIcons[action]} />
+                  <span class="agent-chat__goal-action-label">{t(`chat.goals.${action}Chip`)}</span>
+                </button>
+              </openclaw-tooltip>
+            ) : null}
+          </>
+        )}
+      </For>
+    </span>
+  );
+}
+
+export function ChatGoalBody(props: {
+  goal: SessionGoal;
+  resumeRecovery?: ChatGoalRecovery;
+  objectiveRef?: (element: HTMLDivElement) => void;
+}) {
+  return (
+    <>
+      <div
+        class="agent-chat__goal-detail-objective"
+        ref={props.objectiveRef}
+        textContent={props.goal.objective}
+      />
+      {props.goal.lastStatusNote && !props.resumeRecovery ? (
+        <div class="agent-chat__goal-detail-note">{props.goal.lastStatusNote}</div>
+      ) : null}
+    </>
+  );
+}
+
+export function ChatGoalMetrics(props: { goal: SessionGoal; live?: boolean }) {
+  return (
+    <div class="agent-chat__goal-detail-meta">
+      {formatGoalUsage(props.goal) ? (
+        <>
+          <span class="agent-chat__goal-detail-usage">{formatGoalUsage(props.goal)}</span>
+          <span class="agent-chat__goal-detail-separator" aria-hidden="true">
+            ·
+          </span>
+        </>
+      ) : null}
+      <span class="agent-chat__goal-detail-duration">
+        <Show when={props.live} fallback={formatGoalElapsed(goalElapsedMs(props.goal, Date.now()))}>
+          <GoalElapsed goal={props.goal} />
+        </Show>
+      </span>
+    </div>
+  );
+}
+
+function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
+  const canResume = () => props.goal.status !== "active";
+  const pauseReason = () =>
+    canResume() && !props.expanded && !props.resumeRecovery ? props.goal.lastStatusNote : undefined;
+  const statusLabel = () =>
+    props.resumeRecovery
+      ? t(props.resumeRecovery.pending ? "chat.goals.resuming" : "chat.goals.resumeUnconfirmed")
+      : formatGoalStatusLabel(props.goal.status);
+  return (
     <div
-      class={`agent-chat__goal agent-chat__goal--${props.resumeRecovery ? "resuming" : props.goal.status}`}
+      class={[
+        "agent-chat__goal",
+        `agent-chat__goal--${props.resumeRecovery ? "resuming" : props.goal.status}`,
+      ]}
       data-expanded={String(props.expanded)}
       role="group"
       aria-label={
@@ -145,48 +210,16 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
           </openclaw-tooltip>
           <span class="agent-chat__goal-objective">{props.goal.objective}</span>
         </span>
-        <span class="agent-chat__goal-elapsed" ref={createGoalElapsedRef(() => props.goal)} />
+        <GoalElapsed goal={props.goal} class="agent-chat__goal-elapsed" />
         <span class="agent-chat__goal-actions">
-          <span class="agent-chat__goal-command-actions">
-            <Show when={props.resumeRecovery && !props.resumeRecovery.pending}>
-              <button
-                class="agent-chat__goal-action agent-chat__goal-resume"
-                type="button"
-                disabled={!props.connected}
-                onClick={() => void props.resumeRecovery?.onCheck()}
-              >
-                <Icon name="play" />
-                <span class="agent-chat__goal-action-label">{t("chat.goals.retryResume")}</span>
-              </button>
-            </Show>
-            <For each={goalActions}>
-              {(action) => (
-                <>
-                  {visibleAction(action) ? (
-                    <openclaw-tooltip content={t(`chat.goals.${action}`)}>
-                      <button
-                        class={`agent-chat__goal-action agent-chat__goal-${action}`}
-                        type="button"
-                        aria-label={t(`chat.goals.${action}`)}
-                        onClick={() => {
-                          if (action === "edit") {
-                            props.onGoalEdit?.(props.goal);
-                          } else {
-                            props.onGoalAction?.(props.goal.id, action);
-                          }
-                        }}
-                      >
-                        <Icon name={goalActionIcons[action]} />
-                        <span class="agent-chat__goal-action-label">
-                          {t(`chat.goals.${action}Chip`)}
-                        </span>
-                      </button>
-                    </openclaw-tooltip>
-                  ) : null}
-                </>
-              )}
-            </For>
-          </span>
+          <ChatGoalActions
+            goal={props.goal}
+            canAct={props.canAct}
+            resumeRecovery={props.resumeRecovery}
+            connected={props.connected}
+            onGoalAction={props.onGoalAction}
+            onGoalEdit={props.onGoalEdit}
+          />
           <button
             class="agent-chat__goal-action agent-chat__goal-expand"
             type="button"
@@ -205,27 +238,12 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
         inert={!props.expanded}
       >
         <div class="agent-chat__goal-detail-content">
-          <div
-            class="agent-chat__goal-detail-objective"
-            ref={composerScrollStateRef(() => props.goal.objective)}
-            textContent={props.goal.objective}
+          <ChatGoalBody
+            goal={props.goal}
+            resumeRecovery={props.resumeRecovery}
+            objectiveRef={useScrollState(false, true, { revision: () => props.goal.objective })}
           />
-          {props.goal.lastStatusNote && !props.resumeRecovery ? (
-            <div class="agent-chat__goal-detail-note">{props.goal.lastStatusNote}</div>
-          ) : null}
-          <div class="agent-chat__goal-detail-meta">
-            {formatGoalUsage(props.goal) ? (
-              <>
-                <span class="agent-chat__goal-detail-usage">{formatGoalUsage(props.goal)}</span>
-                <span class="agent-chat__goal-detail-separator" aria-hidden="true">
-                  ·
-                </span>
-              </>
-            ) : null}
-            <span class="agent-chat__goal-detail-duration">
-              {formatGoalElapsed(goalElapsedMs(props.goal, Date.now()))}
-            </span>
-          </div>
+          <ChatGoalMetrics goal={props.goal} />
         </div>
       </div>
     </div>
@@ -262,25 +280,41 @@ export function renderChatGoalRecoverySolid(
         <Icon name="alertTriangle" />
       </span>
       <div class="chat-composer-neighbor-card__copy">
-        <strong>{t(recovery.pending ? "chat.goals.checking" : "chat.goals.recoveryTitle")}</strong>
-        <span>
-          {t(
-            recovery.retired === "expired"
-              ? "chat.goals.recoveryExpired"
-              : recovery.retired === "invalid"
-                ? "chat.goals.recoveryInvalid"
-                : "chat.goals.recoveryHint",
-          )}
-        </span>
+        <ChatGoalRecoveryMessage recovery={recovery} />
       </div>
-      <button
-        class="btn btn--sm"
-        type="button"
-        disabled={!connected || recovery.pending}
-        onClick={() => void recovery.onCheck()}
-      >
-        {t(recovery.retired ? "chat.goals.refreshCurrent" : "chat.goals.checkOutcome")}
-      </button>
+      <ChatGoalRecoveryAction recovery={recovery} connected={connected} />
     </div>
+  );
+}
+
+export function ChatGoalRecoveryMessage(props: { recovery: ChatGoalRecovery }) {
+  return (
+    <>
+      <strong>
+        {t(props.recovery.pending ? "chat.goals.checking" : "chat.goals.recoveryTitle")}
+      </strong>
+      <span>
+        {t(
+          props.recovery.retired === "expired"
+            ? "chat.goals.recoveryExpired"
+            : props.recovery.retired === "invalid"
+              ? "chat.goals.recoveryInvalid"
+              : "chat.goals.recoveryHint",
+        )}
+      </span>
+    </>
+  );
+}
+
+export function ChatGoalRecoveryAction(props: { recovery: ChatGoalRecovery; connected: boolean }) {
+  return (
+    <button
+      class="btn btn--sm"
+      type="button"
+      disabled={!props.connected || props.recovery.pending}
+      onClick={() => void props.recovery.onCheck()}
+    >
+      {t(props.recovery.retired ? "chat.goals.refreshCurrent" : "chat.goals.checkOutcome")}
+    </button>
   );
 }

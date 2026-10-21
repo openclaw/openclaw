@@ -1,6 +1,4 @@
-// Ensure Cli Startup Build tests cover ensure cli startup build script behavior.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -8,47 +6,35 @@ import {
   hasCliStartupBuild,
   resolveCliStartupBuildTimeoutMs,
 } from "../../scripts/ensure-cli-startup-build.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempRoots: string[] = [];
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+const timeout = (value?: string) =>
+  resolveCliStartupBuildTimeoutMs(
+    value === undefined ? {} : { OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: value },
+  );
 
-function makeTempRoot(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-cli-startup-build-"));
-  tempRoots.push(root);
-  mkdirSync(path.join(root, "scripts"), { recursive: true });
-  writeFileSync(path.join(root, "scripts", "build-all.mts"), "", "utf8");
-  return root;
-}
-
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-describe("ensure-cli-startup-build", () => {
-  it("detects an existing CLI startup build", () => {
-    const root = makeTempRoot();
-    mkdirSync(path.join(root, "dist"), { recursive: true });
-    writeFileSync(path.join(root, "dist", "entry.js"), "export {};\n", "utf8");
+function makeTempRoot(entry?: string): string {
+  const root = tempRoots.make("openclaw-cli-startup-build-");
+  if (entry) {
+    mkdirSync(path.join(root, "dist"));
+    writeFileSync(path.join(root, "dist", entry), "export {};\n");
     writeFileSync(
       path.join(root, "dist", "cli-startup-metadata.json"),
       '{"rootHelpText":"help\\n"}\n',
-      "utf8",
     );
+  }
+  return root;
+}
 
+describe("ensure-cli-startup-build", () => {
+  it("detects an existing CLI startup build", () => {
+    const root = makeTempRoot("entry.js");
     expect(hasCliStartupBuild({ rootDir: root })).toBe(true);
   });
 
   it("skips the build profile when dist entry output and startup metadata already exist", () => {
-    const root = makeTempRoot();
-    mkdirSync(path.join(root, "dist"), { recursive: true });
-    writeFileSync(path.join(root, "dist", "entry.mjs"), "export {};\n", "utf8");
-    writeFileSync(
-      path.join(root, "dist", "cli-startup-metadata.json"),
-      '{"rootHelpText":"help\\n"}\n',
-      "utf8",
-    );
-
+    const root = makeTempRoot("entry.mjs");
     const result = ensureCliStartupBuild({
       rootDir: root,
       spawnSync: () => {
@@ -60,11 +46,10 @@ describe("ensure-cli-startup-build", () => {
   });
 
   it("uses the configured cliStartup build timeout", () => {
-    const root = makeTempRoot();
     const calls: unknown[] = [];
 
     ensureCliStartupBuild({
-      rootDir: root,
+      rootDir: makeTempRoot(),
       env: { OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "1234" },
       spawnSync: (command, args, options) => {
         calls.push({ command, args, options });
@@ -74,53 +59,32 @@ describe("ensure-cli-startup-build", () => {
     });
 
     expect(calls).toEqual([
-      expect.objectContaining({
-        options: expect.objectContaining({
-          timeout: 1234,
-        }),
-      }),
+      expect.objectContaining({ options: expect.objectContaining({ timeout: 1234 }) }),
     ]);
   });
 
-  it("fails when the cliStartup build profile fails", () => {
-    const root = makeTempRoot();
-
+  it.each([
+    [{ status: 1 }, "cliStartup build profile failed with exit code 1"],
+    [{ error: new Error("spawn denied") }, "spawn denied"],
+  ] as const)("reports build failure %j", (result, message) => {
     expect(() =>
       ensureCliStartupBuild({
-        rootDir: root,
-        spawnSync: () => ({ status: 1 }),
+        rootDir: makeTempRoot(),
+        spawnSync: () => result,
         stdio: "pipe",
       }),
-    ).toThrow("cliStartup build profile failed with exit code 1");
-  });
-
-  it("fails when spawning the cliStartup build profile fails", () => {
-    const root = makeTempRoot();
-
-    expect(() =>
-      ensureCliStartupBuild({
-        rootDir: root,
-        spawnSync: () => ({ error: new Error("spawn denied") }),
-        stdio: "pipe",
-      }),
-    ).toThrow("spawn denied");
+    ).toThrow(message);
   });
 });
 
 describe("resolveCliStartupBuildTimeoutMs", () => {
   it("parses only positive integer environment timeouts", () => {
-    expect(resolveCliStartupBuildTimeoutMs({})).toBe(10 * 60 * 1000);
-    expect(resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "" })).toBe(
-      10 * 60 * 1000,
-    );
-    expect(resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "4321" })).toBe(
-      4321,
-    );
+    expect(timeout()).toBe(10 * 60 * 1000);
+    expect(timeout("")).toBe(10 * 60 * 1000);
+    expect(timeout("4321")).toBe(4321);
 
     for (const raw of ["nope", "10m", "1e3", "0", "-1", "9007199254740992"]) {
-      expect(() =>
-        resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: raw }),
-      ).toThrow(`invalid OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: ${raw}`);
+      expect(() => timeout(raw)).toThrow(`invalid OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: ${raw}`);
     }
   });
 });

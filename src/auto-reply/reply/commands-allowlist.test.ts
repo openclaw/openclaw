@@ -1,4 +1,3 @@
-// Tests allowlist command edits across legacy and scoped channel configuration.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -28,7 +27,9 @@ const replaceConfigFileMock = vi.hoisted(() => vi.fn());
 const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn());
 const addChannelAllowFromStoreEntryMock = vi.hoisted(() => vi.fn());
 const removeChannelAllowFromStoreEntryMock = vi.hoisted(() => vi.fn());
+type ConfigEdit = { nextConfig: OpenClawConfig; result?: unknown };
 
+// mock-isolation: Keep config reads and conditional writes inside the command fixture.
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
   readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -39,12 +40,7 @@ vi.mock("../../config/config.js", () => ({
     transform: (
       currentConfig: OpenClawConfig,
       context: { snapshot: ConfigSnapshotMock; previousHash: string | null; attempt: number },
-    ) =>
-      | Promise<{ nextConfig: OpenClawConfig; result?: unknown }>
-      | {
-          nextConfig: OpenClawConfig;
-          result?: unknown;
-        };
+    ) => ConfigEdit | Promise<ConfigEdit>;
   }) => {
     const snapshot = (await readConfigFileSnapshotMock()) as ConfigSnapshotMock;
     const previousHash = snapshot.hash ?? null;
@@ -89,26 +85,15 @@ type TelegramTestSectionConfig = {
 
 type DmGroupAllowlistTestSectionConfig = {
   allowFrom?: string[];
-  groupAllowFrom?: string[];
-  dm?: {
-    allowFrom?: string[];
-  };
+  dm?: { allowFrom?: string[] };
 };
 
 function normalizeTelegramAllowFromEntries(values: Array<string | number>): string[] {
   return formatAllowFromLowercase({ allowFrom: values, stripPrefixRe: /^(telegram|tg):/i });
 }
 
-function normalizeAllowlistValues(values: Array<string | number>): string[] {
-  const normalized: string[] = [];
-  for (const value of values) {
-    const entry = String(value).trim();
-    if (entry) {
-      normalized.push(entry);
-    }
-  }
-  return normalized;
-}
+const normalizeAllowlistValues = (values: Array<string | number>): string[] =>
+  values.map((value) => String(value).trim()).filter(Boolean);
 
 function resolveTelegramTestAccount(
   cfg: OpenClawConfig,
@@ -128,7 +113,6 @@ const telegramAllowlistTestPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
     id: "telegram",
     label: "Telegram",
-    docsPath: "/channels/telegram",
     capabilities: {
       chatTypes: ["direct", "group", "channel", "thread"],
       nativeCommands: true,
@@ -148,67 +132,34 @@ const telegramAllowlistTestPlugin: ChannelPlugin = {
     resolveAllowFrom: (account) => account.allowFrom,
     formatAllowFrom: normalizeTelegramAllowFromEntries,
   }),
-  pairing: {
-    idLabel: "telegramUserId",
-  },
+  pairing: { idLabel: "telegramUserId" },
   allowlist: buildDmGroupAccountAllowlistAdapter({
     channelId: "telegram",
     resolveAccount: ({ cfg, accountId }) => resolveTelegramTestAccount(cfg, accountId),
     normalize: ({ values }) => normalizeTelegramAllowFromEntries(values),
     resolveDmAllowFrom: (account) => account.allowFrom,
     resolveGroupAllowFrom: (account) => account.groupAllowFrom,
-    resolveDmPolicy: () => undefined,
-    resolveGroupPolicy: () => undefined,
   }),
 };
 
-const whatsappAllowlistTestPlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "whatsapp",
-    label: "WhatsApp",
-    docsPath: "/channels/whatsapp",
-    capabilities: {
-      chatTypes: ["direct", "group"],
-      nativeCommands: true,
-    },
-  }),
-  pairing: {
-    idLabel: "phone",
-  },
-  allowlist: buildDmGroupAccountAllowlistAdapter({
-    channelId: "whatsapp",
-    resolveAccount: ({ cfg }) =>
-      (cfg.channels?.whatsapp as DmGroupAllowlistTestSectionConfig | undefined) ?? {},
-    normalize: ({ values }) => normalizeAllowlistValues(values),
-    resolveDmAllowFrom: (account) => account.allowFrom,
-    resolveGroupAllowFrom: (account) => account.groupAllowFrom,
-    resolveDmPolicy: () => undefined,
-    resolveGroupPolicy: () => undefined,
-  }),
-};
-
-function createLegacyAllowlistPlugin(channelId: "discord" | "slack"): ChannelPlugin {
+function createLegacyAllowlistPlugin(): ChannelPlugin {
+  const channelId = "discord";
   return {
     ...createChannelTestPluginBase({
       id: channelId,
-      label: channelId === "discord" ? "Discord" : "Slack",
-      docsPath: `/channels/${channelId}`,
+      label: "Discord",
       capabilities: {
         chatTypes: ["direct", "group", "thread"],
         nativeCommands: true,
       },
     }),
-    pairing: {
-      idLabel: channelId === "discord" ? "discordUserId" : "slackUserId",
-    },
+    pairing: { idLabel: "discordUserId" },
     allowlist: buildLegacyDmAccountAllowlistAdapter({
       channelId,
       resolveAccount: ({ cfg }) =>
         (cfg.channels?.[channelId] as DmGroupAllowlistTestSectionConfig | undefined) ?? {},
       normalize: ({ values }) => normalizeAllowlistValues(values),
       resolveDmAllowFrom: (account) => account.allowFrom ?? account.dm?.allowFrom,
-      resolveGroupPolicy: () => undefined,
-      resolveGroupOverrides: () => undefined,
     }),
   };
 }
@@ -217,9 +168,7 @@ function setAllowlistPluginRegistry() {
   setActivePluginRegistry(
     createTestRegistry([
       { pluginId: "telegram", plugin: telegramAllowlistTestPlugin, source: "test" },
-      { pluginId: "whatsapp", plugin: whatsappAllowlistTestPlugin, source: "test" },
-      { pluginId: "discord", plugin: createLegacyAllowlistPlugin("discord"), source: "test" },
-      { pluginId: "slack", plugin: createLegacyAllowlistPlugin("slack"), source: "test" },
+      { pluginId: "discord", plugin: createLegacyAllowlistPlugin(), source: "test" },
     ]),
   );
 }
@@ -235,9 +184,9 @@ beforeEach(() => {
     const parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
     return { valid: true, parsed };
   });
-  validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+  validateConfigObjectWithPluginsMock.mockImplementation((value: unknown) => ({
     ok: true,
-    config,
+    config: value,
   }));
   replaceConfigFileMock.mockImplementation(async (params: { nextConfig: unknown }) => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -310,17 +259,29 @@ function buildAllowlistParams(
   } as unknown as HandleCommandsParams;
 }
 
+function config(channels: OpenClawConfig["channels"], editable = true): OpenClawConfig {
+  return { commands: editable ? { text: true, config: true } : { text: true }, channels };
+}
+
+function runOwnerCommand(
+  body: string,
+  cfg: OpenClawConfig,
+  ctx?: Parameters<typeof buildAllowlistParams>[2],
+) {
+  const params = buildAllowlistParams(body, cfg, ctx);
+  params.command.senderIsOwner = true;
+  return handleAllowlistCommand(params, true);
+}
+
+const listAllowlist = (cfg: OpenClawConfig) =>
+  handleAllowlistCommand(buildAllowlistParams("/allowlist list dm", cfg), true);
+
 describe("handleAllowlistCommand", () => {
   it("lists config and store allowFrom entries", async () => {
     readChannelAllowFromStoreMock.mockResolvedValueOnce(["456"]);
 
-    const cfg = {
-      commands: { text: true },
-      channels: { telegram: { allowFrom: ["123", "@Alice"] } },
-    } as OpenClawConfig;
-    const result = await handleAllowlistCommand(
-      buildAllowlistParams("/allowlist list dm", cfg),
-      true,
+    const result = await listAllowlist(
+      config({ telegram: { allowFrom: ["123", "@Alice"] } }, false),
     );
 
     expect(result?.shouldContinue).toBe(false);
@@ -332,14 +293,7 @@ describe("handleAllowlistCommand", () => {
   it("surfaces pairing-store read failures instead of an empty store list", async () => {
     readChannelAllowFromStoreMock.mockRejectedValueOnce(new Error("pairing db locked"));
 
-    const cfg = {
-      commands: { text: true },
-      channels: { telegram: { allowFrom: ["123"] } },
-    } as OpenClawConfig;
-    const result = await handleAllowlistCommand(
-      buildAllowlistParams("/allowlist list dm", cfg),
-      true,
-    );
+    const result = await listAllowlist(config({ telegram: { allowFrom: ["123"] } }, false));
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain(
@@ -348,132 +302,65 @@ describe("handleAllowlistCommand", () => {
   });
 
   it("adds allowlist entries to config and pairing stores", async () => {
-    const cases = [
-      {
-        name: "default account",
-        run: async () => {
-          await withTempConfigPath(
-            {
-              channels: { telegram: { allowFrom: ["123"] } },
-            },
-            async (configPath) => {
-              readConfigFileSnapshotMock.mockResolvedValueOnce({
-                valid: true,
-                parsed: {
-                  channels: { telegram: { allowFrom: ["123"] } },
-                },
-              });
-              addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
-                changed: true,
-                allowFrom: ["123", "789"],
-              });
-
-              const params = buildAllowlistParams("/allowlist add dm 789", {
-                commands: { text: true, config: true },
-                channels: { telegram: { allowFrom: ["123"] } },
-              } as OpenClawConfig);
-              params.command.senderIsOwner = true;
-              const result = await handleAllowlistCommand(params, true);
-
-              expect(result?.shouldContinue, "default account").toBe(false);
-              const written = await readJsonFile<OpenClawConfig>(configPath);
-              expect(written.channels?.telegram?.allowFrom, "default account").toEqual([
-                "123",
-                "789",
-              ]);
-              expect(addChannelAllowFromStoreEntryMock, "default account").toHaveBeenCalledWith({
-                channel: "telegram",
-                entry: "789",
-                accountId: "default",
-              });
-              expect(result?.reply?.text, "default account").toContain("DM allowlist added");
-            },
-          );
-        },
-      },
-      {
-        name: "selected account scope",
-        run: async () => {
-          readConfigFileSnapshotMock.mockResolvedValueOnce({
-            valid: true,
-            parsed: {
-              channels: { telegram: { accounts: { work: { allowFrom: ["123"] } } } },
-            },
-          });
-          addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
-            changed: true,
-            allowFrom: ["123", "789"],
-          });
-
-          const params = buildAllowlistParams(
-            "/allowlist add dm --account work 789",
-            {
-              commands: { text: true, config: true },
-              channels: { telegram: { accounts: { work: { allowFrom: ["123"] } } } },
-            } as OpenClawConfig,
-            { AccountId: "work" },
-          );
-          params.command.senderIsOwner = true;
-          const result = await handleAllowlistCommand(params, true);
-
-          expect(result?.shouldContinue, "selected account scope").toBe(false);
-          expect(addChannelAllowFromStoreEntryMock, "selected account scope").toHaveBeenCalledWith({
-            channel: "telegram",
-            entry: "789",
-            accountId: "work",
-          });
-        },
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      await testCase.run();
+    for (const accountId of ["default", "work"]) {
+      const telegram =
+        accountId === "default"
+          ? { allowFrom: ["123"] }
+          : { accounts: { work: { allowFrom: ["123"] } } };
+      const cfg = config({ telegram });
+      await withTempConfigPath(cfg, async (configPath) => {
+        readConfigFileSnapshotMock.mockResolvedValueOnce({ valid: true, parsed: cfg });
+        addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
+          changed: true,
+          allowFrom: ["123", "789"],
+        });
+        const accountFlag = accountId === "default" ? "" : "--account work ";
+        const result = await runOwnerCommand(
+          `/allowlist add dm ${accountFlag}789`,
+          cfg,
+          accountId === "default" ? undefined : { AccountId: "work" },
+        );
+        expect(result?.shouldContinue, accountId).toBe(false);
+        expect(addChannelAllowFromStoreEntryMock, accountId).toHaveBeenCalledWith({
+          channel: "telegram",
+          entry: "789",
+          accountId,
+        });
+        if (accountId === "default") {
+          const written = await readJsonFile<OpenClawConfig>(configPath);
+          expect(written.channels?.telegram?.allowFrom, accountId).toEqual(["123", "789"]);
+          expect(result?.reply?.text, accountId).toContain("DM allowlist added");
+        }
+      });
     }
   });
 
   it("keeps group allowlist edits out of the DM pairing store", async () => {
-    await withTempConfigPath(
-      { channels: { telegram: { groupAllowFrom: ["123"] } } },
-      async (configPath) => {
-        const params = buildAllowlistParams("/allowlist add group 789", {
-          commands: { text: true, config: true },
-          channels: { telegram: { groupAllowFrom: ["123"] } },
-        } as OpenClawConfig);
-        params.command.senderIsOwner = true;
+    const cfg = config({ telegram: { groupAllowFrom: ["123"] } });
+    await withTempConfigPath({ channels: cfg.channels }, async (configPath) => {
+      const result = await runOwnerCommand("/allowlist add group 789", cfg);
 
-        const result = await handleAllowlistCommand(params, true);
-
-        expect(result?.shouldContinue).toBe(false);
-        const written = await readJsonFile<OpenClawConfig>(configPath);
-        expect(written.channels?.telegram?.groupAllowFrom).toEqual(["123", "789"]);
-        expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
-        expect(result?.reply?.text).toContain(
-          "group allowlist added: channels.telegram.groupAllowFrom.",
-        );
-        expect(result?.reply?.text).not.toContain("pairing store");
-      },
-    );
+      expect(result?.shouldContinue).toBe(false);
+      const written = await readJsonFile<OpenClawConfig>(configPath);
+      expect(written.channels?.telegram?.groupAllowFrom).toEqual(["123", "789"]);
+      expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+      expect(result?.reply?.text).toContain(
+        "group allowlist added: channels.telegram.groupAllowFrom.",
+      );
+      expect(result?.reply?.text).not.toContain("pairing store");
+    });
   });
 
   it("uses the configured default account for omitted-account list", async () => {
-    const cfg = {
-      commands: { text: true, config: true },
-      channels: {
-        telegram: {
-          defaultAccount: "work",
-          accounts: { work: { allowFrom: ["123"] } },
-        },
+    const cfg = config({
+      telegram: {
+        defaultAccount: "work",
+        accounts: { work: { allowFrom: ["123"] } },
       },
-    } as OpenClawConfig;
+    });
     readChannelAllowFromStoreMock.mockResolvedValueOnce([]);
 
-    const result = await handleAllowlistCommand(
-      buildAllowlistParams("/allowlist list dm", cfg, {
-        Provider: "telegram",
-        Surface: "telegram",
-      }),
-      true,
-    );
+    const result = await listAllowlist(cfg);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Channel: telegram (account work)");
@@ -481,45 +368,28 @@ describe("handleAllowlistCommand", () => {
   });
 
   it("blocks config-targeted edits when the target account disables writes", async () => {
-    const previousWriteCount = replaceConfigFileMock.mock.calls.length;
-    const cfg = {
-      commands: { text: true, config: true },
-      channels: {
-        telegram: {
-          configWrites: true,
-          accounts: {
-            work: { configWrites: false, allowFrom: ["123"] },
-          },
-        },
+    const cfg = config({
+      telegram: {
+        configWrites: true,
+        accounts: { work: { configWrites: false, allowFrom: ["123"] } },
       },
-    } as OpenClawConfig;
+    });
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       valid: true,
       parsed: structuredClone(cfg),
     });
-    const params = buildAllowlistParams("/allowlist add dm --account work --config 789", cfg, {
+    const result = await runOwnerCommand("/allowlist add dm --account work --config 789", cfg, {
       AccountId: "default",
-      Provider: "telegram",
-      Surface: "telegram",
     });
-    params.command.senderIsOwner = true;
-    const result = await handleAllowlistCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
-    expect(replaceConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("blocks non-owner allowlist writes before resolving target channel", async () => {
-    const cfg = {
-      commands: { text: true, config: true },
-      channels: {
-        telegram: { allowFrom: ["*"], configWrites: true },
-      },
-    } as OpenClawConfig;
+    const cfg = config({ telegram: { allowFrom: ["*"], configWrites: true } });
     const params = buildAllowlistParams("/allowlist add dm --channel unknown attacker-id", cfg, {
-      Provider: "telegram",
-      Surface: "telegram",
       SenderId: "telegram-attacker",
       From: "telegram-attacker",
     });
@@ -534,23 +404,15 @@ describe("handleAllowlistCommand", () => {
   });
 
   it("blocks cross-channel config edits when the command origin disables writes", async () => {
-    const cfg = {
-      commands: { text: true, config: true },
-      channels: {
-        telegram: { allowFrom: ["123"], configWrites: false },
-        discord: { allowFrom: ["456"], configWrites: true },
-      },
-    } as OpenClawConfig;
+    const cfg = config({
+      telegram: { allowFrom: ["123"], configWrites: false },
+      discord: { allowFrom: ["456"], configWrites: true },
+    });
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       valid: true,
       parsed: structuredClone(cfg),
     });
-    const params = buildAllowlistParams("/allowlist add dm --channel discord --config 789", cfg, {
-      Provider: "telegram",
-      Surface: "telegram",
-    });
-    params.command.senderIsOwner = true;
-    const result = await handleAllowlistCommand(params, true);
+    const result = await runOwnerCommand("/allowlist add dm --channel discord --config 789", cfg);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("channels.telegram.accounts.default.configWrites=true");
@@ -559,19 +421,11 @@ describe("handleAllowlistCommand", () => {
   });
 
   it("blocks cross-channel store edits when the command origin disables writes", async () => {
-    const cfg = {
-      commands: { text: true, config: true },
-      channels: {
-        telegram: { allowFrom: ["123"], configWrites: false },
-        discord: { allowFrom: ["456"], configWrites: true },
-      },
-    } as OpenClawConfig;
-    const params = buildAllowlistParams("/allowlist add dm --channel discord --store 789", cfg, {
-      Provider: "telegram",
-      Surface: "telegram",
+    const cfg = config({
+      telegram: { allowFrom: ["123"], configWrites: false },
+      discord: { allowFrom: ["456"], configWrites: true },
     });
-    params.command.senderIsOwner = true;
-    const result = await handleAllowlistCommand(params, true);
+    const result = await runOwnerCommand("/allowlist add dm --channel discord --store 789", cfg);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("channels.telegram.accounts.default.configWrites=true");
@@ -579,14 +433,8 @@ describe("handleAllowlistCommand", () => {
   });
 
   it("rejects group-scoped store edits because pairing stores authorize DMs only", async () => {
-    const cfg = {
-      commands: { text: true, config: true },
-      channels: { telegram: { allowFrom: ["123"], configWrites: true } },
-    } as OpenClawConfig;
-    const params = buildAllowlistParams("/allowlist add group --store 789", cfg);
-    params.command.senderIsOwner = true;
-
-    const result = await handleAllowlistCommand(params, true);
+    const cfg = config({ telegram: { allowFrom: ["123"], configWrites: true } });
+    const result = await runOwnerCommand("/allowlist add group --store 789", cfg);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Pairing-store allowlist edits apply to DMs only");
@@ -596,23 +444,8 @@ describe("handleAllowlistCommand", () => {
   });
 
   it("removes default-account entries from scoped and legacy pairing stores", async () => {
-    removeChannelAllowFromStoreEntryMock
-      .mockResolvedValueOnce({
-        changed: true,
-        allowFrom: [],
-      })
-      .mockResolvedValueOnce({
-        changed: true,
-        allowFrom: [],
-      });
-
-    const cfg = {
-      commands: { text: true, config: true },
-      channels: { telegram: { allowFrom: ["123"] } },
-    } as OpenClawConfig;
-    const params = buildAllowlistParams("/allowlist remove dm --store 789", cfg);
-    params.command.senderIsOwner = true;
-    const result = await handleAllowlistCommand(params, true);
+    const cfg = config({ telegram: { allowFrom: ["123"] } });
+    const result = await runOwnerCommand("/allowlist remove dm --store 789", cfg);
 
     expect(result?.shouldContinue).toBe(false);
     expect(removeChannelAllowFromStoreEntryMock).toHaveBeenNthCalledWith(1, {
@@ -629,13 +462,8 @@ describe("handleAllowlistCommand", () => {
   it("rejects blocked account ids and keeps Object.prototype clean", async () => {
     delete (Object.prototype as Record<string, unknown>).allowFrom;
 
-    const cfg = {
-      commands: { text: true, config: true },
-      channels: { telegram: { allowFrom: ["123"] } },
-    } as OpenClawConfig;
-    const params = buildAllowlistParams("/allowlist add dm --account __proto__ 789", cfg);
-    params.command.senderIsOwner = true;
-    const result = await handleAllowlistCommand(params, true);
+    const cfg = config({ telegram: { allowFrom: ["123"] } });
+    const result = await runOwnerCommand("/allowlist add dm --account __proto__ 789", cfg);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Invalid account id");

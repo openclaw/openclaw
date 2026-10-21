@@ -34,6 +34,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
+import { formatTimestamp } from "../logging/timestamps.js";
 import { defaultRuntime } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatCliCommand } from "./command-format.js";
@@ -41,7 +42,6 @@ import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { formatDocsHelp } from "./help-format.js";
-import { formatLogsCliLine } from "./logs-cli.format.js";
 import { parseLogsPositiveInt } from "./logs-cli.options.js";
 
 type LogsTailPayload = Partial<Omit<LogsTailResult, "cursor">> & {
@@ -92,13 +92,6 @@ const JOURNAL_FALLBACK_NOTICE =
 const JOURNAL_CURSOR_PREFIX = "-- cursor: ";
 const JOURNAL_MAX_LIMIT = 5000;
 const JOURNAL_MAX_BYTES = 1_000_000;
-
-function normalizeLogTailPayloadSource(payload: LogsTailPayload): LogsTailPayload {
-  if (payload.sourceKind || !payload.file) {
-    return payload;
-  }
-  return { ...payload, sourceKind: "file" };
-}
 
 function buildLogSourceIdentity(payload: LogsTailPayload): string | undefined {
   const sourceKind = payload.sourceKind ?? (payload.file ? "file" : undefined);
@@ -393,18 +386,6 @@ export function registerLogsCli(program: Command) {
       }
       return undefined;
     };
-    const clearConsumedGatewayRecovery = (
-      promise: Promise<GatewayRecoveryResult>,
-      result: GatewayRecoveryResult,
-    ) => {
-      const isMatchingProbe =
-        gatewayRecovery.kind === "probing" && gatewayRecovery.promise === promise;
-      const isMatchingResult =
-        gatewayRecovery.kind === "settled" && gatewayRecovery.result === result;
-      if (isMatchingProbe || isMatchingResult) {
-        gatewayRecovery = { kind: "idle" };
-      }
-    };
     const { logLine, errorLine, emitJsonLine } = createLogWriters(() => {
       void abortGatewayRecoveryProbe();
     });
@@ -427,6 +408,45 @@ export function registerLogsCli(program: Command) {
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
     const rich = isRich() && opts.color !== false && !opts.plain;
     const localTime = !opts.utc;
+    const formatLogLine = (raw: string): string => {
+      const parsed = parseLogLine(raw);
+      if (!parsed) {
+        return raw;
+      }
+      const label = parsed.subsystem ?? parsed.module ?? parsed.plugin ?? "";
+      let time = parsed.time ?? "";
+      if (time) {
+        const date = new Date(time);
+        if (!Number.isNaN(date.getTime())) {
+          time = pretty
+            ? formatTimestamp(date, { style: "short", timeZone: localTime ? undefined : "UTC" })
+            : localTime
+              ? formatTimestamp(date, { style: "long" })
+              : date.toISOString();
+        }
+      }
+      const level = parsed.level ?? "";
+      const message = parsed.message || parsed.raw;
+      if (!pretty) {
+        return [time, level, label, message].filter(Boolean).join(" ").trim();
+      }
+      const levelStyle =
+        level === "error" || level === "fatal"
+          ? theme.error
+          : level === "warn"
+            ? theme.warn
+            : level === "debug" || level === "trace"
+              ? theme.muted
+              : theme.info;
+      const head = [
+        colorize(rich, theme.muted, time),
+        colorize(rich, levelStyle, level),
+        colorize(rich, theme.accent, label),
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return [head, colorize(rich, levelStyle, message)].filter(Boolean).join(" ").trim();
+    };
     const emitConnectionNotice = (message: string, style: (value: string) => string) =>
       jsonMode
         ? emitJsonLine({ type: "notice", message }, true)
@@ -454,9 +474,7 @@ export function registerLogsCli(program: Command) {
       );
       gatewayRecovery = { kind: "probing", promise, abortController };
       void promise.then((result) => {
-        if (gatewayRecovery.kind === "probing" && gatewayRecovery.promise === promise) {
-          gatewayRecovery = { kind: "settled", result };
-        }
+        gatewayRecovery = { kind: "settled", result };
       });
     };
 
@@ -487,7 +505,7 @@ export function registerLogsCli(program: Command) {
       }
       if (activeProbe) {
         const result = await activeProbe;
-        clearConsumedGatewayRecovery(activeProbe, result);
+        gatewayRecovery = { kind: "idle" };
         if (result.ok) {
           return { payload: result.payload, gatewayPollStartedAt: result.startedAt };
         }
@@ -503,7 +521,6 @@ export function registerLogsCli(program: Command) {
           break;
         }
         let payload: LogsTailPayload;
-        // Show progress spinner only on first fetch, not during follow polling
         const showProgress = first && !opts.follow;
         let gatewayPollStartedAt = new Date().toISOString();
         try {
@@ -621,7 +638,6 @@ export function registerLogsCli(program: Command) {
           return;
         }
         followRetryAttempt = 0;
-        payload = normalizeLogTailPayloadSource(payload);
         const sourceIdentity = buildLogSourceIdentity(payload);
         const sourceChanged = sourceIdentity !== undefined && sourceIdentity !== lastSourceIdentity;
         const shouldEmitSourceMetadata = first || sourceChanged;
@@ -669,15 +685,7 @@ export function registerLogsCli(program: Command) {
             }
           }
           for (const line of lines) {
-            if (
-              !logLine(
-                formatLogsCliLine(line, {
-                  pretty,
-                  rich,
-                  localTime,
-                }),
-              )
-            ) {
+            if (!logLine(formatLogLine(line))) {
               return;
             }
           }

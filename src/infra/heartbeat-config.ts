@@ -16,6 +16,14 @@ import type { HeartbeatWakeSource } from "./heartbeat-wake-contracts.js";
 
 export type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
+export function sanitizeCronHeartbeatOverride(
+  heartbeat: HeartbeatConfig | undefined,
+): HeartbeatConfig | undefined {
+  return heartbeat?.target === "last"
+    ? { ...heartbeat, to: undefined, accountId: undefined }
+    : heartbeat;
+}
+
 const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 10 * 60;
 
 type HeartbeatAgent = {
@@ -85,14 +93,9 @@ export function resolveHeartbeatTimeoutOverrideSeconds(
     return heartbeat.timeoutSeconds;
   }
   const agentDefaultTimeoutSeconds = cfg.agents?.defaults?.timeoutSeconds;
-  if (
-    typeof agentDefaultTimeoutSeconds === "number" &&
-    Number.isFinite(agentDefaultTimeoutSeconds)
-  ) {
+  if (agentDefaultTimeoutSeconds !== undefined) {
     // Preserve the unlimited sentinel consumed by resolveAgentTimeoutMs.
-    return agentDefaultTimeoutSeconds === 0
-      ? 0
-      : Math.max(1, Math.floor(agentDefaultTimeoutSeconds));
+    return agentDefaultTimeoutSeconds;
   }
   // Monitor turns use their cadence budget instead of the 48h built-in agent default.
   const intervalMs = resolveHeartbeatIntervalMs(cfg, undefined, heartbeat);

@@ -5,7 +5,7 @@ import {
   confirmAndStartUpdate,
   createUpdateProgressWatcher,
 } from "../../app/update-confirmation.ts";
-import { canReportUpdateFailure } from "../../app/update-failure-report-controller.ts";
+import { canReportUpdateFailure } from "../../app/update-failure-report-owner.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {

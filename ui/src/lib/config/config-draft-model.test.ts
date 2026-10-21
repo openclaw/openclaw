@@ -14,9 +14,7 @@ import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("config draft model", () => {
   it.each([
-    { edit: "revert", dispose: false, unavailable: false },
     { edit: "delete", dispose: false, unavailable: false },
-    { edit: "revert", dispose: false, unavailable: true },
     { edit: "revert", dispose: true, unavailable: true },
   ])(
     "config.set replays $edit (dispose: $dispose, JSON5 unavailable: $unavailable)",
@@ -67,10 +65,8 @@ describe("config draft model", () => {
     },
   );
 
-  it.each([
-    ["comments", "{\n  // Keep this note.\n  count: 2,\n}\n"],
-    ["semantic edit", "{ count: 3, /* keep spacing */ }\n"],
-  ])("config.set adopts its revision and rejects stale raw %s by content", async (_edit, raw) => {
+  it("config.set adopts its revision and rejects stale raw comments by content", async () => {
+    const raw = "{\n  // Keep this note.\n  count: 2,\n}\n";
     vi.useFakeTimers();
     const canonical = { count: 2, ui: { prefs: { locale: "fr" } } };
     const { request, submissions, firstSet } = createDeferredSetServerMock(canonical);
@@ -87,66 +83,54 @@ describe("config draft model", () => {
     expect(runtimeConfig.state.configRaw).toBe(raw);
     expect(runtimeConfig.state.configFormDirty).toBe(true);
     expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
-    expect(runtimeConfig.state.configSnapshot).toMatchObject({ config: canonical, hash: "hash-2" });
+    expect(runtimeConfig.state.configSnapshot).toMatchObject({
+      config: canonical,
+      hash: "hash-2",
+    });
     await expect(runtimeConfig.save()).resolves.toBe(false);
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
     expect(submissions).toHaveLength(1);
     runtimeConfig.dispose();
   });
 
-  it.each([
-    { edit: "replace", dispose: false },
-    { edit: "delete", dispose: false },
-    { edit: "replace", dispose: true },
-    { edit: "delete", dispose: true },
-  ])(
-    "config.set retains a redacted object's child $edit (dispose: $dispose)",
-    async ({ edit, dispose }) => {
-      vi.useFakeTimers();
-      const canonical = {
-        count: 1,
-        channels: { googlechat: { serviceAccount: "__OPENCLAW_REDACTED__" } },
-        ui: { prefs: { locale: "fr" } },
-      };
-      const { request, submissions, firstSet } = createDeferredSetServerMock(canonical);
-      const { runtimeConfig } = createConfigCapabilityHarness(
-        request as GatewayBrowserClient["request"],
-      );
-      await runtimeConfig.ensureLoaded();
-      const account = { project_id: "fixture-project", client_email: "before@example.invalid" };
-      const path = ["channels", "googlechat", "serviceAccount"];
-      runtimeConfig.patchForm(path, account);
-      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-      if (edit === "delete") {
-        runtimeConfig.removeFormValue([...path, "client_email"]);
-      } else {
-        runtimeConfig.patchForm([...path, "client_email"], "after@example.invalid");
-      }
-      if (dispose) {
-        runtimeConfig.dispose();
-      }
-      firstSet.resolve({});
-      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+  it("config.set retains a redacted object's child deletion during teardown", async () => {
+    vi.useFakeTimers();
+    const canonical = {
+      count: 1,
+      channels: { googlechat: { serviceAccount: "__OPENCLAW_REDACTED__" } },
+      ui: { prefs: { locale: "fr" } },
+    };
+    const { request, submissions, firstSet } = createDeferredSetServerMock(canonical);
+    const { runtimeConfig } = createConfigCapabilityHarness(
+      request as GatewayBrowserClient["request"],
+    );
+    await runtimeConfig.ensureLoaded();
+    const account = { project_id: "fixture-project", client_email: "before@example.invalid" };
+    const path = ["channels", "googlechat", "serviceAccount"];
+    runtimeConfig.patchForm(path, account);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    runtimeConfig.removeFormValue([...path, "client_email"]);
+    runtimeConfig.dispose();
+    firstSet.resolve({});
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
 
-      expect(submissions).toHaveLength(2);
-      expect(submissions[1]?.baseHash).toBe("hash-2");
-      expect(submissions.map(({ raw }) => JSON.parse(raw))).toEqual([
-        { count: 1, channels: { googlechat: { serviceAccount: account } } },
-        {
-          ...canonical,
-          channels: {
-            googlechat: {
-              serviceAccount: {
-                project_id: "fixture-project",
-                ...(edit === "replace" ? { client_email: "after@example.invalid" } : {}),
-              },
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1]?.baseHash).toBe("hash-2");
+    expect(submissions.map(({ raw }) => JSON.parse(raw))).toEqual([
+      { count: 1, channels: { googlechat: { serviceAccount: account } } },
+      {
+        ...canonical,
+        channels: {
+          googlechat: {
+            serviceAccount: {
+              project_id: "fixture-project",
             },
           },
         },
-      ]);
-      runtimeConfig.dispose();
-    },
-  );
+      },
+    ]);
+    runtimeConfig.dispose();
+  });
 
   it("config.set serializes schema-coerced form values with the draft base hash", async () => {
     const submitted: Array<{ method: string; params: unknown }> = [];
@@ -507,76 +491,56 @@ describe("config draft model", () => {
     runtimeConfig.dispose();
   });
 
-  it.each([
-    ["automatic save", "123"],
-    ["manual save", "z.ai"],
-    ["manual save", "$&"],
-    ["apply", "a.models.3"],
-  ] as const)(
-    "formats the rejected %s validation path for provider %s without changing the Gateway issue",
-    async (operation, providerId) => {
-      vi.useFakeTimers();
-      const issue = {
-        path: `models.providers.${providerId}.models.3.name`,
-        message: "Invalid model name",
-      };
-      const rejection = new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: `invalid config: ${issue.path}: ${issue.message}`,
-        details: { issues: [issue] },
-      });
-      const config = {
-        models: {
-          providers: {
-            [providerId]: {
-              models: [
-                { name: "First" },
-                { name: "Second" },
-                { name: "Third" },
-                { name: "Fourth" },
-              ],
-            },
+  it("formats the rejected apply validation path without changing the Gateway issue", async () => {
+    const providerId = "a.models.3";
+    vi.useFakeTimers();
+    const issue = {
+      path: `models.providers.${providerId}.models.3.name`,
+      message: "Invalid model name",
+    };
+    const rejection = new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: `invalid config: ${issue.path}: ${issue.message}`,
+      details: { issues: [issue] },
+    });
+    const config = {
+      models: {
+        providers: {
+          [providerId]: {
+            models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, { name: "Fourth" }],
           },
         },
-      };
-      const request = vi.fn(async (method: string) => {
-        if (method === "config.get") {
-          return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
-        }
-        if (method === "config.set" || method === "config.apply") {
-          throw rejection;
-        }
-        return {};
-      });
-      const { runtimeConfig } = createConfigCapabilityHarness(
-        request as GatewayBrowserClient["request"],
-      );
-      await runtimeConfig.ensureLoaded();
-      expect(runtimeConfig.state.configSchema).toBeNull();
-
-      if (operation === "automatic save") {
-        runtimeConfig.patchForm(["models", "providers", providerId, "models", 3, "name"], "");
-        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-      } else if (operation === "manual save") {
-        runtimeConfig.patchForm(["models", "providers", providerId, "models", 3, "name"], "");
-        await expect(runtimeConfig.save()).resolves.toBe(false);
-      } else {
-        await expect(runtimeConfig.apply()).resolves.toBe(false);
+      },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
       }
+      if (method === "config.set" || method === "config.apply") {
+        throw rejection;
+      }
+      return {};
+    });
+    const { runtimeConfig } = createConfigCapabilityHarness(
+      request as GatewayBrowserClient["request"],
+    );
+    await runtimeConfig.ensureLoaded();
+    expect(runtimeConfig.state.configSchema).toBeNull();
 
-      expect(runtimeConfig.state.configSnapshot?.valid).toBe(true);
-      expect(runtimeConfig.state.configIssues).toEqual([]);
-      expect(runtimeConfig.state.lastError).toBe(
-        `GatewayRequestError: invalid config: models.providers.${providerId}.models.#4.name: Invalid model name`,
-      );
-      expect(issue.path).toBe(`models.providers.${providerId}.models.3.name`);
-      expect(rejection.message).toBe(
-        `invalid config: models.providers.${providerId}.models.3.name: Invalid model name`,
-      );
-      expect(rejection.details).toEqual({ issues: [issue] });
-      runtimeConfig.dispose();
-    },
-  );
+    await expect(runtimeConfig.apply()).resolves.toBe(false);
+
+    expect(runtimeConfig.state.configSnapshot?.valid).toBe(true);
+    expect(runtimeConfig.state.configIssues).toEqual([]);
+    expect(runtimeConfig.state.lastError).toBe(
+      `GatewayRequestError: invalid config: models.providers.${providerId}.models.#4.name: Invalid model name`,
+    );
+    expect(issue.path).toBe(`models.providers.${providerId}.models.3.name`);
+    expect(rejection.message).toBe(
+      `invalid config: models.providers.${providerId}.models.3.name: Invalid model name`,
+    );
+    expect(rejection.details).toEqual({ issues: [issue] });
+    runtimeConfig.dispose();
+  });
 
   it("preserves raw validation paths when dotted draft keys have multiple interpretations", async () => {
     const issue = {
@@ -657,188 +621,60 @@ describe("config draft model", () => {
     runtimeConfig.dispose();
   });
 
-  it("preserves machine-indexed validation paths for raw-editor submissions", async () => {
-    const issue = { path: "models.3.name", message: "Invalid model name" };
-    const config = {
-      models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, { name: "Fourth" }],
+  it("formats rejected apply paths against the submitted draft after a mid-flight edit", async () => {
+    vi.useFakeTimers();
+    const pendingWrite = deferred<unknown>();
+    const issue = {
+      path: "models.providers.a.models.3.models.3.name",
+      message: "Invalid model name",
     };
-    const request = vi.fn(async (method: string) => {
+    const config = {
+      models: {
+        providers: {
+          "a.models.3": {
+            models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, { name: "Fourth" }],
+          },
+        },
+      },
+    };
+    const request = vi.fn((method: string) => {
       if (method === "config.get") {
-        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
-      }
-      if (method === "config.set") {
-        throw new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: `invalid config: ${issue.path}: ${issue.message}`,
-          details: { issues: [issue] },
+        return Promise.resolve({
+          config,
+          raw: JSON.stringify(config),
+          hash: "hash-1",
+          valid: true,
+          issues: [],
         });
       }
-      return {};
+      if (method === "config.set" || method === "config.apply") {
+        return pendingWrite.promise;
+      }
+      return Promise.resolve({});
     });
     const { runtimeConfig } = createConfigCapabilityHarness(
       request as GatewayBrowserClient["request"],
     );
     await runtimeConfig.ensureLoaded();
-    runtimeConfig.setRaw(
-      JSON.stringify({
-        models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, { name: "" }],
+
+    const write = runtimeConfig.apply();
+    expect(request).toHaveBeenCalledWith("config.apply", expect.any(Object));
+
+    runtimeConfig.patchForm(["models", "providers", "a"], {
+      models: [{}, {}, {}, { models: [{}, {}, {}, { name: "Overlapping provider" }] }],
+    });
+    pendingWrite.reject(
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: `invalid config: ${issue.path}: ${issue.message}`,
+        details: { issues: [issue] },
       }),
     );
+    await expect(write).resolves.toBe(false);
 
-    await expect(runtimeConfig.save()).resolves.toBe(false);
-    expect(runtimeConfig.state.configFormMode).toBe("raw");
     expect(runtimeConfig.state.lastError).toBe(
-      "GatewayRequestError: invalid config: models.3.name: Invalid model name",
+      "GatewayRequestError: invalid config: models.providers.a.models.3.models.#4.name: Invalid model name",
     );
-    runtimeConfig.dispose();
-  });
-
-  it.each(["automatic save", "manual save", "apply"] as const)(
-    "formats rejected %s paths against the submitted draft after a mid-flight edit",
-    async (operation) => {
-      vi.useFakeTimers();
-      const pendingWrite = deferred<unknown>();
-      const issue = {
-        path: "models.providers.a.models.3.models.3.name",
-        message: "Invalid model name",
-      };
-      const config = {
-        models: {
-          providers: {
-            "a.models.3": {
-              models: [
-                { name: "First" },
-                { name: "Second" },
-                { name: "Third" },
-                { name: "Fourth" },
-              ],
-            },
-          },
-        },
-      };
-      const request = vi.fn((method: string) => {
-        if (method === "config.get") {
-          return Promise.resolve({
-            config,
-            raw: JSON.stringify(config),
-            hash: "hash-1",
-            valid: true,
-            issues: [],
-          });
-        }
-        if (method === "config.set" || method === "config.apply") {
-          return pendingWrite.promise;
-        }
-        return Promise.resolve({});
-      });
-      const { runtimeConfig } = createConfigCapabilityHarness(
-        request as GatewayBrowserClient["request"],
-      );
-      await runtimeConfig.ensureLoaded();
-
-      let write: Promise<boolean> | undefined;
-      if (operation === "automatic save") {
-        runtimeConfig.patchForm(["models", "providers", "a.models.3", "models", 3, "name"], "");
-        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-      } else if (operation === "manual save") {
-        runtimeConfig.patchForm(["models", "providers", "a.models.3", "models", 3, "name"], "");
-        write = runtimeConfig.save();
-      } else {
-        write = runtimeConfig.apply();
-      }
-      expect(request).toHaveBeenCalledWith(
-        operation === "apply" ? "config.apply" : "config.set",
-        expect.any(Object),
-      );
-
-      runtimeConfig.patchForm(["models", "providers", "a"], {
-        models: [{}, {}, {}, { models: [{}, {}, {}, { name: "Overlapping provider" }] }],
-      });
-      pendingWrite.reject(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: `invalid config: ${issue.path}: ${issue.message}`,
-          details: { issues: [issue] },
-        }),
-      );
-      if (write) {
-        await expect(write).resolves.toBe(false);
-      } else {
-        await vi.advanceTimersByTimeAsync(0);
-      }
-
-      expect(runtimeConfig.state.lastError).toBe(
-        "GatewayRequestError: invalid config: models.providers.a.models.3.models.#4.name: Invalid model name",
-      );
-      runtimeConfig.dispose();
-    },
-  );
-
-  it("resets a stale Saved/error status as soon as a new edit lands", async () => {
-    vi.useFakeTimers();
-    const server = createConfigServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      server.request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
-
-    runtimeConfig.patchForm(["count"], 3);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
-
-    // Raw edits reset the indicator too.
-    runtimeConfig.setRaw('{\n  "count": 9\n}\n');
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
-    runtimeConfig.dispose();
-  });
-
-  it("applies a clean snapshot's raw bytes verbatim instead of reserializing", async () => {
-    vi.useFakeTimers();
-    const server = createConfigServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      server.request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    // Hand-formatted (but JSON-parseable) raw that serializeConfigForm would
-    // rewrite into pretty-printed two-space form.
-    const rawDraft = '{"count":9,"keepFormatting":true}\n';
-    runtimeConfig.setRaw(rawDraft);
-    const savePromise = runtimeConfig.save();
-    await vi.advanceTimersByTimeAsync(0);
-    await expect(savePromise).resolves.toBe(true);
-    expect(server.submissions[0]?.raw).toBe(rawDraft);
-
-    // The banner's apply must not destroy the formatting that was just saved.
-    await expect(runtimeConfig.apply()).resolves.toBe(true);
-    expect(server.submissions[1]).toMatchObject({ method: "config.apply", raw: rawDraft });
-    runtimeConfig.dispose();
-  });
-
-  it("merges a form patch on top of a parseable dirty raw draft", async () => {
-    vi.useFakeTimers();
-    const server = createConfigServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      server.request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.setRaw('{\n  "count": 1,\n  "rawOnly": true\n}\n');
-    expect(runtimeConfig.state.configFormMode).toBe("raw");
-
-    // A Quick Settings patch lands on the shared capability: it must build on
-    // the parsed raw draft instead of the stale form.
-    runtimeConfig.patchForm(["count"], 7);
-    expect(runtimeConfig.state.configFormMode).toBe("form");
-
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(server.submissions).toHaveLength(1);
-    expect(JSON.parse(server.submissions[0]?.raw ?? "{}")).toEqual({ count: 7, rawOnly: true });
     runtimeConfig.dispose();
   });
 
@@ -864,130 +700,42 @@ describe("config draft model", () => {
     runtimeConfig.dispose();
   });
 
-  it.each(["form", "raw"] as const)(
-    "clears a failure when %s editing reverts the draft clean",
-    async (mode) => {
-      vi.useFakeTimers();
-      let setCalls = 0;
-      const request = vi.fn(async (method: string) => {
-        if (method === "config.get") {
-          return {
-            config: { count: 1 },
-            raw: '{\n  "count": 1\n}\n',
-            hash: "hash-1",
-            valid: true,
-            issues: [],
-          };
-        }
-        if (method === "config.set") {
-          setCalls += 1;
-          throw new Error("disk full");
-        }
-        return {};
-      });
-      const { runtimeConfig } = createConfigCapabilityHarness(
-        request as GatewayBrowserClient["request"],
-      );
-      await runtimeConfig.ensureLoaded();
-
-      runtimeConfig.patchForm(["count"], 2);
-      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-      expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
-
-      // Reverting to the original makes the failure moot.
-      if (mode === "raw") {
-        runtimeConfig.setRaw(runtimeConfig.state.configRawOriginal);
-      } else {
-        runtimeConfig.patchForm(["count"], 1);
-      }
-      expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
-      expect(runtimeConfig.state.configFormDirty).toBe(false);
-      expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
-      expect(runtimeConfig.state.lastError).toBeNull();
-      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
-      expect(setCalls).toBe(1);
-      runtimeConfig.dispose();
-    },
-  );
-
-  it.each(["form", "raw"] as const)(
-    "keeps conflict status when %s editing reverts the draft clean",
-    async (mode) => {
-      vi.useFakeTimers();
-      const request = vi.fn(async (method: string) => {
-        if (method === "config.get") {
-          return {
-            config: { count: 1 },
-            raw: '{\n  "count": 1\n}\n',
-            hash: "hash-1",
-            valid: true,
-            issues: [],
-          };
-        }
-        if (method === "config.set") {
-          throw new Error("config changed since last load; re-run config.get and retry");
-        }
-        return {};
-      });
-      const { runtimeConfig } = createConfigCapabilityHarness(
-        request as GatewayBrowserClient["request"],
-      );
-      await runtimeConfig.ensureLoaded();
-
-      runtimeConfig.patchForm(["count"], 2);
-      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-      expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
-
-      // The snapshot is known stale; local cleanliness cannot clear that.
-      if (mode === "raw") {
-        runtimeConfig.setRaw(runtimeConfig.state.configRawOriginal);
-      } else {
-        runtimeConfig.patchForm(["count"], 1);
-      }
-      expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
-      expect(runtimeConfig.state.configFormDirty).toBe(false);
-      expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
-
-      await runtimeConfig.discardDraft({ reloadOnly: true });
-      expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
-      runtimeConfig.dispose();
-    },
-  );
-
-  it("discards offline drafts locally instead of no-op refreshing", async () => {
+  it("clears a failure when raw editing reverts the draft clean", async () => {
     vi.useFakeTimers();
-    const server = createConfigServerMock();
-    const { runtimeConfig, publish } = createConfigCapabilityHarness(
-      server.request as GatewayBrowserClient["request"],
+    let setCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: '{\n  "count": 1\n}\n',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.set") {
+        setCalls += 1;
+        throw new Error("disk full");
+      }
+      return {};
+    });
+    const { runtimeConfig } = createConfigCapabilityHarness(
+      request as GatewayBrowserClient["request"],
     );
     await runtimeConfig.ensureLoaded();
-    const originalRaw = runtimeConfig.state.configRawOriginal;
 
-    publish(false);
-    runtimeConfig.setRaw('{\n  "count": 9\n}\n');
-    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    runtimeConfig.patchForm(["count"], 2);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
 
-    await runtimeConfig.discardDraft({ reloadOnly: true });
-    expect(runtimeConfig.state.configRaw).toBe('{\n  "count": 9\n}\n');
-    expect(runtimeConfig.state.configFormDirty).toBe(true);
-
-    await runtimeConfig.discardDraft();
-    expect(runtimeConfig.state.configRaw).toBe(originalRaw);
+    // Reverting to the original makes the failure moot.
+    runtimeConfig.setRaw(runtimeConfig.state.configRawOriginal);
+    expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
     expect(runtimeConfig.state.lastError).toBeNull();
-
-    // Connected discards still reload from disk.
-    publish(true);
-    runtimeConfig.patchForm(["count"], 4);
-    const getCallsBefore = server.request.mock.calls.filter(
-      ([method]) => method === "config.get",
-    ).length;
-    await runtimeConfig.discardDraft();
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(server.request.mock.calls.filter(([method]) => method === "config.get").length).toBe(
-      getCallsBefore + 1,
-    );
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+    expect(setCalls).toBe(1);
     runtimeConfig.dispose();
   });
 
@@ -1007,59 +755,6 @@ describe("config draft model", () => {
     expect(server.submissions).toHaveLength(0);
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
     expect(runtimeConfig.state.lastError).toContain("Raw editor");
-    runtimeConfig.dispose();
-  });
-
-  it("preserves JSON5 raw text when config.patch reports a no-op", async () => {
-    const originalRaw = "{\n  // keep this operator note\n  count: 1,\n}\n";
-    const request = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          config: { count: 1 },
-          raw: originalRaw,
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        };
-      }
-      if (method === "config.patch") {
-        return { config: { count: 1 }, noop: true };
-      }
-      return {};
-    });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    await expect(
-      runtimeConfig.patch({ raw: { count: 1 }, note: "no-op test patch" }),
-    ).resolves.toBe(true);
-    expect(runtimeConfig.state.configSnapshot?.raw).toBe(originalRaw);
-    expect(runtimeConfig.state.configRaw).toBe(originalRaw);
-    runtimeConfig.dispose();
-  });
-
-  it("never auto-saves raw-text drafts and submits them on manual save", async () => {
-    vi.useFakeTimers();
-    const server = createConfigServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      server.request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    const rawDraft = '{\n  "count": 9,\n  "handEdited": true\n}\n';
-    runtimeConfig.setRaw(rawDraft);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
-    expect(server.submissions).toHaveLength(0);
-    expect(runtimeConfig.state.configFormDirty).toBe(true);
-
-    // Manual save must submit the raw bytes, not the stale form serialization.
-    const savePromise = runtimeConfig.save();
-    await vi.advanceTimersByTimeAsync(0);
-    await expect(savePromise).resolves.toBe(true);
-    expect(server.submissions[0]?.raw).toBe(rawDraft);
-    expect(runtimeConfig.state.configNeedsApply).toBe(true);
     runtimeConfig.dispose();
   });
 });

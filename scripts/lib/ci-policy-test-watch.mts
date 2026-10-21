@@ -3,6 +3,10 @@ import { matchesGlob } from "node:path";
 import { isPlainRepoRelativePath } from "../../test/vitest/vitest.include-patterns.ts";
 import { resolveUiTypeScriptPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { isTestFileTarget } from "./changed-path-facts.mjs";
+import {
+  NODE_WORKER_E2E_OWNER_GLOBS,
+  NODE_WORKER_E2E_TEST_FILES,
+} from "./ci-node-worker-e2e-inventory.mts";
 import { UI_E2E_OWNER_WATCHES } from "./ci-ui-e2e-owner-inventory.mts";
 
 type PolicyTestWatch = {
@@ -17,6 +21,11 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches: readonly PolicyTestWatch[] = [
+  ...NODE_WORKER_E2E_TEST_FILES.map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: NODE_WORKER_E2E_OWNER_GLOBS,
+    sourceOnly: true,
+  })),
   {
     testFile: "test/scripts/ios-lifecycle-workflow.test.ts",
     watchGlobs: [
@@ -71,9 +80,67 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "src/gateway/server.agents.config-readiness.test.ts",
     watchGlobs: [
+      "src/gateway/config-reload.ts",
       "src/secrets/runtime-auth-store-admission.ts",
       "src/agents/prepared-model-runtime.configured.ts",
     ],
+  },
+  {
+    testFile: "src/gateway/server.config-patch.test.ts",
+    watchGlobs: ["src/gateway/config-reload.ts"],
+  },
+  // server.close() reaches these owners through the kernel's lazy shutdown
+  // runtime, four or five import hops away; aggressive selection walks two.
+  ...[
+    "src/gateway/server.agent-execution-shutdown.test.ts",
+    "src/gateway/server.agent-late-admission.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: ["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"],
+  })),
+  // These E2Es boot a real Gateway or built CLI as a child process, so the
+  // import graph reaches only the test-instance helper. Without owner watches
+  // they ran on PRs only when that helper changed and drifted for days.
+  {
+    testFile: "test/gateway-background-process-restart.e2e.test.ts",
+    watchGlobs: [
+      "src/gateway/server-startup-observers.ts",
+      "src/agents/bash-tools.exec-notify.ts",
+      "src/infra/restart-intent{,-payload}.ts",
+      "src/sessions/session-controller*.ts",
+    ],
+    sourceOnly: true,
+  },
+  {
+    testFile: "test/gateway-session-end-shutdown.e2e.test.ts",
+    watchGlobs: [
+      "src/gateway/active-sessions-shutdown-{drain,tracker}.ts",
+      "src/gateway/session-lifecycle-plugin-hooks.ts",
+      "src/gateway/server-close.ts",
+      "src/gateway/server-run-shutdown.ts",
+      "src/plugins/session-end-transcript.ts",
+      "gateway-shutdown-budget.mjs",
+    ],
+    sourceOnly: true,
+  },
+  {
+    testFile: "test/gateway-hook-concurrency.e2e.test.ts",
+    watchGlobs: [
+      "src/process/command-queue{,.capacity-groups,.state}.ts",
+      "src/process/background-work.ts",
+      "src/gateway/server/hooks{,-event-dispatch,-request-handler}.ts",
+    ],
+    sourceOnly: true,
+  },
+  {
+    testFile: "test/scripts/node-runtime-recovery.built-cli.e2e.test.ts",
+    watchGlobs: [
+      "node-runtime-recovery.mjs",
+      "cli-parent-lifetime.mjs",
+      "src/entry.{compile-cache,respawn}.ts",
+      "src/process/respawn-child-runner.ts",
+    ],
+    sourceOnly: true,
   },
   {
     testFile: "src/agents/agent-bundle-mcp-reload.test.ts",
@@ -121,7 +188,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/gateway/worker-environments/store.kernel.ts",
       "src/gateway/worker-environments/store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   })),
@@ -280,7 +347,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile,
     watchGlobs: [
       "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   })),
@@ -295,7 +362,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/agents/auth-profiles/store-owner-publication.test.ts",
     watchGlobs: [
       "src/agents/auth-profiles/store-scope-cwd.test-support.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/agents/auth-profiles/store.worker.ts",
     ],
   },
   ...[
@@ -305,6 +372,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
+    "src/agents/embedded-agent-runner/transcript-rewrite-plugin-reads.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
     "src/agents/subagents/spawn/subagent-spawn.preparation-authority.test.ts",
   ].map((testFile): PolicyTestWatch => ({
@@ -324,12 +392,12 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/agents/mcp-oauth-store.worker.ts",
       "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
     ],
   })),
   {
     testFile: "src/agents/model-auth.profiles.test.ts",
-    watchGlobs: ["src/state/openclaw-state-worker-runtime.ts"],
+    watchGlobs: ["src/agents/auth-profiles/store.worker.ts"],
   },
   {
     testFile: "src/agents/sandbox/registry-read.test.ts",
@@ -375,11 +443,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "src/agents/subagents/registry/subagent-control.publication.test.ts",
     watchGlobs: [
+      "src/agents/subagents/registry/subagent-registry.store.worker.ts",
       "src/config/sessions/session-cold-storage-worker.ts",
       "src/config/sessions/session-entry-read.worker.ts",
       "src/infra/sqlite-store.worker.ts",
       "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   },
@@ -501,7 +569,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts",
     watchGlobs: [
-      "src/agents/embedded-agent-runner/active-run-projections.ts",
+      "src/sessions/session-controller.admission.ts",
+      "src/sessions/session-controller.queries.ts",
+      "src/sessions/session-controller.state.ts",
       "src/agents/embedded-agent-runner/runs.ts",
       "src/channels/message/ingress-drain.ts",
       "src/channels/message/ingress-queue.ts",
@@ -559,8 +629,8 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "src/commands/doctor-maintenance.worker.test.ts",
     watchGlobs: [
+      "src/commands/doctor-state.worker.ts",
       "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   },
@@ -570,7 +640,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "extensions/minimax/index.ts",
       "extensions/minimax/oauth.runtime.ts",
       "extensions/minimax/oauth.ts",
-      "extensions/minimax/provider-registration.ts",
     ],
   },
   {
@@ -595,9 +664,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
+      "src/config/config-journal-snapshot.worker.ts",
       "src/infra/sqlite-store.worker.ts",
       "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   })),
@@ -784,7 +853,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/gateway/operator-approval-store.worker.ts",
       "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   },
@@ -869,16 +938,13 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/infra/sqlite-store.worker.ts",
     ],
   })),
-  ...[
-    "src/gateway/session-row-projection.membership.test.ts",
-    "src/gateway/session-utils.single-row-cache.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
+  ...["src/gateway/session-utils.single-row-cache.test.ts"].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
       "src/config/sessions/session-transcript.worker.ts",
       "src/infra/sqlite-store.worker.ts",
       "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   })),
@@ -905,7 +971,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     (testFile): PolicyTestWatch => ({
       testFile,
       watchGlobs: [
-        "src/state/openclaw-state-worker-runtime.ts",
+        "src/state/openclaw-state-worker-registry.ts",
         "src/state/openclaw-state.worker.ts",
       ],
     }),
@@ -924,7 +990,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/config/sessions/session-transcript.worker.ts",
       "src/infra/sqlite-store.worker.ts",
       "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   },
@@ -953,7 +1019,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/infra/git-operation.worker.ts",
       "src/node-host/node-worker-journal.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   },
@@ -971,7 +1037,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/gateway/worker-environments/store.kernel.ts",
       "src/gateway/worker-environments/store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   })),
@@ -984,7 +1050,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/gateway/worker-environments/store.kernel.ts",
       "src/gateway/worker-environments/store.worker.ts",
       "src/infra/git-operation.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   })),
@@ -1000,7 +1066,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/infra/device-pairing-mutation.worker.ts",
       "src/infra/sqlite-store.worker.ts",
       "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   },
@@ -1010,7 +1076,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/infra/device-pairing-dispatch.worker.ts",
       "src/infra/device-pairing-node.worker.ts",
       "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   },
@@ -1023,7 +1089,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/infra/device-pairing-read.kernel.ts",
       "src/infra/sqlite-store.worker.ts",
       "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   },
@@ -1052,7 +1118,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/infra/outbound/delivery-queue-platform-lease.worker.ts",
       "src/infra/outbound/delivery-queue-storage.worker.ts",
       "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   })),
@@ -1061,7 +1127,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/infra/push-web-store.worker.ts",
       "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   },
@@ -1073,7 +1139,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/infra/session-delivery-queue.worker.ts",
       "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   })),
@@ -1089,7 +1155,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile,
     watchGlobs: [
       "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
       "src/transcripts/store-sqlite-read.ts",
       "src/transcripts/store-sqlite-write.ts",
@@ -1110,7 +1176,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/infra/sqlite-store.worker.ts",
       "src/infra/telemetry-store.kernel.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/infra/telemetry-store.worker.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   },
@@ -1133,7 +1199,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/infra/sqlite-store.worker.ts",
       "src/node-host/node-worker-journal.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   },
@@ -1160,7 +1226,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/plugin-state/plugin-blob-store.worker.ts",
       "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   })),
@@ -1179,16 +1245,17 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/projects/project-registry.test.ts",
     watchGlobs: [
       "src/projects/project-registry.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   },
   {
     testFile: "src/sessions/session-upstream-monitor.test.ts",
     watchGlobs: [
+      "src/sessions/session-state-events.worker.ts",
+      "src/sessions/session-upstream-links.worker.ts",
       "src/state/openclaw-state-read-registry.ts",
       "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
       "src/state/openclaw-state.worker.ts",
     ],
   },
@@ -1225,7 +1292,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/infra/sqlite-store.worker.ts",
       "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/state/openclaw-state.worker.ts",
       "src/state/user-profiles.worker.ts",
     ],
@@ -1680,7 +1747,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/infra/session-delivery-queue.worker.ts",
       "src/state/openclaw-state.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
     ],
   },
   {
@@ -1766,7 +1833,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/transcripts/store-sqlite-read.ts",
       "src/transcripts/store-sqlite-write.ts",
       "src/state/openclaw-state.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
+      "src/state/openclaw-state-worker-registry.ts",
       "src/infra/sqlite-store.worker.ts",
     ],
   },
@@ -1993,7 +2060,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   })),
   {
     testFile: "ui/src/components/web-awesome-migration.node.test.ts",
-    watchGlobs: ["ui/src/**/*.ts"],
+    watchGlobs: ["ui/src/**/*.{ts,tsx}"],
   },
   {
     testFile: "ui/src/styles/base-theme-tokens.node.test.ts",

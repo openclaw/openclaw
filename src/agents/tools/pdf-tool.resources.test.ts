@@ -271,14 +271,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       await parent.drain();
       await closePreparedModelRuntimeSnapshots();
       for (const connection of connections) {
-        expect(connection.disposals).toBe(1);
-        expect(connection.database.isOpen).toBe(false);
-        const reopened = new DatabaseSync(connection.dbPath, { readOnly: true });
-        try {
-          expect(reopened.prepare("SELECT value FROM proof").get()?.value).toBe(42);
-        } finally {
-          reopened.close();
-        }
+        expect(connection).toMatchObject({ disposals: 1, database: { isOpen: false } });
+        using reopened = new DatabaseSync(connection.dbPath, { readOnly: true });
+        expect(reopened.prepare("SELECT value FROM proof").get()?.value).toBe(42);
       }
     },
   };
@@ -325,9 +320,10 @@ it.each(["result", "late-rejection"] as const)(
   async (mode) => {
     const fixture = nativePdfFixture();
     await fixture.run(async () => {
-      fixture.state.holdCreation = mode === "late-rejection";
-      fixture.state.reject = mode === "late-rejection";
-      fixture.state.watchCancellation = true;
+      const { state, lease, parent } = fixture;
+      state.holdCreation = mode === "late-rejection";
+      state.reject = mode === "late-rejection";
+      state.watchCancellation = true;
       const downloading = createDeferredCore();
       const finishDownload = createDeferredCore();
       vi.mocked(webMedia.loadWebMediaRaw).mockImplementationOnce(async () => {
@@ -339,47 +335,45 @@ it.each(["result", "late-rejection"] as const)(
       try {
         const result = fixture.execute({ signal: abort.signal });
         await downloading.promise;
-        await fixture.lease[Symbol.asyncDispose]();
+        await lease[Symbol.asyncDispose]();
         await setImmediate();
-        expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
+        expect(state.connections[0]?.database.isOpen).toBe(true);
         finishDownload.resolve();
         await Promise.race([
-          fixture.state.started.promise,
+          state.started.promise,
           result.then(() => {
             throw new Error("PDF provider never started");
           }),
         ]);
         withPluginRuntimeGenerationScope(
           {
-            metadataSnapshot: fixture.lease.snapshot.metadataSnapshot,
+            metadataSnapshot: lease.snapshot.metadataSnapshot,
             pluginRegistry: createEmptyPluginRegistry(),
           },
           () => {
             const reason = new Error("synthetic PDF cancellation");
             if (mode === "result") {
-              fixture.parent.beginClose(reason);
-              expect(fixture.state.cancellation.signal?.reason).toBe(reason);
+              parent.beginClose(reason);
+              expect(state.cancellation.signal?.reason).toBe(reason);
             }
             abort.abort(reason);
           },
         );
         expect(await result).toMatchObject({ message: "synthetic PDF cancellation" });
-        expect(fixture.state.connections[0]?.disposals).toBe(0);
-        fixture.state.finish.resolve();
-        await fixture.state.settled.promise;
-        await fixture.state.cleanupStarted.promise;
-        expect(fixture.state.cancellation.signal?.aborted).toBe(true);
-        expect(fixture.state.cancellation.cleanupSignal?.aborted).toBe(true);
-        expect(fixture.state.cancellation.registry).toBe(fixture.lease.snapshot.pluginRegistry);
-        expect(fixture.state.connections[0]?.lateReads).toBe(1);
-        expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
-        fixture.state.finishCleanup.resolve();
+        expect(state.connections[0]?.disposals).toBe(0);
+        state.finish.resolve();
+        await state.settled.promise;
+        await state.cleanupStarted.promise;
+        expect(state.cancellation.signal?.aborted).toBe(true);
+        expect(state.cancellation.cleanupSignal?.aborted).toBe(true);
+        expect(state.cancellation.registry).toBe(lease.snapshot.pluginRegistry);
+        expect(state.connections[0]?.lateReads).toBe(1);
+        expect(state.connections[0]?.database.isOpen).toBe(true);
+        state.finishCleanup.resolve();
         await fixture.assertClosed();
-        expect(fixture.state.cancellation.failure).toBeUndefined();
-        expect(fixture.state.cancellation.afterRegistry).toBe(
-          fixture.lease.snapshot.pluginRegistry,
-        );
-        expect(fixture.state.connections[0]?.cleanupReads).toBe(1);
+        expect(state.cancellation.failure).toBeUndefined();
+        expect(state.cancellation.afterRegistry).toBe(lease.snapshot.pluginRegistry);
+        expect(state.connections[0]?.cleanupReads).toBe(1);
       } finally {
         finishDownload.resolve();
       }
@@ -390,6 +384,7 @@ it.each(["result", "late-rejection"] as const)(
 it("adopts a default runtime before failed auth setup leaves a descendant", async () => {
   const fixture = nativePdfFixture();
   await fixture.run(async () => {
+    const { state } = fixture;
     vi.spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime").mockResolvedValueOnce(
       fixture.lease,
     );
@@ -397,10 +392,10 @@ it("adopts a default runtime before failed auth setup leaves a descendant", asyn
     let reads = 0;
     vi.spyOn(modelAuth, "getApiKeyForModelCore").mockImplementationOnce(async () => {
       void trackAsyncWork(async () => {
-        await fixture.state.finishCleanup.promise;
-        expect(
-          fixture.state.connections[0]?.database.prepare("SELECT value FROM proof").get()?.value,
-        ).toBe(42);
+        await state.finishCleanup.promise;
+        expect(state.connections[0]?.database.prepare("SELECT value FROM proof").get()?.value).toBe(
+          42,
+        );
         reads++;
       }).catch((error: unknown) => {
         failure = error;
@@ -411,8 +406,8 @@ it("adopts a default runtime before failed auth setup leaves a descendant", asyn
       message: expect.stringContaining("synthetic PDF setup failure"),
     });
     await setImmediate();
-    expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
-    fixture.state.finishCleanup.resolve();
+    expect(state.connections[0]?.database.isOpen).toBe(true);
+    state.finishCleanup.resolve();
     await fixture.assertClosed();
     expect(reads).toBe(1);
     expect(failure).toBeUndefined();
@@ -427,8 +422,6 @@ it("leaves raw supplied registry disposal to its owner", async () => {
     expect(await fixture.execute({ raw })).toMatchObject({ details: { text: "PDF value 42" } });
     await fixture.parent.drain();
     const rawConnection = fixture.state.connections.at(-1);
-    expect(rawConnection?.lateReads).toBe(1);
-    expect(rawConnection?.disposals).toBe(0);
-    expect(rawConnection?.database.isOpen).toBe(true);
+    expect(rawConnection).toMatchObject({ lateReads: 1, disposals: 0, database: { isOpen: true } });
   });
 });

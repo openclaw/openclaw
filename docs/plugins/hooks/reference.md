@@ -189,9 +189,15 @@ queue. The field identifies an existing queue and grants no additional access.
 | `before_compaction` / `after_compaction` | Observe | Observe compaction boundaries; no rewrite or veto result     |
 | `before_reset`                           | Observe | Observe session-reset events (`/reset`, programmatic resets) |
 
-Successful engine-owned compaction attempts emit `after_compaction` even when
-no history changes, with `compactedCount: 0`. Failed or aborted attempts do not
-emit that completion hook.
+Successful engine-owned and built-in native compaction attempts emit
+`after_compaction` even when no history changes, with `compactedCount: 0`.
+Native skips include heartbeat-only transcripts and automatic retention-policy
+no-ops. Completion means the attempt finished; it does not guarantee a history
+rewrite. Failed or aborted attempts do not emit that completion hook.
+
+Queued compaction emits one pair of plugin callbacks even when an owning context
+engine delegates to the native runtime. The host owns that plugin lifecycle and
+post-compaction refresh; native internal compaction events still run.
 
 `session_end.reason` is one of `new`, `reset`, `idle`, `daily`, `compaction`,
 `deleted`, `shutdown`, `restart`, or `unknown`. `session_start` has no reason

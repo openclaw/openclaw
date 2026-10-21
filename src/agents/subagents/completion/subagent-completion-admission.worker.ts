@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
   bindDeliveryQueueEntry,
@@ -14,6 +13,7 @@ import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
 } from "../../../infra/session-delivery-queue.records.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -31,7 +31,10 @@ import {
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import { readSubagentRunRow } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
+import {
+  compareSubagentRunGeneration,
+  isSubagentRunGenerationCandidate,
+} from "../registry/subagent-run-generation.js";
 import {
   decodeSubagentCompletionRecord,
   mutateSubagentCompletionInDatabase,
@@ -42,7 +45,7 @@ import type {
   SubagentCompletionRecord,
 } from "./subagent-completion-mutation.types.js";
 
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "subagent_runs">>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, "subagent_runs">>(db);
 
 function commitCompletionWrite<T extends object>(
   input: { writeId: string },
@@ -121,7 +124,15 @@ export function admitSubagentCompletionInWorker(
     ).rows;
     for (const row of siblings) {
       const candidate = rowToSubagentRunRecord(row);
-      if (!candidate || compareSubagentRunGeneration(candidate, expected) > 0) {
+      if (
+        !candidate ||
+        (isSubagentRunGenerationCandidate(
+          candidate,
+          expected.childSessionKey,
+          expected.childAgentId,
+        ) &&
+          compareSubagentRunGeneration(candidate, expected) > 0)
+      ) {
         throw new Error("subagent completion owner was replaced before admission");
       }
     }

@@ -1,40 +1,314 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-/** A cancellation result cannot publish a predecessor's task outcome after admitted reactivation. */
-import { beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { callGateway } from "../../../gateway/call.js";
+import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
+import { registerPluginSubagentRunFromGateway } from "../../../gateway/server-methods/agent-subagent-registration.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import * as gatewayLifecycle from "../../../gateway/server-recovery-runtime-context.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import {
-  beginSessionWorkAdmission,
-  getActiveSessionLifecycleMutationCount,
-  getActiveSessionWorkAdmissionCount,
-} from "../../../sessions/session-lifecycle-admission.js";
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import type { AgentWaitResult } from "../../run-wait.js";
-import type { KillPublicationPreparation } from "./subagent-control-kill-scope.js";
+import * as killScopeOwner from "./subagent-control-kill-scope.js";
 import * as killSession from "./subagent-control-session.js";
+import {
+  beginControlAdmission,
+  createControlRunFixture,
+  expectControlIdle,
+} from "./subagent-control.fixtures.test-support.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
-import type { SubagentAdminKillResult } from "./subagent-control.types.js";
 import * as completionState from "./subagent-registry-completion.js";
 import * as registryHelpers from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
-import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
+import {
+  persistRegistryFixture,
+  loadSubagentRegistryFromSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
+import {
+  adoptPausedSubagentRunForFollowUp,
+  registerSubagentRun,
+  replaceSubagentRunAfterSteerCore,
+} from "./subagent-registry.js";
 import {
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
+import type { SubagentAdmissionRejection } from "./subagent-registry.types.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
-beforeEach(() => {
-  setRuntimeConfigSnapshot({ agents: { defaults: { workspace: fixture.stateDir } } });
-});
+const runs = createControlRunFixture(() => fixture.stateDir);
 const rootKey = "agent:main:subagent:publication-root";
 const childKey = "agent:main:subagent:publication-drain";
+
+it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
+  "settles an unstarted plugin registration with a %s owner",
+  async (ownerState) => {
+    const childSessionKey = "agent:main:subagent:unstarted-plugin";
+    const runId = "unstarted-plugin";
+    const target = {
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: childSessionKey,
+      defaultSessionId: "unstarted-plugin-session",
+      lifecycleRevision: "unstarted-plugin-revision",
+    };
+    const storePath = await writeSubagentSessionEntry(target);
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      defaultSessionId: "unstarted-plugin-requester-session",
+    });
+    const sessionEntry = expectDefined(
+      loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey }),
+      "child session",
+    ).entry;
+    const context = createContext();
+    let currentGateway = context;
+    context.getRuntimeConfig = getRuntimeConfig;
+    context.resolveGatewayContext = () => currentGateway;
+    const client = createOperatorClient({
+      profileName: "unstarted-plugin-requester",
+      scopes: ["operator.write"],
+    });
+    const revoked = new AbortController();
+    const source = expectDefined(
+      await captureGatewayOperatorRunAuthority({
+        client,
+        context,
+        sourceAuthority: {
+          signal: revoked.signal,
+          assertCurrent: () => revoked.signal.throwIfAborted(),
+        },
+      }),
+      "operator source",
+    );
+    client.internal = { operatorRunAuthority: source.authority };
+    vi.spyOn(gatewayLifecycle, "bindGatewayLifecycleRequest").mockReturnValue(callGateway);
+    const announcementEntered = createDeferred();
+    const continueAnnouncement = createDeferred();
+    let announcement:
+      | { source?: unknown; scopes?: readonly string[]; prepared?: boolean; allowed?: boolean }
+      | undefined;
+    fixture.announce.mockImplementation(async (params) => {
+      const retained =
+        getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
+      announcement = { source: retained?.source, scopes: retained?.scopes };
+      retained?.assertCurrent();
+      if (ownerState === "replaced Gateway") {
+        announcementEntered.resolve();
+        await continueAnnouncement.promise;
+        announcement.prepared = await params.prepareChildSessionEffects?.();
+        announcement.allowed = params.isChildSessionEffectsAllowed?.();
+        return "intentional_non_delivery";
+      }
+      if (ownerState === "replaced child") {
+        announcement.prepared = await params.prepareChildSessionEffects?.();
+        announcement.allowed = params.isChildSessionEffectsAllowed?.();
+      }
+      return "delivered";
+    });
+    let rejectAdmission: SubagentAdmissionRejection | undefined;
+    try {
+      await withPluginRuntimeGatewayRequestScope(
+        {
+          client,
+          context,
+          resolveGatewayContext: context.resolveGatewayContext,
+          isWebchatConnect: () => false,
+        },
+        () =>
+          registerPluginSubagentRunFromGateway({
+            cfg: getRuntimeConfig(),
+            runId,
+            childSessionKey,
+            childAgentId: "main",
+            task: "unstarted operation",
+            requester: {
+              sessionKey: "agent:main:main",
+              origin: { channel: "webchat", to: "requester" },
+            },
+            gatewayContextResolver: context.resolveGatewayContext,
+            assertCurrent: () => {
+              source.authority.assertCurrent();
+              return sessionEntry;
+            },
+            admittedSession: {
+              sessionId: target.defaultSessionId,
+              storePath,
+              entry: sessionEntry,
+            },
+            retainAdmission: (reject) => {
+              rejectAdmission = reject;
+            },
+          }),
+      );
+      source.release();
+      if (ownerState === "revoked") {
+        revoked.abort(new Error("requester access revoked"));
+      } else if (ownerState === "replaced child") {
+        await writeSubagentSessionEntry({
+          ...target,
+          sessionId: "replacement-session",
+          lifecycleRevision: "replacement-revision",
+        });
+      }
+      const beforeCleanup = loadExactSessionEntryReadOnly({
+        storePath,
+        sessionKey: childSessionKey,
+      });
+      await expectDefined(rejectAdmission, "committed rejection cleanup")("admission rejected");
+      if (ownerState === "replaced Gateway") {
+        await announcementEntered.promise;
+        currentGateway = createContext();
+        continueAnnouncement.resolve();
+      }
+      await fixture.settle();
+      expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+        requesterSessionKey: "agent:main:main",
+        execution: {
+          status: "terminal",
+          outcome: { status: "error", error: "admission rejected" },
+        },
+        completion: { resultText: "admission rejected" },
+      });
+      if (ownerState !== "revoked") {
+        expect(fixture.announce).toHaveBeenCalledOnce();
+        expect(announcement).toMatchObject({
+          source: source.authority.source,
+          scopes: ["operator.write"],
+        });
+        if (ownerState === "replaced Gateway" || ownerState === "replaced child") {
+          expect(announcement).toMatchObject({ prepared: false, allowed: false });
+        }
+        if (ownerState !== "replaced Gateway") {
+          expect(loadSubagentRegistryFromSqlite().get(runId)?.delivery?.status).toBe("delivered");
+        }
+      } else {
+        expect(fixture.announce).not.toHaveBeenCalled();
+        const entry = expectDefined(subagentRuns.get(runId), "failed registration");
+        expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
+          /authority/,
+        );
+      }
+      if (ownerState === "replaced child") {
+        expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).toBe(
+          true,
+        );
+        expect(loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })).toEqual(
+          beforeCleanup,
+        );
+      } else {
+        expect(
+          loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })?.entry,
+        ).toMatchObject({
+          sessionId: target.defaultSessionId,
+          status: "failed",
+          lastRunError: expect.anything(),
+        });
+      }
+    } finally {
+      continueAnnouncement.resolve();
+      source.release();
+    }
+  },
+);
+
+it.each(["registration", "adoption"] as const)(
+  "retains committed %s cleanup when publication throws",
+  async (mode) => {
+    const childSessionKey = "agent:main:subagent:rejected-publication";
+    const runId = "rejected-publication";
+    const storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: childSessionKey,
+      defaultSessionId: "rejected-publication-session",
+    });
+    const sessionBefore = expectDefined(
+      loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey }),
+      "child session",
+    ).entry;
+    const registration = {
+      runId,
+      childSessionKey,
+      childAgentId: "main",
+      sessionEntry: sessionBefore,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "unstarted operation",
+      cleanup: "keep" as const,
+      expectsCompletionMessage: false,
+    };
+    if (mode === "adoption") {
+      await registerSubagentRun({ ...registration, runId: "paused-publication" });
+      const paused = structuredClone(
+        expectDefined(subagentRuns.get("paused-publication"), "paused run"),
+      );
+      paused.pauseReason = "sessions_yield";
+      paused.execution = { ...paused.execution, status: "terminal", endedAt: Date.now() };
+      subagentRuns.set(paused.runId, paused);
+      persistRegistryFixture(subagentRuns, [paused.runId]);
+    }
+    let rejectAdmission: SubagentAdmissionRejection | undefined;
+    const retainAdmission = (reject: SubagentAdmissionRejection) => {
+      rejectAdmission = reject;
+    };
+    const unsubscribe = subscribeSubagentRunChanges("projection", ({ runIds }) => {
+      if (runIds?.includes(runId)) {
+        throw new Error("publication failed after commit");
+      }
+    });
+    try {
+      await expect(async () => {
+        if (mode === "adoption") {
+          await adoptPausedSubagentRunForFollowUp({
+            childSessionKey,
+            childAgentId: "main",
+            runId,
+            task: registration.task,
+            retainAdmission,
+          });
+        } else {
+          await registerSubagentRun(registration, { retainAdmission });
+        }
+      }).rejects.toThrow("publication failed after commit");
+    } finally {
+      unsubscribe();
+    }
+    const committed = expectDefined(subagentRuns.get(runId), "committed registration");
+    expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+      runId,
+      generation: committed.generation,
+      execution: { status: "running" },
+    });
+    expect(subagentRuns.has("paused-publication")).toBe(false);
+    await expectDefined(rejectAdmission, "committed rejection cleanup")("admission rejected");
+    expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+      runId,
+      taskRunId: mode === "adoption" ? "paused-publication" : runId,
+      execution: { status: "terminal", outcome: { status: "error", error: "admission rejected" } },
+      completion: { resultText: "admission rejected" },
+    });
+    expect(
+      loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })?.entry,
+    ).toEqual(sessionBefore);
+  },
+);
 
 it("does not refresh session metadata when an owned abort marker is already persisted", async () => {
   const sessionId = "idempotent-abort-session";
@@ -67,38 +341,27 @@ it("does not refresh session metadata when an owned abort marker is already pers
   expect(read()).toEqual(before);
 });
 
-it("revalidates the session after held publication preparation permits retirement", async () => {
-  const target = {
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: rootKey,
-    defaultSessionId: "prepared-publication-session",
-    lifecycleRevision: "prepared-publication-revision",
-  };
-  const storePath = await writeSubagentSessionEntry(target);
-  await registerSubagentRun({
-    runId: "prepared-publication",
+it("revalidates the original session after deletion during cancellation result handoff", async () => {
+  const { target } = await runs.seed("prepared-publication", {
     childSessionKey: rootKey,
-    childAgentId: "main",
-    sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: rootKey })?.entry,
-    requesterSessionKey: "agent:main:main",
-    requesterAgentId: "main",
-    requesterDisplayKey: "main",
-    task: "publication ownership",
-    cleanup: "keep",
+    expectsCompletionMessage: undefined,
   });
+  const withKillScope = killScopeOwner.withSubagentKillScope;
+  using _ = vi
+    .spyOn(killScopeOwner, "withSubagentKillScope")
+    .mockImplementation((params, run, ...publicationCallbacks) =>
+      withKillScope(
+        params,
+        async (scope, trees) => {
+          const result = await run(scope, trees);
+          await removeSubagentSessionEntry(target);
+          return result;
+        },
+        ...publicationCallbacks,
+      ),
+    );
   const onResult = vi.fn();
-  let transitioned = false;
-  const publishSnapshot = vi.fn();
-  const preparePublication = vi.fn<KillPublicationPreparation<SubagentAdminKillResult>["prepare"]>(
-    async (publish) => {
-      if (!transitioned) {
-        transitioned = true;
-        await removeSubagentSessionEntry(target);
-      }
-      return publish();
-    },
-  );
+  const onSnapshot = vi.fn();
   const result = await killSubagentRunAdmin(
     {
       cfg: getRuntimeConfig(),
@@ -107,12 +370,9 @@ it("revalidates the session after held publication preparation permits retiremen
       expectedRunId: "prepared-publication",
       onResult,
     },
-    {
-      assertCurrent: () => {},
-      preparePublication: { prepare: preparePublication, publishSnapshot },
-    },
+    { assertCurrent: () => {}, onSnapshot },
   );
-  expect(publishSnapshot).toHaveBeenCalledExactlyOnceWith(result);
+  expect(onSnapshot).toHaveBeenCalledExactlyOnceWith(result);
   expect(onResult).toHaveBeenCalledExactlyOnceWith(result);
   expect(result).toMatchObject({
     found: true,
@@ -139,26 +399,9 @@ it.each([
       expect(["publication-b0", "publication-b1"]).toContain(runId);
       return await (runId === "publication-b0" ? previousWait : nextWait).promise;
     });
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: rootKey,
-      defaultSessionId: "publication-root-session",
-      lifecycleRevision: "publication-root-revision",
-    });
-    await registerSubagentRun({
-      runId: "publication-b0",
+    const { storePath } = await runs.seed("publication-root", {
       childSessionKey: rootKey,
-      childAgentId: "main",
-      sessionEntry: {
-        sessionId: "publication-root-session",
-        lifecycleRevision: "publication-root-revision",
-      },
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
-      task: "original task",
-      cleanup: "keep",
+      runId: "publication-b0",
       expectsCompletionMessage: true,
     });
     const b0 = subagentRuns.get("publication-b0")!;
@@ -188,12 +431,8 @@ it.each([
     const persistTiming = registryHelpers.persistSubagentSessionTiming;
     vi.spyOn(registryHelpers, "persistSubagentSessionTiming").mockImplementation(
       async (entry, options) => {
-        if (
-          entry.runId === b0.runId &&
-          entry.generation === b0.generation &&
-          !completeDuringDrain &&
-          !provisional
-        ) {
+        const original = entry.runId === b0.runId && entry.generation === b0.generation;
+        if (original && !completeDuringDrain && !provisional) {
           originalTimingEntered.resolve();
           await releaseOriginalTiming.promise;
         }
@@ -203,8 +442,7 @@ it.each([
           await releaseFirstChildCleanup.promise;
         }
         const completingOriginal =
-          entry.runId === b0.runId &&
-          entry.generation === b0.generation &&
+          original &&
           entry.execution.status === "terminal" &&
           entry.execution.outcome?.status === "ok";
         await persistTiming(entry, options);
@@ -244,47 +482,43 @@ it.each([
       ["publication-child", childKey],
     ];
     for (const [runId, sessionKey] of children) {
-      await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey,
-        defaultSessionId: `${runId}-session`,
-        lifecycleRevision: `${runId}-revision`,
-      });
-      await registerSubagentRun({
-        runId,
+      await runs.seed(runId, {
         childSessionKey: sessionKey,
-        childAgentId: "main",
-        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey })?.entry,
         requesterSessionKey: rootKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: "main",
-        task: runId,
-        cleanup: "keep",
+        requesterTurnRunId: b0.runId,
         collect: true,
         queued: true,
-        expectsCompletionMessage: false,
       });
     }
     const entered = createDeferred();
-    const childAdmission = await beginSessionWorkAdmission({
+    const childAdmission = await beginSessionEffect({
       scope: storePath,
       identities: [childKey, "publication-child-session"],
+      run: {
+        runId: "publication-child",
+        sessionKey: childKey,
+        sessionId: "publication-child-session",
+        agentId: "main",
+      },
       assertAllowed: () => {},
-      onInterrupt: () => entered.resolve(),
+      onInterrupt: () => {
+        entered.resolve();
+        return { runId: "publication-child" };
+      },
     });
     const markerCleared = createDeferred();
     const releaseMarker = createDeferred();
     let markerWaits = 0;
-    let followup: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let followup: Awaited<ReturnType<typeof beginControlAdmission>> | undefined;
     const handoffComplete = createDeferred();
     const resolveTargetState = completionState.resolveSubagentKillTargetState;
     let observedTarget = false;
     vi.spyOn(completionState, "resolveSubagentKillTargetState").mockImplementation((entry) => {
       const result = resolveTargetState(entry);
+      const admission = followup;
       if (
         handoff &&
-        followup !== undefined &&
+        admission !== undefined &&
         entry.runId === b0.runId &&
         entry.generation === b0.generation &&
         !observedTarget
@@ -294,11 +528,7 @@ it.each([
         handoffOrder.push("captured outcome");
         // Replace during the real awaited scope handoff, before synchronous publication.
         queueMicrotask(() => {
-          if (!followup) {
-            handoffComplete.reject(new Error("missing admitted follow-up"));
-            return;
-          }
-          void followup
+          void admission
             .run(async () => {
               // Follow-up admission authorizes the same asynchronous row owner as reactivation.
               expect(
@@ -327,23 +557,12 @@ it.each([
       }
       return result;
     });
-    const admin = vi.fn<typeof killSubagentRunAdmin>((params, control) =>
-      killSubagentRunAdmin(
-        {
-          ...params,
-          onResult: (result) => {
-            params.onResult?.(result);
-          },
-        },
-        control,
-      ),
-    );
     const originalEndedAt = Date.now();
     // The earlier producer result arrives only after cancellation enters descendant drain.
     const cancellationClock = completeDuringDrain
       ? vi.spyOn(Date, "now").mockReturnValue(originalEndedAt + 1)
       : undefined;
-    const pending = admin({
+    const pending = killSubagentRunAdmin({
       cfg: getRuntimeConfig(),
       sessionKey: rootKey,
       expectedRunId: b0.runId,
@@ -352,12 +571,11 @@ it.each([
     });
     const followupInterrupted = vi.fn();
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        pending.then((result) => {
-          throw new Error(`Cancellation never entered descendant drain: ${JSON.stringify(result)}`);
-        }),
-      ]);
+        pending,
+        "Cancellation never entered descendant drain",
+      );
       if (completeDuringDrain) {
         previousWait.resolve({
           status: "ok",
@@ -370,12 +588,11 @@ it.each([
         expect(subagentRuns.get(b0.runId)?.killReconciliation).toBeUndefined();
         childAdmission.release();
 
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           markerCleared.promise,
-          pending.then((result) => {
-            throw new Error(`Cancellation never reached marker cleanup: ${JSON.stringify(result)}`);
-          }),
-        ]);
+          pending,
+          "Cancellation never reached marker cleanup",
+        );
         expect(
           loadExactSessionEntryReadOnly({ storePath, sessionKey: rootKey })?.entry.abortedLastRun,
         ).toBe(false);
@@ -386,12 +603,12 @@ it.each([
       }
 
       // The root lifecycle lock and any marker write have finished before follow-up admission.
-      followup = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [rootKey, "publication-root-session"],
-        assertAllowed: () => {},
-        onInterrupt: followupInterrupted,
-      });
+      followup = await beginControlAdmission(
+        storePath,
+        rootKey,
+        "publication-root-session",
+        followupInterrupted,
+      );
       if (!handoff) {
         expect(
           await followup.run(() =>
@@ -417,20 +634,17 @@ it.each([
       childAdmission.release();
       releaseMarker.resolve();
       releaseFirstChildCleanup.resolve();
-      await pending;
+      const published = await pending;
       if (handoff) {
         expect(observedTarget, "admin resolved its root outcome").toBe(true);
-        expect(handoffOrder, "admin captured its owner outcome").not.toEqual([]);
         await handoffComplete.promise;
         expect(handoffOrder.slice(0, 2)).toEqual(["captured outcome", "replacement"]);
       }
-      const published = await admin.mock.results[0]!.value;
       expect(markerWaits).toBe(completeDuringDrain ? 1 : 0);
       if (!handoff) {
         expect.soft(published).not.toHaveProperty("targetState");
         expect.soft(published).toHaveProperty("error", expect.any(String));
       }
-      expect.soft(handoffOrder).not.toContain("task write");
       expect(subagentRuns.get("publication-b1")?.execution.status).toBe("running");
       expect(followupInterrupted).not.toHaveBeenCalled();
       expect(published).toMatchObject({
@@ -464,8 +678,7 @@ it.each([
       childAdmission.release();
       followup?.release();
       await pending;
-      expect(getActiveSessionWorkAdmissionCount()).toBe(0);
-      expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+      expectControlIdle();
     }
   },
 );

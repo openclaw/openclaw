@@ -10,7 +10,7 @@ import {
   mintAgentRuntimeIdentityToken,
   verifyAgentRuntimeIdentityToken,
 } from "../../gateway/agent-runtime-identity-token.js";
-import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
+import { prepareAgentRunExecutionIdentityFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import {
   createTestApprovalManager,
@@ -370,10 +370,19 @@ describe("Gateway tool identity and hosted routing", () => {
         /private-parent|private-requester|private-controller|private-local|private-target/,
       );
       const identity = await verifyAgentRuntimeIdentityToken(token);
+      const prepareFacts = (agentRuntimeIdentity: typeof identity) =>
+        prepareAgentRunExecutionIdentityFacts(
+          {
+            client: { internal: { agentRuntimeIdentity } },
+            context,
+            isRestartRecoveryResumeRun: false,
+          },
+          {},
+        );
       return {
         identity,
-        facts: resolveExecutionIdentitySpawnFacts(identity ? { ...identity } : undefined),
-        replayFacts: resolveExecutionIdentitySpawnFacts(identity),
+        facts: prepareFacts(identity ? { ...identity } : undefined),
+        replayFacts: prepareFacts(identity),
       };
     });
     expect(result.identity).toBeDefined();

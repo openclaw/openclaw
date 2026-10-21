@@ -5,7 +5,7 @@ import { createPluginRuntimeMock } from "../../src/plugin-sdk/test-helpers/plugi
 import { LegacyPluginSdkResourceHost } from "../../src/plugins/legacy-sdk-resource-host.js";
 import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import { getPluginInstance } from "../../src/plugins/plugin-instance-scope.js";
-import { createTestPluginRegistry } from "../../src/plugins/registry-runtime.test-helpers.js";
+import { createRuntimeTestRegistry } from "../../src/plugins/registry-runtime.test-helpers.js";
 import type { PluginServiceSchedulerV1 } from "../../src/plugins/service-scheduler.types.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
 import {
@@ -63,11 +63,10 @@ it.each([
       connectionDetails: { url: "ws://127.0.0.1:18789" },
     }),
   );
-  const clock = createGatewaySchedulerClock();
-  const root = createTestGatewayScheduler(clock.clock);
+  const root = createTestGatewayScheduler(createGatewaySchedulerClock().clock);
   const host = new LegacyPluginSdkResourceHost();
   host.bindScheduler(root);
-  const builder = createTestPluginRegistry(createPluginRuntimeMock());
+  const builder = createRuntimeTestRegistry(createPluginRuntimeMock());
   const record = createPluginRecord({
     id: "voice-call",
     source: "test",
@@ -75,7 +74,6 @@ it.each([
     enabled: true,
     configSchema: true,
   });
-  builder.registry.plugins.push(record);
   const api = builder.createApi(record, { config: {}, pluginConfig: scenario.config });
   const instance = getPluginInstance(record)!;
   const program = new Command();
@@ -99,24 +97,24 @@ it.each([
     },
   );
   const originalListeners = new Set(process.listeners("SIGTERM"));
+  const ownedListeners = () =>
+    process.listeners("SIGTERM").filter((handler) => !originalListeners.has(handler));
   const originalExitCode = process.exitCode;
   let output = "";
   let command: Promise<Command> | undefined;
   let settled = false;
   const signalOwnedCommand = () => {
-    for (const handler of process.listeners("SIGTERM")) {
-      if (!originalListeners.has(handler)) {
-        handler("SIGTERM");
-      }
+    for (const handler of ownedListeners()) {
+      handler("SIGTERM");
     }
   };
-  const stdout = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+  const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
     output += String(chunk);
     if (output.includes(scenario.output)) {
       printed.resolve();
     }
     return true;
-  }) as typeof process.stdout.write);
+  });
   try {
     host.run(() => voiceCallPlugin.register(api));
     await host.run(() =>
@@ -135,15 +133,12 @@ it.each([
       (error: unknown) => printed.reject(error),
     );
     await printed.promise;
-    expect(output).toContain(scenario.output);
     expect(initiateCall).toHaveBeenCalledWith(scenario.to, undefined, scenario.options);
     expect(mocks.createRuntime).toHaveBeenCalledOnce();
     expect(scheduler?.signal.aborted).toBe(false);
     expect(settled).toBe(false);
     expect(stop).not.toHaveBeenCalled();
-    expect(
-      process.listeners("SIGTERM").filter((handler) => !originalListeners.has(handler)),
-    ).toHaveLength(1);
+    expect(ownedListeners()).toHaveLength(1);
     signalOwnedCommand();
     await stopping.promise;
     expect(settled).toBe(false);

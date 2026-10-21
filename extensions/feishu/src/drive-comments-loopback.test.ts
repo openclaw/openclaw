@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { withFeishuRuntimeDefaults } from "./bot.test-support.js";
 import { createCommentTypingReactionLifecycle } from "./comment-reaction.js";
 import { registerFeishuDriveTools } from "./drive.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
@@ -76,7 +77,7 @@ async function createDriveLoopback(replies: ApiReply[], deliveryContext?: Delive
   });
   const sdkErrors = vi.spyOn(client.logger, "error").mockImplementation(() => {});
   vi.spyOn(await import("./client.js"), "createFeishuClient").mockReturnValue(client);
-  const harness = createToolFactoryHarness(config);
+  const harness = createToolFactoryHarness(withFeishuRuntimeDefaults(config));
   registerFeishuDriveTools(harness.api);
   const context = { agentAccountId: undefined, deliveryContext };
   return {
@@ -410,7 +411,7 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
         { channel: "feishu", to: "comment:docx:file:comment", threadId: "typing_reply" },
       );
       const lifecycle = createCommentTypingReactionLifecycle({
-        cfg: config,
+        cfg: withFeishuRuntimeDefaults(config),
         fileType: "docx",
         fileToken: "file",
         replyId: "typing_reply",

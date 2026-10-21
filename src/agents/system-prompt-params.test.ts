@@ -237,7 +237,13 @@ describe("buildSystemPromptParams", () => {
     const { runtimeInfo } = buildSystemPromptParams({
       config,
       agentId: "main",
+      preparedSessionEntry: {
+        sessionId: "public-session",
+        updatedAt: 1,
+        publicShare: { id: "a".repeat(48), sessionId: "public-session", createdAt: 1 },
+      },
       runtime: {
+        sessionId: "public-session",
         sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
         ...runtime,
       },
@@ -246,11 +252,38 @@ describe("buildSystemPromptParams", () => {
     expect(runtimeInfo.sessionUrl).toBe(expected);
   });
 
+  it.each(["private", "mismatched"])("omits %s session links from Runtime", (state) => {
+    const { runtimeInfo } = buildSystemPromptParams({
+      config: { gateway: { publicOrigin: "https://gateway.example" } },
+      agentId: "main",
+      preparedSessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        publicShare:
+          state === "private"
+            ? undefined
+            : {
+                id: "a".repeat(48),
+                sessionId: "older-session",
+                createdAt: 1,
+              },
+      },
+      runtime: { ...runtime, sessionKey: "agent:main:main", sessionId: "session-1" },
+    });
+    expect(runtimeInfo.sessionUrl).toBeUndefined();
+  });
+
   it("omits oversized current session URLs from model context", () => {
     const { runtimeInfo } = buildSystemPromptParams({
       config: { gateway: { publicOrigin: "https://gateway.example" } },
       agentId: "main",
+      preparedSessionEntry: {
+        sessionId: "public-session",
+        updatedAt: 1,
+        publicShare: { id: "a".repeat(48), sessionId: "public-session", createdAt: 1 },
+      },
       runtime: {
+        sessionId: "public-session",
         sessionKey: `agent:main:dashboard:${"a".repeat(512)}`,
         ...runtime,
       },

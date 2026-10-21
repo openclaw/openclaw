@@ -112,6 +112,7 @@ export const pluginRuntimeOperations = {
       runOpenClawStateWriteTransaction(
         ({ db }) => writeHostedCatalogSnapshotInDatabase(db, input.snapshot, input.now),
         options,
+        input.snapshot.monotonic?.mode === "signed-feed" ? {} : { singleStatement: true },
       );
       return { ok: true as const };
     } catch (error) {

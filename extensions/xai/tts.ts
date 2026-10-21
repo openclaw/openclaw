@@ -8,7 +8,6 @@ import {
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import {
-  isValidXaiTtsVoice,
   normalizeXaiLanguageCode,
   normalizeXaiTtsBaseUrl,
   type XaiSpeechResponseFormat,
@@ -86,9 +85,6 @@ function prepareXaiTtsRequest({
   ...request
 }: XaiTtsRequest) {
   const language = normalizeXaiLanguageCode(rawLanguage) ?? "en";
-  if (!isValidXaiTtsVoice(request.voiceId)) {
-    throw new Error(`Invalid voice: ${request.voiceId}`);
-  }
   return { ...request, language, responseFormat, maxBytes };
 }
 

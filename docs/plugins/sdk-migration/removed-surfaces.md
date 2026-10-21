@@ -46,6 +46,42 @@ subpaths, including older published `@openclaw/discord` packages. Upgrade affect
 plugins before upgrading the host. Not every export has a path-only replacement;
 see the [per-surface mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
 
+### Codex app-server extension factories
+
+The unused bundled-only `api.registerCodexAppServerExtensionFactory(...)` method
+and `contracts.embeddedExtensionFactories` manifest family have been removed.
+Register tool-result transforms with `api.registerAgentToolResultMiddleware(...)`
+and declare `contracts.agentToolResultMiddleware: ["codex"]` for Codex-only
+middleware. The supported middleware also covers `openclaw` and `agentsapi`.
+
+The standalone `createCodexAppServerToolResultExtensionRunner` export remains
+available from `agent-harness` and `agent-harness-runtime`, together with its
+`CodexAppServer*` types. Published `@openclaw/codex@2026.10.4` still imports and
+calls this helper. Explicit factory arrays retain their ordered initialization;
+omitting factories returns tool output unchanged. No removal date is set for
+these exports; their published consumers must migrate first.
+
+### Hosted media, global transforms, and executor controllers
+
+The following registration methods were removed with explicit maintainer approval
+on October 19, 2026, without a new deprecation window. Public ClawHub and bundled
+source inventories found no direct consumers; incomplete inventories and private
+plugins mean this is not proof of universal absence.
+
+| Removed method                             | Migration                                                                                                                                  |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `api.registerHostedMediaResolver(...)`     | No generic replacement. Pass a directly loadable media URL or an allowed local path. Built-in Canvas document URLs still resolve normally. |
+| `api.registerTextTransforms(...)`          | Declare `textTransforms` on your own provider or CLI backend. This does not replace an overlay across other plugins' backends.             |
+| `api.registerAgentExecutorController(...)` | No replacement registrar. Use AgentsAPI `openai_hosted` or an externally managed `self_hosted` environment.                                |
+
+The named `resolveAgentExecutorController` export and its types remain importable
+for published plugins, but lookup throws `PLUGIN_CAPABILITY_REMOVED`. Existing
+controller-owned AgentsAPI bindings and `executorController` configuration are
+rejected rather than silently reassigned or deleted. Before upgrading a host
+that uses this capability, retire or migrate those sessions with the previous
+host and controller. See [AgentsAPI](/plugins/agentsapi) for the supported
+externally managed setup.
+
 ### Retroactively recorded shipped exports
 
 The following exports shipped in `v2026.9.8` and were removed without a
@@ -78,6 +114,32 @@ The four legacy JSON migration exports were removed in
 The four Copilot exports and their earlier deprecation entries were removed in
 [`f2de06b38de710854aacd19218327358445816c8`](https://github.com/openclaw/openclaw/commit/f2de06b38de710854aacd19218327358445816c8);
 third-party plugins must own their provider-specific token exchange and caching.
+
+### Reply silence parsing
+
+`isSilentReplyText` and `isSilentReplyPayloadText` were removed from
+`openclaw/plugin-sdk/reply-chunking`. The exact whole-reply classifier remains
+available from `openclaw/plugin-sdk/reply-runtime` for raw producer input.
+Delivery plugins must forward prepared text without reclassifying it: literal
+`NO_REPLY` can be a visible answer.
+
+`SILENT_REPLY_TOKEN` was also removed from `openclaw/plugin-sdk/reply-chunking`.
+Import it from its existing `openclaw/plugin-sdk/reply-runtime` export instead:
+
+```ts
+import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
+```
+
+Harness producers use `prepareAgentRunTerminalReply` from
+`openclaw/plugin-sdk/agent-harness-runtime` once on the raw final text, then
+render the returned text and publish the matching terminal fact. Deliver the full
+returned text rather than the bounded `terminalReply.text` snapshot. An exact uppercase
+`NO_REPLY`, ignoring surrounding whitespace, requests silence; punctuation,
+quotes, JSON, and prose do not. A literal leading `NO_REPLY\n` removes one line
+without reclassifying the suffix. Otherwise, a standalone `NO_REPLY` on the last
+non-empty line is removed and the preceding answer is delivered; whitespace around
+that final line is allowed. Inline and mid-text mentions remain visible.
+See [Silent replies](/concepts/messages#silent-replies).
 
 ### Tool argument redaction
 
@@ -369,7 +431,7 @@ timeline for current status.
     `target: { kind: "chat" | "channel" | "room" | "conversation", id }`;
     the old parallel `chatId`, `channelId`, `roomId`, and `conversationId`
     result fields are no longer accepted. The raw result type remains available
-    until the next plugin-SDK major release.
+    until its separately announced ordinary stable removal release.
 
   </Accordion>
 
@@ -395,7 +457,7 @@ timeline for current status.
 
     | Migrating surface | Replacement |
     | ----------------- | ----------- |
-    | Removed `loadSessionStore(...)` and `resolveSessionStoreEntry(...)`, including package-root `loadSessionStore(...)` | `getSessionEntry(...)` for one scoped row or `listSessionEntries(...)` for scoped iteration from `openclaw/plugin-sdk/session-store-runtime`. |
+    | Removed `loadSessionStore(...)` and `resolveSessionStoreEntry(...)`, including package-root `loadSessionStore(...)` | `await getSessionEntryAsync(...)` for one scoped row or `await listSessionEntriesAsync(...)` for scoped metadata iteration from `openclaw/plugin-sdk/session-store-runtime`. |
     | Removed `updateSessionStore(...)`, package-root `saveSessionStore(...)`, and SDK file-store writes | `patchSessionEntry(...)`, `upsertSessionEntry(...)`, and `deleteSessionEntry(...)` from `openclaw/plugin-sdk/session-store-runtime`; mutate only the intended rows instead of replacing a detached whole-store snapshot. |
     | Removed `LoadSessionStoreOptions` and `UpdateSessionStoreOptions` | Parameters accepted by the scoped row APIs; the whole-store cache and callback options no longer apply. |
     | Removed `resolveSessionFilePath(...)` | Session identity (`agentId`, `sessionKey`, and `sessionId`) with `openclaw/plugin-sdk/session-transcript-runtime`, or Gateway methods that operate on the current session. |

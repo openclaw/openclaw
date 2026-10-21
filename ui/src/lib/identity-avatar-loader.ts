@@ -1,4 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { AVATAR_MAX_BYTES, isAvatarImageMimeType } from "../../../src/shared/avatar-limits.js";
 import {
   fetchGatewayContextResource,
@@ -53,14 +52,14 @@ function trimIdentityAvatarCache(): void {
   }
 }
 
-function loadIdentityAvatar(url: string): string | Promise<string | null> {
+function loadIdentityAvatar(url: string): string | Promise<string | null> | null {
   const cached = identityAvatarCache.get(url);
   // Map order is the LRU order; concurrent roster, profile, and chat views
   // share the authenticated request and its result, including a cached miss.
   identityAvatarCache.delete(url);
   if (cached && (cached.retryAt === undefined || Date.now() < cached.retryAt)) {
     identityAvatarCache.set(url, cached);
-    return cached.blobUrl ?? cached.promise;
+    return cached.blobUrl ?? (cached.retryAt === undefined ? cached.promise : null);
   }
 
   const entry: CachedIdentityAvatar = {
@@ -106,12 +105,15 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
   return entry.promise;
 }
 
-/** Fetch connected-gateway profile images once and render CSP-safe blobs. */
-export function resolveAvatarImageUrl(value: string): string | Promise<string | null> | null {
+/** Cache managed images and misses; caller-owned sources bypass the loader. */
+export function resolveAvatarImageUrl(
+  value: string,
+  unmanagedUrl: string | null = null,
+): string | Promise<string | null> | null {
   const { authTokens, origin, resourceBasePath } = readAvatarGatewayContext();
   const trusted = resolveTrustedAvatarUrl(value, origin, resourceBasePath);
   if (!trusted) {
-    return null;
+    return unmanagedUrl;
   }
   // Connected same-origin routes need the loader too: it resolves a missing
   // avatar before Lit can reconcile an <img> error back over its initials.
@@ -141,116 +143,114 @@ export function retainAvatarImageUrl(value: string | Promise<string | null> | nu
   };
 }
 
-/** View ownership for agent cards/selectors; bytes remain in the shared Gateway image cache. */
-export class IdentityAvatarController implements ReactiveController {
-  private readonly requestUpdate: () => void;
-  private connected = false;
-  private unsubscribeGatewayReset?: () => void;
-  private routes = new Map<
+/** Synchronous view leases; the shared Gateway cache owns image bytes. */
+export function createIdentityAvatars() {
+  const listeners = new Set<() => void>();
+  const notify = () => listeners.forEach((listener) => listener());
+  let connected = false;
+  let unsubscribeGatewayReset: (() => void) | undefined;
+  const routes = new Map<
     string,
     { url: string | null; result: string | Promise<string | null> | null; release?: () => void }
   >();
-  private activeRoutes: Set<string> | null = null;
-  private generation = identityAvatarGeneration;
-
-  constructor(host: ReactiveControllerHost | (() => void)) {
-    this.requestUpdate = typeof host === "function" ? host : () => host.requestUpdate();
-    if (typeof host !== "function") {
-      host.addController(this);
-    }
-  }
-
-  hostConnected() {
-    this.connected = true;
-    this.unsubscribeGatewayReset = registerAvatarGatewayReset(this.requestUpdate);
-    this.requestUpdate();
-  }
-
-  hostDisconnected() {
-    this.connected = false;
-    this.unsubscribeGatewayReset?.();
-    this.unsubscribeGatewayReset = undefined;
-    this.clearRoutes();
-  }
-
-  private clearRoutes(): void {
-    for (const route of this.routes.values()) {
+  let activeRoutes: Set<string> | null = null;
+  let generation = identityAvatarGeneration;
+  function clearRoutes() {
+    for (const route of routes.values()) {
       route.release?.();
     }
-    this.routes.clear();
+    routes.clear();
   }
-
-  withActiveRoutes<T>(render: () => T): T {
-    this.activeRoutes = new Set();
-    try {
-      return render();
-    } finally {
-      for (const [key, route] of this.routes) {
-        if (!this.activeRoutes.has(key)) {
+  function disconnect() {
+    connected = false;
+    unsubscribeGatewayReset?.();
+    unsubscribeGatewayReset = undefined;
+    clearRoutes();
+  }
+  return {
+    connect() {
+      connected = true;
+      unsubscribeGatewayReset = registerAvatarGatewayReset(notify);
+      notify();
+      return disconnect;
+    },
+    disconnect,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    withActiveRoutes<T>(render: () => T): T {
+      activeRoutes = new Set();
+      try {
+        return render();
+      } finally {
+        for (const [key, route] of routes) {
+          if (!activeRoutes.has(key)) {
+            route.release?.();
+            routes.delete(key);
+          }
+        }
+        activeRoutes = null;
+      }
+    },
+    imageErrorHandler(value: string): () => void {
+      const route = routes.get(value);
+      return () => {
+        // An old image may fail after its view or Gateway context was replaced.
+        if (
+          !route?.url ||
+          !connected ||
+          generation !== identityAvatarGeneration ||
+          routes.get(value) !== route
+        ) {
+          return;
+        }
+        route.url = null;
+        notify();
+      };
+    },
+    resolve(value: string): string | null {
+      if (!connected) {
+        return null;
+      }
+      if (generation !== identityAvatarGeneration) {
+        clearRoutes();
+        generation = identityAvatarGeneration;
+      }
+      activeRoutes?.add(value);
+      const result = value.startsWith("/") ? resolveAvatarImageUrl(value) : value;
+      const cached = routes.get(value);
+      if (cached && cached.result === result) {
+        return cached.url;
+      }
+      const route: { url: string | null; result: typeof result; release?: () => void } = {
+        // Keep the configured source visible until the shared fetch settles.
+        url: value,
+        result,
+        release: retainAvatarImageUrl(result),
+      };
+      routes.set(value, route);
+      const apply = (url: string | null) => {
+        if (generation !== identityAvatarGeneration || routes.get(value) !== route) {
           route.release?.();
-          this.routes.delete(key);
+          return;
         }
+        route.url = url;
+      };
+      if (typeof result === "string" || result === null) {
+        apply(result);
+      } else {
+        void result.then((url) => {
+          apply(url);
+          if (connected && routes.get(value) === route) {
+            notify();
+          }
+        });
       }
-      this.activeRoutes = null;
-    }
-  }
-
-  imageErrorHandler(value: string): () => void {
-    const route = this.routes.get(value);
-    return () => {
-      // An old image may fail after its view or Gateway context was replaced.
-      if (
-        !route?.url ||
-        !this.connected ||
-        this.generation !== identityAvatarGeneration ||
-        this.routes.get(value) !== route
-      ) {
-        return;
-      }
-      route.url = null;
-      this.requestUpdate();
-    };
-  }
-
-  resolve(value: string): string | null {
-    if (!this.connected) {
-      return null;
-    }
-    if (this.generation !== identityAvatarGeneration) {
-      this.clearRoutes();
-      this.generation = identityAvatarGeneration;
-    }
-    this.activeRoutes?.add(value);
-    const result = value.startsWith("/") ? resolveAvatarImageUrl(value) : value;
-    const cached = this.routes.get(value);
-    if (cached && cached.result === result) {
-      return cached.url;
-    }
-    const route: { url: string | null; result: typeof result; release?: () => void } = {
-      // Keep the configured source visible to renderers until the shared fetch settles.
-      url: value,
-      result,
-      release: retainAvatarImageUrl(result),
-    };
-    this.routes.set(value, route);
-    const apply = (url: string | null) => {
-      if (this.generation !== identityAvatarGeneration || this.routes.get(value) !== route) {
-        route.release?.();
-        return;
-      }
-      route.url = url;
-    };
-    if (typeof result === "string" || result === null) {
-      apply(result);
-    } else {
-      void result.then((url) => {
-        apply(url);
-        if (this.connected && this.routes.get(value) === route) {
-          this.requestUpdate();
-        }
-      });
-    }
-    cached?.release?.();
-    return route.url;
-  }
+      cached?.release?.();
+      return route.url;
+    },
+  };
 }
+
+export type IdentityAvatars = ReturnType<typeof createIdentityAvatars>;

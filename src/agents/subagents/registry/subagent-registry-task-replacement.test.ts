@@ -37,6 +37,7 @@ import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import * as persistence from "./subagent-registry-persistence.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
@@ -241,6 +242,13 @@ it.each(["end", "error"] as const)(
       agentId: "main",
       sessionKey: childSessionKey,
       defaultSessionId: sessionId,
+    });
+    // Required completion reserves its real requester before the mocked transport runs.
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      defaultSessionId: "late-owner-requester-session",
     });
     await registerSubagentRun({
       runId: "timeout-predecessor",
@@ -589,9 +597,11 @@ it("rearms native execution for an interrupted run's successor", async () => {
     await finalizeInterruptedSubagentRun({ runId: previous.runId, expectedEntry: previous, error }),
   ).toBe(1);
   await fixture.settle();
-  expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toEqual(
-    subagentRuns.get(previous.runId),
-  );
+  expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toMatchObject({
+    task: "Resume interrupted work",
+    execution: { status: "terminal", outcome: { status: "error", error } },
+    completion: { resultText: null },
+  });
 
   const observerSnapshots: Array<{ run?: string }> = [];
   const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
@@ -759,10 +769,10 @@ it.each([
       handler: async () => {},
     });
     vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(createHookRunner(registry));
+    vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
     const cleanup = createSubagentRegistryContextCleanup({
       isEndedHookOwnerCurrent: (entry) =>
         isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
-      warn: () => {},
     });
     const lateStamp =
       transition.includes("late stamp") || transition === "stamp admitted during wait";

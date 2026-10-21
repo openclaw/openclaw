@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type {
@@ -7,6 +6,7 @@ import type {
   WorkerOperations,
   WorkerWriteOperationContext,
 } from "../../state/worker-operation-registry.js";
+import type { EngineConnection } from "../sql-connection.js";
 import { requestSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-admission.js";
 import {
   bindCurrentConversationInDatabase,
@@ -15,7 +15,7 @@ import {
   readCurrentConversationBindingListsInDatabase,
   pruneCurrentConversationBindingListInTransaction,
   readCurrentConversationBindingResolutionInDatabase,
-  readCurrentConversationBindingSelectionInDatabase,
+  inspectCurrentConversationBindingRecordsInDatabase,
   updateCurrentConversationBindingRecordInDatabase,
 } from "./current-conversation-bindings.kernel.js";
 import { withCurrentConversationBindingWorkerReceipt } from "./current-conversation-bindings.publication.js";
@@ -28,7 +28,7 @@ import type { ConversationRef, SessionBindingRecord } from "./session-binding.ty
 
 function runBindingTransaction<T>(
   context: WorkerOperationContext,
-  update: (db: DatabaseSync) => T,
+  update: (db: EngineConnection) => T,
   database = context.open(),
 ): T {
   return runOpenClawStateWriteTransaction(
@@ -44,7 +44,7 @@ function runBindingTransaction<T>(
 
 /** The caller holds the shared-state write transaction and current host admission. */
 function touchCurrentConversationBindingInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: CurrentConversationBindingTouch,
 ): SessionBindingRecord | null {
   const conversation = input.conversation;
@@ -112,7 +112,7 @@ export const conversationBindingOperations = {
   ): ReadonlyArray<SessionBindingRecord | null> =>
     // Worker-local reads cannot inherit the host's retained discovery snapshot.
     withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => readCurrentConversationBindingSelectionInDatabase(db, input),
+      ({ db }) => inspectCurrentConversationBindingRecordsInDatabase(db, input),
       stateOptions(),
     ) ?? input.map(() => null),
   "conversationBindings.listBySessions": (

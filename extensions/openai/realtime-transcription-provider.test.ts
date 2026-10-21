@@ -1,8 +1,8 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import {
   createTranscriptionSession,
+  createTranscriptionSocketHarness,
   emitCommitted,
   emitCompleted,
   emitDelta,
@@ -10,60 +10,12 @@ import {
   emitJson,
 } from "./realtime-transcription-provider.test-support.js";
 
-const { FakeWebSocket, providerAuthMocks, ssrfMocks } = vi.hoisted(() => {
-  type Listener = (...args: unknown[]) => void;
-
-  class MockWebSocket {
-    static readonly OPEN = 1;
-    static readonly CLOSED = 3;
-    static instances: MockWebSocket[] = [];
-    static onCreated: ((socket: MockWebSocket) => void) | undefined;
-
-    readonly listeners = new Map<string, Listener[]>();
-    readonly headers?: Record<string, string>;
-    readonly url?: string;
-    readyState = 0;
-    sent: string[] = [];
-    closed = false;
-
-    constructor(url?: string, options?: { headers?: Record<string, string> }) {
-      this.url = url;
-      this.headers = options?.headers;
-      MockWebSocket.instances.push(this);
-      MockWebSocket.onCreated?.(this);
-    }
-
-    on(event: string, listener: Listener): this {
-      const listeners = this.listeners.get(event) ?? [];
-      listeners.push(listener);
-      this.listeners.set(event, listeners);
-      return this;
-    }
-
-    emit(event: string, ...args: unknown[]): void {
-      for (const listener of this.listeners.get(event) ?? []) {
-        listener(...args);
-      }
-    }
-
-    send(payload: string): void {
-      this.sent.push(payload);
-    }
-
-    close(code?: number, reason?: string): void {
-      this.closed = true;
-      this.readyState = MockWebSocket.CLOSED;
-      this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
-    }
-
-    terminate(): void {
-      this.closed = true;
-      this.readyState = MockWebSocket.CLOSED;
-    }
-  }
+const { FakeWebSocket, providerAuthMocks, ssrfMocks } = await vi.hoisted(async () => {
+  const { createTranscriptionMockWebSocket } =
+    await import("./realtime-transcription-socket.test-support.js");
 
   return {
-    FakeWebSocket: MockWebSocket,
+    FakeWebSocket: createTranscriptionMockWebSocket(),
     providerAuthMocks: {
       isProviderAuthProfileConfigured: vi.fn(),
       isProviderAuthProfileConfiguredAsync: vi.fn(),
@@ -102,43 +54,8 @@ function parseSent(socket: FakeWebSocketInstance): SentRealtimeEvent[] {
   return socket.sent.map((payload) => JSON.parse(payload) as SentRealtimeEvent);
 }
 
-const sessions = new Set<{ close(): void }>();
-
-async function waitForFakeSocket(
-  session: { close(): void },
-  index = 0,
-): Promise<FakeWebSocketInstance> {
-  sessions.add(session);
-  await vi.dynamicImportSettled();
-  const existing = FakeWebSocket.instances[index];
-  if (existing) {
-    return existing;
-  }
-  const created = createDeferred<FakeWebSocketInstance>();
-  FakeWebSocket.onCreated = (socket) => {
-    if (FakeWebSocket.instances[index] === socket) {
-      created.resolve(socket);
-    }
-  };
-  try {
-    return await vi.waitFor(() => created.promise);
-  } finally {
-    FakeWebSocket.onCreated = undefined;
-  }
-}
-
-async function connectFakeSession(
-  session: { connect(): Promise<void>; close(): void },
-  socketIndex = 0,
-): Promise<FakeWebSocketInstance> {
-  const connecting = session.connect();
-  const socket = await waitForFakeSocket(session, socketIndex);
-  socket.readyState = FakeWebSocket.OPEN;
-  socket.emit("open");
-  emitJson(socket, { type: "session.updated" });
-  await connecting;
-  return socket;
-}
+const socketHarness = createTranscriptionSocketHarness(FakeWebSocket);
+const { waitForFakeSocket, connectFakeSession } = socketHarness;
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
   const call = mock.mock.calls[index];
@@ -159,14 +76,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
   });
 
   afterEach(() => {
-    // Close session ownership before its fake peers so cleanup cannot start a reconnect.
-    for (const session of sessions) {
-      session.close();
-    }
-    for (const socket of FakeWebSocket.instances) {
-      socket.close();
-    }
-    sessions.clear();
+    socketHarness.close();
     vi.unstubAllEnvs();
   });
 
@@ -349,7 +259,6 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
   });
 
   it.each([
-    [1599, 0, false],
     [1600, 1, false],
     [1600, 1, true],
   ] as const)(

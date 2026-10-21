@@ -18,7 +18,6 @@ import {
   runDiscordVoiceAgentTurn,
   resolveDiscordVoiceIngressContext,
 } from "./ingress.js";
-import { formatVoiceLogPreview } from "./log-preview.js";
 import type { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceIngressContextWithParticipants } from "./participant-context.js";
 import { DiscordRealtimeRecordingInput } from "./realtime-recording.js";
@@ -33,7 +32,6 @@ import type { DiscordVoiceAudioReceipt } from "./recording-types.js";
 import { respondToDiscordVoiceTranscript } from "./segment.js";
 import {
   CAPTURE_FINALIZE_GRACE_MS,
-  resolveVoiceTimeoutMs,
   logVoiceVerbose,
   MIN_SEGMENT_SECONDS,
   type VoiceOperationResult,
@@ -59,11 +57,11 @@ export class DiscordVoiceReceive {
       bindCaptureReceipts: (entry: VoiceSessionEntry) => DiscordCaptureReceiptReader;
       accountId: string;
       admissionAllowFrom?: string[];
-      botUserId: () => string | undefined;
+      botUserId?: string;
       cfg: OpenClawConfig;
       client: Client;
       discordConfig: DiscordAccountConfig;
-      getSession: (guildId: string) => VoiceSessionEntry | undefined;
+      sessions: ReadonlyMap<string, VoiceSessionEntry>;
       isEntryCurrent: (entry: VoiceSessionEntry) => boolean;
       isFollowOwnedGuild: (guildId: string) => boolean;
       join: (
@@ -89,10 +87,7 @@ export class DiscordVoiceReceive {
     scheduleVoiceCaptureFinalize({
       state: entry.capture,
       userId,
-      delayMs: resolveVoiceTimeoutMs(
-        this.params.discordConfig.voice?.captureSilenceGraceMs,
-        CAPTURE_FINALIZE_GRACE_MS,
-      ),
+      delayMs: this.params.discordConfig.voice?.captureSilenceGraceMs ?? CAPTURE_FINALIZE_GRACE_MS,
     });
   }
 
@@ -105,7 +100,7 @@ export class DiscordVoiceReceive {
       return;
     }
 
-    if (userId === this.params.botUserId()) {
+    if (userId === this.params.botUserId) {
       return;
     }
     this.params.membership.notePresent(entry, userId);
@@ -483,7 +478,6 @@ export class DiscordVoiceReceive {
       ...this.params,
       entry,
       userId,
-      botUserId: this.params.botUserId(),
     });
   }
 
@@ -507,7 +501,7 @@ export class DiscordVoiceReceive {
       );
     }
     logger.info(
-      `discord voice: agent turn start guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId} user=${userId} speaker=${context.speakerLabel} owner=${context.senderIsOwner} model=${this.params.discordConfig.voice?.model ?? "route-default"} message=${formatVoiceLogPreview(message)}`,
+      `discord voice: agent turn start guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId} user=${userId} owner=${context.senderIsOwner} model=${this.params.discordConfig.voice?.model ?? "route-default"} chars=${message.length}`,
     );
     const text = await runDiscordVoiceAgentTurn({
       ...this.params,
@@ -521,7 +515,7 @@ export class DiscordVoiceReceive {
       return "";
     }
     logger.info(
-      `discord voice: agent turn answer (${text.length} chars) guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}: ${formatVoiceLogPreview(text)}`,
+      `discord voice: agent turn answer (${text.length} chars) guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}`,
     );
     return text;
   }
@@ -530,7 +524,7 @@ export class DiscordVoiceReceive {
     let recovery: Promise<unknown>;
     if (force) {
       if (
-        this.params.getSession(entry.guildId) !== entry ||
+        this.params.sessions.get(entry.guildId) !== entry ||
         entry.sessionLifecycle.status === "stopped" ||
         entry.receiveRecovery.decryptRecoveryInFlight
       ) {
@@ -578,7 +572,7 @@ export class DiscordVoiceReceive {
   }
 
   private async recoverFromDecryptFailures(entry: VoiceSessionEntry): Promise<void> {
-    const active = this.params.getSession(entry.guildId);
+    const active = this.params.sessions.get(entry.guildId);
     if (!active || active.audio !== entry.audio) {
       return;
     }

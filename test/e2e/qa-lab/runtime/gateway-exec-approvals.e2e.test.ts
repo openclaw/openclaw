@@ -13,6 +13,7 @@ import {
   startTestGatewayServer,
 } from "../../../../src/gateway/test-helpers.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
+import { readExecApprovalsSocket } from "../../../../src/infra/exec-approvals-socket.js";
 import { readExecApprovalsSnapshot } from "../../../../src/infra/exec-approvals.js";
 
 type Cleanup = () => Promise<void> | void;
@@ -52,10 +53,22 @@ describe("gateway exec approvals QA", () => {
     cleanup.push(() => server.close());
 
     const requesterIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(stateDir, "test-device-identities", "exec-requester.sqlite"),
+      path: path.join(
+        stateDir,
+        "test-device-identities",
+        "exec-requester",
+        "client",
+        "credentials.sqlite",
+      ),
     });
     const reviewerIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(stateDir, "test-device-identities", "exec-reviewer.sqlite"),
+      path: path.join(
+        stateDir,
+        "test-device-identities",
+        "exec-reviewer",
+        "client",
+        "credentials.sqlite",
+      ),
     });
     expect(reviewerIdentity.deviceId).not.toBe(requesterIdentity.deviceId);
 
@@ -82,13 +95,15 @@ describe("gateway exec approvals QA", () => {
 
     const initial = await reviewer.request<ExecApprovalsSnapshot>("exec.approvals.get", {});
     const storedInitial = readExecApprovalsSnapshot();
-    expect(storedInitial.file.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    const storedSocket = await readExecApprovalsSocket();
+    expect(storedSocket?.socket_token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(storedInitial.file.socket?.token).toBeUndefined();
     expect(initial).toMatchObject({
       exists: true,
       hash: storedInitial.hash,
       file: {
         version: 1,
-        socket: { path: storedInitial.file.socket?.path },
+        socket: { path: storedSocket?.socket_path },
       },
     });
     expect(initial.file.socket).not.toHaveProperty("token");
@@ -114,10 +129,10 @@ describe("gateway exec approvals QA", () => {
     expect(updated.hash).not.toBe(initial.hash);
     expect(updated.file).toMatchObject({
       ...replacement,
-      socket: { path: storedInitial.file.socket?.path },
+      socket: { path: storedSocket?.socket_path },
     });
     expect(updated.file.socket).not.toHaveProperty("token");
-    expect(readExecApprovalsSnapshot().file.socket?.token).toBe(storedInitial.file.socket?.token);
+    expect((await readExecApprovalsSocket())?.socket_token).toBe(storedSocket?.socket_token);
 
     await expect(
       reviewer.request("exec.approvals.set", {

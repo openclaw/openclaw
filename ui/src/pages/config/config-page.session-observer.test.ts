@@ -8,7 +8,7 @@ import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { resetServerUiPrefsSync } from "../../app/server-prefs.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
@@ -16,12 +16,14 @@ import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import * as modelCatalogStore from "../../lib/model-catalog-store.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { meetingStatus } from "../../test-helpers/transcripts.test-support.ts";
+import { mountAppearanceCatalogPage as mount } from "./config-page-catalog.test-support.ts";
 import {
   completeConfigContext,
   mountConfigPage,
@@ -133,7 +135,7 @@ describe("ConfigPage navigation", () => {
         ensureSchemaLoaded: async () => undefined,
         subscribe,
       },
-      theme: { branding: resolveThemeBranding(undefined), serverSelection: null, subscribe },
+      theme: { branding: resolveThemeBranding(undefined), subscribe },
       overlays: { snapshot: {}, subscribe },
       webPush: { snapshot: undefined, subscribe },
     } as unknown as ApplicationContext;
@@ -349,7 +351,9 @@ describe("ConfigPage navigation", () => {
         expect(mounted.querySelector("#config-section-tts")).not.toBeNull();
       });
       const host = expectDefined(mounted.querySelector("openclaw-config-page"), "config host");
-      expect(Reflect.get(host, "pageId")).toBe("communications");
+      expect(host.querySelector(".content-header--settings .page-title")?.textContent).toBe(
+        "Communications",
+      );
 
       const navigation = router.navigate("advanced", context);
       await waitForSolid(() => {
@@ -361,12 +365,14 @@ describe("ConfigPage navigation", () => {
       });
       expect(mounted.querySelector("openclaw-config-page")).toBe(host);
       expect(host.isConnected).toBe(true);
-      expect(Reflect.get(host, "pageId")).toBe("communications");
+      expect(host.querySelector(".content-header--settings .page-title")?.textContent).toBe(
+        "Communications",
+      );
+      expect(host.querySelector("#config-section-tts")).not.toBeNull();
 
       releaseAdvanced.resolve(undefined);
       await navigation;
       await waitForSolid(() => {
-        expect(Reflect.get(host, "pageId")).toBe("advanced");
         expect(host.querySelector(".content-header--settings .page-title")?.textContent).toBe(
           "Advanced",
         );
@@ -381,6 +387,92 @@ describe("ConfigPage navigation", () => {
   });
 
   describe("ConfigPage pending section navigation", () => {
+    it.each([
+      {
+        pageId: "appearance",
+        search: "?section=__appearance__",
+        targetId: "settings-appearance-typography",
+      },
+      {
+        pageId: "appearance",
+        search: "?section=__appearance__",
+        targetId: "settings-accent-status",
+      },
+      { pageId: "ai-agents", search: "?section=session", targetId: "settings-session-storage" },
+      {
+        pageId: "communications",
+        search: "?section=transcripts",
+        targetId: "settings-communications-meeting-capture",
+      },
+    ] as const)(
+      "scrolls to the Settings $targetId anchor after rendering",
+      ({ pageId, search, targetId }) => {
+        const frames = new Map<number, FrameRequestCallback>();
+        let nextFrameId = 0;
+        vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+          const id = ++nextFrameId;
+          frames.set(id, callback);
+          return id;
+        });
+        vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+          frames.delete(id);
+        });
+        const context = routeContext();
+        context.runtimeConfig.state.configSchema = {
+          type: "object",
+          properties: {
+            session: { type: "object", properties: { enabled: { type: "boolean" } } },
+            transcripts: { type: "object", properties: { enabled: { type: "boolean" } } },
+          },
+        };
+        const view = mountConfigPage(context, {
+          pageId,
+          routeData: configRouteData({
+            pathname: `/settings/${pageId}`,
+            search,
+            hash: `#${targetId}`,
+          }),
+        });
+        const target = expectDefined(
+          view.page.querySelector<HTMLElement>(`#${targetId}`),
+          "rendered Settings anchor",
+        );
+        const scroll = vi.fn();
+        target.scrollIntoView = scroll;
+        const pending = [...frames.values()];
+        frames.clear();
+        for (const frame of pending) {
+          frame(0);
+        }
+        expect(scroll).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ block: "start" }));
+      },
+    );
+
+    it("does not scroll to a matching ID outside the Settings host", () => {
+      const outside = document.createElement("div");
+      outside.id = "external-setting-target";
+      const scroll = vi.fn();
+      outside.scrollIntoView = scroll;
+      document.body.append(outside);
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      mountConfigPage(routeContext(), {
+        pageId: "communications",
+        routeData: configRouteData({
+          pathname: "/settings/communications",
+          search: "",
+          hash: "#external-setting-target",
+        }),
+      });
+      for (const frame of frames) {
+        frame(0);
+      }
+      expect(scroll).not.toHaveBeenCalled();
+    });
+
     it.each(["replacement", "retirement", "disconnect"] as const)(
       "does not scroll to a stale target after %s",
       async (transition) => {
@@ -468,37 +560,6 @@ describe("ConfigPage model catalog lifecycle", () => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
-
-  async function mount(
-    client: GatewayBrowserClient,
-    scopes: readonly string[] = ["operator.admin"],
-  ) {
-    const source = createApplicationGateway({
-      client,
-      phase: "connected",
-      hello: gatewayHelloForMethods(["system.info"], scopes),
-    } as ApplicationGatewaySnapshot);
-    const subscribe = () => () => undefined;
-    const context = {
-      gateway: source.gateway,
-      settingsAgentSelection: { state: { selectedId: "main" }, subscribe },
-      agentSelection: { state: { selectedId: "main" }, subscribe },
-      agents: { state: { agentsList: null }, subscribe },
-      agentIdentity: { ensure: async () => undefined, subscribe },
-      runtimeConfig: { state: { configSnapshot: {}, configSchema: {} }, subscribe },
-      theme: { branding: resolveThemeBranding(undefined), serverSelection: null, subscribe },
-      overlays: { snapshot: {}, subscribe },
-      config: { current: { assistantIdentity: { name: "OpenClaw" } }, subscribe },
-      webPush: { subscribe },
-    } as unknown as ApplicationContext;
-    const view = mountConfigPage(context, { pageId: "appearance" });
-    await waitForSolid(() =>
-      expect(
-        view.page.querySelector("#settings-appearance-sidebar openclaw-select-picker"),
-      ).not.toBeNull(),
-    );
-    return { view, source, context };
-  }
 
   function observerModels(view: ReturnType<typeof mountConfigPage>) {
     const picker = expectDefined(
@@ -725,6 +786,44 @@ describe("ConfigPage model catalog lifecycle", () => {
       flush();
       await waitForSolid(() => expect(observerModels(remounted)).toEqual(expectedModels(fresh)));
       expect(catalogReads).toBe(3);
+    });
+
+    it("recovers a rejected catalog on the next admitted poll without replacing other controls", async () => {
+      const failed = deferred<ModelCatalogResult>();
+      const models = [{ id: "small", name: "Small", provider: "openai" }];
+      const load = vi
+        .spyOn(modelCatalogStore, "loadModelCatalog")
+        .mockReturnValueOnce(failed.promise)
+        .mockResolvedValue({ models });
+      const request = vi.fn().mockResolvedValue({});
+      const { view } = await mount(createTestGatewayClient(request));
+      await waitForSolid(() => expect(load).toHaveBeenCalledOnce());
+      const toggle = expectDefined(
+        view.page.querySelector<HTMLInputElement>("#settings-appearance-sidebar input"),
+        "sidebar toggle",
+      );
+      failed.reject(new Error("catalog temporarily unavailable"));
+      await waitForSolid(() =>
+        expect(view.page.textContent).toContain("Explicit model catalog unavailable"),
+      );
+      expect(observerModels(view)).toEqual([]);
+      const picker = expectDefined(
+        view.page.querySelector<
+          HTMLElement & { params: { options: Array<{ value: string; disabled?: boolean }> } }
+        >("#settings-appearance-sidebar openclaw-select-picker"),
+        "observer model picker",
+      );
+      expect(picker.params.options.slice(0, 2).map((option) => option.disabled === true)).toEqual([
+        false,
+        false,
+      ]);
+      expect(view.page.querySelector("#settings-appearance-sidebar input")).toBe(toggle);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await waitForSolid(() => expect(observerModels(view)).toEqual(expectedModels(models)));
+      expect(view.page.textContent).not.toContain("Explicit model catalog unavailable");
+      expect(view.page.querySelector("#settings-appearance-sidebar input")).toBe(toggle);
+      expect(load).toHaveBeenCalledTimes(2);
     });
 
     it("stops status polling outside Appearance while the page remains mounted", async () => {

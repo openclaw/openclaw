@@ -129,6 +129,7 @@ export function isPreservedLaunchdTimeoutWarning(audit: ServiceConfigAudit): boo
 /** Native policy repair must not auto-approve unrelated command or credential changes. */
 export function isServiceDefinitionOnlyRepair(audit: ServiceConfigAudit): boolean {
   const policyCodes: ReadonlySet<string> = new Set([
+    SERVICE_AUDIT_CODES.gatewayEgressProxyEnvEmbedded,
     SERVICE_AUDIT_CODES.systemdAfterNetworkOnline,
     SERVICE_AUDIT_CODES.systemdWantsNetworkOnline,
     SERVICE_AUDIT_CODES.systemdRestartSec,
@@ -166,6 +167,8 @@ export function isOperatorOwnedEnvironmentIssue(
         environmentValueSources,
         normalizeKey: normalizeServiceEnvKey,
       });
+    case SERVICE_AUDIT_CODES.gatewayEgressProxyEnvEmbedded:
+      return hasOverride(issue.environmentKeys ?? []);
     case SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded:
       return hasGatewayServiceEnvironmentOverride(
         command,

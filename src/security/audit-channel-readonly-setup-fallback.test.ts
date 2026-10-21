@@ -1,49 +1,49 @@
 // Covers channel readonly setup fallback audit behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { stubAuditChannelPlugin } from "./audit-channel-test-helpers.js";
+
+type CollectParams = Parameters<
+  typeof import("./audit-channel.js").collectChannelSecurityFindingsCore
+>[0];
 
 const {
   collectChannelSecurityFindingsMock,
-  collectEnabledInsecureOrDangerousFlagsMock,
   listReadOnlyChannelPluginsForConfigMock,
   hasConfiguredChannelsForReadOnlyScopeMock,
 } = vi.hoisted(() => ({
-  collectChannelSecurityFindingsMock: vi.fn(async (..._args: unknown[]) => [
+  collectChannelSecurityFindingsMock: vi.fn(async (_params: CollectParams) => [
     {
       checkId: "channels.telegram.setup_fallback_audited",
       severity: "warn",
       title: "Telegram setup fallback audited",
     },
   ]),
-  collectEnabledInsecureOrDangerousFlagsMock: vi.fn(
-    (_configForTest: OpenClawConfig): string[] => [],
-  ),
   listReadOnlyChannelPluginsForConfigMock: vi.fn(),
   hasConfiguredChannelsForReadOnlyScopeMock: vi.fn(),
 }));
 
+// mock-isolation: Setup-fallback routing excludes unrelated plugin-contract and workspace flag discovery.
 vi.mock("./dangerous-config-flags.js", () => ({
-  collectEnabledInsecureOrDangerousFlags: (config: OpenClawConfig) =>
-    collectEnabledInsecureOrDangerousFlagsMock(config),
+  collectEnabledInsecureOrDangerousFlags: (_configForTest: OpenClawConfig): string[] => [],
 }));
 
 // mock-isolation: Audit fixtures control setup fallback without loading real channel accounts.
 vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfigAsync: async (...args: unknown[]) =>
-    (listReadOnlyChannelPluginsForConfigMock as (...params: unknown[]) => unknown)(...args),
+    listReadOnlyChannelPluginsForConfigMock(...args),
 }));
 
 // mock-isolation: Audit fixtures control channel presence without inspecting persisted plugin state.
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
   hasConfiguredChannelsForReadOnlyScopeAsync: async (...args: unknown[]) =>
-    (hasConfiguredChannelsForReadOnlyScopeMock as (...params: unknown[]) => unknown)(...args),
+    hasConfiguredChannelsForReadOnlyScopeMock(...args),
   resolveConfiguredChannelPluginIdsAsync: async () => [],
 }));
 
+// mock-isolation: Capture delegated setup-fallback plugins without invoking real channel security collectors.
 vi.mock("./audit-channel.collect.runtime.js", () => ({
-  collectChannelSecurityFindings: (...args: unknown[]) =>
-    (collectChannelSecurityFindingsMock as (...params: unknown[]) => unknown)(...args),
+  collectChannelSecurityFindings: collectChannelSecurityFindingsMock,
 }));
 
 const collectNoFindings = vi.hoisted(() => vi.fn(() => []));
@@ -70,33 +70,14 @@ const { runSecurityAuditCore } = await import("./audit.js");
 
 describe("security audit channel read-only setup fallback", () => {
   it("passes setup fallback plugins to channel security collection", async () => {
-    const plugin = {
+    const plugin = stubAuditChannelPlugin({
       id: "telegram",
-      meta: {
-        id: "telegram",
-        label: "Telegram",
-        selectionLabel: "Telegram",
-        docsPath: "/channels/telegram",
-        blurb: "Test",
-      },
-      capabilities: { chatTypes: ["direct"] },
-      config: {
-        listAccountIds: () => ["default"],
-        inspectAccount: () => ({ enabled: true, configured: true }),
-        resolveAccount: () => ({}),
-        isEnabled: () => true,
-        isConfigured: () => true,
-      },
-      security: {
-        resolveDmPolicy: () => ({
-          policy: "open",
-          allowFrom: ["*"],
-          policyPath: "channels.telegram.dmPolicy",
-          allowFromPath: "channels.telegram.",
-          approveHint: "approve",
-        }),
-      },
-    } satisfies ChannelPlugin;
+      label: "Telegram",
+      commands: undefined,
+      collectAuditFindings: undefined,
+      inspectAccount: () => ({ enabled: true, configured: true }),
+      resolveAccount: () => ({}),
+    });
     const cfg = {
       agents: { entries: { main: {} } },
       session: { dmScope: "main" },
@@ -114,31 +95,13 @@ describe("security audit channel read-only setup fallback", () => {
       loadPluginSecurityCollectors: false,
     });
 
-    const readOnlyPluginCalls = listReadOnlyChannelPluginsForConfigMock.mock
-      .calls as unknown as Array<
-      [
-        OpenClawConfig,
-        {
-          includePersistedAuthState?: boolean;
-          includeSetupFallbackPlugins?: boolean;
-        },
-      ]
-    >;
-    const readOnlyPluginCall = readOnlyPluginCalls[0];
+    const readOnlyPluginCall = listReadOnlyChannelPluginsForConfigMock.mock.calls[0];
     expect(readOnlyPluginCall?.[0]).toBe(cfg);
-    expect(readOnlyPluginCall?.[1].includePersistedAuthState).toBe(true);
-    expect(readOnlyPluginCall?.[1].includeSetupFallbackPlugins).toBe(true);
-
-    const collectCalls = collectChannelSecurityFindingsMock.mock.calls as unknown as Array<
-      [
-        {
-          cfg?: OpenClawConfig;
-          sourceConfig?: OpenClawConfig;
-          plugins?: ChannelPlugin[];
-        },
-      ]
-    >;
-    const collectParams = collectCalls[0]?.[0];
+    expect(readOnlyPluginCall?.[1]).toMatchObject({
+      includePersistedAuthState: true,
+      includeSetupFallbackPlugins: true,
+    });
+    const collectParams = collectChannelSecurityFindingsMock.mock.calls[0]?.[0];
     expect(collectParams?.cfg).toBe(cfg);
     expect(collectParams?.sourceConfig).toBe(cfg);
     expect(collectParams?.plugins).toStrictEqual([plugin]);

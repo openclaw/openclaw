@@ -27,6 +27,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { AcceptedWorkerInferenceSessionDrain } from "./inference-control-internal.js";
 import {
@@ -357,7 +358,7 @@ describe("worker inference SQLite store", async () => {
           },
         );
         await Promise.race([dispatched.promise, endedBeforeDispatch]);
-        drain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
+        drain = manager.reserveSessionDrain(REQUEST.sessionId);
         const drained = Promise.allSettled([drain.drained]);
         const [native] = await Promise.allSettled([promise]);
         assert(native.status === "rejected", "native begin unexpectedly succeeded");
@@ -543,7 +544,7 @@ describe("worker inference SQLite store", async () => {
           expect(begin).toHaveBeenCalledOnce();
           expect(complete).toHaveBeenCalledOnce();
         }
-        const acceptedDrain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
+        const acceptedDrain = manager.reserveSessionDrain(REQUEST.sessionId);
         drain = acceptedDrain;
         let drainSettled = false;
         void drain.drained.then(
@@ -648,7 +649,7 @@ describe("worker inference SQLite store", async () => {
           expect(replayed.result.status).toBe("replayed");
           replayed.launch();
           expect(await replaySink.terminal).toEqual(PROVIDER_ERROR);
-          const successorDrain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
+          const successorDrain = manager.reserveSessionDrain(REQUEST.sessionId);
           successorDrain.start();
           await expect(successorDrain.drained).resolves.toBeUndefined();
           successorDrain.release();
@@ -755,8 +756,10 @@ describe("worker inference SQLite store", async () => {
     const outcome = { ...PROVIDER_ERROR, message: "🦞".repeat(128) };
     await completeTurn("run-first", outcome);
     await completeTurn("run-second", outcome);
-    const counter = trackSqliteStatementExecutions(database.db, ["inference"], (query) =>
-      query.includes("worker_inference_turns") ? "inference" : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["inference"],
+      (query) => (query.includes("worker_inference_turns") ? "inference" : null),
     );
     try {
       const kernel = createWorkerInferenceStoreKernel({ db: database.db, now: () => nowMs });

@@ -1,4 +1,3 @@
-/** Store binding for ACP session metadata: resolves which session-store row owns a key. */
 import {
   AgentSelectionRequiredError,
   listAgentIds,

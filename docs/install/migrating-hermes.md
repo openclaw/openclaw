@@ -137,7 +137,7 @@ Rerun with `--overwrite` only when replacing the existing target is intentional.
 
 Conflicts are unusual on a fresh install. They typically show up when you re-run the import against a setup that already has user edits.
 
-If a conflict surfaces mid-apply (for example, an unexpected race on a config file), that item is reported as a conflict while independent files, skills, credentials, archives, and config entries continue. Resolve the conflicted item and rerun the import; identical memory imports are idempotent.
+If a conflict surfaces mid-apply (for example, an unexpected race on a config file), that item is reported as a conflict while independent files, skills, credentials, archives, and config entries continue. Resolve the conflicted item and rerun the import; repeating an identical memory import does not create duplicates.
 
 ## Secrets
 
@@ -158,6 +158,8 @@ openclaw migrate apply hermes --json --yes
 `openclaw migrate hermes --json` without `--yes` prints the plan without applying it. Non-interactive `migrate apply` requires `--yes`. A partial apply failure returns the complete JSON report and exits with code `1`.
 
 ## Troubleshooting
+
+If source directory inspection or skill listing fails, preview stops with the filesystem error instead of silently omitting files. Resolve the reported access or storage problem and rerun the preview before applying.
 
 <AccordionGroup>
   <Accordion title="Apply refuses with conflicts">

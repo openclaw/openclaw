@@ -130,6 +130,7 @@ export const SOURCE_ADMISSION_PATHS = [
   "src/infra/retry.ts",
   "src/infra/secure-random.ts",
   "src/logging/secret-redaction-registry.ts",
+  "src/plugins/record-groups.ts",
   "src/shared/global-singleton.ts",
   "src/shared/regexp.ts",
   "scripts/lib/qualification-admission-baselines.mjs",

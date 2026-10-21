@@ -1,8 +1,7 @@
 import { resolveCronTriggerMinIntervalMs } from "../config/cron-limits.js";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { assertCanonicalCronDeliveryMode } from "../cron/store/delivery-codec.js";
-import type { CronJob, CronJobState } from "../cron/types.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { CronStoredJob } from "../cron/types.js";
 import {
   CronStreamJobOwner,
   isCronStreamJob,
@@ -14,13 +13,11 @@ import type { CronStreamJob } from "./cron-stream-output.js";
 
 export type { CronStreamFireDisposition } from "./cron-stream-output.js";
 
-const MAX_RETIRED_COUNTER_SEEDS = 1_024;
-
 type CronStreamWatchers = {
-  reconcile: (jobs: CronJob[], enabled: boolean, triggersEnabled?: boolean) => Promise<void>;
+  reconcile: (jobs: CronStoredJob[], enabled: boolean, triggersEnabled?: boolean) => Promise<void>;
   resume: () => void;
-  start: (job: CronJob) => Promise<void>;
-  stop: (jobId: string, reason: CronStreamStopReason, job?: CronJob) => Promise<void>;
+  start: (job: CronStoredJob) => Promise<void>;
+  stop: (jobId: string, reason: CronStreamStopReason, job?: CronStoredJob) => Promise<void>;
   stopAll: (reason: CronStreamStopReason) => Promise<void>;
   activeJobIds: () => string[];
   inspect: (jobId: string) => CronStreamOwnerSnapshot | undefined;
@@ -53,10 +50,6 @@ export function createCronStreamWatchers(
   },
 ): CronStreamWatchers {
   const owners = new Map<string, CronStreamJobOwner>();
-  const retiredCounterSeeds = new Map<
-    string,
-    Pick<CronJobState, "streamDroppedBatches" | "streamCoalescedBatches">
-  >();
   let stopped = false;
 
   const ownerParams: CronStreamOwnerParams = {
@@ -64,40 +57,8 @@ export function createCronStreamWatchers(
     minIntervalMs: params.minIntervalMs ?? resolveCronTriggerMinIntervalMs(),
   };
 
-  const retainCounterSeed = (owner: CronStreamJobOwner): void => {
-    const snapshot = owner.snapshot();
-    const current = retiredCounterSeeds.get(owner.id);
-    retiredCounterSeeds.delete(owner.id);
-    retiredCounterSeeds.set(owner.id, {
-      streamDroppedBatches: Math.max(current?.streamDroppedBatches ?? 0, snapshot.droppedBatches),
-      streamCoalescedBatches: Math.max(
-        current?.streamCoalescedBatches ?? 0,
-        snapshot.coalescedBatches,
-      ),
-    });
-    pruneMapToMaxSize(retiredCounterSeeds, MAX_RETIRED_COUNTER_SEEDS);
-  };
-
   const createOwner = (job: CronStreamJob): CronStreamJobOwner => {
-    const seed = retiredCounterSeeds.get(job.id);
-    retiredCounterSeeds.delete(job.id);
-    const seededJob = seed
-      ? {
-          ...job,
-          state: {
-            ...job.state,
-            streamDroppedBatches: Math.max(
-              job.state.streamDroppedBatches ?? 0,
-              seed.streamDroppedBatches ?? 0,
-            ),
-            streamCoalescedBatches: Math.max(
-              job.state.streamCoalescedBatches ?? 0,
-              seed.streamCoalescedBatches ?? 0,
-            ),
-          },
-        }
-      : job;
-    const owner = new CronStreamJobOwner(seededJob, ownerParams);
+    const owner = new CronStreamJobOwner(job, ownerParams);
     owners.set(job.id, owner);
     return owner;
   };
@@ -122,7 +83,6 @@ export function createCronStreamWatchers(
         return undefined;
       }
       if (owners.get(job.id) === existing) {
-        retainCounterSeed(existing);
         owners.delete(job.id);
       }
     }
@@ -131,7 +91,7 @@ export function createCronStreamWatchers(
   const stop = async (
     jobId: string,
     reason: CronStreamStopReason,
-    job?: CronJob,
+    job?: CronStoredJob,
   ): Promise<void> => {
     const streamJob = job && isCronStreamJob(job) ? job : undefined;
     const owner =
@@ -141,12 +101,11 @@ export function createCronStreamWatchers(
     }
     await owner.stop(reason, streamJob);
     if (reason === "removed" && owners.get(jobId) === owner) {
-      retainCounterSeed(owner);
       owners.delete(jobId);
     }
   };
 
-  const start = async (job: CronJob): Promise<void> => {
+  const start = async (job: CronStoredJob): Promise<void> => {
     if (stopped) {
       return;
     }
@@ -215,7 +174,7 @@ export function createCronStreamWatchers(
   };
 
   const reconcile = async (
-    jobs: CronJob[],
+    jobs: CronStoredJob[],
     enabled: boolean,
     triggersEnabled = enabled,
   ): Promise<void> => {
@@ -236,7 +195,6 @@ export function createCronStreamWatchers(
       }
       if (await stopOwnerLogged(owner, "removed")) {
         if (owners.get(jobId) === owner) {
-          retainCounterSeed(owner);
           owners.delete(jobId);
         }
       }

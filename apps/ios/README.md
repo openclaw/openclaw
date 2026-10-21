@@ -108,7 +108,7 @@ Prereqs:
 - `pnpm`
 - `xcodegen`
 - The pinned [Watch Rust toolchain](#watch-companion-build-requirements)
-- Ruby 3.4.11 and Bundler 4.0.22 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
+- Ruby 4.0.7 and Bundler 4.0.22 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
 - Apple account signed into Xcode for the official OpenClaw team (`FWJYW4S8P8`)
 - Fastlane Apple Developer Portal session for the official OpenClaw team when creating bundle IDs or enabling services
 - Release-owner access to the encrypted signing repo password (`MATCH_PASSWORD`)
@@ -188,6 +188,15 @@ pnpm ios:release:upload
 GitHub first qualifies pairing and chat in a separate job. Signing and upload
 then use a fresh checkout of the same commit, so qualification build outputs
 cannot dirty the release source.
+
+The qualification proof includes Gateway process and host resource snapshots around
+simulator boot and elapsed setup RPC authentication, dispatch, and response timings.
+The setup-code request has a 60-second deadline; a request still pending after 10 seconds
+captures one bounded process sample, a read-only worker/queue snapshot, and classified
+Gateway events. Setup failures also capture this evidence, and cleanup failures identify
+the fixture owner. Diagnostic capture finishes before fixture cleanup and does not
+change the setup result. The artifact excludes raw logs, command arguments, paths,
+and pairing credentials.
 
 The entry point freezes the live App Store plan and unchanged source SHA,
 generates reviewed release notes from changes since the latest public build,

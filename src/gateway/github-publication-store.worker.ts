@@ -5,6 +5,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type {
   GitHubPublicationReceiptTarget,
   GitHubPublicationRow,
@@ -41,11 +42,11 @@ type GitHubPublicationDatabase = Pick<
   | "github_publication_session_lifecycles"
   | "worker_session_placements"
 >;
-export const githubPublicationDatabase = (db: Parameters<typeof getNodeSqliteKysely>[0]) =>
+export const githubPublicationDatabase = (db: EngineConnection) =>
   getNodeSqliteKysely<GitHubPublicationDatabase>(db);
 
 export function readGitHubPublicationRequest(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
+  db: EngineConnection,
   request: { requestId: string } | { sessionId: string; idempotencyKey: string },
 ): GitHubPublicationRow | undefined {
   const query = githubPublicationDatabase(db).selectFrom("github_publication_requests").selectAll();
@@ -61,7 +62,7 @@ export function readGitHubPublicationRequest(
 
 /** Retained publisher/target receipts identify reused PRs whose body keeps an older marker. */
 export function readKnownGitHubPublicationPullRequestUrlsInDatabase(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
+  db: EngineConnection,
   row: GitHubPublicationReceiptTarget,
 ): string[] {
   const known = new Set(row.pull_request_url ? [row.pull_request_url] : []);
@@ -164,7 +165,7 @@ export function markSharedGitHubPublicationReportedInDatabase(
 }
 
 export function assertSharedGitHubPublicationClaimInDatabase(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
+  db: EngineConnection,
   request: {
     claim: WorkerSessionTurnClaim;
     sessionKey: string;
@@ -247,13 +248,13 @@ export function claimGitHubPublicationExecutionInDatabase(
 
 /** Insert/replay shared intent inside the caller's admission transaction. */
 export function insertGitHubPublicationRequest(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
+  db: EngineConnection,
   input: SharedGitHubPublicationInsert & { assertCurrent: () => void },
 ): GitHubPublicationRow {
   input.assertCurrent();
   const { request, identity, worktree, claim, snapshot } = input;
   const query = githubPublicationDatabase(db);
-  const inserted = executeSqliteQuerySync(
+  const inserted = executeSqliteQueryTakeFirstSync(
     db,
     query
       .insertInto("github_publication_requests")
@@ -277,6 +278,7 @@ export function insertGitHubPublicationRequest(
         identity_login: identity.account.login,
         title: request.title ?? null,
         body: request.body ?? null,
+        draft: request.draft ? 1 : 0,
         branch: worktree.branch,
         source_head_commit: snapshot?.sourceHeadCommit ?? null,
         source_index_tree: snapshot?.sourceIndexTree ?? null,
@@ -285,15 +287,20 @@ export function insertGitHubPublicationRequest(
         status: "requested",
         updated_at_ms: input.now,
       })
-      .onConflict((conflict) => conflict.columns(["session_id", "idempotency_key"]).doNothing()),
+      .onConflict((conflict) => conflict.columns(["session_id", "idempotency_key"]).doNothing())
+      .returningAll(),
   );
-  if (inserted.numAffectedRows === 1n) {
+  if (inserted) {
     insertGitHubPublicationSessionLifecycle(db, {
       publicationKind: "shared",
       requestId: input.requestId,
       lifecycleRevision: input.lifecycleRevision,
       requester: input.requester,
     });
+    input.assertCurrent();
+    githubPublicationReceipts.stageRow(db, "shared", inserted);
+    deferSharedGitHubPublicationChanged(db, inserted);
+    return inserted;
   }
   const stored = readGitHubPublicationRequest(db, {
     sessionId: input.sessionId,
@@ -321,10 +328,6 @@ export function insertGitHubPublicationRequest(
     }
   }
   input.assertCurrent();
-  if (inserted.numAffectedRows === 1n) {
-    githubPublicationReceipts.stageRow(db, "shared", stored);
-    deferSharedGitHubPublicationChanged(db, stored);
-  }
   return stored;
 }
 
@@ -459,6 +462,7 @@ const sharedGitHubPublicationAuthorityColumns = [
   "identity_profile_id",
   "identity_account_id",
   "identity_login",
+  "draft",
   "status",
   "gateway_instance_id",
   "repository",

@@ -186,16 +186,16 @@ describe("GitHub release-note rendering", () => {
 
   it("round-trips canonical contribution provenance and accepts published legacy lines", () => {
     const target = "a".repeat(40);
-    const singular = formatContributionRecordProvenance({
+    const canonical = {
       base: "v2026.7.2-beta.7",
       target,
       inRangePullRequests: 1,
       retainedSeedOnlyPullRequests: 0,
       uniquePullRequests: 1,
-    });
+    };
+    const singular = formatContributionRecordProvenance(canonical);
     const commaSeparated = formatContributionRecordProvenance({
-      base: "v2026.7.2-beta.7",
-      target,
+      ...canonical,
       inRangePullRequests: 1_234,
       retainedSeedOnlyPullRequests: 56,
       uniquePullRequests: 1_290,
@@ -211,13 +211,7 @@ describe("GitHub release-note rendering", () => {
           "\n",
         ),
       ),
-    ).toEqual({
-      base: "v2026.7.2-beta.7",
-      target,
-      inRangePullRequests: 1,
-      retainedSeedOnlyPullRequests: 0,
-      uniquePullRequests: 1,
-    });
+    ).toEqual(canonical);
     const legacy = parseContributionRecordProvenance(
       [
         `This audited record covers the complete v2026.7.2-beta.6..02d06caeb0febe7ec3c0df1454b85c38f3fb27d1 history: 1 merged PR. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.`,
@@ -229,17 +223,16 @@ describe("GitHub release-note rendering", () => {
     );
     expect(legacy).toMatchObject({ uniquePullRequests: 1 });
     expect(() => formatContributionRecordProvenance(legacy!)).toThrow("requires split PR counts");
-    expect(() =>
-      parseContributionRecordProvenance(
+    for (const [line, error] of [
+      [
         commaSeparated.replace("= 1,290 unique PRs", "= 1,291 unique PRs"),
-      ),
-    ).toThrow("provenance arithmetic is invalid");
-    expect(() =>
-      parseContributionRecordProvenance(commaSeparated.replace("1,234", "1234")),
-    ).toThrow("provenance is malformed");
-    expect(() =>
-      parseContributionRecordProvenance(singular.replace("1 in-range", "001 in-range")),
-    ).toThrow("provenance is malformed");
+        "provenance arithmetic is invalid",
+      ],
+      [commaSeparated.replace("1,234", "1234"), "provenance is malformed"],
+      [singular.replace("1 in-range", "001 in-range"), "provenance is malformed"],
+    ] as const) {
+      expect(() => parseContributionRecordProvenance(line)).toThrow(error);
+    }
     expect(() => parseContributionRecordProvenance(singular)).toThrow(
       "positive contribution record requires a Pull requests section",
     );

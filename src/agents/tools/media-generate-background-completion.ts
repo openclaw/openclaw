@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../../config/sessions/session-transcript-turn-state.js";
 import {
@@ -12,7 +11,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { RequiredCompletionTerminalResult } from "../completion-result.js";
 import {
-  formatGeneratedAttachmentLines,
   mediaUrlsFromGeneratedAttachments,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
@@ -21,9 +19,6 @@ import { isMediaGenerationOperationCurrent } from "../media-generation-activity.
 import { deliverSubagentAnnouncement } from "../subagents/announce/subagent-announce-delivery.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-completion");
-// Only blocked results missed the requester; retain references instead of resending.
-// Bound the process-local failure summary independently of durable transcript retention.
-const MEDIA_GENERATION_RETAINED_RESULT_MAX_CHARS = 4_000;
 
 export type MediaGenerationTaskHandle = {
   taskId: string;
@@ -117,32 +112,9 @@ export async function retainBlockedMediaCompletion(params: {
 
 export type MediaGenerationCompletionWakeOutcome =
   | { status: "delivered" }
+  | { status: "queued" }
   | { status: "pending" }
   | { status: "permanent_failure" };
-
-export function retainBlockedMediaReferences(
-  terminalResult: RequiredCompletionTerminalResult | undefined,
-  attachments: AgentGeneratedAttachment[] | undefined,
-): RequiredCompletionTerminalResult | undefined {
-  if (terminalResult?.terminalOutcome !== "blocked") {
-    return terminalResult;
-  }
-  const referenceLines = formatGeneratedAttachmentLines(attachments);
-  if (referenceLines.length === 0) {
-    return terminalResult;
-  }
-  const terminalSummary = [
-    terminalResult.terminalSummary,
-    "Retained generated media:",
-    ...referenceLines,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
-  return {
-    ...terminalResult,
-    terminalSummary: truncateUtf16Safe(terminalSummary, MEDIA_GENERATION_RETAINED_RESULT_MAX_CHARS),
-  };
-}
 
 export async function wakeMediaGenerationTaskCompletion(params: {
   handle: MediaGenerationTaskHandle | null;
@@ -203,12 +175,17 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       ...(params.attachments?.length ? { attachments: params.attachments } : {}),
       ...(mediaUrls.length ? { mediaUrls } : {}),
       replyInstruction: [
-        params.status === "ok"
-          ? `The ${params.completionLabel} is ready for the original chat.`
-          : `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed for the original chat.`,
-        params.status === "ok"
-          ? "Follow the current visible-reply contract with a short user-facing caption and every structured generated attachment from this event."
-          : "Follow the current visible-reply contract with a concise user-facing failure message.",
+        ...(params.status === "ok"
+          ? [
+              `The ${params.completionLabel} is ready. The host sends its files to the original chat before this turn, so do not send them again.`,
+              "Check the result against what the user asked for. If it falls short, continue the work, for example generate again with adjusted parameters.",
+              "Otherwise follow the current visible-reply contract with a short user-facing reply.",
+            ]
+          : [
+              `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation failed.`,
+              "If the failure looks recoverable, continue the work, for example retry with adjusted parameters.",
+              "Otherwise follow the current visible-reply contract to tell the user briefly what failed.",
+            ]),
         "Keep internal task/session details private and do not copy the internal event text verbatim.",
       ].join(" "),
     },
@@ -236,11 +213,10 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   if (delivery.delivered) {
     return { status: "delivered" };
   }
-  if (
-    delivery.disposition === "session_queued" ||
-    delivery.disposition === "retryable" ||
-    delivery.reason === "completion_handoff_pending"
-  ) {
+  if (delivery.disposition === "session_queued") {
+    return { status: "queued" };
+  }
+  if (delivery.disposition === "retryable" || delivery.reason === "completion_handoff_pending") {
     return { status: "pending" };
   }
   if (delivery.disposition === "ambiguous") {

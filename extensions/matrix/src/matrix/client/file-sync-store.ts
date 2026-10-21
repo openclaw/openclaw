@@ -22,6 +22,11 @@ import {
 
 const PERSIST_DEBOUNCE_MS = 250;
 
+export type MatrixSyncIngressHandler = (
+  sync: ISyncResponse,
+  context: { hasSavedSync: boolean },
+) => Promise<void>;
+
 function syncDataToSyncResponse(syncData: ISyncData): ISyncResponse {
   return {
     next_batch: syncData.nextBatch,
@@ -44,6 +49,8 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private frozen = false;
   private persistTimer: NodeJS.Timeout | null = null;
   private persistPromise: Promise<void> | null = null;
+  private syncIngressHandler: MatrixSyncIngressHandler | undefined;
+  private syncIngressAdmission: Promise<void> | null = null;
 
   static async create(storageRootDir: string): Promise<SqliteBackedMatrixSyncStore> {
     let store: PluginStateKeyedStore<MatrixSyncCacheRecord, 2> | undefined;
@@ -95,6 +102,36 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     return this.hadCleanShutdownOnLoad;
   }
 
+  async bindSyncIngress(handler: MatrixSyncIngressHandler): Promise<() => void> {
+    if (this.frozen || this.syncIngressHandler) {
+      throw new Error("Matrix sync ingress is already bound or the sync store is frozen");
+    }
+    this.syncIngressHandler = handler;
+    const dispose = () => {
+      if (this.syncIngressHandler === handler) {
+        this.syncIngressHandler = undefined;
+      }
+    };
+    try {
+      if (this.savedSync) {
+        const cachedSync = syncDataToSyncResponse(this.savedSync);
+        await this.runSyncIngress(() => handler(cachedSync, { hasSavedSync: true }));
+      }
+    } catch (error) {
+      dispose();
+      throw error;
+    }
+    return dispose;
+  }
+
+  override setSyncToken(token: string): void {
+    // Classic sync assigns its next token before delivering events. Admission
+    // owns that advance while bound, including in-memory retries after failure.
+    if (!this.frozen && !this.syncIngressHandler) {
+      super.setSyncToken(token);
+    }
+  }
+
   override getSavedSync(): Promise<ISyncData | null> {
     return Promise.resolve(this.savedSync ? structuredClone(this.savedSync) : null);
   }
@@ -103,14 +140,40 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     return Promise.resolve(this.savedSync?.nextBatch ?? null);
   }
 
-  override setSyncData(syncData: ISyncResponse): Promise<void> {
+  override async setSyncData(syncData: ISyncResponse): Promise<void> {
     if (this.frozen) {
-      return Promise.resolve();
+      return;
     }
+    const handler = this.syncIngressHandler;
+    if (handler) {
+      await this.runSyncIngress(async () => {
+        await handler(syncData, { hasSavedSync: this.hadSavedSyncOnLoad });
+        if (!this.frozen) {
+          super.setSyncToken(syncData.next_batch);
+          this.acceptSyncData(syncData);
+        }
+      });
+      return;
+    }
+    this.acceptSyncData(syncData);
+  }
+
+  private acceptSyncData(syncData: ISyncResponse): void {
     this.accumulator.accumulate(syncData);
     this.savedSync = this.accumulator.getJSON();
     this.markDirtyAndSchedulePersist();
-    return Promise.resolve();
+  }
+
+  private runSyncIngress(operation: () => Promise<void>): Promise<void> {
+    const pending = Promise.resolve(this.syncIngressAdmission)
+      .then(operation)
+      .finally(() => {
+        if (this.syncIngressAdmission === pending) {
+          this.syncIngressAdmission = null;
+        }
+      });
+    this.syncIngressAdmission = pending;
+    return pending;
   }
 
   override getClientOptions() {
@@ -161,6 +224,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   async freezeSyncCursorPersistence(): Promise<void> {
     this.frozen = true;
     this.clearPersistTimer();
+    await this.syncIngressAdmission;
     while (this.persistPromise) {
       await this.persistPromise;
     }
@@ -213,11 +277,9 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     this.dirty = false;
     const payload: PersistedMatrixSyncStore = {
       version: MATRIX_SYNC_CACHE_VERSION,
-      savedSync: this.savedSync ? structuredClone(this.savedSync) : null,
+      savedSync: this.savedSync,
       cleanShutdown: this.cleanShutdown,
-      ...(this.savedClientOptions
-        ? { clientOptions: structuredClone(this.savedClientOptions) }
-        : {}),
+      ...(this.savedClientOptions ? { clientOptions: this.savedClientOptions } : {}),
     };
     try {
       await writeMatrixSyncCacheStateToStore({

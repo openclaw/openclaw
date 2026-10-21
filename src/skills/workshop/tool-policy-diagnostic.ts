@@ -138,15 +138,13 @@ type SkillWorkshopToolPolicyAvailability = {
   exclusion?: ToolPolicyFilterEvent;
 };
 
-function makeSkillWorkshopPolicyProbe(): AnyAgentTool {
-  return {
-    name: SKILL_WORKSHOP_TOOL_NAME,
-    label: SKILL_WORKSHOP_TOOL_NAME,
-    description: "Skill Workshop policy availability check.",
-    parameters: { type: "object", properties: {} },
-    execute: async () => ({ content: [], details: {} }),
-  } as AnyAgentTool;
-}
+const skillWorkshopPolicyProbe = {
+  name: SKILL_WORKSHOP_TOOL_NAME,
+  label: SKILL_WORKSHOP_TOOL_NAME,
+  description: "Skill Workshop policy availability check.",
+  parameters: { type: "object", properties: {} },
+  execute: async () => ({ content: [], details: {} }),
+} as AnyAgentTool;
 
 /** Applies the real final tool-policy composition used by agent sessions and /learn. */
 export function resolveSkillWorkshopToolPolicyAvailability(params: {
@@ -155,7 +153,7 @@ export function resolveSkillWorkshopToolPolicyAvailability(params: {
 }): SkillWorkshopToolPolicyAvailability {
   let exclusion: ToolPolicyFilterEvent | undefined;
   const tools = applyFinalEffectiveToolPolicy({
-    bundledTools: [makeSkillWorkshopPolicyProbe()],
+    bundledTools: [skillWorkshopPolicyProbe],
     config: params.config,
     conversationCapabilityProfile: params.conversationCapabilityProfile,
     warn: () => {},

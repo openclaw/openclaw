@@ -234,8 +234,6 @@ describe("native assignment completion custody", () => {
       runtime.deliverAgentHarnessCompletion.mockResolvedValue({ delivered: false, path: "none" });
       const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
         recoveryPollDelaysMs: [],
-        completionDeliveryRetryDelaysMs: [1],
-        completionDeliveryMaxRetries: 1,
       });
       try {
         const owner = await registerParent(monitor);
@@ -261,10 +259,16 @@ describe("native assignment completion custody", () => {
             delivered: true,
             path: "direct",
           });
-          await vi.advanceTimersByTimeAsync(1);
+          await vi.advanceTimersByTimeAsync(5_000);
         } else {
-          await vi.advanceTimersByTimeAsync(1);
-          expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);
+          let attempts = 1;
+          for (const delayMs of [5_000, 15_000, 30_000, 60_000, 120_000, 300_000]) {
+            await vi.advanceTimersByTimeAsync(delayMs - 1);
+            expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(attempts);
+            expect(first.live()).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(++attempts);
+          }
         }
         expect(first.live()).toHaveLength(0);
       } finally {
@@ -356,13 +360,10 @@ describe("native completion custody and host recovery", () => {
         path: "none",
         recoveryBlocked: true,
       });
-      monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-        completionDeliveryRetryDelaysMs: [10],
-        completionDeliveryMaxRetries: 1,
-      });
+      monitor = new CodexNativeSubagentMonitor(client as never, runtime);
       await registerDetachedChild(client, monitor);
       await client.notify(nativeCompletionNotification());
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(530_000);
       expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
       const successorRuntime = createRuntime();
       successor = new CodexNativeSubagentMonitor(successorClient as never, successorRuntime);
@@ -389,21 +390,18 @@ describe("native completion custody and host recovery", () => {
         path: "none",
         recoveryPending: true,
       });
-      monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-        completionDeliveryRetryDelaysMs: [10],
-        completionDeliveryMaxRetries: 1,
-      });
+      monitor = new CodexNativeSubagentMonitor(client as never, runtime);
       await registerDetachedChild(client, monitor);
       await client.notify(nativeCompletionNotification());
-      await vi.advanceTimersByTimeAsync(50);
-      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(6);
+      await vi.advanceTimersByTimeAsync(35_000);
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(8);
       runtime.deliverAgentHarnessCompletion.mockResolvedValue({
         delivered: true,
         path: "direct",
       });
-      await vi.advanceTimersByTimeAsync(10);
-      await vi.advanceTimersByTimeAsync(50);
-      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(7);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(530_000);
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(9);
     } finally {
       await monitor?.dispose();
       client.close();

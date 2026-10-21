@@ -19,21 +19,22 @@ import { resolveSqliteDatabaseFilePath } from "./sqlite-database-admission.js";
 
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
 
-async function loadNodeSqliteWithVersion(version: string, extensionLoadingOmitted?: number) {
+async function loadNodeSqliteWithVersion(
+  version: string,
+  extensionLoadingOmitted?: number,
+  storage: { sourceId?: string | null; compileOptions?: string | null } = {},
+) {
   const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
     this: DatabaseSync,
     sql,
   ) {
-    if (
-      sql ===
-        "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted" ||
-      sql === "SELECT sqlite_version() AS version"
-    ) {
+    if (sql.startsWith("SELECT sqlite_version() AS version")) {
       const statement = originalPrepare.call(this, sql);
       const capabilities = statement.get();
       vi.spyOn(statement, "get").mockReturnValue({
         ...capabilities,
         version,
+        ...storage,
         ...(extensionLoadingOmitted === undefined ? {} : { omitted: extensionLoadingOmitted }),
       });
       return statement;
@@ -252,6 +253,25 @@ describe("node SQLite safety", () => {
   );
 
   it.each([
+    { sourceId: "different source", compileOptions: "different options" },
+    { sourceId: null },
+    { compileOptions: null },
+  ])("binds seal identity to loaded library facts (%j)", async (storage) => {
+    const native = await loadNodeSqliteWithVersion("3.53.4", 0, storage);
+    native.requireNodeSqlite();
+    const identity = native.captureSqliteNativeRuntimeAdmission()?.storageIdentity;
+    if (storage.sourceId === null || storage.compileOptions === null) {
+      expect(identity).toBeUndefined();
+    } else {
+      expect(identity).toEqual({
+        sourceId: "different source",
+        compileOptions: "different options",
+      });
+    }
+    expect(native.prepare).toHaveBeenCalledOnce();
+  });
+
+  it.each([
     { version: "3.51.3", jsonb: true },
     { version: "3.52.0", jsonb: true },
     { version: "3.53.0", jsonb: true },
@@ -281,22 +301,17 @@ describe("node SQLite safety", () => {
     },
   );
 
-  it.each([true, "true"])(
-    "rejects vulnerable shared SQLite with system-library remediation (%j)",
+  it.each([true, "true", false, "false"])(
+    "rejects vulnerable SQLite with linkage-specific remediation (%j)",
     async (nodeSharedSqlite) => {
       await withNodeSharedSqliteValue(nodeSharedSqlite, async () => {
         const { requireNodeSqlite } = await loadNodeSqliteWithVersion("3.51.2");
-        expect(() => requireNodeSqlite()).toThrow(expectedUnsafeSqliteError("3.51.2", true));
-      });
-    },
-  );
-
-  it.each([false, "false"])(
-    "rejects vulnerable embedded SQLite with Node-upgrade remediation (%j)",
-    async (nodeSharedSqlite) => {
-      await withNodeSharedSqliteValue(nodeSharedSqlite, async () => {
-        const { requireNodeSqlite } = await loadNodeSqliteWithVersion("3.51.2");
-        expect(() => requireNodeSqlite()).toThrow(expectedUnsafeSqliteError("3.51.2", false));
+        expect(() => requireNodeSqlite()).toThrow(
+          expectedUnsafeSqliteError(
+            "3.51.2",
+            nodeSharedSqlite === true || nodeSharedSqlite === "true",
+          ),
+        );
       });
     },
   );
@@ -355,6 +370,14 @@ describe("node SQLite safety", () => {
         changed === "unchanged" ? receipt : undefined,
       );
       native.environment.set(receiptKey, forwarded);
+      if (changed === "unchanged") {
+        vi.resetModules();
+        const reloaded = await loadNodeSqliteWithVersion("3.53.4", 0);
+        expect(reloaded.supportsNodeSqliteJsonb()).toBe(false);
+        expect(reloaded.supportsNodeSqliteExtensionLoading()).toBe(false);
+        expect(reloaded.prepare).not.toHaveBeenCalled();
+        reloaded.prepare.mockRestore();
+      }
       native.mainThread = false;
       vi.resetModules();
       const worker = await loadNodeSqliteWithVersion("3.53.4", 0);
@@ -398,10 +421,21 @@ describe("node SQLite safety", () => {
 const homebrew = "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib";
 const intelHomebrew = "/usr/local/opt/sqlite/lib/libsqlite3.dylib";
 const safeProbe = { version: "3.53.4", extensionLoadingSupported: true };
+const bundled = "/standalone/runtime/lib/libsqlite3.dylib";
+const standalone = { standaloneRootUrl: "file:///standalone/runtime/" };
+const unloadable = () => {
+  throw new Error("dlopen failed");
+};
 
 function fixture(overrides: Parameters<typeof mockBunSqliteNativeBoundary>[0] = {}) {
   const native = mockBunSqliteNativeBoundary(overrides);
   return { ...native, ensure: ensureSqliteLibrarySelected };
+}
+
+function expectSelection(f: ReturnType<typeof fixture>, source: string, libraryPath: string) {
+  const selected = f.ensure();
+  expect(selected).toEqual({ source, path: libraryPath, ...safeProbe });
+  return selected;
 }
 
 describe("Bun SQLite library selection", () => {
@@ -409,10 +443,73 @@ describe("Bun SQLite library selection", () => {
     { explicitPath: undefined, expected: "/env/sqlite.dylib" },
     { explicitPath: "/parent/sqlite.dylib", expected: "/parent/sqlite.dylib" },
   ])("honors explicit then environment priority ($expected)", ({ explicitPath, expected }) => {
-    const f = fixture({ env: { OPENCLAW_SQLITE_LIBRARY: "  /env/sqlite.dylib  " } });
+    const f = fixture({
+      env: { OPENCLAW_SQLITE_LIBRARY: "  /env/sqlite.dylib  " },
+      ...standalone,
+    });
     expect(f.ensure({ explicitPath })).toEqual({ source: "env", path: expected, ...safeProbe });
     expect(f.probe).toHaveBeenCalledExactlyOnceWith(expected);
     expect(f.select).toHaveBeenCalledExactlyOnceWith(expected);
+  });
+
+  it("uses the standalone SQLite library before host discovery and publishes its source", () => {
+    const f = fixture({
+      ...standalone,
+      env: { HOMEBREW_PREFIX: "/host/brew" },
+    });
+    const selected = expectSelection(f, "bundled", bundled);
+    expect(f.probe).toHaveBeenCalledExactlyOnceWith(bundled);
+    expect(f.select).toHaveBeenCalledExactlyOnceWith(bundled);
+    expect(f.publish).toHaveBeenCalledExactlyOnceWith(
+      "openclaw.bunSqliteLibrarySelection",
+      selected,
+    );
+  });
+
+  it.each(["missing", "invalid"] as const)(
+    "falls back to host discovery when standalone SQLite is %s",
+    (failure) => {
+      const f = fixture({
+        ...standalone,
+        exists: () => failure !== "missing",
+        probe: (candidate) => {
+          if (candidate !== bundled) {
+            return safeProbe;
+          }
+          if (failure === "missing") {
+            throw new Error("dlopen failed");
+          }
+          return { ...safeProbe, version: "3.51.2" };
+        },
+      });
+      expectSelection(f, "discovered", homebrew);
+      expect(f.probe.mock.calls.map(([candidate]) => candidate)).toEqual([bundled, homebrew]);
+      expect(f.select).toHaveBeenCalledExactlyOnceWith(homebrew);
+    },
+  );
+
+  it("inherits a bundled SQLite selection without probing again", () => {
+    const selected = {
+      source: "bundled",
+      path: bundled,
+      ...safeProbe,
+    };
+    const f = fixture({ isMainThread: false });
+    f.environment.set("openclaw.bunSqliteLibrarySelection", selected);
+    expect(f.ensure()).toEqual(selected);
+    expect(f.probe).not.toHaveBeenCalled();
+    expect(f.select).not.toHaveBeenCalled();
+  });
+
+  it("explains how to restore standalone SQLite when no candidate is usable", () => {
+    const f = fixture({
+      ...standalone,
+      exists: () => false,
+      probe: unloadable,
+    });
+    expect(() => f.ensure()).toThrow("Rebuild or replace the complete standalone artifact");
+    expect(() => f.ensure()).toThrow("/standalone/runtime/lib/libsqlite3.dylib (missing file)");
+    expect(f.select).not.toHaveBeenCalled();
   });
 
   it.each(["explicit", "env"])(
@@ -420,10 +517,8 @@ describe("Bun SQLite library selection", () => {
     (source) => {
       const libraryPath = "/missing/sqlite.dylib";
       const f = fixture({
-        exists: vi.fn(() => false),
-        probe: vi.fn(() => {
-          throw new Error("dlopen failed");
-        }),
+        exists: () => false,
+        probe: unloadable,
         env: source === "env" ? { OPENCLAW_SQLITE_LIBRARY: libraryPath } : {},
       });
       expect(() => f.ensure(source === "explicit" ? { explicitPath: libraryPath } : {})).toThrow(
@@ -437,8 +532,8 @@ describe("Bun SQLite library selection", () => {
   it("reports the real defect of a loadable library that has no file on disk", () => {
     // Apple's SQLite is served from the dyld shared cache: dlopen succeeds, stat does not.
     const f = fixture({
-      exists: vi.fn(() => false),
-      probe: vi.fn(() => ({ ...safeProbe, extensionLoadingSupported: false })),
+      exists: () => false,
+      probe: () => ({ ...safeProbe, extensionLoadingSupported: false }),
       env: { OPENCLAW_SQLITE_LIBRARY: "/usr/lib/libsqlite3.dylib" },
     });
     expect(() => f.ensure()).toThrow(
@@ -475,39 +570,32 @@ describe("Bun SQLite library selection", () => {
     const f = fixture({
       probe: vi.fn().mockReturnValueOnce(firstProbe).mockReturnValue(safeProbe),
     });
-    expect(f.ensure()).toEqual({ source: "discovered", path: intelHomebrew, ...safeProbe });
+    expectSelection(f, "discovered", intelHomebrew);
     expect(f.select).toHaveBeenCalledExactlyOnceWith(intelHomebrew);
   });
 
   it("skips missing and unloadable candidates and reaches MacPorts", () => {
     const f = fixture({
       env: { HOMEBREW_PREFIX: "/custom-brew" },
-      exists: vi.fn(
-        (libraryPath) => libraryPath !== "/custom-brew/opt/sqlite/lib/libsqlite3.dylib",
-      ),
-      probe: vi.fn((libraryPath) => {
+      exists: (libraryPath) => libraryPath !== "/custom-brew/opt/sqlite/lib/libsqlite3.dylib",
+      probe: (libraryPath) => {
         if (libraryPath !== "/opt/local/lib/libsqlite3.dylib") {
           throw new Error("dlopen failed");
         }
         return safeProbe;
-      }),
+      },
     });
-    expect(f.ensure()).toEqual({
-      source: "discovered",
-      path: "/opt/local/lib/libsqlite3.dylib",
-      ...safeProbe,
-    });
+    expectSelection(f, "discovered", "/opt/local/lib/libsqlite3.dylib");
     expect(f.select).toHaveBeenCalledTimes(1);
   });
 
   it("prefers HOMEBREW_PREFIX and memoizes the selection without probing again", () => {
     const f = fixture({ env: { HOMEBREW_PREFIX: "/custom-brew" } });
-    const selected = f.ensure();
-    expect(selected).toEqual({
-      source: "discovered",
-      path: "/custom-brew/opt/sqlite/lib/libsqlite3.dylib",
-      ...safeProbe,
-    });
+    const selected = expectSelection(
+      f,
+      "discovered",
+      "/custom-brew/opt/sqlite/lib/libsqlite3.dylib",
+    );
     expect(f.ensure({ explicitPath: "/different.dylib" })).toBe(selected);
     expect(f.probe).toHaveBeenCalledTimes(1);
     expect(f.select).toHaveBeenCalledTimes(1);
@@ -515,10 +603,8 @@ describe("Bun SQLite library selection", () => {
 
   it("refuses Apple's runtime library when no library exists, including a blank override", () => {
     const f = fixture({
-      exists: vi.fn(() => false),
-      probe: vi.fn(() => {
-        throw new Error("dlopen failed");
-      }),
+      exists: () => false,
+      probe: unloadable,
       env: { OPENCLAW_SQLITE_LIBRARY: "  " },
     });
     const refusal =
@@ -535,12 +621,12 @@ describe("Bun SQLite library selection", () => {
   it("names present candidates a translated process cannot load", () => {
     // An x64 Bun under Rosetta cannot dlopen the arm64-only Homebrew library.
     const f = fixture({
-      exists: vi.fn((libraryPath) => libraryPath === homebrew),
-      probe: vi.fn((libraryPath) => {
+      exists: (libraryPath) => libraryPath === homebrew,
+      probe: (libraryPath) => {
         throw new Error(
           libraryPath === homebrew ? "dlopen: incompatible architecture" : "dlopen failed",
         );
-      }),
+      },
     });
     expect(() => f.ensure()).toThrow(
       `No supported SQLite library for Bun on macOS (${process.arch}); unusable: ${homebrew} (dlopen: incompatible architecture). `,
@@ -550,9 +636,9 @@ describe("Bun SQLite library selection", () => {
 
   it("never retries the one-shot hook after a selection failure", () => {
     const f = fixture({
-      select: vi.fn(() => {
+      select: () => {
         throw new Error("SQLite already loaded");
-      }),
+      },
     });
     expect(() => f.ensure()).toThrow(
       `Cannot use SQLite library ${homebrew}: SQLite already loaded`,

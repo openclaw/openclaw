@@ -17,6 +17,23 @@ import { createPackageSwapFixture } from "./package-update-swap.test-support.js"
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 const fixtures = createPackageActivationLifetimeFixture();
+function oversizedFile(payload: string, firstRegularOnly = false) {
+  const lstat = fsp.lstat.bind(fsp);
+  let observed = false;
+  vi.spyOn(fsp, "lstat").mockImplementation(async (...args) => {
+    const stat = await lstat(...args);
+    if (
+      String(args[0]) === payload &&
+      args[1]?.bigint &&
+      (!firstRegularOnly || (!observed && stat.isFile()))
+    ) {
+      stat.size = 8n * 1024n * 1024n * 1024n + 1n;
+      observed = true;
+    }
+    return stat;
+  });
+  return () => expect(observed).toBe(true);
+}
 let root: string;
 beforeEach(() => {
   ({ root } = fixtures.setup());
@@ -40,25 +57,11 @@ it.skipIf(process.platform === "win32")(
     fixtures.lifetime.run(async () => {
       const f = await createPackageSwapFixture(root);
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
-      const payload = "a-oversized.bin";
-      await fsp.writeFile(path.join(f.params.stage.packageRoot, payload), "");
+      const payload = path.join(f.params.stage.packageRoot, "a-oversized.bin");
+      await fsp.writeFile(payload, "");
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
-      const lstat = fsp.lstat.bind(fsp);
-      let oversizedObserved = false;
-      vi.spyOn(fsp, "lstat").mockImplementation(async (...args) => {
-        const stat = await lstat(...args);
-        if (
-          !oversizedObserved &&
-          String(args[0]) === path.join(f.params.stage.packageRoot, payload) &&
-          args[1]?.bigint &&
-          stat.isFile()
-        ) {
-          // The first regular file exceeds the byte budget before any candidate hashing.
-          stat.size = 8n * 1024n * 1024n * 1024n + 1n;
-          oversizedObserved = true;
-        }
-        return stat;
-      });
+      // Exhaust the budget before candidate hashing, but only on its first regular file.
+      const assertOversized = oversizedFile(payload, true);
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
         let transaction: PackageUpdateTransaction | undefined;
@@ -70,7 +73,7 @@ it.skipIf(process.platform === "win32")(
           },
         });
         expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
-        expect(oversizedObserved).toBe(true);
+        assertOversized();
         expect(result.step.advisory?.message).toContain("full package contents are unverified");
         expect(updateRunStepsFromResultStep(result.step)).toContainEqual(
           expect.objectContaining({ step: "warning:package-swap", status: "completed" }),
@@ -110,20 +113,11 @@ it.skipIf(process.platform === "win32")(
     fixtures.lifetime.run(async () => {
       const f = await fixtures.prepare();
       const payload = path.join(f.anchor, "candidate", "dist", "index.js");
-      const lstat = fsp.lstat.bind(fsp);
-      let oversizedObserved = false;
-      vi.spyOn(fsp, "lstat").mockImplementation(async (...args) => {
-        const stat = await lstat(...args);
-        if (String(args[0]) === payload && args[1]?.bigint) {
-          stat.size = 8n * 1024n * 1024n * 1024n + 1n;
-          oversizedObserved = true;
-        }
-        return stat;
-      });
+      const assertOversized = oversizedFile(payload);
       await expect(runPackageActivationRecovery(f.anchor, "repair", f.operationId)).rejects.toThrow(
         "Package rollback verification byte limit exceeded",
       );
-      expect(oversizedObserved).toBe(true);
+      assertOversized();
       expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
       expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
     }),

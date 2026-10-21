@@ -135,7 +135,7 @@ export function extractA2aMessageText(parts: unknown[]): string | undefined {
     if (!parsed.success) {
       continue;
     }
-    if (typeof parsed.data.text === "string") {
+    if (parsed.data.text !== undefined) {
       textParts.push(parsed.data.text);
     } else if (Object.hasOwn(parsed.data, "data") && parsed.data.data !== undefined) {
       textParts.push(JSON.stringify(parsed.data.data));

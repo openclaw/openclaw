@@ -1,17 +1,20 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, render as renderSolid } from "@solidjs/testing-library";
-import { nothing, render } from "lit";
-import { createComponent, flush } from "solid-js";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { renderHubTabs } from "./hub-tabs.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { HubTabs } from "./solid/hub-tabs.tsx";
 
 type SessionsHubTabsProps = {
   active: "sessions" | "worktrees";
   onSelect: (tab: "sessions" | "worktrees") => void;
 };
+
+const mounts = new WeakMap<
+  HTMLDivElement,
+  { update: (props: SessionsHubTabsProps) => void; unmount: () => void }
+>();
 
 async function mount(
   props: SessionsHubTabsProps,
@@ -20,21 +23,46 @@ async function mount(
   if (!container.isConnected) {
     document.body.append(container);
   }
-  render(
-    renderHubTabs({
-      ...props,
-      id: "sessions",
-      tabs: [
-        { value: "sessions", label: "Sessions" },
-        { value: "worktrees", label: "Worktrees" },
-      ],
-      ariaLabel: "Sessions",
-      panelId: "sessions-hub-panel",
-    }),
-    container,
-  );
+  const mounted = mounts.get(container);
+  if (mounted) {
+    mounted.update(props);
+  } else {
+    const [current, setCurrent] = createSignal(props);
+    const view = mountSolid(
+      () =>
+        createComponent(HubTabs<"sessions" | "worktrees">, {
+          get active() {
+            return current().active;
+          },
+          get onSelect() {
+            return current().onSelect;
+          },
+          id: "sessions",
+          tabs: [
+            { value: "sessions", label: "Sessions" },
+            { value: "worktrees", label: "Worktrees" },
+          ],
+          ariaLabel: "Sessions",
+          panelId: "sessions-hub-panel",
+        }),
+      { container },
+    );
+    mounts.set(container, { update: setCurrent, unmount: view.unmount });
+  }
+  flush();
   await Promise.resolve();
   return container;
+}
+
+function findTab(container: Element, value = "worktrees") {
+  return container.querySelector<HTMLElement>(`#sessions-tab-${value}`);
+}
+
+function activate(container: Element, value = "worktrees") {
+  findTab(container, value)?.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }),
+  );
+  container.remove();
 }
 
 describe("Sessions hub navigation", () => {
@@ -43,7 +71,7 @@ describe("Sessions hub navigation", () => {
   });
 
   afterEach(() => {
-    cleanup();
+    cleanupSolid();
     document.body.innerHTML = "";
   });
 
@@ -82,121 +110,53 @@ describe("Sessions hub navigation", () => {
 
   it("hands focus to the destination strip after keyboard navigation", async () => {
     const source = await mount({ active: "sessions", onSelect: () => undefined });
-    source
-      .querySelector<HTMLElement>("#sessions-tab-worktrees")
-      ?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }),
-      );
-    source.remove();
+    activate(source);
 
     const destination = await mount({ active: "worktrees", onSelect: () => undefined });
     await vi.waitFor(() => {
-      expect(document.activeElement).toBe(
-        destination.querySelector<HTMLElement>("#sessions-tab-worktrees"),
-      );
+      expect(document.activeElement).toBe(findTab(destination));
     });
   });
 
-  it("does not steal deliberate focus established before a queued route handoff", async () => {
-    const source = await mount({ active: "sessions", onSelect: () => undefined });
-    source
-      .querySelector<HTMLElement>("#sessions-tab-worktrees")
-      ?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }),
-      );
-    source.remove();
-
-    await mount({ active: "worktrees", onSelect: () => undefined });
-    const outside = document.createElement("button");
-    document.body.append(outside);
-    outside.focus();
-    await new Promise<void>((resolve) => {
-      window.setTimeout(resolve, 0);
-    });
-
-    expect(document.activeElement).toBe(outside);
-  });
-
-  it("does not steal deliberate focus established before the destination mounts", async () => {
-    const source = await mount({ active: "sessions", onSelect: () => undefined });
-    const sourceTab = source.querySelector<HTMLElement>("#sessions-tab-worktrees");
-    sourceTab?.focus();
-    sourceTab?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }),
-    );
-    source.remove();
-
-    const outside = document.createElement("button");
-    document.body.append(outside);
-    outside.focus();
-    await mount({ active: "worktrees", onSelect: () => undefined });
-    await new Promise<void>((resolve) => {
-      window.setTimeout(resolve, 0);
-    });
-
-    expect(document.activeElement).toBe(outside);
-  });
+  it.each(["queued", "before mount"] as const)(
+    "does not steal deliberate focus established %s",
+    async (stage) => {
+      const source = await mount({ active: "sessions", onSelect: () => undefined });
+      if (stage === "before mount") {
+        findTab(source)?.focus();
+      }
+      activate(source);
+      if (stage === "queued") {
+        await mount({ active: "worktrees", onSelect: () => undefined });
+      }
+      const outside = document.createElement("button");
+      document.body.append(outside);
+      outside.focus();
+      if (stage === "before mount") {
+        await mount({ active: "worktrees", onSelect: () => undefined });
+      }
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 0);
+      });
+      expect(document.activeElement).toBe(outside);
+    },
+  );
 
   it("keeps only the latest cross-route keyboard focus handoff", async () => {
     const first = await mount({ active: "sessions", onSelect: () => undefined });
-    first
-      .querySelector<HTMLElement>("#sessions-tab-worktrees")
-      ?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }),
-      );
-    first.remove();
+    activate(first);
     const intermediate = await mount({ active: "worktrees", onSelect: () => undefined });
-    intermediate
-      .querySelector<HTMLElement>("#sessions-tab-sessions")
-      ?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }),
-      );
-    intermediate.remove();
+    activate(intermediate, "sessions");
     const destination = await mount({ active: "sessions", onSelect: () => undefined });
 
-    await vi.waitFor(() =>
-      expect(document.activeElement).toBe(
-        destination.querySelector<HTMLElement>("#sessions-tab-sessions"),
-      ),
-    );
+    await vi.waitFor(() => expect(document.activeElement).toBe(findTab(destination, "sessions")));
   });
-  it("hands keyboard focus from a retiring Lit route to the Solid destination", async () => {
-    const source = document.createElement("div");
-    document.body.append(source);
-    render(
-      renderHubTabs({
-        id: "mixed-routes",
-        active: "a",
-        tabs: [
-          { value: "a", label: "Alpha" },
-          { value: "b", label: "Beta" },
-        ],
-        ariaLabel: "Routes",
-        panelId: "mixed-panel",
-        onSelect: () => undefined,
-      }),
-      source,
-    );
-    source
-      .querySelector<HTMLElement>("#mixed-routes-tab-b")!
-      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    render(nothing, source);
+  it("hands keyboard focus from a retiring route to the Solid destination", async () => {
+    const source = await mount({ active: "sessions", onSelect: () => undefined });
+    findTab(source)!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    mounts.get(source)!.unmount();
     source.remove();
-    const view = renderSolid(() =>
-      createComponent(HubTabs, {
-        id: "mixed-routes",
-        active: "b",
-        tabs: [
-          { value: "a", label: "Alpha" },
-          { value: "b", label: "Beta" },
-        ],
-        ariaLabel: "Routes",
-        panelId: "mixed-panel",
-        onSelect: () => undefined,
-      }),
-    );
-    flush();
-    await Promise.resolve();
-    expect(document.activeElement).toBe(view.getByRole("tab", { name: "Beta" }));
+    const destination = await mount({ active: "worktrees", onSelect: () => undefined });
+    expect(document.activeElement).toBe(findTab(destination));
   });
 });

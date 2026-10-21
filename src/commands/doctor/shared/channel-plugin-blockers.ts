@@ -20,6 +20,7 @@ import {
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
 import { isSafeChannelEnvVarTriggerName } from "../../../secrets/channel-env-var-names.js";
+import { normalizeLowercaseStringSet } from "../../../shared/normalized-string-set.js";
 
 const CHANNEL_PLUGIN_BLOCKERS_CHECK_ID = "core/doctor/channel-plugin-blockers";
 
@@ -180,11 +181,7 @@ function listPackageEnvConfiguredChannelTriggers(
 ): Map<string, Map<string, Set<string>>> {
   const triggersByChannelId = new Map<string, Map<string, Set<string>>>();
   for (const plugin of plugins) {
-    const ownedChannelIds = new Set(
-      plugin.channels
-        .map((channelId) => normalizeOptionalLowercaseString(channelId))
-        .filter((channelId): channelId is string => Boolean(channelId)),
-    );
+    const ownedChannelIds = normalizeLowercaseStringSet(plugin.channels.values());
     const channelId = normalizeOptionalLowercaseString(plugin.packageChannel?.id);
     if (!channelId || !ownedChannelIds.has(channelId)) {
       continue;

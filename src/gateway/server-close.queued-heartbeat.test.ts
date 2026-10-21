@@ -2,10 +2,12 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { waitForActiveCronTaskRuns } from "../cron/service/active-run-cancellation.js";
 import { createCronServiceState } from "../cron/service/state.js";
 import { executeJobCoreWithTimeout } from "../cron/service/timer-job-runner.js";
 import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
+import type { CronJob } from "../cron/types.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
 import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
@@ -16,17 +18,10 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
-import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
+import { createCloseTestDeps } from "./server-close.lifecycle.test-support.js";
 import { buildGatewayCronService } from "./server-cron.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
-  disposeAllCodeModeRuns: async () => {},
-  disposeAllBundleLspRuntimes: async () => {},
-  drainRetainedEmbeddingProviders: async () => {},
-  stopGmailWatcher: async () => {},
-  closeProviderTransportDispatcherPool: async () => {},
-});
 
 afterEach(() => vi.useRealTimers());
 
@@ -35,16 +30,14 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
   const stateDir = tempDirs.make("gateway-close-queued-heartbeat-");
   const cfg = { cron: { enabled: false }, agents: { entries: { main: {} } } };
   const scheduler = createTestGatewayScheduler();
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const { cron } = buildGatewayCronService({
-    storePath: await resolveCronJobsStorePathFromConfigAsync(cfg, {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-    }),
+    storePath: await resolveCronJobsStorePathFromConfigAsync(cfg, env),
     scheduler,
     cfg,
     deps: {} as CliDeps,
     broadcast: () => {},
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    env,
   });
   const runOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
   const runner = startHeartbeatRunner({ cfg, runOnce });
@@ -74,43 +67,31 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
       return { status: "ok" };
     },
   });
-  const sibling = executeJobCoreWithTimeout(core, {
+  const run = (job: Pick<CronJob, "id" | "name" | "payload" | "sessionTarget" | "agentId">) =>
+    executeJobCoreWithTimeout(core, makeCronJob(job));
+  const sibling = run({
     id: "admitted-sibling",
     name: "admitted sibling",
-    enabled: true,
-    createdAtMs: Date.now(),
-    updatedAtMs: Date.now(),
-    schedule: { kind: "every", everyMs: 60_000 },
     payload: { kind: "agentTurn", message: "finish owned work" },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    state: {},
   });
   await siblingStarted.promise;
   let heartbeatSettled = false;
-  const running = executeJobCoreWithTimeout(core, {
+  const running = run({
     id: "queued-monitor",
     name: "queued monitor",
     agentId: "main",
-    enabled: true,
-    createdAtMs: Date.now(),
-    updatedAtMs: Date.now(),
-    schedule: { kind: "every", everyMs: 60_000 },
     payload: { kind: "heartbeat" },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
-    state: {},
   }).then((result) => {
     heartbeatSettled = true;
     return result;
   });
   await queued.promise;
-  // The real wake is pending at the zero-drain restart admission fence, not
-  // an embedded model run that reply cancellation could already settle.
+  // Fence a real queued wake, not an embedded run already settled by reply cancellation.
   markGatewayRestartDraining();
   await vi.advanceTimersByTimeAsync(0);
-  // The CLI joins process activity before server close can stop the runner.
-  // Only the executing sibling may still hold that boundary.
+  // CLI activity joins precede runner stop; only the executing sibling may remain.
   const heartbeatSettledBeforeClose = heartbeatSettled;
   const beforeClose = await waitForGatewayActiveWork(0);
   const drainEntered = createDeferredCore();
@@ -121,7 +102,7 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
   });
   let closed = false;
   const sharedStateClosed = vi.fn();
-  const deps = createGatewayCloseTestDeps({
+  const deps = createCloseTestDeps({
     cron,
     heartbeatRunner: runner,
     clearSecretsRuntimeSnapshot: sharedStateClosed,
@@ -139,8 +120,7 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
     await drainEntered.promise;
     expect(heartbeatSettledBeforeClose).toBe(true);
     expect(beforeClose.snapshot.counts.cronRuns).toBe(1);
-    // Preserve the real 10s cron drain. A queued wake must not consume it
-    // waiting for a heartbeat stop that close has placed after its own join.
+    // Keep the real 10s grace: queued wakes cannot wait for the later heartbeat stop.
     await vi.advanceTimersByTimeAsync(9_999);
     expect(heartbeatSettled).toBe(true);
     expect(closed).toBe(false);
@@ -150,8 +130,7 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
       status: "skipped",
       error: "heartbeat skipped: gateway-draining",
     });
-    // Cancellation may project a result, but the admitted sibling's actual
-    // core must still join before shared resources close.
+    // A cancellation result does not release the admitted sibling's actual work.
     await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({ drained: false, active: 1 });
     releaseSibling.resolve();
     expect((await closing).warnings).toEqual([]);

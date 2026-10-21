@@ -75,11 +75,17 @@ hooks read the accepted activity for their attempt from the transcript when need
 If a `before_message_write` hook suppresses a nested activity row, finalization and
 agent-end hooks omit that activity too. The successful tool still counts as completed
 for turn settlement; suppressing its display history does not undo its execution.
-Starts and partial updates remain transient. Older missing child history cannot be
-reconstructed from source code or outer results.
+Terminal tool and activity events are published only after the nested activity
+append is accepted. Effect and replay-safety evidence is captured before that
+append, so a persistence failure cannot undo a known tool effect or make it safe
+to repeat. Lifecycle accounting settles from the captured outcome even when
+cancellation, supersession, or persistence failure suppresses terminal presentation.
+Starts and partial updates remain transient. Older missing child
+history cannot be reconstructed from source code or outer results.
 
-Nested tool failures cross into the guest as catchable JavaScript errors. If
-guest code does not catch an error, `exec` or `wait` returns a failed tool
+Thrown tool errors are catchable. Returned values may instead report failure.
+Follow the tool's result contract, and inspect possible effects before retrying.
+If guest code does not catch an error, `exec` or `wait` returns a failed tool
 result and the agent can continue normally. Follow the
 [tool-error guidance](/tools/code-mode/quickstart#recover-from-tool-errors) to inspect possible partial
 effects before choosing another action. Network-controlled tool output and errors
@@ -122,18 +128,20 @@ statuses: `completed`, `waiting`, or `failed`.
 
 - A `waiting` result retains an executor continuation, pending bridge requests, and
   scoping metadata (agent run id, session id/key) until `wait` resumes it or
-  it expires.
+  it expires. Successful completion of the observing tool call or model response
+  leaves this parked work available. Cancellation of an active `exec`/`wait`,
+  the parent run, or its catalog still cancels the cell and pending calls.
 - Expiry, wrong-session, wrong-run, and unknown/already-resuming `runId`
   values do not produce a distinct terminal status; they surface as a
   `failed` result (`code: "invalid_input"`) with a message such as `code mode
-run is unavailable or expired.` or `code mode run belongs to a different
-session.`.
+  run is unavailable or expired.` or `code mode run belongs to a different
+  session.`.
 - A run's continuation is released as soon as it settles to
   `completed` or `failed`, or is dropped on Gateway shutdown. Continuations
   do not survive a restart; committed session-store values do.
 - OpenClaw caps the number of concurrently suspended runs per process (64) and
   rejects new suspensions past that cap with `too many suspended code mode
-runs.`.
+  runs.`.
 
 The selected executor stays fixed for the cell's lifetime. Suspended state is
 bounded by the per-process cap above and `snapshotTtlSeconds`. QuickJS also
@@ -239,8 +247,9 @@ bridge as QuickJS. Suspension retains the worker, context, and pending promises;
 `wait` continues that context without replaying the source. Cancellation,
 expiry, terminal results, and shutdown release the retained execution.
 
-After successful completion, Node keeps up to four idle workers warm for five
-minutes each, reusing only workers with the same runtime entry and heap limit.
+After successful completion, Node keeps up to four idle workers for 30 seconds
+to reuse short bursts, then retains one for up to five minutes since its last
+completion. Reuse requires the same runtime entry and heap limit.
 Reuse stays within the creating Gateway or CLI command lifetime; closing that
 host joins worker retirement. Standalone executor calls without a host close
 their completed worker immediately. Each new cell still gets a fresh VM context.

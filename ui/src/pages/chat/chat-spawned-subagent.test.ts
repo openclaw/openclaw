@@ -1,21 +1,21 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard } from "../../lib/chat/chat-types.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { ownSessionLaunchCalls, resolveSpawnedSubagent } from "./chat-spawned-subagent.ts";
 import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
-import { renderActivityGroup } from "./components/chat-message-group.test-support.ts";
+import { ActivityGroup } from "./components/chat-message-group-view.tsx";
 import {
   createAssistantMessage,
   createMessageEntry,
   createToolCall,
   createToolGroup,
 } from "./components/chat-message.test-support.ts";
-import { renderToolCard } from "./components/chat-tool-cards.ts";
-import { renderToolFixture } from "./components/chat-tool-render.test-support.ts";
+import { ChatToolCard } from "./components/chat-tool-cards.solid.tsx";
+import { settleToolBridges } from "./components/chat-tool-render.test-support.ts";
 
 const parentKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
 const label = "Write a six-line robot story";
@@ -125,7 +125,15 @@ describe("a launched subagent", () => {
       ),
     ]);
     const container = document.createElement("div");
-    render(renderActivityGroup([group], { showToolCalls: true, showReasoning: false }), container);
+    mountSolid(
+      ActivityGroup,
+      {
+        groups: [group],
+        options: { showToolCalls: true, showReasoning: false },
+        presentation: "standalone",
+      },
+      container,
+    );
     expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
       "1 other operation · 1 subagent",
     );
@@ -137,15 +145,22 @@ describe("a launched subagent", () => {
     const onToggleExpanded = vi.fn();
     const mount = async (subagentSessions: GatewaySessionRow[]) => {
       const container = document.createElement("div");
-      await renderToolFixture(
-        renderToolCard(launch({ outputText: accepted(story.key) }), {
-          messageKey: "message",
-          expanded: false,
-          onToggleExpanded,
-          subagents: { subagentSessions, onOpenSubagent, onOpenSession },
-        }),
+      document.body.append(container);
+      onTestFinished(() => container.remove());
+      mountSolid(
+        ChatToolCard,
+        {
+          card: launch({ outputText: accepted(story.key) }),
+          options: {
+            messageKey: "message",
+            expanded: false,
+            onToggleExpanded,
+            subagents: { subagentSessions, onOpenSubagent, onOpenSession },
+          },
+        },
         container,
       );
+      await settleToolBridges(container);
       return container;
     };
     const row = await mount([story]);

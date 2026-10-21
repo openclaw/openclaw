@@ -32,11 +32,7 @@ import { createMattermostReactionHandler } from "./monitor-reactions.js";
 import { createMattermostMonitorResources } from "./monitor-resources.js";
 import { registerMattermostMonitorSlashCommands } from "./monitor-slash.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
-import {
-  createMattermostConnectOnce,
-  type MattermostEventPayload,
-  type MattermostWebSocketFactory,
-} from "./monitor-websocket.js";
+import { createMattermostConnectOnce, type MattermostEventPayload } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
 import type { ChannelAccountSnapshot, OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 import {
@@ -57,7 +53,6 @@ type MonitorMattermostOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
-  webSocketFactory?: MattermostWebSocketFactory;
 };
 
 function publishMattermostRecoveringStatus(
@@ -125,7 +120,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     },
     {
       abortSignal: opts.abortSignal,
-      jitterRatio: 0.2,
       reconnectAfterClose: false,
       onError: (err) => {
         runtime.error?.(`mattermost: API auth failed: ${String(err)}`);
@@ -335,7 +329,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     abortSignal: opts.abortSignal,
     statusSink: opts.statusSink,
     runtime,
-    webSocketFactory: opts.webSocketFactory,
     nextSeq: () => sequence++,
     getBotUpdateAt: async () => (await fetchMattermostMe(client)).update_at ?? 0,
     onPosted: ingress.receive,
@@ -370,7 +363,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   try {
     await runWithReconnect(connectOnce, {
       abortSignal: opts.abortSignal,
-      jitterRatio: 0.2,
       onError: (err) => {
         runtime.error?.(`mattermost connection failed: ${String(err)}`);
         publishMattermostRecoveringStatus(opts.statusSink, err);

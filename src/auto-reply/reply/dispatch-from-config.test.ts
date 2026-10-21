@@ -70,6 +70,7 @@ describe("dispatchReplyFromConfig", () => {
       });
       expect(preparedLookup).toHaveBeenCalledTimes(2);
       expect(preparedLookup).toHaveBeenNthCalledWith(1, {
+        abortSignal: expect.any(AbortSignal),
         agentId: "main",
         demand: "interactive",
         onRuntimeLease: expect.any(Function),

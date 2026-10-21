@@ -17,14 +17,13 @@ vi.mock("./nodes-utils.js", () => ({
   resolveAgentNodeId: mocks.resolveAgentNodeId,
 }));
 
-import { executeNodeCommandAction } from "./nodes-tool-commands.js";
 import { createNodesTool } from "./nodes-tool.js";
 
 async function execute(input: Record<string, unknown>) {
-  return await executeNodeCommandAction({
+  return await createNodesTool().execute("ptz-fixture", {
     action: "camera_ptz",
-    input: { action: "camera_ptz", node: "Mac", ...input },
-    gatewayOpts: {},
+    node: "Mac",
+    ...input,
   });
 }
 

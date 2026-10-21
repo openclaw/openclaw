@@ -5,8 +5,8 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
-import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
+import { mountSettings, settingsAck, settingsRow } from "./chat-pane-settings.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -15,43 +15,21 @@ import {
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-const initialRow = (): GatewaySessionRow => ({
-  key: "agent:main:settings-ownership",
-  agentId: "main",
-  sessionId: "settings-ownership-session",
-  kind: "direct",
-  updatedAt: 1,
-  label: "Original label",
-  thinkingLevel: "high",
-  fastMode: false,
-  effectiveFastMode: false,
-  contextWindow: "64k",
-});
-
 it.each(["rejected", "older-clock ACK"] as const)(
   "retains settled thinking facts after an older direct capability patch returns %s",
   async (outcome) => {
-    const initial = initialRow();
+    const initial = settingsRow("settings-ownership", {
+      label: "Original label",
+      fastMode: false,
+      effectiveFastMode: false,
+      contextWindow: "64k",
+    });
     const firstFields = { thinkingLevel: "off" };
     const secondFields = { thinkingLevel: "low" };
     const firstReply = createDeferred<unknown>();
     const secondReply = createDeferred<unknown>();
-    const firstAcknowledgement = {
-      ok: true,
-      key: initial.key,
-      path: "",
-      entry: {
-        sessionId: initial.sessionId,
-        updatedAt: 2,
-        ...firstFields,
-      },
-    };
-    const secondAcknowledgement = {
-      ok: true,
-      key: initial.key,
-      path: "",
-      entry: { sessionId: initial.sessionId, updatedAt: 3, ...secondFields },
-    };
+    const firstAcknowledgement = settingsAck(initial, { updatedAt: 2, ...firstFields });
+    const secondAcknowledgement = settingsAck(initial, { updatedAt: 3, ...secondFields });
     let calls = 0;
     const patch = vi.fn<GatewayRequestHandler>(() => {
       calls += 1;
@@ -61,24 +39,17 @@ it.each(["rejected", "older-clock ACK"] as const)(
       expect(calls).toBe(2);
       return secondReply.promise;
     });
-    const { sessions, mount } = createMountedPanes([initial], "main", undefined, {
+    const fixture = createMountedPanes([initial], "main", undefined, {
       "sessions.patch": patch,
     });
+    const { sessions } = fixture;
     let first: ReturnType<typeof sessions.patch> | undefined;
     let second: ReturnType<typeof sessions.patch> | undefined;
     let firstSettled = false;
     try {
-      await sessions.refresh({ agentId: "main", force: true });
-      const panes = [mount(initial.key), mount(initial.key)];
-      await Promise.all(panes.map(refreshPane));
-      const assertFields = (fields: Partial<GatewaySessionRow>) => {
-        const expected = { key: initial.key, sessionId: initial.sessionId, ...fields };
-        expect(sessions.state.result?.sessions).toEqual([expect.objectContaining(expected)]);
-        for (const pane of panes) {
-          expect(pane.state.currentSessionId).toBe(initial.sessionId);
-          expect(selectedChatSessionRow(pane.state)).toMatchObject(expected);
-        }
-      };
+      const { assertRows } = await mountSettings(fixture, initial);
+      const assertFields = (fields: Partial<GatewaySessionRow>) =>
+        assertRows({ key: initial.key, sessionId: initial.sessionId, ...fields });
       assertFields(initial);
       const options = {
         agentId: "main",
@@ -134,7 +105,12 @@ it.each([
 ] as const)(
   "settles only admitted effective speed ($read read, overlap=$overlap, event=$observeEffective)",
   async ({ read, overlap, observeEffective }) => {
-    const initial = initialRow();
+    const initial = settingsRow("settings-ownership", {
+      label: "Original label",
+      fastMode: false,
+      effectiveFastMode: false,
+      contextWindow: "64k",
+    });
     const firstReply = createDeferred<unknown>();
     const secondReply = createDeferred<unknown>();
     let calls = 0;
@@ -149,7 +125,7 @@ it.each([
       expect(calls).toBe(2);
       return secondReply.promise;
     });
-    const { sessions, mount, emitGatewayEvent } = createMountedPanes([initial], "main", undefined, {
+    const fixture = createMountedPanes([initial], "main", undefined, {
       "sessions.patch": patch,
       "sessions.list": () => {
         if (!acknowledged) {
@@ -167,22 +143,16 @@ it.each([
         );
       },
     });
+    const { sessions, emitGatewayEvent } = fixture;
     let first: ReturnType<typeof sessions.patch> | undefined;
     let second: ReturnType<typeof sessions.patch> | undefined;
     try {
-      await sessions.refresh({ agentId: "main", force: true });
-      const panes = [mount(initial.key), mount(initial.key)];
-      await Promise.all(panes.map(refreshPane));
+      const { assertRows } = await mountSettings(fixture, initial);
       const assertModes = (
         fastMode: GatewaySessionRow["fastMode"],
         effectiveFastMode: GatewaySessionRow["effectiveFastMode"],
       ) => {
-        const expected = { sessionId: initial.sessionId, fastMode, effectiveFastMode };
-        expect(sessions.state.result?.sessions).toEqual([expect.objectContaining(expected)]);
-        for (const pane of panes) {
-          expect(pane.state.currentSessionId).toBe(initial.sessionId);
-          expect(selectedChatSessionRow(pane.state)).toMatchObject(expected);
-        }
+        assertRows({ sessionId: initial.sessionId, fastMode, effectiveFastMode });
       };
       const options = { agentId: "main", deferListRefresh: read === "deferred" };
       first = sessions.patch(initial.key, { fastMode: true }, options);
@@ -206,22 +176,12 @@ it.each([
 
       committed = { ...initial, updatedAt: 3, fastMode: true };
       acknowledged = true;
-      firstReply.resolve({
-        ok: true,
-        key: initial.key,
-        path: "",
-        entry: { sessionId: initial.sessionId, updatedAt: 3, fastMode: true },
-      });
+      firstReply.resolve(settingsAck(initial, { updatedAt: 3, fastMode: true }));
       await expect(first).resolves.toMatchObject({ entry: { fastMode: true } });
       if (overlap) {
         assertModes("auto", "auto");
         committed = { ...initial, updatedAt: 5, fastMode: "auto" };
-        secondReply.resolve({
-          ok: true,
-          key: initial.key,
-          path: "",
-          entry: { sessionId: initial.sessionId, updatedAt: 5, fastMode: "auto" },
-        });
+        secondReply.resolve(settingsAck(initial, { updatedAt: 5, fastMode: "auto" }));
         await expect(second).resolves.toMatchObject({ entry: { fastMode: "auto" } });
       }
       if (read === "deferred") {
@@ -231,18 +191,8 @@ it.each([
       }
       assertModes(overlap ? "auto" : true, observeEffective || read === "fresh");
     } finally {
-      firstReply.resolve({
-        ok: true,
-        key: initial.key,
-        path: "",
-        entry: { sessionId: initial.sessionId, updatedAt: 3, fastMode: true },
-      });
-      secondReply.resolve({
-        ok: true,
-        key: initial.key,
-        path: "",
-        entry: { sessionId: initial.sessionId, updatedAt: 5, fastMode: "auto" },
-      });
+      firstReply.resolve(settingsAck(initial, { updatedAt: 3, fastMode: true }));
+      secondReply.resolve(settingsAck(initial, { updatedAt: 5, fastMode: "auto" }));
       await Promise.allSettled([first, second]);
       await vi.dynamicImportSettled();
     }

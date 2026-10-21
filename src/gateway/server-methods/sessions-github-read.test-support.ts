@@ -1,7 +1,9 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { SessionGitHubStatusResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareUserGitHubConnection } from "../../state/user-github-connections.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -11,12 +13,23 @@ import {
   type PersonalGitHubAction,
 } from "../github-personal-oauth.js";
 import { personalGitHubStatusAsync as personalGitHubStatus } from "../github-personal-status.js";
+import * as publicationAvailability from "../github-publication-availability.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 export const sessionKey = "agent:main:publication-read";
 export const sessionId = "publication-read-session";
 export const publisher = { source: "agent-override" as const, accountId: 7, login: "shared-bot" };
+export const publisherIdentity = () => ({
+  source: publisher.source,
+  account: { accountId: publisher.accountId, login: publisher.login, avatarUrl: null },
+});
+export function mockPublicationIdentity() {
+  vi.spyOn(
+    publicationAvailability,
+    "prepareCurrentGitHubPublicationOptionsIdentity",
+  ).mockResolvedValue(publisherIdentity());
+}
 export const receipt = {
   result: {
     requestId: "8c698e8a-bdc7-4927-a0f2-73a842c2d7b1",
@@ -26,6 +39,48 @@ export const receipt = {
   },
   confirmation: null,
 };
+
+export async function withHeldReceipt(
+  fixture: ReturnType<typeof createFixture>,
+  source: "personal" | "shared" | "status",
+  run: (
+    respond: ReturnType<typeof vi.fn>,
+    release: (value: SessionGitHubStatusResult | null) => Promise<void>,
+  ) => Promise<void>,
+  ready: Promise<unknown> = Promise.resolve(),
+) {
+  const entered = createDeferredCore();
+  const pending = createDeferredCore<SessionGitHubStatusResult | null>();
+  const read = {
+    personal: fixture.personalPending,
+    shared: fixture.latestShared,
+    status: fixture.sharedStatus,
+  }[source];
+  read.mockImplementationOnce(() => {
+    entered.resolve();
+    return pending.promise;
+  });
+  const respond = vi.fn();
+  const request = source === "status" ? fixture.status(respond) : fixture.options(respond);
+  try {
+    await awaitGateBeforeSettlement(
+      Promise.all([entered.promise, ready]),
+      request,
+      "Receipt completed before the held read was ready",
+    );
+    expect(respond).not.toHaveBeenCalled();
+    await run(respond, async (value) => {
+      pending.resolve(value);
+      await request;
+    });
+    if (source !== "personal") {
+      expect(read).toHaveBeenCalledOnce();
+    }
+  } finally {
+    pending.resolve(source === "status" ? receipt : null);
+    await request;
+  }
+}
 
 export async function withReadFixture(
   run: (fixture: ReturnType<typeof createFixture>) => Promise<void>,
@@ -88,16 +143,6 @@ function createFixture(
 ) {
   const client: GatewayClient = {
     connId: "publication-reader",
-    ...(profile
-      ? {
-          authenticatedUserProfile: {
-            profileId: profile.id,
-            displayName: profile.displayName,
-            hasAvatar: false,
-            updatedAt: profile.updatedAt,
-          },
-        }
-      : {}),
     connect: {
       role: "operator",
       scopes,
@@ -106,20 +151,30 @@ function createFixture(
       client: { id: "test", mode: "test", platform: "test", version: "1" },
     },
   };
+  if (profile) {
+    client.authenticatedUserProfile = {
+      profileId: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    };
+  }
   let connected = true;
-  const sharedStatus = vi.fn().mockResolvedValue(receipt);
-  const latestShared = vi.fn().mockResolvedValue(receipt);
-  const personalStatus = vi.fn();
-  const preparePersonalStatus = vi.fn(async () => undefined);
-  const personalPending = vi
-    .fn<() => Promise<SessionGitHubStatusResult | null>>()
-    .mockResolvedValue(null);
+  const publication = {
+    sharedStatus: vi.fn().mockResolvedValue(receipt),
+    latestShared: vi.fn().mockResolvedValue(receipt),
+    personalStatusAsync: vi.fn(),
+    preparePersonalStatus: vi.fn(async () => undefined),
+    personalPending: vi
+      .fn<() => Promise<SessionGitHubStatusResult | null>>()
+      .mockResolvedValue(null),
+    requestForSessionV2: vi.fn(),
+  };
   const personalLifecycle = createPersonalGitHubOAuthLifecycle();
   const personalConnectionStatus = vi.fn(async (action: PersonalGitHubAction) => {
     await prepareUserGitHubConnection(action.owner);
     return personalGitHubStatus(action);
   });
-  const requestForSession = vi.fn();
   const pullRequests = { subscribe: vi.fn(), unsubscribe: vi.fn(), read: vi.fn(), stop: vi.fn() };
   // Only these services belong to the read handler; the authorization helpers stay real.
   const context = {
@@ -127,14 +182,7 @@ function createFixture(
     controlUiSessionPullRequests: pullRequests,
     getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) =>
       new Set(connected && (!filter || filter(client)) ? [client.connId] : []),
-    githubPublicationService: {
-      preparePersonalStatus,
-      sharedStatus,
-      latestShared,
-      personalStatusAsync: personalStatus,
-      personalPending,
-      requestForSessionV2: requestForSession,
-    },
+    githubPublicationService: publication,
     githubOAuthService: {
       personal: {
         ...personalLifecycle,
@@ -160,14 +208,19 @@ function createFixture(
     client,
     context,
     invoke,
-    sharedStatus,
-    latestShared,
-    personalStatus,
-    preparePersonalStatus,
-    personalPending,
+    options: (respond = vi.fn(), params: Record<string, unknown> = {}) =>
+      invoke("sessions.github.options", { sessionKey, ...params }, respond),
+    status: (respond = vi.fn()) =>
+      invoke(
+        "sessions.github.status",
+        { sessionKey, requestId: receipt.result.requestId },
+        respond,
+      ),
+    ...publication,
+    personalStatus: publication.personalStatusAsync,
     personalLifecycle,
     personalConnectionStatus,
-    requestForSession,
+    requestForSession: publication.requestForSessionV2,
     pullRequests,
     disconnect: () => {
       connected = false;

@@ -1,8 +1,4 @@
-import type {
-  PluginBlobEntry,
-  PluginBlobEntryInfo,
-  PluginBlobStoreOperation,
-} from "./plugin-blob-store.types.js";
+import type { PluginBlobStoreOperation } from "./plugin-blob-store.types.js";
 
 type Namespace = { pluginId: string; namespace: string };
 type Key = Namespace & { key: string };
@@ -31,8 +27,3 @@ export const pluginBlobWorkerOperations = {
 export type PluginBlobReadCommand =
   | { type: "pluginBlob.lookup"; input: Key }
   | { type: "pluginBlob.entries"; input: Namespace };
-
-export type PluginBlobReadReply = { ok: true; sourceAdmitted: true } & (
-  | { type: "pluginBlob.lookup"; value: PluginBlobEntry<unknown> | undefined }
-  | { type: "pluginBlob.entries"; value: PluginBlobEntryInfo<unknown>[] }
-);

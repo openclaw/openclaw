@@ -373,7 +373,6 @@ extension OpenClawConfigFile {
         let decoder = JSONDecoder()
         decoder.allowsJSON5 = true
         if let decoded = try? decoder.decode([String: AnyCodable].self, from: data) {
-            self.logger.notice("config parsed with JSON5 decoder")
             return decoded.mapValues { $0.foundationValue }
         }
         return nil

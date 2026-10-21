@@ -80,24 +80,22 @@ describe("resolvePairingHint", () => {
       ConnectErrorDetailCodes.PAIRING_REQUIRED,
     ],
   ])("detects pairing required from %s", (_name, lastError, lastErrorCode) => {
-    expect(resolvePairingHint(false, lastError, lastErrorCode)).toEqual({
+    expect(resolvePairingHint(lastError, lastErrorCode)).toEqual({
       kind: "pairing-required",
       requestId: null,
     });
   });
 
   it.each([
-    ["connected clients", true, "disconnected (1008): pairing required"],
-    ["missing errors", false, null],
-    ["unrelated errors", false, "disconnected (1006): no reason"],
-  ])("ignores %s", (_name, connected, lastError) => {
-    expect(resolvePairingHint(connected, lastError)).toBeNull();
+    ["missing errors", null],
+    ["unrelated errors", "disconnected (1006): no reason"],
+  ])("ignores %s", (_name, lastError) => {
+    expect(resolvePairingHint(lastError)).toBeNull();
   });
 
   it("detects scope-upgrade pending approval and keeps the request id", () => {
     expect(
       resolvePairingHint(
-        false,
         "scope upgrade pending approval (requestId: req-123)",
         ConnectErrorDetailCodes.PAIRING_REQUIRED,
       ),
@@ -251,7 +249,6 @@ describe("shouldShowInsecureContextHint", () => {
   it("returns true for browser WebSocket security errors", () => {
     expect(
       shouldShowInsecureContextHint(
-        false,
         "Browser refused the Gateway WebSocket for security reasons.",
         "BROWSER_WEBSOCKET_SECURITY_ERROR",
       ),
@@ -261,7 +258,6 @@ describe("shouldShowInsecureContextHint", () => {
   it("does not treat generic WebSocket constructor errors as insecure context", () => {
     expect(
       shouldShowInsecureContextHint(
-        false,
         "Could not create the Gateway WebSocket: constructor failed",
         "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR",
       ),

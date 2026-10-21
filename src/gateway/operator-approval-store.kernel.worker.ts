@@ -1,5 +1,3 @@
-// Approval creation and bounded query transactions, executed in workers.
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
@@ -9,8 +7,12 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+// Approval creation and bounded query transactions, executed in workers.
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-reviewer-binding.js";
@@ -28,6 +30,7 @@ import {
   stringifyPresentation,
   normalizeExecutionIdentityBinding,
   decodeOperatorApprovalRow,
+  decodeOperatorApprovalBindings,
   inputMatchesExistingRow,
   decodeOperatorApprovalHistoryCursor,
   encodeOperatorApprovalHistoryCursor,
@@ -174,7 +177,11 @@ export function insertOperatorApprovalInDatabase(params: {
     }
     if (result.rows.length === 1) {
       if (executionIdentityBinding) {
-        ensureExecutionIdentitySchema(database.db);
+        if (isPostgresSqlConnection(database.db)) {
+          ensureStatePostgresFragment(database.db, "operator_approval_execution_identities");
+        } else {
+          ensureExecutionIdentitySchema(database.db);
+        }
         executeSqliteQuerySync(
           database.db,
           stateDb.insertInto("operator_approval_execution_identities").values({
@@ -253,7 +260,7 @@ type PendingApprovalInput = {
 
 export function readPendingOperatorApprovalsInDatabase(
   params: PendingApprovalInput,
-  db: DatabaseSync,
+  db: EngineConnection,
 ) {
   const nowMs = params.nowMs ?? Date.now();
   const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
@@ -307,7 +314,7 @@ export function readPendingOperatorApprovalsInDatabase(
   return { records, corrupt };
 }
 
-export function hasDueOperatorApprovalsInDatabase(nowMs: number, db: DatabaseSync): boolean {
+function hasDueOperatorApprovalsInDatabase(nowMs: number, db: EngineConnection): boolean {
   return (
     executeSqliteQueryTakeFirstSync(
       db,
@@ -319,6 +326,18 @@ export function hasDueOperatorApprovalsInDatabase(nowMs: number, db: DatabaseSyn
         .limit(1),
     ) !== undefined
   );
+}
+
+export function readOperatorApprovalReplayInDatabase(
+  params: PendingApprovalInput & { nowMs: number },
+  db: EngineConnection,
+) {
+  return runSqliteReadSnapshotSync(db, () => {
+    if (hasDueOperatorApprovalsInDatabase(params.nowMs, db)) {
+      return { outcome: "expiry-required" as const };
+    }
+    return { outcome: "pending" as const, ...readPendingOperatorApprovalsInDatabase(params, db) };
+  });
 }
 
 export function listPendingOperatorApprovalsInDatabase(
@@ -340,7 +359,15 @@ export function listPendingOperatorApprovalsInDatabase(
 
 export function listTerminalOperatorApprovalsInDatabase(
   params: ListTerminalOperatorApprovalsInput,
-  db: DatabaseSync,
+  db: EngineConnection,
+): ListTerminalOperatorApprovalsResult {
+  // Metadata selection and payload hydration must observe the same durable snapshot.
+  return runSqliteReadSnapshotSync(db, () => readTerminalOperatorApprovals(params, db));
+}
+
+function readTerminalOperatorApprovals(
+  params: ListTerminalOperatorApprovalsInput,
+  db: EngineConnection,
 ): ListTerminalOperatorApprovalsResult {
   const requestedLimit = Number.isSafeInteger(params.limit)
     ? (params.limit ?? OPERATOR_APPROVAL_HISTORY_DEFAULT_LIMIT)
@@ -355,6 +382,12 @@ export function listTerminalOperatorApprovalsInDatabase(
   const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
   const records: OperatorApprovalRecord[] = [];
   const pageSize = resultLimit + 1;
+  const source = params.source
+    ? {
+        sessionId: requireString(params.source.sessionId, "operator approval source session ID"),
+        runId: requireString(params.source.runId, "operator approval source run"),
+      }
+    : undefined;
 
   // Corrupt rows are skipped through the same decode-and-validate path used by
   // point lookups. Continue the keyset scan so one bad row cannot hide later
@@ -363,33 +396,64 @@ export function listTerminalOperatorApprovalsInDatabase(
     const batchLimit = pageSize - records.length;
     let query = stateDb
       .selectFrom("operator_approvals")
-      .selectAll()
+      .select([
+        "approval_id",
+        "resolved_at_ms",
+        "audience_session_keys_json",
+        "reviewer_device_ids_json",
+      ])
       .where("status", "!=", "pending")
       .where("resolved_at_ms", "is not", null)
       .where("resolved_at_ms", ">=", retentionCutoffMs)
       .orderBy("resolved_at_ms", "desc")
       .orderBy("approval_id", "desc")
       .limit(batchLimit);
+    if (source) {
+      query = query
+        .where("source_session_id", "=", source.sessionId)
+        .where("source_run_id", "=", source.runId);
+    }
     if (params.kind) {
       query = query.where("kind", "=", params.kind);
     }
     if (cursor) {
       const pageCursor = cursor;
-      query = query.where((eb) =>
-        eb.or([
-          eb("resolved_at_ms", "<", pageCursor.resolvedAtMs),
-          eb.and([
-            eb("resolved_at_ms", "=", pageCursor.resolvedAtMs),
-            eb("approval_id", "<", pageCursor.id),
+      // The explicit upper bound keeps the resolved-time index range bounded;
+      // the tie-aware predicate alone can rescan the preceding range each page.
+      query = query
+        .where("resolved_at_ms", "<=", pageCursor.resolvedAtMs)
+        .where((eb) =>
+          eb.or([
+            eb("resolved_at_ms", "<", pageCursor.resolvedAtMs),
+            eb.and([
+              eb("resolved_at_ms", "=", pageCursor.resolvedAtMs),
+              eb("approval_id", "<", pageCursor.id),
+            ]),
           ]),
-        ]),
-      );
+        );
     }
     const rows = executeSqliteQuerySync(database.db, query).rows;
-    for (const row of rows) {
-      const record = decodeOperatorApprovalRow(row);
-      if (record) {
-        records.push(record);
+    const ids = rows
+      .filter((row) => decodeOperatorApprovalBindings(row) !== null)
+      .map((row) => row.approval_id);
+    if (ids.length > 0) {
+      const selected = executeSqliteQuerySync(
+        db,
+        stateDb
+          .selectFrom("operator_approvals")
+          .selectAll()
+          .where("approval_id", "in", ids)
+          .orderBy("resolved_at_ms", "desc")
+          .orderBy("approval_id", "desc"),
+      ).rows;
+      for (const row of selected) {
+        const record = decodeOperatorApprovalRow(row);
+        if (record) {
+          records.push(record);
+          if (records.length === pageSize) {
+            break;
+          }
+        }
       }
     }
     const last = rows.at(-1);

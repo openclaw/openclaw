@@ -317,13 +317,6 @@ async function createFixture(
       senderIsOwner: options.senderIsOwner,
       messageActionTurnCapability: turnCapability,
       config: cfg,
-      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-      resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-        resolvedConfig: config,
-        diagnostics: [],
-        targetStatesByPath: {},
-        hadUnresolvedTargets: false,
-      }),
     }),
     {
       ...capabilityParams,

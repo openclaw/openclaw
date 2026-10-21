@@ -187,18 +187,6 @@ function renderErrorChainForLog(error: Error): string {
   return segments.filter(Boolean).join(" <- ");
 }
 
-function compactPreview(input: string, maxLen = 160): string {
-  const prefixLength = maxLen * 2;
-  let oneLine = input.slice(0, prefixLength).replace(/\s+/g, " ").trim();
-  if (oneLine.length <= maxLen && input.length > prefixLength) {
-    oneLine = input.replace(/\s+/g, " ").trim();
-  }
-  if (oneLine.length <= maxLen) {
-    return oneLine;
-  }
-  return `${truncateUtf16Safe(oneLine, Math.max(0, maxLen - 1))}…`;
-}
-
 /** Extracts small, non-sensitive fields from agent event payloads for WS logs. */
 export function summarizeAgentEventForWsLog(payload: unknown): Record<string, unknown> {
   if (!payload || typeof payload !== "object") {
@@ -270,17 +258,20 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
     return extra;
   }
 
-  if (stream === "lifecycle") {
+  if (stream === "lifecycle" || stream === "compaction") {
     const phase = typeof data.phase === "string" ? data.phase : undefined;
     if (phase) {
       extra.phase = phase;
+    }
+    if (stream === "compaction" && typeof data.outcome === "string") {
+      extra.outcome = data.outcome;
     }
     if (typeof data.aborted === "boolean") {
       extra.aborted = data.aborted;
     }
     const error = typeof data.error === "string" ? data.error : undefined;
     if (error?.trimStart()) {
-      extra.error = compactPreview(error, 120);
+      extra.err = true;
     }
     return extra;
   }

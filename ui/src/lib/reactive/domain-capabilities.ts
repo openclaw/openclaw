@@ -24,26 +24,6 @@ export function projectAgentIdentity(source: AgentIdentityProjectionSource) {
   });
 }
 
-export function projectSessions(
-  source: Pick<
-    SessionCapability,
-    | "state"
-    | "presentation"
-    | "revision"
-    | "canonicalListRevision"
-    | "eventSubscriptionError"
-    | "subscribe"
-  >,
-) {
-  return projectOwner(source, (sessions) => ({
-    state: sessions.state,
-    presentation: sessions.presentation,
-    revision: sessions.revision,
-    canonicalListRevision: sessions.canonicalListRevision,
-    eventSubscriptionError: sessions.eventSubscriptionError,
-  }));
-}
-
 export function projectRosterActivity(
   source: Pick<ReturnType<typeof rosterActivityStore>, "snapshot" | "subscribe">,
 ) {

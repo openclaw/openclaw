@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import type { WorkerProfile, WorkerProvider } from "../../plugins/types.js";
+import type { WorkerProvider } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -13,6 +13,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import type { WorkerEnvironmentService } from "./service.js";
@@ -29,75 +30,94 @@ export const RECEIPT = {
   protocolFeatures: [],
 };
 export type PoolOptions = Parameters<typeof createPreparedWorkerPool>[0];
+export const PREPARATION_TARGET = {
+  machineClass: "standard",
+  platform: "linux",
+  arch: "x64",
+} as const;
+export const createPreparationArtifacts = () => ({
+  nodeBootstrapSha256: "e".repeat(64),
+  enabledPluginIds: [],
+  workerBundleHash: BUNDLE_HASH,
+  workerArchiveSha256: "f".repeat(64),
+  openclawVersion: "2026.8.1",
+  protocolFeatures: [],
+});
 
-export function usePreparedPoolFixture() {
-  let root: string;
-  let database: OpenClawStateDatabase;
-  let store: Awaited<ReturnType<typeof createWorkerEnvironmentStore>>;
-  let config: OpenClawConfig;
-  let developmentProfile: CloudWorkerProfileConfig;
-  let nowMs: number;
-  let abort: AbortController;
-  let provider: WorkerProvider;
-  let service: WorkerEnvironmentService | undefined;
-  let releases: Array<() => void>;
-  let operations: Set<Promise<void>>;
-  const openStore = async () => {
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+class PreparedPoolFixture {
+  root!: string;
+  database!: OpenClawStateDatabase;
+  store!: Awaited<ReturnType<typeof createWorkerEnvironmentStore>>;
+  config!: OpenClawConfig;
+  developmentProfile!: CloudWorkerProfileConfig;
+  nowMs!: number;
+  abort!: AbortController;
+  provider!: WorkerProvider;
+  service!: WorkerEnvironmentService | undefined;
+  releases!: Array<() => void>;
+  operations!: Set<Promise<void>>;
+  constructor() {
+    beforeEach(async () => {
+      this.root = await fs.mkdtemp(
+        path.join(await fs.realpath(os.tmpdir()), "openclaw-prepared-pool-"),
+      );
+      this.nowMs = 1_000;
+      this.abort = new AbortController();
+      this.releases = [];
+      this.operations = new Set();
+      this.service = undefined;
+      this.developmentProfile = { provider: "test-provider", settings: {} };
+      this.config = { cloudWorkers: { profiles: { development: this.developmentProfile } } };
+      this.provider = {
+        id: "test-provider",
+        resolvePreparedIdleTimeoutMs: () => IDLE_TIMEOUT_MS,
+        resolveAllocation: vi.fn(async () => ({ leaseId: "resolved-lease", sharedHost: false })),
+        provision: vi.fn(async () => ({ leaseId: "new-lease", node: { deviceId: "new-node" } })),
+        inspect: vi.fn(async () => ({ status: "active" as const })),
+        destroy: vi.fn(async () => {}),
+        notePreparedDemand: vi.fn(async () => {}),
+      };
+      await this.openStore();
+    });
+    afterEach(async () => {
+      this.abort.abort();
+      for (const release of this.releases) {
+        release();
+      }
+      await Promise.allSettled(this.operations);
+      await this.service?.stop();
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(this.root, { recursive: true, force: true });
+    });
+  }
+  private openStore = async () => {
+    this.database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: this.root } });
+    this.store = await createWorkerEnvironmentStore({
+      database: this.database,
+      now: () => this.nowMs,
+    });
   };
-  const reopenStore = async () => {
+
+  reopenStore = async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    await openStore();
+    await this.openStore();
   };
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-prepared-pool-"));
-    nowMs = 1_000;
-    abort = new AbortController();
-    releases = [];
-    operations = new Set();
-    service = undefined;
-    developmentProfile = { provider: "test-provider", settings: {} };
-    config = { cloudWorkers: { profiles: { development: developmentProfile } } };
-    provider = {
-      id: "test-provider",
-      resolvePreparedIdleTimeoutMs: () => IDLE_TIMEOUT_MS,
-      resolveAllocation: vi.fn(async () => ({ leaseId: "resolved-lease", sharedHost: false })),
-      provision: vi.fn(async () => ({ leaseId: "new-lease", node: { deviceId: "new-node" } })),
-      inspect: vi.fn(async () => ({ status: "active" as const })),
-      destroy: vi.fn(async () => {}),
-      notePreparedDemand: vi.fn(async () => {}),
-    };
-    await openStore();
-  });
-
-  afterEach(async () => {
-    abort.abort();
-    for (const release of releases) {
-      release();
-    }
-    await Promise.allSettled(operations);
-    await service?.stop();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  function profile(
+  profile = (
     projectKey = PROJECT_KEY,
     preparationKey = PREPARATION_KEY,
     runSetupScript?: boolean,
     repository?: RepositoryWorkerProjectSnapshot,
-  ): WorkerProfile {
-    return {
+  ) =>
+    ({
       settings: {},
       executionMode: "worker-turn",
       project: {
         ...(repository ?? {
           key: projectKey,
-          root: path.join(root, projectKey),
+          root: path.join(this.root, projectKey),
           baseCommit: "d".repeat(40),
         }),
         preparation: {
@@ -105,21 +125,18 @@ export function usePreparedPoolFixture() {
           cacheKey: "9".repeat(64),
           contractVersion: 1,
           ...(runSetupScript === false ? { runSetupScript: false } : {}),
-          target: { machineClass: "standard", platform: "linux", arch: "x64" },
-          artifacts: {
-            nodeBootstrapSha256: "e".repeat(64),
-            enabledPluginIds: [],
-            workerBundleHash: BUNDLE_HASH,
-            workerArchiveSha256: "f".repeat(64),
-            openclawVersion: "2026.8.1",
-            protocolFeatures: [],
-          },
+          target: { ...PREPARATION_TARGET },
+          artifacts: createPreparationArtifacts(),
         },
       },
-    };
-  }
+    }) satisfies WorkerProviderPreparedIntent["profileSnapshot"];
 
-  function seed(
+  intent = (projectKey = PROJECT_KEY) => ({
+    providerId: this.provider.id,
+    profileSnapshot: this.profile(projectKey),
+  });
+
+  seed = (
     environmentId: string,
     options: {
       projectKey?: string;
@@ -131,13 +148,13 @@ export function usePreparedPoolFixture() {
       profileId?: string;
       expiresAtMs?: number;
     } = {},
-  ) {
-    return store.createIntent({
+  ) =>
+    this.store.createIntent({
       environmentId,
-      providerId: provider.id,
+      providerId: this.provider.id,
       profileId: options.profileId ?? "development",
       provisionOperationId: `provision:${environmentId}`,
-      profileSnapshot: profile(
+      profileSnapshot: this.profile(
         options.projectKey,
         options.preparationKey,
         options.runSetupScript,
@@ -148,25 +165,22 @@ export function usePreparedPoolFixture() {
           ? {
               purpose: options.purpose ?? "reserve",
               key: options.preparationKey ?? PREPARATION_KEY,
-              demandAtMs: nowMs,
-              expiresAtMs: options.expiresAtMs ?? nowMs + IDLE_TIMEOUT_MS,
+              demandAtMs: this.nowMs,
+              expiresAtMs: options.expiresAtMs ?? this.nowMs + IDLE_TIMEOUT_MS,
             }
           : undefined,
     });
-  }
 
-  function credential(value: string, sessionId: string | null = value) {
-    return {
-      credentialHash: hashWorkerCredential(value),
-      sessionId,
-      rpcSetVersion: 1,
-      expiresAtMs: nowMs + 10_000,
-    };
-  }
+  credential = (value: string, sessionId: string | null = value) => ({
+    credentialHash: hashWorkerCredential(value),
+    sessionId,
+    rpcSetVersion: 1,
+    expiresAtMs: this.nowMs + 10_000,
+  });
 
-  async function ready({ environmentId }: WorkerEnvironmentRecord) {
-    await store.transition({ environmentId, from: "requested", to: "provisioning" });
-    return await store.transition({
+  ready = async ({ environmentId }: WorkerEnvironmentRecord) => {
+    await this.store.transition({ environmentId, from: "requested", to: "provisioning" });
+    return await this.store.transition({
       environmentId,
       from: "provisioning",
       to: "ready",
@@ -175,21 +189,24 @@ export function usePreparedPoolFixture() {
         nodeDeviceId: `node:${environmentId}`,
         sharedHost: false,
         bootstrapReceipt: RECEIPT,
-        credential: credential(environmentId, null),
+        credential: this.credential(environmentId, null),
       },
     });
-  }
+  };
 
-  async function attach(
+  attach = async (
     record: WorkerEnvironmentRecord,
     stage: "provisioning" | "syncing" | "active" = "active",
-    activatedAtMs = nowMs,
-  ) {
+    activatedAtMs = this.nowMs,
+  ) => {
     const sessionId = `session:${record.environmentId}`;
     const sessionKey = `agent:main:${sessionId}`;
     const executionMode = "worker-turn";
     const identity = { sessionId, sessionKey, agentId: "main", executionMode } as const;
-    const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+    const placements = createWorkerSessionPlacementStore({
+      database: this.database,
+      now: () => this.nowMs,
+    });
     const requested = await placements.startDispatch(identity);
     const assigned = record.preparation
       ? (await placements.bindPreparedEnvironment({
@@ -213,7 +230,7 @@ export function usePreparedPoolFixture() {
           patch: { environmentId: record.environmentId },
         });
     if (stage === "provisioning") {
-      return store.get(record.environmentId)!;
+      return this.store.get(record.environmentId)!;
     }
     const syncing = await placements.transition({
       sessionId,
@@ -230,14 +247,14 @@ export function usePreparedPoolFixture() {
           assertCurrent: () => {},
         }
       : undefined;
-    const attached = await store.transition({
+    const attached = await this.store.transition({
       environmentId: record.environmentId,
       from: "ready",
       to: "attached",
       placementBinding,
       patch: {
         attachedSessionIds: [sessionId],
-        credential: credential(sessionId),
+        credential: this.credential(sessionId),
       },
     });
     if (stage === "active") {
@@ -248,7 +265,7 @@ export function usePreparedPoolFixture() {
         expectedGeneration: syncing.generation,
         patch: { workspaceBaseManifestRef: "manifest", remoteWorkspaceDir: "/workspace" },
       });
-      nowMs = activatedAtMs;
+      this.nowMs = activatedAtMs;
       await placements.transition({
         sessionId,
         from: "starting",
@@ -257,13 +274,16 @@ export function usePreparedPoolFixture() {
         patch: { activeOwnerEpoch: attached.ownerEpoch },
       });
     }
-    return store.get(attached.environmentId)!;
-  }
+    return this.store.get(attached.environmentId)!;
+  };
 
-  async function teardown(record: WorkerEnvironmentRecord) {
+  teardown = async (record: WorkerEnvironmentRecord) => {
     const environmentId = record.environmentId;
     const sessionId = `session:${environmentId}`;
-    const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+    const placements = createWorkerSessionPlacementStore({
+      database: this.database,
+      now: () => this.nowMs,
+    });
     const placement = placements.get(sessionId)!;
     if (placement.state === "active") {
       const ownerEpoch = placement.activeOwnerEpoch;
@@ -273,100 +293,52 @@ export function usePreparedPoolFixture() {
       await placements.startReconcile({ ...owner, expectedGeneration: draining.generation });
     }
     await placements.fail({ sessionId, recoveryError: "session teardown" });
-    await destroy(record);
-  }
+    await this.destroy(record);
+  };
 
-  async function destroy(record: WorkerEnvironmentRecord) {
+  destroy = async (record: WorkerEnvironmentRecord) => {
     const environmentId = record.environmentId;
-    await store.requestDestroy({ environmentId, state: record.state });
-    await store.transition({ environmentId, from: record.state, to: "draining" });
-    await store.transition({ environmentId, from: "draining", to: "destroying" });
-    await store.transition({ environmentId, from: "destroying", to: "destroyed" });
-  }
+    await this.store.requestDestroy({ environmentId, state: record.state });
+    await this.store.transition({ environmentId, from: record.state, to: "draining" });
+    await this.store.transition({ environmentId, from: "draining", to: "destroying" });
+    await this.store.transition({ environmentId, from: "destroying", to: "destroyed" });
+  };
 
-  function pool(overrides: Partial<PoolOptions> = {}) {
-    return createPreparedWorkerPool({
-      store,
-      getConfig: () => config,
-      resolveProvider: () => provider,
+  pool = (overrides: Partial<PoolOptions> = {}) =>
+    createPreparedWorkerPool({
+      store: this.store,
+      getConfig: () => this.config,
+      resolveProvider: () => this.provider,
       prepareRetention: async () => ({ isCurrent: () => true }),
-      prepareIntent: async (_profileId, { projectPath }) => ({
-        providerId: provider.id,
-        profileSnapshot: profile(path.basename(projectPath!)),
-        preparationKey: PREPARATION_KEY,
-      }),
+      prepareIntent: async (_profileId, { projectPath }) =>
+        this.intent(path.basename(projectPath!)),
       assertIntentCurrent: () => {},
       reconcile: async () => {},
-      signal: abort.signal,
-      now: () => nowMs,
+      signal: this.abort.signal,
+      now: () => this.nowMs,
       warn: vi.fn(),
       ...overrides,
     });
-  }
 
-  function schedule(owner: ReturnType<typeof pool>) {
+  schedule = (owner: ReturnType<PreparedPoolFixture["pool"]>) => {
     const operation = owner.schedule();
-    operations.add(operation);
-    const release = () => operations.delete(operation);
+    this.operations.add(operation);
+    const release = () => this.operations.delete(operation);
     void operation.then(release, release);
     return operation;
-  }
-
-  const reserves = () => store.list().filter((record) => record.preparation !== null);
-
-  return {
-    get root() {
-      return root;
-    },
-    get database() {
-      return database;
-    },
-    get store() {
-      return store;
-    },
-    get config() {
-      return config;
-    },
-    get developmentProfile() {
-      return developmentProfile;
-    },
-    get nowMs() {
-      return nowMs;
-    },
-    set nowMs(value: typeof nowMs) {
-      nowMs = value;
-    },
-    get abort() {
-      return abort;
-    },
-    get provider() {
-      return provider;
-    },
-    set provider(value: typeof provider) {
-      provider = value;
-    },
-    get service() {
-      return service;
-    },
-    set service(value: typeof service) {
-      service = value;
-    },
-    get releases() {
-      return releases;
-    },
-    get operations() {
-      return operations;
-    },
-    reopenStore,
-    profile,
-    seed,
-    credential,
-    ready,
-    attach,
-    teardown,
-    destroy,
-    pool,
-    schedule,
-    reserves,
   };
+
+  reserves = () => this.store.list().filter((record) => record.preparation !== null);
+
+  readySeed = async (id: string, options?: Parameters<PreparedPoolFixture["seed"]>[1]) =>
+    this.ready(await this.seed(id, options));
+
+  attachSeed = async (id: string, options?: Parameters<PreparedPoolFixture["seed"]>[1]) =>
+    this.attach(await this.readySeed(id, options));
+
+  readyReserves = () => Promise.all(this.reserves().map(this.ready));
+}
+
+export function usePreparedPoolFixture() {
+  return new PreparedPoolFixture();
 }

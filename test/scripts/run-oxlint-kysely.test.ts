@@ -6,45 +6,36 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const consumer = "src/state/consumer.ts";
+const coreConfig = "config/tsconfig/oxlint.core.json";
+const output = ".artifacts/kysely/openclaw-state-db.generated.ts";
 
 function createLintFixture() {
   const root = tempDirs.make("oxlint-kysely-");
-  fs.mkdirSync(path.join(root, ".git"));
+  const file = (name: string) => path.join(root, name);
+  fs.mkdirSync(file(".git"));
   installDistArtifactScripts(root, ["run-oxlint.mjs", "run-oxlint.mts", "run-oxlint-shards.mts"], {
     compiler: false,
-    dependencies: [
-      "tsx",
-      "@openclaw/fs-safe",
-      "json5",
-      "p-map",
-      "kysely",
-      "oxlint",
-      "oxlint-tsgolint",
-    ],
+    dependencies: "tsx @openclaw/fs-safe json5 p-map kysely oxlint oxlint-tsgolint".split(" "),
   });
   fs.symlinkSync(
     path.resolve("node_modules/.bin"),
-    path.join(root, "node_modules/.bin"),
+    file("node_modules/.bin"),
     process.platform === "win32" ? "junction" : "dir",
   );
-  const write = (file: string, content: string) => {
-    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-    fs.writeFileSync(path.join(root, file), content);
+  const write = (name: string, content: string) => {
+    fs.mkdirSync(path.dirname(file(name)), { recursive: true });
+    fs.writeFileSync(file(name), content);
   };
-  write("package.json", '{"type":"module"}');
-  write(
-    "tsconfig.json",
-    JSON.stringify({ compilerOptions: { strict: true, types: [], module: "nodenext" } }),
-  );
-  write("config/tsconfig/oxlint.core.json", '{"extends":"../../tsconfig.json"}');
-  write(
-    ".oxlintrc.json",
-    JSON.stringify({
-      plugins: ["typescript"],
-      categories: { correctness: "off" },
-      rules: { "typescript/no-redundant-type-constituents": "error" },
-    }),
-  );
+  const json = (name: string, value: unknown) => write(name, JSON.stringify(value));
+  json("package.json", { type: "module" });
+  json("tsconfig.json", { compilerOptions: { strict: true, types: [], module: "nodenext" } });
+  write(coreConfig, '{"extends":"../../tsconfig.json"}');
+  json(".oxlintrc.json", {
+    plugins: ["typescript"],
+    categories: { correctness: "off" },
+    rules: { "typescript/no-redundant-type-constituents": "error" },
+  });
   for (const name of ["state", "agent"]) {
     write(
       "src/state/openclaw-" + name + "-schema.sql",
@@ -56,35 +47,29 @@ function createLintFixture() {
     'export type * from "../../.artifacts/kysely/openclaw-state-db.generated.js";',
   );
   write(
-    "src/state/consumer.ts",
+    consumer,
     'import type { DB } from "./openclaw-state-db.generated.js"; export type Row = DB["records"] | null;',
   );
-  const run = (args: string[], env: NodeJS.ProcessEnv = {}) =>
-    spawnSync(process.execPath, args, {
-      cwd: root,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        GITHUB_ACTIONS: "false",
-        OPENCLAW_CI_STATIC_EVIDENCE: "0",
-        OPENCLAW_OXLINT_SKIP_PREPARE: "0",
-        ...env,
-      },
-    });
   return {
-    root,
-    run,
+    file,
     write,
-    output: path.join(root, ".artifacts/kysely/openclaw-state-db.generated.ts"),
+    exists: (name: string) => fs.existsSync(file(name)),
+    run: (args: string[], env: NodeJS.ProcessEnv = {}) =>
+      spawnSync(process.execPath, args, {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: "false",
+          OPENCLAW_CI_STATIC_EVIDENCE: "0",
+          OPENCLAW_OXLINT_SKIP_PREPARE: "0",
+          ...env,
+        },
+      }),
   };
 }
 
-const direct = [
-  "scripts/run-oxlint.mjs",
-  "--tsconfig",
-  "config/tsconfig/oxlint.core.json",
-  "src/state/consumer.ts",
-];
+const direct = ["scripts/run-oxlint.mjs", "--tsconfig", coreConfig, consumer];
 const striped = [
   "--import",
   "./scripts/tsx.mjs",
@@ -93,7 +78,7 @@ const striped = [
   "--split-core",
   "--core-stripe=1/5",
   "--files-json",
-  '["src/state/consumer.ts"]',
+  JSON.stringify([consumer]),
   "--threads=1",
 ];
 
@@ -111,27 +96,23 @@ describe("typed lint Kysely prerequisites", () => {
       const fixture = createLintFixture();
       const agentProjection = ".artifacts/kysely/openclaw-agent-db.generated.ts";
       if (sparse) {
-        fs.unlinkSync(path.join(fixture.root, "src/state/openclaw-agent-schema.sql"));
+        fs.unlinkSync(fixture.file("src/state/openclaw-agent-schema.sql"));
         fixture.write(agentProjection, "export interface Stale {}\n");
       }
       if (invalid) {
         fixture.write("src/state/openclaw-state-schema.sql", "not valid SQL");
-        fixture.write("src/state/consumer.ts", "export const valid = true;\n");
+        fixture.write(consumer, "export const valid = true;\n");
       }
-      expect(fs.existsSync(fixture.output)).toBe(false);
       const result = fixture.run(args);
+      expect(result.status, result.stdout + result.stderr).toBe(invalid ? 1 : 0);
       if (invalid) {
-        expect(result.status, result.stdout + result.stderr).toBe(1);
         expect(result.stdout + result.stderr).toContain("syntax error");
-        expect(fs.existsSync(path.join(fixture.root, ".artifacts/kysely"))).toBe(false);
+        expect(fixture.exists(".artifacts/kysely")).toBe(false);
         return;
       }
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(fs.readFileSync(fixture.output, "utf8")).toContain("title: string;");
-      expect(fs.existsSync(path.join(fixture.root, agentProjection))).toBe(!sparse);
-      expect(fs.existsSync(path.join(fixture.root, ".artifacts/extension-package-boundary"))).toBe(
-        false,
-      );
+      expect(fs.readFileSync(fixture.file(output), "utf8")).toContain("title: string;");
+      expect(fixture.exists(agentProjection)).toBe(!sparse);
+      expect(fixture.exists(".artifacts/extension-package-boundary")).toBe(false);
     },
   );
 
@@ -147,7 +128,7 @@ describe("typed lint Kysely prerequisites", () => {
     ]) {
       const result = fixture.run(args);
       expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(fs.existsSync(fixture.output)).toBe(false);
+      expect(fixture.exists(output)).toBe(false);
     }
   });
 });

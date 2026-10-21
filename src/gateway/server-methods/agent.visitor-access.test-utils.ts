@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasAgentRunContextExecutionOwner } from "../../infra/agent-run-registry.js";
 import * as mutationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { captureResidentUserProfileAccess } from "../../state/user-profile-list.js";
@@ -304,7 +305,7 @@ describe("visitor access admitted caller", () => {
           try {
             await expectDefined(proof, "admitted visitor proof missing");
           } finally {
-            await waitForAssertion(() => expect(context.chatAbortControllers.size).toBe(0));
+            await waitForAssertion(() => expect(rpcSourceTesting.size).toBe(0));
           }
           expect(mocks.agentCommand).toHaveBeenCalledOnce();
           const saved = await grants.lookup(EMAIL);
@@ -453,26 +454,6 @@ describe("visitor access admitted caller", () => {
       });
       try {
         const grants = createVisitorGrantStore(state.env);
-        expect(provider.emails()).toEqual([active.email, retainedGuest.email, unmanaged]);
-        expect(provider.writes).toEqual(["PUT"]);
-        const qualified = expectDefined(
-          await grants.lookup(active.email),
-          "qualified grant missing",
-        );
-        const grantId = z.uuid().parse(qualified.grantId);
-        const qualifiedGuest = expectDefined(
-          await grants.lookup(retainedGuest.email),
-          "retained guest grant missing",
-        );
-        const guestGrantId = z.uuid().parse(qualifiedGuest.grantId);
-        const reopenedGrants = await grants.entries();
-        expect(reopenedGrants.map(({ key, value }) => ({ key, value }))).toEqual(
-          expect.arrayContaining([
-            { key: active.email, value: { ...active, grantId } },
-            { key: retainedGuest.email, value: { ...retainedGuest, grantId: guestGrantId } },
-          ]),
-        );
-        expect(reopenedGrants).toHaveLength(2);
         expect(() =>
           resolveGatewayOperatorAccessAuthority(unassigned.id, restrictedConfig),
         ).toThrow(GatewayOperatorAccessDeniedError);
@@ -532,7 +513,28 @@ describe("visitor access admitted caller", () => {
             }
             return { text: block.text, details: isRecord(output) ? output.details : undefined };
           };
+          // Listing joins the service queue after the background startup sweep.
           const { text: listing, details: listedDetails } = await invoke("visitor_list");
+          expect(provider.emails()).toEqual([active.email, retainedGuest.email, unmanaged]);
+          expect(provider.writes).toEqual(["PUT"]);
+          const qualified = expectDefined(
+            await grants.lookup(active.email),
+            "qualified grant missing",
+          );
+          const grantId = z.uuid().parse(qualified.grantId);
+          const qualifiedGuest = expectDefined(
+            await grants.lookup(retainedGuest.email),
+            "retained guest grant missing",
+          );
+          const guestGrantId = z.uuid().parse(qualifiedGuest.grantId);
+          const reopenedGrants = await grants.entries();
+          expect(reopenedGrants.map(({ key, value }) => ({ key, value }))).toEqual(
+            expect.arrayContaining([
+              { key: active.email, value: { ...active, grantId } },
+              { key: retainedGuest.email, value: { ...retainedGuest, grantId: guestGrantId } },
+            ]),
+          );
+          expect(reopenedGrants).toHaveLength(2);
           const listedGrants = z
             .object({
               grants: z.array(

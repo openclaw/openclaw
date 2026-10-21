@@ -1,10 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   encodeMemoryEmbedding,
   type MemoryChunk,
   type MemoryEntryProvenance,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -16,7 +17,12 @@ export type IndexedMemoryChunk = MemoryChunk & {
   projectKey: string | null;
 };
 
-export type MemoryChunkWrite = { id: string; chunk: IndexedMemoryChunk; embedding?: number[] };
+export type MemoryChunkWrite = {
+  id: string;
+  chunk: IndexedMemoryChunk;
+  embedding?: number[];
+  context: { path: string; source: MemorySource; model: string; now: number };
+};
 type ChunkDatabase = {
   memory_index_chunks: {
     id: string;
@@ -46,34 +52,41 @@ type ChunkDatabase = {
 };
 
 export function writeMemoryChunks(
-  database: DatabaseSync,
-  context: { path: string; source: MemorySource; model: string; now: number },
+  database: EngineConnection,
   rows: readonly MemoryChunkWrite[],
 ): void {
   if (rows.length === 0) {
     return;
   }
   const db = getNodeSqliteKysely<ChunkDatabase>(database);
-  const written = rows.flatMap((row) =>
-    row.embedding === undefined ? [] : [{ ...row, embedding: row.embedding }],
-  );
-  if (written.length > 0) {
+  // PostgreSQL cannot update the same conflict key twice in one statement.
+  // Preserve SQLite's last-write behavior separately for content and metadata.
+  const written = new Map<string, MemoryChunkWrite & { embedding: number[] }>();
+  const metadata = new Map<string, MemoryChunkWrite>();
+  for (const row of rows) {
+    metadata.set(row.id, row);
+    if (row.embedding !== undefined) {
+      written.set(row.id, { ...row, embedding: row.embedding });
+    }
+  }
+  const latestRows = [...metadata.values()];
+  if (written.size > 0) {
     executeSqliteQuerySync(
       database,
       db
         .insertInto("memory_index_chunks")
         .values(
-          written.map((row) => ({
+          [...written.values()].map((row) => ({
             id: row.id,
-            path: context.path,
-            source: context.source,
+            path: row.context.path,
+            source: row.context.source,
             start_line: row.chunk.startLine,
             end_line: row.chunk.endLine,
             hash: row.chunk.hash,
-            model: context.model,
+            model: row.context.model,
             text: row.chunk.text,
             embedding: encodeMemoryEmbedding(row.embedding),
-            updated_at: context.now,
+            updated_at: row.context.now,
           })),
         )
         .onConflict((conflict) =>
@@ -92,7 +105,7 @@ export function writeMemoryChunks(
     db
       .insertInto("memory_index_chunk_recall_metadata")
       .values(
-        rows.map((row) => ({
+        latestRows.map((row) => ({
           chunk_id: row.id,
           importance: row.chunk.importance,
           triggers: row.chunk.triggers,
@@ -112,11 +125,11 @@ export function writeMemoryChunks(
     db
       .insertInto("memory_index_chunk_provenance")
       .values(
-        rows.map((row) => {
+        latestRows.map((row) => {
           const provenance = row.chunk.provenance ?? {
             originClass: "untrusted" as const,
             sessionKind: "unknown" as const,
-            observedAt: context.now,
+            observedAt: row.context.now,
           };
           return {
             chunk_id: row.id,
@@ -139,7 +152,14 @@ export function writeMemoryChunks(
           .where((eb) =>
             eb.or(
               (["origin_class", "session_kind", "observed_at", "supersedes_key"] as const).map(
-                (column) => eb(column, "is not", eb.ref(`excluded.${column}`)),
+                (column) =>
+                  eb(
+                    isPostgresSqlConnection(database)
+                      ? `memory_index_chunk_provenance.${column}`
+                      : column,
+                    isPostgresSqlConnection(database) ? "is distinct from" : "is not",
+                    eb.ref(`excluded.${column}`),
+                  ),
               ),
             ),
           ),

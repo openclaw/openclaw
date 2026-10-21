@@ -14,6 +14,7 @@ import {
   resolvePersistedAuthProfileOwnerAgentDirAsync,
 } from "../../agents/auth-profiles/store-runtime.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -127,7 +128,7 @@ export function removeModelAuthProfileSelections(
       defaults.model = stripModel(defaults.model, removed.shared);
     }
     if (defaults.utilityModel !== undefined) {
-      defaults.utilityModel = strip(defaults.utilityModel, removed.shared);
+      defaults.utilityModel = stripModel(defaults.utilityModel, removed.shared);
     }
   }
   for (const agentId of listAgentIds(cfg)) {
@@ -141,38 +142,45 @@ export function removeModelAuthProfileSelections(
       continue;
     }
     const ids = removed.agents.get(agentId);
-    const originalModel = entry.model;
-    const own = toAgentModelListLike(originalModel);
-    const inherited = toAgentModelListLike(beforeDefaults?.model);
-    const nextInherited = toAgentModelListLike(defaults?.model);
-    const model = toAgentModelListLike(stripModel(originalModel, ids)) ?? {};
-    // A shared default can name an independent local credential in another agent.
-    // Preserve that effective choice when the shared pin is removed.
-    if (own?.primary === undefined && inherited?.primary !== undefined) {
-      const primary = strip(inherited.primary, ids);
-      if (primary !== nextInherited?.primary) {
-        model.primary = primary;
+    const resolveFallbacks = (config: OpenClawConfig, key: "model" | "utilityModel") => {
+      if (key === "model") {
+        return (
+          resolveAgentModelFallbacksOverride(config, agentId) ??
+          resolveAgentModelFallbackValues(config.agents?.defaults?.model)
+        );
       }
-    }
-    if (Object.keys(model).length > 0) {
-      entry.model =
-        typeof originalModel === "string" && model.fallbacks === undefined ? model.primary : model;
-    }
-    // An explicit primary disables inherited fallbacks. Materializing one must
-    // retain the prior effective fallback list, not silently change routing.
-    const fallbacks = (
-      resolveAgentModelFallbacksOverride(cfg, agentId) ??
-      resolveAgentModelFallbackValues(beforeDefaults?.model)
-    ).map((ref) => strip(ref, ids)!);
-    const nextFallbacks =
-      resolveAgentModelFallbacksOverride(next, agentId) ??
-      resolveAgentModelFallbackValues(defaults?.model);
-    if (!isDeepStrictEqual(fallbacks, nextFallbacks)) {
-      entry.model = { ...toAgentModelListLike(entry.model), fallbacks };
-    }
-    const utility = strip(entry.utilityModel ?? beforeDefaults?.utilityModel, ids);
-    if (entry.utilityModel !== undefined || utility !== defaults?.utilityModel) {
-      entry.utilityModel = utility;
+      const utility = readUtilityModelSetting(config, agentId);
+      return utility.kind === "disabled" ? [] : utility.fallbacks;
+    };
+    for (const key of ["model", "utilityModel"] as const) {
+      const originalModel = entry[key];
+      if (key === "utilityModel" && typeof originalModel === "string" && !originalModel.trim()) {
+        continue;
+      }
+      const own = toAgentModelListLike(originalModel);
+      const inherited = toAgentModelListLike(beforeDefaults?.[key]);
+      const nextInherited = toAgentModelListLike(defaults?.[key]);
+      const model = toAgentModelListLike(stripModel(originalModel, ids)) ?? {};
+      // A shared default can name an independent local credential in another agent.
+      // Preserve that effective choice when the shared pin is removed.
+      if (own?.primary === undefined && inherited?.primary !== undefined) {
+        const primary = strip(inherited.primary, ids);
+        if (primary !== nextInherited?.primary) {
+          model.primary = primary;
+        }
+      }
+      if (Object.keys(model).length > 0) {
+        const source =
+          originalModel ?? (key === "utilityModel" ? beforeDefaults?.utilityModel : undefined);
+        entry[key] =
+          typeof source === "string" && model.fallbacks === undefined ? model.primary : model;
+      }
+      // An explicit primary disables inherited fallbacks. Materializing one must
+      // retain the prior effective fallback list, not silently change routing.
+      const fallbacks = resolveFallbacks(cfg, key).map((ref) => strip(ref, ids)!);
+      if (!isDeepStrictEqual(fallbacks, resolveFallbacks(next, key))) {
+        entry[key] = { ...toAgentModelListLike(entry[key]), fallbacks };
+      }
     }
     if (implicitAgent && Object.keys(entry).length === 0 && next.agents) {
       delete next.agents.entries;

@@ -36,12 +36,11 @@ declare global {
 /** Observe accepted application events before the connect reply can arrive. */
 export async function installChatLoadingReadinessObserver(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const sample: Window["chatLoadingReadiness"] = {
+    const sample: Window["chatLoadingReadiness"] = (window.chatLoadingReadiness = {
       connects: 0,
       observerAttached: false,
       startups: [],
-    };
-    window.chatLoadingReadiness = sample;
+    });
     const NativeWebSocket = WebSocket;
     const stops: Array<() => void> = [];
     const cleanup = () => {
@@ -58,8 +57,7 @@ export async function installChatLoadingReadinessObserver(page: Page): Promise<v
       ) {
         return;
       }
-      // The root announces its provider before startup sends connect. A temporary
-      // descendant can request that context without waiting for a rendered shell.
+      // Request the root's context before connect, without waiting for the shell.
       const consumer = document.createElement("span");
       provider.contextTarget.append(consumer);
       try {
@@ -78,7 +76,6 @@ export async function installChatLoadingReadinessObserver(page: Page): Promise<v
       }
     };
     window.addEventListener("context-provider", receiveContext);
-    const context = () => application;
     const captureSource = (owner: ApplicationContext, socket: WebSocket) => {
       const { gateway, sessions } = owner;
       const { client, hello } = gateway.snapshot;
@@ -88,7 +85,7 @@ export async function installChatLoadingReadinessObserver(page: Page): Promise<v
         !retired &&
         client !== null &&
         hello !== null &&
-        context() === owner &&
+        application === owner &&
         owner.sessions === sessions &&
         !owner.lifecycleAbortSignal?.aborted &&
         gateway.snapshot.phase === "connected" &&
@@ -114,7 +111,7 @@ export async function installChatLoadingReadinessObserver(page: Page): Promise<v
           return super.send(data);
         }
         const frame = JSON.parse(data) as RequestFrame;
-        const owner = context();
+        const owner = application;
         if (frame.method === "connect") {
           cleanup();
           resolution = undefined;
@@ -153,15 +150,11 @@ export async function installChatLoadingReadinessObserver(page: Page): Promise<v
             sentAtMs: Date.now(),
             resolutionRequestId: resolution?.id,
             resolutionSourceCurrent: resolution?.current(this) ?? false,
-            ...(prepared
-              ? {
-                  prepared: {
-                    ...prepared.identity,
-                    sourceCurrent:
-                      prepared.current(this) && location.pathname === prepared.identity.pathname,
-                  },
-                }
-              : {}),
+            prepared: prepared && {
+              ...prepared.identity,
+              sourceCurrent:
+                prepared.current(this) && location.pathname === prepared.identity.pathname,
+            },
           });
         }
         return super.send(data);

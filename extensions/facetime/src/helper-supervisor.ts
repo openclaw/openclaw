@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { DIAL_BUNDLES } from "./helper-results.js";
 
 type FaceTimeHelperTarget = "FaceTime" | "Phone";
 
@@ -28,12 +29,8 @@ type HelperSupervisorParams = {
 };
 
 const TARGET_BUNDLES: Record<FaceTimeHelperTarget, ReadonlySet<string>> = {
-  FaceTime: new Set(["com.apple.FaceTime", "com.apple.FaceTime.FTConversationService"]),
+  FaceTime: DIAL_BUNDLES,
   Phone: new Set(["com.apple.mobilephone", "com.apple.TelephonyUtilities"]),
-};
-const TARGET_APP_PATHS: Record<FaceTimeHelperTarget, string> = {
-  FaceTime: "/System/Applications/FaceTime.app",
-  Phone: "/System/Applications/Phone.app",
 };
 const FACETIME_HELPER_TARGETS = ["FaceTime", "Phone"] as const;
 
@@ -52,20 +49,20 @@ export class FaceTimeHelperSupervisor {
 
   constructor(private readonly params: HelperSupervisorParams) {
     this.#states = new Map(
-      FACETIME_HELPER_TARGETS.filter((target) => existsSync(TARGET_APP_PATHS[target])).map(
-        (target) => [
+      FACETIME_HELPER_TARGETS.filter((target) =>
+        existsSync(`/System/Applications/${target}.app`),
+      ).map((target) => [
+        target,
+        {
           target,
-          {
-            target,
-            connected: false,
-            attempts: 0,
-            injecting: false,
-            queued: false,
-            retryScheduled: false,
-            stale: false,
-          },
-        ],
-      ),
+          connected: false,
+          attempts: 0,
+          injecting: false,
+          queued: false,
+          retryScheduled: false,
+          stale: false,
+        },
+      ]),
     );
   }
 

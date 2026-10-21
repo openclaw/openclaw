@@ -380,7 +380,7 @@ describe("Gateway Active Memory", () => {
             { timeoutMs: 35_000, signal },
           );
           signal.throwIfAborted();
-          expect(completed.status).toBe("ok");
+          expect(completed).toMatchObject({ status: "ok" });
           phase = "checking recall and main reply";
           const entry = loadSessionEntryReadOnly({
             agentId: "main",
@@ -397,7 +397,9 @@ describe("Gateway Active Memory", () => {
           expect(memoryResults).toEqual(
             expect.arrayContaining([expect.stringContaining(memoryFact)]),
           );
-          expect(recallRequests).toBeGreaterThan(1);
+          // Tool call, empty post-tool reply, then both tool-free settled-turn
+          // finalization attempts. Fewer requests mean the follow-up never ran.
+          expect(recallRequests).toBe(4);
           expect(diagnostics.statusLines?.join("\n")).toContain("Active Memory: status=failed");
           expect(mainRequests).toHaveLength(1);
           expect(mainRequests[0]).not.toContain("<active_memory_plugin>");

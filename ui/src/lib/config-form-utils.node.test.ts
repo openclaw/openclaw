@@ -18,6 +18,7 @@ describe("hintForPath", () => {
       advanced: true,
       order: 7,
     };
+    const path = ["plugins", "entries", "demo", "enabled"];
     const direct = { label: "Specific plugin", sensitive: true };
     const hints = {
       "plugins.entries.*.enabled": wildcard,
@@ -31,34 +32,30 @@ describe("hintForPath", () => {
     });
     await i18n.setLocale("tr");
     try {
-      expect(localizedHintForPath(["plugins", "entries", "demo", "enabled"], hints)).toEqual({
+      expect(localizedHintForPath(path, hints)).toEqual({
         ...wildcard,
         label: "Eklenti etkin",
       });
       expect(localizedHintForPath(["plugins", "entries", "specific", "enabled"], hints)).toEqual(
         direct,
       );
-      expect(hintForPath(["plugins", "entries", "demo", "enabled"], hints)).toBe(wildcard);
+      expect(hintForPath(path, hints)).toBe(wildcard);
       expect(localizedHintForPath(["missing"], hints)).toBeUndefined();
       expect(
-        localizedHintForPath(["plugins", "entries", "demo", "enabled"], {
+        localizedHintForPath(path, {
           "plugins.entries.*.enabled": { label: "Enable this plugin now" },
         })?.label,
       ).toBe("Enable this plugin now");
     } finally {
       await i18n.setLocale("en");
     }
-    expect(localizedHintForPath(["plugins", "entries", "demo", "enabled"], hints)).toEqual(
-      wildcard,
-    );
+    expect(localizedHintForPath(path, hints)).toEqual(wildcard);
   });
 
   it("does not rescan wildcard hints for each path lookup", () => {
     let catalogScans = 0;
     const hints = new Proxy(
-      {
-        "plugins.entries.*.enabled": { label: "Plugin Enabled" },
-      },
+      { "plugins.entries.*.enabled": { label: "Plugin Enabled" } },
       {
         ownKeys(target) {
           catalogScans += 1;
@@ -125,26 +122,12 @@ describe("pruneEmptyConfigForm", () => {
   });
 
   it("does not reindex arrays containing redacted sentinels", () => {
-    const form = {
-      channels: {
-        slack: {
-          tokens: ["__OPENCLAW_REDACTED__", "second-token"],
-        },
-      },
-    };
-    const originalForm = structuredClone(form);
-
-    expect(pruneEmptyConfigForm(form, originalForm)).toEqual(form);
+    const form = { tokens: ["__OPENCLAW_REDACTED__", "second-token"] };
+    expect(pruneEmptyConfigForm(form, structuredClone(form))).toEqual(form);
   });
 
   it("leaves the form unchanged without an authored original", () => {
-    const form = {
-      gateway: {
-        remote: {
-          token: "__OPENCLAW_REDACTED__",
-        },
-      },
-    };
+    const form = { token: "__OPENCLAW_REDACTED__" };
     expect(pruneEmptyConfigForm(form, null)).toBe(form);
   });
 });

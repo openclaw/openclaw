@@ -3,6 +3,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { expect, vi } from "vitest";
 import plugin from "../../index.js";
 import * as boundedTurn from "./bounded-turn.js";
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   buildEmptyToolTelemetry,
   createParams,
@@ -13,17 +14,39 @@ import {
 import { CodexSettledTurnContext } from "./settled-turn-context.js";
 import { projectSettledCodexMessages } from "./settled-turn-projection.js";
 import { createCodexRuntimePlanFixture } from "./thread-lifecycle.test-fixtures.js";
+import {
+  attachCodexMirrorAttestation,
+  fingerprintCodexMirrorSourceMessage,
+  isMirroredAgentMessage,
+} from "./transcript-mirror-attestation.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 
 export { registerCodexEventProjectorTestLifecycle } from "./event-projector.test-harness.js";
 
 export async function createCodexSettledFinalizerTestFixture(
-  options: { failedTool?: boolean } = {},
+  options: { failedTool?: boolean; terminalStatus?: "failed" | "completed" } = {},
 ) {
   const runBounded = vi
     .spyOn(boundedTurn, "runBoundedCodexAppServerTurn")
     .mockImplementation(vi.fn<typeof boundedTurn.runBoundedCodexAppServerTurn>());
-  const mirror = vi.spyOn(codexTranscriptMirrorRuntime, "mirror");
+  const mirror = vi
+    .spyOn(codexTranscriptMirrorRuntime, "mirror")
+    .mockImplementation(async (input) => ({
+      assistantMirrorIdentitiesOwned: input.terminalAssistantOwner
+        ? [input.terminalAssistantOwner.mirrorIdentity]
+        : [],
+      anchorsByMirrorIdentity: new Map(),
+      messagesPresent: input.messages
+        .filter(isMirroredAgentMessage)
+        .map((message) =>
+          attachCodexMirrorAttestation(
+            Object.assign({}, message, { idempotencyKey: `${input.idempotencyScope}:assistant` }),
+            fingerprintCodexMirrorSourceMessage(message),
+          ),
+        )
+        .filter(isMirroredAgentMessage),
+      userMessageReceipts: [],
+    }));
   const params = await createParams();
   params.runId = "run-settled";
   params.sessionId = "session-settled";
@@ -44,49 +67,43 @@ export async function createCodexSettledFinalizerTestFixture(
   params.authProfileStore = { version: 1, profiles: {} };
   params.timeoutMs = 60_000;
   const projector = await createProjector(params);
-  const command = {
-    type: "commandExecution",
+  const emit = (...args: Parameters<typeof forCurrentTurn>) =>
+    projector.handleNotification(forCurrentTurn(...args));
+  const completed = options.terminalStatus === "completed";
+  const { durationMs, ...command } = createNativeCommandItem({
     id: "command-settled",
     command: "printf 'settled'",
-    cwd: "/workspace",
-    processId: null,
-    source: "agent",
-    commandActions: [],
-  };
-  await projector.handleNotification(
-    forCurrentTurn("item/started", {
-      item: { ...command, status: "inProgress", aggregatedOutput: null, exitCode: null },
-    }),
-  );
-  await projector.handleNotification(
-    forCurrentTurn("item/completed", {
-      item: {
-        ...command,
-        status: options.failedTool ? "failed" : "completed",
-        aggregatedOutput: options.failedTool ? "command failed" : "settled",
-        exitCode: options.failedTool ? 1 : 0,
-        durationMs: 1,
-      },
-    }),
-  );
-  await projector.handleNotification(
-    forCurrentTurn("turn/completed", {
-      turn: {
-        id: TURN_ID,
-        status: "failed",
-        items: [],
-        error: { message: "Provider overloaded", codexErrorInfo: "serverOverloaded" },
-      },
-    }),
-  );
-  expect(projector.settledTurnFailureFinalizationAllowed).toBe(true);
+    durationMs: 1,
+  });
+  await emit("item/started", {
+    item: { ...command, status: "inProgress", aggregatedOutput: null, exitCode: null },
+  });
+  await emit("item/completed", {
+    item: {
+      ...command,
+      status: options.failedTool ? "failed" : "completed",
+      aggregatedOutput: options.failedTool ? "command failed" : "settled",
+      exitCode: options.failedTool ? 1 : 0,
+      durationMs,
+    },
+  });
+  await emit("turn/completed", {
+    turn: {
+      id: TURN_ID,
+      status: options.terminalStatus ?? "failed",
+      items: [],
+      error: completed
+        ? null
+        : { message: "Provider overloaded", codexErrorInfo: "serverOverloaded" },
+    },
+  });
+  expect(projector.settledTurnFailureFinalizationAllowed).toBe(!completed);
   const attempt = projector.buildResult(buildEmptyToolTelemetry());
   await projector.closeProjection();
-  const context = new CodexSettledTurnContext(
+  attempt.settledTurnFinalizationContext = new CodexSettledTurnContext(
     projectSettledCodexMessages(attempt.messagesSnapshot),
     { model: params.modelId, modelProvider: "openai" },
   );
-  attempt.settledTurnFinalizationContext = context;
   const registerAgentHarness =
     vi.fn<ReturnType<typeof createTestPluginApi>["registerAgentHarness"]>();
   plugin.register(

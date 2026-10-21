@@ -22,7 +22,6 @@ type OcPathMatch =
   | {
       readonly kind: "item-field";
       readonly node: AstItem;
-      readonly block: AstBlock;
       /** The kv.value string, surfaced for convenience. */
       readonly value: string;
     };
@@ -91,5 +90,5 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath): OcPathMatch | null {
   if (item.kv.key.toLowerCase() !== path.field.toLowerCase()) {
     return null;
   }
-  return { kind: "item-field", node: item, block, value: item.kv.value };
+  return { kind: "item-field", node: item, value: item.kv.value };
 }

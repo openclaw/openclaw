@@ -150,15 +150,36 @@ export function registerOriginalCaptureTests({
         }));
       }
       let admittedRun: shared.UpdateCommandOptions["run"];
-      let admittedRecord: ReturnType<typeof getUpdateRun> | undefined;
+      let preparedRecord: ReturnType<typeof getUpdateRun> | undefined;
+      let preparationCount = 0;
       if (releaseDenied) {
+        const complete = commandRun.completeUpdateCommandRun;
+        vi.spyOn(commandRun, "completeUpdateCommandRun").mockImplementation((...args) => {
+          const run = args[1];
+          if (!admittedRun || run !== admittedRun) {
+            return complete(...args);
+          }
+          assert(run.executorFence);
+          run.executorFence.assertCurrent();
+          const result = complete(...args);
+          preparedRecord = getUpdateRun(run.runId, { env: run.env });
+          preparationCount += 1;
+          expect(preparedRecord).toMatchObject({
+            runId: run.runId,
+            phase: "finished",
+            status: "failed",
+            reason: "unsupported-package-target",
+            finishedAtMs: expect.any(Number),
+          });
+          return result;
+        });
         const prepareTriage = commandTriage.prepareUpdateCommandFailureTriage;
         vi.spyOn(commandTriage, "prepareUpdateCommandFailureTriage").mockImplementation(
           async (...args) => {
             const handleFailure = await prepareTriage(...args);
             admittedRun = args[0].run;
             assert(admittedRun);
-            admittedRecord = getUpdateRun(admittedRun.runId, { env: admittedRun.env });
+            const admittedRecord = getUpdateRun(admittedRun.runId, { env: admittedRun.env });
             expect(admittedRecord).toMatchObject({ status: "running", finishedAtMs: null });
             expect(admittedRecord?.phase).not.toBe("finished");
             const db = new DatabaseSync(
@@ -267,7 +288,9 @@ export function registerOriginalCaptureTests({
             "`--tag main` cannot update a package install",
           );
           expect(result.failedStep.stderrTail).toContain("fixture final lease delete denied");
-          expect(getUpdateRun(admittedRun.runId, { env: admittedRun.env })).toEqual(admittedRecord);
+          expect(preparationCount).toBe(1);
+          assert(preparedRecord);
+          expect(getUpdateRun(admittedRun.runId, { env: admittedRun.env })).toEqual(preparedRecord);
           expect(createManagedHandoffLeaseStore().read(captureRoot)).toMatchObject({
             kind: "current",
           });

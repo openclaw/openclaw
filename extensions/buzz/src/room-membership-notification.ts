@@ -48,7 +48,7 @@ export function startBuzzRoomMembershipNotifications(params: {
   configuredRoomIds: string[];
   since: number;
   signal?: AbortSignal;
-  onNotification?: (notification: BuzzRoomMembershipNotification) => boolean;
+  onNotification: (notification: BuzzRoomMembershipNotification) => boolean;
   onFatalError: (error: Error) => void;
 }): void {
   const configuredRoomIds = new Set(params.configuredRoomIds.map(parseBuzzTarget));
@@ -72,7 +72,7 @@ export function startBuzzRoomMembershipNotifications(params: {
         if (
           notification &&
           configuredRoomIds.has(notification.roomId) &&
-          !params.onNotification?.(notification)
+          !params.onNotification(notification)
         ) {
           params.onFatalError(
             new Error(

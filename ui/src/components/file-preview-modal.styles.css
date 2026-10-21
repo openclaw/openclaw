@@ -428,6 +428,8 @@ openclaw-file-preview-modal {
 
   .foot {
     display: flex;
+    flex-shrink: 0;
+    flex-wrap: wrap;
     align-items: center;
     gap: 18px;
     padding: 12px 20px;
@@ -453,8 +455,13 @@ openclaw-file-preview-modal {
     color: var(--text);
   }
 
-  .spacer {
-    flex: 1;
+  .foot > openclaw-modal-actions {
+    margin-inline-start: auto;
+  }
+
+  .foot .button {
+    height: auto;
+    min-height: 36px;
   }
 
   .button {
@@ -512,22 +519,5 @@ openclaw-file-preview-modal {
       gap: 8px;
       padding: 10px 12px;
     }
-  }
-
-  .shortcut-kbd:where(:not([hidden])) {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    vertical-align: middle;
-  }
-  .shortcut-kbd > span + span {
-    margin-inline-start: 0.15em;
-  }
-  .kbd__text {
-    text-box: trim-both cap alphabetic;
-  }
-  .shortcut-kbd::before {
-    content: "";
-    height: 1lh;
   }
 }

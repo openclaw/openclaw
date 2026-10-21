@@ -15,7 +15,16 @@ import type { RollupPayload } from "../../scripts/lib/watch-pr-ci-rollup.mjs";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createPrivateHandoffStoreFixture } from "./pr-private-handoff.test-support.js";
+import { validReview } from "./pr-review-artifact-fixture.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
+
+type FixtureEvent = {
+  kind: string;
+  sha?: string;
+  shared?: string;
+  args?: string[];
+  localObject?: boolean;
+};
 
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
 const fixtureTemplates = new Map<boolean, ReturnType<typeof createMainRefreshTemplate>>();
@@ -30,7 +39,6 @@ function createFixtureGit(root: string) {
   const handoff = createPrivateHandoffStoreFixture(home);
   const env: NodeJS.ProcessEnv = {
     ...handoff.env,
-    PATH: handoff.env.PATH,
     HOME: home,
     TMPDIR: root,
     GIT_CONFIG_GLOBAL: "/dev/null",
@@ -42,7 +50,17 @@ function createFixtureGit(root: string) {
     GIT_TERMINAL_PROMPT: "0",
     XDG_CONFIG_HOME: join(home, ".config"),
   };
-  const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+  const configuredGit = spawnSync("which", ["git"], { env, encoding: "utf8" }).stdout.trim();
+  const backendDirectory = join(root, "git-backend");
+  mkdirSync(backendDirectory);
+  const realGit = join(backendDirectory, "native-git");
+  // A configured Git wrapper may resolve its backend through PATH again.
+  // Retain the private handoff's Node shim but exclude later Git instrumentation.
+  writeFileSync(
+    realGit,
+    `#!/bin/sh\nexport PATH=${shellQuote(handoff.env.PATH)}\nexec ${shellQuote(configuredGit)} "$@"\n`,
+    { flag: "wx", mode: 0o700 },
+  );
   function git(cwd: string, ...args: string[]) {
     const result = spawnSync(realGit, args, { cwd, env, encoding: "utf8" });
     if (result.status !== 0) {
@@ -75,6 +93,10 @@ function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean
   writeFileSync(join(canonical, ".gitignore"), ".worktrees/\n.local/\nnode_modules\n");
   mkdirSync(join(canonical, "src"), { recursive: true });
   writeFileSync(join(canonical, "src", "subject.ts"), "export const subject = 'base';\n");
+  writeFileSync(
+    join(canonical, "src", "subject.test.ts"),
+    "// Synthetic package-command target.\n",
+  );
   git(canonical, "add", ".");
   git(canonical, "commit", "-qm", "test: trusted native wrapper");
   const main = git(canonical, "rev-parse", "HEAD");
@@ -216,37 +238,20 @@ export function createMainRefreshFixture(
         ..."ABCDEFGHIJ".split("").map((letter) => `${letter}) Synthetic evidence.`),
       ].join("\n"),
     );
-    writeFileSync(
-      join(local, "review.json"),
-      JSON.stringify({
-        pr: { number: 42, headSha: head },
-        recommendation: "READY FOR /prepare-pr",
-        findings: [],
-        nitSweep: { performed: true, status: "none", summary: "No optional nits." },
-        behavioralSweep: {
-          performed: true,
-          status: "pass",
-          summary: "Synthetic tooling fixture.",
-          silentDropRisk: "none",
-          branches: [
-            {
-              path: "src/subject.ts",
-              decision: "synthetic change",
-              outcome: "reviewed fixture value",
-            },
-          ],
-        },
-        issueValidation: {
-          performed: true,
-          source: "pr_body",
-          status: "valid",
-          summary: "Synthetic fixture.",
-        },
-        tests: { ran: ["synthetic local proof"], gaps: [], result: "pass" },
-        docs: "not_applicable",
-        changelog: "not_required",
-      }),
-    );
+    const review = {
+      ...validReview(head),
+      recommendation: "READY FOR /prepare-pr",
+      tests: { ran: ["synthetic local proof"], gaps: [], result: "pass" },
+    };
+    Object.assign(review.behavioralSweep, {
+      status: "pass",
+      summary: "Synthetic tooling fixture.",
+      branches: [
+        { path: "src/subject.ts", decision: "synthetic change", outcome: "reviewed fixture value" },
+      ],
+    });
+    Object.assign(review.issueValidation, { status: "valid", summary: "Synthetic fixture." });
+    writeFileSync(join(local, "review.json"), JSON.stringify(review));
   }
   const controlFile = join(root, "control.json");
   const eventsFile = join(root, "events.jsonl");
@@ -425,6 +430,14 @@ exec ${shellQuote(realGit)} "$@"
     prelude +
       `
 event({ kind: 'gh', args });
+function commitAuthor(oid, linked = false) {
+  const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', oid + '^{commit}']).split('\\n');
+  return { commit: { author: { name, email } }, author: linked ? { ...control.metadata.author, type: 'User' } : null };
+}
+function pick(source, keys) {
+  return Object.fromEntries(keys.map(key => [key, source[key]]));
+}
+
 const inputPath = args.find(arg => arg.startsWith('--input='))?.slice('--input='.length)
   ?? (args.includes('--input') ? args[args.indexOf('--input') + 1] : undefined);
 let inputPayload;
@@ -571,23 +584,18 @@ if (args[0] === 'pr' && args[1] === 'view') {
       html_url: 'https://github.com/fixture/repo',
       permissions: { admin: true },
     };
-  } else if (endpoint === 'repos/fixture/repo/branches/main/protection') {
-    // Hosted CI fixtures retain GraphQL through explicit classic branch protection.
-    value = {};
+  } else if (endpoint === 'repos/fixture/repo/rules/branches/main?per_page=100') {
+    // Signature rules retain the supported GraphQL fallback for these lifecycle cases.
+    value = [[{ type: 'required_signatures' }]];
   } else if (endpoint === 'repos/fixture/repo/git/ref/heads/main') {
     value = { ref: 'refs/heads/main', object: { type: 'commit',
       sha: runGit(['-C', origin, 'rev-parse', 'refs/heads/main']) } };
   } else if (endpoint === 'repos/fixture/repo/commits/${head}') {
-    const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', ${JSON.stringify(head)}]).split('\\n');
-    value = { commit: { author: { name, email } }, author: { ...control.metadata.author, type: 'User' } };
+    value = commitAuthor(${JSON.stringify(head)}, true);
   } else if (endpoint.startsWith('repos/fixture/repo/commits?')) {
     const query = new URL(endpoint, 'https://github.com').searchParams;
     const commits = runGit(['-C', origin, 'rev-list', '--max-count=' + query.get('per_page'), query.get('sha')]).split('\\n');
-    value = commits.map(oid => {
-      const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', oid + '^{commit}']).split('\\n');
-      return { sha: oid, commit: { author: { name, email } },
-        author: oid === ${JSON.stringify(head)} ? { ...control.metadata.author, type: 'User' } : null };
-    });
+    value = commits.map(oid => ({ sha: oid, ...commitAuthor(oid, oid === ${JSON.stringify(head)}) }));
   } else if (endpoint === 'users/fixture') {
     value = { id: 123 };
   } else if (endpoint?.includes('/commits/') && endpoint.includes('/check-runs?')) {
@@ -595,21 +603,13 @@ if (args[0] === 'pr' && args[1] === 'view') {
   } else if (endpoint?.includes('/commits/') && endpoint.includes('/status?')) {
     value = [{ statuses: [] }];
   } else if (new RegExp('^repos/fixture/repo/commits/[0-9a-f]{40}$').test(endpoint)) {
-    const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae',
-      endpoint.split('/').at(-1) + '^{commit}']).split('\\n');
-    // Synthetic Git authors have no linked GitHub account.
-    value = { commit: { author: { name, email } }, author: null };
+    value = commitAuthor(endpoint.split('/').at(-1));
   } else if (endpoint === 'repos/fixture/repo/collaborators/fixture/permission') {
     if (control.authorPermission === 'error') process.exit(1);
     value = { permission: control.authorPermission };
   } else if (endpoint.startsWith('repos/fixture/repo/commits/')) {
-    const oid = endpoint.slice('repos/fixture/repo/commits/'.length);
-    if (!/^[0-9a-f]{40}$/.test(oid)) throw new Error('Invalid synthetic commit identity');
-    const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', oid]).split('\\n');
-    value = {
-      commit: { author: { name, email } },
-      author: { login: control.metadata.author.login, type: 'User' },
-    };
+    // Valid commit OIDs already matched the exact endpoint above.
+    throw new Error('Invalid synthetic commit identity');
   } else if (endpoint.startsWith('repos/fixture/repo/issues/42/comments')) {
     if (args.includes('POST')) {
       value = { html_url: 'https://example.invalid/pr/42#completion' };
@@ -624,9 +624,8 @@ if (args[0] === 'pr' && args[1] === 'view') {
   } else if (endpoint === 'repos/fixture/repo/pulls/' + control.metadata.number) {
     const baseSha = control.remoteOnlyBase || control.metadata.baseRefOid;
     value = {
-      number: control.metadata.number,
+      ...pick(control.metadata, ['number', 'title', 'body', 'labels', 'assignees', 'additions', 'deletions']),
       node_id: control.metadata.id,
-      title: control.metadata.title,
       state: control.metadata.state === 'OPEN' ? 'open' : 'closed',
       merged: control.metadata.state === 'MERGED',
       merge_commit_sha: control.metadata.mergeCommit?.oid ?? null,
@@ -636,12 +635,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
       draft: control.metadata.isDraft,
       user: control.metadata.author,
       html_url: control.metadata.url,
-      body: control.metadata.body,
-      labels: control.metadata.labels,
-      assignees: control.metadata.assignees,
       changed_files: control.metadata.changedFiles,
-      additions: control.metadata.additions,
-      deletions: control.metadata.deletions,
       mergeable: control.metadata.mergeable === 'MERGEABLE' ? true : control.metadata.mergeable === 'CONFLICTING' ? false : null,
       mergeable_state: control.metadata.mergeStateStatus.toLowerCase(),
       head: { sha: control.metadata.headRefOid, ref: control.metadata.headRefName, repo: {
@@ -772,8 +766,28 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     gateMain,
     env,
     git,
+    realGit,
     assertPrivateHandoffVerified: () => handoff.assertProvisionersInjected(),
     metadata,
+    enableReviewTests() {
+      // Keep the native bootstrap, guard and evidence writer; only the package
+      // command is synthetic, so these cases never install or run another suite.
+      writeFileSync(
+        join(bin, "pnpm"),
+        prelude +
+          `
+event({ kind: 'pnpm', args });
+if (JSON.stringify(args) === JSON.stringify(['install', '--frozen-lockfile'])) {
+  process.exit(0);
+}
+if (args[0] !== 'test' || args[1] !== '--' || args.length < 3) {
+  throw new Error('Unexpected package command');
+}
+console.log(args.slice(2).join('\\n'));
+`,
+        { mode: 0o755 },
+      );
+    },
     seedPreparedMerge() {
       // Merge-only cases need prepared inputs, not another prepare/gates/push run.
       // Preparation lifecycle cases still create these artifacts through the wrapper.
@@ -806,17 +820,7 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
         .trim()
         .split("\n")
         .filter(Boolean)
-        .map(
-          (
-            line,
-          ): {
-            kind: string;
-            sha?: string;
-            shared?: string;
-            args?: string[];
-            localObject?: boolean;
-          } => JSON.parse(line),
-        );
+        .map((line): FixtureEvent => JSON.parse(line));
     },
     run(command: string | string[], bash = "bash", from = canonical) {
       const args = typeof command === "string" ? [command, "42"] : command;

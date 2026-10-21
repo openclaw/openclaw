@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertEnvironmentRecipeSecretsMapped,
   type EnvironmentRecipeEntry,
   EnvironmentRecipeSchema,
   resolveEnvironmentRecipe,
@@ -11,6 +12,10 @@ function entry(content = "", blob = "a".repeat(40), executable = false): Environ
 
 function resolve(files: Record<string, EnvironmentRecipeEntry>) {
   return resolveEnvironmentRecipe(async (file) => files[file]);
+}
+
+function devcontainer(content: string) {
+  return resolve({ ".devcontainer.json": entry(content) });
 }
 
 describe("resolveEnvironmentRecipe", () => {
@@ -32,6 +37,7 @@ describe("resolveEnvironmentRecipe", () => {
       identity: "a".repeat(40),
       inputs: { ".devcontainer/devcontainer.json": "a".repeat(40) },
       env: {},
+      secretNames: [],
       onCreate: "npm ci",
       updateContent: ["npm", "run", "build"],
       postCreate: { index: "npm run index", warm: ["npm", "run", "warm"] },
@@ -54,19 +60,42 @@ describe("resolveEnvironmentRecipe", () => {
   });
 
   it("allows remoteEnv null to unset inherited or container values", async () => {
-    const recipe = await resolve({
-      ".devcontainer.json": entry(
-        '{"containerEnv":{"MODE":"build"},"remoteEnv":{"MODE":null,"LANG":null}}',
-      ),
-    });
+    const recipe = await devcontainer(
+      '{"containerEnv":{"MODE":"build"},"remoteEnv":{"MODE":null,"LANG":null}}',
+    );
     expect(recipe.env).toEqual({ MODE: null, LANG: null });
     expect(EnvironmentRecipeSchema.parse(recipe).env).toEqual({ MODE: null, LANG: null });
   });
 
+  it("resolves requested secret names without granting access from repository metadata", async () => {
+    const recipe = await devcontainer(
+      '{"secrets":{"TOKEN":{"description":"Package access","provider":"untrusted","id":"other"},"ACCOUNT":{}}}',
+    );
+    expect(recipe.secretNames).toEqual(["ACCOUNT", "TOKEN"]);
+    expect(recipe.ignoredPropertiesNote).toBeUndefined();
+    expect(EnvironmentRecipeSchema.parse(recipe).secretNames).toEqual(["ACCOUNT", "TOKEN"]);
+    expect(() =>
+      assertEnvironmentRecipeSecretsMapped(recipe, {
+        TOKEN: { source: "store", provider: "default", id: "approved" },
+      }),
+    ).toThrow("unmapped setup secrets: ACCOUNT");
+    expect(() =>
+      assertEnvironmentRecipeSecretsMapped(recipe, { ACCOUNT: {}, TOKEN: {} }),
+    ).not.toThrow();
+    expect(() => assertEnvironmentRecipeSecretsMapped(recipe, undefined)).toThrow("ACCOUNT, TOKEN");
+  });
+
+  it("limits repository secret requests to sixteen names", async () => {
+    const secrets = Object.fromEntries(
+      Array.from({ length: 17 }, (_, index) => [`TOKEN_${index}`, {}]),
+    );
+    await expect(devcontainer(JSON.stringify({ secrets }))).rejects.toThrow(
+      "At most 16 setup secrets",
+    );
+  });
+
   it("admits resolved lifecycle recipes and rejects malformed transport commands", async () => {
-    const recipe = await resolve({
-      ".devcontainer.json": entry('{"onCreateCommand":["npm","ci"]}'),
-    });
+    const recipe = await devcontainer('{"onCreateCommand":["npm","ci"]}');
     expect(EnvironmentRecipeSchema.parse(recipe)).toEqual(recipe);
     expect(
       EnvironmentRecipeSchema.safeParse({ ...recipe, postStart: ["", "argument"] }).success,
@@ -77,11 +106,9 @@ describe("resolveEnvironmentRecipe", () => {
   });
 
   it("records one note for ignored properties without interpreting their values", async () => {
-    const recipe = await resolve({
-      ".devcontainer.json": entry(
-        '{"image":123,"features":false,"hostRequirements":null,"customizations":[],"name":"App"}',
-      ),
-    });
+    const recipe = await devcontainer(
+      '{"image":123,"features":false,"hostRequirements":null,"customizations":[],"name":"App"}',
+    );
     expect(recipe.ignoredPropertiesNote).toBe(
       "devcontainer customizations, features, hostRequirements, image ignored on cloud machines",
     );
@@ -100,6 +127,9 @@ describe("resolveEnvironmentRecipe", () => {
 
   it.each([
     '{"onCreateCommand":42}',
+    '{"secrets":{"BAD-NAME":{}}}',
+    '{"secrets":{"TOKEN":"plaintext"}}',
+    '{"secrets":["TOKEN"]}',
     '{"postStartCommand":{"bad":[1]}}',
     '{"remoteEnv":{"NUMBER":1}}',
     '{"remoteEnv":{"BAD-NAME":"value"}}',
@@ -160,7 +190,10 @@ describe("resolveEnvironmentRecipe", () => {
       expect(recipe.detectedInstall).toBe(
         `mkdir -p "$HOME/.local/bin" && corepack enable --install-directory "$HOME/.local/bin" && PATH="$HOME/.local/bin:$PATH" yarn install ${flag}`,
       );
-      expect(recipe.env).toEqual({ COREPACK_ENABLE_AUTO_PIN: "0" });
+      expect(recipe.env).toEqual({
+        COREPACK_ENABLE_AUTO_PIN: "0",
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+      });
     },
   );
 

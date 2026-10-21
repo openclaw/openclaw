@@ -130,6 +130,12 @@ Selection is conservative. One dispatch starts at most three workers by default.
 
 If worker start fails after a card is claimed, Workboard blocks that card and clears the claim. It records the failure in card execution and worker-log metadata. Failed starts stay visible instead of returning the card to the queue silently.
 
+If the card's fixed worker session is archived, dispatch refuses before claiming
+the card, leaves its retry budget unchanged, and records recovery guidance in the
+card's worker log and dispatch result. Run `openclaw sessions delete <worker key>`
+so the next dispatch starts a fresh worker, or restore the session to continue it.
+The diagnostic includes the exact worker key. Dispatch does not change the session.
+
 The CLI falls back to data-only dispatch against local Workboard state when both of these are true:
 
 - You give no explicit Gateway target.

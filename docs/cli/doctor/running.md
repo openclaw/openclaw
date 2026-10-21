@@ -21,6 +21,14 @@ must still check the process exit status: `Doctor complete.` records completion
 of the checks, but a subsequent crash remains a failed candidate-Doctor step
 during an update.
 
+SIGINT and SIGTERM cancel Doctor's preparation before it stops a Gateway or
+starts repairs. If repair already owns state, Doctor settles its admitted work
+and restores any service it stopped before exiting.
+
+If a native SQLite snapshot request fails, Doctor exits with an error even when
+an optional check defers its work. Resolve the reported snapshot or filesystem
+failure before retrying; a deferred check does not certify a successful inspection.
+
 ## Postures
 
 Doctor supports these postures:
@@ -112,7 +120,9 @@ stop at the deadline with a warning naming active root requests and cron runs;
 unknown custody is not a refusal. An owned service confirmed offline can receive
 the policy refresh without being started.
 
-During [automatic triage](/cli/triage#automatic-failure-handoff), repair can run
+Unattended update and Gateway startup failures collect
+[diagnostics only](/cli/triage#automatic-failure-handoff). An older, already admitted
+managed repair handoff can remain active across an upgrade. In that subtree, repair can run
 against an offline target when schema and maintenance locks permit it. If repair
 needs to stop the managed Gateway, Doctor refuses inside its automatic fixing
 subtree because that stop would cancel recovery. Use read-only diagnosis or safe
@@ -130,6 +140,27 @@ block Gateway startup without prompting, including shared-state audit schema,
 legacy workspace setup, legacy session stores, and exec approvals. Malformed or
 conflicting input is retained and requires the manual action in the diagnostic.
 The updater uses this repair path before accepting the installed target.
+
+Gateway, node, and macOS app startup prepare pending client credentials automatically,
+including profiles that were offline during the update. Preparation keeps existing
+identities and pairing tokens and captures a backup before retiring their old storage.
+Native clients can invoke the same operation with
+`openclaw doctor --client-credentials --repair --non-interactive`. This command only
+prepares the selected root's client credentials and required source schema. It does not
+run health checks or control services. Add `--json` for a completion report.
+
+Migration checks default to whole-database `quick_check`, full integrity checks
+for tables the migration rewrites or re-indexes, and foreign-key checks. Add
+`--full-integrity-check` to check every table and index during migration:
+
+```bash
+openclaw doctor --fix --full-integrity-check
+```
+
+The default can miss an index/table mismatch in an untouched table. Explicit
+verification, recovery, and compaction keep their existing checks. See
+[migration integrity checks](/install/updating#migration-integrity-checks) for
+the coverage and installed-updater boundary.
 
 Update-time Doctor runs startup-required repairs before optional inspections.
 When the installed updater supports post-restart inspections, Doctor moves
@@ -217,6 +248,10 @@ rows, or infer execution policy. Repeating the same repair invocation cannot
 resolve these conditions. After manual recovery, verify readiness before starting
 the service through its owner.
 
+Doctor prints each check or repair section to stderr when it starts. Sections
+still running after 10 seconds repeat their name with elapsed time every 10
+seconds. JSON output does not include these progress messages.
+
 ## Examples
 
 ```bash
@@ -262,9 +297,11 @@ openclaw channels status --probe
 | `--repair` / `--fix`            | Apply recommended repairs while coordinating maintenance with the matching managed Gateway (`--fix` is an alias). Refresh outdated Linux policy and reconcile eligible running-service installation drift; preserve stopped launchers and stop state. |
 | `--force`                       | Allow aggressive repair choices. Alone, remains guided; with `--fix`, `--repair`, or `--yes`, uses the same policy-refresh and installation-drift rules.                                                                                              |
 | `--non-interactive`             | Run without prompts; safe automatic migrations still apply. Combine with `--fix`, `--repair`, or `--yes` to enter repair maintenance.                                                                                                                 |
+| `--client-credentials`          | Prepare only client credentials and their required source schema. Requires `--repair` or `--fix` with `--non-interactive`; optionally accepts `--json`.                                                                                               |
 | `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                                                               |
 | `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                                                                         |
 | `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                                                                   |
+| `--full-integrity-check`        | Use full database integrity checks during migrations instead of the default quick check plus full checks of affected tables.                                                                                                                          |
 | `--lint`                        | Run the [structured health checks](/cli/doctor/health-contract) in read-only mode and emit diagnostic findings.                                                                                                                                       |
 | `--post-upgrade`                | Run post-upgrade plugin compatibility checks; findings go to stdout; exit code 1 if any error-level finding is present.                                                                                                                               |
 | `--state-sqlite <mode>`         | Run explicit shared state SQLite maintenance. The only mode is `compact`.                                                                                                                                                                             |

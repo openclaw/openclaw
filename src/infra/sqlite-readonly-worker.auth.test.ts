@@ -5,11 +5,12 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareAgentSessionStoreDeletionSafety } from "../agents/agent-delete-session-store-safety.targets.js";
 import {
   bindAuthProfileFileObservationReaders,
   readAuthProfileDatabaseIdentity,
   refreshAuthProfileFileState,
-  registerAuthProfileFileChangeListener,
+  authProfileFileChanges,
 } from "../agents/auth-profiles/file-state.js";
 import { watchAuthProfileNativeCommits } from "../agents/auth-profiles/store-update-commit.js";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -53,6 +54,8 @@ const skipBroker = process.platform === "win32";
 it.skipIf(skipBroker)(
   "reuses the Gateway reader through detached observations and retained-state restart",
   async () => {
+    // The macOS directory watch host bypasses fs.watch; keep the unavailable watcher in-process.
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.spyOn(fs, "watch").mockImplementation(() => {
       throw new Error("synthetic unavailable watcher");
     });
@@ -65,18 +68,27 @@ it.skipIf(skipBroker)(
     let publication: ReturnType<typeof watchAuthProfileNativeCommits> | undefined;
     let pendingRefresh: Promise<void> | undefined;
     const observed: unknown[] = [];
+    const fallbackObserved = createDeferredCore();
     let refresh = () => read(source, "canonical");
-    const unsubscribe = registerAuthProfileFileChangeListener(async ({ directory }) => {
+    const publishFileChange = authProfileFileChanges.onChange;
+    authProfileFileChanges.onChange = async (change) => {
+      await publishFileChange?.(change);
+      const { directory } = change;
       if (directory !== path.dirname(source)) {
         return;
       }
       const rows = await refresh();
       observed.push(rows.store);
+      if (observed.length === 2) {
+        fallbackObserved.resolve();
+      }
       // Credential publication can replace the observation's refresh callback.
       refresh = () => read(source, "canonical");
-    });
+    };
     try {
       await broker.ready();
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(29_999);
       const brokerSpawn = vi.spyOn(broker, "spawn");
       vi.mocked(spawn).mockClear();
       runWithSpawnBroker(broker, () => scope.run(() => readAuthProfileDatabaseIdentity(source)));
@@ -84,12 +96,16 @@ it.skipIf(skipBroker)(
         .prepare("UPDATE auth_profile_state SET state_json = ?")
         .run('{"lastGood":{"fixture":"fixture-next"}}');
       await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      // Exercise the next wall-clock recovery boundary without racing the explicit refreshes.
+      await vi.advanceTimersByTimeAsync(1);
+      await fallbackObserved.promise;
       const rotated = { ...store, profiles: {} };
       writer.prepare("UPDATE auth_profile_store SET store_json = ?").run(JSON.stringify(rotated));
       await runInDetachedAsyncContext(refreshAuthProfileFileState);
       clearAuthState(source);
       await runInDetachedAsyncContext(refreshAuthProfileFileState);
       expect(observed).toEqual([
+        { status: "readable", raw: store },
         { status: "readable", raw: store },
         { status: "readable", raw: rotated },
         { status: "readable", raw: rotated },
@@ -100,24 +116,25 @@ it.skipIf(skipBroker)(
       pendingRefresh = runInDetachedAsyncContext(refreshAuthProfileFileState);
       await scope.close();
       expect(brokerSpawn.mock.results[0]?.value.exitCode).toBeNull();
-      expect(observed).toHaveLength(3);
+      expect(observed).toHaveLength(4);
       runWithSpawnBroker(broker, () => restartedScope.run(bindAuthProfileFileObservationReaders));
       writer.prepare("UPDATE auth_profile_store SET store_json = ?").run(JSON.stringify(store));
       publication.dispose();
       await pendingRefresh;
-      expect(observed).toHaveLength(4);
-      expect(observed[3]).toEqual({ status: "readable", raw: store });
+      expect(observed).toHaveLength(5);
+      expect(observed[4]).toEqual({ status: "readable", raw: store });
       expect(brokerSpawn).toHaveBeenCalledTimes(1);
       expect(spawn).not.toHaveBeenCalled();
       await restartedScope.close();
       expect(brokerSpawn.mock.results[0]?.value.exitCode).toBeNull();
       clearAuthState(source);
       await runInDetachedAsyncContext(refreshAuthProfileFileState);
-      expect(observed).toHaveLength(4);
+      expect(observed).toHaveLength(5);
     } finally {
+      vi.useRealTimers();
       publication?.dispose();
       await Promise.allSettled(pendingRefresh ? [pendingRefresh] : []);
-      unsubscribe();
+      authProfileFileChanges.onChange = publishFileChange;
       await closeOpenClawStateDatabaseAsync();
       await scope.close();
       await restartedScope.close();
@@ -191,6 +208,38 @@ function read(
   });
 }
 
+it("rejects stale auth identity before transferring credentials from a replaced database", async () => {
+  const { source } = createAuthDatabase("original");
+  const replacement = createAuthDatabase("replacement");
+  const expectedIdentity = readDatabasePathIdentitySync(source).key;
+  await withSqliteReadOnlyWorkerScope(async () => {
+    await read(source, "canonical");
+    const child: ChildProcess = vi.mocked(spawn).mock.results[0]?.value;
+    const replies: unknown[] = [];
+    child.on("message", (message: unknown) => replies.push(message));
+    fs.renameSync(source, `${source}.retired`);
+    fs.renameSync(replacement.source, source);
+    await expect(
+      runSqliteReadOnlyWorker(source, {
+        mode: "auth-profile-rows",
+        source: "canonical",
+        expectedIdentity,
+        env: { ...process.env },
+      }),
+    ).rejects.toThrow("identity changed");
+    expect(replies).toEqual([
+      {
+        id: expect.any(Number),
+        result: { ok: false, message: expect.stringContaining("identity changed") },
+      },
+    ]);
+    expect((await read(source, "canonical")).store).toEqual({
+      status: "readable",
+      raw: replacement.store,
+    });
+  });
+});
+
 it("observes agent initialization after a cold auth read in the same worker", async () => {
   const root = tempDirs.make("openclaw-auth-bootstrap-");
   const source = path.join(root, "openclaw-agent.sqlite");
@@ -212,9 +261,6 @@ it("observes agent initialization after a cold auth read in the same worker", as
     using database = openNodeSqliteDatabase(source);
     ensureOpenClawAgentDatabaseSchema(database, { agentId: "main", path: source, env });
     database
-      .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-      .run("plugin-model-catalog-v1", "fixture", "synthetic catalog", 1);
-    database
       .prepare(
         "INSERT INTO auth_profile_store (store_key, store_json, updated_at) VALUES (?, ?, ?)",
       )
@@ -222,10 +268,17 @@ it("observes agent initialization after a cold auth read in the same worker", as
     await expect(
       runSqliteReadOnlyOperation(
         source,
-        { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: ["fixture"] } },
+        {
+          type: "agentRetirement.sessionStoreBlocker",
+          input: prepareAgentSessionStoreDeletionSafety(
+            { agents: { entries: { survivor: {} } }, session: { store: source } },
+            "main",
+            env,
+          ),
+        },
         { source: "canonical", expectedIdentity, env },
       ),
-    ).resolves.toEqual([{ pluginId: "fixture", contents: "synthetic catalog" }]);
+    ).resolves.toEqual({ blocker: "survivor" });
     expect((await read(source, "canonical", undefined, env)).store).toEqual({
       status: "readable",
       raw: store,

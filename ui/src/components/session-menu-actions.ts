@@ -1,25 +1,26 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { registerSessionPlacementEnglish } from "../i18n/locales/en-session-placement.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
+import type { SessionCreatedActor, SessionOwnerOption } from "../lib/session-owner.ts";
 import { customSnoozeStorageKey, readCustomSnooze } from "../lib/sessions/custom-snooze.ts";
-import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type { SessionCommunicationMenuAction } from "./session-communication-options.ts";
-import { SessionMenuSettings } from "./session-menu-settings.ts";
-import type { SessionCreatedActor, SessionOwnerOption } from "./session-owner-chip.ts";
-import { SessionOwnerMenu } from "./session-owner-menu.ts";
+import { createSessionMenuSettings } from "./session-menu-settings.ts";
+import { createSessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
 
 registerSessionOrganizationEnglish();
+registerSessionPlacementEnglish();
 
 export type SessionMenuData = {
   label: string;
+  placementAction?: "dispatch" | "move" | "retry";
   target?: { key: string; agentId?: string };
   sessionId: string | null;
   isChild?: boolean;
-  hasChildren?: boolean;
   pinnable?: boolean;
   pinned: boolean;
   unread: boolean;
@@ -50,9 +51,9 @@ const SIMPLE_SESSION_ACTIONS = [
   "toggle-involving-me",
   "rename",
   "fork",
+  "move-session",
   "new-group",
   "toggle-archived",
-  "archive-tree",
   "move-to-top-level",
   "delete",
 ] as const;
@@ -85,7 +86,10 @@ export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
   categoryClearReturnsToGroups: false,
 };
 
-type SessionMenuActionsHost = SolidControllerHost & HTMLElement;
+type SessionMenuActionsHost = {
+  readonly updateComplete: Promise<boolean>;
+  focusCurrentView(): void;
+};
 
 export type SessionMenuActionsState = {
   involvingMeContext?: boolean;
@@ -112,7 +116,6 @@ export type SessionMenuActionsState = {
 export class SessionMenuActions {
   private readonly context = useOptionalApplication();
   private readonly gateway = this.context ? projectGateway(this.context.gateway) : undefined;
-  readonly ownerMenu: SessionOwnerMenu;
   readonly advanced;
   openCustomSnooze?: () => void;
   customSnoozeKeydown?: (event: KeyboardEvent) => boolean;
@@ -127,10 +130,13 @@ export class SessionMenuActions {
     private readonly readState: () => SessionMenuActionsState,
     private readonly onAction: (action: SessionManagementAction) => void,
     private readonly onClose: () => void,
+    readonly ownerMenu = createSessionOwnerMenu(),
   ) {
-    this.ownerMenu = new SessionOwnerMenu(host);
-    this.advanced = new SessionMenuSettings(host, {
-      context: () => this.context,
+    this.advanced = createSessionMenuSettings({
+      context: () => {
+        this.gateway?.read();
+        return this.context;
+      },
       readState: () => this.readState(),
       runAction: (action) => this.runAction(action),
     });
@@ -196,6 +202,8 @@ export class SessionMenuActions {
       case "set-color":
       case "assign-owner":
         return batch;
+      case "move-session":
+        return batch || !session.placementAction || session.archived;
       case "fork":
         return batch || state.forkDisabled;
       case "move-to-group":
@@ -203,14 +211,6 @@ export class SessionMenuActions {
         return false;
       case "move-to-top-level":
         return batch || !session.isChild;
-      case "archive-tree":
-        return (
-          batch ||
-          !session.hasChildren ||
-          session.archived ||
-          session.archiving === true ||
-          !state.archiveAllowed
-        );
       case "toggle-archived":
         return session.archiving === true || (!batch && !session.archived && !state.archiveAllowed);
       case "delete":
@@ -299,19 +299,13 @@ export class SessionMenuActions {
   }
 
   focusCurrentView(): void {
-    void this.host.updateComplete.then(() => {
-      const first =
-        this.host.querySelector<HTMLElement>(".session-menu__appearance button:not(:disabled)") ??
-        this.host.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])");
-      first?.focus();
-    });
+    void this.host.updateComplete.then(() => this.host.focusCurrentView());
   }
 
   handleKeydown(event: KeyboardEvent, appearancePicker: { showIconGrid: () => void }): boolean {
     if (this.customSnoozeKeydown?.(event)) {
       return true;
     }
-    const target = event.composedPath().find((node) => node instanceof HTMLElement);
     const key = resolveAsciiShortcutKey(event);
     // Moving these actions into Advanced must not retire their existing menu shortcuts.
     const kind = key === "f" ? "fork" : key === "d" ? "delete" : undefined;
@@ -333,64 +327,6 @@ export class SessionMenuActions {
       event.stopPropagation();
       this.runAction({ kind });
       return true;
-    }
-    const item = event
-      .composedPath()
-      .find(
-        (node): node is HTMLElement =>
-          node instanceof HTMLElement && node.matches("wa-dropdown-item"),
-      );
-    if (event.key === "Tab" && !event.shiftKey && item) {
-      const settings = item.parentElement;
-      const picker = settings?.querySelector<HTMLElement>(":scope > .session-menu__communication");
-      const first = picker?.querySelector<HTMLButtonElement>("button:not(:disabled)");
-      if (first) {
-        // Menu arrows visit rows; Tab enters the embedded controls without dismissing.
-        event.preventDefault();
-        event.stopPropagation();
-        first.focus();
-        return true;
-      }
-    }
-    const appearance = target?.closest<HTMLElement>(
-      ".session-menu__appearance, .session-menu__communication",
-    );
-    if (event.key === "Tab" && target && appearance && this.host.contains(appearance)) {
-      const controls = Array.from(
-        appearance.querySelectorAll<HTMLElement>(
-          'button:not(:disabled):not([tabindex="-1"]), textarea:not(:disabled)',
-        ),
-      ).filter((control) => !control.closest('[inert], [hidden], [aria-hidden="true"]'));
-      const index = controls.indexOf(target);
-      let next = index < 0 ? undefined : controls[index + (event.shiftKey ? -1 : 1)];
-      if (
-        index === 0 &&
-        event.shiftKey &&
-        appearance.classList.contains("session-menu__communication")
-      ) {
-        for (
-          let previous = appearance.previousElementSibling;
-          previous;
-          previous = previous.previousElementSibling
-        ) {
-          if (
-            previous instanceof HTMLElement &&
-            previous.matches("wa-dropdown-item:not([disabled])")
-          ) {
-            next = previous;
-            break;
-          }
-        }
-      }
-      if (next) {
-        // Web Awesome dismisses on Tab. Embedded settings own internal
-        // traversal; only its outer edges return to the menu's dismissal path.
-        event.preventDefault();
-        event.stopPropagation();
-        next.focus();
-        return true;
-      }
-      return false;
     }
     const input = event
       .composedPath()

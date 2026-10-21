@@ -1,4 +1,5 @@
 import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
+import { OcPathEditError } from "../edit-error.js";
 import type { OcPath } from "../oc-path.js";
 import { splitOcPathSlots } from "../oc-path.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
@@ -9,18 +10,14 @@ import { resolveJsoncValueOcPath } from "./resolve-value.js";
 type JsoncEditPath = Array<string | number>;
 type JsoncEditTarget = { readonly path: JsoncEditPath; readonly value: JsoncValue };
 
-type JsoncEditResult =
-  | { readonly ok: true; readonly ast: JsoncAst }
-  | { readonly ok: false; readonly reason: "unresolved" | "no-root" };
-
-export function setJsoncOcPath(ast: JsoncAst, path: OcPath, newValue: JsoncValue): JsoncEditResult {
+export function setJsoncOcPath(ast: JsoncAst, path: OcPath, newValue: JsoncValue): JsoncAst {
   if (ast.root === null) {
-    return { ok: false, reason: "no-root" };
+    throw new OcPathEditError("no-root");
   }
 
   const target = resolveEditTarget(ast.root, splitOcPathSlots(path.section, path.item, path.field));
   if (target === null) {
-    return { ok: false, reason: "unresolved" };
+    throw new OcPathEditError("unresolved");
   }
   guardSentinel(newValue, `oc://${path.file}/${target.path.join("/")}`);
   return applyJsoncEdit(ast, target.path, newValue, false);
@@ -31,9 +28,9 @@ export function insertJsoncOcPath(
   parentPath: OcPath,
   indexOrKey: number | string,
   newValue: JsoncValue,
-): JsoncEditResult {
+): JsoncAst {
   if (ast.root === null) {
-    return { ok: false, reason: "no-root" };
+    throw new OcPathEditError("no-root");
   }
 
   const target = resolveEditTarget(
@@ -41,17 +38,17 @@ export function insertJsoncOcPath(
     splitOcPathSlots(parentPath.section, parentPath.item, parentPath.field),
   );
   if (target === null) {
-    return { ok: false, reason: "unresolved" };
+    throw new OcPathEditError("unresolved");
   }
   if (typeof indexOrKey === "string") {
     if (
       target.value.kind !== "object" ||
       target.value.entries.some((entry) => entry.key === indexOrKey)
     ) {
-      return { ok: false, reason: "unresolved" };
+      throw new OcPathEditError("unresolved");
     }
   } else if (target.value.kind !== "array") {
-    return { ok: false, reason: "unresolved" };
+    throw new OcPathEditError("unresolved");
   }
 
   const segment = typeof indexOrKey === "number" && indexOrKey < 0 ? -1 : indexOrKey;
@@ -65,21 +62,21 @@ function applyJsoncEdit(
   path: JsoncEditPath,
   newValue: JsoncValue,
   isArrayInsertion: boolean,
-): JsoncEditResult {
+): JsoncAst {
   const edits = modify(ast.raw, path, jsoncValueToJson(newValue), {
     formattingOptions: { insertSpaces: true, tabSize: 2 },
     isArrayInsertion,
   });
   if (edits.length === 0) {
-    return { ok: false, reason: "unresolved" };
+    throw new OcPathEditError("unresolved");
   }
 
   const nextRaw = applyEdits(ast.raw, edits);
   const reparsed = parseJsonc(nextRaw);
-  if (reparsed.ast.root === null) {
-    return { ok: false, reason: "unresolved" };
+  if (reparsed.root === null) {
+    throw new OcPathEditError("unresolved");
   }
-  return { ok: true, ast: reparsed.ast };
+  return reparsed;
 }
 
 function guardSentinel(value: JsoncValue, guardPath: string): void {

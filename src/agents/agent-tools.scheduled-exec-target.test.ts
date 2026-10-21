@@ -14,6 +14,7 @@ const shellSpies = vi.hoisted(() => ({
   process: vi.fn(async () => ({ content: [], details: {} })),
 }));
 
+// mock-isolation: observe pinned arguments without executing real shell commands or process tools.
 vi.mock("./bash-tools.js", () => ({
   createExecTool: (defaults?: ExecToolDefaults) => {
     shellSpies.defaults(defaults);
@@ -59,7 +60,7 @@ function scheduledExec(options: Parameters<typeof createOpenClawCodingTools>[0] 
 describe("createOpenClawCodingTools scheduled exec target", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("pins exec to the scheduled cap's restrict-only target", async () => {
+  it("uses the scheduled Gateway pin when no target is requested", async () => {
     const execTool = scheduledExec();
     const properties = Object.keys(
       (execTool.parameters as { properties?: Record<string, unknown> }).properties ?? {},
@@ -71,8 +72,6 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
 
     await execTool.execute("call-1", {
       command: "echo hi",
-      host: "node",
-      node: "remote",
       security: "full",
       ask: "off",
     });
@@ -85,6 +84,19 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
       undefined,
       undefined,
     );
+  });
+
+  it.each([
+    { host: "node", node: "remote" },
+    { node: "remote" },
+    { host: "gateway", node: "remote" },
+    { host: "sandbox" },
+  ])("refuses a conflicting scheduled exec target before execution: %j", async (target) => {
+    const execTool = scheduledExec();
+    await expect(async () =>
+      execTool.execute("call-conflict", { command: "echo hi", ...target }),
+    ).rejects.toThrow(/pinned to host=gateway;.*host or node is not allowed for this job/);
+    expect(shellSpies.exec).not.toHaveBeenCalled();
   });
 
   it("pins the whole tool lifecycle, including execution preparation", async () => {
@@ -102,11 +114,22 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
     };
 
     const pinned = pinExecToolTarget(source, { host: "gateway", ask: "always" });
+    expect(() =>
+      pinned.prepareBeforeToolCallParams?.(
+        { command: "echo hi", host: "node", node: "remote" },
+        { hookContext: undefined },
+      ),
+    ).toThrow("pinned to host=gateway");
+    expect(prepare).not.toHaveBeenCalled();
     await pinned.prepareBeforeToolCallParams?.(
-      { command: "echo hi", host: "node", node: "remote", security: "full", ask: "off" },
+      { command: "echo hi", security: "full", ask: "off" },
       { hookContext: undefined },
     );
-    pinned.finalizeBeforeToolCallParams?.({ command: "echo hi", host: "node", ask: "off" }, {});
+    expect(() =>
+      pinned.finalizeBeforeToolCallParams?.({ command: "echo hi", host: "node" }, {}),
+    ).toThrow("pinned to host=gateway");
+    expect(finalize).not.toHaveBeenCalled();
+    pinned.finalizeBeforeToolCallParams?.({ command: "echo hi", host: "gateway", ask: "off" }, {});
 
     expect(prepare).toHaveBeenCalledWith(
       { command: "echo hi", host: "gateway", ask: "always" },

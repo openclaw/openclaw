@@ -31,6 +31,7 @@ type EvidenceState = "present" | "absent" | "unknown" | "unsupported";
 
 type RunInspectorProps = {
   basePath: string;
+  connected?: boolean;
   state: RunInspectorState;
   selector: RunInspectorSelector | null;
   selectorId: string | null;
@@ -83,7 +84,7 @@ function renderFact(fact: IdentityFact) {
       <dt>
         <span>{fact.label}</span>
         <span
-          class={`run-inspector__state run-inspector__state--${fact.state}`}
+          class={["run-inspector__state", `run-inspector__state--${fact.state}`]}
           role="img"
           aria-label={t("activity.runInspector.evidenceStateLabel", {
             state: stateLabel,
@@ -238,6 +239,7 @@ function renderUnavailableResult(
   basePath: string,
   executionPageStatus: "loading" | "error" | undefined,
   onLoadMoreExecutions: () => void,
+  disabled: boolean,
 ) {
   if (result.identity.state === "present") {
     return undefined;
@@ -284,7 +286,12 @@ function renderUnavailableResult(
             </For>
           </ol>
           {result.nextExecutionCursor
-            ? renderRunInspectorPagination("candidates", executionPageStatus, onLoadMoreExecutions)
+            ? renderRunInspectorPagination(
+                "candidates",
+                executionPageStatus,
+                onLoadMoreExecutions,
+                disabled,
+              )
             : undefined}
         </>
       ) : undefined}
@@ -302,8 +309,11 @@ function renderReady(
   const currentCoverageLabel = runInspectorCoverageLabel(result.coverage.state);
   return (
     <>
+      {state.refreshError
+        ? renderPanel(props, { status: "error", recovery: state.refreshError })
+        : undefined}
       <div
-        class={`run-inspector__coverage run-inspector__coverage--${result.coverage.state}`}
+        class={["run-inspector__coverage", `run-inspector__coverage--${result.coverage.state}`]}
         role="status"
         aria-label={t("activity.runInspector.coverageStatusLabel", {
           state: currentCoverageLabel,
@@ -333,6 +343,7 @@ function renderReady(
             props.selectorId,
             props.basePath,
             props.onLoadMoreDecisions,
+            props.connected === false,
           )}
         </>
       ) : (
@@ -341,6 +352,7 @@ function renderReady(
           props.basePath,
           state.executionPageStatus,
           props.onLoadMoreExecutions,
+          props.connected === false,
         )
       )}
     </>
@@ -351,7 +363,6 @@ function renderPanel(
   props: RunInspectorProps,
   state: Exclude<RunInspectorState, { status: "ready" }>,
 ) {
-  const key = state.status === "loading" && state.waitingForGateway ? "waiting" : state.status;
   const action =
     state.status === "error"
       ? state.recovery === "restart"
@@ -363,10 +374,15 @@ function renderPanel(
       class="run-inspector__panel"
       role={state.status === "error" || state.status === "unauthorized" ? "alert" : "status"}
     >
-      <h3>{t(`activity.runInspector.panels.${key}.title`)}</h3>
-      <p>{t(`activity.runInspector.panels.${key}.description`)}</p>
+      <h3>{t(`activity.runInspector.panels.${state.status}.title`)}</h3>
+      <p>{t(`activity.runInspector.panels.${state.status}.description`)}</p>
       {action ? (
-        <button type="button" class="btn" onClick={action.onClick}>
+        <button
+          type="button"
+          class="btn"
+          disabled={props.connected === false}
+          onClick={action.onClick}
+        >
           {action.label}
         </button>
       ) : undefined}

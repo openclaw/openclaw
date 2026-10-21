@@ -1,4 +1,3 @@
-/** Verifies effective plugin id resolution across config, manifests, and activation sources. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
@@ -19,69 +18,48 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("./manifest-owner-policy.js").passesManifestOwnerBasePolicy>(),
 }));
 
+// mock-isolation: explicit auto-enable results isolate effective-id selection from discovery.
 vi.mock("../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (...args: Parameters<typeof mocks.applyPluginAutoEnable>) =>
-    mocks.applyPluginAutoEnable(...args),
+  applyPluginAutoEnable: mocks.applyPluginAutoEnable,
 }));
 
 vi.mock("../channels/config-presence.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../channels/config-presence.js")>()),
-  listExplicitlyDisabledChannelIdsForConfig: (
-    ...args: Parameters<typeof mocks.listExplicitlyDisabledChannelIdsForConfig>
-  ) => mocks.listExplicitlyDisabledChannelIdsForConfig(...args),
-  listPotentialConfiguredChannelIds: (
-    ...args: Parameters<typeof mocks.listPotentialConfiguredChannelIds>
-  ) => mocks.listPotentialConfiguredChannelIds(...args),
+  listExplicitlyDisabledChannelIdsForConfig: mocks.listExplicitlyDisabledChannelIdsForConfig,
+  listPotentialConfiguredChannelIds: mocks.listPotentialConfiguredChannelIds,
 }));
 
 vi.mock("./channel-presence-policy.js", () => ({
   listExplicitConfiguredChannelIdsForConfig: () => [],
 }));
 
+// mock-isolation: fixture channel inventories avoid loading installed plugin metadata.
 vi.mock("./channel-plugin-ids.js", () => ({
-  listExplicitConfiguredChannelIdsForConfig: (
-    ...args: Parameters<typeof mocks.listExplicitConfiguredChannelIdsForConfig>
-  ) => mocks.listExplicitConfiguredChannelIdsForConfig(...args),
-  loadGatewayStartupPluginPlan: (...args: Parameters<typeof mocks.loadGatewayStartupPluginPlan>) =>
-    mocks.loadGatewayStartupPluginPlan(...args),
-  resolveConfiguredChannelPluginIds: (
-    ...args: Parameters<typeof mocks.resolveConfiguredChannelPluginIds>
-  ) => mocks.resolveConfiguredChannelPluginIds(...args),
+  listExplicitConfiguredChannelIdsForConfig: mocks.listExplicitConfiguredChannelIdsForConfig,
+  loadGatewayStartupPluginPlan: mocks.loadGatewayStartupPluginPlan,
+  resolveConfiguredChannelPluginIds: mocks.resolveConfiguredChannelPluginIds,
 }));
 
+// mock-isolation: each case owns its manifest snapshot instead of reading installed plugins.
 vi.mock("./manifest-contract-eligibility.js", () => ({
-  loadManifestMetadataSnapshot: (...args: Parameters<typeof mocks.loadManifestMetadataSnapshot>) =>
-    mocks.loadManifestMetadataSnapshot(...args),
+  loadManifestMetadataSnapshot: mocks.loadManifestMetadataSnapshot,
 }));
 
+// mock-isolation: cases control owner admission, opting into the real policy where needed.
 vi.mock("./manifest-owner-policy.js", () => ({
-  passesManifestOwnerBasePolicy: (
-    ...args: Parameters<typeof mocks.passesManifestOwnerBasePolicy>
-  ) => mocks.passesManifestOwnerBasePolicy(...args),
+  passesManifestOwnerBasePolicy: mocks.passesManifestOwnerBasePolicy,
 }));
 
 import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
 import { collectConfiguredStartupChannelIds } from "./gateway-startup-plugin-config.js";
 
 function resolve(config: OpenClawConfig): string[] {
-  return resolveEffectivePluginIds({
-    config,
-    env: {},
-    workspaceDir: "/workspace",
-  });
+  return resolveEffectivePluginIds({ config, env: {}, workspaceDir: "/workspace" });
 }
 
 describe("resolveEffectivePluginIds", () => {
   beforeEach(() => {
-    mocks.applyPluginAutoEnable.mockReset();
-    mocks.listExplicitlyDisabledChannelIdsForConfig.mockReset();
-    mocks.listPotentialConfiguredChannelIds.mockReset();
-    mocks.listExplicitConfiguredChannelIdsForConfig.mockReset();
-    mocks.loadGatewayStartupPluginPlan.mockReset();
-    mocks.resolveConfiguredChannelPluginIds.mockReset();
-    mocks.loadManifestMetadataSnapshot.mockReset();
-    mocks.passesManifestOwnerBasePolicy.mockReset();
-
+    Object.values(mocks).forEach((mock) => mock.mockReset());
     mocks.applyPluginAutoEnable.mockImplementation((params) => ({
       config: params.config ?? {},
       changes: [],
@@ -103,22 +81,13 @@ describe("resolveEffectivePluginIds", () => {
     mocks.listPotentialConfiguredChannelIds.mockImplementation((_config, _env, options) =>
       options?.includePersistedAuthState === false ? [] : ["credential-only"],
     );
-    expect(
-      collectConfiguredStartupChannelIds({
-        configs: [{}, {}],
-        env: {},
-      }),
-    ).toEqual([]);
+    expect(collectConfiguredStartupChannelIds({ configs: [{}, {}], env: {} })).toEqual([]);
   });
 
   it("includes a selected context-engine slot even when omitted from explicit allow and entries", () => {
-    expect(
-      resolve({
-        plugins: {
-          slots: { contextEngine: "lossless-claw" },
-        },
-      }),
-    ).toEqual(["lossless-claw"]);
+    expect(resolve({ plugins: { slots: { contextEngine: "lossless-claw" } } })).toEqual([
+      "lossless-claw",
+    ]);
   });
 
   it("keeps the selected slot but rechecks bundled owner policy after channel callbacks", async () => {
@@ -146,43 +115,28 @@ describe("resolveEffectivePluginIds", () => {
   });
 
   it("keeps the built-in legacy context engine out of plugin preload ids", () => {
-    expect(
-      resolve({
-        plugins: {
-          slots: { contextEngine: "legacy" },
-        },
-      }),
-    ).toStrictEqual([]);
+    expect(resolve({ plugins: { slots: { contextEngine: "legacy" } } })).toStrictEqual([]);
   });
 
   it.each([
     {
       name: "plugins disabled",
-      plugins: {
-        enabled: false,
-        slots: { contextEngine: "lossless-claw" },
-      },
+      policy: { enabled: false },
     },
     {
       name: "denylisted",
-      plugins: {
-        deny: ["lossless-claw"],
-        slots: { contextEngine: "lossless-claw" },
-      },
+      policy: { deny: ["lossless-claw"] },
     },
     {
       name: "entry disabled",
-      plugins: {
-        entries: {
-          "lossless-claw": { enabled: false },
-        },
-        slots: { contextEngine: "lossless-claw" },
-      },
+      policy: { entries: { "lossless-claw": { enabled: false } } },
     },
-  ] satisfies Array<{ name: string; plugins: NonNullable<OpenClawConfig["plugins"]> }>)(
+  ] satisfies Array<{ name: string; policy: NonNullable<OpenClawConfig["plugins"]> }>)(
     "does not preload a selected context-engine slot when $name",
-    ({ plugins }) => {
-      expect(resolve({ plugins })).toStrictEqual([]);
+    ({ policy }) => {
+      expect(
+        resolve({ plugins: { ...policy, slots: { contextEngine: "lossless-claw" } } }),
+      ).toStrictEqual([]);
     },
   );
 });

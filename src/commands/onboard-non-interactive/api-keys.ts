@@ -1,5 +1,5 @@
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
@@ -26,7 +26,7 @@ async function resolveApiKeyFromProfiles(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
 }): Promise<string | null> {
-  const store = ensureAuthProfileStore(params.agentDir);
+  const store = await ensureAuthProfileStoreAsync(params.agentDir);
   const order = resolveAuthProfileOrder({
     cfg: params.cfg,
     store,

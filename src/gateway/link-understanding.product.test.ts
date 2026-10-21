@@ -1,10 +1,13 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { text } from "node:stream/consumers";
+import { expect, it, vi } from "vitest";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -24,27 +27,9 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-const envKeys = [
-  "HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_TEST_FAST",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-] as const;
-
 async function listen(server: ReturnType<typeof createServer>): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("test server did not bind a loopback port");
@@ -57,59 +42,48 @@ async function close(server: ReturnType<typeof createServer> | undefined): Promi
     return;
   }
   await new Promise<void>((resolve) => {
-    server.close(() => {
-      resolve();
-    });
+    server.close(() => resolve());
   });
 }
 
-describe("Gateway link understanding", () => {
-  let tempHome: string | undefined;
-
-  afterEach(async () => {
-    if (tempHome) {
-      await fs.rm(tempHome, { recursive: true, force: true });
-      tempHome = undefined;
-    }
-  });
-
-  it(
-    "fetches bare URLs but not titled markdown links sent through chat.send",
-    { timeout: 90_000 },
-    async () => {
-      const envSnapshot = captureEnv([...envKeys]);
+it(
+  "Gateway link understanding fetches bare URLs but not titled markdown links through chat.send",
+  { timeout: 90_000 },
+  async () =>
+    withTestDir({ prefix: "openclaw-link-gateway-" }, async (tempHome) => {
+      const stateDir = path.join(tempHome, ".openclaw");
+      const workspaceDir = path.join(tempHome, "workspace");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const bundledPluginsDir = path.join(tempHome, "bundled-plugins");
       const providerBodies: string[] = [];
       const linkRequests: string[] = [];
       let providerServer: ReturnType<typeof createServer> | undefined;
       let linkServer: ReturnType<typeof createServer> | undefined;
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
 
+      const env = {
+        HOME: tempHome,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_GATEWAY_TOKEN: "link-understanding-gateway-token",
+        OPENCLAW_TEST_FAST: "0",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      };
+      const envSnapshot = captureEnv(Object.keys(env));
       try {
-        tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-link-gateway-"));
-        const stateDir = path.join(tempHome, ".openclaw");
-        const workspaceDir = path.join(tempHome, "workspace");
-        const configPath = path.join(stateDir, "openclaw.json");
-        const bundledPluginsDir = path.join(tempHome, "bundled-plugins");
-        await Promise.all([
-          fs.mkdir(workspaceDir, { recursive: true }),
-          fs.mkdir(bundledPluginsDir, { recursive: true }),
-          fs.mkdir(path.dirname(configPath), { recursive: true }),
-        ]);
-        for (const [key, value] of Object.entries({
-          HOME: tempHome,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_GATEWAY_TOKEN: "link-understanding-gateway-token",
-          OPENCLAW_TEST_FAST: "0",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        })) {
+        await Promise.all(
+          [workspaceDir, bundledPluginsDir, stateDir].map((dir) =>
+            fs.mkdir(dir, { recursive: true }),
+          ),
+        );
+        for (const [key, value] of Object.entries(env)) {
           setTestEnvValue(key, value);
         }
 
@@ -121,36 +95,18 @@ describe("Gateway link understanding", () => {
         const linkPort = await listen(linkServer);
 
         providerServer = createServer((request, response) => {
-          let body = "";
-          request.setEncoding("utf8");
-          request.on("data", (chunk) => {
-            body += String(chunk);
-          });
-          request.on("end", () => {
-            providerBodies.push(body);
-            response.writeHead(200, { "content-type": "text/event-stream" });
-            const message = {
-              type: "message",
-              id: "link-understanding-gateway-message",
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: "LINK_GATEWAY_OK", annotations: [] }],
-            };
-            response.end(
-              [
-                {
-                  type: "response.output_item.added",
-                  output_index: 0,
-                  item: { ...message, status: "in_progress", content: [] },
-                },
-                { type: "response.output_item.done", output_index: 0, item: message },
-                { type: "response.completed", response: { status: "completed" } },
-              ]
-                .map((event) => `data: ${JSON.stringify(event)}\n\n`)
-                .concat("data: [DONE]\n\n")
-                .join(""),
-            );
-          });
+          void text(request)
+            .then((body) => {
+              providerBodies.push(body);
+              writeOpenAiResponsesText(response, {
+                text: "OK",
+                messageId: "msg",
+                responseId: "resp",
+              });
+            })
+            .catch((error: unknown) => {
+              response.destroy(error instanceof Error ? error : new Error(String(error)));
+            });
         });
         const providerPort = await listen(providerServer);
         const provider = buildMockOpenAiResponsesProvider(`http://127.0.0.1:${providerPort}/v1`);
@@ -215,6 +171,5 @@ describe("Gateway link understanding", () => {
         clearConfigCache();
         clearSessionStoreCacheForTest();
       }
-    },
-  );
-});
+    }),
+);

@@ -1,12 +1,14 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { sqlPublicationAnchor } from "../infra/sql-connection.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import type { GitHubPublicationSessionLifecycle } from "./github-publication-read.types.js";
-import { githubPublicationReceipts } from "./github-publication-receipts.js";
+import {
+  githubPublicationReceipts,
+  type captureGitHubPublicationLifecycle,
+} from "./github-publication-receipts.js";
 import {
   encodeGitHubPublicationRequester,
   type GitHubPublicationRequesterSnapshot,
@@ -16,12 +18,12 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
 const table = "github_publication_session_lifecycles";
-type PublicationIdentity = { publicationKind: "shared" | "personal"; requestId: string };
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+type PublicationIdentity = Parameters<typeof captureGitHubPublicationLifecycle>[1];
+const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
 
 /** The receipt and its captured generation commit together; replay never rebinds it. */
 export function insertGitHubPublicationSessionLifecycle(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: PublicationIdentity & {
     lifecycleRevision: string | null;
     requester?: GitHubPublicationRequesterSnapshot;
@@ -47,7 +49,7 @@ export function insertGitHubPublicationSessionLifecycle(
 /** A missing binding is unproven; a retained NULL records an originally absent revision. */
 export function readGitHubPublicationSessionLifecycle(
   input: PublicationIdentity,
-  db: DatabaseSync,
+  db: EngineConnection,
 ): GitHubPublicationSessionLifecycle | undefined {
   return tableExists(db, table)
     ? executeSqliteQueryTakeFirstSync(

@@ -175,11 +175,10 @@ export function createWorkerSessionToolExecutor(
     ) {
       throw new Error("Worker source environment changed before child spawn");
     }
-    const surface = await getWorkerTurnToolSurface(operation.identity)?.getSurface(
-      operation.identity,
-    );
+    const toolRuntime = getWorkerTurnToolSurface(operation.identity);
+    const surface = await toolRuntime?.getSurface(operation.identity);
     assertSource();
-    if (!surface) {
+    if (!surface || !toolRuntime) {
       throw new Error("Worker tool surface is unavailable");
     }
     const authorizedTools = surface.tools
@@ -187,6 +186,8 @@ export function createWorkerSessionToolExecutor(
       .filter((name) =>
         params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
       );
+    // Workspace-dependent capabilities inherit policy, not the parent's availability.
+    authorizedTools.push(...toolRuntime.getAdditionalInheritedToolNames());
     const gatewayCall: InProcessGatewayCaller = async <T = Record<string, unknown>>(
       method: string,
       requestParams: Record<string, unknown>,
@@ -600,6 +601,7 @@ export async function createWorkerGatewayTools(
   const source = capability.sessionTarget;
   const toolOptions = { agentSessionKey: source.sessionKey, workerPlacement: true };
   const portal = createAvailablePortalTools({
+    workerScoped: true,
     sessionPortalTarget: {
       agentId: source.agentId,
       sessionKey: source.sessionKey,

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -11,30 +11,22 @@ function readback(fault: string, deferVisibility = true, route = "npm-oidc") {
   const root = tempDirs.make("plugin-npm-readback-");
   const bytes = Buffer.from("qualified plugin bytes");
   const tarball = join(root, "plugin.tgz");
-  const preload = join(root, "registry.mjs");
   const summary = join(root, "summary.md");
   const name = "@openclaw/demo";
   const version = "2026.9.2-beta.1";
+  const dist = {
+    integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
+    shasum: createHash("sha1").update(bytes).digest("hex"),
+    tarball: "https://registry.npmjs.org/@openclaw/demo/-/demo.tgz",
+  };
   const packument = {
     name,
     "dist-tags": { beta: version },
-    versions: {
-      [version]: {
-        name,
-        version,
-        dist: {
-          integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
-          shasum: createHash("sha1").update(bytes).digest("hex"),
-          tarball: "https://registry.npmjs.org/@openclaw/demo/-/demo.tgz",
-        },
-      },
-    },
+    versions: { [version]: { name, version, dist } },
   };
   writeFileSync(tarball, bytes);
   writeFileSync(summary, "");
-  writeFileSync(
-    preload,
-    `// Only explicit retry waits advance the mocked registry's clock.
+  const preload = `// Only explicit retry waits advance the mocked registry's clock.
 let now = Date.now();
 Date.now = () => now;
 const delay = globalThis.setTimeout;
@@ -57,9 +49,8 @@ globalThis.fetch = async (url, init) => {
   if (!url.startsWith("https://registry.npmjs.org/") || (init?.method ?? "GET") !== "GET") {
     throw new Error("Unexpected registry mutation or destination");
   }
-  if (fault === "unavailable") return new Response(null, {status: 503});
-  if (fault === "forbidden") return new Response(null, {status: 403});
-  if (fault === "missing-package") return new Response(null, {status: 404});
+  const status = {unavailable: 503, forbidden: 403, "missing-package": 404}[fault];
+  if (status) return new Response(null, {status});
   if (url.endsWith(".tgz")) {
     if (fault === "missing-tarball") return new Response(null, {status: 404});
     if (fault === "oversized") return new Response(Buffer.concat([bytes, bytes]));
@@ -67,29 +58,23 @@ globalThis.fetch = async (url, init) => {
   }
   return Response.json(fault === "malformed" ? {} : packument);
 };
-`,
-  );
+`;
   const result = spawnSync(
     process.execPath,
     [
       "--import",
-      preload,
+      `data:text/javascript,${encodeURIComponent(preload)}`,
       "scripts/plugin-npm-prepared-release.mjs",
       "registry",
-      "--package-name",
-      name,
-      "--version",
-      version,
-      "--publish-tag",
-      "beta",
-      "--route",
-      route,
-      "--tarball",
-      tarball,
-      "--allow-missing",
-      "false",
-      "--defer-visibility",
-      String(deferVisibility),
+      ...Object.entries({
+        "package-name": name,
+        version,
+        "publish-tag": "beta",
+        route,
+        tarball,
+        "allow-missing": "false",
+        "defer-visibility": String(deferVisibility),
+      }).flatMap(([key, value]) => [`--${key}`, value]),
     ],
     {
       encoding: "utf8",
@@ -104,46 +89,44 @@ globalThis.fetch = async (url, init) => {
   return { ...result, summary: readFileSync(summary, "utf8") };
 }
 
-describe("plugin npm postpublish visibility", () => {
-  it.each([
-    ...[
-      "missing-version",
-      "missing-package",
-      "missing-tarball",
-      "unavailable",
-      "selector",
-      "missing-selector",
-    ].map((fault) => [fault, true, "npm-oidc", "pending"] as const),
-    ["missing-version", false, "npm-oidc", "rejected"],
-    ["missing-tarball", false, "npm-token-bootstrap", "rejected"],
-    ["missing-version", true, "npm-readback", "rejected"],
-    ["selector", false, "npm-oidc", "rejected"],
-    ["selector", true, "npm-readback", "rejected"],
-    ...[
-      "integrity",
-      "bytes",
-      "ahead-selector",
-      "malformed-selector",
-      "package-name",
-      "package-version",
-      "oversized",
-      "malformed",
-      "forbidden",
-    ].map((fault) => [fault, true, "npm-oidc", "rejected"] as const),
-    ["none", true, "npm-oidc", "verified"],
-  ] as const)("reports %s with defer=%s, route=%s as %s", (fault, defer, route, outcome) => {
-    const result = readback(fault, defer, route);
-    expect(result.status, result.stderr).toBe(outcome === "rejected" ? 1 : 0);
-    if (outcome === "pending") {
-      expect(result.stderr).toContain("published, visibility pending");
-      expect(result.summary).toContain("published, visibility pending");
-      expect(result.summary).toContain("parent's final registry verification");
-    } else {
-      expect(result.summary).toBe("");
-      expect(result.stderr).not.toContain("published, visibility pending");
-      if (outcome === "verified") {
-        expect(result.stdout).toContain("verified exact published bytes and selector");
-      }
+it.each([
+  ...[
+    "missing-version",
+    "missing-package",
+    "missing-tarball",
+    "unavailable",
+    "selector",
+    "missing-selector",
+  ].map((fault) => [fault, true, "npm-oidc", "pending"] as const),
+  ["missing-version", false, "npm-oidc", "rejected"],
+  ["missing-tarball", false, "npm-token-bootstrap", "rejected"],
+  ["missing-version", true, "npm-readback", "rejected"],
+  ["selector", false, "npm-oidc", "rejected"],
+  ["selector", true, "npm-readback", "rejected"],
+  ...[
+    "integrity",
+    "bytes",
+    "ahead-selector",
+    "malformed-selector",
+    "package-name",
+    "package-version",
+    "oversized",
+    "malformed",
+    "forbidden",
+  ].map((fault) => [fault, true, "npm-oidc", "rejected"] as const),
+  ["none", true, "npm-oidc", "verified"],
+] as const)("reports %s with defer=%s, route=%s as %s", (fault, defer, route, outcome) => {
+  const result = readback(fault, defer, route);
+  expect(result.status, result.stderr).toBe(outcome === "rejected" ? 1 : 0);
+  if (outcome === "pending") {
+    expect(result.stderr).toContain("published, visibility pending");
+    expect(result.summary).toContain("published, visibility pending");
+    expect(result.summary).toContain("parent's final registry verification");
+  } else {
+    expect(result.summary).toBe("");
+    expect(result.stderr).not.toContain("published, visibility pending");
+    if (outcome === "verified") {
+      expect(result.stdout).toContain("verified exact published bytes and selector");
     }
-  });
+  }
 });

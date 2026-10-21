@@ -1,6 +1,7 @@
 // Telegram tests cover ingress worker runtime behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as telegramTransport from "./fetch.js";
 import type {
   TelegramIngressWorkerCommand,
   TelegramIngressWorkerMessage,
@@ -45,7 +46,7 @@ function createRuntime(
   const port: RuntimePort = {
     postMessage(message) {
       messages.push(message);
-      if (message.type === "update") {
+      if (message.type === "updates") {
         sendCommand({
           type: "spool-ack",
           requestId: message.requestId,
@@ -72,6 +73,11 @@ function createRuntime(
     const responseIndex = Math.min(calls.length - 1, responses.length - 1);
     return expectDefined(responses[responseIndex], `Telegram response ${responseIndex}`);
   };
+  vi.spyOn(telegramTransport, "resolveTelegramTransport").mockReturnValue({
+    fetch: fetchImpl,
+    sourceFetch: fetchImpl,
+    close: async () => {},
+  });
   const done = runTelegramIngressWorkerRuntime({
     options: {
       token: "test-auth-token",
@@ -81,10 +87,6 @@ function createRuntime(
       timeoutSeconds: options.timeoutSeconds ?? 1,
     },
     port,
-    deps: {
-      fetch: fetchImpl,
-      closeTransport: async () => {},
-    },
   });
   return { calls, pollBodies, messages, done };
 }
@@ -94,6 +96,7 @@ async function flushRuntime(): Promise<void> {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -173,7 +176,7 @@ describe("telegram ingress worker poll cadence", () => {
 });
 
 describe("telegram ingress worker durable-before-offset", () => {
-  it("advances getUpdates offset only after parent spool-ack commits", async () => {
+  it("advances getUpdates offset only after the whole response is acknowledged", async () => {
     vi.useFakeTimers();
     const messages: TelegramIngressWorkerMessage[] = [];
     const listeners = new Set<(message: TelegramIngressWorkerCommand) => void>();
@@ -191,13 +194,13 @@ describe("telegram ingress worker durable-before-offset", () => {
     const port: RuntimePort = {
       postMessage(message) {
         messages.push(message);
-        if (message.type === "update") {
+        if (message.type === "updates") {
           // Parent must write spool first; offset must not advance until ack.
           void spoolGate.then(() => {
             sendCommand({
               type: "spool-ack",
               requestId: message.requestId,
-              result: { ok: true, updateId: 42 },
+              result: { ok: true, updateId: 44 },
             });
           });
         }
@@ -220,11 +223,20 @@ describe("telegram ingress worker durable-before-offset", () => {
       if (pollCount === 1) {
         return jsonResponse(200, {
           ok: true,
-          result: [{ update_id: 42, message: { text: "hi" } }],
+          result: [
+            { update_id: 42, message: { text: "hi" } },
+            { update_id: 44, message: { text: "again" } },
+            { update_id: 42, message: { text: "hi" } },
+          ],
         });
       }
       return jsonResponse(200, { ok: true, result: [] });
     };
+    vi.spyOn(telegramTransport, "resolveTelegramTransport").mockReturnValue({
+      fetch: fetchImpl,
+      sourceFetch: fetchImpl,
+      close: async () => {},
+    });
     const done = runTelegramIngressWorkerRuntime({
       options: {
         token: "test-auth-token",
@@ -234,15 +246,20 @@ describe("telegram ingress worker durable-before-offset", () => {
         timeoutSeconds: 1,
       },
       port,
-      deps: {
-        fetch: fetchImpl,
-        closeTransport: async () => {},
-      },
     });
 
     await flushRuntime();
-    // First poll delivered an update; spool-ack is still held.
-    expect(messages.some((m) => m.type === "update")).toBe(true);
+    // The response stays intact while its one spool-ack is held.
+    expect(messages.filter((message) => message.type === "updates")).toEqual([
+      expect.objectContaining({
+        updates: [
+          { update_id: 42, message: { text: "hi" } },
+          { update_id: 44, message: { text: "again" } },
+          { update_id: 42, message: { text: "hi" } },
+        ],
+        queued: 3,
+      }),
+    ]);
     expect(messages.some((m) => m.type === "spooled")).toBe(false);
     expect(pollCount).toBe(1);
 
@@ -251,9 +268,11 @@ describe("telegram ingress worker durable-before-offset", () => {
     await vi.advanceTimersByTimeAsync(0);
     await done;
 
-    expect(messages).toContainEqual(expect.objectContaining({ type: "spooled", updateId: 42 }));
+    expect(messages.filter((message) => message.type === "spooled")).toEqual([
+      expect.objectContaining({ type: "spooled", updateId: 44 }),
+    ]);
     // Second getUpdates must use offset = lastUpdateId + 1 only after spool-ack.
-    expect(pollBodies[1]?.offset).toBe(43);
+    expect(pollBodies[1]?.offset).toBe(45);
     expect(pollBodies.map((body) => body.timeout)).toEqual([0, 1]);
   });
 });

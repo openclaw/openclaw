@@ -45,7 +45,6 @@ async function withHashes<T>(
 ): Promise<WorkspaceComputationHashResult<T>> {
   const metrics: WorkspaceHashMetrics = {
     contentHashCount: 0,
-    contentHashDurationMs: 0,
     memoHitCount: 0,
   };
   if (!input) {
@@ -100,7 +99,11 @@ export async function executeWorkspaceManifestComputation(
     }
     case "workspace.manifest.staged": {
       const { loadStagedWorkerWorkspace } = await import("./workspace-result-inventory.runtime.js");
-      return await loadStagedWorkerWorkspace(command.input.root, command.input.ref);
+      return await loadStagedWorkerWorkspace(
+        command.input.root,
+        command.input.ref,
+        command.input.buildCacheInputs,
+      );
     }
     case "workspace.manifest.stage-input": {
       const { buildWorkspaceStageInput } =
@@ -124,6 +127,7 @@ export async function executeWorkspaceManifestComputation(
         const snapshot = await readActualWorkspaceManifestImpl({
           ...input,
           includePaths: input.includePaths && new Set(input.includePaths),
+          buildCacheInputs: input.buildCacheInputs && new Set(input.buildCacheInputs),
           preserveDirectories: input.preserveDirectories && new Set(input.preserveDirectories),
         });
         return command.type === "workspace.manifest.snapshot"

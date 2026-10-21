@@ -1,10 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Insertable, Selectable, Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
+import type { SandboxPersistentExecWorkspaceBinding } from "./persistent-exec-store.types.js";
 import { sandboxRegistryPublication } from "./registry-publication.js";
 import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./registry.types.js";
 
@@ -21,6 +22,7 @@ export type SandboxRegistryOperations = {
       entry: SandboxRegistryEntry;
       reserveRuntime?: boolean;
       prune?: SandboxRegistryPrune;
+      preservePersistentExecs?: boolean;
     };
     output: SandboxRegistryEntry | null;
   };
@@ -46,7 +48,7 @@ function rowToUpdate(row: SandboxRegistryInsert): Updateable<DB["sandbox_registr
 }
 
 export function reserveSandboxRegistryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   candidate: SandboxRegistryEntry,
 ): SandboxRegistryEntry {
   const rows = readRegistryRows(db, "container", {
@@ -85,7 +87,7 @@ export function shouldPruneSandboxRegistryEntry(
 }
 
 export function beginSandboxRegistryRemovalInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   {
     entry,
     reserveRuntime,
@@ -116,7 +118,10 @@ export function beginSandboxRegistryRemovalInDatabase(
   return next;
 }
 
-function insertSandboxRegistryRowInDatabase(db: DatabaseSync, row: SandboxRegistryInsert): void {
+function insertSandboxRegistryRowInDatabase(
+  db: EngineConnection,
+  row: SandboxRegistryInsert,
+): void {
   const { rows } = executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<SandboxRegistryDatabase>(db)
@@ -162,8 +167,43 @@ export function assertSandboxRegistryGenerationCurrent(
   }
 }
 
+/** Persistent admission and retirement consume the same durable removal fence. */
+export function assertSandboxRegistryPersistentExecCurrentInDatabase(
+  db: EngineConnection,
+  containerName: string,
+): SandboxRegistryEntry {
+  const current = readSandboxRegistryEntryInDatabase(db, containerName);
+  if (
+    !current ||
+    (current.backendId ?? "docker") !== "docker" ||
+    current.runtimeState === "pending"
+  ) {
+    throw new Error(
+      "Persistent execution requires the current ready Docker sandbox registry owner.",
+    );
+  }
+  assertSandboxRegistryReservationCurrent(current, current);
+  return current;
+}
+
+export function assertSandboxRegistryWorkspaceBinding(
+  current: SandboxRegistryEntry | null,
+  expected: SandboxPersistentExecWorkspaceBinding,
+): asserts current is SandboxRegistryEntry {
+  if (
+    !current ||
+    current.workspaceDir !== expected.workspaceDir ||
+    (current.workspaceSource ?? null) !== expected.workspaceSource ||
+    current.createdAtMs !== expected.registryCreatedAtMs
+  ) {
+    throw new Error(
+      "The original sandbox workspace binding changed; stopped custody must be retained.",
+    );
+  }
+}
+
 function removeRegistryRowInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   kind: "container" | "browser",
   containerName: string,
 ): void {
@@ -179,7 +219,7 @@ function removeRegistryRowInDatabase(
 }
 
 export function writeSandboxRegistryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   write: SandboxRegistryWrite,
 ): void {
   if (write.operation === "removeGeneration") {
@@ -244,7 +284,7 @@ export function writeSandboxRegistryInDatabase(
 }
 
 // Activity stamps can advance without changing custody; all allocation facts must match.
-function sameSandboxRegistryGeneration(
+export function sameSandboxRegistryGeneration(
   current: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
   expected: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
 ): boolean {
@@ -265,6 +305,7 @@ function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegi
     configHash: entry.configHash ?? existing?.configHash,
     runtimeState: entry.runtimeState ?? existing?.runtimeState,
     workspaceDir: existing?.workspaceDir ?? entry.workspaceDir,
+    workspaceSource: existing?.workspaceSource ?? entry.workspaceSource,
   };
   return registryEntryToRow({ kind: "container", next });
 }
@@ -308,7 +349,7 @@ function registryEntryToRow({
 }
 
 export function insertSandboxRegistryRowIfMissingInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   row: SandboxRegistryInsert,
 ): void {
   const { rows } = executeSqliteQuerySync(
@@ -379,6 +420,9 @@ export function rowToBrowserEntry(row: SandboxRegistryRow): SandboxBrowserRegist
 }
 
 function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegistryEntry {
+  if (entry.workspaceSource !== undefined && entry.workspaceSource !== "managed-worktree") {
+    throw new Error("Invalid sandbox workspace ownership marker; runtime custody retained.");
+  }
   return {
     ...entry,
     backendId: entry.backendId?.trim() || "docker",
@@ -388,7 +432,7 @@ function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegi
 }
 
 function readRegistryRows(
-  db: DatabaseSync,
+  db: EngineConnection,
   kind: "container" | "browser",
   filter?: { backendId: string; scopeKey: string },
 ): SandboxRegistryRow[] {
@@ -410,7 +454,7 @@ function readRegistryRows(
 }
 
 export function readSandboxRegistryEntryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   containerName: string,
 ): SandboxRegistryEntry | null {
   const row = readSandboxRegistryRowInDatabase(db, "container", containerName);
@@ -418,7 +462,7 @@ export function readSandboxRegistryEntryInDatabase(
 }
 
 function readSandboxRegistryRowInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   kind: "container" | "browser",
   containerName: string,
 ): SandboxRegistryRow | null {
@@ -435,14 +479,14 @@ function readSandboxRegistryRowInDatabase(
   );
 }
 
-export function readSandboxRegistryInDatabase(db: DatabaseSync): SandboxRegistryEntry[] {
+export function readSandboxRegistryInDatabase(db: EngineConnection): SandboxRegistryEntry[] {
   return readRegistryRows(db, "container")
     .map(rowToContainerEntry)
     .filter((entry): entry is SandboxRegistryEntry => entry !== null);
 }
 
 export function readSandboxRuntimeIdsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filter: { backendId: string; scopeKey: string },
 ): string[] {
   return readRegistryRows(db, "container", filter)
@@ -452,7 +496,7 @@ export function readSandboxRuntimeIdsInDatabase(
 }
 
 export function readSandboxBrowserRegistryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
 ): SandboxBrowserRegistryEntry[] {
   return readRegistryRows(db, "browser")
     .map(rowToBrowserEntry)

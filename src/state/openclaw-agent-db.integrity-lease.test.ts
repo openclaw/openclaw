@@ -24,6 +24,7 @@ import {
   releaseOpenClawAgentDatabaseLease,
   type OpenClawAgentDatabaseWorkerLeaseReceipt,
 } from "./openclaw-agent-db-lease.js";
+import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   listOpenClawRegisteredAgentDatabases,
@@ -36,7 +37,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   ensureOpenClawAgentDatabaseSchema,
   openOpenClawAgentDatabase,
-  recordOpenClawAgentDatabaseOpenFailure,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 import { cleanupRetiredAgentDatabaseLease } from "./openclaw-agent-execution-cleanup.js";
@@ -44,8 +44,8 @@ import { sqliteDatabaseSealSchemaFor } from "./openclaw-database-seal-schema.js"
 import {
   clearOpenClawDatabaseQuarantine,
   readOpenClawDatabaseQuarantineFailure,
-  recordOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.test-support.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseForTest,
@@ -188,12 +188,8 @@ it.each(process.platform === "win32" ? [false] : [false, true])(
     expect(await exited).toEqual([0, null]);
     const canonicalPath = fs.realpathSync(childPath);
     expect(
-      readSqliteCleanCloseSeal(
-        canonicalPath,
-        sqliteDatabaseSealSchemaFor(),
-        fs.statSync(canonicalPath, { bigint: true }),
-      ),
-    ).toBeDefined();
+      readSqliteCleanCloseSeal(canonicalPath, fs.statSync(canonicalPath, { bigint: true })),
+    ).toMatchObject({ schemaIdentity: sqliteDatabaseSealSchemaFor("agent")?.schemaIdentity });
   },
 );
 
@@ -585,20 +581,18 @@ it.each(["quarantine", "schema-version latch"] as const)(
     closeOpenClawStateDatabase();
     if (condition === "quarantine") {
       // Drop process-held proof after persisting quarantine, as on restart.
-      expect(
-        recordOpenClawDatabaseQuarantine({
-          kind: "agent",
-          path: owner.database.path,
-          reason: "synthetic readonly quarantine",
-          env: owner.env,
-        }),
-      ).toBe(true);
+      seedOpenClawDatabaseQuarantine({
+        kind: "agent",
+        path: owner.database.path,
+        reason: "synthetic readonly quarantine",
+        env: owner.env,
+      });
     }
     closeOpenClawAgentDatabasesForTest();
     const latchError = new Error("synthetic schema-version latch");
     latchError.name = "SqliteSchemaVersionError";
     if (condition === "schema-version latch") {
-      expect(recordOpenClawAgentDatabaseOpenFailure(owner.database.path, latchError)).toBe(true);
+      recordOpenClawAgentDatabaseOpenFailure(owner.database.path, latchError);
       expect(
         readOpenClawDatabaseQuarantineFailure("agent", owner.database.path, { env: owner.env }),
       ).toBeUndefined();

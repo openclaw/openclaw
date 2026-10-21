@@ -3,8 +3,8 @@ import { For, Show, createMemo } from "solid-js";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { ConfigFormArrayIdentity } from "./config-form-array-identity.ts";
 import {
-  openCollectionDraft,
-  ConfigCollectionDraftHost,
+  ConfigCollectionDraft,
+  type ConfigCollectionDraftHandle,
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
@@ -24,10 +24,12 @@ import { ConfigMapField } from "./config-form.node.collection-map.tsx";
 import { resolveConfigObjectFields } from "./config-form.node.collection.ts";
 import {
   configChildRenderOptions,
+  createCollectionFocus,
   getSensitiveRenderState,
   CollectionRemoveButton,
   FieldRow,
   renderSchemaDefaultDescription,
+  type CollectionRowFocus,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.tsx";
@@ -162,7 +164,7 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
         (candidate.length > arrayValue.length &&
           arrayValue.every((entry, index) => configValuesEqual(entry, candidate[index])))),
   );
-  const wholeArrayDefault =
+  const atomicCandidate =
     constrainedCandidate ??
     (value === undefined &&
     params.isRequired &&
@@ -170,7 +172,6 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
     isSupportedConfigValueValid(schema, [])
       ? []
       : undefined);
-  const atomicCandidate = wholeArrayDefault && structuredClone(wholeArrayDefault);
   const canAppend = maximumItems === undefined || arrayValue.length < maximumItems;
   const requiresDraft = atomicCandidate === undefined && autoCandidate === undefined;
   const nextItemSchema = itemSchemaAt(arrayValue.length);
@@ -216,7 +217,7 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
       }
       nextValue[itemIndex] = nextItem.value;
     }
-    if (canApplyArrayCandidate(schema, arrayValue, nextValue, uniqueItems, true)) {
+    if (canApplyArrayCandidate(schema, arrayValue, nextValue, true)) {
       return patch(nextValue, rowIdentities);
     }
     return false;
@@ -224,7 +225,6 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
 
   return {
     arrayValue,
-    arraySourceIdentity,
     inherited,
     label,
     help,
@@ -235,39 +235,30 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
     rowIdentities,
     patch,
     minimumItems,
-    uniqueItems,
     itemSchemaAt,
     atomicCandidate,
     canAppend,
-    requiresDraft,
-    autoCandidate,
     draftId,
     draftProps,
     patchArrayItem,
-    commitDraft(event: CustomEvent<ConfigFormCollectionDraftCommit>) {
-      const nextValue = [...arrayValue, event.detail.value];
-      const canApply =
-        !(uniqueItems && arrayValue.some((item) => configValuesEqual(item, event.detail.value))) &&
-        (maximumItems === undefined || arrayValue.length < maximumItems) &&
-        isSupportedConfigValueValid(nextItemSchema, event.detail.value) &&
-        (nextValue.length < minimumItems || isSupportedConfigValueValid(schema, nextValue));
-      if (!canApply || !patch(nextValue, [...rowIdentities, Symbol("array-row")])) {
-        event.preventDefault();
-      }
+    commitDraft(draft: ConfigFormCollectionDraftCommit) {
+      const nextValue = [...arrayValue, draft.value];
+      // ConfigCollectionDraft validated the item and complete append candidate synchronously.
+      return patch(nextValue, [...rowIdentities, Symbol("array-row")]);
     },
-    add(event: Event) {
+    add(openDraft: () => void) {
       if (atomicCandidate) {
         if (onPatch(path, atomicCandidate) === false) {
-          openCollectionDraft(event, draftId);
+          openDraft();
         }
       } else if (requiresDraft) {
-        openCollectionDraft(event, draftId);
+        openDraft();
       } else if (autoCandidate) {
         const appended = Array.from({ length: autoCandidate.length - arrayValue.length }, () =>
           Symbol("array-row"),
         );
         if (!patch(autoCandidate, [...rowIdentities, ...appended])) {
-          openCollectionDraft(event, draftId);
+          openDraft();
         }
       }
     },
@@ -281,17 +272,12 @@ function ConfigArrayRow(
     content: ArrayContent;
     item: unknown;
     index: number;
+    focus: CollectionRowFocus;
   },
 ): JSX.Element {
   const nextValue = createMemo(() => props.content.arrayValue.toSpliced(props.index, 1));
   const canRemove = createMemo(() =>
-    canApplyArrayCandidate(
-      props.params.schema,
-      props.content.arrayValue,
-      nextValue(),
-      props.content.uniqueItems,
-      false,
-    ),
+    canApplyArrayCandidate(props.params.schema, props.content.arrayValue, nextValue(), false),
   );
   const node = createMemo(() => {
     const schema = props.content.itemSchemaAt(props.index);
@@ -314,6 +300,7 @@ function ConfigArrayRow(
     props.content.patch(nextValue(), props.content.rowIdentities.toSpliced(props.index, 1));
   const removeControl = () => (
     <CollectionRemoveButton
+      focus={props.focus}
       label={t("configForm.removeItem")}
       disabled={
         props.params.disabled ||
@@ -347,6 +334,8 @@ function ConfigArrayRow(
 }
 
 export function ConfigArray(props: CollectionProps): JSX.Element {
+  let draft!: ConfigCollectionDraftHandle;
+  const openDraft = () => draft.openDraft();
   // Only string segments identify a nested array; a moved parent row retains its editors.
   const rows = createMemo(() =>
     JSON.stringify(props.params.path.filter((segment) => typeof segment === "string")),
@@ -366,6 +355,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
         identity: content()!.rowIdentities[index],
       })) ?? [],
   );
+  const focus = createCollectionFocus(() => entries().map((entry) => entry.identity));
   return (
     <Show
       when={content()}
@@ -404,6 +394,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
                 </span>
               </Show>
               <button
+                ref={focus.addRef}
                 type="button"
                 class={props.params.compact ? "btn btn--sm btn--icon" : "btn btn--sm"}
                 aria-label={t("configForm.add")}
@@ -412,7 +403,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
                   props.params.disabled ||
                   (!current().canAppend && current().atomicCandidate === undefined)
                 }
-                onClick={(event) => current().add(event)}
+                onClick={() => current().add(openDraft)}
               >
                 <Show when={props.params.compact} fallback={t("configForm.add")}>
                   <Icon name="plus" />
@@ -420,12 +411,11 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
               </button>
             </div>
           </div>
-          <ConfigCollectionDraftHost
+          <ConfigCollectionDraft
+            {...current().draftProps}
             id={current().draftId}
-            props={current().draftProps}
-            onConfig-collection-draft-commit={(
-              event: CustomEvent<ConfigFormCollectionDraftCommit>,
-            ) => current().commitDraft(event)}
+            ref={(handle) => (draft = handle)}
+            onCommit={(value) => current().commitDraft(value)}
           />
           <Show
             when={entries().length > 0}
@@ -444,6 +434,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
                     content={current()}
                     item={entry().item}
                     index={index()}
+                    focus={focus.row(() => entry().identity)}
                   />
                 )}
               </For>

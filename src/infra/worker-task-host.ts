@@ -4,8 +4,10 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { captureDeletedAgentDatabaseFences } from "./agent-database-readers.js";
+import { getDatabaseEngineSelection } from "./database-engine/context.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
+import { readSqliteDatabaseAdmissionDeadline } from "./sqlite-worker-database-admission-relay.js";
 import {
   createSqliteDatabaseAdmissionRelay,
   type SqliteWorkerOperationAdmission,
@@ -16,6 +18,7 @@ import {
   markWorkerRetirement,
   receiveWorkerMemoryPort,
 } from "./worker-cpu.js";
+import { recordWorkerMessage } from "./worker-message-metrics.js";
 import {
   captureRetainedNativeWorkerSource,
   createRetainedNativeWorker,
@@ -27,6 +30,23 @@ import { getWorkerComputeCapacity } from "./worker-task-capacity.js";
 import { liveWorkerTaskPools } from "./worker-task-pool-registry.js";
 import type { WorkerTaskPoolOwnerOptions } from "./worker-task-pool.types.js";
 import type { WorkerTaskContext } from "./worker-task-transport.js";
+
+// Diagnostics project a closed vocabulary, not arbitrary SDK task fields.
+const diagnosticTaskKinds = new Set([
+  "prepare",
+  "prepare-session",
+  "transcript-stats",
+  "session-entry",
+  "session-entries",
+  "session-cleanup",
+  "session-memory-capture",
+  "history-page",
+  "historical-eviction-candidates",
+  "usage-cost",
+  "model-context",
+  "context-messages",
+  "transcript-search",
+]);
 
 const prepareResources = createLazyRuntimeModule(() => import("./temp-artifact-cleanup.js"));
 const admissions = resolveGlobalSingleton(
@@ -112,8 +132,11 @@ export function createWorkerTaskHost(
         });
       }
       // The retained relay supplies current facts on demand; global snapshots grow with sessions.
+      const selection = getDatabaseEngineSelection();
       const context: WorkerTaskContext = {
+        ...(selection ? { databaseEngineSelection: selection } : {}),
         deletedAgentDatabaseFences: captureDeletedAgentDatabaseFences(),
+        databaseAdmissionDeadlineAtMs: readSqliteDatabaseAdmissionDeadline(),
         ...(!admission.sent ? { databaseAdmissionPort: admission.owner.port } : {}),
       };
       admission.sent = true;
@@ -132,7 +155,17 @@ export function createWorkerTaskHost(
           operation === undefined ? "task" : classifyWorkerRequest(operation),
         );
     },
+    describeTask(url, input) {
+      // Inspect a data property only: diagnostics must not execute an input getter.
+      const kind: unknown =
+        input !== null && typeof input === "object"
+          ? Object.getOwnPropertyDescriptor(input, "kind")?.value
+          : undefined;
+      const operation = typeof kind === "string" && diagnosticTaskKinds.has(kind) ? kind : "task";
+      return `${workerRequestKind(url)}.${operation}`;
+    },
     receiveMessage: receiveWorkerMemoryPort,
+    observeResourceReply: () => recordWorkerMessage("resource", "from_worker"),
     workerStarted(worker, pool) {
       if (owner.databaseAccess !== "read-only") {
         trackSqliteDatabaseAdmissionWorker(worker);

@@ -122,6 +122,15 @@ Backend adapters retain protocol validation and special-mode handling.
     });
     ```
 
+    Direct-provider completions record credential failures using the same auth-profile
+    health policy as agent turns and try the next eligible profile. Each profile is
+    attempted at most once per completion. Explicit `model@profile` pins and
+    provider-bound credentials stay pinned. When the pool is exhausted, the last
+    provider error still resolves with `stopReason: "error"`; callers should check
+    that field before using the text. Successful requests clear the selected
+    profile's failure state for that model. Retries retain the original runtime
+    lease and repeat authorization checks before dispatch.
+
     `maxTokens` and `temperature` are advisory sampling hints. The selected
     provider, CLI, or harness applies them when its transport exposes an
     equivalent control and otherwise may ignore them. They do not weaken the
@@ -160,6 +169,11 @@ Backend adapters retain protocol validation and special-mode handling.
     callers can distinguish authorization, invalid isolated input, unsupported
     or unavailable runtimes, aborts, timeouts, rejected output, and other
     completion failures without matching message text.
+
+    `LLM_RUNTIME_LIFECYCLE` means the host refused the completion because a
+    plugin or model runtime is reloading or has retired; no inference ran.
+    Keep the work and retry it from a fresh plugin operation after the reload
+    completes, instead of treating it as a provider failure.
 
     Provider orchestration can also acquire the configured local-service
     lifecycle before issuing an HTTP request:

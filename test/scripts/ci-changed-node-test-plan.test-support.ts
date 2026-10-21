@@ -9,6 +9,7 @@ import {
 import { createSelectedNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
 import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
 
+type Shards = ReturnType<typeof createChangedNodeTestShards>;
 export const gatewayCallsitesGuard = "src/gateway/client-callsites.guard.test.ts";
 
 export const smokeTestFiles = new Set([
@@ -38,13 +39,11 @@ export function materializeGatewayCallsitesFixture(cwd: string) {
   writeFileSync(file, "export {};\n");
 }
 
-export function fallbackGroups(
-  shards: NonNullable<ReturnType<typeof createChangedNodeTestShards>>,
-) {
+export function fallbackGroups(shards: NonNullable<Shards>) {
   return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
 }
 
-export function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
+export function selectedFiles(shards: Shards) {
   return (shards ?? []).flatMap((shard) =>
     (shard.targets ?? []).concat(
       shard.includePatterns ?? [],
@@ -53,64 +52,60 @@ export function selectedFiles(shards: ReturnType<typeof createChangedNodeTestSha
   );
 }
 
-export function expectCanonicalGroupedConcurrency(
-  shards: ReturnType<typeof createChangedNodeTestShards>,
-  runnerBackend?: string,
-) {
+export function expectCanonicalGroupedConcurrency(shards: Shards, runnerBackend?: string) {
   const grouped = expectDefined(shards, "changed owner plan").filter((shard) => shard.groups);
-  const files = grouped.flatMap((shard) =>
-    (shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+  const groups = grouped.flatMap((shard) =>
+    (shard.groups ?? []).map((group) => ({ shard, group })),
   );
   const canonical = expectDefined(
-    createSelectedNodeTestShardBundles(files, {
-      runnerBackend,
-      includeReleaseOnlyRuntimeTests: true,
-      includePrExemptRuntimeTests: true,
-    }),
+    createSelectedNodeTestShardBundles(
+      groups.flatMap(({ group }) => group.includePatterns ?? []),
+      {
+        runnerBackend,
+        includeReleaseOnlyRuntimeTests: true,
+        includePrExemptRuntimeTests: true,
+      },
+    ),
     "canonical selected owners",
   );
-  for (const shard of grouped) {
-    for (const group of shard.groups ?? []) {
-      if (!group.includePatterns) {
-        // Paired isolated tooling configs retain whole processes and serial admission.
-        expect(group.shard_name).toBe("core-tooling-isolated");
-        expect(group.configs.toSorted()).toEqual([
-          "test/vitest/vitest.tooling-docker.config.ts",
-          "test/vitest/vitest.tooling-isolated.config.ts",
-        ]);
-        expect(shard.planConcurrency).toBe(1);
-        continue;
-      }
-      const owner = expectDefined(
-        canonical.find((job) =>
-          job.groups.some(
-            (candidate) =>
-              candidate.shard_name === group.shard_name &&
-              group.configs.every((config) => candidate.configs.includes(config)),
-          ),
-        ),
-        `canonical concurrency owner for ${group.shard_name}`,
-      );
-      expect(shard.planConcurrency, group.shard_name).toBe(owner.planConcurrency);
+  for (const { shard, group } of groups) {
+    if (!group.includePatterns) {
+      // Paired isolated tooling configs retain whole processes and serial admission.
+      expect(group.shard_name).toBe("core-tooling-isolated");
+      expect(group.configs.toSorted()).toEqual([
+        "test/vitest/vitest.tooling-docker.config.ts",
+        "test/vitest/vitest.tooling-isolated.config.ts",
+      ]);
+      expect(shard.planConcurrency).toBe(1);
+      continue;
     }
+    const owner = expectDefined(
+      canonical.find((job) =>
+        job.groups.some(
+          (candidate) =>
+            candidate.shard_name === group.shard_name &&
+            group.configs.every((config) => candidate.configs.includes(config)),
+        ),
+      ),
+      `canonical concurrency owner for ${group.shard_name}`,
+    );
+    expect(shard.planConcurrency, group.shard_name).toBe(owner.planConcurrency);
   }
 }
 
 export function expectProtectedOwnerExpansion(
-  shards: ReturnType<typeof createChangedNodeTestShards>,
+  shards: Shards,
   required: readonly string[],
   ownerAreas: readonly string[],
 ) {
   const files = selectedFiles(shards);
+  const allowed = new Set([...required, ...PR_PROTECTED_RUNTIME_TEST_FILES]);
   expect(files.filter((file) => required.includes(file)).toSorted()).toEqual(
     [...required].toSorted(),
   );
   expect(
     files.filter(
-      (file) =>
-        !required.includes(file) &&
-        !PR_PROTECTED_RUNTIME_TEST_FILES.includes(file) &&
-        !ownerAreas.some((area) => file.startsWith(`${area}/`)),
+      (file) => !allowed.has(file) && !ownerAreas.some((area) => file.startsWith(`${area}/`)),
     ),
   ).toEqual([]);
   expect(new Set(files).size).toBe(files.length);

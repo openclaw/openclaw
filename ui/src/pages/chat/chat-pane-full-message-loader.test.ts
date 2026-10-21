@@ -14,7 +14,7 @@ function fixture(request = vi.fn().mockResolvedValue(result)) {
   const client = createGatewayBrowserClientFixture({
     request: (method, params) => (method === "chat.message.get" ? request(method, params) : {}),
   });
-  const { state, context } = createRefreshChatPane(client);
+  const { pane, state, context } = createRefreshChatPane(client);
   state.sessionKey = messageRequest.sessionKey;
   state.currentSessionId = "physical-session";
   const session = {
@@ -33,43 +33,22 @@ function fixture(request = vi.fn().mockResolvedValue(result)) {
   };
   context.gateway.snapshot.selfUser = { id: "alice", name: "Alice" };
   const load = () => createSidebarFullMessageLoader(state, context.gateway)!;
-  return { state, context, session, load, request };
+  return { pane, state, context, session, load, request };
 }
 
 describe("explicit full-message reads", () => {
   it.each(["sharing or config", "role", "scopes"] as const)(
     "rechecks full-message reads after current %s authority changes without rerendering",
     async (change) => {
-      const full = { ok: true, message: { role: "assistant", content: "Authorized answer" } };
-      const read = vi.fn().mockResolvedValue(full);
-      const client = createGatewayBrowserClientFixture({
-        request: (method) => (method === "chat.message.get" ? read() : Promise.resolve({})),
-      });
-      const { pane, state, context } = createRefreshChatPane(client);
+      const full = result;
+      const { pane, state, context, request: read } = fixture();
       context.gateway.snapshot.hello = gatewayHelloForMethods(
         ["chat.message.get"],
         ["operator.read", "operator.write"],
       );
-      state.sessionKey = "agent:main:full-cache";
-      state.currentSessionId = "same-session";
-      state.sessionsResult = {
-        ts: 1,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          {
-            key: state.sessionKey,
-            kind: "direct",
-            updatedAt: 1,
-            sessionId: "same-session",
-            lifecycleRevision: "same-revision",
-          },
-        ],
-      };
       pane.render();
       const load = pane.chatProps!.loadFullAssistantMessage!;
-      const request = { sessionKey: state.sessionKey, messageId: "answer" };
+      const request = messageRequest;
       expect(await load(request)).toEqual(full);
       state.connectionEpoch += 1;
       context.gateway.snapshot.hello.auth!.scopes!.reverse();

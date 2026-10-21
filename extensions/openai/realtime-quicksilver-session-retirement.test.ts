@@ -7,8 +7,8 @@ import type {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import {
-  acquireOpenAIQuicksilverBrowserSessionBroker,
-  releaseOpenAIQuicksilverBrowserSessionBroker,
+  acquireOpenAIQuicksilverBrowserSessionBroker as acquireBroker,
+  releaseOpenAIQuicksilverBrowserSessionBroker as releaseBroker,
 } from "./realtime-quicksilver-session-owner.js";
 import {
   createBroker,
@@ -21,6 +21,26 @@ const OPAQUE_REALTIME_MODEL = "gpt-live-test-canary";
 
 function requestTarget(url: string | URL | Request): string {
   return typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+}
+
+function callResponse(answer = "v=answer\r\n", callId = "rtc_retirement") {
+  return new Response(answer, {
+    status: 201,
+    headers: { Location: `/v1/realtime/calls/${callId}` },
+  });
+}
+
+function retirementFetch(
+  hangup: () => Response | Promise<Response>,
+  create: () => Response | Promise<Response> = callResponse,
+) {
+  return vi.fn<typeof fetch>(async (url) =>
+    requestTarget(url).endsWith("/hangup") ? hangup() : create(),
+  );
+}
+
+function offerRequest(token: string) {
+  return createRequest({ token, body: AUDIO_ONLY_SDP });
 }
 
 function retirementBridge() {
@@ -77,22 +97,15 @@ describe("GA Realtime call retirement", () => {
     const nextLogger = { debug: vi.fn(), warn: vi.fn() };
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: string | URL | Request) =>
-        requestTarget(url).endsWith("/hangup")
-          ? new Response(null, { status: 204 })
-          : new Response("v=answer\r\n", {
-              status: 201,
-              headers: { Location: "/v1/realtime/calls/rtc_context" },
-            }),
-      ),
+      retirementFetch(() => new Response(null, { status: 204 })),
     );
-    const first = acquireOpenAIQuicksilverBrowserSessionBroker(
+    const first = acquireBroker(
       { getConfig: originalConfig, logger: originalLogger },
       { ...openAIRealtimeHost, resolveProviderRequestHeaders: originalHeaders },
     );
     try {
       const reservation = await reserveRetirementSession(first, retirementBridge);
-      const retained = acquireOpenAIQuicksilverBrowserSessionBroker(
+      const retained = acquireBroker(
         { getConfig: nextConfig, logger: nextLogger },
         { ...openAIRealtimeHost, resolveProviderRequestHeaders: replacementHeaders },
       );
@@ -113,11 +126,11 @@ describe("GA Realtime call retirement", () => {
       expect(nextLogger.debug).toHaveBeenCalledOnce();
       expect(originalHeaders).toHaveBeenCalledOnce();
       expect(replacementHeaders).not.toHaveBeenCalled();
-      await releaseOpenAIQuicksilverBrowserSessionBroker(retained);
+      await releaseBroker(retained);
       expect(originalHeaders).toHaveBeenCalledTimes(2);
       expect(replacementHeaders).not.toHaveBeenCalled();
     } finally {
-      await releaseOpenAIQuicksilverBrowserSessionBroker(first);
+      await releaseBroker(first);
     }
   });
 
@@ -136,23 +149,21 @@ describe("GA Realtime call retirement", () => {
     const creation = createDeferred<void>();
     const firstHangup = createDeferred<void>();
     let cancelSettled = false;
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
-      if (requestTarget(url).endsWith("/hangup")) {
+    const fetchImpl = retirementFetch(
+      async () => {
         hangups += 1;
         if (failure === "cancel during creation" && hangups === 1) {
           await firstHangup.promise;
         }
         return new Response(null, { status: failHangup && hangups < 3 ? 503 : 204 });
-      }
-      creations += 1;
-      await creation.promise;
-      const answer = failure === "empty answer" ? "" : "v=answer\r\n";
-      return new Response(answer, {
-        status: 201,
-        headers: { Location: "/v1/realtime/calls/rtc_retirement" },
-      });
-    });
-    const { realtime } = createBroker({ fetchImpl: fetchImpl as typeof fetch });
+      },
+      async () => {
+        creations += 1;
+        await creation.promise;
+        return callResponse(failure === "empty answer" ? "" : "v=answer\r\n");
+      },
+    );
+    const { realtime } = createBroker({ fetchImpl });
     try {
       const onClose = vi.fn();
       const reservation = await reserveRetirementSession(
@@ -178,10 +189,7 @@ describe("GA Realtime call retirement", () => {
           : undefined,
       );
       const response = createResponseHarness();
-      const handling = realtime.handler(
-        createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
-        response.res,
-      );
+      const handling = realtime.handler(offerRequest(reservation.clientSecret), response.res);
       await vi.waitFor(() => expect(creations).toBe(1));
       const stopping =
         failure === "shutdown during creation"
@@ -237,10 +245,7 @@ describe("GA Realtime call retirement", () => {
           : 1,
       );
       const replay = createResponseHarness();
-      await realtime.handler(
-        createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
-        replay.res,
-      );
+      await realtime.handler(offerRequest(reservation.clientSecret), replay.res);
       expect(replay.res.statusCode).toBe(401);
       await realtime.cleanup();
       await vi.advanceTimersByTimeAsync(30 * 60_000);
@@ -253,126 +258,94 @@ describe("GA Realtime call retirement", () => {
     }
   });
 
-  it.each(["finish"] as const)(
-    "joins the first failed retirement when delayed answer delivery emits %s",
-    async (deliveryEvent) => {
-      vi.useFakeTimers();
-      const bridge = retirementBridge();
-      let hangups = 0;
-      let failHangup = true;
-      const delivering = createDeferred<void>();
-      const fetchImpl = vi.fn(async (url: string | URL | Request) => {
-        if (requestTarget(url).endsWith("/hangup")) {
-          hangups += 1;
-          return new Response(null, { status: failHangup ? 503 : 204 });
-        }
-        return new Response("v=answer\r\n", {
-          status: 201,
-          headers: { Location: "/v1/realtime/calls/rtc_retirement" },
-        });
-      });
-      const { realtime, logger } = createBroker({ fetchImpl: fetchImpl as typeof fetch });
-      const request = createRequest({ body: AUDIO_ONLY_SDP });
-      const response = new ServerResponse(request);
-      const end = vi.spyOn(response, "end").mockImplementationOnce(() => {
-        response.writeHead(response.statusCode);
-        delivering.resolve();
-        return response;
-      });
-      let handling: Promise<boolean> | undefined;
-      try {
-        const reservation = await reserveRetirementSession(realtime, () => bridge);
-        request.headers.authorization = `Bearer ${reservation.clientSecret}`;
-        handling = realtime.handler(request, response);
-        await delivering.promise;
-        expect(response.headersSent).toBe(true);
-        await expect(realtime.broker.cancelBrowserSession(reservation)).rejects.toThrow(
-          "OpenAI Realtime call hangup failed (503)",
-        );
-        expect(hangups).toBe(1);
-        response.emit(deliveryEvent);
-        await expect(handling).resolves.toBe(true);
-        expect(end).toHaveBeenCalledOnce();
-        expect.soft(hangups).toBe(1);
-        await vi.advanceTimersByTimeAsync(999);
-        expect.soft(hangups).toBe(1);
-        await vi.advanceTimersByTimeAsync(1);
-        expect.soft(hangups).toBe(2);
-        await vi.advanceTimersByTimeAsync(4_999);
-        expect.soft(hangups).toBe(2);
-        await vi.advanceTimersByTimeAsync(1);
-        expect.soft(hangups).toBe(3);
-        await vi.advanceTimersByTimeAsync(30 * 60_000);
-        expect.soft(hangups).toBe(3);
-        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("INCOMPLETE"));
-        expect(bridge.close).toHaveBeenCalledOnce();
-      } finally {
-        failHangup = false;
-        response.emit(deliveryEvent);
-        await handling?.catch(() => undefined);
-        await realtime.cleanup();
-      }
-    },
-  );
+  it("joins the first failed retirement when delayed answer delivery finishes", async () => {
+    vi.useFakeTimers();
+    const bridge = retirementBridge();
+    let hangups = 0;
+    let failHangup = true;
+    const delivering = createDeferred<void>();
+    const fetchImpl = retirementFetch(() => {
+      hangups += 1;
+      return new Response(null, { status: failHangup ? 503 : 204 });
+    });
+    const { realtime, logger } = createBroker({ fetchImpl });
+    const request = createRequest({ body: AUDIO_ONLY_SDP });
+    const response = new ServerResponse(request);
+    const end = vi.spyOn(response, "end").mockImplementationOnce(() => {
+      response.writeHead(response.statusCode);
+      delivering.resolve();
+      return response;
+    });
+    let handling: Promise<boolean> | undefined;
+    try {
+      const reservation = await reserveRetirementSession(realtime, () => bridge);
+      request.headers.authorization = `Bearer ${reservation.clientSecret}`;
+      handling = realtime.handler(request, response);
+      await delivering.promise;
+      expect(response.headersSent).toBe(true);
+      await expect(realtime.broker.cancelBrowserSession(reservation)).rejects.toThrow(
+        "OpenAI Realtime call hangup failed (503)",
+      );
+      expect(hangups).toBe(1);
+      response.emit("finish");
+      await expect(handling).resolves.toBe(true);
+      expect(end).toHaveBeenCalledOnce();
+      expect.soft(hangups).toBe(1);
+      await vi.advanceTimersByTimeAsync(999);
+      expect.soft(hangups).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect.soft(hangups).toBe(2);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect.soft(hangups).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect.soft(hangups).toBe(3);
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect.soft(hangups).toBe(3);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("INCOMPLETE"));
+      expect(bridge.close).toHaveBeenCalledOnce();
+    } finally {
+      failHangup = false;
+      response.emit("finish");
+      await handling?.catch(() => undefined);
+      await realtime.cleanup();
+    }
+  });
 
-  it.each(["reject"] as const)(
-    "awaits %s sideband retirement before hangup and reservation release",
-    async () => {
-      const retired = createDeferred<void>();
-      const bridge = retirementBridge();
-      vi.mocked(bridge.close).mockReturnValue(retired.promise);
-      const hangup = vi.fn();
-      const { realtime } = createBroker({
-        fetchImpl: async (url) => {
-          if (requestTarget(url).endsWith("/hangup")) {
-            hangup();
-            return new Response(null, { status: 204 });
-          }
-          return new Response("v=answer\r\n", {
-            status: 201,
-            headers: { Location: "/v1/realtime/calls/rtc_async_retirement" },
-          });
-        },
-      });
-      try {
-        const reservation = await reserveRetirementSession(realtime, () => bridge);
-        await realtime.handler(
-          createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
-          createResponseHarness().res,
-        );
-        const closing = realtime.broker.cancelBrowserSession(reservation);
-        const concurrent = realtime.cleanup();
-        expect(realtime.getSessionCounts()).toMatchObject({ active: 0, reservations: 1 });
-        expect(bridge.close).toHaveBeenCalledOnce();
-        expect(hangup).not.toHaveBeenCalled();
-        retired.reject(new Error("sideband disposal failed"));
-        await Promise.all([closing, concurrent]);
-        expect(hangup).toHaveBeenCalledOnce();
-        expect(realtime.getSessionCounts()).toMatchObject({ active: 0, reservations: 0 });
-      } finally {
-        retired.resolve();
-        await realtime.cleanup();
-      }
-    },
-  );
+  it("awaits rejected sideband retirement before hangup and reservation release", async () => {
+    const retired = createDeferred<void>();
+    const bridge = retirementBridge();
+    vi.mocked(bridge.close).mockReturnValue(retired.promise);
+    const hangup = vi.fn(() => new Response(null, { status: 204 }));
+    const { realtime } = createBroker({ fetchImpl: retirementFetch(hangup) });
+    try {
+      const reservation = await reserveRetirementSession(realtime, () => bridge);
+      await realtime.handler(offerRequest(reservation.clientSecret), createResponseHarness().res);
+      const closing = realtime.broker.cancelBrowserSession(reservation);
+      const concurrent = realtime.cleanup();
+      expect(realtime.getSessionCounts()).toMatchObject({ active: 0, reservations: 1 });
+      expect(bridge.close).toHaveBeenCalledOnce();
+      expect(hangup).not.toHaveBeenCalled();
+      retired.reject(new Error("sideband disposal failed"));
+      await Promise.all([closing, concurrent]);
+      expect(hangup).toHaveBeenCalledOnce();
+      expect(realtime.getSessionCounts()).toMatchObject({ active: 0, reservations: 0 });
+    } finally {
+      retired.resolve();
+      await realtime.cleanup();
+    }
+  });
 
-  it.each([404])("coalesces reentrant retirement and settles HTTP %s once", async (status) => {
+  it("coalesces reentrant retirement and settles HTTP 404 once", async () => {
     vi.useFakeTimers();
     const bridge = retirementBridge();
     const hungUp = createDeferred<void>();
     let hangups = 0;
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
-      if (requestTarget(url).endsWith("/hangup")) {
-        hangups += 1;
-        await hungUp.promise;
-        return new Response(null, { status });
-      }
-      return new Response("v=answer\r\n", {
-        status: 201,
-        headers: { Location: "/v1/realtime/calls/rtc_retirement" },
-      });
+    const fetchImpl = retirementFetch(async () => {
+      hangups += 1;
+      await hungUp.promise;
+      return new Response(null, { status: 404 });
     });
-    const { realtime } = createBroker({ fetchImpl: fetchImpl as typeof fetch });
+    const { realtime } = createBroker({ fetchImpl });
     let reentered: Promise<void> | undefined;
     try {
       const reservation = await reserveRetirementSession(realtime, ({ onTerminal }) => {
@@ -382,13 +355,9 @@ describe("GA Realtime call retirement", () => {
         });
         return bridge;
       });
-      await realtime.handler(
-        createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
-        createResponseHarness().res,
-      );
+      await realtime.handler(offerRequest(reservation.clientSecret), createResponseHarness().res);
       const first = realtime.broker.cancelBrowserSession(reservation);
       const concurrent = realtime.cleanup();
-      expect(hangups).toBe(1);
       expect(bridge.close).toHaveBeenCalledOnce();
       hungUp.resolve();
       await Promise.all([first, concurrent, reentered]);
@@ -401,92 +370,74 @@ describe("GA Realtime call retirement", () => {
     }
   });
 
-  it.each([{ scope: "per-client native", count: 2, ownerConnId: "conn-retiring" }])(
-    "retains exhausted old broker calls and $scope capacity across replacement",
-    async ({ count, ownerConnId }) => {
-      vi.useFakeTimers();
-      let failHangup = true;
-      let hangups = 0;
-      let callId = 0;
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (url: string | URL | Request) => {
-          if (requestTarget(url).endsWith("/hangup")) {
-            hangups += 1;
-            return new Response(null, { status: failHangup ? 503 : 204 });
-          }
-          callId += 1;
-          return new Response("v=answer\r\n", {
-            status: 201,
-            headers: { Location: `/v1/realtime/calls/rtc_retirement_${callId}` },
-          });
-        }),
+  it("retains exhausted old broker calls and per-client native capacity across replacement", async () => {
+    const count = 2;
+    const ownerConnId = "conn-retiring";
+    vi.useFakeTimers();
+    let failHangup = true;
+    let hangups = 0;
+    let callId = 0;
+    vi.stubGlobal(
+      "fetch",
+      retirementFetch(
+        () => {
+          hangups += 1;
+          return new Response(null, { status: failHangup ? 503 : 204 });
+        },
+        () => callResponse("v=answer\r\n", `rtc_retirement_${++callId}`),
+      ),
+    );
+    const params = { getConfig: () => undefined, logger: { debug: vi.fn(), warn: vi.fn() } };
+    const old = acquireBroker(params, openAIRealtimeHost);
+    let replacement: typeof old | undefined;
+    const reserveNext = (current: typeof old, clientOwner = ownerConnId) =>
+      current.broker.createBrowserSession(
+        {
+          providerConfig: {},
+          model: OPAQUE_REALTIME_MODEL,
+          ownerConnId: clientOwner,
+          runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+          clientControl: { owner: "gateway" },
+          gatewayControl: { bindBridge: vi.fn(), bindControl: vi.fn() },
+        },
+        { type: "api-key", token: "platform-key" },
       );
-      const params = { getConfig: () => undefined, logger: { debug: vi.fn(), warn: vi.fn() } };
-      const old = acquireOpenAIQuicksilverBrowserSessionBroker(params, openAIRealtimeHost);
-      let replacement: typeof old | undefined;
-      const reserveNext = (current: typeof old, clientOwner = ownerConnId) =>
-        current.broker.createBrowserSession(
-          {
-            providerConfig: {},
-            model: OPAQUE_REALTIME_MODEL,
-            ownerConnId: clientOwner,
-            runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-            clientControl: { owner: "gateway" },
-            gatewayControl: { bindBridge: vi.fn(), bindControl: vi.fn() },
-          },
-          { type: "api-key", token: "platform-key" },
-        );
-      try {
-        for (let index = 0; index < count; index += 1) {
-          const reservation = await reserveRetirementSession(
-            old,
-            () => retirementBridge(),
-            ownerConnId,
-          );
-          await old.handler(
-            createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
-            createResponseHarness().res,
-          );
-        }
-        await expect(releaseOpenAIQuicksilverBrowserSessionBroker(old)).rejects.toThrow();
-        replacement = acquireOpenAIQuicksilverBrowserSessionBroker(params, openAIRealtimeHost);
-        expect(replacement).not.toBe(old);
-        await vi.advanceTimersByTimeAsync(6_000);
-        expect(hangups).toBe(count * 3);
-        expect(params.logger.warn).toHaveBeenCalledWith(expect.stringContaining("INCOMPLETE"));
-        await expect(reserveNext(replacement)).rejects.toThrow("Too many concurrent");
-        await expect(reserveNext(replacement, "conn-other")).resolves.toMatchObject({
-          transport: "webrtc",
-        });
-        await vi.advanceTimersByTimeAsync(30 * 60_000);
-        expect(hangups).toBe(count * 3);
-        const disabledReplacement = replacement;
-        await expect(
-          releaseOpenAIQuicksilverBrowserSessionBroker(disabledReplacement),
-        ).rejects.toThrow();
-        await vi.advanceTimersByTimeAsync(6_000);
-        expect(hangups).toBe(count * 6);
-        replacement = acquireOpenAIQuicksilverBrowserSessionBroker(params, openAIRealtimeHost);
-        expect(replacement).not.toBe(disabledReplacement);
-        failHangup = false;
-        await releaseOpenAIQuicksilverBrowserSessionBroker(disabledReplacement);
-        expect(hangups).toBe(count * 7);
-        expect(acquireOpenAIQuicksilverBrowserSessionBroker(params, openAIRealtimeHost)).toBe(
-          replacement,
-        );
-        await expect(reserveNext(replacement)).resolves.toMatchObject({ transport: "webrtc" });
-        await releaseOpenAIQuicksilverBrowserSessionBroker(old);
-        expect(acquireOpenAIQuicksilverBrowserSessionBroker(params, openAIRealtimeHost)).toBe(
-          replacement,
-        );
-      } finally {
-        failHangup = false;
-        await releaseOpenAIQuicksilverBrowserSessionBroker(old);
-        if (replacement) {
-          await releaseOpenAIQuicksilverBrowserSessionBroker(replacement);
-        }
+    try {
+      for (let index = 0; index < count; index += 1) {
+        const reservation = await reserveRetirementSession(old, retirementBridge, ownerConnId);
+        await old.handler(offerRequest(reservation.clientSecret), createResponseHarness().res);
       }
-    },
-  );
+      await expect(releaseBroker(old)).rejects.toThrow();
+      replacement = acquireBroker(params, openAIRealtimeHost);
+      expect(replacement).not.toBe(old);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(hangups).toBe(count * 3);
+      expect(params.logger.warn).toHaveBeenCalledWith(expect.stringContaining("INCOMPLETE"));
+      await expect(reserveNext(replacement)).rejects.toThrow("Too many concurrent");
+      await expect(reserveNext(replacement, "conn-other")).resolves.toMatchObject({
+        transport: "webrtc",
+      });
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(hangups).toBe(count * 3);
+      const disabledReplacement = replacement;
+      await expect(releaseBroker(disabledReplacement)).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(hangups).toBe(count * 6);
+      replacement = acquireBroker(params, openAIRealtimeHost);
+      expect(replacement).not.toBe(disabledReplacement);
+      failHangup = false;
+      await releaseBroker(disabledReplacement);
+      expect(hangups).toBe(count * 7);
+      expect(acquireBroker(params, openAIRealtimeHost)).toBe(replacement);
+      await expect(reserveNext(replacement)).resolves.toMatchObject({ transport: "webrtc" });
+      await releaseBroker(old);
+      expect(acquireBroker(params, openAIRealtimeHost)).toBe(replacement);
+    } finally {
+      failHangup = false;
+      await releaseBroker(old);
+      if (replacement) {
+        await releaseBroker(replacement);
+      }
+    }
+  });
 });

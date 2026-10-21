@@ -1,14 +1,13 @@
 import { createMemo, For, Show } from "solid-js";
 import {
   agentTabIconShape,
-  type AgentTabIconShape,
   type TabIconPreference,
 } from "../../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import { controlUiFaviconBaseSvg } from "../../app/control-ui-environment-presentation.runtime.ts";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import type { LobsterPetPalette } from "../../components/lobster-pet-contract.ts";
-import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-look.ts";
+import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
 import { lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { SettingsRow, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -43,31 +42,13 @@ function LobsterPreview(props: { palette: LobsterPetPalette }) {
   );
 }
 
-function AvatarPreview(props: {
-  source: string | null;
-  fallbackUrl: string;
-  shape?: AgentTabIconShape;
-  fallbackOnly?: boolean;
-}) {
-  return (
-    <TabIconAvatar
-      imageUrl={props.source}
-      shape={props.shape ?? "square"}
-      fallbackOnly={props.fallbackOnly ?? false}
-      fallbackUrl={props.fallbackUrl}
-    />
-  );
-}
-
 export function TabIconSection(props: TabIconViewProps) {
   const defaultSource = createMemo(
     () => controlUiFaviconBaseSvg() ?? inferControlUiPublicAssetPath("favicon.svg"),
   );
-  const lobsterdexEnabled = createMemo(() => props.lobsterdexEnabled !== false);
+  const lobsterdexEnabled = () => props.lobsterdexEnabled !== false;
   const lobsters = createMemo(() => (lobsterdexEnabled() ? (props.tabIconLobsters ?? []) : []));
-  const lobsterMode = createMemo(
-    () => lobsterdexEnabled() && (props.tabIcon?.startsWith("lobster:") ?? false),
-  );
+  const lobsterMode = () => lobsterdexEnabled() && (props.tabIcon?.startsWith("lobster:") ?? false);
   const selectedShape = createMemo(() => agentTabIconShape(props.tabIcon));
   const selected = createMemo(() =>
     lobsters().find((palette) => props.tabIcon === `lobster:${palette.id}`),
@@ -79,7 +60,7 @@ export function TabIconSection(props: TabIconViewProps) {
       value: "default",
       label: (
         <span class="settings-tab-icon__option">
-          <AvatarPreview source={null} fallbackUrl={defaultSource()} />
+          <TabIconAvatar imageUrl={null} fallbackUrl={defaultSource()} />
           {t("configView.appearance.tabIcon.default")}
         </span>
       ),
@@ -88,8 +69,8 @@ export function TabIconSection(props: TabIconViewProps) {
       value: "agent",
       label: (
         <span class="settings-tab-icon__option">
-          <AvatarPreview
-            source={props.tabIconAgentAvatar ?? null}
+          <TabIconAvatar
+            imageUrl={props.tabIconAgentAvatar ?? null}
             shape={selectedShape() ?? "square"}
             fallbackUrl={defaultSource()}
           />
@@ -108,7 +89,7 @@ export function TabIconSection(props: TabIconViewProps) {
         <span class="settings-tab-icon__preview">
           <Show
             when={preview()}
-            fallback={<AvatarPreview source={null} fallbackOnly fallbackUrl={defaultSource()} />}
+            fallback={<TabIconAvatar imageUrl={null} fallbackOnly fallbackUrl={defaultSource()} />}
           >
             {(palette) => <LobsterPreview palette={palette()} />}
           </Show>
@@ -167,8 +148,8 @@ export function TabIconSection(props: TabIconViewProps) {
                       title={t(`configView.appearance.tabIcon.${choice}`)}
                       onClick={() => props.setTabIconMode(preference)}
                     >
-                      <AvatarPreview
-                        source={props.tabIconAgentAvatar ?? null}
+                      <TabIconAvatar
+                        imageUrl={props.tabIconAgentAvatar ?? null}
                         shape={choice}
                         fallbackUrl={defaultSource()}
                       />

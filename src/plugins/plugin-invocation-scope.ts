@@ -72,7 +72,9 @@ export class PluginInvocationScope {
       for (const instance of new Set(instances)) {
         if (options.retained) {
           const acquire = () =>
-            instance.retainConsumer((run) => this.run(run), registry, this.consumerKind);
+            instance.retainConsumer((run) => this.run(run), registry, this.consumerKind, {
+              reason: "invocation-scope",
+            });
           const parent = options.parent?.consumer(instance);
           const consumer = parent ? parent.run(acquire) : acquire();
           this.consumers.set(instance, consumer);

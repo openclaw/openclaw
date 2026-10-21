@@ -4,7 +4,7 @@
  * so ACP sessions running Claude Code can use them.
  */
 import { pathToFileURL } from "node:url";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { Server } from "@modelcontextprotocol/server";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import {

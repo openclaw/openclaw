@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { required, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import { query, turnClaimValues } from "./placement-row-codec.js";
 import { publishPlacementTurnClaimCleared } from "./placement-turn-authority.js";
@@ -13,9 +13,8 @@ export type WorkerSessionPlacementRetirement = {
 };
 
 export function retireWorkerSessionPlacement(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: WorkerSessionPlacementRetirement,
-  options: { onlyIfCurrent?: boolean } = {},
 ): WorkerSessionPlacementIdentity | undefined {
   const sessionId = required(input.sessionId, "session id");
   if (!RETIRABLE_PLACEMENT_STATES.some((state) => state === input.expectedState)) {
@@ -32,10 +31,7 @@ export function retireWorkerSessionPlacement(
       .returning(["session_id as sessionId", "agent_id as agentId", "session_key as sessionKey"]),
   );
   if (!result) {
-    if (options.onlyIfCurrent) {
-      return undefined;
-    }
-    throw new Error(`Worker session placement ${sessionId} changed before retirement`);
+    return undefined;
   }
   publishPlacementTurnClaimCleared(db, sessionId, input.expectedState, true);
   return result;

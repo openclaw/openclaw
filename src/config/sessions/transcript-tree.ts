@@ -165,6 +165,10 @@ function resolveCanonicalParentId<T>(
  */
 type TranscriptNavigationSet = { has(id: string): boolean; add(id: string): void; clear(): void };
 
+type SessionTranscriptNavigationCursor = Partial<
+  Omit<SessionTranscriptTree<unknown>, "nodes" | "byId">
+> & { latestResetId?: string; nextIndex?: number };
+
 /** Storage belongs to the caller: runtime uses memory, migration uses its disposable spool. */
 export type SessionTranscriptNavigationStorage<T> = {
   byId: {
@@ -180,13 +184,13 @@ export type SessionTranscriptNavigationStorage<T> = {
 export function scanSessionTranscriptTree<T>(entries: Iterable<T>): SessionTranscriptTree<T> {
   const nodes: SessionTranscriptTreeNode<T>[] = [];
   const byId = new Map<string, SessionTranscriptTreeNode<T>>();
-  const navigation = scanSessionTranscriptNavigation(entries, {
+  const storage: SessionTranscriptNavigationStorage<T> = {
     byId,
     addNode: (node) => nodes.push(node),
     resetDescendantIds: new Set(),
     invalidLeafControlIds: new Set(),
-  });
-  return { nodes, byId, ...navigation };
+  };
+  return { nodes, byId, ...scanSessionTranscriptNavigation(entries, storage) };
 }
 
 /** Resolves the active branch leaf from the same transcript tree used by branch listing. */
@@ -199,25 +203,28 @@ export function resolveSessionTranscriptActiveLeafEntryId(
 export function scanSessionTranscriptNavigation<T>(
   entries: Iterable<T>,
   storage: SessionTranscriptNavigationStorage<T>,
+  cursor?: SessionTranscriptNavigationCursor,
 ): Omit<SessionTranscriptTree<T>, "nodes" | "byId"> {
   const { byId, resetDescendantIds, invalidLeafControlIds } = storage;
-  let leafId: string | null = null;
-  let appendParentId: string | null = null;
-  let hasLeafControl = false;
-  let hasLeafUpdate = false;
-  let hasExplicitLeafUpdate = false;
-  let hasInvalidLeafControl = false;
-  let latestResetId: string | undefined;
+  let leafId = cursor?.leafId ?? null;
+  let appendParentId = cursor?.appendParentId ?? null;
+  let hasLeafControl = cursor?.hasLeafControl ?? false;
+  let hasLeafUpdate = cursor?.hasLeafUpdate ?? false;
+  let hasExplicitLeafUpdate = cursor?.hasExplicitLeafUpdate ?? false;
+  let hasInvalidLeafControl = cursor?.hasInvalidLeafControl ?? false;
+  let latestResetId = cursor?.latestResetId;
 
-  let nextIndex = 0;
+  let nextIndex = cursor?.nextIndex ?? 0;
   for (const entry of entries) {
     const index = nextIndex++;
     let explicitTreeEntry = parseSessionTranscriptTreeEntry(entry);
+    const isLeafControl =
+      explicitTreeEntry !== undefined && isRecord(entry) && entry.type === "leaf";
     if (
       latestResetId &&
       leafId !== null &&
       explicitTreeEntry?.leafId !== undefined &&
-      isSessionTranscriptLeafControl(entry) &&
+      isLeafControl &&
       (explicitTreeEntry.leafId === null || !resetDescendantIds.has(explicitTreeEntry.leafId))
     ) {
       explicitTreeEntry = {
@@ -231,7 +238,7 @@ export function scanSessionTranscriptNavigation<T>(
       id === null || (byId.has(id) && !invalidLeafControlIds.has(id));
     const invalidLeafControl =
       explicitTreeEntry?.leafId !== undefined &&
-      isSessionTranscriptLeafControl(entry) &&
+      isLeafControl &&
       (!isKnownLeafReference(explicitTreeEntry.leafId) ||
         !isKnownLeafReference(explicitTreeEntry.appendParentId));
     if (invalidLeafControl && explicitTreeEntry) {
@@ -307,12 +314,12 @@ export function scanSessionTranscriptNavigation<T>(
         hasExplicitLeafUpdate = true;
       }
     }
-    if (isSessionTranscriptLeafControl(entry)) {
+    if (isLeafControl) {
       hasLeafControl = true;
     }
   }
 
-  return {
+  const navigation = {
     leafId,
     appendParentId,
     hasLeafControl,
@@ -320,6 +327,10 @@ export function scanSessionTranscriptNavigation<T>(
     hasExplicitLeafUpdate,
     hasInvalidLeafControl,
   };
+  if (cursor) {
+    Object.assign(cursor, navigation, { latestResetId, nextIndex });
+  }
+  return navigation;
 }
 
 export function selectSessionTranscriptActiveEntries<T, R>(params: {

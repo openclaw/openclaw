@@ -4,14 +4,11 @@ import type {
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceGatewayControl,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { vi, type Mock } from "vitest";
+import { vi } from "vitest";
 import type { ClientOptions } from "ws";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
-import type {
-  OpenAIQuicksilverSocket,
-  OpenAIQuicksilverSocketFactory,
-} from "./realtime-quicksilver-socket.shared.js";
+import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-socket.shared.js";
 import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 
 export class FakeSocket extends EventEmitter implements OpenAIQuicksilverSocket {
@@ -44,10 +41,9 @@ export class FakeSocket extends EventEmitter implements OpenAIQuicksilverSocket 
       return;
     }
     this.closeCalls += 1;
-    if (this.deferClose) {
-      return;
+    if (!this.deferClose) {
+      this.finishClose(1000);
     }
-    this.finishClose(1000);
   }
 
   finishClose(code = 1006): void {
@@ -82,20 +78,17 @@ export function createHarness(params?: {
   const socket = new FakeSocket(params?.autoStart, params?.afterOpen);
   socket.deferClose = params?.deferClose ?? false;
   const connections: Array<{ url: string; options: ClientOptions }> = [];
-  const webSocketFactory: OpenAIQuicksilverSocketFactory = function (url, options) {
-    connections.push({ url, options });
-    queueMicrotask(() => socket.open());
-    return socket;
+  const callbacks = {
+    onAudio: vi.fn<RealtimeVoiceBridgeCallbacks["onAudio"]>(),
+    onClearAudio: vi.fn<RealtimeVoiceBridgeCallbacks["onClearAudio"]>(),
+    onTranscript: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onTranscript"]>>(),
+    onToolCall: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onToolCall"]>>(),
+    onReady: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onReady"]>>(),
+    onError: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onError"]>>(),
+    onClose: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onClose"]>>(),
+    onEvent: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onEvent"]>>(),
   };
-  const onAudio: Mock<RealtimeVoiceBridgeCallbacks["onAudio"]> = vi.fn();
-  const onClearAudio: Mock<RealtimeVoiceBridgeCallbacks["onClearAudio"]> = vi.fn();
-  const onTranscript: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onTranscript"]>> = vi.fn();
-  const onToolCall: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onToolCall"]>> = vi.fn();
-  const onReady: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onReady"]>> = vi.fn();
-  const onError: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onError"]>> = vi.fn();
-  const onClose: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onClose"]>> = vi.fn();
-  const onEvent: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onEvent"]>> = vi.fn();
-  const logger: { warn: Mock<PluginLogger["warn"]> } = { warn: vi.fn() };
+  const logger = { warn: vi.fn<PluginLogger["warn"]>() };
   const bridge = new OpenAIQuicksilverVoiceBridge(
     {
       providerConfig: {},
@@ -107,34 +100,18 @@ export function createHarness(params?: {
           ? { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }
           : { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
       resolveAuth: params?.resolveAuth ?? (async () => ({ type: "api-key", token: "test-key" })),
-      mediaSocketFactory: fakeQuicksilverMediaSocket(webSocketFactory),
-      onAudio,
-      onClearAudio,
-      onTranscript,
-      onToolCall,
+      mediaSocketFactory: fakeQuicksilverMediaSocket((url, options) => {
+        connections.push({ url, options });
+        queueMicrotask(() => socket.open());
+        return socket;
+      }),
+      ...callbacks,
       handleDelegationInput: params?.handleDelegationInput,
-      onReady,
-      onError,
-      onClose,
-      onEvent,
       logger,
     },
     openAIRealtimeHost,
   );
-  return {
-    bridge,
-    connections,
-    logger,
-    onAudio,
-    onClearAudio,
-    onClose,
-    onError,
-    onEvent,
-    onReady,
-    onToolCall,
-    onTranscript,
-    socket,
-  };
+  return { bridge, connections, logger, ...callbacks, socket };
 }
 
 export function sentEvents(socket: FakeSocket): Array<Record<string, unknown>> {

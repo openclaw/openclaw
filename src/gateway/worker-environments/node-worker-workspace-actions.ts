@@ -4,7 +4,6 @@ import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import {
   NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
   NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND,
-  type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
 } from "../../worker/node-workspace-protocol.js";
 import { NODE_WORKSPACE_EMPTY_MANIFEST_REF } from "../../worker/node-workspace-transfer-protocol.js";
@@ -20,15 +19,15 @@ import type {
   WorkerLocalWorkspaceReconcileRequest,
   WorkerLocalWorkspaceSyncRequest,
   WorkerWorkspaceReconcileRequest,
+  WorkerWorkspaceReconcileResult,
   WorkerWorkspaceCommand,
   WorkerWorkspaceSyncResult,
   WorkerWorkspaceSyncRequest,
   WorkerWorkspaceTunnelHandle,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
-import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
-import type { WorkspaceHashMemo, WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
+import type { WorkspaceHashMemo } from "./workspace-hash-memo.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
 import {
   decodeWorkspaceManifest,
@@ -41,12 +40,6 @@ import { captureRemoteWorkspaceManifest } from "./workspace-sync-helpers.js";
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 // Leave room for the manifest reference and bounded numeric metrics in the result envelope.
 const NODE_WORKSPACE_HASH_MEMO_BYTES = NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES - 4 * 1024;
-
-export function assertDeviceFolderWorkspaceCommand(input: NodeWorkerWorkspaceExecInput) {
-  if (input.deviceFolder !== undefined && (input.transfer || input.seed || input.resetWorkspace)) {
-    throw new Error("Device folders cannot receive workspace transfers, seeds, or resets");
-  }
-}
 
 export type NodeWorkerWorkspaceBinding = {
   source:
@@ -181,34 +174,28 @@ export function createNodeWorkerWorkspaceActions(params: {
   // keys self-invalidate on change, and without this owner every turn re-hashes
   // the full managed worktree during prepare/apply/verify.
   const placementHashMemo: WorkspaceHashMemo = new Map();
-  const reconcileWorkspace = (request: WorkerWorkspaceReconcileRequest) => {
+  const reconcileWorkspace = (
+    request: WorkerWorkspaceReconcileRequest,
+  ): Promise<WorkerWorkspaceReconcileResult> => {
     if (deviceFolder !== undefined) {
       return Promise.reject(new Error("Device folders cannot be synchronized or reconciled"));
     }
-    return runInstrumentedWorkspaceReconcile((metrics) =>
-      request.source.kind === "repository"
-        ? reconcileRepository(request, metrics)
-        : reconcileWorkspaceRun(
-            {
-              remoteWorkspaceDir: request.remoteWorkspaceDir,
-              baseManifestRef: request.baseManifestRef,
-              localPath: request.source.path,
-              journal: request.source.journal,
-              assertCurrent: request.source.assertCurrent,
-              stagedResult: request.source.stagedResult,
-            },
-            metrics,
-          ),
-    );
+    return request.source.kind === "repository"
+      ? reconcileRepository(request)
+      : reconcileWorkspaceRun({
+          remoteWorkspaceDir: request.remoteWorkspaceDir,
+          baseManifestRef: request.baseManifestRef,
+          localPath: request.source.path,
+          journal: request.source.journal,
+          assertCurrent: request.source.assertCurrent,
+          stagedResult: request.source.stagedResult,
+        });
   };
-  const reconcileRepository = async (
-    request: WorkerWorkspaceReconcileRequest,
-    metrics: WorkspaceReconcileMetrics,
-  ) => {
+  const reconcileRepository = async (request: WorkerWorkspaceReconcileRequest) => {
     if (request.source.kind !== "repository") {
       throw new Error("Repository checkpoint source is required");
     }
-    const { authorize } = request.source;
+    const { authorize, markPhase } = request.source;
     authorize?.();
     const token = params.workspaceTransfer.prepareUpload(
       params.environmentId,
@@ -217,6 +204,7 @@ export function createNodeWorkerWorkspaceActions(params: {
     );
     let preparedCheckpoint: { discard: () => Promise<void> } | undefined;
     try {
+      markPhase?.("repositoryCheckpointUpload");
       await transfer(
         {
           direction: "upload",
@@ -233,6 +221,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       );
       try {
         const verifyStable = async () => {
+          markPhase?.("repositoryVerification");
           authorize?.();
           const observed = await captureRemoteWorkspaceManifest({
             runWorkspaceCommand: (command) => exec({ ...command, assertCurrent: authorize }),
@@ -243,7 +232,6 @@ export function createNodeWorkerWorkspaceActions(params: {
               uploaded.baseManifestRef.slice(7),
             ],
             hashMemo: placementHashMemo,
-            metrics,
             maxHashMemoBytes: NODE_WORKSPACE_HASH_MEMO_BYTES,
           });
           authorize?.();
@@ -265,6 +253,7 @@ export function createNodeWorkerWorkspaceActions(params: {
               NODE_WORKSPACE_EMPTY_MANIFEST_REF,
               authorize,
             );
+            markPhase?.("repositoryPublicationUpload");
             await transfer(
               {
                 direction: "upload",
@@ -305,6 +294,7 @@ export function createNodeWorkerWorkspaceActions(params: {
           // stability, live owner and final quiescence fences still run below.
           await verifyStable();
           authorize?.();
+          markPhase?.("repositoryCheckpointStage");
           const prepared = await request.source.prepareCheckpoint({
             stagingRoot: uploaded.stagingRoot,
             ...(publication && publicationDigest
@@ -354,10 +344,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       await params.workspaceTransfer.revoke(params.environmentId, token);
     }
   };
-  const reconcileWorkspaceRun = async (
-    request: WorkerLocalWorkspaceReconcileRequest,
-    metrics: WorkspaceReconcileMetrics,
-  ) => {
+  const reconcileWorkspaceRun = async (request: WorkerLocalWorkspaceReconcileRequest) => {
     const uploadToken = params.workspaceTransfer.prepareUpload(
       params.environmentId,
       request.baseManifestRef,
@@ -368,7 +355,7 @@ export function createNodeWorkerWorkspaceActions(params: {
     try {
       // Local recovery and remote upload must settle before releasing custody.
       const [local, upload] = await Promise.allSettled([
-        prepareLocalWorkspaceReconciliation({ request, hashMemo: placementHashMemo, metrics }),
+        prepareLocalWorkspaceReconciliation({ request, hashMemo: placementHashMemo }),
         transfer(
           {
             direction: "upload",
@@ -400,7 +387,6 @@ export function createNodeWorkerWorkspaceActions(params: {
           baseCommit: uploaded.base.baseCommit,
           priorManifestDigests: [expectedRemoteRef.slice(7), uploaded.baseManifestRef.slice(7)],
           hashMemo: placementHashMemo,
-          metrics,
           maxHashMemoBytes: NODE_WORKSPACE_HASH_MEMO_BYTES,
         });
         if (observed !== expectedRemoteRef) {

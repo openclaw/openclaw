@@ -1,18 +1,8 @@
-// Discord tests cover config schema plugin behavior.
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 import { resolveUpgradeSurvivorConfigStepsForBaseline } from "../../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 import { DiscordChannelConfigSchema } from "../channel-config-api.js";
 import { DiscordConfigSchema } from "../config-api.js";
-
-function expectValidDiscordConfig(config: unknown) {
-  const res = DiscordConfigSchema.safeParse(config);
-  expect(res.success).toBe(true);
-  if (!res.success) {
-    throw new Error("expected Discord config to be valid");
-  }
-  return res.data;
-}
 
 function expectInvalidDiscordConfig(config: unknown) {
   const res = DiscordConfigSchema.safeParse(config);
@@ -39,15 +29,11 @@ describe("discord config schema", () => {
         ? payload.find((entry: { path: string }) => entry.path === "channels.discord")?.value
         : payload;
     expect(discord).toBeDefined();
-    if (legacy) {
-      expect(discord.dm).toEqual({ policy: "allowlist", allowFrom: ["111111111111111111"] });
-      expect(discord.dmPolicy).toBeUndefined();
-      expect(discord.allowFrom).toBeUndefined();
-    } else {
-      expect(discord.dm).toBeUndefined();
-      expect(discord.dmPolicy).toBe("allowlist");
-      expect(discord.allowFrom).toEqual(["111111111111111111"]);
-    }
+    expect(discord.dm).toEqual(
+      legacy ? { policy: "allowlist", allowFrom: ["111111111111111111"] } : undefined,
+    );
+    expect(discord.dmPolicy).toBe(legacy ? undefined : "allowlist");
+    expect(discord.allowFrom).toEqual(legacy ? undefined : ["111111111111111111"]);
     // The public schema is the config-set boundary; runtime Zod preprocessing
     // would silently normalize the legacy specimen and miss a bad baseline cutoff.
     expect(
@@ -60,10 +46,7 @@ describe("discord config schema", () => {
   });
 
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
-    const issues = expectInvalidDiscordConfig({
-      dmPolicy: "open",
-      allowFrom: ["123"],
-    });
+    const issues = expectInvalidDiscordConfig({ dmPolicy: "open", allowFrom: ["123"] });
 
     expect(issues[0]?.path.join(".")).toBe("allowFrom");
   });
@@ -74,14 +57,14 @@ describe("discord config schema", () => {
   });
 
   it("normalizes shipped nested DM access keys at root and account scope", () => {
-    const cfg = expectValidDiscordConfig({
-      dmPolicy: "pairing",
-      allowFrom: ["canonical-root"],
+    const rootAccess = { dmPolicy: "pairing", allowFrom: ["canonical-root"] };
+    const workAccess = { dmPolicy: "allowlist", allowFrom: ["canonical-account"] };
+    const cfg = DiscordConfigSchema.parse({
+      ...rootAccess,
       dm: { enabled: false, policy: "open", allowFrom: ["legacy-root"] },
       accounts: {
         work: {
-          dmPolicy: "allowlist",
-          allowFrom: ["canonical-account"],
+          ...workAccess,
           dm: { groupEnabled: true, policy: "disabled", allowFrom: ["legacy-account"] },
         },
         personal: {
@@ -90,44 +73,30 @@ describe("discord config schema", () => {
       },
     });
 
-    expect(cfg).toMatchObject({
-      dmPolicy: "pairing",
-      allowFrom: ["canonical-root"],
-      dm: { enabled: false },
-      accounts: {
-        work: {
-          dmPolicy: "allowlist",
-          allowFrom: ["canonical-account"],
-          dm: { groupEnabled: true },
-        },
-        personal: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          dm: { enabled: true },
-        },
-      },
+    expect(cfg).toMatchObject({ ...rootAccess, dm: { enabled: false } });
+    expect(cfg.accounts?.work).toMatchObject({ ...workAccess, dm: { groupEnabled: true } });
+    expect(cfg.accounts?.personal).toMatchObject({
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      dm: { enabled: true },
     });
     expectInvalidDiscordConfig({ dm: { enabled: false, unexpected: true } });
   });
 
   it("defaults groupPolicy to allowlist", () => {
-    const cfg = expectValidDiscordConfig({});
-
-    expect(cfg.groupPolicy).toBe("allowlist");
+    expect(DiscordConfigSchema.parse({}).groupPolicy).toBe("allowlist");
   });
 
   it("accepts Discord application IDs at top-level and account scope", () => {
-    const cfg = expectValidDiscordConfig({
+    const cfg = DiscordConfigSchema.parse({
       applicationId: "123456789012345678",
-      accounts: {
-        work: {
-          applicationId: 234567890123456,
-        },
-      },
+      accounts: { work: { applicationId: 234567890123456 } },
     });
 
-    expect(cfg.applicationId).toBe("123456789012345678");
-    expect(cfg.accounts?.work?.applicationId).toBe("234567890123456");
+    expect(cfg).toMatchObject({
+      applicationId: "123456789012345678",
+      accounts: { work: { applicationId: "234567890123456" } },
+    });
   });
 
   it("rejects invalid Discord realtime voice modes", () => {
@@ -151,8 +120,7 @@ describe("discord config schema", () => {
   });
 
   it("rejects numeric IDs that are not valid non-negative safe integers", () => {
-    const cases = [106232522769186816, -1, 123.45];
-    for (const id of cases) {
+    for (const id of [106232522769186816, -1, 123.45]) {
       const issues = expectInvalidDiscordConfig({ allowFrom: [id] });
 
       expect(
@@ -162,25 +130,10 @@ describe("discord config schema", () => {
   });
 
   it.each([
-    {
-      name: "streaming activity without url",
-      config: { activity: "Live", activityType: 1 },
-    },
-    {
-      name: "activityUrl without streaming type",
-      config: { activity: "Live", activityUrl: "https://twitch.tv/openclaw" },
-    },
-    {
-      name: "auto presence min update interval above check interval",
-      config: {
-        autoPresence: {
-          enabled: true,
-          intervalMs: 5000,
-          minUpdateIntervalMs: 6000,
-        },
-      },
-    },
-  ] as const)("rejects $name", ({ config }) => {
+    ["streaming without URL", { activity: "Live", activityType: 1 }],
+    ["URL without streaming", { activity: "Live", activityUrl: "https://twitch.tv/openclaw" }],
+    ["inverted intervals", { autoPresence: { intervalMs: 5000, minUpdateIntervalMs: 6000 } }],
+  ] as const)("rejects %s", (_name, config) => {
     expect(DiscordConfigSchema.safeParse(config).success).toBe(false);
   });
 });

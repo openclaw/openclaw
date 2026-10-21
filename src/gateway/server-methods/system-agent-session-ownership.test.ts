@@ -54,7 +54,7 @@ vi.mock("../../system-agent/greeting.js", () => ({
     recentExternalEdit: false,
     auditSequence: 0,
   })),
-  resolveSystemAgentGreeting: vi.fn(async () => ({ text: "welcome text", source: "template" })),
+  resolveSystemAgentGreeting: vi.fn(async () => "welcome text"),
 }));
 
 type FakeEngine = {

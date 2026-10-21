@@ -205,7 +205,7 @@ export function projectSessionMetaPatch(params: {
     }
   }
 
-  const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
+  const patch: Partial<SessionEntry> = groupPatch ?? {};
   const mergedOrigin = mergeSessionOrigin(existingOrigin, origin);
   if (origin && mergedOrigin && params.prepared.clearAvatar) {
     delete mergedOrigin.avatar;

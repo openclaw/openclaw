@@ -11,6 +11,7 @@ import {
   evaluate,
   platformRoute,
   routeResolverFactory,
+  mockRouteResolverFactory,
   subscriptionRoute,
 } from "./model-auth-availability.test-support.js";
 import type { createOpenAIModelRoutesResolver } from "./openai-model-routes.js";
@@ -480,8 +481,6 @@ describe("createModelAuthAvailabilityResolver", () => {
       env: { OPENAI_API_KEY: "environment-key" },
       profileId: "openai:oauth-missing",
       profile: { type: "oauth" as const, provider: "openai", access: "", refresh: "" },
-      route: platformRoute,
-      mode: "api-key",
     },
     {
       label: "OAuth environment after unavailable Platform auth",
@@ -491,8 +490,6 @@ describe("createModelAuthAvailabilityResolver", () => {
       env: { OPENAI_API_KEY: "environment-token" },
       profileId: "openai:platform-missing",
       profile: { type: "api_key" as const, provider: "openai", key: "" },
-      route: subscriptionRoute,
-      mode: "oauth",
     },
     // An environment credential named nowhere in config is not authorized to
     // stand in for a declared profile, including a declared profile that turned
@@ -558,6 +555,7 @@ describe("createModelAuthAvailabilityResolver", () => {
   });
 
   it("does not grant refresh authority to an unsupported external CLI id", () => {
+    mockRouteResolverFactory(routeResolverFactory(null));
     const resolver = createModelAuthAvailabilityResolver({
       cfg: {} as OpenClawConfig,
       authStore: authStore({
@@ -571,7 +569,6 @@ describe("createModelAuthAvailabilityResolver", () => {
       }),
       env: {},
       externalCliProviderIds: ["acme-cli"],
-      routeResolverFactory: routeResolverFactory(null),
     });
 
     expect(resolver.resolveProviderAuthAvailability("acme-cli")).toBeUndefined();
@@ -743,6 +740,7 @@ describe("createModelAuthAvailabilityResolver", () => {
   );
   it("passes one physical route group to auth selection for an unknown model", () => {
     const resolveRoutes = vi.fn(() => dualRoutes);
+    mockRouteResolverFactory((() => resolveRoutes) as typeof createOpenAIModelRoutesResolver);
     const resolver = createModelAuthAvailabilityResolver({
       cfg: { auth: { order: { openai: ["openai:chatgpt", "openai:platform"] } } },
       authStore: authStore({
@@ -750,7 +748,6 @@ describe("createModelAuthAvailabilityResolver", () => {
         "openai:chatgpt": openAiOAuthProfile(),
       }),
       env: {},
-      routeResolverFactory: (() => resolveRoutes) as typeof createOpenAIModelRoutesResolver,
     });
     const observedRoutes = [
       { api: "openai-chatgpt-responses" as const, baseUrl: subscriptionRoute.baseUrl },

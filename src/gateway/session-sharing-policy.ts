@@ -286,40 +286,53 @@ export function resolveSessionSharingRole(
   preparedCap?: { value: ReturnType<typeof operatorSessionCap> },
   isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
 ): SessionSharingRole {
+  return prepareSessionSharingRole(params, preparedCap, isCreator)(params.target, params.isMember);
+}
+
+/** Caller facts belong to one synchronous read; prepare again after yielding. */
+export function prepareSessionSharingRole(
+  params: Pick<SessionSharingRoleParams, "cfg" | "client">,
+  preparedCap?: { value: ReturnType<typeof operatorSessionCap> },
+  isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
+): (target: SessionSharingTarget, isMember?: boolean) => SessionSharingRole {
   if (isGatewayAdmin(params.client)) {
-    return "admin";
+    return () => "admin";
   }
   const operatorActor = resolveGatewayOperatorRoleActor(params.client);
   const identity = sharingIdentity(params.client, operatorActor);
   // Solo ownership is independent of the shared-secret connection's attribution profile.
   if (!identity) {
-    return params.client?.authenticatedGitHubIdentitySync ||
+    const role =
+      params.client?.authenticatedGitHubIdentitySync ||
       (params.cfg?.gateway?.roles && operatorActor?.kind !== "system")
-      ? "viewer"
-      : "owner";
+        ? "viewer"
+        : "owner";
+    return () => role;
   }
   const creatorMatches = isCreator ?? prepareSessionCreatorProfile(identity.id);
-  if (creatorMatches(params.target.entry.createdActor)) {
-    return "owner";
-  }
   const sessionCap = preparedCap
     ? preparedCap.value
     : params.cfg && operatorSessionCap(params.client, params.cfg);
-  if (
-    sessionCap === "write" &&
-    resolveSessionVisibility(params.target.entry) !== "draft" &&
-    params.target.entry.incognito !== true &&
-    !isIncognitoSessionKey(params.target.canonicalKey)
-  ) {
-    return "member";
-  }
-  if (sessionCap === "none") {
-    return "viewer";
-  }
-  if (params.isMember === undefined) {
-    throw new SessionMutationFactsUnavailableError();
-  }
-  return params.isMember ? "member" : "viewer";
+  return (target, isMember) => {
+    if (creatorMatches(target.entry.createdActor)) {
+      return "owner";
+    }
+    if (
+      sessionCap === "write" &&
+      resolveSessionVisibility(target.entry) !== "draft" &&
+      target.entry.incognito !== true &&
+      !isIncognitoSessionKey(target.canonicalKey)
+    ) {
+      return "member";
+    }
+    if (sessionCap === "none") {
+      return "viewer";
+    }
+    if (isMember === undefined) {
+      throw new SessionMutationFactsUnavailableError();
+    }
+    return isMember ? "member" : "viewer";
+  };
 }
 
 export function canManageSessionSharing(role: SessionSharingRole): boolean {

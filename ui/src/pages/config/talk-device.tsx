@@ -1,4 +1,4 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, Errored, For, Loading } from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type {
   NativeDeviceSettingsCapability,
@@ -10,6 +10,7 @@ import {
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
 
@@ -42,60 +43,76 @@ function changeDeviceLocales(
   capability: NativeDeviceSettingsCapability,
   change: Partial<DeviceLocaleSelection>,
 ) {
-  const pending = pendingDeviceLocales.get(capability);
-  if (pending) {
-    Object.assign(pending, change);
-  } else {
-    const desired = { ...change };
-    pendingDeviceLocales.set(capability, desired);
-    const unsubscribe = capability.subscribe((snapshot) => {
-      // Only a published snapshot can acknowledge an intent. Reading the old
-      // snapshot during another edit must not clear a pending return to that value.
-      const locale = snapshot.voice.locale;
-      if (!locale) {
-        pendingDeviceLocales.delete(capability);
-        unsubscribe();
-        return;
-      }
-      if (desired.primary === locale.primary) {
-        delete desired.primary;
+  const desired = Object.assign(pendingDeviceLocales.get(capability) ?? {}, change);
+  pendingDeviceLocales.set(capability, desired);
+  for (const key of ["additional", "primary"] as const) {
+    const value = change[key];
+    if (value === undefined) {
+      continue;
+    }
+    capability.set(`voice.locale.${key}`, value, () => {
+      // Native settles before publishing its snapshot. Do not retire a newer edit.
+      if (desired[key] === value) {
+        delete desired[key];
       }
       if (
-        desired.additional &&
-        desired.additional.length === locale.additional.length &&
-        desired.additional.every((id, index) => id === locale.additional[index])
+        desired.primary === undefined &&
+        desired.additional === undefined &&
+        pendingDeviceLocales.get(capability) === desired
       ) {
-        delete desired.additional;
-      }
-      if (desired.primary === undefined && desired.additional === undefined) {
         pendingDeviceLocales.delete(capability);
-        unsubscribe();
       }
     });
-  }
-  if (change.additional) {
-    capability.set("voice.locale.additional", change.additional);
-  }
-  if (change.primary !== undefined) {
-    capability.set("voice.locale.primary", change.primary);
   }
 }
 
 export type VoiceWakeEditorState =
   | { kind: "unavailable" }
-  | { kind: "loading" }
-  | { kind: "error"; error: string }
   | { kind: "ready"; text: string; phase: "saved" | "pending" | "saving"; error: string | null };
 
-export function VoiceWakeEditor(props: {
+function VoiceWakeControls(props: {
   state: VoiceWakeEditorState;
   onInput: (text: string) => void;
   onRetry: () => void;
 }) {
   const ready = () => props.state.kind === "ready";
   const text = () => (props.state.kind === "ready" ? props.state.text : "");
-  const error = () =>
-    props.state.kind === "error" || props.state.kind === "ready" ? props.state.error : null;
+  const error = () => (props.state.kind === "ready" ? props.state.error : null);
+  return (
+    <>
+      {ready() && (
+        <textarea
+          class="settings-input"
+          aria-label={t("configPage.deviceTalk.triggerWords")}
+          rows={4}
+          value={text()}
+          onInput={(event) => props.onInput(event.currentTarget.value)}
+        />
+      )}
+      {error() ? (
+        <div class="callout danger" role="alert">
+          {error()}
+          <button class="btn btn--sm" type="button" onClick={() => props.onRetry()}>
+            {t("common.retry")}
+          </button>
+        </div>
+      ) : props.state.kind === "unavailable" ? (
+        <span class="muted">{t("configPage.deviceTalk.triggerWordsUnavailable")}</span>
+      ) : (
+        <span class="muted" role="status">
+          {props.state.phase !== "saved" ? t("common.saving") : t("configPage.deviceTalk.saved")}
+        </span>
+      )}
+    </>
+  );
+}
+
+export function VoiceWakeEditor(props: {
+  readState: () => VoiceWakeEditorState;
+  scope?: object | null;
+  onInput: (text: string) => void;
+  onRetry: () => void;
+}) {
   return (
     <SettingsSection title={t("configPage.deviceTalk.triggerWords")}>
       <SettingsRow
@@ -103,35 +120,38 @@ export function VoiceWakeEditor(props: {
         description={t("configPage.deviceTalk.triggerWordsHint")}
         stacked
         control={
-          <>
-            {ready() && (
-              <textarea
-                class="settings-input"
-                aria-label={t("configPage.deviceTalk.triggerWords")}
-                rows={4}
-                value={text()}
-                onInput={(event) => props.onInput(event.currentTarget.value)}
-              />
-            )}
-            {error() ? (
+          <Errored
+            fallback={(error, reset) => (
               <div class="callout danger" role="alert">
-                {error()}
-                <button class="btn btn--sm" type="button" onClick={() => props.onRetry()}>
+                {formatUiError(error())}
+                <button
+                  class="btn btn--sm"
+                  type="button"
+                  onClick={() => {
+                    props.onRetry();
+                    reset();
+                  }}
+                >
                   {t("common.retry")}
                 </button>
               </div>
-            ) : props.state.kind === "unavailable" ? (
-              <span class="muted">{t("configPage.deviceTalk.triggerWordsUnavailable")}</span>
-            ) : (
-              <span class="muted" role="status">
-                {props.state.kind === "loading"
-                  ? t("common.loading")
-                  : props.state.kind === "ready" && props.state.phase !== "saved"
-                    ? t("common.saving")
-                    : t("configPage.deviceTalk.saved")}
-              </span>
             )}
-          </>
+          >
+            <Loading
+              on={props.scope}
+              fallback={
+                <span class="muted" role="status">
+                  {t("common.loading")}
+                </span>
+              }
+            >
+              <VoiceWakeControls
+                state={props.readState()}
+                onInput={props.onInput}
+                onRetry={props.onRetry}
+              />
+            </Loading>
+          </Errored>
         }
       />
     </SettingsSection>

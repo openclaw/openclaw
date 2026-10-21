@@ -1,7 +1,10 @@
-import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
+import {
+  asNullableRecord as recordOrNull,
+  isStringArray,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
-import { isSessionRunActive } from "../session-run-state.ts";
+import { isSessionRunStateActive } from "../session-run-state.ts";
 import { sessionMatchesArchivedFilter, type SessionArchivedFilter } from "./navigation.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -34,12 +37,6 @@ export type SessionChangedRowProjection = (
 export type SessionChangedRowResult = {
   applied: boolean;
   key?: string;
-  agentId?: string | null;
-  runId?: string | null;
-  clientRunId?: string | null;
-  hasActiveRun?: boolean | null;
-  status?: SessionRunStatus | null;
-  isChatTurn?: boolean;
   row?: GatewaySessionRow;
   /** Accepted event facts remain available when a list filter removes the row. */
   admittedRow?: GatewaySessionRow;
@@ -67,17 +64,19 @@ export type SessionChangedEventInfo = {
   activeRunIds?: string[] | null;
   status: SessionRunStatus | null;
   archived: boolean | null;
-  isChatTurn: boolean;
   isAncestorReference: boolean;
 };
 
 export function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
-  const next = { ...row };
+  let next = row;
   for (const [key, value] of Object.entries(row)) {
     if (
       value === undefined ||
       (key === "totalTokensFresh" && value === false && row.totalTokens === undefined)
     ) {
+      if (next === row) {
+        next = { ...row };
+      }
       Reflect.deleteProperty(next, key);
     }
   }
@@ -85,8 +84,7 @@ export function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
 }
 
 export function isPersistedSessionRow(row: GatewaySessionRow): boolean {
-  const sessionId = typeof row.sessionId === "string" ? row.sessionId.trim() : "";
-  return Boolean(sessionId || typeof row.updatedAt === "number");
+  return Boolean(row.sessionId?.trim() || row.updatedAt != null);
 }
 
 export function preserveRosterPresentationMetadata(
@@ -97,7 +95,9 @@ export function preserveRosterPresentationMetadata(
     !existing ||
     !incoming.sessionId ||
     incoming.sessionId !== existing.sessionId ||
-    (incoming.derivedTitle !== undefined && incoming.lastMessagePreview !== undefined)
+    (incoming.derivedTitle !== undefined &&
+      incoming.lastMessagePreview !== undefined &&
+      incoming.lastAssistantMessage !== undefined)
   ) {
     return incoming;
   }
@@ -106,31 +106,23 @@ export function preserveRosterPresentationMetadata(
   if (incomingAgentId && existingAgentId && incomingAgentId !== existingAgentId) {
     return incoming;
   }
-  const row = { ...incoming };
-  for (const field of ["derivedTitle", "lastMessagePreview"] as const) {
+  let row = incoming;
+  for (const field of ["derivedTitle", "lastMessagePreview", "lastAssistantMessage"] as const) {
     if (incoming[field] === undefined && existing[field] !== undefined) {
-      row[field] = existing[field];
+      if (row === incoming) {
+        row = { ...incoming };
+      }
+      Object.assign(row, { [field]: existing[field] });
     }
   }
   return row;
-}
-
-function isOlderSessionSnapshot(
-  incoming: GatewaySessionRow,
-  existing: GatewaySessionRow | undefined,
-): boolean {
-  return (
-    typeof incoming.updatedAt === "number" &&
-    typeof existing?.updatedAt === "number" &&
-    incoming.updatedAt < existing.updatedAt
-  );
 }
 
 function isStaleForActiveSession(
   incoming: GatewaySessionRow,
   existing: GatewaySessionRow | undefined,
 ): boolean {
-  if (!existing || !isSessionRunActive(existing) || isSessionRunActive(incoming)) {
+  if (!existing || !isSessionRunStateActive(existing) || isSessionRunStateActive(incoming)) {
     return false;
   }
   if (
@@ -213,7 +205,7 @@ function sessionRunStatus(value: unknown): SessionRunStatus | null {
     : null;
 }
 
-type ParsedSessionChangedEvent = readonly [
+export type ParsedSessionChangedEvent = readonly [
   info: SessionChangedEventInfo,
   event: Record<string, unknown>,
   source: Record<string, unknown>,
@@ -278,7 +270,6 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
     return null;
   }
   const reason = recordString(event, "reason") ?? recordString(source, "reason") ?? null;
-  const phase = recordString(event, "phase") ?? recordString(source, "phase");
   const sourceHasActiveRun = recordValue(source, "hasActiveRun");
   const hasActiveRun =
     typeof sourceHasActiveRun === "boolean"
@@ -312,22 +303,11 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
       clientRunId:
         recordString(event, "clientRunId") ?? recordString(source, "clientRunId") ?? null,
       hasActiveRun: typeof hasActiveRun === "boolean" ? hasActiveRun : null,
-      activeRunIds:
-        activeRunIds === null ||
-        (Array.isArray(activeRunIds) && activeRunIds.every((id) => typeof id === "string"))
-          ? activeRunIds
-          : undefined,
+      activeRunIds: activeRunIds === null || isStringArray(activeRunIds) ? activeRunIds : undefined,
       status:
         sessionRunStatus(recordValue(source, "status")) ??
         sessionRunStatus(recordValue(event, "status")),
       archived: typeof archived === "boolean" ? archived : null,
-      isChatTurn:
-        phase === "start" ||
-        phase === "message" ||
-        phase === "end" ||
-        phase === "error" ||
-        reason === "send" ||
-        reason === "steer",
       isAncestorReference: event.ancestorSessionRef === true,
     },
     event,
@@ -407,6 +387,7 @@ export type SessionRowObservation = {
 
 type SessionRowReconcileOptions = SessionReconcileOptions & {
   preserveExisting?: boolean;
+  clearedFields?: readonly string[];
 };
 
 type RejectedRowDisposition =
@@ -422,13 +403,11 @@ type SessionRowReconcileResult =
       disposition: RejectedRowDisposition;
       row: GatewaySessionRow | undefined;
       admittedRow?: undefined;
-      confirmRead: false;
     }
   | {
       disposition: "unchanged" | "accepted";
       row: GatewaySessionRow | undefined;
       admittedRow: GatewaySessionRow;
-      confirmRead: boolean;
     };
 
 export function isSessionRowOutsideResultScope(
@@ -452,7 +431,6 @@ export function reconcileSessionRow(
   const reject = (disposition: RejectedRowDisposition): SessionRowReconcileResult => ({
     disposition,
     row: previous,
-    confirmRead: false,
   });
   if (!incoming?.key) {
     return reject("invalid");
@@ -466,7 +444,11 @@ export function reconcileSessionRow(
   if (options.preserveExisting && previous) {
     return reject("preserved");
   }
-  if (isOlderSessionSnapshot(session, previous)) {
+  if (
+    session.updatedAt != null &&
+    previous?.updatedAt != null &&
+    session.updatedAt < previous.updatedAt
+  ) {
     return reject("older");
   }
   if (!existing && !isPersistedSessionRow(session)) {
@@ -480,6 +462,9 @@ export function reconcileSessionRow(
     ),
     existing,
   );
+  for (const field of options.clearedFields ?? []) {
+    Reflect.deleteProperty(admittedRow, field);
+  }
   if (isStaleForActiveSession(admittedRow, previous)) {
     return reject("stale-active");
   }
@@ -495,14 +480,13 @@ export function reconcileSessionRow(
       disposition: "unchanged",
       row: existing,
       admittedRow: confirmRead ? existing : admittedRow,
-      confirmRead,
     };
   }
   const row = retained ? admittedRow : undefined;
   if (row) {
     observation?.observe?.(row);
   }
-  return { disposition: "accepted", row, admittedRow, confirmRead: row !== undefined };
+  return { disposition: "accepted", row, admittedRow };
 }
 
 /** List owners may admit a certified snapshot after proving its query membership. */
@@ -516,6 +500,15 @@ export function reconcileSessionChangedRow(
   if (!parsed) {
     return { applied: false, row: existing };
   }
+  return reconcileParsedSessionChangedRow(existing, parsed, options, project);
+}
+
+export function reconcileParsedSessionChangedRow(
+  existing: GatewaySessionRow | undefined,
+  parsed: ParsedSessionChangedEvent,
+  options: SessionReconcileOptions & { admitSnapshot?: boolean } = {},
+  project?: SessionChangedRowProjection,
+): SessionChangedRowResult {
   const [info, event, source] = parsed;
   const { key, reason } = info;
   if (info.isAncestorReference) {
@@ -542,13 +535,13 @@ export function reconcileSessionChangedRow(
     !info.agentId &&
     (isUiGlobalSessionKey(key) || (!parseAgentSessionKey(key) && !Object.keys(rowFields).length))
   ) {
-    return { applied: false, key, agentId: null, row: existing };
+    return { applied: false, key, row: existing };
   }
   if (reason === "delete") {
     if (!info.sessionId || (existing && existing.sessionId !== info.sessionId)) {
-      return { applied: false, key, agentId: info.agentId, row: existing };
+      return { applied: false, key, row: existing };
     }
-    return { applied: true, key, agentId: info.agentId, deletedKey: existing?.key ?? key };
+    return { applied: true, key, deletedKey: existing?.key ?? key };
   }
   // The Gateway folds cron/spawn-child into direct before projection.
   const kind =
@@ -567,12 +560,6 @@ export function reconcileSessionChangedRow(
   const eventResult = {
     applied: true as const,
     key,
-    agentId: info.agentId,
-    runId: info.runId,
-    clientRunId: info.clientRunId,
-    hasActiveRun: info.hasActiveRun,
-    status: info.status,
-    isChatTurn: info.isChatTurn,
   };
   const fullSnapshot = Array.isArray(event.ancestorSessions);
   if (!existing && (!options.admitSnapshot || !fullSnapshot || !recordOrNull(event.session))) {
@@ -598,10 +585,12 @@ export function reconcileSessionChangedRow(
     ...(sessionId ? { sessionId } : {}),
     ...(fullSnapshot && snapshotAgentId ? { agentId: snapshotAgentId } : {}),
   };
+  const clearedFields: string[] = [];
   // Optional wire fields use null as a tombstone; the explicit nullable fields keep null.
   for (const [field, value] of Object.entries(rowFields)) {
     if (value === null && !NULLABLE_SESSION_ROW_FIELDS.has(field)) {
       Reflect.deleteProperty(offered, field);
+      clearedFields.push(field);
     }
   }
   const fields = [
@@ -614,6 +603,7 @@ export function reconcileSessionChangedRow(
     {
       ...options,
       selectedGlobalAgentId: info.agentId ?? options.selectedGlobalAgentId ?? null,
+      clearedFields,
     },
     project && existing
       ? {

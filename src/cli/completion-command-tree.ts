@@ -18,7 +18,7 @@ export type ShellCompletionContext = {
 
 export type ShellCompletionCommandTree = ReturnType<typeof collectShellCompletionCommandTree>;
 
-export function completionFlags(option: Option): string[] {
+function completionFlags(option: Option): string[] {
   return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
 }
 

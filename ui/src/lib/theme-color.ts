@@ -1,4 +1,3 @@
-/** Resolve theme colors for consumers that require concrete RGB values. */
 export function resolveThemeColor(styles: CSSStyleDeclaration, property: string): string {
   const value = styles.getPropertyValue(property).trim();
   if (!value || /^#[\da-f]{6}$/iu.test(value)) {

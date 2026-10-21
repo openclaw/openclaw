@@ -11,14 +11,15 @@ import {
 } from "../../config/sessions/session-actor-scope.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import { logVerbose } from "../../globals.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import type {
   AgentTurnCompletion,
   AgentTurnRestartClaimCleanup,
 } from "./agent-runner-completion.types.js";
-import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
-import { retainReplyOperationUntilComplete } from "./reply-run-registry.state.js";
 
 /** One retained terminal owner, including no-send and exceptional completion. */
 export async function withAgentTurnCompletion<T>(
@@ -29,6 +30,7 @@ export async function withAgentTurnCompletion<T>(
     entry?: SessionEntry;
     writer?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">;
     operation: ReplyOperation;
+    activitySummaryCompletion?: SessionActivitySummaryCompletion;
     prepareRestartClaimCleanup?: (entry: SessionEntry) => AgentTurnRestartClaimCleanup | undefined;
     publish(entry: SessionEntry): void;
   },
@@ -46,12 +48,11 @@ export async function withAgentTurnCompletion<T>(
   };
   const operationKey = operation.key;
   const assertCurrent = () => {
-    if (operation.key !== operationKey || replyRunRegistry.get(operationKey) !== operation) {
+    if (operation.key !== operationKey || !isCurrentSessionControllerOperation(operation)) {
       throw new Error("Terminal accounting lost its reply operation");
     }
   };
   assertCurrent();
-  retainReplyOperationUntilComplete(operation);
   const result = await withSessionActor(
     { agentId: params.agentId, storePath, sessionKey },
     { assertCurrent, assertReadable: assertCurrent },
@@ -74,7 +75,7 @@ export async function withAgentTurnCompletion<T>(
       const prepared: Parameters<AgentTurnCompletion["patch"]>[0][] = [];
       let finished = false;
       const project = () => {
-        let next = structuredClone(snapshot.entry!);
+        let next = snapshot.entry!;
         const reducers: SessionActorReducer[] = [];
         for (const preparation of prepared) {
           const reducer = typeof preparation === "function" ? preparation(next) : preparation;
@@ -114,7 +115,13 @@ export async function withAgentTurnCompletion<T>(
           await refresh();
           let restartClaimCleanup = params.prepareRestartClaimCleanup?.(snapshot.entry!);
           let { reducers } = project();
-          if (reducers.length === 0 && !pendingFinalDelivery && !restartClaimCleanup) {
+          const activitySummary = params.activitySummaryCompletion?.take();
+          if (
+            reducers.length === 0 &&
+            !pendingFinalDelivery &&
+            !restartClaimCleanup &&
+            !activitySummary
+          ) {
             return snapshot.entry!;
           }
           const committed: { receipt?: SessionActorReceipt } = {};
@@ -128,12 +135,12 @@ export async function withAgentTurnCompletion<T>(
                 phaseId: `complete:${operationKey}`,
                 expected: actor.target.database.kind === "memory" ? undefined : snapshot.version,
                 reducers,
+                activitySummary,
                 bookkeeping: {
                   sessionId: expected.sessionId,
                   lifecycleRevision: expected.lifecycleRevision ?? null,
                   writerRunId: expected.writerRunId,
                   expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
-                  ...(pendingFinalDelivery ? { lifecycle: { updatedAt: Date.now() } } : {}),
                 },
                 pendingFinalDelivery,
                 restartClaimCleanup: restartClaimCleanup?.operation,
@@ -142,6 +149,9 @@ export async function withAgentTurnCompletion<T>(
               {
                 committed: (receipt) => {
                   committed.receipt = receipt.receipt;
+                  if (activitySummary && receipt.receipt.postimage.entry) {
+                    params.activitySummaryCompletion?.committed(receipt.receipt.postimage.entry);
+                  }
                   restartClaimCleanup?.committed();
                 },
               },
@@ -162,9 +172,10 @@ export async function withAgentTurnCompletion<T>(
             return snapshot.entry!;
           }
           if (outcome.kind !== "committed") {
-            throw new SqliteWorkerError(
+            throw wrapSqliteWorkerError(
               outcome.error.message,
               outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+              outcome.error,
             );
           }
           if (outcome.failure) {

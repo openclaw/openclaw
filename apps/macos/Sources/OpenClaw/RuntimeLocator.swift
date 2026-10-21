@@ -106,12 +106,6 @@ enum ExecutableVersionProbe {
                     \(label, privacy: .public) --version slow (\(elapsedMs, privacy: .public)ms) \
                     bin=\(binary, privacy: .public)
                     """)
-            } else {
-                logger.debug(
-                    """
-                    \(label, privacy: .public) --version ok (\(elapsedMs, privacy: .public)ms) \
-                    bin=\(binary, privacy: .public)
-                    """)
             }
             return String(data: result.output, encoding: .utf8)
         } catch {

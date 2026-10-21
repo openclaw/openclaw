@@ -1,8 +1,11 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
   createRootFileCopyBatchSync,
+  createRootFileOpenBatchSync,
   type RootFileCopyBatchSync,
+  type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
 import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
@@ -14,6 +17,47 @@ import {
   readPluginSourceDirectory,
   type PluginCapturedSourceFact,
 } from "./plugin-source-verification.js";
+
+/** Publish only verified dependency links; real nested installs keep their own bytes. */
+export function linkPluginGenerationDependency(link: string, target: string): boolean {
+  const entry = fs.lstatSync(link, { throwIfNoEntry: false });
+  if (entry && !entry.isSymbolicLink()) {
+    return false;
+  }
+  if (
+    entry &&
+    path.resolve(path.dirname(link), fs.readlinkSync(link)) === target &&
+    fs.statSync(link, { throwIfNoEntry: false })
+  ) {
+    return false;
+  }
+  fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
+  if (process.platform === "win32") {
+    if (entry) {
+      // MoveFileEx cannot replace a directory junction. Unlink only the reparse point.
+      if (!fs.lstatSync(link).isSymbolicLink()) {
+        throw new Error(`Dependency link became a real entry: ${link}`);
+      }
+      fs.unlinkSync(link);
+    }
+    fs.symlinkSync(target, link, "junction");
+  } else {
+    const staged = `${link}.${randomUUID()}.tmp`;
+    try {
+      fs.symlinkSync(path.relative(path.dirname(link), target), staged, "junction");
+      fs.renameSync(staged, link);
+    } finally {
+      fs.rmSync(staged, { force: true });
+    }
+  }
+  if (!fs.lstatSync(link).isSymbolicLink() || fs.realpathSync(link) !== fs.realpathSync(target)) {
+    throw new Error(`Dependency link does not resolve to its captured target: ${link}`);
+  }
+  if (entry) {
+    process.emitWarning(`Replacing plugin dependency link ${link}`);
+  }
+  return true;
+}
 
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
@@ -68,7 +112,12 @@ export function createPluginGenerationFileCapture({
 }) {
   const { additions } = sourceCapture;
   const ancestors = new Set<string>();
-  const copy = (source: string, target: string, copyFile: RootFileCopyBatchSync["copyFile"]) => {
+  const copy = (
+    source: string,
+    target: string,
+    copyFile: RootFileCopyBatchSync["copyFile"],
+    openFile: RootFileOpenBatchSync["openFile"],
+  ) => {
     // Metadata can precede its package body; promotion never replaces those captured bytes.
     if (capturedPaths.get(path.resolve(source)) === target) {
       return;
@@ -113,7 +162,7 @@ export function createPluginGenerationFileCapture({
             sourceLinks.defer(path.join(input, name), inputBoundary, path.join(source, name))
           )
         ) {
-          copy(path.join(source, name), path.join(target, name), copyFile);
+          copy(path.join(source, name), path.join(target, name), copyFile, openFile);
         }
       }
       ancestors.delete(real);
@@ -142,20 +191,28 @@ export function createPluginGenerationFileCapture({
           captured ?? real,
           captured ? directory : inputBoundary,
           target,
-          { hashCopiedContent: true, copyFile, ...(captured ? { preserveSourceMode: true } : {}) },
+          {
+            hashCopiedContent: true,
+            copyFile,
+            openFile,
+            ...(captured ? { preserveSourceMode: true } : {}),
+          },
         );
       }
-      receipt.file({
-        target: native?.path ?? target,
-        boundary: native?.boundary ?? directory,
-        sizeBytes: Number(stat.size),
-        native: native !== undefined,
-        prepared: native?.content ?? copiedContent,
-        onContent: (content) => {
-          native?.record(content);
-          sourceFacts?.set(path.relative(directory, target), content);
+      receipt.file(
+        {
+          target: native?.path ?? target,
+          boundary: native?.boundary ?? directory,
+          sizeBytes: Number(stat.size),
+          native: native !== undefined,
+          prepared: native?.content ?? copiedContent,
+          onContent: (content) => {
+            native?.record(content);
+            sourceFacts?.set(path.relative(directory, target), content);
+          },
         },
-      });
+        openFile,
+      );
       if (path.basename(target) === "package.json") {
         onPackageMetadata(source, target);
       }
@@ -165,6 +222,8 @@ export function createPluginGenerationFileCapture({
   };
   return (source: string, target: string) => {
     using batch = createRootFileCopyBatchSync();
-    return copy(source, target, batch.copyFile.bind(batch));
+    // Retained roots never outlive this synchronous capture or reach tree retirement.
+    using opened = createRootFileOpenBatchSync();
+    return copy(source, target, batch.copyFile.bind(batch), opened.openFile.bind(opened));
   };
 }

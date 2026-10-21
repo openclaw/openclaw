@@ -1,13 +1,15 @@
 // Fresh-process fixture: value imports stay outside OpenClaw until each scenario demands them.
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
+import { once } from "node:events";
 import fs from "node:fs";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import { registerHooks } from "node:module";
 import path from "node:path";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { text } from "node:stream/consumers";
+import type { FetchLike } from "@modelcontextprotocol/client";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { AuthProfileStore, OAuthCredential } from "./auth-profiles/types.js";
+import type { OAuthCredential } from "./auth-profiles/types.js";
 
 const PLUGIN_ID = "mcp-proof-owner";
 const PROVIDER_ID = "mcp-proof-provider";
@@ -21,6 +23,30 @@ const providerEvents: ProviderEvent[] = [];
 const observerErrors: unknown[] = [];
 let inspectHook: ((owner: string, context?: HookContext) => void) | undefined;
 let authRuntimeEntered = false;
+
+// Shallow equality deliberately preserves callback, config, and registry identity.
+function assertFields<T extends object>(actual: T | undefined, expected: Partial<T>) {
+  assert(actual);
+  for (const key in expected) {
+    assert.equal(actual[key], expected[key], key);
+  }
+}
+
+function assertEvent(kind: string) {
+  assert(
+    providerEvents.some((event) => event.kind === kind),
+    `missing provider event: ${kind}`,
+  );
+}
+
+const credentialOwner = {
+  type: "oauth" as const,
+  provider: PROVIDER_ID,
+  accountId: "fixture-account",
+};
+function credential(access: string, refresh: string, expires: number): OAuthCredential {
+  return { ...credentialOwner, access, refresh, expires };
+}
 
 function observe(message: unknown): void {
   // The generated fixture publishes this exact payload through Node's synchronous channel.
@@ -73,17 +99,11 @@ module.exports = {
         observe("overlay", { config: context.config, agentDir: context.agentDir });
         const file = ${JSON.stringify(credentialPath)};
         if (!fs.existsSync(file)) return [];
-        return [{
-          profileId: ${JSON.stringify(EXTERNAL_PROFILE)},
-          credential: {
-            type: "oauth",
-            provider: ${JSON.stringify(PROVIDER_ID)},
-            accountId: "fixture-account",
-            access: ${JSON.stringify(`${owner}:`)} + fs.readFileSync(file, "utf8"),
-            refresh: "external-refresh-not-real",
-            expires: Date.now() + 3_600_000,
-          },
-        }];
+        return [{ profileId: ${JSON.stringify(EXTERNAL_PROFILE)}, credential: {
+          ...${JSON.stringify(credential("", "external-refresh-not-real", 1))},
+          access: ${JSON.stringify(`${owner}:`)} + fs.readFileSync(file, "utf8"),
+          expires: Date.now() + 3_600_000,
+        }}];
       },
       formatApiKey(credential) {
         observe("formatted");
@@ -122,6 +142,20 @@ module.exports = {
 
 type ProviderFixture = ReturnType<typeof writeProvider>;
 type HttpRequest = { method?: string; headers: IncomingHttpHeaders; body: string };
+const configuredHeaders = { Authorization: "Bearer stale-config-not-real", "X-Trace": "keep" };
+function authOptions(
+  fixture: ProviderFixture,
+  resourceUrl: string,
+  authProfileId = EXTERNAL_PROFILE,
+) {
+  return {
+    serverName: "proof",
+    resourceUrl,
+    authProfileId,
+    cfg: fixture.config,
+    agentDir: fixture.agentDir,
+  };
+}
 
 async function createHttpFixture() {
   const requests: HttpRequest[] = [];
@@ -131,59 +165,46 @@ async function createHttpFixture() {
   const behavior = { rejectRefresh: false };
   const server = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      const body = Buffer.concat(chunks).toString("utf8");
+      const body = await text(request);
       response.setHeader("content-type", "application/json");
+      const send = (code: number, value?: unknown) => {
+        response.statusCode = code;
+        response.end(value === undefined ? undefined : JSON.stringify(value));
+      };
       if (request.url === "/token") {
         const input = JSON.parse(body) as { refresh: string };
         refreshInputs.push(input.refresh);
         order.push("refresh");
-        response.statusCode = behavior.rejectRefresh ? 503 : 200;
-        response.end(
-          JSON.stringify({
-            access: "rotated-access-not-real",
-            refresh: "rotated-refresh-not-real",
-            expires: Date.now() + 3_600_000,
-          }),
-        );
-        return;
+        return send(behavior.rejectRefresh ? 503 : 200, {
+          access: "rotated-access-not-real",
+          refresh: "rotated-refresh-not-real",
+          expires: Date.now() + 3_600_000,
+        });
       }
       requests.push({ method: request.method, headers: request.headers, body });
       order.push("mcp");
-      const message = body
-        ? (JSON.parse(body) as {
-            id?: number;
-            method?: string;
-            params?: { protocolVersion: string };
-          })
-        : undefined;
+      const message: { id?: number; method?: string; params?: { protocolVersion: string } } = body
+        ? JSON.parse(body)
+        : {};
       // This JSON-only endpoint declines the SDK's optional SSE stream.
       if (request.method === "GET" && request.headers.accept === "text/event-stream") {
-        response.statusCode = 405;
         response.setHeader("allow", "POST");
-        response.end();
-        return;
+        return send(405);
       }
-      if (message?.method && message.id === undefined) {
-        response.statusCode = 202;
-        response.end();
-        return;
+      if (message.method && message.id === undefined) {
+        return send(202);
       }
       const result =
-        message?.method === "initialize"
+        message.method === "initialize"
           ? {
               protocolVersion: message.params?.protocolVersion,
               capabilities: {},
               serverInfo: { name: "mcp-proof", version: "1.0.0" },
             }
           : {};
-      response.end(
-        JSON.stringify(
-          message?.id === undefined ? { ok: true } : { jsonrpc: "2.0", id: message.id, result },
-        ),
+      send(
+        200,
+        message.id === undefined ? { ok: true } : { jsonrpc: "2.0", id: message.id, result },
       );
     })().catch((error: unknown) => {
       errors.push(error);
@@ -191,13 +212,7 @@ async function createHttpFixture() {
       response.end();
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
   const address = server.address();
   assert(address && typeof address !== "string");
   const origin = `http://127.0.0.1:${address.port}`;
@@ -231,7 +246,7 @@ function bundleConfig(url: string, profileId = STORED_PROFILE) {
         url,
         auth: "oauth",
         oauth: { authProfileId: profileId },
-        headers: { Authorization: "Bearer stale-config-not-real", "X-Trace": "keep" },
+        headers: configuredHeaders,
       },
     },
   };
@@ -276,98 +291,65 @@ async function runExternalScenario(root: string): Promise<void> {
       return loaded;
     },
   });
-  let phase = "cold-bundle-setup";
   try {
-    const { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } =
+    const { resolveMcpBearerBundleConfig: project, withMcpAuthProfileBearer } =
       await import("./mcp-auth-profile.js");
-    const calls: Array<{ url: string | URL; init?: RequestInit }> = [];
+    const calls: Array<RequestInit | undefined> = [];
     const wrapped = withMcpAuthProfileBearer({
       fetchFn: async (url, init) => {
-        calls.push({ url, init });
+        calls.push(init);
         return fetch(url, init);
       },
-      serverName: "proof",
-      resourceUrl: endpoint.url,
-      authProfileId: EXTERNAL_PROFILE,
-      cfg: fixture.config,
-      agentDir: fixture.agentDir,
-      headers: { Authorization: "Bearer stale-config-not-real", "X-Trace": "keep" },
+      ...authOptions(fixture, endpoint.url),
+      headers: configuredHeaders,
     });
     const plain = { mcpServers: { plain: { url: endpoint.url } } };
-    assert.deepEqual(await resolveMcpBearerBundleConfig({ config: plain }), {
+    assert.deepEqual(await project({ config: plain }), {
       config: plain,
       env: undefined,
     });
     const foreignInit = { headers: { Authorization: "Bearer caller-owned-not-real" } };
-    phase = "foreign-before-demand";
     await consumeFetch(wrapped, foreign.url, foreignInit);
-    assert.equal(calls[0]?.init, foreignInit);
-    // Assert a completed phase, not the live recorders the next request populates.
-    const beforeDemand = {
-      moduleAttempts: [...moduleAttempts],
-      moduleLoads: [...moduleLoads],
-      providerEvents: [...providerEvents],
-    };
-    assert.deepEqual(beforeDemand, { moduleAttempts: [], moduleLoads: [], providerEvents: [] });
-
-    phase = "same-origin-first-demand";
+    assert.equal(calls[0], foreignInit);
+    assert.deepEqual([moduleAttempts, moduleLoads, providerEvents], [[], [], []]);
     authRuntimeEntered = true;
     const signal = new AbortController().signal;
     await consumeFetch(wrapped, new URL(endpoint.url), {
       headers: { Authorization: "Bearer stale-request-not-real", Accept: "application/json" },
       signal,
     });
-    assert.equal(calls.at(-1)?.init?.signal, signal);
-    assert.equal(endpoint.requests.at(-1)?.headers.authorization, "Bearer external:first");
-    assert.equal(endpoint.requests.at(-1)?.headers["x-trace"], "keep");
-    assert.equal(endpoint.requests.at(-1)?.headers.accept, "application/json");
+    assert.equal(calls.at(-1)?.signal, signal);
+    assertFields(endpoint.requests.at(-1)?.headers, {
+      authorization: "Bearer external:first",
+      "x-trace": "keep",
+      accept: "application/json",
+    });
     assert(moduleAttempts.some((entry) => entry.includes("auth-profiles")));
     assert(moduleLoads.some((entry) => entry.includes("auth-profiles")));
-    for (const kind of ["evaluated", "registered", "overlay", "formatted"]) {
-      assert(
-        providerEvents.some((event) => event.kind === kind),
-        `missing provider event: ${kind}`,
-      );
-    }
+    ["evaluated", "registered", "overlay", "formatted"].forEach(assertEvent);
 
-    phase = "same-origin-after-rotation";
     fs.writeFileSync(fixture.credentialPath, "rotated");
     await consumeFetch(wrapped, endpoint.url);
     assert.equal(endpoint.requests.at(-1)?.headers.authorization, "Bearer external:rotated");
-    phase = "missing-profile-after-removal";
     fs.rmSync(fixture.credentialPath);
     const sent = endpoint.requests.length;
     await assert.rejects(() => wrapped(endpoint.url), /profile was not found/u);
     assert.equal(endpoint.requests.length, sent);
     const eventsAfterRemoval = providerEvents.length;
-    phase = "foreign-after-removal";
     await consumeFetch(wrapped, new URL(foreign.url), foreignInit);
-    assert.equal(calls.at(-1)?.init, foreignInit);
+    assert.equal(calls.at(-1), foreignInit);
     assert.equal(providerEvents.length, eventsAfterRemoval);
     for (const request of foreign.requests) {
-      assert.equal(request.headers.authorization, "Bearer caller-owned-not-real");
-      assert.equal(request.headers["x-trace"], undefined);
+      assertFields(request.headers, {
+        authorization: "Bearer caller-owned-not-real",
+        "x-trace": undefined,
+      });
     }
-    phase = "persisted-store-check";
     const { loadPersistedAuthProfileStore } = await import("./auth-profiles/persisted.js");
     assert.equal(
       loadPersistedAuthProfileStore(fixture.agentDir)?.profiles[EXTERNAL_PROFILE],
       undefined,
     );
-    console.log(JSON.stringify({ moduleAttempts, moduleLoads, providerEvents }));
-  } catch (error) {
-    console.error(
-      "MCP_AUTH_EXTERNAL_FAILURE",
-      JSON.stringify({
-        phase,
-        endpointRequests: endpoint.requests.length,
-        foreignRequests: foreign.requests.length,
-        moduleAttempts: moduleAttempts.length,
-        moduleLoads: moduleLoads.length,
-        providerEvents: providerEvents.length,
-      }),
-    );
-    throw error;
   } finally {
     hooks.deregister();
     await Promise.all([endpoint.close(), foreign.close()]);
@@ -381,51 +363,50 @@ async function runRefreshScenario(root: string): Promise<void> {
   const { loadPersistedAuthProfileStore } = await import("./auth-profiles/persisted.js");
   const { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } =
     await import("./mcp-auth-profile.js");
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-  const { StreamableHTTPClientTransport } =
-    await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+  const { Client, StreamableHTTPClientTransport } = await import("@modelcontextprotocol/client");
   const endpoint = await createHttpFixture();
   const fixture = writeProvider(root, "refresh", endpoint.tokenUrl);
-  const expired: OAuthCredential = {
-    type: "oauth",
-    provider: PROVIDER_ID,
-    accountId: "fixture-account",
-    access: "expired-access-not-real",
-    refresh: "stored-refresh-not-real",
-    expires: 1,
-  };
-  const seed = () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        [STORED_PROFILE]: expired,
-        [`${PROVIDER_ID}:static`]: {
-          type: "token",
-          provider: PROVIDER_ID,
-          token: "static-not-real",
+  const expired = credential("expired-access-not-real", "stored-refresh-not-real", 1);
+  const seed = () =>
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [STORED_PROFILE]: expired,
+          [`${PROVIDER_ID}:static`]: {
+            type: "token",
+            provider: PROVIDER_ID,
+            token: "static-not-real",
+          },
         },
       },
-    };
-    saveAuthProfileStore(store, fixture.agentDir, {
-      filterExternalAuthProfiles: false,
-      syncExternalCli: false,
-    });
-  };
+      fixture.agentDir,
+      {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      },
+    );
   seed();
   const wrapped = withMcpAuthProfileBearer({
     fetchFn: fetch,
-    serverName: "proof",
-    resourceUrl: endpoint.url,
-    authProfileId: STORED_PROFILE,
-    cfg: fixture.config,
-    agentDir: fixture.agentDir,
-    headers: { "X-Trace": "keep", Authorization: "Bearer stale-config-not-real" },
+    ...authOptions(fixture, endpoint.url, STORED_PROFILE),
+    headers: configuredHeaders,
   });
   const transport = new StreamableHTTPClientTransport(new URL(endpoint.url), {
     fetch: wrapped,
     requestInit: { headers: { "X-Request": "keep", Authorization: "Bearer stale-sdk-not-real" } },
   });
-  const client = new Client({ name: "mcp-auth-proof", version: "1.0.0" });
+  const client = new Client(
+    { name: "mcp-auth-proof", version: "1.0.0" },
+    { versionNegotiation: { mode: "legacy" } },
+  );
+  const project = (profileId = STORED_PROFILE, tokenProjection?: "env" | "literal") =>
+    resolveMcpBearerBundleConfig({
+      config: bundleConfig(endpoint.url, profileId),
+      cfg: fixture.config,
+      agentDir: fixture.agentDir,
+      tokenProjection,
+    });
   // Optional SSE GETs are independent of the ordered RPC POSTs under test.
   const mcpPosts = () => endpoint.requests.filter((request) => request.method === "POST");
   try {
@@ -439,27 +420,24 @@ async function runRefreshScenario(root: string): Promise<void> {
       ["initialize", "notifications/initialized", "ping", "ping"],
     );
     for (const request of endpoint.requests) {
-      assert.equal(request.headers.authorization, "Bearer rotated-access-not-real");
-      assert.equal(request.headers["x-trace"], "keep");
-      assert.equal(request.headers["x-request"], "keep");
-      assert.equal(
-        request.headers.accept,
-        request.method === "POST" ? "application/json, text/event-stream" : "text/event-stream",
-      );
+      assertFields(request.headers, {
+        authorization: "Bearer rotated-access-not-real",
+        "x-trace": "keep",
+        "x-request": "keep",
+        accept:
+          request.method === "POST" ? "application/json, text/event-stream" : "text/event-stream",
+      });
     }
     const stored = loadPersistedAuthProfileStore(fixture.agentDir)?.profiles[STORED_PROFILE];
     assert(stored?.type === "oauth");
-    assert.equal(stored.access, "rotated-access-not-real");
-    assert.equal(stored.refresh, "rotated-refresh-not-real");
-    assert.equal(stored.accountId, "fixture-account");
+    assertFields(stored, {
+      access: "rotated-access-not-real",
+      refresh: "rotated-refresh-not-real",
+      accountId: "fixture-account",
+    });
 
     for (const tokenProjection of ["env", "literal"] as const) {
-      const projected = await resolveMcpBearerBundleConfig({
-        config: bundleConfig(endpoint.url),
-        cfg: fixture.config,
-        agentDir: fixture.agentDir,
-        tokenProjection,
-      });
+      const projected = await project(STORED_PROFILE, tokenProjection);
       const server = projected.config.mcpServers.proof;
       assert(server);
       const headers = filterStringRecord(server.headers);
@@ -474,25 +452,14 @@ async function runRefreshScenario(root: string): Promise<void> {
         assert.equal(projected.env?.[envKey], "rotated-access-not-real");
       }
       assert.equal(headers?.["X-Trace"], "keep");
-      assert.equal(server.auth, undefined);
-      assert.equal(server.oauth, undefined);
-      const serialized = JSON.stringify(projected);
-      assert(!serialized.includes("rotated-refresh-not-real"));
-      assert(!serialized.includes("formatterOnly"));
+      assertFields(server, { auth: undefined, oauth: undefined });
+      assert.doesNotMatch(JSON.stringify(projected), /rotated-refresh-not-real|formatterOnly/u);
     }
     for (const [profileId, error] of [
       [`${PROVIDER_ID}:missing`, /profile was not found/u],
       [`${PROVIDER_ID}:static`, /profiles are not refreshable/u],
     ] as const) {
-      await assert.rejects(
-        () =>
-          resolveMcpBearerBundleConfig({
-            config: bundleConfig(endpoint.url, profileId),
-            cfg: fixture.config,
-            agentDir: fixture.agentDir,
-          }),
-        error,
-      );
+      await assert.rejects(() => project(profileId), error);
     }
     seed();
     endpoint.behavior.rejectRefresh = true;
@@ -502,14 +469,12 @@ async function runRefreshScenario(root: string): Promise<void> {
       (error: unknown) => {
         assert(error instanceof Error);
         assert.match(error.message, /fixture refresh denied/u);
-        assert(!error.message.includes(expired.access));
-        assert(!error.message.includes(expired.refresh));
+        assert.doesNotMatch(error.message, /expired-access-not-real|stored-refresh-not-real/u);
         return true;
       },
     );
     assert.equal(mcpPosts().length, sent);
-    assert(providerEvents.some((event) => event.kind === "refresh"));
-    assert(providerEvents.some((event) => event.kind === "refreshed"));
+    ["refresh", "refreshed"].forEach(assertEvent);
   } finally {
     await client.close();
     await endpoint.close();
@@ -524,23 +489,19 @@ async function runScopeScenario(root: string): Promise<void> {
   const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
   const { getPluginRegistryState } = await import("../plugins/runtime-state.js");
   const { setActivePluginRegistry } = await import("../plugins/runtime.js");
-  const { getPluginRuntimeGenerationRegistry, withPluginRuntimeGenerationScope } =
-    await import("../plugins/runtime/generation-scope.js");
-  const { getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
-    await import("../plugins/runtime/gateway-request-scope.js");
+  const generationScope = await import("../plugins/runtime/generation-scope.js");
+  const requestScope = await import("../plugins/runtime/gateway-request-scope.js");
   const { withMcpAuthProfileBearer } = await import("./mcp-auth-profile.js");
   const prepare = (fixture: ProviderFixture) =>
     withPluginCache(createPluginCache(), () => {
-      const metadataSnapshot = loadPluginMetadataSnapshot({
+      const options = {
         config: fixture.config,
         env: process.env,
         workspaceDir: fixture.workspaceDir,
-        preferPersisted: false,
-      });
+      };
+      const metadataSnapshot = loadPluginMetadataSnapshot({ ...options, preferPersisted: false });
       const pluginRegistry = loadPluginRegistryHandle({
-        config: fixture.config,
-        env: process.env,
-        workspaceDir: fixture.workspaceDir,
+        ...options,
         manifestRegistry: metadataSnapshot.manifestRegistry,
         installRecords: {},
         onlyPluginIds: [PLUGIN_ID],
@@ -550,43 +511,47 @@ async function runScopeScenario(root: string): Promise<void> {
     });
   const endpoint = await createHttpFixture();
   try {
-    const fixtures = ["first", "second", "disabled"].map((owner) =>
-      writeProvider(root, owner, endpoint.tokenUrl, owner !== "disabled"),
-    );
-    const owners = fixtures.map((fixture, index) => {
-      const generation = prepare(fixture);
-      const request = {
-        pluginId: `requester-${index}`,
-        isWebchatConnect: () => false,
-        resolveGatewayContext: () => undefined,
+    const owners = ["first", "second", "disabled"].map((name, index) => {
+      const fixture = writeProvider(root, name, endpoint.tokenUrl, name !== "disabled");
+      return {
+        fixture,
+        generation: prepare(fixture),
+        request: {
+          pluginId: `requester-${index}`,
+          isWebchatConnect: () => false,
+          resolveGatewayContext: () => undefined,
+        },
       };
-      return { fixture, generation, request };
     });
     type ScopedOwner = (typeof owners)[number];
     const [first, second, disabled] = owners;
     assert(first && second && disabled);
-    assert.equal(first.generation.pluginRegistry.providers.length, 1);
-    assert.equal(second.generation.pluginRegistry.providers.length, 1);
-    assert.equal(disabled.generation.pluginRegistry.providers.length, 0);
-    const checkScope = (owner: ScopedOwner, context?: HookContext, pluginOwner = false) => {
-      const scope = getPluginRuntimeGatewayRequestScope();
+    assert.deepEqual(
+      owners.map(({ generation }) => generation.pluginRegistry.providers.length),
+      [1, 1, 0],
+    );
+    const checkScope = (
+      { request, fixture, generation }: ScopedOwner,
+      context?: HookContext,
+      pluginOwner = false,
+    ) => {
+      const scope = requestScope.getPluginRuntimeGatewayRequestScope();
       assert(scope, "request scope must survive deferred auth");
-      assert.equal(scope.pluginId, pluginOwner ? PLUGIN_ID : owner.request.pluginId);
-      if (pluginOwner) {
-        assert.equal(scope.pluginSource, owner.fixture.source);
-        assert.equal(scope.pluginOrigin, "config");
-      }
-      assert.equal(scope.isWebchatConnect === owner.request.isWebchatConnect, true);
-      assert.equal(scope.resolveGatewayContext === owner.request.resolveGatewayContext, true);
-      assert.equal(scope.pluginRegistry === owner.generation.pluginRegistry, true);
-      assert.equal(
-        scope.declaredProviderOwners === owner.generation.metadataSnapshot.declaredProviderOwners,
-        true,
-      );
-      assert.equal(getPluginRuntimeGenerationRegistry() === owner.generation.pluginRegistry, true);
+      assertFields(scope, {
+        ...request,
+        ...(pluginOwner
+          ? {
+              pluginId: PLUGIN_ID,
+              pluginSource: fixture.source,
+              pluginOrigin: "config" as const,
+            }
+          : {}),
+        pluginRegistry: generation.pluginRegistry,
+        declaredProviderOwners: generation.metadataSnapshot.declaredProviderOwners,
+      });
+      assert.equal(generationScope.getPluginRuntimeGenerationRegistry(), generation.pluginRegistry);
       if (context) {
-        assert.equal(context.config, owner.fixture.config);
-        assert.equal(context.agentDir, owner.fixture.agentDir);
+        assertFields(context, { config: fixture.config, agentDir: fixture.agentDir });
       }
     };
     inspectHook = (name, context) => checkScope(name === "first" ? first : second, context, true);
@@ -596,15 +561,11 @@ async function runScopeScenario(root: string): Promise<void> {
           checkScope(owner);
           return fetch(url, init);
         },
-        serverName: "proof",
-        resourceUrl: endpoint.url,
-        authProfileId: EXTERNAL_PROFILE,
-        cfg: owner.fixture.config,
-        agentDir: owner.fixture.agentDir,
+        ...authOptions(owner.fixture, endpoint.url),
       });
       return () =>
-        withPluginRuntimeGatewayRequestScope(owner.request, () =>
-          withPluginRuntimeGenerationScope(owner.generation, () =>
+        requestScope.withPluginRuntimeGatewayRequestScope(owner.request, () =>
+          generationScope.withPluginRuntimeGenerationScope(owner.generation, () =>
             consumeFetch(wrapped, endpoint.url),
           ),
         );
@@ -636,12 +597,9 @@ async function runScopeScenario(root: string): Promise<void> {
     await assert.rejects(bind(disabled), /profile was not found/u);
     assert.equal(endpoint.requests.length, sent);
     assert(!providerEvents.some((event) => event.owner === "disabled"));
-    assert.equal(getPluginRuntimeGatewayRequestScope(), undefined);
-    assert.equal(getPluginRuntimeGenerationRegistry(), undefined);
-    assert.equal(
-      getPluginRegistryState()?.activeRegistry === second.generation.pluginRegistry,
-      true,
-    );
+    assert.equal(requestScope.getPluginRuntimeGatewayRequestScope(), undefined);
+    assert.equal(generationScope.getPluginRuntimeGenerationRegistry(), undefined);
+    assert.equal(getPluginRegistryState()?.activeRegistry, second.generation.pluginRegistry);
   } finally {
     inspectHook = undefined;
     await endpoint.close();
@@ -650,23 +608,17 @@ async function runScopeScenario(root: string): Promise<void> {
 
 async function main(): Promise<void> {
   const [scenario, root] = process.argv.slice(2);
-  assert(root);
+  assert(root && scenario);
   const observer = channel(OBSERVER_CHANNEL);
   observer.subscribe(observe);
   try {
-    switch (scenario) {
-      case "external":
-        await runExternalScenario(root);
-        break;
-      case "refresh":
-        await runRefreshScenario(root);
-        break;
-      case "scopes":
-        await runScopeScenario(root);
-        break;
-      default:
-        throw new Error(`Unknown MCP auth proof scenario: ${scenario}`);
-    }
+    const run = new Map([
+      ["external", runExternalScenario],
+      ["refresh", runRefreshScenario],
+      ["scopes", runScopeScenario],
+    ]).get(scenario);
+    assert(run, `Unknown MCP auth proof scenario: ${scenario}`);
+    await run(root);
   } finally {
     try {
       // A rejected cold import must not load auth owners merely to clean them up.

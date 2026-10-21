@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
@@ -31,7 +31,13 @@ import {
 import { isTruthyEnvValue } from "./env.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import {
+  getOrLoadSqliteDatabaseAdmissionForPath,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "./sqlite-database-admission.js";
 import { runWithSqliteCleanup, throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { invalidateSuccessfulMigrationCheckpointsInTransaction } from "./startup-migration-checkpoint.js";
 import { withStateDatabaseSchemaMaintenance } from "./state-database-maintenance.js";
@@ -39,7 +45,26 @@ import { recordLegacyMigrationRun } from "./state-migrations.receipts.js";
 
 export type { DeferredPluginMigration } from "./deferred-plugin-migrations.contract.js";
 
+type PinnedMigrationRead = { invalidated: boolean; parent?: PinnedMigrationRead };
+const pinnedMigrationRead = new AsyncLocalStorage<PinnedMigrationRead>();
+
+function invalidatePinnedMigrationReads(): void {
+  for (let read = pinnedMigrationRead.getStore(); read; read = read.parent) {
+    read.invalidated = true;
+  }
+}
+
 const RUN_PREFIX = "deferred-plugin-migration:";
+const migrationReceipt: SqliteDatabaseAdmissionKey<object> = {
+  name: "plugins.deferred-migrations",
+  lifetime: "process",
+  read: (value) => (isRecord(value) ? value : undefined),
+};
+
+/** Only committed migration writes retire readiness; ordinary state writes do not. */
+export function readDeferredPluginMigrationReceipt(databasePath: string): object {
+  return getOrLoadSqliteDatabaseAdmissionForPath(databasePath, migrationReceipt, () => ({})) ?? {};
+}
 
 type ConfigMigrationCompletion = {
   configPath: string;
@@ -165,7 +190,7 @@ export function mergeDeferredPluginMigration(
   };
 }
 
-function readPendingMigrationRows(database: DatabaseSync) {
+function readPendingMigrationRows(database: EngineConnection) {
   return executeSqliteQuerySync(
     database,
     getNodeSqliteKysely<Pick<DB, "migration_runs">>(database)
@@ -181,7 +206,7 @@ function pendingMigrationRecords(rows: ReturnType<typeof readPendingMigrationRow
   return rows.map((row) => deferredPluginMigrationSchema.parse(JSON.parse(row.report_json)));
 }
 
-function readPendingMigrationRecords(database: DatabaseSync) {
+function readPendingMigrationRecords(database: EngineConnection) {
   return tableExists(database, "migration_runs")
     ? pendingMigrationRecords(readPendingMigrationRows(database))
     : [];
@@ -192,7 +217,7 @@ export const deferredPluginMigrationReadOperations = {
     type: "plugins.deferredMigrations.read" as const,
     pending: readPendingMigrationRecords(db),
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 function assertPendingGeneration(
   current: readonly DeferredPluginMigration[],
@@ -244,6 +269,34 @@ export async function readDeferredPluginMigrationsAsync(
     return [];
   }
   return reply.pending;
+}
+
+/** The caller holds the plugin lifecycle lease until its last synchronous policy guard. */
+export async function withLeasePinnedDeferredPluginMigrations<T>(
+  options: {
+    env: NodeJS.ProcessEnv;
+    lease: { databasePath: string; assertOwned: () => void };
+  },
+  run: (pending: readonly DeferredPluginMigration[], assertCurrent: () => void) => Promise<T>,
+): Promise<T> {
+  options.lease.assertOwned();
+  const pending = await readDeferredPluginMigrationsAsync({
+    env: options.env,
+    path: options.lease.databasePath,
+  });
+  options.lease.assertOwned();
+  const read: PinnedMigrationRead = {
+    invalidated: false,
+    ...(pinnedMigrationRead.getStore() ? { parent: pinnedMigrationRead.getStore() } : {}),
+  };
+  return await pinnedMigrationRead.run(read, async () =>
+    run(pending, () => {
+      options.lease.assertOwned();
+      if (read.invalidated) {
+        throw new Error("Deferred plugin migration policy changed since review.");
+      }
+    }),
+  );
 }
 
 /** Completion receipts resolve historical warnings without loading their retired reports. */
@@ -409,9 +462,12 @@ export type DeferredPluginMigrationRecordInput = {
 
 /** Native row transform; the worker owns its transaction and lease grants. */
 export function recordDeferredPluginMigrationsInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: Omit<DeferredPluginMigrationRecordInput, "env">,
 ) {
+  if (params.pending.length > 0 || params.resolvedPluginIds?.length) {
+    invalidatePinnedMigrationReads();
+  }
   const pendingById = new Map(
     params.pending.map((pending) => [
       pending.pluginId,
@@ -473,6 +529,9 @@ export function recordDeferredPluginMigrationsInTransaction(
   if (deferred.length > 0) {
     invalidateSuccessfulMigrationCheckpointsInTransaction(db);
   }
+  if (deferred.length > 0 || resolved.length > 0) {
+    publishSqliteDatabaseAdmission(db, migrationReceipt, {});
+  }
   return { deferred, resolved, pending: pendingMigrationRecords(readPendingMigrationRows(db)) };
 }
 
@@ -487,6 +546,7 @@ export async function recordDeferredPluginMigrations(
   ) {
     return undefined;
   }
+  invalidatePinnedMigrationReads();
   const input = structuredClone({
     pending: params.pending,
     resolvedPluginIds: params.resolvedPluginIds,

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseQaJson } from "./json.js";
 import { buildQaImageGenerationConfigPatch } from "./providers/image-generation.js";
 import { readFirstMediaPath } from "./providers/mock-openai/mock-openai-directives.js";
 import {
@@ -17,12 +18,7 @@ function extractMediaPathFromText(text: string | undefined): string | undefined 
   if (!text) {
     return undefined;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text) as unknown;
-  } catch {
-    return undefined;
-  }
+  const parsed = safeParseQaJson(text);
   const details = isRecord(parsed) ? parsed.details : undefined;
   const media = isRecord(details) ? details.media : undefined;
   return isRecord(media) ? readFirstMediaPath(media) || undefined : undefined;

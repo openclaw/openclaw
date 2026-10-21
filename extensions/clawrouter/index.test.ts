@@ -1,7 +1,9 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerAuthRuntimeMocks = vi.hoisted(() => ({
@@ -11,7 +13,6 @@ const providerAuthRuntimeMocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => providerAuthRuntimeMocks);
 
 import plugin from "./index.js";
-import { wrapClawRouterProviderStream } from "./stream.js";
 
 const LIVE_CATALOG = {
   providers: [
@@ -21,13 +22,7 @@ const LIVE_CATALOG = {
       openaiCompatible: true,
       nativeBaseUrl: "/v1/native/openai",
       routes: [],
-      models: [
-        {
-          id: "openai/gpt-5.5",
-          upstream: "gpt-5.5",
-          capabilities: ["llm.responses"],
-        },
-      ],
+      models: [{ id: "openai/gpt-5.5", upstream: "gpt-5.5", capabilities: ["llm.responses"] }],
     },
   ],
 };
@@ -47,13 +42,36 @@ function streamModel(overrides: Partial<Parameters<StreamFn>[0]> = {}): Paramete
   };
 }
 
-function createStreamCapture() {
+function createStreamCapture(
+  provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>,
+  agentId?: string,
+) {
   const calls: Array<Parameters<StreamFn>[0]> = [];
   const streamFn = vi.fn<StreamFn>((model) => {
     calls.push(model);
     return createAssistantMessageEventStream();
   });
-  return { calls, streamFn };
+  const wrapped = provider.wrapStreamFn?.({
+    provider: "clawrouter",
+    modelId: "openai/gpt-5.5",
+    agentId,
+    streamFn,
+  });
+  const dispatch = (model = streamModel(), options?: Parameters<StreamFn>[2]) => {
+    void wrapped?.(model, { messages: [] }, options);
+  };
+  return { calls, streamFn, dispatch };
+}
+
+function mockCatalogAuth(source = "auth profile") {
+  providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue({
+    apiKey: "resolved-proxy-key",
+    mode: "api-key",
+    source,
+  });
+  const fetchMock = vi.fn(async () => Response.json(LIVE_CATALOG));
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
 
 function dynamicModelContext() {
@@ -69,141 +87,126 @@ function dynamicModelContext() {
   };
 }
 
+const SCOPED_AUTH = {
+  provider: "clawrouter",
+  cfg: { models: {} },
+  agentDir: "/agent",
+  workspaceDir: "/workspace",
+  profileId: "clawrouter-profile",
+  lockedProfile: true,
+};
+
+function catalogContext(
+  apiKey: string,
+  discoveryApiKey?: string,
+  source: "profile" | "env" = "profile",
+): ProviderCatalogContext {
+  const auth = { apiKey, discoveryApiKey };
+  return {
+    config: { models: {} },
+    env: {},
+    resolveProviderAuth: () => ({ ...auth, mode: "api_key", source }),
+    resolveProviderApiKey: () => auth,
+  };
+}
+
 describe("ClawRouter plugin", () => {
-  beforeEach(() => {
+  let provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
+  const resolveLevels = (efforts?: string[], agentRuntime?: string) =>
+    provider
+      .resolveThinkingProfile?.({
+        provider: "clawrouter",
+        modelId: "opaque-route-id",
+        agentRuntime,
+        ...(efforts ? { compat: { supportedReasoningEfforts: efforts } } : {}),
+      } as never)
+      ?.levels.map((level) => level.id);
+
+  beforeEach(async () => {
     clearLiveCatalogCacheForTests();
     providerAuthRuntimeMocks.resolveApiKeyForProvider.mockReset();
+    provider = await registerSingleProviderPlugin(plugin);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("resolves authoritative catalog thinking profiles without inventing minimal", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const compat = {
-      supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
-    };
-    const resolveLevels = (agentRuntime: string | undefined) =>
-      provider
-        ?.resolveThinkingProfile?.({
-          provider: "clawrouter",
-          modelId: "opaque-route-id",
-          agentRuntime,
-          compat,
-        } as never)
-        ?.levels.map((level) => level.id);
-
+  it("resolves authoritative catalog thinking profiles without inventing minimal", () => {
+    const efforts = ["none", "low", "medium", "high", "xhigh", "max"];
     const catalogLevels = ["off", "low", "medium", "high", "xhigh", "max"];
-    expect(resolveLevels("openclaw")).toEqual([...catalogLevels, "ultra"]);
-    expect(resolveLevels("auto")).toEqual([...catalogLevels, "ultra"]);
-    expect(resolveLevels("codex")).toEqual(catalogLevels);
-    expect(resolveLevels(undefined)).toEqual(catalogLevels);
-    expect(
-      provider?.resolveThinkingProfile?.({
+    expect(resolveLevels(efforts, "openclaw")).toEqual([...catalogLevels, "ultra"]);
+    expect(resolveLevels(efforts, "auto")).toEqual([...catalogLevels, "ultra"]);
+    expect(resolveLevels(efforts, "codex")).toEqual(catalogLevels);
+    expect(resolveLevels(efforts)).toEqual(catalogLevels);
+    expect(resolveLevels()).toBeUndefined();
+  });
+
+  it("bounds configured thinking metadata at the provider hook", () => {
+    const bounded = resolveLevels(["ultra", "custom", "none", "none", "max"], "openclaw");
+    expect(bounded).toEqual(["off", "max", "ultra"]);
+    expect(resolveLevels(["ultra", "custom"])).toBeUndefined();
+  });
+
+  it.each(["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const)(
+    "%s attaches the proxy key and native upstream id only at request dispatch",
+    (hook) => {
+      const { calls, streamFn } = createStreamCapture(provider);
+      expect(
+        provider[hook]?.({ provider: "clawrouter", modelId: "openai/gpt-5.5" }),
+      ).toBeUndefined();
+      const wrapped = provider[hook]?.({
         provider: "clawrouter",
-        modelId: "opaque-route-id",
-      } as never),
-    ).toBeUndefined();
-  });
+        modelId: "anthropic/claude-sonnet-4-6",
+        streamFn,
+      });
 
-  it("bounds configured thinking metadata at the provider hook", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(
-      provider
-        ?.resolveThinkingProfile?.({
-          provider: "clawrouter",
-          modelId: "opaque-route-id",
-          agentRuntime: "openclaw",
-          compat: {
-            supportedReasoningEfforts: ["ultra", "custom", "none", "none", "max"],
+      void wrapped?.(
+        streamModel({
+          api: "anthropic-messages",
+          id: "anthropic/claude-sonnet-4-6",
+          headers: { "x-request-id": "request-1" },
+          params: {
+            clawrouterRoute: {
+              api: "anthropic-messages",
+              baseUrl: "https://clawrouter.example/v1/native/anthropic",
+              upstreamModel: "claude-sonnet-4-6",
+            },
           },
-        } as never)
-        ?.levels.map((level) => level.id),
-    ).toEqual(["off", "max", "ultra"]);
-    expect(
-      provider?.resolveThinkingProfile?.({
-        provider: "clawrouter",
-        modelId: "opaque-route-id",
-        compat: { supportedReasoningEfforts: ["ultra", "custom"] },
-      } as never),
-    ).toBeUndefined();
-  });
+        }),
+        { messages: [] },
+        { apiKey: "runtime-proxy-key", requestId: "automatic-call-id" },
+      );
 
-  it("attaches the proxy key and native upstream id only at request dispatch", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const { calls, streamFn } = createStreamCapture();
-    const wrapped = provider?.wrapStreamFn?.({
-      provider: "clawrouter",
-      modelId: "anthropic/claude-sonnet-4-6",
-      streamFn,
-    });
-
-    void wrapped?.(
-      streamModel({
-        api: "anthropic-messages",
-        id: "anthropic/claude-sonnet-4-6",
-        headers: { "x-request-id": "request-1" },
-        params: {
-          clawrouterRoute: {
-            api: "anthropic-messages",
-            baseUrl: "https://clawrouter.example/v1/native/anthropic",
-            upstreamModel: "claude-sonnet-4-6",
-          },
-        },
-      }),
-      { messages: [] },
-      { apiKey: "runtime-proxy-key", requestId: "automatic-call-id" },
-    );
-
-    expect(calls[0]?.headers).toEqual({
-      "x-request-id": "request-1",
-      "X-ClawRouter-Client": "openclaw",
-      Authorization: "Bearer runtime-proxy-key",
-    });
-    expect(calls[0]?.id).toBe("claude-sonnet-4-6");
-    expect(calls[0]?.params).toBeUndefined();
-  });
+      expect(calls[0]?.headers).toEqual({
+        "x-request-id": "request-1",
+        "X-ClawRouter-Client": "openclaw",
+        Authorization: "Bearer runtime-proxy-key",
+      });
+      expect(calls[0]?.id).toBe("claude-sonnet-4-6");
+      expect(calls[0]?.params).toBeUndefined();
+    },
+  );
 
   it("attaches bounded attribution without overriding configured metadata", () => {
-    const { calls, streamFn } = createStreamCapture();
-    const wrapped = wrapClawRouterProviderStream({
-      provider: "clawrouter",
-      modelId: "openai/gpt-5.5",
-      agentId: "main",
-      streamFn,
-    });
+    const { calls, dispatch } = createStreamCapture(provider, "main");
 
     const longRunId = `run-${"r".repeat(300)}`;
-    void wrapped?.(
+    dispatch(
       streamModel({
         headers: {
           "x-clawrouter-client": "managed-openclaw",
           "X-ClawRouter-Project-Id": "fakeco",
         },
       }),
-      { messages: [] },
       {
         apiKey: "runtime-proxy-key",
         requestId: `${longRunId}:model:1`,
         sessionId: `session-${"x".repeat(300)}`,
       },
     );
-    void wrapped?.(
-      streamModel(),
-      { messages: [] },
-      {
-        requestId: `${longRunId}:model:2`,
-      },
-    );
-    void wrapped?.(
-      streamModel(),
-      { messages: [] },
-      {
-        requestId: "turn-😀:model:3",
-      },
-    );
+    dispatch(streamModel(), { requestId: `${longRunId}:model:2` });
+    dispatch(streamModel(), { requestId: "turn-😀:model:3" });
 
     expect(calls[0]?.headers).toMatchObject({
       "x-clawrouter-client": "managed-openclaw",
@@ -222,23 +225,14 @@ describe("ClawRouter plugin", () => {
 
   it("sanitizes Unicode attribution to distinct printable ASCII ByteStrings", () => {
     const captured: Array<Record<string, string>> = [];
-    const streamFn: StreamFn = (model) => {
-      captured.push(model.headers ?? {});
-      return createAssistantMessageEventStream();
-    };
 
     for (const [agentId, sessionId] of [
       ["agent-😀中文-id", "session-🚀测试-id"],
       ["agent-🚀中文-id", "session-😀测试-id"],
     ] as const) {
-      const wrapped = wrapClawRouterProviderStream({
-        provider: "clawrouter",
-        modelId: "openai/gpt-5.5",
-        agentId,
-        streamFn,
-      });
-
-      void wrapped?.(streamModel(), { messages: [] }, { sessionId });
+      const { calls, dispatch } = createStreamCapture(provider, agentId);
+      dispatch(streamModel(), { sessionId });
+      captured.push(calls[0]?.headers ?? {});
     }
 
     expect(captured).toHaveLength(2);
@@ -256,16 +250,9 @@ describe("ClawRouter plugin", () => {
   it("keeps encoded and lone-surrogate attribution ids distinct", () => {
     const captured: string[] = [];
     const captureAgentId = (agentId: string) => {
-      const wrapped = wrapClawRouterProviderStream({
-        provider: "clawrouter",
-        modelId: "openai/gpt-5.5",
-        agentId,
-        streamFn: ((model) => {
-          captured.push(model.headers?.["X-ClawRouter-Agent-Id"] ?? "");
-          return createAssistantMessageEventStream();
-        }) satisfies StreamFn,
-      });
-      void wrapped?.(streamModel(), { messages: [] });
+      const { calls, dispatch } = createStreamCapture(provider, agentId);
+      dispatch();
+      captured.push(calls[0]?.headers?.["X-ClawRouter-Agent-Id"] ?? "");
     };
 
     captureAgentId("agent-😀");
@@ -283,44 +270,25 @@ describe("ClawRouter plugin", () => {
   });
 
   it("keeps an explicit per-request header ahead of the automatic model-call id", () => {
-    const { calls, streamFn } = createStreamCapture();
-    const wrapped = wrapClawRouterProviderStream({
-      provider: "clawrouter",
-      modelId: "openai/gpt-5.5",
-      streamFn,
-    });
+    const { calls, streamFn, dispatch } = createStreamCapture(provider);
 
-    void wrapped?.(
-      streamModel(),
-      { messages: [] },
-      {
-        headers: { "x-request-id": "operator-request" },
-        requestId: "automatic-call-id",
-      },
-    );
+    dispatch(streamModel(), {
+      headers: { "x-request-id": "operator-request" },
+      requestId: "automatic-call-id",
+    });
 
     expect(calls[0]?.headers).not.toHaveProperty("X-Request-ID");
     expect(streamFn.mock.calls[0]?.[2]?.headers).toEqual({ "x-request-id": "operator-request" });
   });
 
   it("omits unsafe attribution header values", () => {
-    const { calls, streamFn } = createStreamCapture();
-    const wrapped = wrapClawRouterProviderStream({
-      provider: "clawrouter",
-      modelId: "openai/gpt-5.5",
-      agentId: "bad\nagent",
-      streamFn,
-    });
+    const { calls, dispatch } = createStreamCapture(provider, "bad\nagent");
 
-    void wrapped?.(
-      streamModel(),
-      { messages: [] },
-      {
-        apiKey: "runtime-proxy-key",
-        requestId: "bad\nrequest",
-        sessionId: "bad\rsession",
-      },
-    );
+    dispatch(streamModel(), {
+      apiKey: "runtime-proxy-key",
+      requestId: "bad\nrequest",
+      sessionId: "bad\rsession",
+    });
 
     expect(calls[0]?.headers).toEqual({
       "X-ClawRouter-Client": "openclaw",
@@ -329,30 +297,18 @@ describe("ClawRouter plugin", () => {
   });
 
   it("resolves managed secret refs before scoped discovery", async () => {
-    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue({
-      apiKey: "resolved-proxy-key",
-      mode: "api-key",
-      source: "models.json secretref",
-    });
-    const fetchMock = vi.fn(async () => Response.json(LIVE_CATALOG));
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const provider = await registerSingleProviderPlugin(plugin);
+    const fetchMock = mockCatalogAuth("models.json secretref");
 
     const result = await provider?.catalog?.run({
-      config: { models: {} },
+      ...catalogContext("secretref-managed"),
       agentDir: "/agent",
       workspaceDir: "/workspace",
-      env: {},
       resolveProviderAuth: () => ({
         apiKey: "secretref-managed",
         discoveryApiKey: undefined,
         mode: "api_key",
         source: "profile",
         profileId: "clawrouter-profile",
-      }),
-      resolveProviderApiKey: () => ({
-        apiKey: "secretref-managed",
-        discoveryApiKey: undefined,
       }),
     });
 
@@ -361,14 +317,7 @@ describe("ClawRouter plugin", () => {
     }
     expect(result.provider.apiKey).toBe("secretref-managed");
     expect(result.provider.models.map((model) => model.id)).toEqual(["openai/gpt-5.5"]);
-    expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
-      provider: "clawrouter",
-      cfg: { models: {} },
-      agentDir: "/agent",
-      workspaceDir: "/workspace",
-      profileId: "clawrouter-profile",
-      lockedProfile: true,
-    });
+    expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenCalledWith(SCOPED_AUTH);
     const fetchCall = fetchMock.mock.calls[0] as unknown as [string, RequestInit] | undefined;
     expect(new Headers(fetchCall?.[1]?.headers).get("Authorization")).toBe(
       "Bearer resolved-proxy-key",
@@ -380,45 +329,20 @@ describe("ClawRouter plugin", () => {
       "fetch",
       vi.fn(async () => new Response("Unauthorized", { status: 401 })),
     );
-    const provider = await registerSingleProviderPlugin(plugin);
-
     await expect(
       provider?.catalog?.run({
-        config: { models: {} },
+        ...catalogContext("invalid-proxy-key", "invalid-proxy-key", "env"),
         env: { CLAWROUTER_API_KEY: "invalid-proxy-key" },
-        resolveProviderAuth: () => ({
-          apiKey: "invalid-proxy-key",
-          discoveryApiKey: "invalid-proxy-key",
-          mode: "api_key",
-          source: "env",
-        }),
-        resolveProviderApiKey: () => ({
-          apiKey: "invalid-proxy-key",
-          discoveryApiKey: "invalid-proxy-key",
-        }),
       }),
     ).rejects.toThrow(/401/u);
   });
 
   it("resolves configured catalog models through a stored auth profile", async () => {
-    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue({
-      apiKey: "resolved-proxy-key",
-      mode: "api-key",
-      source: "auth profile",
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => Response.json(LIVE_CATALOG)),
-    );
-    const provider = await registerSingleProviderPlugin(plugin);
+    mockCatalogAuth();
     const context = dynamicModelContext();
 
-    expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
-    expect(provider?.preferRuntimeResolvedModel?.(context as never)).toBe(false);
-    await provider?.prepareDynamicModel?.(context as never);
-
     expect(provider?.preferRuntimeResolvedModel?.(context as never)).toBe(true);
-    expect(provider?.resolveDynamicModel?.(context as never)).toMatchObject({
+    expect(await provider.prepareDynamicModel?.(context as never)).toMatchObject({
       id: "openai/gpt-5.5",
       provider: "clawrouter",
       api: "openai-responses",
@@ -430,80 +354,59 @@ describe("ClawRouter plugin", () => {
         },
       },
     });
-    expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
-      provider: "clawrouter",
-      cfg: { models: {} },
-      agentDir: "/agent",
-      workspaceDir: "/workspace",
-      profileId: "clawrouter-profile",
-      lockedProfile: true,
+    expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenCalledWith(SCOPED_AUTH);
+    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue(undefined);
+    expect(await provider.prepareDynamicModel?.(context as never)).toBeUndefined();
+  });
+
+  it("returns only the requested model from the caller's credential and endpoint", async () => {
+    providerAuthRuntimeMocks.resolveApiKeyForProvider
+      .mockResolvedValueOnce({ apiKey: "catalog-key-a" })
+      .mockResolvedValueOnce({ apiKey: "catalog-key-b" })
+      .mockResolvedValue({ apiKey: "catalog-key-a" });
+    let finishFirst: ((response: Response) => void) | undefined;
+    const firstResponse = new Promise<Response>((resolve) => {
+      finishFirst = resolve;
+    });
+    const firstStarted = createDeferred<void>();
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      if (new Headers(init.headers).get("Authorization") === "Bearer catalog-key-a") {
+        firstStarted.resolve();
+        return firstResponse;
+      }
+      return Response.json({ providers: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const context = dynamicModelContext();
+    const first = provider.prepareDynamicModel?.(context as never);
+    try {
+      await Promise.race([firstStarted.promise, first]);
+      const other = await provider.prepareDynamicModel?.({
+        ...context,
+        authProfileId: "other-profile",
+        providerConfig: { baseUrl: "https://other.example/v1", models: [] },
+      } as never);
+      expect(other).toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        "https://clawrouter.openclaw.ai/v1/catalog",
+        "https://other.example/v1/catalog",
+      ]);
+    } finally {
+      finishFirst?.(Response.json(LIVE_CATALOG));
+      await first;
+    }
+    expect(await first).toMatchObject({ id: "openai/gpt-5.5" });
+    expect(await provider.prepareDynamicModel?.(context as never)).toMatchObject({
+      id: "openai/gpt-5.5",
     });
     expect(
-      provider?.resolveDynamicModel?.({
-        ...context,
-        authProfileId: "another-profile",
-      } as never),
+      await provider.prepareDynamicModel?.({ ...context, modelId: "not-granted" } as never),
     ).toBeUndefined();
-
-    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue(undefined);
-    await provider?.prepareDynamicModel?.(context as never);
-    expect(provider?.preferRuntimeResolvedModel?.(context as never)).toBe(false);
-    expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps discovered models isolated to their plugin registration", async () => {
-    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue({
-      apiKey: "resolved-proxy-key",
-      mode: "api-key",
-      source: "auth profile",
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => Response.json(LIVE_CATALOG)),
-    );
-    const first = await registerSingleProviderPlugin(plugin);
-    const second = await registerSingleProviderPlugin(plugin);
-    const context = dynamicModelContext();
-
-    await first.prepareDynamicModel?.(context as never);
-
-    expect(first.resolveDynamicModel?.(context as never)).toMatchObject({
-      id: "openai/gpt-5.5",
-    });
-    expect(second.resolveDynamicModel?.(context as never)).toBeUndefined();
-    expect(second.preferRuntimeResolvedModel?.(context as never)).toBe(false);
-  });
-
-  it("keeps the previous dynamic model snapshot while rebuilding", async () => {
-    providerAuthRuntimeMocks.resolveApiKeyForProvider
-      .mockResolvedValueOnce({ apiKey: "decoy-token" })
-      .mockResolvedValueOnce({ apiKey: "changeme" });
-    let finishRefresh: ((response: Response) => void) | undefined;
-    const refreshResponse = new Promise<Response>((resolve) => {
-      finishRefresh = resolve;
-    });
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json(LIVE_CATALOG))
-      .mockReturnValueOnce(refreshResponse);
-    vi.stubGlobal("fetch", fetchMock);
-    const provider = await registerSingleProviderPlugin(plugin);
-    const context = dynamicModelContext();
-
-    await provider?.prepareDynamicModel?.(context as never);
-    const refresh = provider?.prepareDynamicModel?.(context as never);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-
-    expect(provider?.resolveDynamicModel?.(context as never)).toMatchObject({
-      id: "openai/gpt-5.5",
-    });
-
-    finishRefresh?.(Response.json({ providers: [] }));
-    await refresh;
-    expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
-  });
-
-  it("keeps the previous dynamic model snapshot when catalog refresh fails", async () => {
+  it("surfaces catalog refresh failures", async () => {
     providerAuthRuntimeMocks.resolveApiKeyForProvider
       .mockResolvedValueOnce({ apiKey: "decoy-token" })
       .mockResolvedValueOnce({ apiKey: "changeme" });
@@ -514,42 +417,32 @@ describe("ClawRouter plugin", () => {
         .mockResolvedValueOnce(Response.json(LIVE_CATALOG))
         .mockRejectedValueOnce(new Error("catalog unavailable")),
     );
-    const provider = await registerSingleProviderPlugin(plugin);
     const context = dynamicModelContext();
 
-    await provider?.prepareDynamicModel?.(context as never);
+    expect(await provider.prepareDynamicModel?.(context as never)).toMatchObject({
+      id: "openai/gpt-5.5",
+    });
     await expect(provider?.prepareDynamicModel?.(context as never)).rejects.toThrow(
       "catalog unavailable",
     );
-
-    expect(provider?.resolveDynamicModel?.(context as never)).toMatchObject({
-      id: "openai/gpt-5.5",
-    });
   });
 
-  it("dispatches replay and tool policies by upstream protocol family", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(
-      provider?.buildReplayPolicy?.({
+  it("dispatches replay and tool policies by upstream protocol family", () => {
+    const replay = (modelApi: string, modelId: string) =>
+      provider.buildReplayPolicy?.({
         provider: "clawrouter",
-        modelApi: "anthropic-messages",
-        modelId: "anthropic/claude-sonnet-4-6",
-      } as never),
-    ).toMatchObject({ preserveNativeAnthropicToolUseIds: true, validateAnthropicTurns: true });
-    expect(
-      provider?.buildReplayPolicy?.({
-        provider: "clawrouter",
-        modelApi: "google-generative-ai",
-        modelId: "google/gemini-3.5-flash",
-      } as never),
-    ).toMatchObject({ validateGeminiTurns: true });
-    expect(
-      provider?.buildReplayPolicy?.({
-        provider: "clawrouter",
-        modelApi: "openai-completions",
-        modelId: "deepseek/deepseek-v4-flash",
-      } as never),
-    ).toMatchObject({ sanitizeToolCallIds: true });
+        modelApi,
+        modelId,
+      } as never);
+    expect(replay("anthropic-messages", "anthropic/claude-sonnet-4-6")).toMatchObject({
+      preserveNativeAnthropicToolUseIds: true,
+      validateAnthropicTurns: true,
+    });
+    expect(replay("google-generative-ai", "google/gemini-3.5-flash")).toMatchObject({
+      validateGeminiTurns: true,
+    });
+    expect(replay("openai-completions", "deepseek/deepseek-v4-flash")).toMatchObject({
+      sanitizeToolCallIds: true,
+    });
   });
 });

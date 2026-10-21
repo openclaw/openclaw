@@ -1,13 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CacheRetention } from "../types.js";
 import { splitSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import type { resolveAnthropicEphemeralCacheControl } from "./anthropic-payload-policy.js";
 import type { ResolvedOpenAICompletionsCompat } from "./openai-completions-compat.js";
 
 // Payload identity lasts only for one request. Wrappers must not reinterpret a
 // builder's already-shaped boundary or its transient-message exclusions.
 const shapedPayloads = new WeakSet<object>();
 
-type CacheControl = { type: "ephemeral"; ttl?: "1h" | "5m" };
+type CacheControl = NonNullable<ReturnType<typeof resolveAnthropicEphemeralCacheControl>>;
 
 export function resolveCompletionsCacheControl(
   compat: Pick<
@@ -37,6 +38,7 @@ export function applyCompletionsAnthropicCacheControl(
   cacheOptOutIndexes: ReadonlySet<number> = new Set(),
   markTools = true,
   markMessages = true,
+  systemOnly = false,
 ): void {
   if (shapedPayloads.has(payload)) {
     return;
@@ -105,7 +107,7 @@ export function applyCompletionsAnthropicCacheControl(
     return false;
   };
 
-  if (markTools && lastToolIndex >= 0) {
+  if (!systemOnly && markTools && lastToolIndex >= 0) {
     // Request-specific markers must not mutate a reusable provider descriptor.
     tools[lastToolIndex] = { ...tools[lastToolIndex], cache_control: cacheControl };
   }
@@ -118,6 +120,11 @@ export function applyCompletionsAnthropicCacheControl(
   );
   if (isRecord(system)) {
     markText(system, true);
+  }
+  // OpenRouter Gemini uses only the last breakpoint. Keep it before the dynamic
+  // system suffix rather than superseding it with a tool/history checkpoint.
+  if (systemOnly) {
+    return;
   }
   for (let i = messages.length - 1; i >= 0; i--) {
     const message: unknown = messages[i];

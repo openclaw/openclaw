@@ -1,7 +1,7 @@
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { sameFileMutationFingerprint, type FileMutationFingerprint } from "./file-descriptor.js";
 
 export type BackupSqliteSource = {
@@ -21,14 +21,9 @@ function hasKnownIdentity(identity: BigIntStats): boolean {
 }
 
 async function readRegularSidecar(pathname: string): Promise<BigIntStats | null> {
-  let identity: BigIntStats;
-  try {
-    identity = await fs.lstat(pathname, { bigint: true });
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
+  const identity = await fs.lstat(pathname, { bigint: true }).catch(ignoreMissingPath);
+  if (!identity) {
+    return null;
   }
   if (!identity.isFile()) {
     throw new Error(`SQLite hardlink sidecar must be a regular file: ${pathname}`);

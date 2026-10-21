@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { CLI_PARENT_BOUND_PRELOAD } from "../../cli-parent-lifetime.mjs";
 import {
   findUsableNodeRuntime,
   isUsableNode,
@@ -679,10 +680,16 @@ describe("runtime recovery discovery", () => {
   );
 
   it.each([
-    [0, "cached OpenClaw runtime"],
-    [1, "managed Gateway service"],
-    [7, "Homebrew node@24"],
-  ] as const)("selects the first admissible runtime: %s %s", async (index, source) => {
+    [0, "cached OpenClaw runtime", undefined],
+    [1, "managed Gateway service", undefined],
+    [7, "Homebrew node@24", undefined],
+    ...(hostPlatform === "win32"
+      ? []
+      : ([
+          [1, "managed Gateway service", "/"],
+          [7, "Homebrew node@24", "/"],
+        ] as const)),
+  ] as const)("selects runtime %s: %s (cwd=%s)", async (index, source, cwd) => {
     await withRecoveryHome(async (home) => {
       const candidates = await Promise.all(
         [
@@ -715,6 +722,9 @@ describe("runtime recovery discovery", () => {
           path.join(prefix, "opt", "node@24", "bin", "node"),
           expectDefined(candidates[7], "Node 24 candidate"),
         );
+      }
+      if (cwd) {
+        vi.spyOn(process, "cwd").mockReturnValue(cwd);
       }
       for (const candidate of candidates.slice(index)) {
         mocks.admissible.add(candidate);
@@ -859,9 +869,17 @@ describe("runtime recovery discovery", () => {
 
         expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
           candidate,
-          ["--trace-warnings", "/fixture/dist/index.js", "doctor", "--non-interactive", "--fix"],
+          [
+            "--import",
+            CLI_PARENT_BOUND_PRELOAD,
+            "--trace-warnings",
+            "/fixture/dist/index.js",
+            "doctor",
+            "--non-interactive",
+            "--fix",
+          ],
           {
-            stdio: "inherit",
+            stdio: ["inherit", "inherit", "inherit", "ipc"],
             env: { ...originalEnv, OPENCLAW_NODE_UPDATE_RESPAWNED: "1" },
             windowsHide: hide,
           },

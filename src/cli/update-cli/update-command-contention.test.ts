@@ -122,11 +122,13 @@ it.each(["dry-run", "update", "repair", "finalize"] as const)(
             ? updateRepairCommand(opts)
             : updateCommand({ ...opts, dryRun: mode === "dry-run" }),
       ).rejects.toMatchObject({ name: "ExitError", code: mode === "finalize" ? 1 : 0 });
-      expect(json).toHaveBeenCalledWith(
+      expect(json).toHaveBeenLastCalledWith(
         expect.objectContaining({
           status: "skipped",
           reason: "update-ledger-busy",
           notes: [expect.stringContaining("busy")],
+          ...(mode === "finalize" ? { mode: "finalize" } : {}),
+          ...(mode === "dry-run" ? { dryRun: true } : {}),
         }),
       );
       const result = json.mock.calls.at(-1)?.[0];
@@ -136,12 +138,6 @@ it.each(["dry-run", "update", "repair", "finalize"] as const)(
       expect(doctor).not.toHaveBeenCalled();
       expect(plugins).not.toHaveBeenCalled();
       expect(fixture.serviceMutation).not.toHaveBeenCalled();
-      if (mode === "finalize") {
-        expect(result).toMatchObject({ mode: "finalize" });
-      }
-      if (mode === "dry-run") {
-        expect(result).toMatchObject({ dryRun: true, notes: [expect.stringContaining("busy")] });
-      }
       expect(classifyUpdateOutcome({ status: "skipped", reason: "update-ledger-busy" })).toBe(
         "noop",
       );

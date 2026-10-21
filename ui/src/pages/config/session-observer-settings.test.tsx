@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { updatePickers } from "../../test-helpers/select-picker.ts";
+import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
+import { baseProps } from "./config-view.test-support.tsx";
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
-import { SessionObserverSettings } from "./session-observer-settings.tsx";
+import { SidebarPreferencesSection } from "./view-appearance-preferences.tsx";
 
 describe("session observer settings patches", () => {
   it("uses null to restore the default toggle and false to opt out", () => {
@@ -31,25 +32,46 @@ describe("session observer settings patches", () => {
     });
   });
 
+  it("preserves the utility chain when changing its primary or restoring automatic routing", () => {
+    const current = { primary: "fixture/utility", fallbacks: ["fixture/backup"] };
+    expect(
+      buildSessionObserverUtilityModelPatch({ kind: "model", model: "fixture/next" }, current),
+    ).toEqual({
+      agents: {
+        defaults: { utilityModel: { primary: "fixture/next", fallbacks: ["fixture/backup"] } },
+      },
+    });
+    expect(buildSessionObserverUtilityModelPatch({ kind: "auto" }, current)).toEqual({
+      agents: { defaults: { utilityModel: { primary: null, fallbacks: ["fixture/backup"] } } },
+    });
+    expect(buildSessionObserverUtilityModelPatch({ kind: "disabled" }, current)).toEqual({
+      agents: { defaults: { utilityModel: { primary: "", fallbacks: ["fixture/backup"] } } },
+    });
+  });
+
   it("keeps auto and disabled selectable when explicit models are unavailable", async () => {
     const container = document.createElement("div");
     mountSolid(
       () =>
-        SessionObserverSettings({
-          enabled: true,
-          utilityModel: undefined,
-          resolvedUtilityModel: { status: "unavailable" },
-          models: [{ id: "gpt-mini", name: "GPT Mini", provider: "openai" }],
-          modelsUnavailable: true,
-          disabled: false,
-          onEnabledChange: () => undefined,
-          onUtilityModelChange: () => undefined,
+        SidebarPreferencesSection({
+          ...baseProps(),
+          sessionObserverEnabled: true,
+          sessionObserverUtilityModel: undefined,
+          sessionObserverResolvedModel: { status: "unavailable" },
+          sessionObserverModels: [{ id: "gpt-mini", name: "GPT Mini", provider: "openai" }],
+          sessionObserverModelsUnavailable: true,
+          sessionObserverDisabled: false,
+          setSessionObserverEnabled: () => undefined,
+          setSessionObserverUtilityModel: () => undefined,
         }),
       { container },
     );
 
     await updatePickers(container);
-    const select = container.querySelector("openclaw-select-picker.model-picker__select");
+    const select = container.querySelector<HTMLElement>(
+      "openclaw-select-picker.model-picker__select",
+    )!;
+    await openPicker(select);
     const options = [...(select?.querySelectorAll('[role="option"]') ?? [])];
     const option = (label: string) =>
       options.find((candidate) => candidate.textContent?.trim() === label);
@@ -96,15 +118,16 @@ describe("session observer settings patches", () => {
     const container = document.createElement("div");
     mountSolid(
       () =>
-        SessionObserverSettings({
-          enabled: true,
-          utilityModel: undefined,
-          resolvedUtilityModel: { status: "auto", model, ...(runtime ? { runtime } : {}) },
-          models: [],
-          modelsUnavailable: false,
-          disabled: false,
-          onEnabledChange: () => undefined,
-          onUtilityModelChange: () => undefined,
+        SidebarPreferencesSection({
+          ...baseProps(),
+          sessionObserverEnabled: true,
+          sessionObserverUtilityModel: undefined,
+          sessionObserverResolvedModel: { status: "auto", model, ...(runtime ? { runtime } : {}) },
+          sessionObserverModels: [],
+          sessionObserverModelsUnavailable: false,
+          sessionObserverDisabled: false,
+          setSessionObserverEnabled: () => undefined,
+          setSessionObserverUtilityModel: () => undefined,
         }),
       { container },
     );

@@ -28,7 +28,7 @@ afterEach(async () => {
 });
 
 describe("settled post-tool turn finalization context", () => {
-  it("keeps detached tool receipts across empty finalization retries without retaining internal user prompts", async () => {
+  it("keeps detached tool receipts and hidden prompts across empty finalization retries", async () => {
     const { guardSessionManager } = await vi.importActual<
       typeof import("../../session-tool-result-guard-wrapper.js")
     >("../../session-tool-result-guard-wrapper.js");
@@ -131,17 +131,26 @@ describe("settled post-tool turn finalization context", () => {
       for (const messages of finalizerContexts) {
         expect(messages).toContainEqual(expect.objectContaining(toolResult));
       }
-      expect(
-        manager
-          .buildSessionContext()
-          .messages.filter((message) => message.role === "user")
-          .map((message) => message.content),
-      ).toEqual(["hello"]);
+      const userMessages = manager
+        .buildSessionContext()
+        .messages.filter((message) => message.role === "user");
+      expect(userMessages).toHaveLength(3);
+      expect(userMessages[0]?.content).toBe("hello");
+      expect(userMessages[0]).not.toHaveProperty("display", false);
+      for (const message of userMessages.slice(1)) {
+        expect(message).toMatchObject({
+          content: expect.stringContaining("Your turn ended without a final reply."),
+          display: false,
+          provenance: { kind: "internal_system" },
+        });
+      }
       const genuineUser = { role: "user" as const, content: "Read the next file", timestamp: 5 };
       manager.appendMessage(genuineUser);
       expect(manager.buildSessionContext().messages).toContainEqual(
         expect.objectContaining(genuineUser),
       );
+      expect(genuineUser).not.toHaveProperty("display", false);
+      expect(genuineUser).not.toHaveProperty("provenance");
     } finally {
       admission.close();
     }

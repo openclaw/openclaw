@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import path from "node:path";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -33,6 +35,40 @@ export function inspectSessionStorePath(pathname: string): "missing" | "present"
     throw new Error(`session store is not a regular file: ${pathname}`);
   }
   return "present";
+}
+
+export function resolveMissingPhysicalPath(pathname: string): string {
+  const prefix = resolvePathPrefixSync(path.resolve(pathname));
+  return path.join(prefix.existingPath, ...prefix.unresolvedSegments);
+}
+
+export function resolvePhysicalPathIdentity(pathname: string): string {
+  try {
+    const stat = fs.statSync(pathname, { bigint: true });
+    if (!stat.isFile()) {
+      throw new Error(`session store is not a regular file: ${pathname}`);
+    }
+    return `file:${stat.dev}:${stat.ino}`;
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+    return `missing:${resolveMissingPhysicalPath(pathname)}`;
+  }
+}
+
+export function resolveSourceLayout(resolved: {
+  stores: PhysicalStore[];
+  jsonPaths: string[];
+}): string[] {
+  return [
+    ...new Set([
+      ...resolved.stores.map(
+        (store) => `sqlite:${store.databaseAgentId}:${resolvePhysicalPathIdentity(store.path)}`,
+      ),
+      ...resolved.jsonPaths.map((pathname) => `json:${resolvePhysicalPathIdentity(pathname)}`),
+    ]),
+  ].toSorted();
 }
 
 /** Returns the stored `agent:<id>:` prefix when the key is owned by the legacy agent. */
@@ -169,9 +205,6 @@ export function prepareComparisonClaimsFromStores(params: {
       }
       try {
         const result = await reader.read({ operation: "keys" });
-        if (result.operation !== "keys") {
-          throw new Error("Legacy key scan returned another retirement operation");
-        }
         const keys = result.keys.map((key) => {
           const canonicalKey = canonicalKeyFor(key, params.legacyAgentId, params.ownerAgentId);
           if (canonicalKey) {
@@ -192,9 +225,6 @@ export function prepareComparisonClaimsFromStores(params: {
       }
       try {
         const result = await reader.read({ operation: "comparison-claims", store, keys: targeted });
-        if (result.operation !== "comparison-claims") {
-          throw new Error("Legacy claim scan returned another retirement operation");
-        }
         claims.push(...result.claims.map((claim) => ({ store, claim })));
       } catch (error) {
         unreadable(store, error);
@@ -241,9 +271,6 @@ export async function storesHaveLegacyAgentSessionKey(params: {
   return withSessionRetirementReaders(readers, async () => {
     for (const reader of readers) {
       const result = await reader.read({ operation: "keys" });
-      if (result.operation !== "keys") {
-        throw new Error("Legacy key scan returned another retirement operation");
-      }
       if (result.keys.some((key) => legacyAgentKeyPrefix(key, params.legacyAgentId) !== null)) {
         return true;
       }

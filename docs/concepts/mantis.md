@@ -42,8 +42,8 @@ at build/run time (bundled workflows set `OPENCLAW_BUILD_PRIVATE_QA=1` and
 Every command accepts `--repo-root <path>` and `--output-dir <path>`; Crabbox
 commands also accept `--crabbox-bin`, `--provider`, `--machine-class`/`--class`,
 `--lease-id`, `--idle-timeout`, `--ttl`, and `--keep-lease`. Local CLI defaults
-for provider/class are `hetzner`/`beast` unless noted otherwise; CI workflows
-usually override both.
+for provider/class are `hetzner`/`beast`, except `desktop-browser-smoke` defaults
+to class `tiny`; CI workflows usually override both.
 
 ### `discord-smoke`
 
@@ -56,7 +56,8 @@ Calls the Discord REST API (`https://discord.com/api/v10`) to fetch the bot
 user, the guild, the guild's channels, and the target channel, asserts the
 channel belongs to the guild, then (unless `--skip-post`) posts a message and
 adds a `👀` reaction. Writes `mantis-discord-smoke-summary.json` and
-`mantis-discord-smoke-report.md`.
+`mantis-discord-smoke-report.md`. If the reaction fails after a successful post,
+the smoke fails but the artifacts still record the posted message.
 
 Token resolution order: `--token-file` value, then `OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN`
 (override with `--token-env`), then a file named by `OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN_FILE`
@@ -473,8 +474,9 @@ outside this proof surface.
 
 ## Machines and secrets
 
-Local CLI Crabbox defaults are `--provider hetzner --class beast`; override
-with `--provider`, `--class`/`--machine-class`, or
+Local CLI Crabbox defaults are `--provider hetzner --class beast`, except
+`desktop-browser-smoke` uses `--class tiny` for its browser capture workload.
+Override with `--provider`, `--class`/`--machine-class`, or
 `OPENCLAW_MANTIS_CRABBOX_PROVIDER` / `OPENCLAW_MANTIS_CRABBOX_CLASS`. GitHub
 workflows commonly override both (for example `--class standard`, and the
 Slack workflow's `aws`/`hetzner` provider choice input). If a provider is too

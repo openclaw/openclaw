@@ -64,8 +64,13 @@ const enNewSessionSetup = {
     operatingSystem: "Operating system",
     runsOn: "Runs on {place}",
     browse: "Browse folders",
+    browseDevice: "Browse folders on {device}",
     worktree: "Worktree",
     checkingGit: "Checking Git availability…",
+    folderRequiresScope:
+      "Checking Git for this folder requires {scope} access. Ask the person who manages OpenClaw for access.",
+    gitCheckAccessDenied:
+      "You don't have permission to check Git for this folder. Ask the person who manages OpenClaw for access.",
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
     starting: "Starting…",
     followUps: "Follow-up messages",
@@ -175,6 +180,8 @@ const enNewSessionSetup = {
     checkoutCloudFrom: "From {branch}",
     checkoutRepository: "Remote checkout",
     checkoutRepositoryFrom: "Remote checkout from {branch}",
+    checkoutRequiresWorktree: "Use an isolated worktree for this project and agent",
+    checkoutCheckUnavailable: "Checkout unavailable. Select the project again to retry",
     checkoutRemoteLocked: "Devices and cloud run in a worktree",
     local: "Local",
     folderPlaceholder: "Agent workspace",

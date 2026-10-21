@@ -53,7 +53,7 @@ openclaw update --channel dev --dry-run
 openclaw update --channel stable --dry-run
 ```
 
-`dev` ensures a git checkout, builds it, and installs the global CLI from that
+`dev` creates or reuses a git checkout, builds it, and installs the global CLI from that
 checkout. The `stable`, `extended-stable`, and `beta` channels use package
 installs. Extended-stable is rejected on a git checkout without mutating or
 converting it. If the gateway is already installed, `openclaw update` refreshes
@@ -97,7 +97,7 @@ Already-running older updaters retain their own activation and finalization beha
 For package installs with an owned managed Bun Gateway at a different root,
 `openclaw update` targets the Gateway's package root and leaves the invoking CLI
 installation unchanged. It validates the service's actual Bun executable for
-Bun 1.4+ and WAL-safe `node:sqlite`, and retains its recorded runtime pin through
+Bun 1.4.3+ and WAL-safe `node:sqlite`, and retains its recorded runtime pin through
 service installation and restart. Bun's emulated Node version is never compared
 to the target's `engines.node` requirement. When the updater runs on Node, its
 Node must also pass the target's engine and SQLite checks before package
@@ -162,8 +162,10 @@ for a source-server update: it refuses tracked local changes, including build
 outputs, and prepares the fetched target in a private checkout. It checks that
 `main` can fast-forward, or rebases the local server branch with `--rebase-merges`.
 Dependencies install with a frozen lockfile and the candidate builds before the
-serving checkout changes. A preparation failure leaves the existing service
-running. After preparation, the script stops its selected service and checks for
+serving checkout changes. The built candidate checks the selected profile's
+configuration and migration inputs through `openclaw update admit` before the
+service stops. A refusal or unavailable admission leaves the existing service
+running; resolve the reported conflict and retry. After preparation, the script stops its selected service and checks for
 other observed managed consumers before publishing source, dependencies, and
 generated output together. Stop any shared-install siblings through their own
 service owners first; this script does not stop or restart them for you.
@@ -460,7 +462,7 @@ intact.
 bun add -g --trust openclaw@latest
 ```
 
-`--trust` allows OpenClaw's lifecycle scripts. The canonical `openclaw update`
+`--trust` allows OpenClaw's lifecycle scripts. The standard `openclaw update`
 path applies the same OpenClaw-only Bun trust when it owns the install.
 For Bun-owned updates, package-manager checks and installs use the verified
 service Bun when updating a managed service root. Otherwise they use
@@ -570,6 +572,22 @@ needs attention.
     Snapshot space is checked at the existing destinations: `TMPDIR`, the capture directory beside the state directory, and the system temporary directory. An update refuses before staging only when every destination has known free space below the snapshot owner's requirement, because its private state copy cannot be taken. Database sizes are inventory for the temporary snapshot, not database-health or growth warnings. A successful check needs no database cleanup. If measurement fails, the updater warns that it will check again after staging. A usable alternative or unknown free-space reading does not itself stop the update. Package and Git targets that are already current need no candidate snapshot. The updater preserves a config copy, not a full-state backup.
 
     For a direct CLI update, scratch variables set by the invoking operator (`TMPDIR`, `TMP`, and `TEMP`) take precedence over managed-service defaults. For example, `TMPDIR="$HOME/.cache" openclaw update` checks that directory first and labels it `explicit-tmpdir` in snapshot capacity reports. The service still owns installation, profile, state, and runtime-path selection. This precedence fix belongs to the installed updater and takes effect for updates it performs after installation; a newer candidate cannot change an older updater's environment merge.
+
+    `TMPDIR` is scratch placement, not a relocation of the installation or durable state. Large update writes have these owners:
+
+    | Data | Location |
+    | --- | --- |
+    | Retained updater runtime | Explicit `TMPDIR`, otherwise a sibling of the installation when possible so unchanged files can be hard-linked; system temp is the fallback. |
+    | Disposable candidate state and plugin rehearsal | A capacity-checked directory, preferring explicit `TMPDIR`. |
+    | Plugin source captures during update finalization | Explicit `TMPDIR`; ordinary Gateway captures remain under the state directory. |
+    | SQLite read-only inspection snapshots | Explicit `XDG_CACHE_HOME`, then `TMPDIR` during updates; ordinary inspection retains its platform cache default. |
+    | Original-state captures | `<state-dir>.update-captures`, retained there so later recovery and cleanup can discover them. These are durable recovery artifacts, not disposable temp files. Known payload space is checked before capture; an unavailable optional capture produces a warning. |
+    | Doctor migration backups | Beside the database being migrated, retained for recovery rather than moved with temporary scratch. |
+    | Package candidates and rollback images | Beside the package-manager installation, so activation and rollback can rename on the same filesystem. Database backup admission checks the backup and restore volumes before migration. |
+    | Installed plugin projects | The selected state directory's npm/git roots; these are the installed plugins. |
+    | npm cache | npm's configured cache, independently of `TMPDIR`. Set npm's existing `npm_config_cache` variable to move it. |
+
+    A large temp volume does not supply free space to these durable destinations. Preserve recovery artifacts when freeing space. After a failed update, retry the reported recovery command or `openclaw update repair`; do not delete journals or captures to clear a pending recovery hold.
 
     This check runs in the installed updater; an already-installed 2026.9.3 updater retains its prior behavior for its own first upgrade hop.
 

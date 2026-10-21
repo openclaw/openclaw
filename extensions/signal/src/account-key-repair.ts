@@ -18,7 +18,12 @@ export function repairSignalAccountKeys({
   for (const key of Object.keys(accounts)) {
     if (key) {
       const id = normalizeAccountId(key);
-      groups.set(id, [...(groups.get(id) ?? []), key]);
+      const keys = groups.get(id);
+      if (keys) {
+        keys.push(key);
+      } else {
+        groups.set(id, [key]);
+      }
     }
   }
   const moves = new Map<string, string>();
@@ -43,13 +48,14 @@ export function repairSignalAccountKeys({
       }
     }
   }
+  if (!moves.size) {
+    return { config: cfg, changes: [], warnings };
+  }
   const repaired = Object.fromEntries(
     Object.entries(accounts).map(([key, entry]) => [moves.get(key) ?? key, entry]),
   );
   return {
-    config: moves.size
-      ? { ...cfg, channels: { ...cfg.channels, signal: { ...signal, accounts: repaired } } }
-      : cfg,
+    config: { ...cfg, channels: { ...cfg.channels, signal: { ...signal, accounts: repaired } } },
     changes: [...moves].map(
       ([from, to]) => `Moved Signal account "${from}" to channels.signal.accounts.${to}.`,
     ),

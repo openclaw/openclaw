@@ -1,4 +1,3 @@
-// Voice Call plugin module implements cli gateway calls.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   callGatewayFromCli,
@@ -21,7 +20,6 @@ import type { VoiceCallRuntime } from "./runtime.js";
 type VoiceCallGatewayMethod =
   | "voicecall.initiate"
   | "voicecall.start"
-  | "voicecall.continue"
   | "voicecall.continue.start"
   | "voicecall.continue.result"
   | "voicecall.steer"
@@ -79,10 +77,6 @@ function gatewayOperationalError(err: unknown): Error {
   // Configured gateway URLs may embed userinfo/tokens, and close reasons are
   // remote-controlled text; redact once where the text becomes operator-visible.
   return new Error(redactSensitiveUrlLikeString(detail));
-}
-
-export function isUnknownMethod(err: unknown, method: VoiceCallGatewayMethod): boolean {
-  return formatErrorMessage(err).includes(`unknown method: ${method}`);
 }
 
 export async function callVoiceCallGateway(

@@ -1,13 +1,17 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import {
   readSessionMethodAccess,
   sessionAccessRowForBatch,
   type SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
-import type { SessionMenuActionKind } from "./session-menu.ts";
+import type { SessionMenuActionKind } from "./session-menu-solid.tsx";
+import { sessionPlacementActionReason } from "./session-placement-action.ts";
+
+registerSessionOrganizationEnglish();
 
 type SessionMenuAccessRow = Pick<
   GatewaySessionRow,
@@ -21,6 +25,8 @@ export function sessionMenuReasons(params: {
   session: SessionMenuAccessRow;
   batchRows?: readonly SessionMenuAccessRow[] | null;
   cloudWorkerStopAction?: CloudWorkerStopAction | null;
+  placementRow?: GatewaySessionRow;
+  requiredProfile?: string;
 }): Partial<Record<SessionMenuActionKind, string>> {
   const { snapshot, session, batchRows = null, cloudWorkerStopAction } = params;
   const reason = (request: SessionMethodAccessRequest) => {
@@ -37,6 +43,7 @@ export function sessionMenuReasons(params: {
       params: { key: session.key, ...patch },
       sessionScope,
       session,
+      allowDeferred: true,
     });
   const renameReason = patchReason({ label: null }, true);
   const promotionReason = !session.sessionId?.trim()
@@ -57,7 +64,7 @@ export function sessionMenuReasons(params: {
       params: { patch },
     });
   };
-  const unreadReason = batchPatchReason({ unread: true });
+  const unreadReason = batchPatchReason({ unread: true }, true);
   const categoryReason = batchPatchReason({ category: null });
   const lifecycleRows = batchRows ?? [session];
   const archiveReason = lifecycleRows.some((row) => !row.sessionId?.trim())
@@ -89,7 +96,11 @@ export function sessionMenuReasons(params: {
         params: { parentSessionKey: session.key, fork: true },
       });
   const cloudWorkerStopReason = cloudWorkerStopAction ? reason(cloudWorkerStopAction) : undefined;
+  const placementReason = params.placementRow
+    ? sessionPlacementActionReason(snapshot, params.placementRow, params.requiredProfile)
+    : undefined;
   return {
+    ...(placementReason ? { "move-session": placementReason } : {}),
     ...(snoozeReason ? { snooze: snoozeReason, wake: snoozeReason } : {}),
     ...(renameReason ? { rename: renameReason } : {}),
     ...(iconReason ? { "set-icon": iconReason } : {}),
@@ -99,7 +110,7 @@ export function sessionMenuReasons(params: {
     ...(unreadReason ? { "toggle-unread": unreadReason } : {}),
     ...(involvementReason ? { "toggle-involving-me": involvementReason } : {}),
     ...(categoryReason ? { "move-to-group": categoryReason } : {}),
-    ...(archiveReason ? { "toggle-archived": archiveReason, "archive-tree": archiveReason } : {}),
+    ...(archiveReason ? { "toggle-archived": archiveReason } : {}),
     ...(promotionReason ? { "move-to-top-level": promotionReason } : {}),
     ...(groupReason || categoryReason ? { "new-group": groupReason ?? categoryReason } : {}),
     ...(forkReason ? { fork: forkReason } : {}),

@@ -17,7 +17,6 @@ vi.mock("./monitor.state.js", () => ({
 
 const account: ResolvedFeishuAccount = {
   accountId: "person-2",
-  selectionSource: "explicit",
   enabled: true,
   configured: true,
   domain: "feishu",
@@ -51,7 +50,6 @@ describe("Feishu bot identity recovery", () => {
       .mockResolvedValueOnce({ botOpenId: "ou_cached", source: "cache" })
       .mockResolvedValueOnce({
         botOpenId: "ou_provider",
-        botName: "OpenClaw QA",
         source: "provider",
       });
     const runtime = createRuntimeSpies() satisfies RuntimeEnv;

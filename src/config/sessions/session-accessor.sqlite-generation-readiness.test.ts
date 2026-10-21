@@ -17,13 +17,93 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { prepareSessionGenerationFacts } from "./session-delivery-generation.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
 
 const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
 
-it.for(["permissionMode", "toolOverrides"] as const)(
-  "fences retained %s until same-generation policy publication settles",
+it.for(["assignment", "metadata"] as const)(
+  "checks absent ID selection during held $0 publication",
+  async (change, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const scope = {
+        agentId: "main",
+        storePath: database.path,
+        sessionKey: "agent:main:id-publication-sibling",
+      };
+      const original = {
+        sessionId: "id-publication-sibling",
+        lifecycleRevision: "original-lifecycle",
+        updatedAt: 1,
+      };
+      replaceSessionEntrySync(scope, original);
+      const sessionId = "id-publication-target";
+      const selected = await captureSessionEntryCurrentCheckAsyncInternal({
+        agentId: scope.agentId,
+        storePath: scope.storePath,
+        sessionId,
+        fields: ["inheritedToolDeny"],
+        errorMessage: "ID selection changed",
+      });
+      expect(selected.entry).toBeUndefined();
+      selected.source();
+      const committed = createDeferred();
+      const release = createDeferred();
+      const onAbort = () => release.resolve();
+      signal.addEventListener("abort", onAbort, { once: true });
+      delivery.afterResult = async () => {
+        committed.resolve();
+        await release.promise;
+      };
+      const pending = applySessionEntryExactReplacements({
+        ...scope,
+        sessionKeys: [scope.sessionKey],
+        requireWriteSuccess: true,
+        update: () => ({
+          result: undefined,
+          replacements: [
+            {
+              sessionKey: scope.sessionKey,
+              entry:
+                change === "assignment"
+                  ? { sessionId, lifecycleRevision: "created-lifecycle", updatedAt: 2 }
+                  : { ...original, label: "Harmless metadata", updatedAt: 2 },
+            },
+          ],
+        }),
+      });
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(committed.promise, pending, "ID write did not commit"),
+          signal,
+        );
+        if (change === "assignment") {
+          expect(selected.source).toThrow("ID selection changed");
+        } else {
+          selected.source();
+        }
+        release.resolve();
+        await withinTest(pending, signal);
+        if (change === "assignment") {
+          expect(selected.source).toThrow("ID selection changed");
+        } else {
+          selected.source();
+        }
+      } finally {
+        release.resolve();
+        delivery.afterResult = undefined;
+        await Promise.allSettled([pending]);
+        signal.removeEventListener("abort", onAbort);
+        selected.release();
+      }
+    });
+  },
+);
+
+it.for(["permissionMode", "toolOverrides", "lifecycleRunId"] as const)(
+  "keeps exec-wake settings available only when pending %s publication preserves policy",
   async (setting, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -60,7 +140,12 @@ it.for(["permissionMode", "toolOverrides"] as const)(
         requireWriteSuccess: true,
         update: () => ({
           result: undefined,
-          replacements: [{ sessionKey: scope.sessionKey, entry: { ...original, ...settings } }],
+          replacements: [
+            {
+              sessionKey: scope.sessionKey,
+              entry: { ...original, ...settings, lifecycleRunId: "completion-wake" },
+            },
+          ],
         }),
       });
       try {
@@ -68,11 +153,15 @@ it.for(["permissionMode", "toolOverrides"] as const)(
           awaitGateBeforeSettlement(committed.promise, write, "policy write did not commit"),
           signal,
         );
-        // Main's generation-only readers stay current; policy consumers cannot reuse old grants.
+        // Exec wakes check identity and settings synchronously after tool-preparation awaits.
         generation.assertCurrent();
-        expect(generation.readSessionSettings).toThrow(
-          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-        );
+        if (setting === "lifecycleRunId") {
+          expect(generation.readSessionSettings()).toEqual(settings);
+        } else {
+          expect(generation.readSessionSettings).toThrow(
+            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+          );
+        }
         release.resolve();
         await withinTest(write, signal);
         generation.assertCurrent();

@@ -7,14 +7,12 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
-  getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import { runDoctorHealthRepairs } from "../flows/doctor-repair-flow.js";
-import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
@@ -34,6 +32,21 @@ describe("doctor Telegram General-topic conversation repair", () => {
   let cfg: OpenClawConfig;
   let env: NodeJS.ProcessEnv;
   let storePath: string;
+  async function repair() {
+    const check = (await resolveDoctorContributionHealthChecks()).find(
+      (candidate) => candidate.id === CHECK_ID,
+    );
+    expect(check).toBeDefined();
+    return runDoctorHealthRepairs(
+      { mode: "fix", runtime: { log() {}, error() {}, exit() {} }, cfg, env },
+      { checks: [check!] },
+    );
+  }
+
+  const delivery = (to: string) =>
+    normalizeSessionDeliveryState({
+      context: { channel: "telegram", accountId: "default", to, threadId: "1" },
+    });
 
   beforeEach(() => {
     const root = tempDirs.make("openclaw-doctor-telegram-topic-");
@@ -49,10 +62,6 @@ describe("doctor Telegram General-topic conversation repair", () => {
   it("merges an upgraded General-topic related binding exactly once", async () => {
     const sessionKey = "agent:main:telegram:group:-1001234567890:topic:1";
     const scope = { agentId: "main", env, sessionKey, storePath };
-    const delivery = (to: string) =>
-      normalizeSessionDeliveryState({
-        context: { channel: "telegram", accountId: "default", to, threadId: "1" },
-      });
     await upsertSessionEntryCore(scope, {
       sessionId: "topic-1-session",
       updatedAt: 100,
@@ -81,42 +90,17 @@ describe("doctor Telegram General-topic conversation repair", () => {
     expect(canonical).toBeDefined();
 
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(scope)));
-    const db = getSessionKysely(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db.insertInto("conversation_deliveries").values({
-        operation_id: "legacy-delivery",
-        operation_kind: "send",
-        conversation_id: legacy!.conversationRef,
-        source_session_key: sessionKey,
-        message_hash: "hash",
-        status: "sent",
-        prepared_message_id: null,
-        platform_message_id: "message-1",
-        queue_id: null,
-        rejection_error: null,
-        reply_message_id: null,
-        reply_to_id: null,
-        reply_thread_id: "1",
-        reply_text: null,
-        reply_timestamp: null,
-        created_at: 100,
-        updated_at: 100,
-      }),
-    );
+    database.db
+      .prepare(`INSERT INTO conversation_deliveries
+      (operation_id, operation_kind, conversation_id, source_session_key, message_hash,
+       status, platform_message_id, reply_thread_id, created_at, updated_at)
+      VALUES ('legacy-delivery', 'send', ?, ?, 'hash', 'sent', 'message-1', '1', 100, 100)`)
+      .run(legacy!.conversationRef, sessionKey);
     expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
 
-    const check = (await resolveDoctorContributionHealthChecks()).find(
-      (candidate) => candidate.id === CHECK_ID,
-    );
-    expect(check).toBeDefined();
-    const runtime = { log() {}, error() {}, exit() {} };
-    const repaired = await runDoctorHealthRepairs(
-      { mode: "fix", runtime, cfg, env },
-      { checks: [check!] },
-    );
+    const repaired = await repair();
     expect(repaired.remainingFindings).toEqual([]);
     expect(repaired.changes).toEqual([
       "Merged 1 stale Telegram General-topic conversation identity row(s).",
@@ -132,22 +116,15 @@ describe("doctor Telegram General-topic conversation repair", () => {
       }),
     ]);
     expect(
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .selectFrom("conversation_deliveries")
-          .select("conversation_id")
-          .where("operation_id", "=", "legacy-delivery"),
-      ).rows,
+      database.db
+        .prepare("SELECT conversation_id FROM conversation_deliveries WHERE operation_id = ?")
+        .all("legacy-delivery"),
     ).toEqual([{ conversation_id: canonical!.conversationRef }]);
     expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
 
-    const repeated = await runDoctorHealthRepairs(
-      { mode: "fix", runtime, cfg, env },
-      { checks: [check!] },
-    );
+    const repeated = await repair();
     expect(repeated.findings).toEqual([]);
     expect(repeated.changes).toEqual([]);
     expect(await listConversations(scope, { channel: "telegram" })).toHaveLength(1);
@@ -160,25 +137,10 @@ describe("doctor Telegram General-topic conversation repair", () => {
       sessionId: "legacy-only-session",
       updatedAt: 100,
       chatType: "group",
-      delivery: normalizeSessionDeliveryState({
-        context: {
-          channel: "telegram",
-          accountId: "default",
-          to: "telegram:-1002223334444:topic:1",
-          threadId: "1",
-        },
-      }),
+      delivery: delivery("telegram:-1002223334444:topic:1"),
     });
 
-    const check = (await resolveDoctorContributionHealthChecks()).find(
-      (candidate) => candidate.id === CHECK_ID,
-    );
-    expect(check).toBeDefined();
-    const runtime = { log() {}, error() {}, exit() {} };
-    const repaired = await runDoctorHealthRepairs(
-      { mode: "fix", runtime, cfg, env },
-      { checks: [check!] },
-    );
+    const repaired = await repair();
     expect(repaired.remainingFindings).toEqual([]);
     expect(await listConversations(scope, { channel: "telegram" })).toEqual([
       expect.objectContaining({

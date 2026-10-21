@@ -8,15 +8,15 @@
 // failure in place. It is mounted on `document.body`, outside the shell, so the
 // Gateway restart that tears down the connection cannot unmount it.
 import { render } from "@solidjs/web";
-import { createSignal, Show } from "solid-js";
+import { createStore, Show } from "solid-js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { UpdateGitRevisions } from "../components/solid/update-git-revisions.tsx";
+import { UpdateRunView } from "../components/update-run-view.tsx";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
-import { formatUiError } from "../lib/format-error.ts";
 import "../components/modal-dialog.ts";
-import "../components/update-run-view.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { hasNativeUpdateBridge, postNativeUpdate } from "./native-link-routing.ts";
 import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
@@ -211,98 +211,99 @@ export async function confirmAndStartUpdateRuntime(
         return;
       }
       dispose = render(() => {
-        const [view, setView] = createSignal(snapshot);
-        updateView = setView;
+        // Run and schedule records retain the identity published by their owner.
+        const [view, setView] = createStore(snapshot, { shallow: true });
+        let cancelButton!: HTMLButtonElement;
+        let closeButton: HTMLButtonElement | undefined;
+        updateView = (next) => setView(() => next);
         return (
           <openclaw-modal-dialog
-            label={view().route.title}
-            description={view().body}
+            prop:initialFocus={() => (closeButton?.isConnected ? closeButton : cancelButton)}
+            label={view.route.title}
+            description={view.body}
             onModal-cancel={finish}
           >
             <div class="exec-approval-card update-run-dialog">
               <div class="exec-approval-header">
                 <div>
-                  <div class="exec-approval-title">{view().route.title}</div>
+                  <div class="exec-approval-title">{view.route.title}</div>
                   <div class="exec-approval-sub" style="white-space: pre-line">
-                    {view().body}
+                    {view.body}
                   </div>
                 </div>
               </div>
               <div role="status" aria-live="polite" class="exec-approval-sub">
-                {view().disconnected && view().showRecovery
+                {view.disconnected && view.showRecovery
                   ? t("updates.dialog.checkStatusDisconnected")
-                  : view().statusRefreshed
+                  : view.statusRefreshed
                     ? t("updates.dialog.statusRefreshed")
                     : null}
               </div>
-              <Show when={view().statusCheckError}>
+              <Show when={view.statusCheckError}>
                 <div role="alert" class="exec-approval-sub">
-                  {view().statusCheckError}
+                  {view.statusCheckError}
                 </div>
               </Show>
               <Show
                 when={
-                  view().details &&
-                  view().confirmed &&
-                  !view().checkingStatus &&
-                  !view().statusCheckError
+                  view.details && view.confirmed && !view.checkingStatus && !view.statusCheckError
                 }
               >
                 <div class="exec-approval-command mono update-confirmation-details">
-                  <div>{view().details}</div>
+                  <div>{view.details}</div>
                   <UpdateGitRevisions
-                    schedule={view().updateSchedule}
-                    updateAvailable={view().updateAvailable}
+                    schedule={view.updateSchedule}
+                    updateAvailable={view.updateAvailable}
                   />
                 </div>
               </Show>
-              <Show when={view().run}>
-                {(run) => (
-                  <openclaw-update-run-view
-                    prop:run={run()}
-                    prop:connected={!view().disconnected}
-                  />
-                )}
+              <Show when={view.run}>
+                {(run) => <UpdateRunView run={run()} connected={!view.disconnected} />}
               </Show>
-              <div class="exec-approval-actions">
+              <openclaw-modal-actions class="exec-approval-actions">
                 <Show
-                  when={view().finished || view().showRecovery}
+                  when={view.finished || view.showRecovery}
                   fallback={
                     <>
                       <button
                         type="button"
-                        class={[
-                          "btn danger",
-                          { "btn--busy": view().working || view().checkingStatus },
-                        ]}
-                        disabled={view().working || view().checkingStatus}
+                        class={["btn danger", { "btn--busy": view.working || view.checkingStatus }]}
+                        disabled={view.working || view.checkingStatus}
                         onClick={() => void confirm()}
                       >
-                        {view().checkingStatus ? (
+                        {view.checkingStatus ? (
                           t("updates.dialog.checkingStatus")
-                        ) : view().working ? (
+                        ) : view.working ? (
                           <>
                             <span class="btn__spinner" aria-hidden="true" />
                             {t("chat.updating")}
                           </>
                         ) : (
-                          view().route.confirmLabel
+                          view.route.confirmLabel
                         )}
                       </button>
-                      <button type="button" class="btn" autofocus onClick={finish}>
-                        {view().working ? t("common.close") : t("common.cancel")}
+                      <button
+                        ref={(element) => {
+                          cancelButton = element;
+                        }}
+                        type="button"
+                        class="btn"
+                        autofocus
+                        onClick={finish}
+                      >
+                        {view.working ? t("common.close") : t("common.cancel")}
                       </button>
                     </>
                   }
                 >
-                  <Show when={view().showRecovery && params.onCheckStatus}>
+                  <Show when={view.showRecovery && params.onCheckStatus}>
                     <button
                       type="button"
-                      class={["btn", { "btn--busy": view().checkingStatus }]}
-                      disabled={view().checkingStatus || view().disconnected}
+                      class={["btn", { "btn--busy": view.checkingStatus }]}
+                      disabled={view.checkingStatus || view.disconnected}
                       onClick={() => void checkStatus()}
                     >
-                      {view().checkingStatus ? (
+                      {view.checkingStatus ? (
                         <>
                           <span class="btn__spinner" aria-hidden="true" />
                           {t("updates.dialog.checkingStatus")}
@@ -312,17 +313,17 @@ export async function confirmAndStartUpdateRuntime(
                       )}
                     </button>
                   </Show>
-                  <Show when={view().failed}>
+                  <Show when={view.failed}>
                     <button
                       type="button"
                       class="btn primary"
-                      disabled={view().checkingStatus || view().disconnected}
+                      disabled={view.checkingStatus || view.disconnected}
                       onClick={() => void retry()}
                     >
                       {t("updates.dialog.retryUpdate")}
                     </button>
                   </Show>
-                  <Show when={view().failed && params.onReviewUpdate}>
+                  <Show when={view.failed && params.onReviewUpdate}>
                     <button
                       type="button"
                       class="btn"
@@ -334,11 +335,19 @@ export async function confirmAndStartUpdateRuntime(
                       {t("updates.reviewUpdate")}
                     </button>
                   </Show>
-                  <button type="button" class="btn" autofocus onClick={finish}>
+                  <button
+                    ref={(element) => {
+                      closeButton = element;
+                    }}
+                    type="button"
+                    class="btn"
+                    autofocus
+                    onClick={finish}
+                  >
                     {t("common.close")}
                   </button>
                 </Show>
-              </div>
+              </openclaw-modal-actions>
             </div>
           </openclaw-modal-dialog>
         );

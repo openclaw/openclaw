@@ -7,7 +7,7 @@ import { OcEmitSentinelError, REDACTED_SENTINEL } from "../../sentinel.js";
 
 describe("sentinel guard cross-kind", () => {
   it("jsonc edits reject caller-injected sentinels before mutation", () => {
-    const ast = parseJsonc('{ "x": "ok" }').ast;
+    const ast = parseJsonc('{ "x": "ok" }');
     expect(() =>
       setJsoncOcPath(ast, parseOcPath("oc://config/x"), {
         kind: "string",

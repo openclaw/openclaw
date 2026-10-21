@@ -1,4 +1,5 @@
 import { hash } from "node:crypto";
+import { serialize } from "node:v8";
 import { serializeModelRequestBody } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
@@ -21,6 +22,9 @@ import {
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
 
 const originalHost = getAiTransportHost();
+const digest = (value: unknown) => hash("sha256", JSON.stringify(value));
+const fieldDigests = (fields: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(fields).map(([name, value]) => [name, digest(value)]));
 afterEach(() => {
   configureAiTransportHost(originalHost);
   resetDiagnosticEventsForTest();
@@ -52,12 +56,15 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
         : []),
     ],
   }));
-  const replacement = {
+  const parameters = {
     model: model.id,
     prompt_cache_key: "private-affinity",
     previous_response_id: "private-response",
-    messages,
     stream: true,
+  };
+  const replacement = {
+    ...parameters,
+    messages,
     tools: [...allowedTools, { type: "function", function: { name: "hidden" } }],
   };
   const expectedPayload = { ...replacement, tools: allowedTools };
@@ -157,7 +164,7 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
         cacheKeyPresent: true,
         cacheKeyHash: hash("sha256", '"private-affinity"').slice(0, 16),
         previousResponseIdPresent: true,
-        modelHash: hash("sha256", JSON.stringify(model.id)).slice(0, 16),
+        modelHash: digest(model.id).slice(0, 16),
         routeHash: hash("sha256", model.baseUrl).slice(0, 16),
         attempts: 1,
         retried: false,
@@ -175,37 +182,16 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
       },
       cachePrefix: {
         system: hash("sha256", "{}"),
-        tools: hash("sha256", JSON.stringify({ tools: allowedTools })),
-        messages: messages.map((message, index) => {
-          const digest = hash("sha256", JSON.stringify(message));
-          return index < 32
-            ? {
-                digest,
-                fields: {
-                  role: hash("sha256", JSON.stringify(message.role)),
-                  content: hash("sha256", JSON.stringify(message.content)),
-                },
-              }
-            : { digest };
-        }),
+        tools: digest({ tools: allowedTools }),
+        messageDigests: messages
+          .map((message) => hash("sha256", JSON.stringify(message), "latin1"))
+          .join(""),
+        messageFields: messages.slice(0, 32).map(fieldDigests),
         messageField: "messages",
         messageCount: 100,
         parameters: {
-          digest: hash(
-            "sha256",
-            JSON.stringify({
-              model: model.id,
-              prompt_cache_key: "private-affinity",
-              previous_response_id: "private-response",
-              stream: true,
-            }),
-          ),
-          fields: {
-            model: hash("sha256", JSON.stringify(model.id)),
-            prompt_cache_key: hash("sha256", '"private-affinity"'),
-            previous_response_id: hash("sha256", '"private-response"'),
-            stream: hash("sha256", "true"),
-          },
+          digest: hash("sha256", JSON.stringify(parameters), "latin1"),
+          fields: fieldDigests(parameters),
         },
         continuation: true,
       },
@@ -266,32 +252,27 @@ it("fingerprints serialized prompt segments with bounded, content-free history m
   expect(first.cachePrefix).toEqual({
     system: hash("sha256", '{"instructions":"private instructions"}'),
     tools: hash("sha256", '{"tools":[{"type":"function","name":"private_tool_name"}]}'),
-    messages: Array.from({ length: 512 }, (_, index) => ({
-      digest: hash("sha256", JSON.stringify(message)),
-      ...(index < 32
-        ? {
-            fields: {
-              role: hash("sha256", '"user"'),
-              content: hash("sha256", '"private history content"'),
-              other: expect.stringMatching(/^[a-f0-9]{64}$/),
-            },
-          }
-        : {}),
+    messageDigests: hash("sha256", JSON.stringify(message), "latin1").repeat(512),
+    messageFields: Array.from({ length: 32 }, () => ({
+      role: hash("sha256", '"user"'),
+      content: hash("sha256", '"private history content"'),
+      other: expect.stringMatching(/^[a-f0-9]{64}$/),
     })),
     messageField: "input",
     messageCount: 514,
     tail: hash("sha256", JSON.stringify([message, message])),
     parameters: {
-      digest: hash("sha256", '{"private_parameter_name":"private parameter value"}'),
+      digest: hash("sha256", '{"private_parameter_name":"private parameter value"}', "latin1"),
       fields: { other: expect.stringMatching(/^[a-f0-9]{64}$/) },
     },
     continuation: false,
   });
   expect(JSON.stringify(first.cachePrefix)).not.toContain("private");
+  expect(serialize(first.cachePrefix).byteLength).toBeLessThan(32 * 1024);
 
   input[513] = { ...message, content: "changed private history" };
   const changed = prepareProviderPrompt({ payload, encode: true });
-  expect(changed.cachePrefix?.messages).toEqual(first.cachePrefix?.messages);
+  expect(changed.cachePrefix?.messageDigests).toEqual(first.cachePrefix?.messageDigests);
   expect(changed.cachePrefix?.tail).not.toBe(first.cachePrefix?.tail);
   expect(prepareProviderPrompt({ payload: {}, encode: false }).cachePrefix).toBeUndefined();
 });

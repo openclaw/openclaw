@@ -35,102 +35,74 @@ export function writeExternalSetupChannelPlugin(
   const setupMarker = path.join(pluginDir, "setup-loaded.txt");
   const setupEntry = options.setupEntry !== false;
 
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify(
-      {
-        name: `@example/openclaw-${pluginId}`,
-        version: "1.0.0",
-        openclaw: {
-          extensions: ["./index.cjs"],
-          ...(setupEntry ? { setupEntry: "./setup-entry.cjs" } : {}),
-          channel: {
-            id: channelId,
-            ...options.packagePresentation,
-            configuredState: { env: { anyOf: ["EXTERNAL_CHAT_TOKEN"] } },
-          },
-        },
+  const writeJson = (name: string, value: unknown) =>
+    fs.writeFileSync(path.join(pluginDir, name), JSON.stringify(value, null, 2), "utf-8");
+  writeJson("package.json", {
+    name: `@example/openclaw-${pluginId}`,
+    version: "1.0.0",
+    openclaw: {
+      extensions: ["./index.cjs"],
+      ...(setupEntry ? { setupEntry: "./setup-entry.cjs" } : {}),
+      channel: {
+        id: channelId,
+        ...options.packagePresentation,
+        configuredState: { env: { anyOf: ["EXTERNAL_CHAT_TOKEN"] } },
       },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: pluginId,
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-        channels: manifestChannelIds,
-        ...(typeof options.setupRequiresRuntime === "boolean"
-          ? { setup: { requiresRuntime: options.setupRequiresRuntime } }
-          : {}),
-        ...(options.manifestChannelConfig
-          ? {
-              channelConfigs: Object.fromEntries(
-                manifestChannelIds.map((id) => [
-                  id,
-                  {
-                    schema: {
-                      type: "object",
-                      additionalProperties: false,
-                      properties: {
-                        token: { type: "string" },
-                      },
-                    },
-                    uiHints: {
-                      token: {
-                        label: "Token",
-                        sensitive: true,
-                      },
-                    },
-                    label: options.manifestChannelLabel ?? "External Chat Manifest",
-                    description: options.manifestChannelDescription ?? "manifest config",
-                    preferOver: ["legacy-external-chat"],
-                  },
-                ]),
-              ),
-            }
-          : {}),
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "index.cjs"),
-    `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
-module.exports = {
-  id: ${JSON.stringify(pluginId)},
-  register(api) {
-    api.registerChannel({
-      plugin: {
-        id: ${JSON.stringify(channelId)},
+    },
+  });
+  writeJson("openclaw.plugin.json", {
+    id: pluginId,
+    configSchema: EMPTY_PLUGIN_SCHEMA,
+    channels: manifestChannelIds,
+    ...(typeof options.setupRequiresRuntime === "boolean"
+      ? { setup: { requiresRuntime: options.setupRequiresRuntime } }
+      : {}),
+    ...(options.manifestChannelConfig
+      ? {
+          channelConfigs: Object.fromEntries(
+            manifestChannelIds.map((id) => [
+              id,
+              {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: { token: { type: "string" } },
+                },
+                uiHints: { token: { label: "Token", sensitive: true } },
+                label: options.manifestChannelLabel ?? "External Chat Manifest",
+                description: options.manifestChannelDescription ?? "manifest config",
+                preferOver: ["legacy-external-chat"],
+              },
+            ]),
+          ),
+        }
+      : {}),
+  });
+  const pluginSource = (id: string, blurb: string) => `{
+        id: ${JSON.stringify(id)},
         meta: {
-          id: ${JSON.stringify(channelId)},
+          id: ${JSON.stringify(id)},
           label: "External Chat",
           selectionLabel: "External Chat",
-          docsPath: ${JSON.stringify(`/channels/${channelId}`)},
-          blurb: "full entry",
+          docsPath: ${JSON.stringify(`/channels/${id}`)},
+          blurb: ${JSON.stringify(blurb)},
         },
         capabilities: { chatTypes: ["direct"] },
         config: {
           listAccountIds: () => ["default"],
           resolveAccount: (cfg) => ({
             accountId: "default",
-            token: cfg.channels?.[${JSON.stringify(channelId)}]?.token ?? "configured",
+            token: cfg.channels?.[${JSON.stringify(id)}]?.token ?? "configured",
           }),
         },
         outbound: { deliveryMode: "direct" },
         secrets: {
           secretTargetRegistryEntries: [
             {
-              id: ${JSON.stringify(`channels.${channelId}.token`)},
+              id: ${JSON.stringify(`channels.${id}.token`)},
               targetType: "channel",
               configFile: "openclaw.json",
-              pathPattern: ${JSON.stringify(`channels.${channelId}.token`)},
+              pathPattern: ${JSON.stringify(`channels.${id}.token`)},
               secretShape: "secret_input",
               expectedResolvedValue: "string",
               includeInPlan: true,
@@ -139,8 +111,14 @@ module.exports = {
             },
           ],
         },
-      },
-    });
+      }`;
+  fs.writeFileSync(
+    path.join(pluginDir, "index.cjs"),
+    `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  id: ${JSON.stringify(pluginId)},
+  register(api) {
+    api.registerChannel({ plugin: ${pluginSource(channelId, "full entry")} });
   },
 };`,
     "utf-8",
@@ -150,40 +128,7 @@ module.exports = {
       path.join(pluginDir, "setup-entry.cjs"),
       `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
 module.exports = {
-  plugin: {
-    id: ${JSON.stringify(setupChannelId)},
-    meta: {
-      id: ${JSON.stringify(setupChannelId)},
-      label: "External Chat",
-      selectionLabel: "External Chat",
-      docsPath: ${JSON.stringify(`/channels/${setupChannelId}`)},
-      blurb: "setup entry",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: (cfg) => ({
-        accountId: "default",
-        token: cfg.channels?.[${JSON.stringify(setupChannelId)}]?.token ?? "configured",
-      }),
-    },
-    outbound: { deliveryMode: "direct" },
-    secrets: {
-      secretTargetRegistryEntries: [
-            {
-              id: ${JSON.stringify(`channels.${setupChannelId}.token`)},
-              targetType: "channel",
-              configFile: "openclaw.json",
-              pathPattern: ${JSON.stringify(`channels.${setupChannelId}.token`)},
-          secretShape: "secret_input",
-          expectedResolvedValue: "string",
-          includeInPlan: true,
-          includeInConfigure: true,
-          includeInAudit: true,
-        },
-      ],
-    },
-  },
+  plugin: ${pluginSource(setupChannelId, "setup entry")},
 };`,
       "utf-8",
     );

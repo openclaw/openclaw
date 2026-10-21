@@ -5,7 +5,6 @@ import type {
   ProgressCardPutResult,
   ProgressCardRefreshParams,
   ProgressCardRefreshResult,
-  ProgressCardStep,
 } from "@openclaw/gateway-protocol";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -75,57 +74,33 @@ export type SessionProgressCardStore = {
   subscribe: (listener: () => void) => () => void;
 };
 
-const stores = new WeakMap<ApplicationGateway, SessionProgressCardStore>();
-
-function parseProgressCardStep(value: unknown): ProgressCardStep {
-  if (
-    !isRecord(value) ||
-    typeof value.step !== "string" ||
-    (value.status !== "pending" && value.status !== "in_progress" && value.status !== "completed")
-  ) {
-    throw new Error("Progress card response contained invalid steps");
-  }
-  return { status: value.status, step: value.step };
+export function readSessionProgressCard(
+  store: SessionProgressCardStore | undefined,
+  target: ProgressCardGetParams | undefined,
+) {
+  const card = target ? store?.get(target) : undefined;
+  return {
+    card,
+    loading: card === undefined,
+    lifetime: target ? store?.getLifetime(target) : undefined,
+    error: target ? store?.getError(target) : undefined,
+    refreshState: target ? store?.getRefreshState(target) : undefined,
+  };
 }
 
-function parseProgressCard(value: unknown, sessionKey: string): ProgressCard | null {
-  if (!isRecord(value)) {
-    throw new Error("Progress card response was invalid");
-  }
+const stores = new WeakMap<ApplicationGateway, SessionProgressCardStore>();
+
+// Gateway and persisted snapshot owners validate the card's content.
+function parseProgressCard(value: ProgressCardGetResult, sessionKey: string): ProgressCard | null {
   const card = value.card;
   if (card === null) {
     return null;
   }
-  if (!isRecord(card)) {
-    throw new Error("Progress card response was invalid");
-  }
-  const markdown = card.markdown;
-  const revision = card.revision;
   const updatedAt = asDateTimestampMs(card.updatedAt);
-  const rawSteps = card.steps;
-  if (
-    card.sessionKey !== sessionKey ||
-    (markdown !== undefined && typeof markdown !== "string") ||
-    (rawSteps !== undefined && !Array.isArray(rawSteps)) ||
-    typeof revision !== "number" ||
-    !Number.isInteger(revision) ||
-    revision < 1 ||
-    updatedAt === undefined ||
-    !Number.isInteger(updatedAt)
-  ) {
+  if (card.sessionKey !== sessionKey || updatedAt === undefined || !Number.isInteger(updatedAt)) {
     throw new Error("Progress card response did not match the requested session");
   }
-  const steps = Array.isArray(rawSteps) ? rawSteps.map(parseProgressCardStep) : undefined;
-  if (markdown === undefined && (!steps || steps.length === 0)) {
-    throw new Error("Progress card response contained no content");
-  }
-  return {
-    sessionKey,
-    revision,
-    updatedAt,
-    ...(markdown !== undefined ? { markdown } : {}),
-    ...(steps && steps.length > 0 ? { steps } : {}),
-  };
+  return card;
 }
 
 // Progress follows store routing: sentinels stay bare; other keys use the captured
@@ -445,6 +420,7 @@ export function sessionProgressCardsForGateway(
       retireClientEntries();
     }
     knownAvailable = available();
+    // Active card consumers keep cached snapshots fresh through Gateway connection and event receipts.
     stopGatewaySnapshots = gateway.subscribe(handleGatewaySnapshot);
     stopGatewayEvents = gateway.subscribeEvents(handleGatewayEvent);
   };
@@ -456,7 +432,6 @@ export function sessionProgressCardsForGateway(
     stopGatewayEvents?.();
     stopGatewaySnapshots = null;
     stopGatewayEvents = null;
-    // Without event/client subscriptions these snapshots cannot remain fresh.
     entries.forEach(retireRefresh);
     entries.clear();
   };
@@ -557,15 +532,6 @@ export function sessionProgressCardsForGateway(
         .then((result) => {
           if (!current()) {
             return;
-          }
-          if (
-            result.status !== "accepted" ||
-            typeof result.runId !== "string" ||
-            !result.runId ||
-            !Number.isInteger(result.revision) ||
-            result.revision < 1
-          ) {
-            throw new Error("Progress refresh response was invalid");
           }
           refresh.baseline = Math.max(refresh.baseline, result.revision);
           refresh.accepted = true;

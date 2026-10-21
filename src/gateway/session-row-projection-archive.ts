@@ -115,12 +115,11 @@ export function createSessionRowProjectionArchive(params: {
               ...row.retainedDatabaseFacts,
               runtimeOwnership: undefined,
               runtimeOwnershipDependencies: undefined,
-              runtimeOwnershipRetryPending: undefined,
             },
           );
         }
         if (catalogOnly && row.entry?.archivedAt === undefined) {
-          if (!params.dirty.has(records.identity(row))) {
+          if (row.materialized && !params.dirty.has(records.identity(row))) {
             row.pendingDatabaseFacts = records.isPreparedSessionRowDatabaseFacts(
               row.retainedDatabaseFacts,
             )
@@ -136,7 +135,12 @@ export function createSessionRowProjectionArchive(params: {
           if (!catalogOnly) {
             records.invalidateDatabaseFacts(current);
           }
-          if (current.preparedAcpMeta === undefined || current.hasBoard === undefined) {
+          // Catalog policy can expire native ownership while retaining ACP and Board facts.
+          if (
+            current.preparedAcpMeta === undefined ||
+            current.preparedRuntimeOwnership === undefined ||
+            current.hasBoard === undefined
+          ) {
             params.dirty.add(records.identity(current));
           }
           continue;

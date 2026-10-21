@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import type { PersonalPublicationSelector } from "../state/github-publication-worker.types.js";
@@ -17,17 +17,16 @@ import { projectGitHubPublicationResult } from "./github-publication-receipt.js"
 
 export type PersonalGitHubPublicationRow = DB["github_personal_publication_requests"];
 const table = "github_personal_publication_requests";
-const query = (db: Parameters<typeof getNodeSqliteKysely>[0]) =>
-  getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
 
-function assertOwner(db: DatabaseSync, owner: string): void {
+function assertOwner(db: EngineConnection, owner: string): void {
   if (resolvePersonalGitHubOwnerInDatabase(owner, db) !== owner) {
     throw new Error("My GitHub publication owner changed.");
   }
 }
 
 export function readPersonalGitHubPublicationInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: string,
   request: PersonalPublicationSelector,
 ): PersonalGitHubPublicationRow | undefined {
@@ -127,13 +126,8 @@ export function writePersonalGitHubPublicationInDatabase(
   instanceId: string,
   executionId: string,
   values: Partial<PersonalGitHubPublicationRow>,
-  requireAction: boolean,
-  assertCurrent: () => void,
 ): PersonalGitHubPublicationRow {
   const { db } = database;
-  if (requireAction) {
-    assertCurrent();
-  }
   const updated = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -179,7 +173,7 @@ export function requirePersonalGitHubPublicationConfirmationInDatabase(
   return rows;
 }
 
-export function listUnreportedPersonalGitHubPublicationsInDatabase(db: DatabaseSync) {
+export function listUnreportedPersonalGitHubPublicationsInDatabase(db: EngineConnection) {
   if (!tableExists(db, table)) {
     return [];
   }

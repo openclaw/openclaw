@@ -1,15 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { defaultRuntime } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import {
-  createCapturingTestRuntime,
-  createTestConfigSnapshot,
-  createTestRuntime,
-} from "./test-runtime-config-helpers.js";
+import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const TEST_MAX_IDENTITY_FILE_BYTES = 4 * 1024 * 1024;
 
@@ -58,9 +55,12 @@ function writtenAgent(id = "main") {
 }
 
 async function jsonIdentity(options: IdentityOptions) {
-  const capture = createCapturingTestRuntime();
-  await agentsSetIdentityCommand({ ...options, json: true }, capture.runtime);
-  const payload: unknown = JSON.parse(capture.logs.at(-1) ?? "{}");
+  await agentsSetIdentityCommand({ ...options, json: true });
+  const output = runtime.log.mock.calls.at(-1)?.[0];
+  if (typeof output !== "string") {
+    throw new Error("Expected JSON identity output");
+  }
+  const payload: unknown = JSON.parse(output);
   return payload;
 }
 
@@ -79,7 +79,7 @@ async function writeIdentityFile(workspace: string, lines: string[]) {
 
 async function expectIdentityCommandFailure(options: IdentityOptions, expected: string | RegExp) {
   const message = typeof expected === "string" ? expected : expect.stringMatching(expected);
-  await expect(agentsSetIdentityCommand(options, runtime)).rejects.toMatchObject({
+  await expect(agentsSetIdentityCommand(options)).rejects.toMatchObject({
     name: "ExpectedCliError",
     message,
     humanOutput: message,
@@ -91,9 +91,46 @@ async function expectIdentityCommandFailure(options: IdentityOptions, expected: 
 }
 
 describe("agents set-identity command", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+    vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) =>
+      runtime.log(JSON.stringify(value, null, 2)),
+    );
     setAgents({ entries: { main: {} } });
+  });
+
+  it.each([
+    {
+      label: "renames the synchronized roster label after the identity conversation",
+      name: "New Bot",
+      update: { name: "Pip" },
+      expectedName: "Pip",
+      expectedIdentity: { name: "Pip" },
+    },
+    {
+      label: "preserves a separate operator roster label when identity changes",
+      name: "Research assistant",
+      update: { name: "Pip" },
+      expectedName: "Research assistant",
+      expectedIdentity: { name: "Pip" },
+    },
+    {
+      label: "preserves the roster label for an emoji-only identity update",
+      name: "New Bot",
+      update: { emoji: "🐦" },
+      expectedName: "New Bot",
+      expectedIdentity: { name: "New Bot", emoji: "🐦" },
+    },
+  ])("$label", async ({ name, update, expectedName, expectedIdentity }) => {
+    setAgents({ entries: { main: { name, identity: { name: "New Bot" } } } });
+
+    await agentsSetIdentityCommand({ agent: "main", ...update });
+
+    expect(writtenAgent()).toMatchObject({ name: expectedName, identity: expectedIdentity });
   });
 
   it("resolves --from-identity against the selected agent workspace", async () => {
@@ -104,7 +141,7 @@ describe("agents set-identity command", () => {
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
 
     try {
-      await agentsSetIdentityCommand({ agent: "main", fromIdentity: true }, runtime);
+      await agentsSetIdentityCommand({ agent: "main", fromIdentity: true });
     } finally {
       cwdSpy.mockRestore();
     }
@@ -142,7 +179,7 @@ describe("agents set-identity command", () => {
   it("sanitizes identity echoes while preserving stored and JSON values", async () => {
     const name = "Operator\u001B]0;identity-injection\u0007🦞\r\nforged-row\tbadge";
 
-    await agentsSetIdentityCommand({ agent: "main", name }, runtime);
+    await agentsSetIdentityCommand({ agent: "main", name });
 
     const textOutput = runtime.log.mock.calls.flat().join("\n");
     expect(textOutput).not.toContain("\u001B");
@@ -186,7 +223,7 @@ describe("agents set-identity command", () => {
     });
 
     expect(writtenAgent()).toMatchObject({ workspace: storedWorkspace, identity });
-    await agentsSetIdentityCommand(options, runtime);
+    await agentsSetIdentityCommand(options);
     expect(runtime.log).toHaveBeenCalledWith(`Workspace: ${storedWorkspace}`);
     expect(runtime.log).toHaveBeenCalledWith(`Identity source: ${workspace}`);
     expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("Relocate with");
@@ -256,7 +293,7 @@ describe("agents set-identity command", () => {
       workspace: storedWorkspace,
       identity: { name: "Worker" },
     });
-    await agentsSetIdentityCommand(options, runtime);
+    await agentsSetIdentityCommand(options);
     expect(runtime.log).toHaveBeenCalledWith(`Workspace: ${storedWorkspace}`);
     expect(runtime.log).toHaveBeenCalledWith(`Workspace locator: ${workspaceLocator}`);
     expect(runtime.log).toHaveBeenCalledWith(
@@ -349,7 +386,6 @@ describe("agents helpers", () => {
       agents: {
         defaults: {
           workspace: "/srv/fleet",
-          heartbeat: { agentId: "work", every: "5m" },
           systemAgent: { agentId: "WORK" },
           subagents: { allowAgents: ["work", "home"] },
         },
@@ -406,7 +442,6 @@ describe("agents helpers", () => {
     ]);
     expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);
     expect(result.config.agents?.defaults?.subagents?.allowAgents).toEqual(["home"]);
-    expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "5m" });
     expect(result.config.agents?.defaults?.systemAgent).toBeUndefined();
     expect(result.config.talk).toEqual({ provider: "test-provider" });
     expect(result.config.agents?.entries?.home?.subagents?.allowAgents).toEqual(["home"]);
@@ -418,25 +453,24 @@ describe("agents helpers", () => {
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
     expect(result.clearedOwnerRefs).toEqual([
-      "agents.defaults.heartbeat.agentId",
       "agents.defaults.systemAgent.agentId",
       "talk.agentId",
     ]);
   });
-
-  it("removes ambient heartbeat policy when its owner leaves a surviving fleet", () => {
+  it("preserves ordinary defaults without reintroducing retired heartbeat config", () => {
     const result = pruneAgentConfig(
       {
         agents: {
           ownership: "explicit",
-          defaults: { heartbeat: { agentId: "ops", every: "5m" } },
+          defaults: { skipBootstrap: true, systemAgent: { agentId: "ops" } },
           entries: { ops: {}, research: {}, writer: {} },
         },
       },
       "ops",
     );
-
-    expect(result.config.agents?.defaults?.heartbeat).toBeUndefined();
-    expect(result.clearedOwnerRefs).toContain("agents.defaults.heartbeat");
+    expect(result.config.agents?.defaults).not.toHaveProperty("heartbeat");
+    expect(result.config.agents?.defaults?.skipBootstrap).toBe(true);
+    expect(result.config.agents?.defaults?.systemAgent).toBeUndefined();
+    expect(result.clearedOwnerRefs).toEqual(["agents.defaults.systemAgent.agentId"]);
   });
 });

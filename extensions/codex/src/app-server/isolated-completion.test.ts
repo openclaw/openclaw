@@ -1,24 +1,19 @@
-import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  resolveAuthHandoff: vi.fn(),
-  runBoundedTurn: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ resolveAuthHandoff: vi.fn(), runBoundedTurn: vi.fn() }));
 
 vi.mock("./auth-bridge.js", () => ({
   resolveCodexAppServerPreparedAuthHandoff: mocks.resolveAuthHandoff,
 }));
-vi.mock("./bounded-turn.js", () => ({
-  runBoundedCodexAppServerTurn: mocks.runBoundedTurn,
-}));
+// mock-isolation: Exercise completion orchestration without starting a native provider turn.
+vi.mock("./bounded-turn.js", () => ({ runBoundedCodexAppServerTurn: mocks.runBoundedTurn }));
 
 import { runCodexIsolatedCompletion } from "./isolated-completion.js";
+import { isolatedParams, type IsolatedParams } from "./isolated-completion.params-test-support.js";
 
-type IsolatedParams = Parameters<NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>>[0];
-
-const authProfileStore = {
+const authProfileStore: AuthProfileStore = {
   version: 1,
   profiles: {
     "openai:test": {
@@ -31,100 +26,70 @@ const authProfileStore = {
   },
 };
 
-function createParams(): IsolatedParams {
-  return {
-    authorization: {
-      owner: "harness",
-      plan: {
-        providerForAuth: "openai",
-        authProfileProviderForAuth: "openai",
-        forwardedAuthProfileId: "openai:test",
-        modelRoute: {
-          provider: "openai",
-          modelId: "gpt-5.4",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          authRequirement: "subscription",
-          requestTransportOverrides: "none",
-        },
-      },
-      authProfileStore,
-    },
-    config: {},
-    provider: "openai",
-    modelId: "gpt-5.4",
-    agentId: "main",
-    agentDir: "/tmp/agent",
-    workspaceDir: "/tmp/workspace",
-    systemPrompt: "Name the conversation.",
-    prompt: "Help me plan a garden.",
-    timeoutMs: 5_000,
-  } as unknown as IsolatedParams;
+const createParams = () => isolatedParams(authProfileStore, "openai:test");
+const authHandoff = { authProfileId: "openai:test", nativeAuthProfile: true };
+const expectCall = (mock: ReturnType<typeof vi.fn>, params: Record<string, unknown>) =>
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(params));
+
+const answer = { id: "answer", type: "agentMessage", text: "Garden Planning" };
+const prompt = {
+  id: "prompt",
+  type: "userMessage",
+  content: [{ type: "text", text: "Help me plan a garden." }],
+};
+const hook = (hookRunId: string) => ({
+  id: "hook",
+  type: "hookPrompt",
+  fragments: [{ text: "Revise the answer.", hookRunId }],
+});
+function turn(items: unknown[], managedHooksEnabled?: boolean) {
+  mocks.runBoundedTurn.mockResolvedValue({
+    text: "Garden Planning",
+    model: "gpt-5.4",
+    usage: { input: 7, output: 3, cacheRead: 2, total: 10 },
+    items,
+    managedHooksEnabled,
+  });
 }
+const run = (params = createParams()) => runCodexIsolatedCompletion(params, {});
 
 describe("runCodexIsolatedCompletion", () => {
   beforeEach(() => {
-    mocks.resolveAuthHandoff.mockReset();
+    mocks.resolveAuthHandoff.mockReset().mockResolvedValue(authHandoff);
     mocks.runBoundedTurn.mockReset();
-    mocks.resolveAuthHandoff.mockResolvedValue({
-      authProfileId: "openai:test",
-      nativeAuthProfile: true,
-    });
-    mocks.runBoundedTurn.mockResolvedValue({
-      text: "Garden Planning",
-      model: "gpt-5.4",
-      usage: { input: 7, output: 3, cacheRead: 2, total: 10 },
-      items: [
-        {
-          id: "prompt",
-          type: "userMessage",
-          content: [{ type: "text", text: "Help me plan a garden." }],
-        },
-        { id: "reasoning", type: "reasoning" },
-        { id: "answer", type: "agentMessage", text: "Garden Planning" },
-      ],
-    });
+    turn([prompt, { id: "reasoning", type: "reasoning" }, answer]);
   });
 
   it("uses the selected native authorization on a private ring-zero turn", async () => {
     const params = { ...createParams(), assertCurrent: vi.fn() };
 
-    await expect(runCodexIsolatedCompletion(params, {})).resolves.toEqual({
+    await expect(run(params)).resolves.toEqual({
       assistant: expect.objectContaining({
         role: "assistant",
         api: "openai-chatgpt-responses",
         provider: "openai",
         model: "gpt-5.4",
         content: [{ type: "text", text: "Garden Planning" }],
-        usage: expect.objectContaining({
-          input: 7,
-          output: 3,
-          cacheRead: 2,
-          totalTokens: 10,
-        }),
+        usage: expect.objectContaining({ input: 7, output: 3, cacheRead: 2, totalTokens: 10 }),
       }),
     });
-    expect(mocks.resolveAuthHandoff).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authRequirement: "subscription",
-        authProfileId: "openai:test",
-        authProfileStore,
-        agentDir: "/tmp/agent",
-        homeScope: "agent",
-      }),
-    );
-    expect(mocks.runBoundedTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: { mode: "required", id: "gpt-5.4" },
-        profile: "openai:test",
-        authRequirement: "subscription",
-        isolation: "private-stdio",
-        assertCurrent: params.assertCurrent,
-        requireNoExternalCapabilities: true,
-        developerInstructions: "Name the conversation.",
-        input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
-      }),
-    );
+    expectCall(mocks.resolveAuthHandoff, {
+      authRequirement: "subscription",
+      authProfileId: "openai:test",
+      authProfileStore,
+      agentDir: "/tmp/agent",
+      homeScope: "agent",
+    });
+    expectCall(mocks.runBoundedTurn, {
+      model: { mode: "required", id: "gpt-5.4" },
+      profile: "openai:test",
+      authRequirement: "subscription",
+      isolation: "private-stdio",
+      assertCurrent: params.assertCurrent,
+      requireNoExternalCapabilities: true,
+      developerInstructions: "Name the conversation.",
+      input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
+    });
     expect(mocks.runBoundedTurn.mock.calls[0]?.[0]).not.toHaveProperty("modelProvider");
   });
 
@@ -139,12 +104,11 @@ describe("runCodexIsolatedCompletion", () => {
       },
     };
     mocks.resolveAuthHandoff.mockResolvedValue({
-      authProfileId: "openai:test",
-      nativeAuthProfile: true,
+      ...authHandoff,
       preparedAuth,
     });
 
-    await runCodexIsolatedCompletion(createParams(), {});
+    await run();
 
     const boundedParams = mocks.runBoundedTurn.mock.calls[0]?.[0];
     expect(boundedParams).toMatchObject({ preparedAuth });
@@ -157,7 +121,7 @@ describe("runCodexIsolatedCompletion", () => {
     mocks.resolveAuthHandoff.mockImplementationOnce(async () => {
       preparing.resolve();
       await release.promise;
-      return { authProfileId: "openai:test", nativeAuthProfile: true };
+      return authHandoff;
     });
     const retired = new Error("isolated completion caller retired");
     let current = true;
@@ -169,8 +133,7 @@ describe("runCodexIsolatedCompletion", () => {
         }
       },
     };
-    const run = runCodexIsolatedCompletion(params, {});
-    const rejection = expect(run).rejects.toBe(retired);
+    const rejection = expect(run(params)).rejects.toBe(retired);
     await preparing.promise;
     current = false;
     release.resolve();
@@ -180,58 +143,31 @@ describe("runCodexIsolatedCompletion", () => {
   });
 
   it("accepts a policy-directed continuation only from attested managed hooks", async () => {
-    mocks.runBoundedTurn.mockResolvedValue({
-      text: "Garden Planning",
-      model: "gpt-5.4",
-      managedHooksEnabled: true,
-      items: [
-        {
-          id: "prompt",
-          type: "userMessage",
-          content: [{ type: "text", text: createParams().prompt }],
-        },
+    turn(
+      [
+        prompt,
         { id: "draft", type: "agentMessage", text: "An earlier draft." },
-        {
-          id: "hook",
-          type: "hookPrompt",
-          fragments: [{ text: "Revise the answer.", hookRunId: "managed-stop-1" }],
-        },
-        { id: "answer", type: "agentMessage", text: "Garden Planning" },
+        hook("managed-stop-1"),
+        answer,
       ],
-    });
+      true,
+    );
 
-    await expect(runCodexIsolatedCompletion(createParams(), {})).resolves.toMatchObject({
+    await expect(run()).resolves.toMatchObject({
       assistant: { content: [{ type: "text", text: "Garden Planning" }] },
     });
   });
 
   it("rejects hook continuations without active managed attestation", async () => {
-    mocks.runBoundedTurn.mockResolvedValue({
-      text: "Garden Planning",
-      model: "gpt-5.4",
-      items: [
-        {
-          id: "hook",
-          type: "hookPrompt",
-          fragments: [{ text: "Revise the answer.", hookRunId: "hook-1" }],
-        },
-      ],
-    });
+    turn([hook("hook-1")]);
 
-    await expect(runCodexIsolatedCompletion(createParams(), {})).rejects.toThrow(
-      "unexpected native item: hookPrompt",
-    );
+    await expect(run()).rejects.toThrow("unexpected native item: hookPrompt");
   });
 
   it("rejects native tools even when managed hooks were attested", async () => {
-    mocks.runBoundedTurn.mockResolvedValue({
-      text: "Garden Planning",
-      model: "gpt-5.4",
-      managedHooksEnabled: true,
-      items: [{ id: "tool", type: "commandExecution" }],
-    });
+    turn([{ id: "tool", type: "commandExecution" }], true);
 
-    await expect(runCodexIsolatedCompletion(createParams(), {})).rejects.toThrow(
+    await expect(run()).rejects.toThrow(
       "Codex isolated completion returned unexpected native item: commandExecution",
     );
   });
@@ -244,7 +180,7 @@ describe("runCodexIsolatedCompletion", () => {
       auth: { mode: "api-key", source: "test" },
     } as IsolatedParams["authorization"];
 
-    await expect(runCodexIsolatedCompletion(params, {})).rejects.toThrow("harness-owned");
+    await expect(run(params)).rejects.toThrow("harness-owned");
     expect(mocks.runBoundedTurn).not.toHaveBeenCalled();
   });
 });

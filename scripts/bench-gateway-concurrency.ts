@@ -704,8 +704,8 @@ function remainingMs(deadlineAt: number): number {
   return Math.max(0, deadlineAt - performance.now());
 }
 
-function requireRemainingMs(deadlineAt: number, label: string): number {
-  const remaining = remainingMs(deadlineAt);
+function requireRemainingMs(deadlineAt: number, label: string, now = performance.now()): number {
+  const remaining = Math.max(0, deadlineAt - now);
   if (remaining <= 0) {
     throw new Error(`benchmark timed out while ${label}`);
   }
@@ -1164,7 +1164,6 @@ function buildConfig(
   agents.defaults = {
     ...(agents.defaults as Record<string, unknown>),
     maxConcurrent: concurrency,
-    heartbeat: { every: "0m" },
   };
   const pluginFixtures =
     pluginCount > 0 ? writePluginFixtures(root, { count: pluginCount }) : undefined;
@@ -1217,17 +1216,38 @@ async function connectGateway(
     params: unknown,
     requestedTimeoutMs?: number,
   ): Promise<T> => {
-    const response = await client.request(
-      method,
-      params,
-      Math.max(
-        1,
-        Math.min(
-          requestedTimeoutMs ?? 65_000,
-          requireRemainingMs(requestDeadlineAt, `waiting for ${method}`),
-        ),
-      ),
+    // A later phase may advance the client's deadline while this request is pending.
+    // Keep its original budget with the failure; transport errors are not timer verdicts.
+    const issuedAtMs = performance.now();
+    const deadlineAtMs = requestDeadlineAt;
+    const remainingAtIssueMs = requireRemainingMs(
+      deadlineAtMs,
+      `waiting for ${method}`,
+      issuedAtMs,
     );
+    const requestedCapMs = requestedTimeoutMs ?? 65_000;
+    const selectedTimeoutMs = Math.max(1, Math.min(requestedCapMs, remainingAtIssueMs));
+    let response: Awaited<ReturnType<typeof client.request>>;
+    try {
+      response = await client.request(method, params, selectedTimeoutMs);
+    } catch (cause) {
+      const rejectedAtMs = performance.now();
+      const timing = {
+        method,
+        issuedAtMs,
+        deadlineAtMs,
+        remainingAtIssueMs,
+        requestedCapMs,
+        selectedTimeoutMs,
+        scheduledExpiryAtMs: issuedAtMs + selectedTimeoutMs,
+        rejectedAtMs,
+        remainingAtRejectionMs: Math.max(0, deadlineAtMs - rejectedAtMs),
+      };
+      throw new Error(
+        `${cause instanceof Error ? cause.message : String(cause)}\nRPC failure timing: ${JSON.stringify(timing)}`,
+        { cause },
+      );
+    }
     if (!response.ok) {
       const message =
         response.error && typeof response.error === "object" && "message" in response.error
@@ -3464,6 +3484,7 @@ async function main(): Promise<void> {
 }
 
 export const testing = {
+  connectGateway,
   waitForGatewayDispatchReady,
   parseOptions,
   parseMockRequests,

@@ -139,7 +139,6 @@ export type InitiateCallInput = {
   from: string;
   to: string;
   webhookUrl: string;
-  clientState?: Record<string, string>;
   /** Inline TwiML to execute without fetching webhook TwiML. */
   inlineTwiml?: string;
   /** TwiML to serve once before normal webhook-driven call handling resumes. */

@@ -9,16 +9,11 @@ export type LocalServiceExit = {
 };
 
 export type LocalServiceDiagnostics = {
-  providerId: string;
   healthUrl: string;
   pid?: number;
-  startedAt: number;
   spawnedAt?: number;
   readyAt?: number;
-  lastHealthyAt?: number;
-  stdoutTail: string;
   stderrTail: string;
-  lastExit?: LocalServiceExit;
 };
 
 export function appendLocalServiceOutputTail(

@@ -2,6 +2,7 @@ export { discordPlugin } from "./src/channel.js";
 export { discordSetupPlugin } from "./src/channel.setup.js";
 export {
   handleDiscordSubagentDeliveryTarget,
+  handleDiscordSubagentDeliveryTargetAsync,
   handleDiscordSubagentEnded,
 } from "./src/subagent-hooks.js";
 export { inspectDiscordAccount, type InspectedDiscordAccount } from "./src/account-inspect.js";

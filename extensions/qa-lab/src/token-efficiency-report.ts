@@ -281,6 +281,12 @@ export function buildTokenEfficiencyReport(params: {
     .map((scenario) => scenario.runtimeParity)
     .filter((result): result is RuntimeParityResult => Boolean(result));
 
+  // Keep measured rows, but a live report cannot pass on a completed prefix alone.
+  const missingCaptures = liveUsage
+    ? params.summary.scenarios
+        .filter((scenario) => !scenario.runtimeParity)
+        .map((scenario) => `${scenario.name}: runtime parity capture missing`)
+    : [];
   const notApplicableScenarios = parityResults.flatMap((result) => {
     const usage = resolveRuntimeParityUsagePolicy(result.runtimeParityUsage);
     return usage.expectation === "not-applicable"
@@ -307,7 +313,7 @@ export function buildTokenEfficiencyReport(params: {
       notApplicableScenarios,
       aggregate: ZERO_AGGREGATE,
       pass: !liveUsage,
-      failures: liveUsage ? [noApplicableReason] : [],
+      failures: liveUsage ? [noApplicableReason, ...missingCaptures] : [],
       ...(liveUsage ? {} : { skipReason: noApplicableReason }),
       notes: [
         parityResults.length === 0
@@ -342,6 +348,7 @@ export function buildTokenEfficiencyReport(params: {
     }
     return rowFailures;
   });
+  failures.push(...missingCaptures);
 
   return {
     status: liveUsage ? "evaluated" : "estimated",

@@ -17,6 +17,7 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { requesterCreatorProfileId } from "./requester-origin.js";
 import type {
   CronCreatorToolAuthorityMaterialization,
   CronToolOptions,
@@ -266,6 +267,9 @@ export function bindCronManagementGrant(runId: string | undefined) {
 
 /** Retains authenticated provenance before late CLI admission without execution authority. */
 export function captureCronRequesterGrantIssuer(runId: string | undefined) {
+  const creatorProfileId = requesterCreatorProfileId(
+    getGatewayToolCallerIdentity()?.requesterOrigin,
+  );
   const scope = activeCronCreatorAuthority.getStore();
   if (
     !scope ||
@@ -292,6 +296,7 @@ export function captureCronRequesterGrantIssuer(runId: string | undefined) {
       undefined,
       "requester",
       isCurrent,
+      creatorProfileId,
     );
   };
 }
@@ -405,6 +410,9 @@ export function bindActiveCronCreatorAuthorityResolver(
     return undefined;
   }
   const resolve = resolver.resolve;
+  const creatorProfileId = requesterCreatorProfileId(
+    getGatewayToolCallerIdentity()?.requesterOrigin,
+  );
   return async (options) => {
     // Tool callbacks can run after construction; retain the exact scope object
     // and let its owner revoke it when the admitted run settles.
@@ -426,7 +434,15 @@ export function bindActiveCronCreatorAuthorityResolver(
     return Object.freeze({
       tools: snapshot.tools,
       provenance: snapshot.provenance,
-      grant: mintCronCreatorAuthorityGrant(authority, operationSignal, snapshot.runtimeAuthority),
+      grant: mintCronCreatorAuthorityGrant(
+        authority,
+        operationSignal,
+        snapshot.runtimeAuthority,
+        undefined,
+        "runtime",
+        undefined,
+        creatorProfileId,
+      ),
       ...(snapshot.runtimeAuthority ? { holdsRuntimeAuthority: true as const } : {}),
     });
   };

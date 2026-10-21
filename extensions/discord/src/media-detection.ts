@@ -14,7 +14,9 @@ export function isLikelyDiscordVideoMedia(mediaUrl: string): boolean {
     // Decode only the filename; malformed escapes in earlier path segments are irrelevant.
     try {
       path = decodeURIComponent(path);
-    } catch {}
+    } catch {
+      // A malformed escape leaves the original filename available for extension detection.
+    }
   } catch {
     path = trimmed.split(/[?#]/, 1)[0] ?? trimmed;
   }

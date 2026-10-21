@@ -21,6 +21,10 @@ function createModel(overrides: Partial<ModelInput> = {}): ModelInput {
   };
 }
 
+function resolveModel(overrides: Partial<ModelInput>) {
+  return resolveCopilotProvider({ model: createModel(overrides) });
+}
+
 describe("resolveCopilotProvider", () => {
   it("keeps the subscription provider on the native Copilot auth path", () => {
     expect(
@@ -256,11 +260,7 @@ describe("resolveCopilotProvider", () => {
       { requestTls: { ca: "ca-pem" } },
       { requestAllowPrivateNetwork: false },
     ]) {
-      expect(() =>
-        resolveCopilotProvider({
-          model: createModel(model),
-        }),
-      ).toThrow(COPILOT_BYOK_TRANSPORT_POLICY_ERROR);
+      expect(() => resolveModel(model)).toThrow(COPILOT_BYOK_TRANSPORT_POLICY_ERROR);
     }
   });
 
@@ -279,83 +279,41 @@ describe("resolveCopilotProvider", () => {
       "http://metadata.google.internal/v1",
       "http://localhost:11434/v1",
     ]) {
-      expect(() =>
-        resolveCopilotProvider({
-          model: createModel({ baseUrl }),
-        }),
-      ).toThrow(COPILOT_BYOK_ENDPOINT_POLICY_ERROR);
+      expect(() => resolveModel({ baseUrl })).toThrow(COPILOT_BYOK_ENDPOINT_POLICY_ERROR);
     }
   });
 
   it("advertises support only for representable BYOK provider shapes", () => {
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "openai-responses",
-        baseUrl: "https://proxy.example/v1",
-      }),
-    ).toBe(true);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "azure-openai-responses",
-        baseUrl: "https://example.openai.azure.com/openai/v1",
-      }),
-    ).toBe(true);
-    expect(
-      supportsCopilotByokProviderShape({
+    const supported = [
+      { api: "openai-responses", baseUrl: "https://proxy.example/v1" },
+      { api: "azure-openai-responses", baseUrl: "https://example.openai.azure.com/openai/v1" },
+      {
         api: "azure-openai-responses",
         baseUrl: "https://project.services.ai.azure.com/api/projects/demo/openai/v1",
-      }),
-    ).toBe(true);
-    expect(
-      supportsCopilotByokProviderShape({
+      },
+    ];
+    const unsupported = [
+      {
         api: "azure-openai-responses",
         baseUrl: "https://project.services.ai.azure.com/api/projects/demo",
-      }),
-    ).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "google-generative-ai",
-        baseUrl: "https://google.example",
-      }),
-    ).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "openai-responses",
-        baseUrl: "file://public.example/v1",
-      }),
-    ).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "openai-responses",
-        baseUrl: "http://proxy.example/v1",
-      }),
-    ).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "openai-responses",
-        baseUrl: "https://user:pass@proxy.example/v1",
-      }),
-    ).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "openai-responses",
-        baseUrl: "https://proxy.example/v1?api_key=secret",
-      }),
-    ).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
-        api: "openai-responses",
-        baseUrl: "https://proxy.example/v1?x-api-key=secret",
-      }),
-    ).toBe(false);
-    expect(supportsCopilotByokProviderShape({ api: "openai-responses" })).toBe(false);
-    expect(
-      supportsCopilotByokProviderShape({
+      },
+      { api: "google-generative-ai", baseUrl: "https://google.example" },
+      ...[
+        "file://public.example/v1",
+        "http://proxy.example/v1",
+        "https://user:pass@proxy.example/v1",
+        "https://proxy.example/v1?api_key=secret",
+        "https://proxy.example/v1?x-api-key=secret",
+      ].map((baseUrl) => ({ api: "openai-responses", baseUrl })),
+      { api: "openai-responses" },
+      {
         api: "openai-responses",
         baseUrl: "https://proxy.example/v1",
         requestProxy: { mode: "env-proxy" },
-      }),
-    ).toBe(false);
+      },
+    ];
+    expect(supported.map(supportsCopilotByokProviderShape)).toEqual([true, true, true]);
+    expect(unsupported.map(supportsCopilotByokProviderShape)).toEqual(Array(9).fill(false));
   });
 
   it("rejects provider APIs the SDK adapter cannot represent", () => {

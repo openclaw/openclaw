@@ -1,8 +1,13 @@
 import { Show } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import type { readPendingSendStatus } from "../chat-thread-items.ts";
 
+registerEnglishCatalog(registerChatComposerEnglish);
+
 export type ChatSendStatusActions = {
+  connected?: boolean;
   onRetryQueuedMessage?: (id: string) => void;
   onDiscardQueuedMessage?: (id: string) => void;
   queuedMessageAction?: { id: string; label?: string; onAction?: () => void };
@@ -21,7 +26,7 @@ function SendStatusAction(props: {
       <span class="chat-send-status__part">
         <span aria-hidden="true">{"·"}</span>
         <button
-          class={"chat-send-status__action chat-send-status__" + props.kind}
+          class={["chat-send-status__action", `chat-send-status__${props.kind}`]}
           type="button"
           aria-label={
             props.kind === "retry" ? (props.label ?? t("chat.queue.retryQueuedMessage")) : undefined
@@ -48,15 +53,16 @@ export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendSta
     props.actions.queuedMessageAction?.id === props.status?.id
       ? props.actions.queuedMessageAction
       : undefined;
-  const reconnecting = () => props.status?.state === "waiting-reconnect";
+  const awaitingRecovery = () => props.status?.state === "waiting-reconnect";
+  const reconnecting = () => isChatSendReconnecting(props.status?.state, props.actions.connected);
   const retry = () =>
-    reconnecting() ? undefined : (action()?.onAction ?? props.actions.onRetryQueuedMessage);
+    awaitingRecovery() ? undefined : (action()?.onAction ?? props.actions.onRetryQueuedMessage);
   const discard = () =>
     props.status &&
     (props.status.state === "failed" ||
       props.status.state === "unconfirmed" ||
       props.status.state === "held" ||
-      reconnecting()) &&
+      awaitingRecovery()) &&
     !action()
       ? props.actions.onDiscardQueuedMessage
       : undefined;
@@ -74,11 +80,13 @@ export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendSta
               {t(
                 reconnecting()
                   ? "chat.queue.states.waitingForReconnect"
-                  : status().state === "held"
-                    ? "chat.queue.states.needsReview"
-                    : status().state === "unconfirmed"
-                      ? "chat.queue.deliveryUnconfirmed"
-                      : "chat.queue.notSent",
+                  : awaitingRecovery()
+                    ? "common.queued"
+                    : status().state === "held"
+                      ? "chat.queue.states.needsReview"
+                      : status().state === "unconfirmed"
+                        ? "chat.queue.deliveryUnconfirmed"
+                        : "chat.queue.notSent",
               )}
             </span>
           </span>

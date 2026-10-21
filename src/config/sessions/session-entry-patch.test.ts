@@ -57,7 +57,7 @@ import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcri
 import * as reconcile from "./session-transcript-reconcile.js";
 import type { SessionEntry } from "./types.js";
 
-const { getSessionEntryPatchDelivery } =
+const { getSessionEntryPatchDelivery, observeCommitAdmission } =
   await import("./session-entry-patch-delivery.test-support.js");
 const delivery = getSessionEntryPatchDelivery();
 
@@ -65,6 +65,12 @@ function patchSessionEntryCore(
   ...[scope, update, options]: Parameters<typeof patchInternalSessionEntry>
 ) {
   return patchInternalSessionEntry(scope, update, { workerGuard: {}, ...options });
+}
+
+function releasableSource(release: () => void | Promise<void>) {
+  return Object.assign(() => {}, {
+    prepareSessionSource: async () => ({ assertCurrent() {}, checks: [], release }),
+  });
 }
 
 it("ends an absent live-switch selection without committing and keeps newer flags and callback CAS", async () => {
@@ -786,20 +792,9 @@ it.each(["lost reply", "callback failure", "unknown settlement with callback fai
       const f = fixture();
       const failure = new Error(fault);
       if (fault === "unknown settlement with callback failure") {
-        let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
-        const createAdmission = admission.createSqliteWorkerOperationAdmission;
-        vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-          (callback, attachment) => {
-            const owned = createAdmission((request, grant) => {
-              if (request.stage === "commit") {
-                nativeAdmission = owned;
-              }
-              callback(request, grant);
-            }, attachment);
-            return owned;
-          },
-        );
+        const getAdmission = observeCommitAdmission();
         delivery.afterCommit = () => {
+          const nativeAdmission = getAdmission();
           expect(nativeAdmission?.committed?.facts).toMatchObject({
             kind: "session-entry-patch-committed",
           });
@@ -865,20 +860,9 @@ it.each(["unknown", "mismatched receipt", "unknown failure"] as const)(
           ? new SqliteWorkerError("commit outcome lost", "outcome-unknown")
           : new Error("commit reply lost");
       const cleanupFailure = new Error("prepared source release failed");
-      let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) => {
-          const owned = createAdmission((request, grant) => {
-            if (request.stage === "commit") {
-              nativeAdmission = owned;
-            }
-            callback(request, grant);
-          }, attachment);
-          return owned;
-        },
-      );
+      const getAdmission = observeCommitAdmission();
       const loseCommitResult = vi.fn(() => {
+        const nativeAdmission = getAdmission();
         expect(nativeAdmission?.committed?.facts).toMatchObject({
           kind: "session-entry-patch-committed",
         });
@@ -904,13 +888,7 @@ it.each(["unknown", "mismatched receipt", "unknown failure"] as const)(
       const update = vi.fn(() => ({ label: "committed once" }));
       const failure: unknown = await patchSessionEntryCore(f.scope, update, {
         workerGuard: {
-          source: composeSessionSourceAssertion(
-            [releaseFirst, releaseLast].map((release) =>
-              Object.assign(() => {}, {
-                prepareSessionSource: async () => ({ assertCurrent() {}, checks: [], release }),
-              }),
-            ),
-          ),
+          source: composeSessionSourceAssertion([releaseFirst, releaseLast].map(releasableSource)),
         },
       }).catch((error: unknown) => error);
 
@@ -951,9 +929,7 @@ it.each([false, true])(
       try {
         const failure: unknown = await patchSessionEntryCore(f.scope, update, {
           workerGuard: {
-            source: Object.assign(() => {}, {
-              prepareSessionSource: async () => ({ assertCurrent() {}, checks: [], release }),
-            }),
+            source: releasableSource(release),
           },
         }).catch((error: unknown) => error);
         expect(release).toHaveBeenCalledOnce();
@@ -988,11 +964,7 @@ it("preserves the translated source refusal while joining failed preparation cle
     const update = vi.fn(() => ({ label: "must not commit" }));
     const source = composeSessionSourceAssertion(
       [
-        ...[releaseFirst, releaseLast].map((release) =>
-          Object.assign(() => {}, {
-            prepareSessionSource: async () => ({ assertCurrent() {}, checks: [], release }),
-          }),
-        ),
+        ...[releaseFirst, releaseLast].map(releasableSource),
         Object.assign(() => {}, {
           prepareSessionSource: async () => {
             throw refusal;

@@ -9,6 +9,7 @@ vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 vi.mock("./systemd-exec.js", async (original) => ({
   ...(await original<typeof import("./systemd-exec.js")>()),
   execBusctlUser: busctl,
+  execBusctlSystem: (...args: unknown[]) => busctl(undefined, ...args),
   bindSystemdManagerOwner: vi.fn(),
 }));
 vi.mock("./systemd-peer-native.js", async (original) => ({
@@ -21,6 +22,7 @@ import {
   assertDaemonRuntimePinDefinition,
   commitDaemonRuntimePin,
   readDaemonRuntimePin,
+  withDaemonRuntimePinMigration,
 } from "./runtime-pin-state.js";
 import {
   hasGatewayServiceEnvironmentOverride,
@@ -73,6 +75,37 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["before query", "during query"])(
+  "names the expired effective-command probe: %s",
+  async (phase) => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const commandReader = await createSystemdCommandQuery(
+      queryEnv,
+      unitName,
+      {
+        timeoutMs: 100,
+        systemdReadTarget: {
+          scope: "system",
+          unitName,
+          unitPath: `/etc/systemd/system/${unitName}`,
+        },
+      },
+      unavailable,
+    );
+    busctl.mockImplementation(async () => {
+      now = 101;
+      return success('o "/unit"');
+    });
+    if (phase === "before query") {
+      now = 101;
+    }
+    await expect(commandReader.query(callArgs, ["o"])).rejects.toThrow(
+      /Stalled check: (?:effective command LoadUnit|busctl call .* LoadUnit)\./,
+    );
+  },
+);
+
 it("does not infer ownership from expanded specifiers or normalized working directories", async () => {
   const home = queryEnv.HOME;
   const unit = path.join(home, ".config/systemd/user", unitName);
@@ -122,7 +155,7 @@ it("does not infer ownership from expanded specifiers or normalized working dire
 });
 
 describe("ordinary private-manager inspection", () => {
-  it.each(["disconnected"])("closes the captured private connection when %s", async (result) => {
+  it("closes the captured private connection when disconnected", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.spyOn(process, "geteuid").mockReturnValue(1000);
     const home = dirs.make("openclaw-private-manager-");
@@ -153,10 +186,7 @@ describe("ordinary private-manager inspection", () => {
         close,
         verify: () => {},
         query: async () => {
-          if (result === "disconnected") {
-            throw new Error("native-error-secret-canary");
-          }
-          return null;
+          throw new Error("native-error-secret-canary");
         },
       });
     busctl.mockResolvedValue(failure(systemdOperatorBusFixtures.stale.getUnitFileState));
@@ -176,11 +206,7 @@ describe("ordinary private-manager inspection", () => {
         },
       },
     );
-    if (result === "absent") {
-      await expect(inspected).resolves.toBeNull();
-    } else {
-      await expect(inspected).rejects.toMatchObject({ reason: "systemd-user-bus-unavailable" });
-    }
+    await expect(inspected).rejects.toMatchObject({ reason: "systemd-user-bus-unavailable" });
     expect(closeDiscovery).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
     expect(busctl).not.toHaveBeenCalled();
@@ -199,22 +225,18 @@ describe("systemd command query legacy compatibility", () => {
     await expect((await reader()).query(args, ["s"])).resolves.toBeNull();
   });
 
-  it.each([[true, { ...success('o "/unitName"'), termination: "timeout" }]])(
-    "rejects failure (legacy=%s): %j",
-    async (legacy, result) => {
-      if (legacy) {
-        busctl.mockResolvedValueOnce(unsupported);
-      }
-      busctl.mockResolvedValue(result);
-      await expect(query()).rejects.toThrow();
-      expect(busctl).toHaveBeenCalledTimes(legacy ? 2 : 1);
-    },
-  );
+  it("rejects a timed-out legacy reply even when its output is valid", async () => {
+    busctl
+      .mockResolvedValueOnce(unsupported)
+      .mockResolvedValue({ ...success('o "/unitName"'), termination: "timeout" });
+    await expect(query()).rejects.toThrow();
+    expect(busctl).toHaveBeenCalledTimes(2);
+  });
 
   it.each([
-    { first: 1000, retry: 0, budgets: [1000], ok: false },
-    { first: 0, retry: 1000, budgets: [1000, 1000], ok: false },
-  ])("shares the original call deadline: %j", async ({ first, retry, budgets, ok }) => {
+    { first: 1000, retry: 0, budgets: [1000] },
+    { first: 0, retry: 1000, budgets: [1000, 1000] },
+  ])("shares the original call deadline: %j", async ({ first, retry, budgets }) => {
     let now = 1000;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     busctl
@@ -226,12 +248,7 @@ describe("systemd command query legacy compatibility", () => {
         now += retry;
         return success('o "/unitName"');
       });
-    const result = query({ timeoutMs: 3000 });
-    if (ok) {
-      await expect(result).resolves.toEqual([["/unitName"]]);
-    } else {
-      await expect(result).rejects.toThrow();
-    }
+    await expect(query({ timeoutMs: 3000 })).rejects.toThrow();
     expect(busctl.mock.calls.map((call) => call[2])).toEqual(budgets);
   });
 
@@ -259,7 +276,6 @@ describe("effective service inspection through legacy busctl", () => {
   let env: Record<string, string>;
   let unit: string;
   let dropIn: string;
-  let loadedDropIns: string[];
   let requiredFile: string;
   let pendingReload: boolean;
   let malformed: boolean;
@@ -275,7 +291,6 @@ describe("effective service inspection through legacy busctl", () => {
     };
     unit = path.join(home, ".config/systemd/user/openclaw-legacy.service");
     dropIn = `${unit}.d/override.conf`;
-    loadedDropIns = [dropIn];
     requiredFile = path.join(home, "required.env");
     await fs.mkdir(path.dirname(dropIn), { recursive: true });
     await fs.writeFile(unit, "[Service]\nExecStart=/local/file gateway\n");
@@ -292,7 +307,7 @@ describe("effective service inspection through legacy busctl", () => {
       }
       if (args.includes("org.freedesktop.systemd1.Unit")) {
         return success(
-          `s ${JSON.stringify(unit)}\nas ${[loadedDropIns.length, ...loadedDropIns.map((file) => JSON.stringify(file))].join(" ")}\nb ${pendingReload}\ns "loaded"\ns "enabled"\ns "active"\nb true\nb false\n`,
+          `s ${JSON.stringify(unit)}\nas 1 ${JSON.stringify(dropIn)}\nb ${pendingReload}\ns "loaded"\ns "enabled"\ns "active"\nb true\nb false\n`,
         );
       }
       return success(
@@ -309,55 +324,46 @@ describe("effective service inspection through legacy busctl", () => {
     });
   });
 
-  it.each(["resource-only"])(
-    "persists an authored runtime pin with default user cwd and %s drop-ins",
-    async (dropIns) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const planned = {
-        programArguments: ["/usr/bin/node", "gateway", "café", 'quoted "value" \\ path'],
-      };
-      await fs.writeFile(unit, buildSystemdUnit(planned));
-      if (dropIns === "none") {
-        loadedDropIns = [];
-      } else {
-        await fs.writeFile(dropIn, "[Service]\nMemoryMax=1G\n");
-      }
-      const actual = await inspect();
-      expect(actual?.workingDirectory).toBe(env.HOME);
-      expect(() => assertDaemonRuntimePinDefinition(planned, actual)).not.toThrow();
-      expect(hasGatewayServiceLauncherOverride(actual)).toBe(false);
+  it("persists an authored runtime pin with default user cwd and resource-only drop-ins", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const planned = {
+      programArguments: ["/usr/bin/node", "gateway", "café", 'quoted "value" \\ path'],
+    };
+    await fs.writeFile(unit, buildSystemdUnit(planned));
+    await fs.writeFile(dropIn, "[Service]\nMemoryMax=1G\n");
+    const actual = await inspect();
+    expect(actual?.workingDirectory).toBe(env.HOME);
+    expect(() => assertDaemonRuntimePinDefinition(planned, actual)).not.toThrow();
+    expect(hasGatewayServiceLauncherOverride(actual)).toBe(false);
 
-      const scope = {
-        kind: "gateway" as const,
-        env: {
-          ...env,
-          OPENCLAW_STATE_DIR: path.join(env.HOME!, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(env.HOME!, "state", "openclaw.json"),
-        },
-      };
-      const pin = { runtime: "node" as const, path: "/usr/bin/node" };
-      commitDaemonRuntimePin(scope, { expected: readDaemonRuntimePin(scope, null), pin }, actual);
-      expect(readDaemonRuntimePin(scope, await inspect()).pin).toEqual(pin);
-    },
-  );
+    const scope = {
+      kind: "gateway" as const,
+      env: {
+        ...env,
+        OPENCLAW_STATE_DIR: path.join(env.HOME!, "state"),
+        OPENCLAW_CONFIG_PATH: path.join(env.HOME!, "state", "openclaw.json"),
+      },
+    };
+    await withDaemonRuntimePinMigration(scope.env, () => undefined);
+    const pin = { runtime: "node" as const, path: "/usr/bin/node" };
+    commitDaemonRuntimePin(scope, { expected: readDaemonRuntimePin(scope, null), pin }, actual);
+    expect(readDaemonRuntimePin(scope, await inspect()).pin).toEqual(pin);
+  });
 
-  it.each([true])(
-    "retains manager data and selected drop-ins with reloadPending=%s",
-    async (reload) => {
-      pendingReload = reload;
-      const actual = await inspect();
-      expect(actual).toMatchObject({
-        programArguments: ["/usr/bin/node", "gateway", "café", 'quoted "value" \\ path'],
-        workingDirectory: env.HOME,
-        environment: { A: "file", KEEP: "file" },
-        sourcePath: unit,
-        definitionPaths: [unit, dropIn],
-      });
-      expect(actual?.environment).not.toHaveProperty("REMOVE");
-      expect(actual?.reloadPending).toBe(reload || undefined);
-      expect(busctl).toHaveBeenCalledTimes(4);
-    },
-  );
+  it("retains manager data and selected drop-ins while a reload is pending", async () => {
+    pendingReload = true;
+    const actual = await inspect();
+    expect(actual).toMatchObject({
+      programArguments: ["/usr/bin/node", "gateway", "café", 'quoted "value" \\ path'],
+      workingDirectory: env.HOME,
+      environment: { A: "file", KEEP: "file" },
+      sourcePath: unit,
+      definitionPaths: [unit, dropIn],
+    });
+    expect(actual?.environment).not.toHaveProperty("REMOVE");
+    expect(actual?.reloadPending).toBe(true);
+    expect(busctl).toHaveBeenCalledTimes(4);
+  });
 
   it.each(["missing required file", "malformed reply"])(
     "rejects %s despite a readable local unit",

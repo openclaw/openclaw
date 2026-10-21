@@ -1,15 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-function isExecutable(filePath: string): boolean {
-  try {
-    fs.accessSync(filePath, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
+import { canAccessSync } from "./path-existence.js";
 
 type BrewResolutionOptions = {
   homeDir?: string;
@@ -27,7 +19,7 @@ function resolveBrewFromPath(pathEnv = process.env.PATH): string | undefined {
       continue;
     }
     const candidate = path.join(trimmed, "brew");
-    if (isExecutable(candidate)) {
+    if (canAccessSync(candidate, fs.constants.X_OK)) {
       return candidate;
     }
   }
@@ -64,7 +56,7 @@ export function resolveBrewExecutable(opts?: BrewResolutionOptions): string | un
     "/home/linuxbrew/.linuxbrew/bin/brew",
     "/opt/homebrew/bin/brew",
     "/usr/local/bin/brew",
-  ].find(isExecutable);
+  ].find((candidate) => canAccessSync(candidate, fs.constants.X_OK));
 }
 
 /** Recognize formula-owned OpenClaw files and keep service paths independent of the keg version. */

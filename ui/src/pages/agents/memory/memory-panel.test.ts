@@ -1,664 +1,665 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, flush } from "solid-js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { registerListener } from "../../../../../src/shared/listeners.ts";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
 import { ShellLayoutOwner } from "../../../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../../../app/shell-layout-traits-solid.tsx";
-import {
-  showConfirmDialog,
-  type ConfirmDialogOptions,
-} from "../../../components/confirm-dialog.ts";
-import { i18n } from "../../../i18n/index.ts";
-import type { TranslationMap } from "../../../i18n/lib/types.ts";
-import { en } from "../../../i18n/locales/en.ts";
-import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
+import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
-import type { DreamDiaryActionMethod, DreamingState, WikiOverview } from "./dreaming.ts";
-import { AgentMemoryState } from "./memory-panel-state.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createAgentMemory, type AgentMemoryState } from "./memory-panel-state.ts";
 import { AgentMemoryView } from "./memory-panel-view.tsx";
 import { AgentMemoryPanel } from "./memory-panel.tsx";
-import type { DreamingViewState } from "./view.tsx";
+import { installDreamingViewTestTranslations } from "./view.test-helpers.ts";
 
 vi.mock("../../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
-
-type TestMemoryPanel = {
-  connect: () => void;
-  disconnect: () => void;
-  context: ApplicationContext;
-  agentId: string;
-  dreaming: DreamingState;
-  viewState: DreamingViewState;
-  toggleConfirmLoading: boolean;
-  pendingEnabled: boolean | null;
-  applyAgentId: () => void;
-  applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
-  loadResources: () => Promise<void>;
-  openWikiPage: (lookup: string) => Promise<unknown>;
-  confirmDreamingTask: (
-    method: DreamDiaryActionMethod,
-    confirmation: ConfirmDialogOptions,
-  ) => Promise<void>;
-  requestUpdate: () => void;
-  readonly updateComplete: Promise<boolean>;
-};
-
-let restoreTranslations = () => {};
-
-beforeAll(() => {
-  const dreaming =
-    en.dreaming && typeof en.dreaming === "object" ? (en.dreaming as TranslationMap) : {};
-  const wiki =
-    dreaming.wiki && typeof dreaming.wiki === "object" ? (dreaming.wiki as TranslationMap) : {};
-  i18n.registerTranslation("en", {
-    ...en,
-    dreaming: {
-      ...dreaming,
-      wiki: {
-        ...wiki,
-        noContent: "No wiki content available.",
-      },
-    },
-  });
-  restoreTranslations = () => i18n.registerTranslation("en", en);
-});
-
-afterAll(() => {
-  restoreTranslations();
-});
-
-function contextWithGateway(
-  client: GatewayBrowserClient,
-  connected: boolean,
-  configForm: Record<string, unknown> | null = null,
-): ApplicationContext {
-  const snapshot: ApplicationGatewaySnapshot = {
-    client,
-    phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: gatewayHelloForMethods(["config.patch"]),
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const subscribe = () => () => undefined;
-  return {
-    gateway: { snapshot, subscribe },
-    agents: {
-      state: { agentsList: null },
-      subscribe,
-    },
-    runtimeConfig: {
-      state: { configForm, configSnapshot: null },
-      ensureLoaded: vi.fn(async () => undefined),
-      refresh: vi.fn(async () => undefined),
-      removeFormValue: vi.fn(),
-      waitForPendingWrites: vi.fn(async () => undefined),
-      save: vi.fn(async () => true),
-      patch: vi.fn(async () => true),
-      subscribe,
-    },
-  } as unknown as ApplicationContext;
-}
-
-const states = new Set<AgentMemoryState>();
-function createMemoryState(): TestMemoryPanel {
-  const state = new AgentMemoryState();
-  states.add(state);
-  return state as unknown as TestMemoryPanel;
-}
-
-function createPage(context: ApplicationContext): TestMemoryPanel {
-  const page = createMemoryState();
-  page.context = context;
-  page.agentId = "main";
-  page.loadResources = vi.fn(async () => undefined);
-  return page;
-}
-
-async function replaceContext(page: TestMemoryPanel, context: ApplicationContext) {
-  page.context = context;
-  page.requestUpdate();
-  await page.updateComplete;
-}
-
+const restoreTranslations = installDreamingViewTestTranslations();
+afterAll(() => restoreTranslations());
 afterEach(() => {
   cleanupSolid();
-  for (const state of states) {
-    state.disconnect();
-  }
-  states.clear();
   document.body.replaceChildren();
   vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
-describe("AgentMemoryPanel gateway lifecycle", () => {
-  it.each(["lit", "solid"] as const)(
-    "registers the memory host and releases shell layout for %s callers",
-    async (renderer) => {
-      const context = contextWithGateway({} as GatewayBrowserClient, false);
-      const content = document.createElement("main");
-      content.className = "content";
-      document.body.append(content);
-      const owner = new ShellLayoutOwner();
-      owner.contentRef(content);
-      if (renderer === "lit") {
-        const provider = createApplicationContextProvider(context);
-        const host = document.createElement("openclaw-agent-memory-panel");
-        host.agentId = "support";
-        provider.append(host);
-        content.append(provider);
-      } else {
-        const provider = createSolidApplicationContextProvider(context);
-        mountSolid(
-          () =>
-            createComponent(ShellLayoutProvider, {
-              value: { owner, host: content },
-              get children() {
-                return createComponent(AgentMemoryPanel, { agentId: "support" });
-              },
-            }),
-          { container: content, wrapper: provider.wrapper },
-        );
-      }
-      const host = content.querySelector("openclaw-agent-memory-panel")!;
-      await host.updateComplete;
-      flush();
-      expect(host.agentId).toBe("support");
-      expect(host.querySelector(".agent-memory-panel__header")).not.toBeNull();
-      expect(owner.current.toolbarHeader).toBe(true);
-      if (renderer === "solid") {
-        cleanupSolid();
-      } else {
-        host.remove();
-      }
-      await Promise.resolve();
-      expect(owner.current.toolbarHeader).toBeUndefined();
+function contextWithRequest(request: Parameters<typeof createTestGatewayClient>[0]) {
+  const { gateway, publish } = createApplicationGateway();
+  publish({
+    ...gateway.snapshot,
+    client: createTestGatewayClient(request),
+    phase: "connected",
+    hello: gatewayHelloForMethods(["config.patch"]),
+    sessionKey: "main",
+  });
+  const configListeners = new Set<() => void>();
+  const context = {
+    gateway,
+    agents: { state: { agentsList: null }, subscribe: () => () => {} },
+    runtimeConfig: {
+      state: {
+        configForm: null,
+        configSnapshot: null,
+        client: gateway.snapshot.client,
+        connected: true,
+      },
+      ensureLoaded: vi.fn(async () => undefined),
+      refresh: vi.fn(async () => undefined),
+      patch: vi.fn(async () => true),
+      lookupSchemaPath: vi.fn(async () => ({ children: [{ key: "dreaming" }] })),
+      subscribe: (listener: () => void) => registerListener(configListeners, listener),
     },
-  );
+  } as unknown as ApplicationContext;
+  return Object.assign(context, {
+    emit(patch: Partial<ApplicationGatewaySnapshot>) {
+      publish({ ...gateway.snapshot, ...patch });
+    },
+    setConfig(config: Record<string, unknown>) {
+      context.runtimeConfig.state.configForm = config;
+      context.runtimeConfig.state.configSnapshot = { config, hash: "synthetic-config-hash" };
+      configListeners.forEach((listener) => listener());
+    },
+  });
+}
 
-  it("waits for a committed agent before loading agent-scoped memory", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "doctor.memory.status") {
-        return { dreaming: null };
-      }
-      if (method === "doctor.memory.dreamDiary") {
-        return { found: false, path: "DREAMS.md" };
-      }
-      return {};
-    });
-    const page = createMemoryState();
-    page.context = contextWithGateway({ request } as unknown as GatewayBrowserClient, true);
+const STATUS = "doctor.memory.status";
+const DIARY = "doctor.memory.dreamDiary";
+const REPAIR = "doctor.memory.repairDreamingArtifacts";
+const PREVIEW = ".dreams-diary__preview-panel";
+const PREVIEW_TEXT = ".dreams-diary__preview-pre";
 
-    page.connect();
-    await page.updateComplete;
-    await page.updateComplete;
+function requestFor(
+  replies: Record<string, () => unknown>,
+  fallback: (method: string) => unknown = emptyReply,
+) {
+  return vi.fn((method: string) => replies[method]?.() ?? fallback(method));
+}
+
+function memoryStatus(promotedToday: number, extra: Record<string, unknown> = {}) {
+  return { dreaming: { enabled: true, promotedToday, ...extra } };
+}
+
+function diary(content: string) {
+  return { found: true, path: "DREAMS.md", content };
+}
+
+const emptyClient = () => createTestGatewayClient(vi.fn(emptyReply));
+
+const emptyReply = (method: string) =>
+  method === STATUS ? { dreaming: null } : { found: false, path: "DREAMS.md" };
+function createAgentTarget(initialAgentId: string | null) {
+  let agentId = initialAgentId;
+  const listeners = new Set<() => void>();
+  return {
+    read: () => agentId,
+    subscribe: (notify: () => void) => registerListener(listeners, notify),
+    set: (next: string | null) => {
+      agentId = next;
+      listeners.forEach((notify) => notify());
+    },
+    subscriberCount: () => listeners.size,
+  };
+}
+
+async function createPage(
+  replies:
+    | Parameters<typeof createTestGatewayClient>[0]
+    | Record<string, () => unknown> = emptyReply,
+  agentId = "main",
+  hello = gatewayHelloForMethods(["config.patch"]),
+) {
+  const request = typeof replies === "function" ? vi.fn(replies) : requestFor(replies);
+  const context = contextWithRequest(request);
+  context.emit({ hello });
+  const agentTarget = createAgentTarget(agentId);
+  let state: AgentMemoryState;
+  const { container, unmount } = mountSolid(() => {
+    state = createAgentMemory(context, () => agentTarget);
+    return AgentMemoryView({ state });
+  });
+  await waitForSolid(() => expect(state.view().header.refreshLoading).toBe(false));
+  return {
+    get state() {
+      return state;
+    },
+    context,
+    request,
+    get dreaming() {
+      return state.view().dreaming;
+    },
+    get toggle() {
+      return state.view().toggle;
+    },
+    query: container.querySelector.bind(container),
+    text: (selector: string) => container.querySelector(selector)?.textContent,
+    waitText: (selector: string, text: string) =>
+      waitForSolid(() => expect(container.querySelector(selector)?.textContent).toBe(text)),
+    container,
+    setAgentId: agentTarget.set,
+    unmount,
+  };
+}
+
+function click(container: HTMLElement, selector: string) {
+  const button = container.querySelector<HTMLButtonElement>(selector);
+  expect(button).not.toBeNull();
+  button!.click();
+  flush();
+}
+
+it.each(["rejected", "declined"] as const)(
+  "shows a %s toggle write through its receipt and permits retry",
+  async (outcome) => {
+    const page = await createPage();
+    page.context.setConfig({});
+    const pending = deferred<boolean>();
+    const patch = vi.mocked(page.context.runtimeConfig.patch);
+    patch.mockReturnValueOnce(pending.promise);
+    page.state.setEnabled(false);
+    flush();
+    click(page.container, ".exec-approval-actions button");
+    await waitForSolid(() => expect(page.text(".exec-approval-actions button")).toBe("Saving…"));
+    expect(page.toggle.onConfirm()).toBeUndefined();
+    await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
+    if (outcome === "rejected") {
+      pending.reject(new Error("synthetic patch failure"));
+    } else {
+      pending.resolve(false);
+    }
+    await waitForSolid(() => expect(page.query(".exec-approval-error")).not.toBeNull());
+    expect(page.toggle.open).toBe(true);
+    expect(page.query<HTMLButtonElement>(".exec-approval-actions button")?.disabled).toBe(false);
+    const retry = deferred<boolean>();
+    patch.mockReturnValueOnce(retry.promise);
+    click(page.container, ".exec-approval-actions button");
+    await waitForSolid(() => expect(page.text(".exec-approval-actions button")).toBe("Saving…"));
+    expect(page.query(".exec-approval-error")).toBeNull();
+    retry.resolve(true);
+    await waitForSolid(() => expect(page.toggle.open).toBe(false));
+    expect(patch).toHaveBeenCalledTimes(2);
+    expect(page.query(".exec-approval-error")).toBeNull();
+  },
+);
+
+it.each(["reconnect", "agent", "client", "access", "unmount"] as const)(
+  "releases the admitted toggle receipt immediately on %s retirement",
+  async (replacement) => {
+    const page = await createPage();
+    page.context.setConfig({});
+    const pending = deferred<boolean>();
+    const patch = vi.mocked(page.context.runtimeConfig.patch);
+    patch.mockReturnValueOnce(pending.promise);
+    page.state.setEnabled(false);
+    flush();
+    const completion = page.toggle.onConfirm();
+    const settled = vi.fn();
+    void completion?.then(settled);
+    await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
+    if (replacement === "reconnect") {
+      page.context.emit({ phase: "reconnecting", hello: null });
+    } else if (replacement === "agent") {
+      page.setAgentId("support");
+    } else if (replacement === "client") {
+      page.context.emit({ client: emptyClient() });
+    } else if (replacement === "access") {
+      page.context.emit({ hello: gatewayHelloForMethods([], []) });
+    } else {
+      page.unmount();
+    }
+    await waitForSolid(() => expect(settled).toHaveBeenCalledOnce());
+    if (replacement === "reconnect") {
+      expect(page.toggle.open).toBe(true);
+    } else if (replacement !== "unmount") {
+      expect(page.toggle.open).toBe(false);
+    }
+    pending.reject(new Error("retired transport failure"));
     await Promise.resolve();
-    await expect(page.openWikiPage("unowned.md")).resolves.toBeNull();
+    expect(page.query(".exec-approval-error")).toBeNull();
+  },
+);
 
-    expect(request).not.toHaveBeenCalled();
+function wikiOverview(title = "Original title") {
+  return {
+    totalItems: 1,
+    totalPages: 1,
+    pageCounts: { synthesis: 1 },
+    clusters: [
+      {
+        key: "synthesis",
+        label: "Syntheses",
+        itemCount: 1,
+        items: [
+          {
+            pagePath: "syntheses/example.md",
+            title,
+            kind: "synthesis",
+            claims: [],
+            questions: [],
+            contradictions: [],
+          },
+        ],
+      },
+    ],
+  };
+}
 
-    page.agentId = "support";
-    await page.updateComplete;
-    await vi.waitFor(() => {
-      expect(request.mock.calls.filter(([method]) => method === "doctor.memory.status")).toEqual([
-        ["doctor.memory.status", { agentId: "support" }],
-      ]);
-      expect(
-        request.mock.calls.filter(([method]) => method === "doctor.memory.dreamDiary"),
-      ).toEqual([["doctor.memory.dreamDiary", { agentId: "support" }]]);
-      expect(request).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  it.each([false, true])(
-    "keeps confirmed dreaming actions scoped to their agent (changed: %s)",
-    async (changed) => {
-      const confirmation = deferred<boolean>();
-      vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
-      const method = "doctor.memory.repairDreamingArtifacts";
-      const request = vi.fn(async () => ({}));
-      const context = contextWithGateway({ request } as unknown as GatewayBrowserClient, true);
-      context.gateway.snapshot.hello = gatewayHelloForMethods([method], ["operator.write"]);
-      const page = createPage(context);
-      page.connect();
-      await page.updateComplete;
-
-      const pending = page.confirmDreamingTask(method, { message: "Repair?" });
-      if (changed) {
-        page.agentId = "support";
-        await page.updateComplete;
-      }
-      confirmation.resolve(true);
-      await pending;
-
-      if (changed) {
-        expect(request).not.toHaveBeenCalled();
-      } else {
-        expect(request).toHaveBeenCalledTimes(2);
-        expect(request).toHaveBeenNthCalledWith(1, method, { agentId: "main" });
-        expect(request).toHaveBeenNthCalledWith(2, "doctor.memory.status", { agentId: "main" });
-      }
+it("scopes native memory requests to the current agent and releases shell layout", async () => {
+  const request = vi.fn(emptyReply);
+  const context = contextWithRequest(request);
+  const unsubscribe = vi.fn();
+  context.gateway.subscribe = () => unsubscribe;
+  const content = document.createElement("main");
+  content.className = "content";
+  document.body.append(content);
+  const owner = new ShellLayoutOwner();
+  owner.contentRef(content);
+  const provider = createSolidApplicationContextProvider(context);
+  const originalTarget = createAgentTarget("main");
+  const getInitialTarget = vi.fn(() => agentTarget());
+  const replacementTarget = createAgentTarget("ignored");
+  const [agentTarget, setAgentTarget] = createSignal(originalTarget);
+  const view = mountSolid(
+    () => {
+      const panel = createComponent(ShellLayoutProvider, {
+        value: { owner, host: content },
+        get children() {
+          return createComponent(AgentMemoryPanel, {
+            get initialAgentTarget() {
+              return getInitialTarget();
+            },
+          });
+        },
+      });
+      expect(getInitialTarget).not.toHaveBeenCalled();
+      originalTarget.set("support");
+      return panel;
     },
+    { container: content, wrapper: provider.wrapper },
   );
+  await waitForSolid(() => expect(request).toHaveBeenCalledWith(STATUS, { agentId: "support" }));
+  expect(getInitialTarget).toHaveBeenCalledOnce();
+  expect(request).toHaveBeenCalledWith(DIARY, { agentId: "support" });
+  const host = content.querySelector<HTMLElement>("openclaw-agent-memory-panel")!;
+  expect(host.querySelector(".agent-memory-panel__header")).not.toBeNull();
+  expect(owner.current.toolbarHeader).toBe(true);
 
-  it("resets stale panel data when the selected agent changes", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage(contextWithGateway(client, true));
-    page.connect();
-    await page.updateComplete;
-    const previousState = page.dreaming;
-    previousState.dreamDiaryContent = "main-only";
+  click(host, "#dreams-tab-diary");
+  expect(originalTarget.subscriberCount()).toBe(1);
+  setAgentTarget(replacementTarget);
+  flush();
+  expect(replacementTarget.subscriberCount()).toBe(0);
+  originalTarget.set(" support ");
+  expect(request).toHaveBeenCalledTimes(2);
 
-    page.agentId = "support";
-    await page.updateComplete;
+  originalTarget.set("main");
+  await waitForSolid(() => expect(request).toHaveBeenCalledWith(STATUS, { agentId: "main" }));
+  expect(content.querySelector("openclaw-agent-memory-panel")).toBe(host);
+  expect(host.querySelector("#dreams-tab-diary")?.getAttribute("aria-selected")).toBe("true");
+  view.unmount();
+  expect(originalTarget.subscriberCount()).toBe(0);
+  expect(owner.current.toolbarHeader).toBeUndefined();
+  expect(unsubscribe).toHaveBeenCalledOnce();
+});
 
-    expect(page.dreaming).not.toBe(previousState);
-    expect(page.dreaming.selectedAgentId).toBe("support");
-    expect(page.dreaming.dreamDiaryContent).toBeNull();
+it("waits for a committed agent before loading agent-scoped memory", async () => {
+  const page = await createPage(undefined, "");
+  await page.dreaming.onOpenWikiPage("unowned.md");
+  expect(page.request).not.toHaveBeenCalled();
+  page.setAgentId("support");
+  await waitForSolid(() => expect(page.request).toHaveBeenCalledTimes(2));
+  expect(page.request).toHaveBeenCalledWith(STATUS, { agentId: "support" });
+  expect(page.request).toHaveBeenCalledWith(DIARY, { agentId: "support" });
+});
 
-    page.dreaming.dreamDiaryContent = "support-only";
-    page.agentId = "";
-    await page.updateComplete;
+it.each([false, true])("scopes confirmed actions (agent changed: %s)", async (changed) => {
+  const confirmation = deferred<boolean>();
+  vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+  const page = await createPage(
+    undefined,
+    "main",
+    gatewayHelloForMethods([REPAIR], ["operator.write"]),
+  );
+  page.dreaming.onRepairDreamingArtifacts();
+  expect(showConfirmDialog).toHaveBeenCalledOnce();
+  if (changed) {
+    page.setAgentId("support");
+  }
+  confirmation.resolve(true);
+  await waitForSolid(() => expect(page.dreaming.dreamDiaryActionLoading).toBe(false));
+  await waitForSolid(() =>
+    expect(page.request.mock.calls.filter(([method]) => method === REPAIR)).toEqual(
+      changed ? [] : [[REPAIR, { agentId: "main" }]],
+    ),
+  );
+});
 
-    expect(page.dreaming.selectedAgentId).toBeNull();
-    expect(page.dreaming.dreamDiaryContent).toBeNull();
-  });
+it.each(["", "main"])(
+  "resets stale panel data after switching through support to %s",
+  async (agentId) => {
+    const reply = deferred<unknown>();
+    const request = vi.fn((method: string, params?: unknown) =>
+      method === DIARY
+        ? asOptionalRecord(params)?.agentId === "main"
+          ? Promise.resolve(diary("main-only"))
+          : reply.promise
+        : Promise.resolve(emptyReply(method)),
+    );
+    const page = await createPage(request);
+    await waitForSolid(() => expect(page.dreaming.dreamDiaryContent).toBe("main-only"));
+    page.setAgentId("support");
+    expect(page.dreaming).toMatchObject({ selectedAgentId: "support", dreamDiaryContent: null });
+    await waitForSolid(() => expect(request).toHaveBeenCalledWith(DIARY, { agentId: "support" }));
+    page.setAgentId(agentId);
+    await waitForSolid(() => expect(page.dreaming.selectedAgentId).toBe(agentId));
+    if (agentId) {
+      await waitForSolid(() => expect(page.dreaming.dreamDiaryContent).toBe("main-only"));
+    }
+    reply.resolve(diary("support-only"));
+    await reply.promise;
+    flush();
+    expect(page.dreaming.dreamDiaryContent).toBe(agentId ? "main-only" : null);
+  },
+);
 
-  it("resets provider and modal state when the gateway source changes", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage(contextWithGateway(client, false));
-    page.connect();
-    await page.updateComplete;
-    const previousState = page.dreaming;
-    previousState.dreamDiaryContent = "old provider";
-    const wikiPreview = {
-      loading: true,
-      error: null,
-      page: { title: "Old page", path: "old.md", content: "old wiki" },
-    };
-    page.viewState.wikiPreview = wikiPreview;
-    page.toggleConfirmLoading = true;
-    page.pendingEnabled = true;
-
-    await replaceContext(page, contextWithGateway(client, false));
-
-    expect(page.dreaming).not.toBe(previousState);
-    expect(page.dreaming.dreamDiaryContent).toBeNull();
-    expect(page.viewState.wikiPreview).toBeNull();
-    expect(page.toggleConfirmLoading).toBe(false);
-    expect(page.pendingEnabled).toBeNull();
-
-    page.viewState.wikiPreview = wikiPreview;
-    page.toggleConfirmLoading = true;
-    page.pendingEnabled = false;
-    page.disconnect();
-
-    expect(page.viewState.wikiPreview).toBeNull();
-    expect(page.toggleConfirmLoading).toBe(false);
-    expect(page.pendingEnabled).toBeNull();
-  });
-
-  it.each([false, true])(
-    "discards a wiki response from a replaced gateway source (subscription rebound: %s)",
-    async (rebound) => {
-      const pending = deferred<unknown>();
-      const client = {
-        request: vi.fn(() => pending.promise),
-      } as unknown as GatewayBrowserClient;
-      const page = createPage(contextWithGateway(client, true));
-      page.connect();
-      await page.updateComplete;
-
-      const preview = page.openWikiPage("old.md");
-      const nextContext = contextWithGateway(client, false);
-      if (rebound) {
-        await replaceContext(page, nextContext);
-      } else {
-        page.context = nextContext;
+it.each([false, true])(
+  "preserves interrupted action outcomes (confirmed: %s)",
+  async (confirmed) => {
+    const action = deferred<unknown>();
+    const refresh = deferred<unknown>();
+    let statusReads = 0;
+    const request = vi.fn((name: string) => {
+      if (name === REPAIR) {
+        return action.promise;
       }
-      pending.resolve({ title: "Old", path: "old.md", content: "stale" });
+      if (name === STATUS && ++statusReads === 2) {
+        return refresh.promise;
+      }
+      return Promise.resolve(emptyReply(name));
+    });
+    const hello = gatewayHelloForMethods([REPAIR], ["operator.read", "operator.write"]);
+    const page = await createPage(request, "main", hello);
+    const { context } = page;
+    click(page.container, "#dreams-tab-advanced");
+    vi.mocked(showConfirmDialog).mockResolvedValueOnce(true);
+    page.dreaming.onRepairDreamingArtifacts();
+    await waitForSolid(() => expect(request).toHaveBeenCalledWith(REPAIR, { agentId: "main" }));
+    const result = { archivedDreamsDiary: true, archiveDir: "/tmp/dreaming-repair" };
+    if (confirmed) {
+      action.resolve(result);
+      await waitForSolid(() => expect(statusReads).toBe(2));
+    }
 
-      await expect(preview).resolves.toBeNull();
-    },
+    context.emit({ phase: "reconnecting", hello: null });
+    flush();
+    const message = confirmed
+      ? "Dream cache repair complete"
+      : "Connection lost before the memory action was confirmed. It may have completed.";
+    expect(page.text("[role='status']")).toContain(message);
+    expect(page.dreaming).toMatchObject({
+      dreamDiaryActionLoading: false,
+      access: { canRepairDreamingArtifacts: false },
+    });
+
+    context.emit({ phase: "connected", hello });
+    action.resolve(result);
+    refresh.resolve(emptyReply(STATUS));
+    await waitForSolid(() => expect(statusReads).toBe(confirmed ? 3 : 2));
+    await waitForSolid(() => expect(page.state.view().header.refreshLoading).toBe(false));
+    expect(page.text("[role='status']")).toContain(message);
+    expect(request.mock.calls.filter(([method]) => method === REPAIR)).toHaveLength(1);
+    expect(page.dreaming.dreamDiaryActionArchivePath).toBe(
+      confirmed ? "/tmp/dreaming-repair" : null,
+    );
+
+    context.emit({ client: emptyClient() });
+    flush();
+    expect(page.dreaming).toMatchObject({
+      dreamDiaryActionMessage: null,
+      dreamDiaryActionArchivePath: null,
+    });
+  },
+);
+
+it("retains diary, preview and toggle drafts through reconnect while rejecting old reads", async () => {
+  const stale = deferred<unknown>();
+  let refresh = false;
+  const fresh = deferred<unknown>();
+  const freshPreview = deferred<unknown>();
+  const page = await createPage({
+    [DIARY]: () => (refresh ? fresh.promise : diary("Retained diary")),
+    "wiki.get": () => (refresh ? freshPreview.promise : stale.promise),
+  });
+  const { context } = page;
+  const hello = context.gateway.snapshot.hello;
+  await waitForSolid(() => expect(page.dreaming.dreamDiaryContent).toBe("Retained diary"));
+  click(page.container, "#dreams-tab-diary");
+  const preview = page.dreaming.onOpenWikiPage("retained.md");
+  page.state.setEnabled(false);
+  flush();
+  const previewDialog = page.query(PREVIEW);
+  expect(previewDialog).not.toBeNull();
+  context.emit({ phase: "reconnecting", hello: null });
+  flush();
+  expect(page.dreaming).toMatchObject({
+    dreamDiaryContent: "Retained diary",
+    wikiPreview: { page: { path: "retained.md" } },
+  });
+  expect(page.text(".dreams-diary__preview-body .dreams-diary__empty-text")).toBe(
+    "Loading wiki page…",
   );
+  expect(page.toggle).toMatchObject({ open: true, disabled: true });
+  expect(page.query<HTMLButtonElement>(".exec-approval-actions button")?.disabled).toBe(true);
+  refresh = true;
+  context.emit({ phase: "connected", hello });
+  await waitForSolid(() =>
+    expect(page.request.mock.calls.filter(([method]) => method === DIARY)).toHaveLength(2),
+  );
+  expect(page.dreaming.dreamDiaryContent).toBe("Retained diary");
+  expect(page.request.mock.calls.filter(([method]) => method === "wiki.get")).toHaveLength(2);
+  stale.resolve({ title: "Old", path: "retained.md", content: "Stale preview" });
+  await preview;
+  expect(page.dreaming.wikiPreview).toMatchObject({ page: { content: "" } });
+  expect(page.text(".dreams-diary__preview-body .dreams-diary__empty-text")).toBe(
+    "Loading wiki page…",
+  );
+  expect(page.toggle.open).toBe(true);
+  freshPreview.resolve({ title: "Fresh", path: "retained.md", content: "Fresh preview" });
+  await page.waitText(PREVIEW_TEXT, "Fresh preview");
+  expect(page.query(PREVIEW)).toBe(previewDialog);
+  fresh.resolve(diary("Fresh diary"));
+  await waitForSolid(() => expect(page.dreaming.dreamDiaryContent).toBe("Fresh diary"));
 
-  it("discards a wiki response across a same-client reconnect", async () => {
-    const pending = deferred<unknown>();
-    const client = {
-      request: vi.fn(() => pending.promise),
-    } as unknown as GatewayBrowserClient;
-    const page = createPage(contextWithGateway(client, true));
-    page.connect();
-    await page.updateComplete;
-
-    const previousState = page.dreaming;
-    const preview = page.openWikiPage("old.md");
-    page.applyGatewaySnapshot({ client, phase: "stopped" } as ApplicationGatewaySnapshot);
-    page.applyGatewaySnapshot({ client, phase: "connected" } as ApplicationGatewaySnapshot);
-    pending.resolve({ title: "Old", path: "old.md", content: "stale" });
-
-    await expect(preview).resolves.toBeNull();
-    expect(page.dreaming).not.toBe(previousState);
-    expect(page.viewState.wikiPreview).toBeNull();
-  });
-
-  it("loads wiki previews for the selected agent", async () => {
-    const request = vi.fn(async () => ({
-      title: "Support",
-      path: "support.md",
-      content: "support-only",
-    }));
-    const client = { request } as unknown as GatewayBrowserClient;
-    const page = createPage(contextWithGateway(client, true));
-    page.agentId = "support";
-    page.connect();
-    await page.updateComplete;
-
-    await page.openWikiPage("support.md");
-
-    expect(request).toHaveBeenCalledWith("wiki.get", {
-      lookup: "support.md",
-      fromLine: 1,
-      lineCount: 5000,
-      agentId: "support",
-    });
-  });
-
-  it("updates the mounted view across tab selection and owner notifications", async () => {
-    const page = createPage(contextWithGateway({} as GatewayBrowserClient, true));
-    page.connect();
-    await page.updateComplete;
-    const container = document.createElement("div");
-    document.body.append(container);
-    mountSolid(() => AgentMemoryView({ state: page as unknown as AgentMemoryState }), {
-      container,
-    });
-    flush();
-    const scene = container.querySelector(".dreams");
-    page.dreaming.dreamingStatus = {
-      enabled: true,
-      promotedToday: 9,
-      phases: {
-        light: { enabled: true },
-        deep: { enabled: false },
-        rem: { enabled: false },
-      },
-    } as DreamingState["dreamingStatus"];
-    page.requestUpdate();
-    await page.updateComplete;
-    flush();
-    expect(container.querySelector(".dreams")).toBe(scene);
-    expect(container.querySelector(".dreams__status-detail")?.textContent).toContain("9 promoted");
-    expect(container.querySelectorAll(".dreams__phase--off")).toHaveLength(2);
-
-    page.dreaming.dreamDiaryContent =
-      "*April 4, 2026*\nFirst dream.\n---\n*April 5, 2026*\nSecond dream.";
-    container
-      .querySelector("#dreams-tab-diary")
-      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    await page.updateComplete;
-    flush();
-    expect(container.querySelector(".dreams-diary")).not.toBeNull();
-    const dayChip = container.querySelectorAll<HTMLButtonElement>(".dreams-diary__day-chip")[1]!;
-    dayChip.focus();
-    dayChip.click();
-    await page.updateComplete;
-    flush();
-    expect(container.querySelectorAll(".dreams-diary__day-chip")[1]).toBe(dayChip);
-    expect(document.activeElement).toBe(dayChip);
-    expect(dayChip.classList.contains("dreams-diary__day-chip--active")).toBe(true);
-    page.requestUpdate();
-    await page.updateComplete;
-    flush();
-    expect(container.querySelectorAll(".dreams-diary__day-chip")[1]).toBe(dayChip);
-    expect(document.activeElement).toBe(dayChip);
-    container
-      .querySelector("#dream-diary-tab-insights")
-      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    await page.updateComplete;
-    flush();
-    expect(container.querySelector("#dream-diary-panel")?.textContent).toContain("memory-wiki");
-    expect(container.querySelector("#dream-diary-panel")?.getAttribute("aria-labelledby")).toBe(
-      "dream-diary-tab-insights",
-    );
-    const preview = {
-      loading: true,
-      error: null,
-      page: { title: "Example", path: "example.md", content: "" },
-    };
-    page.viewState.wikiPreview = preview;
-    page.requestUpdate();
-    await page.updateComplete;
-    flush();
-    const dialog = container.querySelector("openclaw-modal-dialog");
-    expect(dialog).not.toBeNull();
-    preview.loading = false;
-    preview.page.content = "Loaded wiki page";
-    page.requestUpdate();
-    await page.updateComplete;
-    flush();
-    expect(container.querySelector("openclaw-modal-dialog")).toBe(dialog);
-    expect(container.querySelector(".dreams-diary__preview-pre")?.textContent).toBe(
-      "Loaded wiki page",
-    );
-    page.context.runtimeConfig.state.configSnapshot = {
-      config: { plugins: { entries: { "memory-wiki": { enabled: true } } } },
-    };
-    const wikiPage = {
-      pagePath: "syntheses/example.md",
-      title: "Original title",
-      kind: "synthesis" as const,
-      claimCount: 1,
-      questionCount: 0,
-      contradictionCount: 0,
-      claims: ["A supported claim"],
-      questions: [],
-      contradictions: [],
-    };
-    const wikiCluster: WikiOverview["clusters"][number] = {
-      key: "synthesis",
-      label: "Syntheses",
-      itemCount: 1,
-      claimCount: 1,
-      questionCount: 0,
-      contradictionCount: 0,
-      items: [wikiPage],
-    };
-    page.dreaming.wikiOverview = {
-      totalItems: 1,
-      totalPages: 1,
-      truncated: false,
-      pageCounts: { synthesis: 1, entity: 0, concept: 0, source: 0, report: 0 },
-      totalClaims: 1,
-      totalQuestions: 0,
-      totalContradictions: 0,
-      clusters: [wikiCluster],
-    };
-    container
-      .querySelector("#dream-diary-tab-wiki")
-      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    await page.updateComplete;
-    flush();
-    const card = container.querySelector("[data-wiki-page]")!;
-    const details = card.querySelector<HTMLButtonElement>("button")!;
-    details.focus();
-    details.click();
-    await page.updateComplete;
-    flush();
-    expect(container.querySelector("[data-wiki-page]")).toBe(card);
-    expect(document.activeElement).toBe(details);
-    page.dreaming.wikiOverview = {
-      ...page.dreaming.wikiOverview!,
-      clusters: [{ ...wikiCluster, items: [{ ...wikiPage, title: "Refreshed title" }] }],
-    };
-    page.requestUpdate();
-    await page.updateComplete;
-    flush();
-    expect(container.querySelector("[data-wiki-page]")).toBe(card);
-    expect(card.querySelector("button")).toBe(details);
-    expect(document.activeElement).toBe(details);
-    expect(card.querySelector(".dreams-diary__insight-title")?.textContent).toBe("Refreshed title");
-  });
-
-  it("renders explicit engine Off as unavailable with a latent override", () => {
-    const context = contextWithGateway({} as GatewayBrowserClient, true, {
-      plugins: {
-        slots: { memory: "none" },
-        entries: {
-          "memory-core": { config: { dreaming: { enabled: false } } },
-        },
-      },
-    });
-    const page = createMemoryState();
-    page.context = context;
-    page.agentId = "main";
-    const container = document.createElement("div");
-
-    mountSolid(() => AgentMemoryView({ state: page as unknown as AgentMemoryState }), {
-      container,
-    });
-
-    expect(container.textContent).toContain(
-      "Memory engine is Off. Choose an engine in Settings to enable dreaming.",
-    );
-    expect(container.textContent).not.toContain("Using default: Enabled");
-    expect(container.querySelector<HTMLButtonElement>(".dreams__phase-toggle")?.disabled).toBe(
-      true,
-    );
-  });
-
-  it("does not present cached runtime status after the memory engine switches Off", () => {
-    const context = contextWithGateway({} as GatewayBrowserClient, true, {
-      plugins: { slots: { memory: "none" } },
-    });
-    const page = createMemoryState();
-    page.context = context;
-    page.agentId = "main";
-    page.dreaming.dreamingStatus = {
-      enabled: true,
-      promotedToday: 7,
-      timezone: "Mars/Base",
-      phases: {
-        light: { enabled: true, cron: "* * * * *", managedCronPresent: true },
-        deep: {
-          enabled: true,
-          cron: "* * * * *",
-          managedCronPresent: true,
-          limit: 1,
-          minScore: 0,
-          minRecallCount: 0,
-          minUniqueQueries: 0,
-          recencyHalfLifeDays: 1,
-        },
-        rem: {
-          enabled: true,
-          cron: "* * * * *",
-          managedCronPresent: true,
-          lookbackDays: 1,
-          limit: 1,
-          minPatternStrength: 0,
-        },
-      },
-    } as NonNullable<DreamingState["dreamingStatus"]>;
-    const container = document.createElement("div");
-
-    mountSolid(() => AgentMemoryView({ state: page as unknown as AgentMemoryState }), {
-      container,
-    });
-
-    const toggle = container.querySelector<HTMLButtonElement>(".dreams__phase-toggle");
-    expect(toggle?.textContent).toContain("Off");
-    expect(toggle?.classList.contains("dreams__phase-toggle--on")).toBe(false);
-    expect(container.querySelector(".dreams__status-label")?.textContent).toContain("Idle");
-    expect(container.textContent).toContain("0 promoted");
-    expect(container.textContent).not.toContain("7 promoted");
-    expect(container.textContent).not.toContain("Mars/Base");
-    expect(
-      [...container.querySelectorAll(".dreams__phase-next")].every(
-        (phase) => phase.textContent?.trim() === "—",
-      ),
-    ).toBe(true);
-  });
-
-  it("omits default provenance when engine Off has no latent override", () => {
-    const context = contextWithGateway({} as GatewayBrowserClient, true, {
-      plugins: { slots: { memory: "none" } },
-    });
-    const page = createMemoryState();
-    page.context = context;
-    page.agentId = "main";
-    const container = document.createElement("div");
-
-    mountSolid(() => AgentMemoryView({ state: page as unknown as AgentMemoryState }), {
-      container,
-    });
-
-    expect(container.textContent).not.toContain("Using default: Enabled");
-    const toggle = container.querySelector<HTMLButtonElement>(".dreams__phase-toggle");
-    expect(toggle?.disabled).toBe(true);
-    toggle?.click();
-    expect(page.pendingEnabled).toBeNull();
-  });
-
-  it("uses localized empty content for wiki previews", async () => {
-    const client = {
-      request: vi.fn(async () => ({ title: "Empty", path: "empty.md", content: "" })),
-    } as unknown as GatewayBrowserClient;
-    const page = createPage(contextWithGateway(client, true));
-    page.connect();
-    await page.updateComplete;
-
-    await expect(page.openWikiPage("empty.md")).resolves.toMatchObject({
-      content: "No wiki content available.",
-    });
-  });
-
-  it("discards a wiki preview after the selected agent changes", async () => {
-    const pending = deferred<unknown>();
-    const client = {
-      request: vi.fn(() => pending.promise),
-    } as unknown as GatewayBrowserClient;
-    const page = createPage(contextWithGateway(client, true));
-    page.agentId = "support";
-    page.connect();
-    await page.updateComplete;
-
-    const preview = page.openWikiPage("support.md");
-    page.agentId = "marketing";
-    await page.updateComplete;
-    pending.resolve({ title: "Support", path: "support.md", content: "stale" });
-
-    await expect(preview).resolves.toBeNull();
-  });
-
-  it("closes an open wiki preview when the selected agent changes", async () => {
-    const client = {
-      request: vi.fn(async () => ({})),
-    } as unknown as GatewayBrowserClient;
-    const page = createPage(contextWithGateway(client, true));
-    page.agentId = "support";
-    page.connect();
-    await page.updateComplete;
-    page.viewState.wikiPreview = {
-      loading: true,
-      error: null,
-      page: { title: "Support", path: "support.md", content: "support-only" },
-    };
-
-    page.agentId = "marketing";
-    await page.updateComplete;
-
-    expect(page.viewState.wikiPreview).toBeNull();
+  context.emit({ client: emptyClient() });
+  flush();
+  expect(page.state.view()).toMatchObject({
+    dreaming: { dreamDiaryContent: null, wikiPreview: null },
+    toggle: { open: false },
   });
 });
+
+it.each(["agent", "client", "access", "unmount"] as const)(
+  "retires pending wiki requests and modal state on %s replacement",
+  async (replacement) => {
+    const pending = deferred<unknown>();
+    const page = await createPage({ "wiki.get": () => pending.promise }, "support");
+    const { context } = page;
+    click(page.container, "#dreams-tab-diary");
+    const preview = page.dreaming.onOpenWikiPage("support.md");
+    page.state.setEnabled(false);
+    await waitForSolid(() => expect(page.query(PREVIEW)).not.toBeNull());
+    expect(page.toggle.open).toBe(true);
+    if (replacement === "agent") {
+      page.setAgentId("marketing");
+    } else if (replacement === "client") {
+      context.emit({ client: emptyClient() });
+    } else if (replacement === "access") {
+      context.emit({ hello: gatewayHelloForMethods([], []) });
+    } else {
+      page.unmount();
+    }
+    pending.resolve({ title: "Support", path: "support.md", content: "stale" });
+    await preview;
+    flush();
+    expect(page.query(PREVIEW)).toBeNull();
+    expect(page.query("openclaw-modal-dialog")).toBeNull();
+    if (replacement !== "unmount") {
+      expect(page.toggle.open).toBe(false);
+      expect(page.dreaming.wikiPreview).toBeNull();
+    }
+  },
+);
+
+it.each(["support-only", ""])("loads scoped wiki preview content %j", async (content) => {
+  const response = deferred<unknown>();
+  const page = await createPage({ "wiki.get": () => response.promise }, "support");
+  click(page.container, "#dreams-tab-diary");
+  const pending = page.dreaming.onOpenWikiPage("support.md");
+  flush();
+  const dialog = page.query("openclaw-modal-dialog");
+  expect(dialog).not.toBeNull();
+  expect(page.request).toHaveBeenCalledWith("wiki.get", {
+    lookup: "support.md",
+    fromLine: 1,
+    lineCount: 5000,
+    agentId: "support",
+  });
+  response.resolve({ content, totalLines: 6001, truncated: true });
+  await pending;
+  const expected = content || "No wiki content available.";
+  expect(page.dreaming.wikiPreview?.page.content).toBe(expected);
+  await page.waitText(PREVIEW_TEXT, expected);
+  expect(page.query("openclaw-modal-dialog")).toBe(dialog);
+  expect(page.text(".dreams-diary__preview-hint")).toContain("6001");
+  click(page.container, ".dreams-diary__preview-footer button");
+  expect(page.dreaming.wikiPreview).toBeNull();
+});
+
+it("keeps the preview dialog and focused close control when its read fails, then opens a fresh page", async () => {
+  const failure = deferred<unknown>();
+  let fail = true;
+  const page = await createPage({
+    "wiki.get": () =>
+      fail ? failure.promise : { title: "Fresh", path: "fresh.md", content: "Fresh wiki content" },
+  });
+  click(page.container, "#dreams-tab-diary");
+  const pending = page.dreaming.onOpenWikiPage("failed.md");
+  flush();
+  const dialog = page.query("openclaw-modal-dialog");
+  expect(dialog).not.toBeNull();
+  await waitForSolid(() => expect(dialog?.querySelector("dialog")?.dataset.phase).toBe("open"));
+  const close = page.query<HTMLButtonElement>(".dreams-diary__preview-footer button")!;
+  close.focus();
+  expect(document.activeElement).toBe(close);
+  failure.reject(new Error("Wiki request failed"));
+  await pending;
+  await page.waitText(".dreams-diary__error", "Wiki request failed");
+  expect(page.query("openclaw-modal-dialog")).toBe(dialog);
+  expect(page.query(".dreams-diary__preview-footer button")).toBe(close);
+  expect(document.activeElement).toBe(close);
+  close.click();
+  flush();
+  expect(page.query("openclaw-modal-dialog")).toBeNull();
+  fail = false;
+  await page.dreaming.onOpenWikiPage("fresh.md");
+  await page.waitText(PREVIEW_TEXT, "Fresh wiki content");
+  expect(page.query(".dreams-diary__error")).toBeNull();
+});
+
+it("updates the mounted view across tab selection and owner notifications", async () => {
+  let promotedToday = 2;
+  let title = "Original title";
+  const page = await createPage(
+    requestFor(
+      {
+        [STATUS]: () =>
+          memoryStatus(promotedToday, {
+            phases: { light: { enabled: true }, deep: { enabled: false }, rem: { enabled: false } },
+          }),
+        [DIARY]: () => diary("*April 4, 2026*\nFirst dream.\n---\n*April 5, 2026*\nSecond dream."),
+        "wiki.overview": () => wikiOverview(title),
+      },
+      () => ({ clusters: [], totalItems: 0 }),
+    ),
+  );
+  const { context } = page;
+  const scene = page.query(".dreams");
+  promotedToday = 9;
+  await page.state.loadResources();
+  await waitForSolid(() => expect(page.text(".dreams__status-detail")).toContain("9 promoted"));
+  expect(page.query(".dreams")).toBe(scene);
+  expect(page.container.querySelectorAll(".dreams__phase--off")).toHaveLength(2);
+  click(page.container, "#dreams-tab-diary");
+  const dayChip = page.container.querySelectorAll<HTMLButtonElement>(".dreams-diary__day-chip")[1]!;
+  dayChip.focus();
+  dayChip.click();
+  flush();
+  await page.state.loadResources();
+  flush();
+  expect(page.container.querySelectorAll(".dreams-diary__day-chip")[1]).toBe(dayChip);
+  expect(document.activeElement).toBe(dayChip);
+  expect(dayChip.classList.contains("dreams-diary__day-chip--active")).toBe(true);
+  click(page.container, "#dream-diary-tab-insights");
+  expect(page.text("#dream-diary-panel")).toContain("memory-wiki");
+  expect(page.query("#dream-diary-panel")?.getAttribute("aria-labelledby")).toBe(
+    "dream-diary-tab-insights",
+  );
+  context.setConfig({ plugins: { entries: { "memory-wiki": { enabled: true } } } });
+  context.emit({
+    hello: gatewayHelloForMethods(["config.patch", "wiki.overview", "wiki.importInsights"]),
+  });
+  await page.state.loadResources("wikiOverview");
+  click(page.container, "#dream-diary-tab-wiki");
+  const card = page.query("[data-wiki-page]")!;
+  const details = card.querySelector<HTMLButtonElement>("button")!;
+  details.focus();
+  details.click();
+  flush();
+  title = "Refreshed title";
+  await page.state.loadResources("wikiOverview");
+  await waitForSolid(() =>
+    expect(card.querySelector(".dreams-diary__insight-title")?.textContent).toBe(title),
+  );
+  expect(page.query("[data-wiki-page]")).toBe(card);
+  expect(card.querySelector("button")).toBe(details);
+  expect(document.activeElement).toBe(details);
+});
+
+it.each([false, true])(
+  "hides cached runtime when engine is Off (override: %s)",
+  async (override) => {
+    const page = await createPage({
+      [STATUS]: () =>
+        memoryStatus(7, {
+          timezone: "Mars/Base",
+          phases: { light: { enabled: true }, deep: { enabled: true }, rem: { enabled: true } },
+        }),
+    });
+    const { context } = page;
+    await waitForSolid(() => expect(page.container.textContent).toContain("7 promoted"));
+    const plugins: Record<string, unknown> = { slots: { memory: "none" } };
+    if (override) {
+      plugins.entries = { "memory-core": { config: { dreaming: { enabled: false } } } };
+    }
+    context.setConfig({ plugins });
+    await waitForSolid(() => expect(page.container.textContent).toContain("Memory engine is Off"));
+    const toggle = page.query<HTMLButtonElement>(".dreams__phase-toggle")!;
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.classList.contains("dreams__phase-toggle--on")).toBe(false);
+    expect(page.container.textContent).not.toContain("Using default: Enabled");
+    expect(page.container.textContent).toContain("0 promoted");
+    expect(page.container.textContent).not.toContain("7 promoted");
+    expect(page.container.textContent).not.toContain("Mars/Base");
+    toggle.click();
+    expect(page.toggle.open).toBe(false);
+  },
+);
 
 describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
   "agent memory real Chromium owner proof",
@@ -686,69 +687,20 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
     it("preserves both routes, agent ownership, wiki gating, and reconnects", async () => {
       const status = (agentId: string, promotedToday: number) => ({
         agentId,
-        provider: "builtin",
-        embedding: { ok: true, checked: true },
-        dreaming: {
-          enabled: true,
-          verboseLogging: false,
-          storageMode: "inline" as const,
-          separateReports: false,
-          shortTermCount: promotedToday,
-          recallSignalCount: 0,
-          dailySignalCount: 0,
-          groundedSignalCount: 0,
-          totalSignalCount: 0,
-          phaseSignalCount: 0,
-          lightPhaseHitCount: 0,
-          remPhaseHitCount: 0,
-          promotedTotal: promotedToday,
-          promotedToday,
-          shortTermEntries: [],
-          signalEntries: [],
-          promotedEntries: [],
-          phases: {
-            light: {
-              enabled: true,
-              cron: "0 * * * *",
-              managedCronPresent: true,
-              lookbackDays: 2,
-              limit: 10,
-            },
-            deep: {
-              enabled: true,
-              cron: "0 3 * * *",
-              managedCronPresent: true,
-              limit: 10,
-              minScore: 0.8,
-              minRecallCount: 2,
-              minUniqueQueries: 2,
-              recencyHalfLifeDays: 14,
-            },
-            rem: {
-              enabled: false,
-              cron: "0 5 * * 0",
-              managedCronPresent: false,
-              lookbackDays: 7,
-              limit: 10,
-              minPatternStrength: 0.75,
-            },
-          },
-        },
+        ...memoryStatus(promotedToday),
       });
-      const diary = (agentId: string) => ({
+      const agentDiary = (agentId: string) => ({
         agentId,
-        found: true,
-        path: "DREAMS.md",
-        content: `# Dream Diary\n\n*April 5, 2026, 3:00 AM*\n\n${agentId} owns this dream.`,
+        ...diary(`*April 5, 2026*\n${agentId} owns this dream.`),
       });
-      const config = {
-        agents: { entries: { main: {}, support: {} } },
-        plugins: {
-          entries: {
-            "memory-core": { enabled: true, config: { dreaming: { enabled: true } } },
-          },
-        },
-      };
+      const scoped = (responses: Record<string, unknown>) => ({
+        cases: Object.entries(responses).map(([agentId, response]) => ({
+          match: { agentId },
+          response,
+        })),
+      });
+      const statusCases = (count: number) =>
+        scoped({ main: status("main", count), support: status("support", 22) });
       const roster = {
         agents: [
           { id: "main", name: "Main" },
@@ -766,54 +718,31 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
       const page = await context.newPage();
       const gateway = await e2e.installMockGateway(page, {
         webSocketPassthroughPrefixes: [`${e2e.controlUiBundledGatewayUrl(server.baseUrl)}/?token=`],
-        featureMethods: [
-          "chat.metadata",
-          "chat.startup",
-          "doctor.memory.status",
-          "doctor.memory.dreamDiary",
-        ],
+        featureMethods: ["chat.metadata", "chat.startup", STATUS, DIARY],
         methodResponses: {
           "agents.list": roster,
           "config.get": {
-            config,
-            sourceConfig: config,
-            runtimeConfig: config,
+            config: {},
             hash: "memory-proof-1",
             issues: [],
-            raw: JSON.stringify(config),
+            raw: "{}",
             valid: true,
           },
-          "plugins.list": {
-            plugins: [
-              {
-                id: "memory-core",
-                name: "OpenClaw Memory",
-                installed: true,
-                enabled: true,
-                state: "enabled",
-                kind: ["memory"],
-              },
-            ],
-            diagnostics: [],
-            mutationAllowed: true,
-          },
-          "doctor.memory.status": {
-            cases: [
-              { match: { agentId: "main" }, response: status("main", 11) },
-              { match: { agentId: "support" }, response: status("support", 22) },
-            ],
-          },
-          "doctor.memory.dreamDiary": {
-            cases: [
-              { match: { agentId: "main" }, response: diary("main") },
-              { match: { agentId: "support" }, response: diary("support") },
-            ],
-          },
+          [STATUS]: statusCases(11),
+          [DIARY]: scoped({ main: agentDiary("main"), support: agentDiary("support") }),
         },
       });
       const detail = () => page.locator("openclaw-agent-memory-panel .dreams__status-detail");
-      const requestCount = () =>
-        gateway.getRequests("doctor.memory.status").then((requests) => requests.length);
+      const requestCount = () => gateway.getRequests(STATUS).then((requests) => requests.length);
+      const poll = <T>(read: () => T | Promise<T>) => expect.poll(read, { timeout: 15_000 });
+      const expectPromoted = (count: number) =>
+        poll(() => detail().textContent()).toContain(`${count} promoted`);
+      const expectWikiUnused = async () => {
+        expect(await gateway.getRequests("wiki.importInsights")).toHaveLength(0);
+        expect(await gateway.getRequests("wiki.overview")).toHaveLength(0);
+      };
+      const waitRoute = (routeId: string, pathname: string) =>
+        e2e.waitForControlUiRoute(page, { routeId, pathname });
       const chooseAgent = async (name: string) => {
         const picker = page.locator(".settings-sidebar openclaw-agent-select");
         await picker.locator(".agent-select__trigger").click();
@@ -827,51 +756,32 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
         expect((await page.goto(`${server.baseUrl}settings/agents/main/memory`))?.status()).toBe(
           200,
         );
-        await e2e.waitForControlUiRoute(page, {
-          routeId: "agents",
-          pathname: "/settings/agents/main/memory",
-        });
-        await expect
-          .poll(async () => await detail().textContent(), { timeout: 15_000 })
-          .toContain("11 promoted");
-        expect(await gateway.getRequests("wiki.importInsights")).toHaveLength(0);
-        expect(await gateway.getRequests("wiki.overview")).toHaveLength(0);
+        await waitRoute("agents", "/settings/agents/main/memory");
+        await expectPromoted(11);
+        await expectWikiUnused();
 
         const beforeFirstMain = await requestCount();
-        await gateway.deferNext("doctor.memory.status");
+        await gateway.deferNext(STATUS);
         await page.evaluate(() => {
           history.pushState(null, "", "/settings/memory/dreams");
           window.dispatchEvent(new PopStateEvent("popstate"));
         });
-        await e2e.waitForControlUiRoute(page, {
-          routeId: "memory",
-          pathname: "/settings/memory/dreams",
-        });
-        await expect.poll(requestCount, { timeout: 15_000 }).toBeGreaterThan(beforeFirstMain);
+        await waitRoute("memory", "/settings/memory/dreams");
+        await poll(requestCount).toBeGreaterThan(beforeFirstMain);
 
         const beforeSupport = await requestCount();
-        await gateway.deferNext("doctor.memory.status");
+        await gateway.deferNext(STATUS);
         await chooseAgent("Support");
-        await expect.poll(requestCount, { timeout: 15_000 }).toBeGreaterThan(beforeSupport);
-        await gateway.setMethodResponse("doctor.memory.status", {
-          cases: [
-            { match: { agentId: "main" }, response: status("main", 33) },
-            { match: { agentId: "support" }, response: status("support", 22) },
-          ],
-        });
+        await poll(requestCount).toBeGreaterThan(beforeSupport);
+        await gateway.setMethodResponse(STATUS, statusCases(33));
         await chooseAgent("Main");
-        await expect
-          .poll(async () => await detail().textContent(), { timeout: 15_000 })
-          .toContain("33 promoted");
-        await gateway.resolveDeferred("doctor.memory.status", status("main", 11));
-        await gateway.resolveDeferred("doctor.memory.status", status("support", 22));
-        await expect
-          .poll(async () => await detail().textContent(), { timeout: 15_000 })
-          .toContain("33 promoted");
-        expect(await gateway.getRequests("wiki.importInsights")).toHaveLength(0);
-        expect(await gateway.getRequests("wiki.overview")).toHaveLength(0);
+        await expectPromoted(33);
+        await gateway.resolveDeferred(STATUS, status("main", 11));
+        await gateway.resolveDeferred(STATUS, status("support", 22));
+        await expectPromoted(33);
+        await expectWikiUnused();
 
-        await gateway.setMethodResponse("doctor.memory.status", status("main", 44));
+        await gateway.setMethodResponse(STATUS, status("main", 44));
         const beforeReconnect = await requestCount();
         const socketCount = await gateway.getSocketCount();
         await gateway.closeLatest(1001, "proxy idle timeout");
@@ -881,18 +791,11 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
             timeout: 15_000,
           })
           .toBe("reconnecting");
-        await expect
-          .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
-          .toBeGreaterThan(socketCount);
+        await poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
         await gateway.setOnline(true);
-        await expect.poll(requestCount, { timeout: 15_000 }).toBeGreaterThan(beforeReconnect);
-        await expect
-          .poll(async () => await detail().textContent(), { timeout: 15_000 })
-          .toContain("44 promoted");
-        await e2e.waitForControlUiRoute(page, {
-          routeId: "memory",
-          pathname: "/settings/memory/dreams",
-        });
+        await poll(requestCount).toBeGreaterThan(beforeReconnect);
+        await expectPromoted(44);
+        await waitRoute("memory", "/settings/memory/dreams");
       } finally {
         await context.close();
       }

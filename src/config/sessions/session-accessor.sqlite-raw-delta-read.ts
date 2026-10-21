@@ -1,5 +1,9 @@
 import { sql } from "kysely";
-import { getNodeSqliteKysely, executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  getNodeSqliteKysely,
+  executeSqliteQuerySync,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type {
@@ -20,7 +24,7 @@ import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { readTranscriptPayload } from "./transcript-payload.js";
 
 /** Read inside the caller's validated projection snapshot on its exact connection. */
 export function readTranscriptRawDeltaFromProjection(
@@ -45,7 +49,7 @@ export function readTranscriptRawDeltaFromProjection(
 
 /** The caller owns this synchronous snapshot and any already-captured frontier. */
 export function readRawDeltaInTransaction(
-  database: import("node:sqlite").DatabaseSync,
+  database: import("../../infra/sql-connection.js").EngineConnection,
   scope: ResolvedTranscriptReadScope,
   encodedCursor: string | undefined,
   maxEvents: number,
@@ -138,17 +142,17 @@ export function readRawDeltaInTransaction(
   const rows =
     selectedCount === 0
       ? []
-      : executeSqliteQuerySync(
-          database,
-          transcript
-            .select([transcriptEventJsonSql(database).as("event_json"), "seq"])
-            .where("seq", ">", cursor.lastSeq)
-            .where("seq", "<=", lastSeq)
-            .orderBy("seq", "asc"),
-        ).rows.map((row) => ({
-          event: JSON.parse(row.event_json),
-          seq: sqliteNumber(row.seq),
-        }));
+      : Array.from(
+          iterateSqliteQuerySync(
+            database,
+            transcript
+              .select(["event_json", "event_zstd", "event_utf8_bytes", "seq"])
+              .where("seq", ">", cursor.lastSeq)
+              .where("seq", "<=", lastSeq)
+              .orderBy("seq", "asc"),
+          ),
+          (row) => ({ event: JSON.parse(readTranscriptPayload(row)), seq: sqliteNumber(row.seq) }),
+        );
   const nextCursor = encodeRawTranscriptCursor({ ...cursor, lastSeq });
   return {
     kind: "page",

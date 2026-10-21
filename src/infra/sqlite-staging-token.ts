@@ -65,7 +65,9 @@ export function acquireSqliteStagingToken(
   // Legacy readers may supply a parent without a token; fresh owners never recreate a removed inode.
   const existingIdentity = tokenExists ? readIdentity(location, "file") : undefined;
   const db = withSqliteNativeOpen(() =>
-    openNodeSqliteDatabase(tokenExists ? resolveExistingSqliteFileUri(location) : location),
+    openNodeSqliteDatabase(tokenExists ? resolveExistingSqliteFileUri(location) : location, {
+      timeout: 0,
+    }),
   );
   let tokenIdentity: fs.BigIntStats;
   const kysely = getNodeSqliteKysely(db);
@@ -85,10 +87,6 @@ export function acquireSqliteStagingToken(
     if (tokenIdentity.dev !== currentToken.dev || tokenIdentity.ino !== currentToken.ino) {
       throw new Error("SQLite staging ownership changed before retirement");
     }
-  };
-  const readVersion = () => {
-    const row = execute(sql`PRAGMA user_version`);
-    return isRecord(row) ? row.user_version : undefined;
   };
   const beginRetirement = (): SqliteStagingToken => {
     assertIdentity();
@@ -127,24 +125,27 @@ export function acquireSqliteStagingToken(
   const token = Object.assign(release, { beginRetirement });
   try {
     tokenIdentity = existingIdentity ?? readIdentity(location, "file");
-    execute(sql`PRAGMA busy_timeout=0`);
     if (mode === "create") {
       execute(sql`BEGIN IMMEDIATE`);
     } else if (mode === "reclaim") {
       execute(sql`BEGIN EXCLUSIVE`);
     } else {
       execute(sql`BEGIN`);
-      execute(sql`SELECT rootpage FROM sqlite_schema LIMIT 1`);
     }
-    const journalMode = execute(sql`PRAGMA journal_mode`);
-    if (!isRecord(journalMode) || journalMode.journal_mode !== "delete") {
-      throw new Error("SQLite snapshot token journal mode is unknown");
+    // A private wx-created empty token has the native DELETE journal and zero marker.
+    // Existing tokens need their marker read under the lock; this also pins read custody.
+    if (mode !== "create" || existing) {
+      const journalMode = execute(sql`PRAGMA journal_mode`);
+      if (!isRecord(journalMode) || journalMode.journal_mode !== "delete") {
+        throw new Error("SQLite snapshot token journal mode is unknown");
+      }
+      const header = execute(sql`PRAGMA user_version`);
+      const version = isRecord(header) ? header.user_version : undefined;
+      if (version !== 0 && (mode !== "reclaim" || version !== 1)) {
+        throw new SqliteStagingRetiredError();
+      }
+      retired = version === 1;
     }
-    const version = readVersion();
-    if (version !== 0 && (mode !== "reclaim" || version !== 1)) {
-      throw new SqliteStagingRetiredError();
-    }
-    retired = version === 1;
     assertIdentity();
     return token;
   } catch (error) {

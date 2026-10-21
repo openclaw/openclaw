@@ -15,7 +15,6 @@ import {
   hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
   hasReplyChannelData,
-  hasReplyPayloadContent,
   normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationChartFallbackText,
@@ -126,22 +125,12 @@ export function resolveOutboundPayloadMirrorText(payload: ReplyPayload): string 
   return lines.join("\n");
 }
 
-function isSuppressedRelayStatusText(text: string): boolean {
-  const normalized = text.trim();
-  // Prevent relay housekeeping text from leaking into user-visible channels.
-  return (
-    /^(?:no channel reply|replied in-thread|replied in #[-\w]+)\.?$/i.test(normalized) ||
-    /^updated\s+\[[^\]]*wiki\/[^\]]+\](?:\([^)]+\))?(?:\s+with\b[\s\S]*)?(?:\.\s*)?(?:no channel reply\.?)?$/i.test(
-      normalized,
-    )
-  );
-}
-
 function normalizeRawOutboundPayload(
   payload: ReplyPayload,
   context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
+  admittedReasoning?: true,
 ): ReplyPayload | null {
-  if (shouldSuppressReasoningPayload(payload)) {
+  if (!admittedReasoning && shouldSuppressReasoningPayload(payload)) {
     return null;
   }
   const parsed = parseReplyDirectives(stripLeadingInboundMetadata(payload.text ?? ""), {
@@ -158,13 +147,10 @@ function normalizeRawOutboundPayload(
   const strippedParsed =
     strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
   const parsedText = strippedParsed.text ?? "";
-  const suppressedText = strippedParsed.isSilent || isSuppressedRelayStatusText(parsedText);
   const normalizedPayload: ReplyPayload = applyReplyPayloadTargetPolicy(
     copyReplyPayloadMetadata(payload, {
       ...payload,
-      text:
-        formatBtwTextForExternalDelivery({ ...payload, text: suppressedText ? "" : parsedText }) ??
-        "",
+      text: formatBtwTextForExternalDelivery({ ...payload, text: parsedText }) ?? "",
       mediaUrls,
       mediaUrl: explicitMediaUrl,
       ...(payload.attachments
@@ -187,7 +173,7 @@ function normalizeRawOutboundPayload(
     ...(parsed.mediaFailures ?? []),
     ...(strippedParsed === parsed ? [] : (strippedParsed.mediaFailures ?? [])),
   ]);
-  return suppressedText && !hasReplyPayloadContent(normalizedPayload) ? null : normalizedPayload;
+  return normalizedPayload;
 }
 
 function createStructuredOutboundPayloadPlanEntry(
@@ -245,6 +231,16 @@ export function createOutboundPayloadPlan(
 ): OutboundPayloadPlan[] {
   return buildOutboundPayloadPlan(payloads, (payload) =>
     normalizeRawOutboundPayload(payload, context),
+  );
+}
+
+/** Internal lane handoff: retain admitted reasoning while parsing raw reply controls normally. */
+export function createOutboundPayloadPlanWithAdmittedReasoning(
+  payloads: readonly ReplyPayload[],
+  context: OutboundPayloadPlanContext = {},
+): OutboundPayloadPlan[] {
+  return buildOutboundPayloadPlan(payloads, (payload) =>
+    normalizeRawOutboundPayload(payload, context, true),
   );
 }
 

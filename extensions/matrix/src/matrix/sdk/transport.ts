@@ -94,12 +94,7 @@ function toFetchUrl(resource: RequestInfo | URL): string {
 const MATRIX_STATE_AFTER_SYNC_PARAM = "org.matrix.msc4222.use_state_after";
 
 function withoutMatrixStateAfterSyncParam(rawUrl: string): string {
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    return rawUrl;
-  }
+  const url = new URL(rawUrl);
 
   if (!url.pathname.endsWith("/sync") || !url.searchParams.has(MATRIX_STATE_AFTER_SYNC_PARAM)) {
     return rawUrl;
@@ -179,7 +174,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   assertCurrent?: () => void;
   beforeDispatch?: () => Promise<void> | undefined;
   assertSendCurrent?: () => void;
-}): Promise<{ response: Response; release: () => Promise<void>; finalUrl: string }> {
+}): Promise<{ response: Response; release: () => Promise<void> }> {
   const effect = captureEffectAuthority();
   const assertDispatchCurrent = () => {
     params.assertCurrent?.();
@@ -224,8 +219,6 @@ async function fetchWithMatrixGuardedRedirects(params: {
         signal,
         dispatcher,
       };
-      assertDispatchCurrent();
-      signal?.throwIfAborted();
       // The runtime fetch preserves the validated pinned-address dispatcher.
       let entered = false;
       const response = await effect
@@ -250,7 +243,6 @@ async function fetchWithMatrixGuardedRedirects(params: {
             cleanup();
             await closeDispatcher(dispatcher);
           },
-          finalUrl: currentUrl.toString(),
         };
       }
 

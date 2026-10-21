@@ -7,8 +7,11 @@ it("uses the SQLite handle and the PostgreSQL anchor as publication identities",
   try {
     const postgres: PostgresSqlConnection = {
       anchor,
+      mutationRevision: 0,
       advisoryLockKey: 0n,
+      isOpen: true,
       isTransaction: false,
+      prepare: vi.fn(),
       exec: vi.fn(),
       close: vi.fn(),
       query: vi.fn(),

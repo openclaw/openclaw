@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionEntry } from "../config/sessions.js";
+import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
@@ -19,12 +20,18 @@ import {
   resolveEnvApiKey,
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
+  shouldPreferExplicitConfigApiKeyAuth,
 } from "./model-auth.js";
 
 type ModelAuthLabelParams = {
   provider?: string;
   cfg?: OpenClawConfig;
-  sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
+  sessionEntry?: Partial<
+    Pick<
+      SessionEntry,
+      "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+    >
+  >;
   agentDir?: string;
   workspaceDir?: string;
   codexCliCredentialsHome?: string;
@@ -103,6 +110,20 @@ function resolveModelAuthLabelFromStore(
     ),
   );
   const candidates = [profileOverride, ...order].filter(Boolean) as string[];
+  const providerEntryProfileRef = resolveProviderEntryApiKeyProfileReference({
+    cfg: params.cfg,
+    provider: providerKey,
+    store,
+  });
+  // Inference sends an explicit api-key provider's own key before stored
+  // profiles; only a user-pinned session profile outranks it.
+  if (
+    resolveCollapsedSessionAuthPinSource(params.sessionEntry) !== "user" &&
+    providerEntryProfileRef.kind === "literal" &&
+    shouldPreferExplicitConfigApiKeyAuth(params.cfg, providerKey)
+  ) {
+    return "api-key (models.json)";
+  }
 
   for (const profileId of candidates) {
     const profile = store.profiles[profileId];
@@ -126,11 +147,6 @@ function resolveModelAuthLabelFromStore(
     return `${mode}${label ? ` (${label})` : ""}`;
   }
 
-  const providerEntryProfileRef = resolveProviderEntryApiKeyProfileReference({
-    cfg: params.cfg,
-    provider: providerKey,
-    store,
-  });
   if (providerEntryProfileRef.kind === "profile") {
     const label = resolveAuthProfileDisplayLabel({
       cfg: params.cfg,

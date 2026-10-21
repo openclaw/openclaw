@@ -67,7 +67,7 @@ describe("Workboard context and session-scoped reads", () => {
     const cases = [
       {
         kind: "direct",
-        stored: "Agent:Main:Matrix:Channel:!Room:example.org",
+        stored: " Agent:Main:Matrix:Channel:!Room:example.org ",
         key: "agent:main:matrix:channel:!Room:example.org",
         other: "agent:main:matrix:channel:!room:example.org",
       },
@@ -118,6 +118,7 @@ describe("Workboard context and session-scoped reads", () => {
           ? { sessionKey }
           : scenario.kind === "execution"
             ? {
+                sessionKey: "another-session",
                 execution: {
                   id,
                   kind: "agent-session" as const,
@@ -155,65 +156,8 @@ describe("Workboard context and session-scoped reads", () => {
       expect(new Set(hydratedIds)).toEqual(
         new Set(cases.map((scenario) => `${scenario.kind}-selected`)),
       );
-    } finally {
-      restore();
-    }
-  });
-
-  test("selects session links before hydrating unrelated card history", async () => {
-    const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
-      createStores: createKernelStores,
-    });
-    const sessionKey = "agent:main:chat";
-    const cards = [
-      fixtureCard("direct", { sessionKey: " Agent:Main:Chat " }),
-      fixtureCard("execution", {
-        sessionKey: "another-session",
-        execution: {
-          id: "execution",
-          kind: "agent-session",
-          mode: "autonomous",
-          status: "done",
-          sessionKey,
-          startedAt: 1,
-          updatedAt: 2,
-        },
-      }),
-      fixtureCard("attempt", {
-        metadata: { attempts: [{ id: "attempt", status: "succeeded", startedAt: 1, sessionKey }] },
-      }),
-      fixtureCard("event", { events: [{ id: "event", kind: "created", at: 1, sessionKey }] }),
-      fixtureCard("unrelated", { notes: "Unrelated history".repeat(10_000) }),
-      fixtureCard("opaque", { sessionKey: "agent:main:matrix:channel:!Room:example.org" }),
-    ];
-    for (const card of cards) {
-      await stores.cards.register(card.id, { version: 1, card });
-    }
-    using raw = new DatabaseSync(dbPath);
-    raw.prepare("UPDATE workboard_cards SET automation_json = '{' WHERE id = 'unrelated'").run();
-    const hydratedIds: unknown[] = [];
-    const restore = observeReads((_sql, rows) => {
-      hydratedIds.push(...rows.filter((row) => "notes" in row).map((row) => row.id));
-    });
-    try {
-      const result = await store.listCards(undefined, sessionKey);
-      expect(result.cards.map((card) => card.id).toSorted()).toEqual([
-        "attempt",
-        "direct",
-        "event",
-        "execution",
-      ]);
-      expect(new Set(hydratedIds)).toEqual(new Set(["attempt", "direct", "event", "execution"]));
-      expect(JSON.stringify(result).length).toBeLessThan(10_000);
-      expect((await store.listCards("other", sessionKey)).cards).toEqual([]);
-      expect(
-        (await store.listCards(undefined, "agent:main:matrix:channel:!room:example.org")).cards,
-      ).toEqual([]);
-      expect(
-        (await store.listCards(undefined, "agent:main:matrix:channel:!Room:example.org")).cards.map(
-          (card) => card.id,
-        ),
-      ).toEqual(["opaque"]);
+      expect((await store.listCards("other", cases[0]!.key)).cards).toEqual([]);
+      expect((await store.listCards(undefined, "missing-session")).cards).toEqual([]);
       await expect(store.listCards(undefined)).rejects.toThrow(SyntaxError);
     } finally {
       restore();

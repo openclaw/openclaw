@@ -8,16 +8,24 @@ let matrixSdkLoggingConfigured = false;
 let matrixSdkLogMode: "default" | "quiet" = "default";
 let matrixJsSdkRootLoggerSnapshot: MatrixJsSdkRootLoggerSnapshot | null = null;
 
+type MatrixJsSdkLogMethod = (this: unknown, ...args: unknown[]) => void;
+type MatrixJsSdkLogMethodFactory = (
+  this: unknown,
+  methodName: string,
+  level: number,
+  loggerName: string | symbol,
+) => MatrixJsSdkLogMethod;
+
 type MatrixJsSdkLoglevelLogger = {
   getLevel?: () => number | string;
-  methodFactory?: unknown;
+  methodFactory: MatrixJsSdkLogMethodFactory;
   rebuild?: () => void;
   setLevel?: (level: number | string, persist?: boolean) => void;
 };
 
 type MatrixJsSdkRootLoggerSnapshot = {
   level?: number | string;
-  methodFactory?: unknown;
+  methodFactory: MatrixJsSdkLogMethodFactory;
 };
 
 function shouldSuppressMatrixHttpNotFound(module: string, messageOrObject: unknown[]): boolean {
@@ -46,21 +54,44 @@ export function setMatrixSdkLogMode(mode: "default" | "quiet"): void {
 }
 
 function applyMatrixSdkLogger(): void {
-  setMatrixJsSdkRootLoggerLevel(matrixSdkLogMode === "quiet" ? "silent" : "debug");
+  configureMatrixJsSdkRootLogger();
   setMatrixLogServiceQuiet(matrixSdkLogMode === "quiet");
 }
 
-function setMatrixJsSdkRootLoggerLevel(level: "debug" | "silent"): void {
+function configureMatrixJsSdkRootLogger(): void {
   const logger = matrixJsSdkRootLogger as unknown as MatrixJsSdkLoglevelLogger;
-  matrixJsSdkRootLoggerSnapshot ??= {
-    level: logger.getLevel?.(),
-    methodFactory: logger.methodFactory,
-  };
-  if (level === "silent") {
-    logger.methodFactory = () => () => undefined;
-    logger.setLevel?.("silent", false);
-    logger.rebuild?.();
-    return;
+  if (!matrixJsSdkRootLoggerSnapshot) {
+    const methodFactory = logger.methodFactory;
+    matrixJsSdkRootLoggerSnapshot = {
+      level: logger.getLevel?.(),
+      methodFactory(methodName, logLevel, loggerName) {
+        const log = methodFactory.call(this, methodName, logLevel, loggerName);
+        return function (this: unknown, ...args: unknown[]) {
+          // SDK children copy this factory, so quiet must be checked at emission.
+          if (matrixSdkLogMode === "quiet") {
+            return;
+          }
+          const label = args[0];
+          // These matrix-js-sdk 43 global producers include profile/event content.
+          if (
+            methodName === "info" &&
+            typeof label === "string" &&
+            label.startsWith("Storing user profile ")
+          ) {
+            return;
+          }
+          if (
+            methodName === "trace" &&
+            (label === "membership event with membership undefined (forwardLooking: true)!" ||
+              label === "membership event with membership undefined (forwardLooking: false)!")
+          ) {
+            log.call(this, "membership event with membership undefined");
+          } else {
+            log.apply(this, args);
+          }
+        };
+      },
+    };
   }
   logger.methodFactory = matrixJsSdkRootLoggerSnapshot.methodFactory;
   const previousLevel = matrixJsSdkRootLoggerSnapshot.level;
@@ -78,7 +109,14 @@ export function createMatrixJsSdkClientLogger(prefix = "matrix"): MatrixJsSdkLog
     if (matrixSdkLogMode === "quiet") {
       return;
     }
-    emitMatrixLog(method, prefix, messageOrObject);
+    // matrix-js-sdk 43 includes caller-supplied reason/code in this lifecycle log.
+    emitMatrixLog(
+      method,
+      prefix,
+      messageOrObject[0] === "Cancelling verification request with params:"
+        ? ["Cancelling verification request"]
+        : messageOrObject,
+    );
   };
 
   return {

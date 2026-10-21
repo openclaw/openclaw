@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
@@ -114,9 +115,6 @@ export async function publishSessionStateArchives(
                   requested: requestedForPass,
                 },
               });
-              if (prepared.kind !== "archive-publish-prepare") {
-                throw new Error("SQLite archive preparation returned another operation's result");
-              }
               assertOwnerCurrent();
               for (const plan of prepared.value) {
                 if (
@@ -136,7 +134,7 @@ export async function publishSessionStateArchives(
             },
             async record(results) {
               assertOwnerCurrent();
-              const recorded = await runSqliteSessionReclamation({
+              await runSqliteSessionReclamation({
                 assertCommitAllowed: assertOwnerCurrent,
                 plan: {
                   kind: "archive-publish-record",
@@ -146,9 +144,6 @@ export async function publishSessionStateArchives(
                   nowMs: Date.now(),
                 },
               });
-              if (recorded.kind !== "archive-publish-record") {
-                throw new Error("SQLite archive recording returned another operation's result");
-              }
             },
           },
           signal,
@@ -188,7 +183,7 @@ export async function prunePublishedSessionArchivesByRetention(params: {
   return withSqliteSessionPageReclamation(
     toDatabaseOptions(params.scope),
     async (_reclaim, assertCurrent, _options, archives) => {
-      const candidates = await archives.withWriter(archives.readRetentionCandidates);
+      const candidates = await archives.readRetentionCandidates();
       assertCurrent();
       const now = params.nowMs ?? Date.now();
       const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(params.scope);
@@ -204,13 +199,21 @@ export async function prunePublishedSessionArchivesByRetention(params: {
           !fs.existsSync(archivePath)
         );
       });
-      if (removable.length === 0) {
-        return 0;
+      let removed = 0;
+      // Small reference sets use narrowed rechecks; each batch returns FIFO custody.
+      for (let offset = 0; offset < removable.length; offset += 16) {
+        if (offset > 0) {
+          await setImmediate();
+        }
+        removed += await archives.withWriter(() => {
+          assertCurrent();
+          return archives.pruneRetention({
+            candidates: removable.slice(offset, offset + 16),
+            archiveDirectory,
+          });
+        });
       }
-      return archives.withWriter(() => {
-        assertCurrent();
-        return archives.pruneRetention({ candidates: removable, archiveDirectory });
-      });
+      return removed;
     },
   );
 }

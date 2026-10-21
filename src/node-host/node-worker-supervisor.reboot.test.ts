@@ -1,4 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
@@ -19,6 +22,53 @@ function fixture(label: string) {
 }
 
 describe("node worker reboot recovery", () => {
+  it("reports a failed capacity refresh without losing committed completion or advertising free capacity", async () => {
+    const { root, env, workspaceDir } = fixture("node-worker-capacity-refresh-");
+    const journal = new NodeWorkerJournalWorker({ env });
+    const store = new NodeWorkerLaunchStore(journal);
+    const snapshots: Array<{ total: number; available: number }> = [];
+    const capacity = new NodeWorkerCapacity(store, {
+      capacity: 1,
+      onCapacityChanged: (value) => snapshots.push(value),
+    });
+    const supervisor = requireNodeWorkerProcessIdentity(process.pid);
+    const input = testWorkerLaunchInput(workspaceDir, "refresh-failure");
+    const claim = {
+      ...testNodeWorkerLaunchIdentity(input),
+      gatewayNamespace: input.gatewayNamespace,
+    };
+    const logPath = path.join(root, "capacity.log");
+    setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logPath });
+    try {
+      await capacity.initialize(async () => {});
+      await capacity.claim(claim, supervisor);
+      vi.spyOn(store, "nonterminalCount").mockRejectedValueOnce(new Error("private query detail"));
+
+      await expect(
+        capacity.finish({
+          launchId: claim.launchId,
+          planHash: claim.planHash,
+          supervisor,
+          worker: null,
+          state: "cancelled",
+          errorText: "cancelled before worker startup",
+        }),
+      ).resolves.toMatchObject({ state: "cancelled" });
+      expect(await store.get(claim.launchId)).toMatchObject({ state: "cancelled" });
+      expect(snapshots.at(-1)).toEqual({ total: 1, available: 0 });
+      await flushLogger();
+      const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
+      expect(output).toContain("Worker capacity refresh failed");
+      expect(output).toContain("Restart the node host if capacity does not recover");
+      expect(output).not.toContain("private query detail");
+    } finally {
+      capacity.close();
+      await journal.drain();
+      await flushLogger();
+      setLoggerOverride(null);
+    }
+  });
+
   it.each([
     { recorded: "boot-a", current: "boot-b", expected: "boot-b" },
     { recorded: "boot-a", current: null, expected: undefined },

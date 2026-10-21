@@ -49,6 +49,18 @@ the meter omits context usage instead of borrowing the agent's default model
 capacity; available provider plan usage remains visible. Stale token totals remain
 approximate and do not trigger the context warning.
 
+In the Control UI, expand **Context** in session details to inspect the last saved
+report. **Workspace files** groups files by their recorded source: agent workspace,
+execution project, or personal instructions. File paths distinguish matching names
+such as two `AGENTS.md` files. Reports without source metadata show neutral file
+groups rather than guessing their role.
+
+**Tool schemas** groups loaded tools by source and MCP server. When available,
+**Available on demand** lists deferred schemas separately; their potential sizes
+are not added to current usage. Discovery descriptions and schemas retrieved into
+the conversation still consume context. Native-harness reports may cover only
+OpenClaw-provided tools, and unmeasured sizes remain unverified rather than zero.
+
 ## Example output
 
 Values vary by model, provider, tool policy, and what's in your workspace.
@@ -219,6 +231,12 @@ your agent instructions: use it to answer the active request, keep internal
 details private, and do not treat the carrier as a new user request or wait for
 another message.
 
+Google generate-content requests keep the carrier separate and add explicit
+context-only framing: do not acknowledge the context; continue answering the
+user's request. This prevents the trailing user-role carrier from becoming the
+request to answer. The framing is deterministic for retained replay and does not
+rewrite user messages when turn-scoped context expires.
+
 For embedded Responses requests, current request metadata stays after the user
 message or compaction checkpoint and before its tool calls. This lets supported transports reuse the
 previous response across tool rounds without dropping live context, so OpenClaw
@@ -227,8 +245,9 @@ turn in an OpenAI Responses-family session preserves hidden runtime-context
 carriers append-only, so the previous turn, including tool calls and results,
 remains an unchanged cached prefix. Retained carriers count toward the context
 window until compaction, which does not split a user message from its carrier.
-User-role carriers contain the labeled context body; interpretation guidance lives
-once in the stable system prompt. OpenAI-compatible Chat Completions and native
+User-role carriers contain the labeled context body; except for Google's
+generate-content framing, interpretation guidance lives once in the stable system
+prompt. OpenAI-compatible Chat Completions and native
 Ollama also retain earlier carriers without rewriting the system prompt or prior
 conversation bytes.
 

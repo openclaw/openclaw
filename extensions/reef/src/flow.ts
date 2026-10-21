@@ -1,8 +1,9 @@
-import * as pluginStateRuntime from "openclaw/plugin-sdk/plugin-state-runtime";
+import { PluginStateOperationInvalidatedError } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { fromBase64url } from "../protocol/encoding.js";
+import { seal, type Envelope } from "../protocol/envelope.js";
+import { admitVerdict } from "../protocol/guard.js";
 import {
-  bodyHash as hashMessageBody,
   composeInbound,
-  composeOutbound,
   confirmDelivery,
   createMonotonicUlidFactory,
   effectiveGuardPolicyVersion,
@@ -11,45 +12,78 @@ import {
   parseHandleEpoch,
   PipelineError,
   type AuditStore,
-  type Envelope,
   type GuardAdapter,
   type ReplayStore,
   type ReviewGate,
 } from "../protocol/index.js";
+import { getReefAuditOperationState } from "./audit-state.js";
 import type { ReefChannelConfig } from "./config-schema.js";
 import { autonomyBudget } from "./config-schema.js";
-import {
-  matchesReefPeerIdentity,
-  reefPeerIdentity,
-  type ReefPeerIdentity,
-} from "./friend-types.js";
-import {
-  prepareReefOutboundComposition,
-  ReefOutboundRejectedError,
-} from "./outbound-state-client.js";
+import { matchesReefPeerIdentity, type ReefPeerIdentity } from "./friend-types.js";
+import type { ReefOutboundFailure, ReefOutboundOperations } from "./outbound-state-operation.js";
 import { reefMessageTextHash } from "./rejection-resend.js";
-import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
+import { getReefReviewOperationState, ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
 import { ReefInboxEntryParkedError, ReefTransportClient } from "./transport.js";
+import { getReefRecoveryOperationState } from "./trust-store-delivery.js";
 import { requirePeer } from "./trust-store-format.js";
-import { ReefPeerTrustChangedError, type ReefTrustStore } from "./trust-store.js";
+import {
+  getReefTrustOperationState,
+  ReefPeerTrustChangedError,
+  type ReefTrustStore,
+} from "./trust-store.js";
 import type {
   InboxEntry,
   ReefDeliveryRejection,
   ReefIngressMessage,
   ReefKeys,
-  ReefOutboundDeliveryPreparation,
   ReefRejectionRecovery,
 } from "./types.js";
 
 /** Reserves a protocol-valid id before recipient-visible Reef delivery starts. */
 export const prepareReefMessageId = createMonotonicUlidFactory();
 
+const operationHandler = {
+  moduleName: "outbound-state-operation-api.js",
+  exportName: "runReefOutboundOperation",
+};
+
+/** Local policy or trust rejection that is safe to retire without retrying. */
+class ReefOutboundRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReefOutboundRejectedError";
+  }
+}
+
+function rejectOutcome(outcome: ReefOutboundFailure, peer: string, id: string): never {
+  switch (outcome.kind) {
+    case "pipeline":
+      throw new PipelineError(
+        outcome.stage,
+        outcome.message,
+        outcome.verdict,
+        undefined,
+        outcome.reviewOutcome,
+        outcome.approvalDigest,
+      );
+    case "unapproved":
+      throw new ReefOutboundRejectedError(`Reef peer @${peer} is not approved with current keys`);
+    case "peer-changed":
+      throw new ReefPeerTrustChangedError(peer);
+    case "duplicate":
+      throw new Error(`Duplicate outbound Reef delivery id ${id}`);
+    case "review-capacity":
+      throw new Error("Reef pending review capacity is exhausted");
+    case "composition-failed":
+      throw new Error("Reef outbound envelope composition failed");
+  }
+}
+
 export function isPermanentReefOutboundRejection(error: unknown): boolean {
-  const InvalidatedError = pluginStateRuntime.PluginStateOperationInvalidatedError;
   if (
     error instanceof ReefOutboundRejectedError ||
     error instanceof ReefPeerTrustChangedError ||
-    (InvalidatedError && error instanceof InvalidatedError)
+    error instanceof PluginStateOperationInvalidatedError
   ) {
     return true;
   }
@@ -101,7 +135,6 @@ export class ReefMessageFlow {
       resendDisabled?: true;
       messageId?: string;
       onPlatformSendDispatch?: () => Promise<void>;
-      prepareDelivery?: (id: string) => Promise<ReefOutboundDeliveryPreparation | undefined>;
       recovery?: ReefRejectionRecovery;
     } = {},
   ): Promise<string> {
@@ -126,78 +159,137 @@ export class ReefMessageFlow {
       : undefined;
     const resendDisabled = context.resendDisabled;
     const onPlatformSendDispatch = context.onPlatformSendDispatch;
-    const prepareDelivery = context.prepareDelivery;
     const transport = this.options.transport;
-    const composition = prepareReefOutboundComposition({
-      trust: this.options.trust,
-      audit: this.options.audit,
-      reviews: this.options.reviews,
-      guard: this.options.guard,
-      peer,
-      id,
-      from,
-      body,
-      senderSigningSecretKey,
-      policyVersion,
-      expectedRecipient,
-      resendDisabled,
-      recovery: context.recovery,
-      authoritySignal: signal,
-    });
-    if (composition && prepareDelivery && !context.recovery) {
-      throw new Error("Reef worker send requires a source-bound recovery continuation");
+    const activeState = getReefTrustOperationState(this.options.trust);
+    const recovery = context.recovery ? getReefRecoveryOperationState(context.recovery) : undefined;
+    const state = context.recovery ? recovery : activeState;
+    const audit = getReefAuditOperationState(this.options.audit);
+    const reviews = getReefReviewOperationState(this.options.reviews);
+    if (!state || !audit || !reviews) {
+      throw new Error("Reef outbound composition requires source-bound worker state owners");
     }
+    const senderSigningKeyLength = fromBase64url(senderSigningSecretKey).length;
+    const classify = this.options.guard.classify.bind(this.options.guard);
+    const pinnedModel = this.options.guard.pinnedModel;
+    const assertActive = () => {
+      signal?.throwIfAborted();
+      state.assertCurrent();
+    };
+    // The host captures one physical source and plugin generation synchronously.
+    // A recovery from another source cannot be combined with current audit/review owners.
+    const operation = state.peers.createOperation!<ReefOutboundOperations>(
+      [state.peers, state.deliveries, audit.head, audit.migration, audit.entries, reviews.store],
+      operationHandler,
+      {
+        assertCurrent: assertActive,
+        ...(recovery ? { sourceReceipt: recovery.sourceReceipt } : {}),
+      },
+    );
+    const peerKey = `${state.identityScope}:${peer}`;
+    const common = {
+      peer,
+      peerKey,
+      deliveryKey: `${peerKey}:${id}`,
+      audit: {
+        head: 2,
+        migration: 3,
+        entries: 4,
+        auditKey: audit.auditKey,
+        maxEntries: audit.maxEntries,
+      },
+    };
     this.pendingOutbound.add(pendingKey);
     try {
-      let prepared: { envelope: Envelope; assertCurrent(): void };
-      if (composition) {
-        prepared = await composition.compose();
-      } else {
-        const preparation = await (prepareDelivery
-          ? prepareDelivery(id)
-          : this.options.trust.prepareOutboundDelivery(peer, id));
-        const friend = preparation?.trust;
-        signal?.throwIfAborted();
-        if (
-          !preparation ||
-          !friend ||
-          friend.safetyNumberChanged ||
-          (expectedRecipient !== undefined && !matchesReefPeerIdentity(friend, expectedRecipient))
-        ) {
-          throw new ReefOutboundRejectedError(
-            `Reef peer @${peer} is not approved with current keys`,
-          );
-        }
-        const result = await composeOutbound({
-          id,
-          from,
-          to: formatHandleEpoch(peer, friend.keyEpoch),
-          body,
-          senderSigningSecretKey,
-          recipientEncryptionPublicKey: friend.x25519PublicKey,
-          guard: this.options.guard,
-          audit: this.options.audit,
-          policyVersion,
-          reviewGate: reviewGateFor(this.options.reviews),
-        });
-        signal?.throwIfAborted();
-        await preparation.record(
-          {
-            bodyHash: hashMessageBody(body),
-            textHash: reefMessageTextHash(text),
-            recipient: reefPeerIdentity(friend),
+      const preparation = await operation.execute(
+        {
+          type: "prepare",
+          input: {
+            ...common,
+            id,
+            from,
+            body,
+            senderSigningKeyLength,
+            policyVersion,
+            expectedRecipient,
           },
-          resendDisabled ? { resendDisabled: true } : {},
-        );
-        prepared = { envelope: result.envelope, assertCurrent: () => preparation.assertCurrent() };
+        },
+        { writeStores: [2, 4], watchStores: [0, 5] },
+      );
+      preparation.assertCurrent();
+      if (preparation.value.kind !== "prepared") {
+        return rejectOutcome(preparation.value, peer, id);
+      }
+      const prepared = preparation.value.prepared;
+      const verdict = admitVerdict(
+        await classify({
+          direction: "outbound",
+          source: from,
+          destination: prepared.binding.to,
+          text: body.text,
+          policyVersion,
+        }),
+        pinnedModel,
+        policyVersion,
+      );
+      assertActive();
+      let envelope: Envelope | undefined;
+      let compositionFailure: { error: unknown } | undefined;
+      if (
+        verdict.decision === "allow" ||
+        (prepared.afterApproval && verdict.decision === "review")
+      ) {
+        try {
+          envelope = seal({
+            id,
+            from,
+            to: prepared.binding.to,
+            body,
+            senderSigningSecretKey,
+            recipientEncryptionPublicKey: prepared.recipient.x25519PublicKey,
+          });
+        } catch (error) {
+          compositionFailure = { error };
+        }
+      }
+      const recording = await operation.execute(
+        {
+          type: "finish",
+          input: {
+            ...common,
+            prepared,
+            verdict,
+            envelope,
+            textHash: reefMessageTextHash(body.text),
+            resendDisabled,
+            reviewMaxEntries: reviews.maxEntries,
+          },
+        },
+        {
+          writeStores: envelope
+            ? [1, 2, 4]
+            : !prepared.afterApproval && verdict.decision === "review"
+              ? [2, 4, 5]
+              : [2, 4],
+          watchStores: [0, 5],
+        },
+      );
+      recording.assertCurrent();
+      if (compositionFailure) {
+        throw compositionFailure.error;
+      }
+      if (recording.value.kind !== "recorded") {
+        return rejectOutcome(recording.value, peer, id);
+      }
+      if (!envelope) {
+        throw new Error("Reef outbound state recorded without a sealed envelope");
       }
       // Guard/review/encryption may reject safely. Mark ambiguity only at the
       // relay boundary, after the exact delivery binding has committed.
       await onPlatformSendDispatch?.();
       signal?.throwIfAborted();
-      await transport.sendEnvelope(peer, prepared.envelope, signal, () => {
+      await transport.sendEnvelope(peer, envelope, signal, () => {
         signal?.throwIfAborted();
-        prepared.assertCurrent();
+        recording.assertCurrent();
       });
       signal?.throwIfAborted();
       return id;

@@ -1,5 +1,37 @@
 [
   {
+    "source": "Database engines",
+    "target": "数据库引擎"
+  },
+  {
+    "source": "PostgreSQL operator guide",
+    "target": "PostgreSQL 运维指南"
+  },
+  {
+    "source": "MCP Events",
+    "target": "MCP Events"
+  },
+  {
+    "source": "Mcp Events plugin reference",
+    "target": "MCP Events 插件参考"
+  },
+  {
+    "source": "MCP connections",
+    "target": "MCP 连接"
+  },
+  {
+    "source": "Plugin service runtime",
+    "target": "插件服务运行时"
+  },
+  {
+    "source": "Migrate synchronous SQLite APIs",
+    "target": "迁移同步 SQLite API"
+  },
+  {
+    "source": "Async SQLite migration",
+    "target": "异步 SQLite 迁移"
+  },
+  {
     "source": "X / Twitter",
     "target": "X / Twitter"
   },
@@ -726,6 +758,10 @@
   {
     "source": "Moonshot AI",
     "target": "Moonshot AI"
+  },
+  {
+    "source": "Neon AI Gateway",
+    "target": "Neon AI Gateway"
   },
   {
     "source": "Mistral",
@@ -2870,6 +2906,10 @@
   {
     "source": "Session management",
     "target": "会话管理"
+  },
+  {
+    "source": "Session controller",
+    "target": "会话控制器"
   },
   {
     "source": "Transcript hygiene",
@@ -5058,5 +5098,13 @@
   {
     "source": "Cloud environment file",
     "target": "云环境文件"
+  },
+  {
+    "source": "Standalone builds",
+    "target": "独立可执行文件构建"
+  },
+  {
+    "source": "PostgreSQL operator guide",
+    "target": "PostgreSQL 运维指南"
   }
 ]

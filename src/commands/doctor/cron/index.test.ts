@@ -13,6 +13,7 @@ import {
   saveCronStore,
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
+import * as quarantine from "../../../cron/store/quarantine.js";
 import * as staging from "../../../infra/sqlite-snapshot-staging.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -185,6 +186,33 @@ describe("collectLegacyCronStoreHealthFindings", () => {
     });
   });
 });
+
+it.each(["structured", "interactive"])(
+  "reports the original quarantine observation failure in %s Doctor output",
+  async (mode) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
+    await writeCurrentCronStore([]);
+    const observation = vi
+      .spyOn(quarantine, "loadCronQuarantinedJobs")
+      .mockRejectedValueOnce(new Error("quarantine observation unavailable"));
+    try {
+      if (mode === "structured") {
+        expect(await collectLegacyCronStoreHealthFindings({ cfg: createCronConfig() })).toEqual([
+          expect.objectContaining({
+            requirement: "cron-store-readable",
+            fixHint: expect.stringContaining("quarantine observation unavailable"),
+          }),
+        ]);
+      } else {
+        await repairCronStore();
+        expectNoteContaining("Unable to read cron job store");
+        expectNoteContaining("quarantine observation unavailable");
+      }
+    } finally {
+      observation.mockRestore();
+    }
+  },
+);
 
 describe("maybeRepairLegacyCronStore", () => {
   it("preserves prompt-window runtime state and authority while repairing config", async () => {

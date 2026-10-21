@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lstatSync, realpathSync, statSync, type BigIntStats } from "node:fs";
 import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -160,12 +161,14 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   schemas?: DoctorDatabasePreflight;
   runtime?: RuntimeEnv;
   json?: boolean;
+  signal?: AbortSignal;
   /** These entry points run before a shipped parent can delegate Doctor. */
   entry?: "cli-bootstrap" | "package-lifecycle";
   postCoreSchemaRepair?: UpdateDoctorWriteAuthority["postCoreSchemaRepair"];
   onVerifiedBackup?: (snapshots: readonly BackupSqliteSnapshotFact[]) => void;
   /** Read-only pre-capture publication check; never authorizes an agent repair. */
   statePublicationOnly?: boolean;
+  preserveSourceArtifacts?: true;
 }): Promise<DoctorDatabasePreflight | undefined> {
   if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1") {
     return undefined;
@@ -177,9 +180,10 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     : createDoctorRehearsalDatabaseCoverage(process.env);
   const schemas =
     options.schemas ??
-    (await prepareDoctorDatabasePreflight(
-      options.statePublicationOnly ? { scope: "state" } : undefined,
-    ));
+    (await prepareDoctorDatabasePreflight({
+      scope: options.statePublicationOnly ? "state" : undefined,
+      preserveSourceArtifacts: options.preserveSourceArtifacts,
+    }));
   rehearsal?.assertCurrent();
   if (!schemas.pendingMigrations?.length) {
     return schemas;
@@ -291,6 +295,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       assertCurrent();
       let snapshotFacts: readonly BackupSqliteSnapshotFact[] = [];
       const backup = await createBackupArchive({
+        signal: options.signal,
         output: path.join(
           resolveUpdateCaptureRoot(resolveStateDir()),
           `agent-schema-${updater.runId}-${randomUUID()}.tar.gz`,
@@ -410,7 +415,10 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
 }
 
 /** Complete a private CLI validation before bootstrap can reach any live writer. */
-export async function preflightUpdateDoctorCli(options: { json?: boolean }) {
+export async function preflightUpdateDoctorCli(options: {
+  json?: boolean;
+  fullIntegrityCheck?: boolean;
+}) {
   // Pin the invoking parent before schema admission can yield or reparent us.
   const parent = readUpdateRunDriver(process.ppid);
   if (resolveUpdateRehearsalRoot(process.env)) {
@@ -426,7 +434,12 @@ export async function preflightUpdateDoctorCli(options: { json?: boolean }) {
   }
   const schemas = await guardUpdateDoctorSchemaUpgrade({ ...options, entry: "cli-bootstrap" });
   if (schemas?.updateSchemaRehearsal) {
-    await rehearseDeferredUpdateDoctorSchemaForParent(schemas, defaultRuntime, parent);
+    await rehearseDeferredUpdateDoctorSchemaForParent(
+      schemas,
+      defaultRuntime,
+      parent,
+      options.fullIntegrityCheck,
+    );
     // The existing one-shot owner joins cleanup and drains the warning before exit.
     exitCliAfterOutput(defaultRuntime, 0);
   }
@@ -457,11 +470,13 @@ export async function preflightUpdatePackageLifecycle(): Promise<void> {
 export function rehearseDeferredUpdateDoctorSchema(
   schemas: DoctorDatabasePreflight,
   runtime: RuntimeEnv = defaultRuntime,
+  fullIntegrityCheck?: boolean,
 ): Promise<void> {
   return rehearseDeferredUpdateDoctorSchemaForParent(
     schemas,
     runtime,
     readUpdateRunDriver(process.ppid),
+    fullIntegrityCheck,
   );
 }
 
@@ -469,6 +484,7 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
   schemas: DoctorDatabasePreflight,
   runtime: RuntimeEnv,
   parent: UpdateRunDriver | undefined,
+  fullIntegrityCheck?: boolean,
 ): Promise<void> {
   const selected = schemas.updateSchemaRehearsal;
   if (!selected) {
@@ -588,31 +604,32 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
     runtime.log(JSON.stringify(admitted.fact));
     admitted.assertPrepared();
     writerStarted = true;
-    const result = await runUtf8CommandWithTimeout(
-      [
-        process.execPath,
-        entry,
+    const invocation = resolveOpenClawCliInvocation({
+      entryPath: entry,
+      execArgv: [],
+      args: [
         "doctor",
         "--fix",
         "--non-interactive",
         "--no-workspace-suggestions",
+        ...(fullIntegrityCheck ? ["--full-integrity-check"] : []),
       ],
-      {
-        cwd: root,
-        baseEnv: env,
-        timeoutMs: resolveSqliteInspectionBudget(
-          "legacy update schema rehearsal",
-          rehearsal.stateDir,
-          rehearsal.snapshotCapacity.sqliteBytes,
-        ).timeoutMs,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        // Doctor's exit owns validation; verbose diagnostics must not turn a
-        // successful migration into an update refusal on a large agent fleet.
-        outputCapture: { stdout: "discard", stderr: "tail" },
-        maxOutputBytes: { stderr: 20_000 },
-      },
-    );
+    });
+    const result = await runUtf8CommandWithTimeout([invocation.command, ...invocation.args], {
+      cwd: root,
+      baseEnv: env,
+      timeoutMs: resolveSqliteInspectionBudget(
+        "legacy update schema rehearsal",
+        rehearsal.stateDir,
+        rehearsal.snapshotCapacity.sqliteBytes,
+      ).timeoutMs,
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+      // Doctor's exit owns validation; verbose diagnostics must not turn a
+      // successful migration into an update refusal on a large agent fleet.
+      outputCapture: { stdout: "discard", stderr: "tail" },
+      maxOutputBytes: { stderr: 20_000 },
+    });
     settled = result.cleanup === "normal";
     if (!settled) {
       throw new Error(

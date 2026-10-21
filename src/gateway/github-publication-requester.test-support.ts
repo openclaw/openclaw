@@ -117,20 +117,15 @@ async function createRequesterPolicySources(
     createdActor: { type: "human", source: "profile", id: guestProfile },
     sandbox: "required",
   });
-  const guestSource = await createGitHubPublicationRequesterFixture({
-    profileId: guestProfile,
-    scopes: guestScopes,
-    sessionKey: session.sessionKey,
-    agentId: "main",
-  });
-  const maintainerSource = await createGitHubPublicationRequesterFixture({
-    profileId: maintainerProfile,
-    scopes: ["operator.admin"],
-    sessionKey: session.sessionKey,
-    agentId: "main",
-  });
-  const guest = guestSource.requester;
-  const maintainer = maintainerSource.requester;
+  const capture = (profileId: string, scopes: readonly string[]) =>
+    createGitHubPublicationRequesterFixture({
+      profileId,
+      scopes,
+      sessionKey: session.sessionKey,
+      agentId: "main",
+    });
+  const guestSource = await capture(guestProfile, guestScopes);
+  const maintainerSource = await capture(maintainerProfile, ["operator.admin"]);
   const database = openOpenClawStateDatabase();
   const publishedTitles: string[] = [];
   const externalWrites: string[] = [];
@@ -148,10 +143,10 @@ async function createRequesterPolicySources(
     config,
     session,
     database,
-    guest,
+    guest: guestSource.requester,
     guestSource,
     guestProfile,
-    maintainer,
+    maintainer: maintainerSource.requester,
     maintainerSource,
     maintainerProfile,
     publishedTitles,
@@ -277,22 +272,17 @@ type StoredVisitorGrant = {
 
 export function requireVisitorPublicationPolicy(f: { config: OpenClawConfig }): OpenClawConfig {
   const roles = f.config.gateway!.roles!;
+  const guest = {
+    ...roles.definitions.guest!,
+    sandbox: "required" as const,
+    accessPolicyPlugin: "visitor-access",
+    modelPolicy: {},
+  };
   const config: OpenClawConfig = {
     ...f.config,
     gateway: {
       ...f.config.gateway,
-      roles: {
-        ...roles,
-        definitions: {
-          ...roles.definitions,
-          guest: {
-            ...roles.definitions.guest!,
-            sandbox: "required",
-            accessPolicyPlugin: "visitor-access",
-            modelPolicy: {},
-          },
-        },
-      },
+      roles: { ...roles, definitions: { ...roles.definitions, guest } },
     },
   };
   setRuntimeConfigSnapshot(config);
@@ -305,18 +295,7 @@ export async function prepareVisitorPublicationFixture(f: {
   maintainer: Requester;
   local?: { cwd: string };
 }) {
-  const [
-    { loadAndActivateRootPluginRegistry },
-    { startPluginServices },
-    {
-      captureActivePluginRegistrySnapshot,
-      clearActivePluginRegistry,
-      restoreActivePluginRegistrySnapshot,
-      stageActivePluginRegistry,
-      rollbackStagedPluginRegistry,
-    },
-    { createEmptyPluginRegistry },
-  ] = await Promise.all([
+  const [loader, servicesRuntime, runtime, registryFactory] = await Promise.all([
     import("../plugins/loader.js"),
     import("../plugins/services.test-support.js"),
     import("../plugins/runtime.js"),
@@ -347,7 +326,7 @@ export async function prepareVisitorPublicationFixture(f: {
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
   };
   const workspaceDir = f.local?.cwd ?? root;
-  const priorRegistry = captureActivePluginRegistrySnapshot();
+  const priorRegistry = runtime.captureActivePluginRegistrySnapshot();
   const policyUrl =
     "https://api.cloudflare.com/client/v4/accounts/publication-test/access/apps/publication-test/policies";
   let emails: string[] = [];
@@ -382,23 +361,16 @@ export async function prepareVisitorPublicationFixture(f: {
       return Response.json({ success: true, result: {} });
     }),
   );
+  const unexpected = () => {
+    throw new Error("Unexpected Visitor publication Gateway operation");
+  };
   const gateway: PluginRuntime["gateway"] = {
     isAvailable: async () => true,
-    async openPluginPanel() {
-      throw new Error("Unexpected plugin panel request");
-    },
-    async readSessionFacts() {
-      throw new Error("Unexpected session facts request");
-    },
-    async withSessionFacts() {
-      throw new Error("Unexpected session read scope");
-    },
-    subscribeSessionChanges() {
-      throw new Error("Unexpected session changes subscription");
-    },
-    async request() {
-      throw new Error("Unexpected Gateway request");
-    },
+    openPluginPanel: unexpected,
+    readSessionFacts: unexpected,
+    withSessionFacts: unexpected,
+    subscribeSessionChanges: unexpected,
+    request: async () => unexpected(),
   };
   vi.spyOn(gateway, "request").mockImplementation(async (method) => {
     expect(method).toBe("users.list");
@@ -410,11 +382,8 @@ export async function prepareVisitorPublicationFixture(f: {
     senderIsOwner: true,
     assertInvocationCurrent: f.maintainer.assertCurrent,
   };
-  const unexpectedSubagent = () => {
-    throw new Error("Visitor publication fixtures must not dispatch subagent work");
-  };
   const register = async () => {
-    const registry = await loadAndActivateRootPluginRegistry({
+    const registry = await loader.loadAndActivateRootPluginRegistry({
       config,
       env,
       workspaceDir,
@@ -425,12 +394,12 @@ export async function prepareVisitorPublicationFixture(f: {
         gateway,
         // Service node setup reads this host facet even when Visitor never invokes nodes.
         subagent: {
-          complete: unexpectedSubagent,
-          forkSession: unexpectedSubagent,
-          run: unexpectedSubagent,
-          waitForRun: unexpectedSubagent,
-          getSessionMessages: unexpectedSubagent,
-          deleteSession: unexpectedSubagent,
+          complete: unexpected,
+          forkSession: unexpected,
+          run: unexpected,
+          waitForRun: unexpected,
+          getSessionMessages: unexpected,
+          deleteSession: unexpected,
         },
       },
     });
@@ -448,7 +417,7 @@ export async function prepareVisitorPublicationFixture(f: {
         env,
       }),
       async start() {
-        await startPluginServices({
+        await servicesRuntime.startPluginServices({
           registry,
           config,
           workspaceDir,
@@ -465,7 +434,7 @@ export async function prepareVisitorPublicationFixture(f: {
             expect(stopped.errors).toEqual([]);
           }
         } finally {
-          await clearActivePluginRegistry(registry);
+          await runtime.clearActivePluginRegistry(registry);
         }
       },
       async execute(name: "visitor_invite" | "visitor_revoke", input: Record<string, unknown>) {
@@ -490,6 +459,11 @@ export async function prepareVisitorPublicationFixture(f: {
     };
   };
   let active = await register();
+  const resetStores = async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+  };
   return {
     get store() {
       return active.store;
@@ -497,30 +471,26 @@ export async function prepareVisitorPublicationFixture(f: {
     start: () => active.start(),
     execute: (...args: Parameters<typeof active.execute>) => active.execute(...args),
     suspendRegistry() {
-      const snapshot = captureActivePluginRegistrySnapshot();
-      stageActivePluginRegistry(
-        createEmptyPluginRegistry(),
+      const snapshot = runtime.captureActivePluginRegistrySnapshot();
+      runtime.stageActivePluginRegistry(
+        registryFactory.createEmptyPluginRegistry(),
         null,
         snapshot.runtimeSubagentMode,
         snapshot.workspaceDir ?? undefined,
       );
-      return () => rollbackStagedPluginRegistry(snapshot);
+      return () => runtime.rollbackStagedPluginRegistry(snapshot);
     },
     async reopen() {
       await active.stop();
-      await closeOpenClawAgentDatabasesAsync();
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
+      await resetStores();
       active = await register();
     },
     async close() {
       try {
         await active.stop();
       } finally {
-        restoreActivePluginRegistrySnapshot(priorRegistry);
-        await closeOpenClawAgentDatabasesAsync();
-        await closeOpenClawStateDatabaseAsync();
-        resetPluginStateStoreForTests();
+        runtime.restoreActivePluginRegistrySnapshot(priorRegistry);
+        await resetStores();
         vi.unstubAllGlobals();
       }
     },

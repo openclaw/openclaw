@@ -1,5 +1,4 @@
 import { SimplePool, type Event } from "nostr-tools";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { type NostrProfile, NostrProfileSchema } from "./config-schema.js";
 import { contentToProfile, type ProfileContent } from "./nostr-profile-core.js";
@@ -8,11 +7,7 @@ import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 interface ProfileImportOptions {
   pubkey: string;
   relays: string[];
-  /** Timeout per relay in milliseconds (default: 5000) */
-  timeoutMs?: number;
 }
-
-const DEFAULT_TIMEOUT_MS = 5000;
 
 function sanitizeProfileUrls(profile: NostrProfile): NostrProfile {
   const result = { ...profile };
@@ -34,7 +29,6 @@ function sanitizeProfileUrls(profile: NostrProfile): NostrProfile {
 /** Import the latest verified kind:0 profile across the configured relays. */
 export async function importProfileFromRelays(opts: ProfileImportOptions) {
   const { pubkey, relays } = opts;
-  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, DEFAULT_TIMEOUT_MS);
 
   if (!pubkey || !/^[0-9a-fA-F]{64}$/.test(pubkey)) {
     return {
@@ -53,7 +47,7 @@ export async function importProfileFromRelays(opts: ProfileImportOptions) {
   }
 
   const pool = new SimplePool();
-  const relaysQueried = [...relays];
+  const relaysQueried = relays;
   const subscriptions: Array<ReturnType<typeof pool.subscribeMany>> = [];
 
   try {
@@ -84,7 +78,7 @@ export async function importProfileFromRelays(opts: ProfileImportOptions) {
               }),
           ),
         ),
-      timeoutMs,
+      10_000,
       () => undefined,
       { ref: false },
     );

@@ -128,7 +128,6 @@ it("gives a heartbeat delivered to Telegram the delivering account's contract on
     sessionKey,
     source: "cron",
     reason: "cron:status",
-    deps: { getReplyFromConfig },
   });
   expect(result.status).toBe("ran");
   expectContractOnce(lastPrompt(), "markdown_telegram_rich");

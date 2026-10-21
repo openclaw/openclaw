@@ -51,9 +51,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   // Bridge payloads carry trusted failure codes; guest JSON replacements must not rewrite them.
   const parseJson = JSON.parse;
   function emitOutput(entry) {
-    const count = output.push(entry);
-    if (hostOutput) hostOutput(encodeFinalValue(entry));
-    return count;
+    if (hostOutput) return hostOutput(encodeFinalValue(entry));
+    return output.push(entry);
   }
   const promiseOutput = "[Unawaited Promise: use await or Promise.all(...) before emitting or returning values.]";
   let networkContentObserved = false;
@@ -390,6 +389,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       input: binding.input,
       output: binding.output,
       ...(isMcp ? { apiPath: binding.apiPath } : {}),
+      ...(isMcp && typeof binding.instructions === "string" ? { instructions: binding.instructions } : {}),
+      ...(isMcp && typeof binding.instructionsHint === "string" ? { instructionsHint: binding.instructionsHint } : {}),
     });
     for (const [key, value] of Object.entries(metadata)) {
       Object.defineProperty(handle, key, binding.source !== "openclaw"

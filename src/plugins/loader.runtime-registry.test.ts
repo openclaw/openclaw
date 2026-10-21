@@ -84,7 +84,8 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
       system.enqueueSystemEvent("registration", { sessionKey: "prepared-runtime-system" });
       system.requestHeartbeat({ source: "other", intent: "immediate", reason: "registration", coalesceMs: 0 });
       const asyncStore = api.runtime.state.openKeyedStore({ namespace: "registration", maxEntries: 2 });
-      fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ entries, selection, runtimePolicy, provider, config: api.runtime.config.current() }));
+      const { acquireLocalService } = api.runtime.llm;
+      fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ entries, selection, runtimePolicy, provider, llmAcquireType: typeof acquireLocalService, config: api.runtime.config.current() }));
       api.registerCli(({ program }) => program.command("state-proof").action(async () => {
         const runtime = runtimeStore.getRuntime();
         sync.register("before", { value: "retained" });
@@ -185,6 +186,7 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
             matchedProvider: "fixture",
           },
           provider: "fixture",
+          llmAcquireType: "function",
           config,
         });
         expect(fs.existsSync(path.join(root, "state", "state", "openclaw.sqlite"))).toBe(false);
@@ -514,7 +516,7 @@ describe("cached plugin load failures", () => {
     if (!(failure instanceof PluginLoadFailureError)) {
       throw failure;
     }
-    expect(failure.pluginIds).toEqual([healthy.id]);
+    expect(failure.message).toContain(healthy.id);
     expect(failure.message).not.toContain(broken.id);
     expect(failure.registry.plugins.find((entry) => entry.id === broken.id)).toBe(retained);
     expect(failure.registry.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({

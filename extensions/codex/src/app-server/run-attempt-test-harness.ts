@@ -22,6 +22,7 @@ import {
   createEmptyPluginRegistry,
   disposePluginRegistryInstances,
   getActivePluginRegistry,
+  runInHarnessToolAuthorityForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
@@ -234,17 +235,32 @@ export function runCodexAppServerAttempt(
     }
   };
   trackedParams.onExecutionPhase = observeExecutionPhase;
-  const promise = runCodexAppServerAttemptImpl(trackedParams, {
-    ...options,
-    startupTimeoutFloorMs: options.startupTimeoutFloorMs ?? 30_000,
-    bindingStore: options.bindingStore ?? testCodexAppServerBindingStore,
-    ...(clientFactory ? { clientFactory } : {}),
-  }).finally(() => {
-    if (trackedParams.onExecutionPhase === observeExecutionPhase) {
-      trackedParams.onExecutionPhase = onExecutionPhase;
+  const attemptOptions = options;
+  const runAdmitted = async (admitted: EmbeddedRunAttemptParams) => {
+    // Steering callers retain the original params even when cancellation adds a copy.
+    params.toolAuthorityFingerprint = admitted.toolAuthorityFingerprint;
+    try {
+      return await runCodexAppServerAttemptImpl(admitted, {
+        ...attemptOptions,
+        startupTimeoutFloorMs: attemptOptions.startupTimeoutFloorMs ?? 30_000,
+        bindingStore: attemptOptions.bindingStore ?? testCodexAppServerBindingStore,
+        ...(clientFactory ? { clientFactory } : {}),
+      });
+    } finally {
+      if (params.toolAuthorityFingerprint === admitted.toolAuthorityFingerprint) {
+        delete params.toolAuthorityFingerprint;
+      }
     }
-    activeAppServerAttemptsForTest.delete(entry);
-  });
+  };
+  // Gateway runs reach the harness inside an admitted session turn.
+  const promise = runInHarnessToolAuthorityForTest(trackedParams, "codex", runAdmitted).finally(
+    () => {
+      if (trackedParams.onExecutionPhase === observeExecutionPhase) {
+        trackedParams.onExecutionPhase = onExecutionPhase;
+      }
+      activeAppServerAttemptsForTest.delete(entry);
+    },
+  );
   entry.promise = promise;
   activeAppServerAttemptsForTest.add(entry);
   promise.catch(() => undefined);
@@ -406,30 +422,8 @@ export async function bindProductionHarnessHostCapabilitiesForTest(
   return close;
 }
 
-export {
-  setCodexTestModelSupportsTools,
-  createCodexRuntimePlanFixture,
-} from "./thread-lifecycle.test-fixtures.js";
-
-export function assistantMessage(text: string, timestamp: number) {
-  return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-chatgpt-responses",
-    provider: "openai",
-    model: "gpt-5.4-codex",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop" as const,
-    timestamp,
-  };
-}
+export { assistantMessage, createCodexRuntimePlanFixture } from "./test-support.js";
+export { setCodexTestModelSupportsTools } from "./thread-lifecycle.test-fixtures.js";
 
 export function userMessage(text: string, timestamp: number) {
   return {

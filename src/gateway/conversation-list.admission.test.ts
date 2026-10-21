@@ -75,7 +75,13 @@ async function createDirectory(
       };
     },
   };
-  return { agentId, config, deps, routed, scope, stateDir, storePath };
+  const list = (overrides: Partial<Parameters<typeof runGatewayConversationList>[0]> = {}) =>
+    runGatewayConversationList({ config, agentId, channel: "reef", limit: 10, ...overrides }, deps);
+  const expectStored = async (count: number) => {
+    expect(await listConversations(scope)).toHaveLength(count);
+    expect(listSessionEntriesCore(scope)).toEqual([]);
+  };
+  return { config, deps, routed, scope, storePath, list, expectStored };
 }
 
 describe("conversation directory write admission", () => {
@@ -90,7 +96,7 @@ describe("conversation directory write admission", () => {
         toDatabaseOptions(resolveSqliteReadScope(fixture.scope)),
         () => release.promise,
       );
-      let settled = false;
+      const settled = vi.fn();
       let forcedUnavailable = false;
       const prepare = routeOwnership.prepareConversationRouteEligibilitiesForAgent;
       vi.spyOn(routeOwnership, "prepareConversationRouteEligibilitiesForAgent").mockImplementation(
@@ -105,29 +111,17 @@ describe("conversation directory write admission", () => {
           };
         },
       );
-      const result = runGatewayConversationList(
-        {
-          config: fixture.config,
-          readCurrentConfig: () => currentConfig,
-          agentId: fixture.agentId,
-          channel: "reef",
-          limit: 10,
-        },
-        fixture.deps,
-      ).then(
-        (value) => {
-          settled = true;
-          return { value };
-        },
-        (error: unknown) => {
-          settled = true;
-          return { error };
-        },
-      );
+      const result = fixture
+        .list({ readCurrentConfig: () => currentConfig })
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        )
+        .finally(settled);
       try {
         await fixture.routed.promise;
         await setImmediate();
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
         expect(await listConversations(fixture.scope)).toEqual([]);
         if (eligibility === "denied") {
           currentConfig = {
@@ -145,21 +139,17 @@ describe("conversation directory write admission", () => {
             error: new Error("Conversation route ownership is temporarily unavailable"),
           });
         } else {
+          const conversations =
+            eligibility === "eligible"
+              ? expect.arrayContaining(
+                  peerIds.map((id) => expect.objectContaining({ target: `reef:${id}` })),
+                )
+              : [];
           await expect(result).resolves.toMatchObject({
-            value: {
-              conversations:
-                eligibility === "eligible"
-                  ? expect.arrayContaining(
-                      peerIds.map((id) => expect.objectContaining({ target: `reef:${id}` })),
-                    )
-                  : [],
-            },
+            value: { conversations },
           });
         }
-        expect(await listConversations(fixture.scope)).toHaveLength(
-          eligibility === "eligible" ? peerIds.length : 0,
-        );
-        expect(listSessionEntriesCore(fixture.scope)).toEqual([]);
+        await fixture.expectStored(eligibility === "eligible" ? peerIds.length : 0);
       } finally {
         release.resolve();
         await blocker;
@@ -186,10 +176,7 @@ describe("conversation directory write admission", () => {
         ...fixture.config,
         session: { store: path.relative(process.cwd(), fixture.storePath) },
       };
-      const result = runGatewayConversationList(
-        { config, agentId: fixture.agentId, channel: "reef", limit: 10 },
-        fixture.deps,
-      );
+      const result = fixture.list({ config });
       try {
         await fixture.routed.promise;
         const otherDirectory = tempDirs.make("conversation-directory-moved-");
@@ -202,8 +189,7 @@ describe("conversation directory write admission", () => {
         await expect(result).resolves.toMatchObject({
           conversations: [expect.objectContaining({ target: "reef:peer" })],
         });
-        expect(await listConversations(fixture.scope)).toHaveLength(1);
-        expect(listSessionEntriesCore(fixture.scope)).toEqual([]);
+        await fixture.expectStored(1);
       } finally {
         releaseRoute.resolve();
         await result;

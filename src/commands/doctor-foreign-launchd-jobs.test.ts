@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ForeignLaunchdJob } from "../daemon/launchd-foreign-jobs.js";
 import { noteMacForeignLaunchdJobs } from "./doctor-foreign-launchd-jobs.js";
+import type { DoctorOptions } from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
   find: vi.fn<() => Promise<ForeignLaunchdJob[]>>(),
@@ -35,7 +36,7 @@ const lifecycleJob: ForeignLaunchdJob = {
   gatewayActions: ["restart"],
   safeToRemove: true,
 };
-const reportOnlyJob: ForeignLaunchdJob = {
+const reportOnlyJob = {
   label: "ai.openclaw.test.w15.observer",
   program: "/usr/bin/true",
   keepAlive: false,
@@ -46,24 +47,22 @@ const reportOnlyJob: ForeignLaunchdJob = {
 describe("Doctor foreign launchd jobs", () => {
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const run = (options: DoctorOptions = { repair: true }, env: NodeJS.ProcessEnv = {}) =>
+    noteMacForeignLaunchdJobs(options, runtime, env);
+  const removed = (label: string) => `Removed stray launchd job ${label}. Verified unloaded.`;
 
   beforeEach(() => {
     Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
-    mocks.find.mockReset().mockResolvedValue([lifecycleJob, reportOnlyJob]);
-    mocks.repair.mockReset().mockResolvedValue({
-      removed: true,
-      detail: `Removed stray launchd job ${lifecycleJob.label}. Verified unloaded.`,
-    });
-    mocks.note.mockReset();
-    mocks.defaultIdentity.mockReset().mockReturnValue(true);
-    mocks.manageService.mockReset().mockResolvedValue(true);
-    runtime.log.mockReset();
+    vi.resetAllMocks();
+    mocks.find.mockResolvedValue([lifecycleJob, reportOnlyJob]);
+    mocks.defaultIdentity.mockReturnValue(true);
+    mocks.manageService.mockResolvedValue(true);
   });
 
   afterEach(() => Object.defineProperty(process, "platform", platform));
 
   it("reports lifecycle details without removal when --fix is absent", async () => {
-    await noteMacForeignLaunchdJobs({}, runtime, {});
+    await run({});
 
     const report = mocks.note.mock.calls[0]?.[0];
     expect(report).toContain(lifecycleJob.label);
@@ -75,40 +74,31 @@ describe("Doctor foreign launchd jobs", () => {
     expect(mocks.repair).not.toHaveBeenCalled();
   });
 
-  it("reports a job rejected by fresh owner inspection as not removed", async () => {
+  it("reports owner rejection without claiming removal", async () => {
     mocks.repair.mockResolvedValue({ removed: false, detail: "Lifecycle command changed." });
-
-    await noteMacForeignLaunchdJobs({ repair: true, nonInteractive: true }, runtime, {});
-
+    await run({ repair: true, nonInteractive: true });
     expect(mocks.repair).toHaveBeenCalledExactlyOnceWith(lifecycleJob, {});
     expect(runtime.log).toHaveBeenCalledWith(
       `Removal not confirmed for launchd job ${lifecycleJob.label}: Lifecycle command changed.`,
     );
   });
 
-  it("reports a repair failure per job and continues to the next candidate", async () => {
+  it("reports repair failure and continues to the next candidate", async () => {
     const secondJob = { ...lifecycleJob, label: "ai.openclaw.test.w15.second" };
     mocks.find.mockResolvedValue([lifecycleJob, secondJob]);
     mocks.repair.mockRejectedValueOnce(new Error("launchd job inspection failed"));
-    mocks.repair.mockResolvedValueOnce({
-      removed: true,
-      detail: `Removed stray launchd job ${secondJob.label}. Verified unloaded.`,
-    });
-
-    await noteMacForeignLaunchdJobs({ repair: true }, runtime, {});
-
+    mocks.repair.mockResolvedValueOnce({ removed: true, detail: removed(secondJob.label) });
+    await run();
     expect(runtime.log).toHaveBeenCalledWith(
       `Removal not confirmed for launchd job ${lifecycleJob.label}: launchd job inspection failed`,
     );
-    expect(runtime.log).toHaveBeenCalledWith(
-      `Removed stray launchd job ${secondJob.label}. Verified unloaded.`,
-    );
+    expect(runtime.log).toHaveBeenCalledWith(removed(secondJob.label));
   });
 
   it("reports unavailable inspection without removing jobs or aborting Doctor", async () => {
     mocks.find.mockRejectedValue(new Error("launchd inspection unavailable"));
 
-    await noteMacForeignLaunchdJobs({ repair: true }, runtime, {});
+    await run();
 
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -128,7 +118,7 @@ describe("Doctor foreign launchd jobs", () => {
     mocks.defaultIdentity.mockReturnValue(testCase.defaultIdentity ?? true);
     mocks.manageService.mockResolvedValue(testCase.manageService ?? true);
 
-    await noteMacForeignLaunchdJobs({ repair: true }, runtime, testCase.env);
+    await run({ repair: true }, testCase.env);
 
     expect(mocks.note).toHaveBeenCalled();
     expect(mocks.repair).not.toHaveBeenCalled();

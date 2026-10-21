@@ -5,6 +5,13 @@ import {
 } from "./local-user-ingress.js";
 import { resolveAgentRunSessionCreation } from "./session-creation-provenance.js";
 
+function prepare(
+  input: Omit<Parameters<typeof prepareGatewayLocalUserIngress>[0], "isLocalClient">,
+) {
+  return prepareGatewayLocalUserIngress({ ...input, isLocalClient: false });
+}
+const humanRun = (id: string) => ({ via: "run", actor: { type: "human", source: "profile", id } });
+
 function resolveWithIngress(
   localUserIngress: ReturnType<typeof prepareGatewayLocalUserIngress>,
   profileId?: string,
@@ -35,16 +42,14 @@ describe("agent run session creation provenance", () => {
   });
 
   it("uses the live canonical profile id after a connection profile merge", () => {
-    const localUserIngress = prepareGatewayLocalUserIngress({
+    const localUserIngress = prepare({
       authenticatedUserExpected: true,
       profile: { profileId: "profile-before-merge", displayName: "Ada" },
-      isLocalClient: false,
     });
 
-    expect(resolveWithIngress(localUserIngress, "profile-after-merge")).toEqual({
-      via: "run",
-      actor: { type: "human", source: "profile", id: "profile-after-merge" },
-    });
+    expect(resolveWithIngress(localUserIngress, "profile-after-merge")).toEqual(
+      humanRun("profile-after-merge"),
+    );
     expect(localUserIngress.facts.invoker).toMatchObject({
       state: "present",
       rawPrincipalRef: "profile-before-merge",
@@ -62,16 +67,11 @@ describe("agent run session creation provenance", () => {
         authMethod: "device-token" as const,
         authenticatedUserExpected: false,
         pairedDeviceId: "device-browser",
-        isLocalClient: false,
       },
       expected: {
         ingress: expect.objectContaining({ rawSourceRef: "device-browser" }),
         assurance: [
-          {
-            kind: "device-proof",
-            rawEvidenceRef: "device-browser",
-            strength: "cryptographic",
-          },
+          { kind: "device-proof", rawEvidenceRef: "device-browser", strength: "cryptographic" },
         ],
       },
     },
@@ -80,12 +80,11 @@ describe("agent run session creation provenance", () => {
       input: {
         authMethod: "token" as const,
         authenticatedUserExpected: false,
-        isLocalClient: false,
       },
       expected: { ingress: expect.not.objectContaining({ rawSourceRef: expect.anything() }) },
     },
   ])("keeps a $name profile-less and unattributed", ({ input, expected }) => {
-    const localUserIngress = prepareGatewayLocalUserIngress(input);
+    const localUserIngress = prepare(input);
 
     expect(localUserIngress.facts).toEqual(expect.objectContaining(expected));
     expect(localUserIngress.facts.invoker).toBeUndefined();
@@ -93,10 +92,9 @@ describe("agent run session creation provenance", () => {
   });
 
   it("keeps a trusted-proxy identity unknown when durable profile resolution is missing", () => {
-    const localUserIngress = prepareGatewayLocalUserIngress({
+    const localUserIngress = prepare({
       authMethod: "trusted-proxy",
       authenticatedUserExpected: true,
-      isLocalClient: false,
     });
 
     expect(localUserIngress.facts).toMatchObject({
@@ -137,13 +135,12 @@ describe("agent run session creation provenance", () => {
 
   it("keeps a bounded, redacted profile label transient for opt-in run auditing", () => {
     const secret = "sk-1234567890abcdef";
-    const localUserIngress = prepareGatewayLocalUserIngress({
+    const localUserIngress = prepare({
       authenticatedUserExpected: true,
       profile: {
         profileId: "profile-redacted",
         displayName: `Operator OPENAI_API_KEY=${secret} ${"x".repeat(256)}`,
       },
-      isLocalClient: false,
     });
 
     const invoker = localUserIngress.facts.invoker;
@@ -154,9 +151,8 @@ describe("agent run session creation provenance", () => {
     expect(invoker.displayLabel).toContain("OPENAI_API_KEY=***");
     expect(invoker.displayLabel).not.toContain(secret);
     expect(invoker.displayLabel?.length).toBeLessThanOrEqual(128);
-    expect(resolveWithIngress(localUserIngress, "profile-redacted")).toEqual({
-      via: "run",
-      actor: { type: "human", source: "profile", id: "profile-redacted" },
-    });
+    expect(resolveWithIngress(localUserIngress, "profile-redacted")).toEqual(
+      humanRun("profile-redacted"),
+    );
   });
 });

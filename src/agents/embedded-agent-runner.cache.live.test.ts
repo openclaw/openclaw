@@ -34,6 +34,7 @@ import {
   resolveLiveDirectModel,
   withLiveCacheHeartbeat,
 } from "./live-cache-test-support.js";
+import { useLiveTestRuntimeConfig } from "./live-test-helpers.js";
 
 const describeCacheLive = LIVE_CACHE_TEST_ENABLED ? describe : describe.skip;
 
@@ -208,6 +209,7 @@ async function runEmbeddedCacheProbe(params: {
       model: params.model,
       transport: params.transport,
     });
+  using _ = useLiveTestRuntimeConfig(config);
   // Full-runner probes own a real admission through settlement, just like production callers.
   const preparedRunAdmission = prepareSystemAgentRunAdmission(config, runId, "main", "live-cache");
   const recorder = createUserTurnTranscriptRecorder({
@@ -1351,7 +1353,6 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
           systemPromptDigest: expect.stringMatching(/\S/),
           toolDigest: expect.stringMatching(/\S/),
           toolCount: 0,
-          toolNames: [],
         });
         for (const [index, snapshot] of cacheSnapshots.entries()) {
           expect(snapshot, `cache:state for ${cacheRunIds[index]}`).toEqual(primedCachePolicy);

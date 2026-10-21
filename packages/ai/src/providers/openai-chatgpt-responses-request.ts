@@ -87,7 +87,9 @@ export function buildRequestBody(
   if (effort !== undefined) {
     body.reasoning = {
       effort,
-      ...(effort === "none" ? {} : { summary: options?.reasoningSummary ?? "auto" }),
+      ...(effort === "none"
+        ? {}
+        : { summary: options?.reasoningSummary === undefined ? "auto" : options.reasoningSummary }),
     };
   }
 

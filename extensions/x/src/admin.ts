@@ -63,8 +63,8 @@ function callerIdentity(request: Request): string {
 export function registerXAllowlistMethods(
   api: Pick<OpenClawPluginApi, "registerGatewayMethod" | "logger"> & {
     runtime: {
-      capabilities?: OpenClawPluginApi["runtime"]["capabilities"];
       state: Pick<OpenClawPluginApi["runtime"]["state"], "openKeyedStore" | "resolveStateDir">;
+      logging: Pick<OpenClawPluginApi["runtime"]["logging"], "getChildLogger">;
     };
   },
 ) {
@@ -150,7 +150,11 @@ export function registerXAllowlistMethods(
       const { cfg, account } = accountFor(request);
       const client = await getXApi(account.accountId, cfg);
       assertAdmin(request);
-      const user = await client.getUserByUsername(username, request.signal);
+      const user = await client.getUserByUsername(
+        username,
+        request.signal,
+        () => () => assertAdmin(request),
+      );
       assertAdmin(request);
       await getAllowlist().put(
         account.accountId,

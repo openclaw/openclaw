@@ -13,6 +13,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { CronService } from "../service.js";
 import {
@@ -39,7 +40,7 @@ const runtimeStoreFixtures = setupCronRegressionFixtures({ prefix: "cron-runtime
 
 function trackCronRowReads() {
   return trackSqliteStatementExecutions(
-    openOpenClawStateDatabase().db,
+    requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
     ["jobs", "authorities"] as const,
     (sql) => {
       if (sql.includes('from "cron_jobs"')) {
@@ -270,7 +271,6 @@ describe("cron runtime row publication", () => {
     await saveCronStore(storePath, { version: 1, jobs });
     const job = jobs[64]!;
     const prepared = prepareCronRunReceiptClaim({
-      observed: undefined,
       storePath,
       job,
       agentId: "main",
@@ -281,7 +281,6 @@ describe("cron runtime row publication", () => {
       claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
-        resolveAgentId: (current) => current.agentId ?? "main",
       }),
     );
     try {

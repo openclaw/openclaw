@@ -1,4 +1,3 @@
-// Gateway mutable runtime handles.
 // Provides stop-safe defaults for timers, sidecars, subscriptions, and services.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -50,7 +49,6 @@ export type GatewayServerMutableState = {
   configReloader: GatewayConfigReloaderHandle;
   reconcileAuditPolicy: ((config: OpenClawConfig) => void) | null;
   agentUnsub: (() => Promise<void> | void) | null;
-  heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
 };
@@ -78,7 +76,6 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     },
     reconcileAuditPolicy: null,
     agentUnsub: null,
-    heartbeatUnsub: null,
     transcriptUnsub: null,
     lifecycleUnsub: null,
   };

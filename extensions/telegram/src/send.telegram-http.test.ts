@@ -774,7 +774,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     },
   );
 
-  it("keeps private captions and media paths out of success logging", async () => {
+  it("keeps private captions and media paths out of logs", async () => {
     const info = vi.spyOn(sendLogger, "info");
     const text = "private outbound payload";
     await sendMessageTelegram("123:topic:77", text, {
@@ -784,7 +784,6 @@ describe("Telegram physical send acceptance over HTTP", () => {
       mediaLocalRoots: [mediaDir],
     });
     const logs = info.mock.calls.map(([message]) => message).join("\n");
-    expect(logs).toContain("outbound send ok");
     expect(logs).not.toContain(text);
     expect(logs).not.toContain(photoPath);
   });
@@ -838,6 +837,43 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
   describe("edit recovery", () => {
     afterEach(resetGlobalHookRunner);
+    it.each(["caption", "auto"] as const)(
+      "preserves rich list caption rendering during a %s edit",
+      async (editMode) => {
+        if (editMode === "auto") {
+          rejections.push("Bad Request: there is no text in the message to edit");
+        }
+        await editMessageTelegram(
+          "123",
+          321,
+          "<ul><li>First</li><li>Second</li></ul><aside>Note</aside>",
+          { cfg, api: bot.api, editMode },
+        );
+        expect(requests.at(-1)?.method).toBe("editMessageCaption");
+        expect(requests.at(-1)?.fields.caption).toBe(
+          "• First\n• Second\n<blockquote>Note</blockquote>",
+        );
+      },
+    );
+
+    it("keeps a markup-heavy caption edit within the limit after an HTML rejection", async () => {
+      rejections.push("Bad Request: can't parse entities");
+      await editMessageTelegram("123", 321, `**${"x".repeat(1024)}**`, {
+        cfg,
+        api: bot.api,
+        editMode: "caption",
+      });
+      expect(requests.map(({ method }) => method)).toEqual([
+        "editMessageCaption",
+        "editMessageCaption",
+      ]);
+      expect(requests.map(({ fields }) => fields.caption)).toEqual([
+        `<b>${"x".repeat(1024)}</b>`,
+        "x".repeat(1024),
+      ]);
+      expect(requests[1]?.fields.parse_mode).toBeUndefined();
+    });
+
     it("edits the existing caption when Telegram reports no text to edit", async () => {
       rejections.push("Bad Request: there is no text in the message to edit");
       await editMessageTelegram("123", 321, "<b>visible</b>", {

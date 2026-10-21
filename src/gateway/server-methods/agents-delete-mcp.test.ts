@@ -18,8 +18,8 @@ import { drainAgentDeletionRuns } from "./agents-delete-drain.js";
 
 it.each(["keyed", "unkeyed"])(
   "joins an idle %s MCP transport without a session row, preserving a surviving agent",
-  async (kind) => {
-    await withOpenClawTestState({ label: "agent-delete-mcp" }, async (state) => {
+  (kind) =>
+    withOpenClawTestState({ label: "agent-delete-mcp" }, async (state) => {
       const termination = createDeferred();
       const doomed = await startCatalogRecoveryMcpServer("doomed", {
         holdTermination: termination.promise,
@@ -95,6 +95,5 @@ it.each(["keyed", "unkeyed"])(
         await scheduler.stop();
         await Promise.all([doomed.close(), keeper.close()]);
       }
-    });
-  },
+    }),
 );

@@ -1,6 +1,6 @@
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-list.read.js";
 import { projectSqliteSessionParticipantsBatch } from "./session-accessor.sqlite-participant-projection.js";
@@ -42,7 +42,7 @@ export function readSessionCreationSnapshotInDatabase(
   label?: string,
 ): SessionCreationSnapshot {
   return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-    runSqliteDeferredTransactionSync(database.db, () => {
+    runSqliteReadSnapshotSync(database.db, () => {
       const normalizedKey = normalizeStoreSessionKey(sessionKey);
       const keys = [normalizedKey, ...collectSessionEntryLookupKeys(sessionKey)];
       const candidates = readSelectedSessionEntriesInDatabase(database, keys, {

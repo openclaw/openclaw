@@ -3,8 +3,11 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
-import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
+import {
+  replayChatDisplay,
+  type ChatDisplayFrame,
+} from "../../test/helpers/gateway/chat-display-replay.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -126,6 +129,7 @@ it(
     let scenario: Scenario = "fallback";
     let requests: string[] = [];
     const events: ChatEvent[] = [];
+    const displayFrames: ChatDisplayFrame[] = [];
     const terminalEvents = new Map<string, (event: ChatEvent) => void>();
     const publishedMessages = new Map<string, unknown[]>();
     const fallbackEvents: unknown[] = [];
@@ -297,7 +301,11 @@ it(
           if (event.event === "chat") {
             const chatEvent = event.payload as ChatEvent;
             events.push(chatEvent);
+            displayFrames.push({ event: "chat", payload: chatEvent });
             terminalEvents.get(chatEvent.runId)?.(chatEvent);
+          }
+          if (event.event === "session.message") {
+            displayFrames.push({ event: "session.message", payload: event.payload });
           }
           if (
             event.event === "session.message" &&
@@ -442,13 +450,21 @@ it(
           expect
             .soft(messageText(publishedMessages.get(sessionKey)?.at(-1)), scenario)
             .toBe(prefix);
-          const deltas = runEvents.filter((event) => event.state === "delta");
-          const liveMessage = deltas.reduce<unknown>(
-            (previous, event) => mergeChatStreamMessage(previous, event),
-            undefined,
-          );
-          // Saved assistant content belongs to canonical publication, not the unsaved live tail.
-          expect.soft(messageText(liveMessage), scenario).toBe("");
+          const display = replayChatDisplay(displayFrames, sessionKey, started.runId);
+          expect.soft(display.chatRunId, scenario).toBeNull();
+          expect.soft(display.chatStream, scenario).toBeNull();
+          expect.soft(display.chatStreamSegments, scenario).toEqual([]);
+          expect
+            .soft(
+              display.chatMessages
+                .filter(isRecord)
+                .filter((message) => message.role === "assistant")
+                .map(messageText),
+              scenario,
+            )
+            .toEqual(
+              history.messages.filter((message) => message.role === "assistant").map(messageText),
+            );
           if (scenario === "no-fallback") {
             expect.soft(requests, scenario).not.toContain(fallbackModel);
           } else {

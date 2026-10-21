@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
+import {
+  withAgentDeletion,
+  type AgentDeletionOperation,
+} from "../agents/agent-lifecycle-registry.js";
 import { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-service.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withSessionEntryWorker } from "../config/sessions/session-accessor.sqlite-replacement-worker.js";
@@ -11,8 +14,8 @@ import { purgeDeletedAgentSessionEntries } from "../config/sessions/session-agen
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
+  closeOpenClawAgentDatabasesAsync as closeAgentDbs,
+  openOpenClawAgentDatabase as openAgentDb,
 } from "./openclaw-agent-db.js";
 import * as native from "./openclaw-agent-execution-native.js";
 import * as execution from "./openclaw-agent-execution.js";
@@ -21,33 +24,53 @@ import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
-    await closeOpenClawAgentDatabasesAsync();
+    await closeAgentDbs();
     await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );
 
-it("preserves a surviving shared-store executor across another agent's deletion", async () => {
-  const root = fs.realpathSync(tempDirs.make("delete-shared-executor-"));
+async function fixture(shared: boolean) {
+  const root = fs.realpathSync(tempDirs.make("delete-straggling-write-"));
   const env = { OPENCLAW_STATE_DIR: root };
-  const database = openOpenClawAgentDatabase({
-    agentId: "kept",
+  const storeAgentId = shared ? "kept" : "worker";
+  const database = openAgentDb({
+    agentId: storeAgentId,
     env,
-    path: path.join(root, "shared.sqlite"),
+    ...(shared ? { path: path.join(root, "shared.sqlite") } : {}),
   });
-  const target = { agentId: "kept", path: database.path, env };
+  const target = { agentId: storeAgentId, path: database.path, env };
   const cfg = {
     agents: { entries: { worker: {}, kept: {} } },
-    session: { store: target.path },
+    ...(shared ? { session: { store: target.path } } : {}),
   };
-  for (const agentId of ["worker", "kept"]) {
+  for (const agentId of shared ? ["worker", "kept"] : ["worker"]) {
     replaceSessionEntrySync(
       { agentId, env, storePath: target.path, sessionKey: `agent:${agentId}:main` },
-      { sessionId: agentId, updatedAt: Date.now() },
+      { sessionId: shared ? agentId : "before", updatedAt: shared ? Date.now() : 1 },
     );
   }
-  await closeOpenClawAgentDatabasesAsync();
+  await closeAgentDbs();
   const retained = execution.captureOpenClawAgentDatabaseExecution(target);
+  const entry = {
+    agentId: "worker",
+    agentDir: path.join(root, "agents/worker/agent"),
+    workspaceDir: path.join(root, shared ? "workspace-worker" : "workspace"),
+    sessionsDir: path.join(root, "agents/worker/sessions"),
+  };
+  return {
+    target,
+    cfg,
+    env,
+    retained,
+    withDeletion: <T>(run: (deletion: AgentDeletionOperation) => Promise<T>) =>
+      withAgentDeletion("worker", async (begin) => run(await begin(entry)), { env }),
+  };
+}
+
+it("preserves a surviving shared-store executor across another agent's deletion", async () => {
+  const f = await fixture(true);
+  const { target, cfg, env, retained } = f;
   const purged = createDeferredCore();
   const survivorUsed = createDeferredCore();
   const read = (agentId: string) =>
@@ -70,33 +93,23 @@ it("preserves a surviving shared-store executor across another agent's deletion"
     );
   try {
     expect(await read("kept")).toMatchObject({ sessionId: "kept" });
-    const deleting = withAgentDeletion(
-      "worker",
-      async (begin) => {
-        const deletion = await begin({
-          agentId: "worker",
-          agentDir: path.join(root, "agents", "worker", "agent"),
-          workspaceDir: path.join(root, "workspace-worker"),
-          sessionsDir: path.join(root, "agents", "worker", "sessions"),
-        });
-        await expect(
-          purgeAgentSessionStoreEntries(cfg, "worker", {
-            env,
-            runDatabaseCleanup: (store, run) =>
-              deletion.runDatabaseCleanup(store, async () => {
-                const result = await run();
-                purged.resolve();
-                await survivorUsed.promise;
-                return result;
-              }),
-          }),
-        ).resolves.toBe(false);
-        expect(await read("worker")).toBeUndefined();
-        expect(await read("kept")).toMatchObject({ sessionId: "kept" });
-        await deletion.finish();
-      },
-      { env },
-    );
+    const deleting = f.withDeletion(async (deletion) => {
+      await expect(
+        purgeAgentSessionStoreEntries(cfg, "worker", {
+          env,
+          runDatabaseCleanup: (store, run) =>
+            deletion.runDatabaseCleanup(store, async () => {
+              const result = await run();
+              purged.resolve();
+              await survivorUsed.promise;
+              return result;
+            }),
+        }),
+      ).resolves.toBe(false);
+      expect(await read("worker")).toBeUndefined();
+      expect(await read("kept")).toMatchObject({ sessionId: "kept" });
+      await deletion.finish();
+    });
     try {
       await awaitGateBeforeSettlement(
         purged.promise,
@@ -118,17 +131,9 @@ it("preserves a surviving shared-store executor across another agent's deletion"
 });
 
 it("keeps purge's native generation alive when a retained ordinary borrower is refused", async () => {
-  const root = fs.realpathSync(tempDirs.make("delete-retained-writer-"));
-  const env = { OPENCLAW_STATE_DIR: root };
+  const f = await fixture(false);
+  const { target, cfg, env, retained } = f;
   const agentId = "worker";
-  const database = openOpenClawAgentDatabase({ agentId, env });
-  const target = { agentId, path: database.path };
-  replaceSessionEntrySync(
-    { agentId, env, sessionKey: "agent:worker:main" },
-    { sessionId: "before", updatedAt: 1 },
-  );
-  await closeOpenClawAgentDatabasesAsync();
-  const retained = execution.captureOpenClawAgentDatabaseExecution({ ...target, env });
   const prepared = createDeferredCore();
   const resumePurge = createDeferredCore();
   const closing = createDeferredCore();
@@ -158,63 +163,49 @@ it("keeps purge's native generation alive when a retained ordinary borrower is r
     };
   });
   try {
-    await withAgentDeletion(
-      agentId,
-      async (begin) => {
-        const deletion = await begin({
+    await f.withDeletion(async (deletion) => {
+      const purging = deletion.runDatabaseCleanup(target, () =>
+        purgeDeletedAgentSessionEntries({
+          cfg,
           agentId,
-          agentDir: path.dirname(target.path),
-          workspaceDir: path.join(root, "workspace"),
-          sessionsDir: path.join(root, "agents", agentId, "sessions"),
-        });
-        const purging = deletion.runDatabaseCleanup(target, () =>
-          purgeDeletedAgentSessionEntries({
-            cfg: { agents: { entries: { worker: {}, kept: {} } } },
-            agentId,
-            storeAgentId: agentId,
-            storePath: target.path,
-            env,
-          }),
+          storeAgentId: agentId,
+          storePath: target.path,
+          env,
+        }),
+      );
+      const purged = expect(purging).resolves.toBeUndefined();
+      try {
+        await awaitGateBeforeSettlement(
+          prepared.promise,
+          purging,
+          "purge did not prepare its native generation",
         );
-        const purged = expect(purging).resolves.toBeUndefined();
-        try {
-          await awaitGateBeforeSettlement(
-            prepared.promise,
-            purging,
-            "purge did not prepare its native generation",
-          );
-          const staleOperation = vi.fn(async () => undefined);
-          const refused = expect(
-            retained.runExisting(
-              {
-                assertCurrent() {},
-                createAdmission() {
-                  throw new Error("Refused borrower reached native admission");
-                },
+        const staleOperation = vi.fn(async () => undefined);
+        const refused = expect(
+          retained.runExisting(
+            {
+              assertCurrent() {},
+              createAdmission() {
+                throw new Error("Refused borrower reached native admission");
               },
-              staleOperation,
-              { retireNativeOnFailure: true },
-            ),
-          ).rejects.toThrow(/active deletion cleanup|execution admission is closed/);
-          await Promise.race([closing.promise, refused]);
-          resumePurge.resolve();
-          await refused;
-          expect(staleOperation).not.toHaveBeenCalled();
-        } finally {
-          resumePurge.resolve();
-          await purged;
-        }
-      },
-      { env },
-    );
+            },
+            staleOperation,
+            { retireNativeOnFailure: true },
+          ),
+        ).rejects.toThrow(/active deletion cleanup|execution admission is closed/);
+        await Promise.race([closing.promise, refused]);
+        resumePurge.resolve();
+        await refused;
+        expect(staleOperation).not.toHaveBeenCalled();
+      } finally {
+        resumePurge.resolve();
+        await purged;
+      }
+    });
   } finally {
     resumePurge.resolve();
     await retained.release();
   }
-  const reader = openNodeSqliteDatabase(target.path, { readOnly: true });
-  try {
-    expect(reader.prepare("SELECT session_key FROM session_nodes").all()).toEqual([]);
-  } finally {
-    reader.close();
-  }
+  using reader = openNodeSqliteDatabase(target.path, { readOnly: true });
+  expect(reader.prepare("SELECT session_key FROM session_nodes").all()).toEqual([]);
 });

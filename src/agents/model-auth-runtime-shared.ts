@@ -5,6 +5,7 @@
  */
 import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderSyntheticAuthResult } from "../plugins/provider-external-auth.types.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
@@ -19,6 +20,7 @@ export type ResolvedProviderAuth = {
   mode: "api-key" | "oauth" | "token" | "aws-sdk";
   /** Provider-owned OAuth grant family; distinct from credential renewal mode. */
   authFlow?: string;
+  nativeAuth?: ProviderSyntheticAuthResult["nativeAuth"];
 };
 
 export function resolveDirectProviderCredentialMode(params: {
@@ -53,6 +55,20 @@ export class ProviderAuthError extends Error {
     this.code = code;
     this.provider = provider;
     this.providerGuidance = options?.providerGuidance === true;
+  }
+}
+
+/** Native login is availability evidence, never an HTTP credential. */
+export function assertProviderAuthSupportsHttp(
+  auth: { nativeAuth?: ProviderSyntheticAuthResult["nativeAuth"] },
+  provider: string,
+): void {
+  if (auth.nativeAuth) {
+    throw new ProviderAuthError(
+      "missing-provider-auth",
+      provider,
+      `Native authentication for provider "${provider}" belongs to the "${auth.nativeAuth.runtime}" runtime and cannot authorize an HTTP request. Select that runtime or configure an API key.`,
+    );
   }
 }
 
@@ -97,6 +113,7 @@ export function formatMissingAuthError(auth: ResolvedProviderAuth, provider: str
 }
 
 export function requireApiKey(auth: ResolvedProviderAuth, provider: string): string {
+  assertProviderAuthSupportsHttp(auth, provider);
   const key = normalizeSecretInput(auth.apiKey);
   if (key) {
     return key;

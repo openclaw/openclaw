@@ -176,6 +176,7 @@ export async function noteSessionTranscriptHealth(options?: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   shouldRepair?: boolean;
+  integrityCheck?: "quick" | "full";
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
@@ -223,6 +224,7 @@ export async function noteSessionTranscriptHealth(options?: {
         ...(params.cfg ? { cfg: params.cfg } : {}),
         env: params.env,
         mode: params.shouldRepair ? "import" : "dry-run",
+        integrityCheck: params.integrityCheck,
       },
       maintenanceAuthority,
     );
@@ -237,6 +239,7 @@ export async function noteSessionTranscriptHealth(options?: {
       apply: params.shouldRepair,
       cfg: params.cfg ?? {},
       env: params.env,
+      integrityCheck: params.integrityCheck,
     };
     const canonicalKeyReport = await repairCanonicalSessionKeys(repairParams);
     // Preview reuses its read-only inventory; import and key repair can create stores.
@@ -253,6 +256,7 @@ export async function noteSessionTranscriptHealth(options?: {
     const acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
       ...rowRepairParams,
       authority: maintenanceAuthority,
+      integrityCheck: params.integrityCheck,
     });
     const titleReport = await repairLegacySessionTitles({
       ...rowRepairParams,

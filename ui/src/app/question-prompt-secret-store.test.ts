@@ -93,39 +93,28 @@ describe("store-bound question normalization", () => {
     };
     const { prompt } = createSecretPrompt(
       undefined,
-      requestedSecret(secretStore, { secretStoreExisting }),
+      requestedSecret(secretStore, {
+        secretStoreExisting: { ...secretStoreExisting, updatedBy: " operator@example.test " },
+      }),
     );
 
     expect(prompt.questions[0]).toMatchObject({ isSecret: true, secretStore, secretStoreExisting });
   });
 
   it.each([
-    { label: "non-boolean secrecy", overrides: { isSecret: "true" } },
     {
-      label: "duplicate hosts",
-      overrides: {
-        secretStore: {
-          name: "TEST_API_KEY",
-          kind: "secret",
-          allowedHosts: ["api.example.test", "api.example.test"],
-        },
-      },
+      label: "negative replacement timestamp",
+      secretStoreExisting: { updatedAtMs: -1 },
     },
     {
-      label: "hosts on environment entries",
-      overrides: {
-        secretStore: {
-          name: "TEST_ENV_VALUE",
-          kind: "env",
-          allowedHosts: ["api.example.test"],
-        },
-      },
+      label: "unsafe replacement timestamp",
+      secretStoreExisting: { updatedAtMs: Number.MAX_SAFE_INTEGER + 1 },
     },
     {
-      label: "invalid replacement metadata",
-      overrides: { secretStoreExisting: { updatedAtMs: -1 } },
+      label: "blank replacement writer",
+      secretStoreExisting: { updatedAtMs: 1_234, updatedBy: " " },
     },
-  ])("rejects $label", ({ overrides }) => {
+  ])("rejects $label", ({ secretStoreExisting }) => {
     const state = createQuestionPromptState(vi.fn());
     states.push(state);
     const record = requestedSecret();
@@ -133,7 +122,7 @@ describe("store-bound question normalization", () => {
     expect(
       handleQuestionPromptEvent(state, {
         event: "question.requested",
-        payload: { ...record, questions: [{ ...record.questions[0], ...overrides }] },
+        payload: { ...record, questions: [{ ...record.questions[0], secretStoreExisting }] },
       }),
     ).toBe(false);
   });

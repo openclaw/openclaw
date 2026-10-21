@@ -261,7 +261,10 @@ export async function registerNativeSubagentParent(
   }
   const ready = dependencies.submissions
     .restore(state, owner)
-    .then(() => dependencies.assignments.restore(state, owner));
+    .then(() => dependencies.submissions.drain(registeredState))
+    .then(() => dependencies.assignments.restore(state, owner))
+    // Recovery can enqueue binding writes; settle them before the caller's effect guard.
+    .then(() => dependencies.assignments.drain(registeredState));
   let registered = true;
   let settlement: Promise<void> | undefined;
   return {

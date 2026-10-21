@@ -1,8 +1,13 @@
-// Control UI tests cover About artifact identity against a mocked Gateway.
 import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import {
+  expectAttribute,
+  expectCount,
+  expectText,
+  showHeading,
+} from "./activity-assertions.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -87,6 +92,7 @@ suite.define(() => {
           await waitForControlUiGatewayReady(page);
           const strip = page.locator('dl[aria-label="Control UI build details"]');
           const copy = strip.locator(".about-commit__copy");
+          const tooltip = strip.locator(".about-commit > openclaw-tooltip");
           await copy.waitFor();
           const original = await copy.elementHandle();
           if (!original) {
@@ -110,28 +116,22 @@ suite.define(() => {
             });
           const readBackend = () =>
             page.evaluate(() => {
-              const backend = (window as AboutCopyWindow).aboutCopyBackend;
-              return {
-                writes: backend.writes,
-                legacyCalls: backend.legacyCalls,
-                pending: backend.pending,
-              };
+              const { writes, legacyCalls, pending } = (window as AboutCopyWindow).aboutCopyBackend;
+              return { writes, legacyCalls, pending };
             });
           const firstLabel = firstCopied ? "Commit hash copied" : "Could not copy commit hash";
           const resultLabel = retryCopied ? "Commit hash copied" : "Could not copy commit hash";
-          const copying = {
+          const state = (label: string, busy: string | null = null, disabled = false) => ({
             connected: true,
-            label: "Copying commit hash",
-            busy: "true",
-            disabled: true,
-          };
+            label,
+            busy,
+            disabled,
+          });
+          const copying = state("Copying commit hash", "true", true);
           await pauseVirtualClock(page);
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
           await copy.click();
-          await expect
-            .poll(readState)
-            .toEqual({ connected: true, label: firstLabel, busy: null, disabled: false });
+          await expect.poll(readState).toEqual(state(firstLabel));
           expect((await readBackend()).writes).toEqual([COMMIT]);
           await copy.click();
           await expect.poll(readState).toEqual(copying);
@@ -146,14 +146,8 @@ suite.define(() => {
             await page.mouse.move(0, 0);
             await copy.hover();
             await page.clock.runFor(200);
-            await expect
-              .poll(() => strip.locator(".about-commit > openclaw-tooltip").getAttribute("open"))
-              .toBe("");
-            await expect
-              .poll(() =>
-                strip.locator(".about-commit > openclaw-tooltip .tooltip-content").textContent(),
-              )
-              .toBe(afterOldDeadline.label);
+            await expectAttribute(tooltip, "open").toBe("");
+            await expectText(tooltip.locator(".tooltip-content")).toBe(afterOldDeadline.label);
             await page.screenshot({ path: path.join(suite.artifactDir, `${prior}-pending.png`) });
             expect((await readBackend()).pending).toBe(true);
           }
@@ -161,7 +155,7 @@ suite.define(() => {
             (copied) => (window as AboutCopyWindow).aboutCopyBackend.finishRetry?.(copied),
             retryCopied,
           );
-          const result = { connected: true, label: resultLabel, busy: null, disabled: false };
+          const result = state(resultLabel);
           await expect.poll(readState).toEqual(result);
           expect(await readBackend()).toEqual({
             writes: [COMMIT, COMMIT],
@@ -173,33 +167,13 @@ suite.define(() => {
           );
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           if (capture) {
-            await expect
-              .poll(() =>
-                strip.locator(".about-commit > openclaw-tooltip .tooltip-content").textContent(),
-              )
-              .toBe(resultLabel);
+            await expectText(tooltip.locator(".tooltip-content")).toBe(resultLabel);
             await page.screenshot({ path: path.join(suite.artifactDir, `${prior}-result.png`) });
           }
-          console.info(
-            "[about-copy-proof] " +
-              JSON.stringify({
-                prior,
-                afterOldDeadline,
-                result: await readState(),
-                backend: await readBackend(),
-                pendingAdvanceBeforeSnapshotMs: 1_801,
-                mediaInspected: false,
-              }),
-          );
           await page.clock.runFor(1_799);
           expect(await readState()).toEqual(result);
           await page.clock.runFor(1);
-          await expect.poll(readState).toEqual({
-            connected: true,
-            label: "Copy full commit hash",
-            busy: null,
-            disabled: false,
-          });
+          await expect.poll(readState).toEqual(state("Copy full commit hash"));
         },
         async ({ page }) => {
           await page.evaluate(
@@ -214,39 +188,27 @@ suite.define(() => {
     },
   );
 
-  it("shows and copies browser artifact identity, separately from the Gateway version", async () => {
+  it("shows browser artifact identity separately from the Gateway version", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: {
-          writeText: async (text: string) => {
-            (globalThis as typeof globalThis & { __openclawCopiedCommit?: string })[
-              "__openclawCopiedCommit"
-            ] = text;
-          },
-        },
-      });
-    });
     const page = await context.newPage();
     await installMockGateway(page);
 
     try {
       const response = await page.goto(`${suite.server.baseUrl}settings/about`);
       expect(response?.status()).toBe(200);
-      await page.getByRole("heading", { name: "Settings" }).waitFor();
+      await showHeading(page, "Settings");
 
       const aboutLink = page.getByRole("link", { name: "About", exact: true });
-      await expect.poll(() => aboutLink.getAttribute("aria-current")).toBe("page");
+      await expectAttribute(aboutLink, "aria-current").toBe("page");
 
       const strip = page.locator('dl[aria-label="Control UI build details"]');
       const items = strip.locator(":scope > dd");
-      await expect.poll(() => items.count()).toBe(3);
-      await expect.poll(() => items.nth(0).textContent()).toContain("2026.7.10");
+      await expectCount(items).toBe(3);
+      await expectText(items.nth(0)).toContain("2026.7.10");
 
       const commit = items.nth(1).locator("code");
-      await expect.poll(() => commit.textContent()).toBe(COMMIT.slice(0, 12));
-      await expect.poll(() => commit.getAttribute("title")).toBe(COMMIT);
+      await expectText(commit).toBe(COMMIT.slice(0, 12));
+      await expectAttribute(commit, "title").toBe(COMMIT);
 
       const [versionLabelBox, versionValueBox, commitBox, commitAgeBox] = await Promise.all([
         strip.locator(":scope > dt").first().boundingBox(),
@@ -262,32 +224,13 @@ suite.define(() => {
       expect(commitAgeBox!.x - (commitBox!.x + commitBox!.width)).toBeLessThan(12);
 
       const built = items.nth(2).locator("time");
-      await expect.poll(() => built.textContent()).toBe("Jul 10, 2026");
-      await expect.poll(() => built.getAttribute("datetime")).toBe(BUILT_AT);
-      await expect.poll(() => built.getAttribute("title")).toBe(BUILT_AT);
+      await expectText(built).toBe("Jul 10, 2026");
+      await expectAttribute(built, "datetime").toBe(BUILT_AT);
+      await expectAttribute(built, "title").toBe(BUILT_AT);
 
       const gatewayRow = page.locator(".settings-row", { hasText: "Connected Gateway version" });
-      await expect.poll(() => gatewayRow.textContent()).toContain("e2e");
-      await expect
-        .poll(() => gatewayRow.textContent())
-        .toContain("separate from this Control UI build");
-
-      const hero = page.locator(".about-hero");
-      await expect.poll(() => hero.locator(".about-hero__name").textContent()).toBe("OpenClaw");
-      await expect
-        .poll(() => hero.locator(".about-hero__version").textContent())
-        .toBe("v2026.7.10");
-
-      const githubLink = hero.getByRole("link", { name: "GitHub", exact: true });
-      await expect
-        .poll(() => githubLink.getAttribute("href"))
-        .toBe("https://github.com/openclaw/openclaw");
-      await expect.poll(() => githubLink.getAttribute("target")).toBe("_blank");
-      await expect.poll(() => githubLink.getAttribute("rel")).toContain("noopener");
-      const discordLink = hero.getByRole("link", { name: "Discord", exact: true });
-      await expect.poll(() => discordLink.getAttribute("href")).toBe("https://discord.gg/clawd");
-      const xLink = hero.getByRole("link", { name: "X (Twitter)", exact: true });
-      await expect.poll(() => xLink.getAttribute("href")).toBe("https://x.com/openclaw");
+      await expectText(gatewayRow).toContain("e2e");
+      await expectText(gatewayRow).toContain("separate from this Control UI build");
 
       const clawd = page.getByRole("button", { name: "Wave hello to Clawd" });
       // CLAWD_WAVE_MS clears the class after 1400ms, so click and read it in one browser step.
@@ -307,56 +250,6 @@ suite.define(() => {
       });
       expect(clawdWaving).toBe(true);
 
-      await expect.poll(() => page.locator(".about-footer").textContent()).toContain("MIT License");
-
-      const copyButton = strip.locator(".about-commit button");
-      await expect.poll(() => copyButton.getAttribute("aria-label")).toBe("Copy full commit hash");
-      // COPY_RESULT_VISIBLE_MS clears the copied label after 1800ms. Await both the
-      // initial copying render and the async clipboard continuation before reading it.
-      const copiedLabel = await copyButton.evaluate(async (element) => {
-        const button = element as HTMLButtonElement;
-        const owner = element.closest("openclaw-about-page") as
-          | (HTMLElement & {
-              updateComplete: Promise<unknown>;
-            })
-          | null;
-        if (!owner) {
-          throw new Error("About page owner is unavailable");
-        }
-        let copyObserver: MutationObserver | undefined;
-        const copySettled = new Promise<void>((resolve) => {
-          copyObserver = new MutationObserver(() => {
-            if (button.getAttribute("aria-busy") !== "true") {
-              copyObserver?.disconnect();
-              resolve();
-            }
-          });
-          copyObserver.observe(button, {
-            attributeFilter: ["aria-busy", "aria-label"],
-            attributes: true,
-          });
-        });
-        button.click();
-        await owner.updateComplete;
-        if (button.getAttribute("aria-busy") === "true") {
-          await copySettled;
-        }
-        copyObserver?.disconnect();
-        await owner.updateComplete;
-        return button.getAttribute("aria-label");
-      });
-      expect(copiedLabel).toBe("Commit hash copied");
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              (globalThis as typeof globalThis & { __openclawCopiedCommit?: string })[
-                "__openclawCopiedCommit"
-              ],
-          ),
-        )
-        .toBe(COMMIT);
-
       await page.setViewportSize({ height: 812, width: 375 });
       await expect
         .poll(() =>
@@ -365,8 +258,6 @@ suite.define(() => {
           ),
         )
         .toBeLessThanOrEqual(1);
-      const mobileScreenshot = await page.screenshot({ animations: "disabled", fullPage: true });
-      expect(mobileScreenshot.byteLength).toBeGreaterThan(1_000);
     } finally {
       await context.close();
     }

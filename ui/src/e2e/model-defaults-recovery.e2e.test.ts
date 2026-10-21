@@ -1,8 +1,8 @@
-import path from "node:path";
 import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 const suite = createControlUiE2eSuite({ name: "Control UI global model defaults recovery" });
@@ -37,14 +37,7 @@ suite.define(() => {
                   { id: "research", name: "QA Research" },
                 ],
               },
-              "config.get": {
-                config,
-                sourceConfig: config,
-                hash: "qa-settings-original",
-                valid: true,
-                issues: [],
-                raw: JSON.stringify(config),
-              },
+              "config.get": configSnapshot(config, "qa-settings-original"),
               "models.authStatus": {
                 ts: 1,
                 providers: [{ provider: "openai", profiles: [], apiKey: { source: "config" } }],
@@ -56,6 +49,7 @@ suite.define(() => {
           const primary = page.locator(".model-providers__defaults .model-picker").first();
           const trigger = primary.locator(".picker-select__trigger");
           const modelLabel = trigger.locator(".picker-select__label");
+          const retry = page.getByRole("button", { name: "Retry", exact: true });
           await expect.poll(() => modelLabel.textContent()).toBe("GPT-4.1");
           await gateway.deferNext("config.patch");
           await trigger.click();
@@ -77,26 +71,19 @@ suite.define(() => {
             message: "Synthetic rejected model save",
           });
           await expect.poll(() => trigger.isEnabled()).toBe(true);
-          await page.getByRole("button", { name: "Retry", exact: true }).waitFor();
+          await retry.waitFor();
           await expect.poll(() => modelLabel.textContent()).toBe("GPT-4.1");
           const savedConfig = {
             ...config,
             agents: { ...config.agents, defaults: { model: { primary: "openai/gpt-4.1-mini" } } },
           };
-          await gateway.setMethodResponse("config.get", {
-            config: savedConfig,
-            sourceConfig: savedConfig,
-            hash: "qa-retried",
-            valid: true,
-            issues: [],
-            raw: JSON.stringify(savedConfig),
-          });
+          await gateway.setMethodResponse("config.get", configSnapshot(savedConfig, "qa-retried"));
           await gateway.setMethodResponse("config.patch", {
             ok: true,
             config: savedConfig,
             hash: "qa-retried",
           });
-          await page.getByRole("button", { name: "Retry", exact: true }).click();
+          await retry.click();
           await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(2);
           const patches = await gateway.getRequests("config.patch");
           const retryParams = requireRecord(patches[1]?.params);
@@ -105,28 +92,16 @@ suite.define(() => {
           expect(retryPatch).toMatchObject({
             agents: { defaults: { model: "openai/gpt-4.1-mini" } },
           });
-          await expect
-            .poll(() => page.getByRole("button", { name: "Retry", exact: true }).count())
-            .toBe(0);
+          await expect.poll(() => retry.count()).toBe(0);
           await expect.poll(() => modelLabel.textContent()).toBe("GPT-4.1 mini");
           const previousReads = (await gateway.getRequests("config.get")).length;
-          await gateway.setMethodResponse("config.get", {
-            config,
-            sourceConfig: config,
-            hash: "qa-external",
-            valid: true,
-            issues: [],
-            raw: JSON.stringify(config),
-          });
+          await gateway.setMethodResponse("config.get", configSnapshot(config, "qa-external"));
           await gateway.emitGatewayEvent("config.changed", {});
           await expect
             .poll(async () => (await gateway.getRequests("config.get")).length)
             .toBeGreaterThan(previousReads);
           await expect.poll(() => trigger.isEnabled()).toBe(true);
           await expect.poll(() => modelLabel.textContent()).toBe("GPT-4.1");
-          await page.screenshot({
-            path: path.join(suite.artifactDir, `external-change-switch-${switchAgent}.png`),
-          });
         },
       );
     },

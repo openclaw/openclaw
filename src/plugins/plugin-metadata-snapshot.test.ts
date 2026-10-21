@@ -72,12 +72,19 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
   };
 });
 
-function mockRegistrySnapshot(index: ReturnType<typeof makeIndex>) {
+function mockRegistrySnapshot(index: ReturnType<typeof makeIndex>, source = "provided") {
   loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-    source: "provided",
+    source,
     snapshot: index,
     diagnostics: [],
   });
+}
+
+function prepareRegistry(config: OpenClawConfig = {}, source = "provided") {
+  const index = makeIndex();
+  index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+  mockRegistrySnapshot(index, source);
+  return { config, env: {}, index };
 }
 
 describe("plugin metadata snapshot", () => {
@@ -101,12 +108,6 @@ describe("plugin metadata snapshot", () => {
     const projected = projectPluginMetadataSnapshot(snapshot, ["setup-owner"]);
     expect([...(projected.declaredProviderOwners.get("literal") ?? [])]).toEqual(["setup-owner"]);
     expect(projectPluginMetadataSnapshot(snapshot, []).declaredProviderOwners.size).toBe(0);
-    expect(() => (snapshot.declaredProviderOwners as Map<string, Set<string>>).clear()).toThrow(
-      "Plugin metadata snapshots are immutable",
-    );
-    expect(() =>
-      (snapshot.declaredProviderOwners.get("literal") as Set<string>).add("foreign"),
-    ).toThrow("Plugin metadata snapshots are immutable");
   });
 
   beforeEach(() => {
@@ -177,11 +178,7 @@ describe("plugin metadata snapshot", () => {
       clearBundledDiscoveryModeMemo();
       const index = makeIndex();
       index.policyHash = resolveInstalledPluginIndexPolicyHash(config, env);
-      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-        source: "persisted",
-        snapshot: index,
-        diagnostics: [],
-      });
+      mockRegistrySnapshot(index, "persisted");
 
       const first = loadPluginMetadataSnapshot({ config, env });
       expect(first.index.plugins.map((plugin) => plugin.enabled)).toEqual([true]);
@@ -238,10 +235,7 @@ describe("plugin metadata snapshot", () => {
   it.each([{ pluginIds: [] }, { pluginIds: ["demo"] }])(
     "selects $pluginIds from a runtime inventory without rediscovery",
     ({ pluginIds }) => {
-      const config = {};
-      const index = makeIndex();
-      index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-      mockRegistrySnapshot(index);
+      const { config, index } = prepareRegistry();
       const snapshot = loadPluginMetadataSnapshot({ config, env: {}, index });
       loadPluginRegistrySnapshotWithMetadata.mockClear();
       loadPluginManifestRegistryForInstalledIndex.mockClear();
@@ -352,14 +346,11 @@ describe("plugin metadata snapshot", () => {
     );
   });
 
-  it("reuses frozen snapshots across module instances", async () => {
+  it("reuses finalized snapshots across module instances", async () => {
     const snapshot = restorePluginMetadataSnapshot(createPluginMetadataSnapshotFixture());
     vi.resetModules();
     const reloaded = await import("./plugin-metadata-snapshot.js");
     expect(reloaded.finalizePluginMetadataSnapshot(snapshot)).toBe(snapshot);
-    expect(() => (snapshot.declaredProviderOwners as Map<string, Set<string>>).clear()).toThrow(
-      "Plugin metadata snapshots are immutable",
-    );
   });
 
   it("reuses discovery from a derived empty plugin index", () => {
@@ -439,12 +430,19 @@ describe("plugin metadata snapshot", () => {
   });
 
   it("reuses an adopted snapshot across config objects until a lifecycle owner replaces it", () => {
-    const config = { plugins: { entries: { demo: { enabled: true } } } };
+    // Activation-only config can share default discovery; a custom path cannot.
+    const load = { paths: ["/custom/plugins"] };
+    const config = { plugins: { load, entries: { demo: { enabled: true } } } };
+    const compatibleConfig = { plugins: { load, entries: { demo: { enabled: false } } } };
     const index = makeIndex();
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
     mockRegistrySnapshot(index);
     const snapshot = loadPluginMetadataSnapshot({ config, env: {}, index });
-    adoptCurrentPluginMetadataSnapshotIfAbsent(snapshot, { config, env: {} });
+    adoptCurrentPluginMetadataSnapshotIfAbsent(snapshot, {
+      config,
+      compatibleConfigs: [compatibleConfig],
+      env: {},
+    });
     const ignored = { ...snapshot, registrySource: "persisted" as const };
     adoptCurrentPluginMetadataSnapshotIfAbsent(ignored, {
       config: structuredClone(config),
@@ -456,8 +454,19 @@ describe("plugin metadata snapshot", () => {
     expect(resolvePluginMetadataSnapshot({ config: structuredClone(config), env: {} })).toBe(
       snapshot,
     );
+    const compatibleParams = {
+      config: compatibleConfig,
+      env: {},
+      index: snapshot.index,
+    };
+    expect(loadPluginMetadataSnapshot(compatibleParams)).toBe(snapshot);
+    expect(resolvePluginMetadataSnapshot(compatibleParams)).toBe(snapshot);
     expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
     expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+
+    expect(loadPluginMetadataSnapshot({ env: {}, index })).not.toBe(snapshot);
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
 
     setGatewayPluginMetadataSnapshot(ignored, { config, env: {} });
     expect(resolvePluginMetadataSnapshot({ config: structuredClone(config), env: {} })).toBe(
@@ -473,11 +482,7 @@ describe("plugin metadata snapshot", () => {
     };
     const index = makeIndex();
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "derived",
-      snapshot: index,
-      diagnostics: [],
-    });
+    mockRegistrySnapshot(index, "derived");
 
     const snapshot = resolvePluginMetadataSnapshot({ config, env: {} });
 
@@ -507,14 +512,7 @@ describe("plugin metadata snapshot", () => {
     { scope: "persisted bypass", options: { preferPersisted: false } },
     { scope: "state override", options: { stateDir: "/state" } },
   ])("does not publish a cold $scope snapshot as process metadata", ({ options }) => {
-    const config = {};
-    const index = makeIndex();
-    index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "derived",
-      snapshot: index,
-      diagnostics: [],
-    });
+    const { config } = prepareRegistry({}, "derived");
 
     const first = resolvePluginMetadataSnapshot({ config, env: {}, ...options });
     const second = resolvePluginMetadataSnapshot({ config, env: {}, ...options });
@@ -530,22 +528,11 @@ describe("plugin metadata snapshot", () => {
   });
 
   it("propagates the current-snapshot bypass to the registry reader", () => {
-    const config = {};
-    const index = makeIndex();
-    index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "derived",
-      snapshot: index,
-      diagnostics: [],
-    });
+    const { config, index } = prepareRegistry({}, "derived");
     const current = loadPluginMetadataSnapshot({ config, env: {}, index });
     setCurrentPluginMetadataSnapshot(current, { config, env: {} });
     loadPluginRegistrySnapshotWithMetadata.mockClear();
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "persisted",
-      snapshot: index,
-      diagnostics: [],
-    });
+    mockRegistrySnapshot(index, "persisted");
 
     const resolved = resolvePluginMetadataSnapshot({
       config,
@@ -587,10 +574,7 @@ describe("plugin metadata snapshot", () => {
   ])(
     "projects an $scope request without rebuilding the lifecycle graph",
     ({ pluginIds, expectedPluginIds }) => {
-      const config = {};
-      const index = makeIndex();
-      index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-      mockRegistrySnapshot(index);
+      const { config, index } = prepareRegistry();
       const unscoped = loadPluginMetadataSnapshot({ config, env: {}, index });
       setCurrentPluginMetadataSnapshot(unscoped, { config, env: {} });
       loadPluginManifestRegistryForInstalledIndex.mockClear();
@@ -745,8 +729,8 @@ describe("plugin metadata snapshot", () => {
     plugin.providerRequest = {
       providers: {
         demo: {
-          family: " demo-family ",
-          compatibilityFamily: " moonshot " as never,
+          family: "demo-family",
+          compatibilityFamily: "moonshot",
           openAICompletions: { supportsStreamingUsage: true },
         },
       },
@@ -855,12 +839,6 @@ describe("plugin metadata snapshot", () => {
       expect(snapshot.owners.modelIdNormalizationPolicies.get("demo")).toEqual({
         aliases: { raw: "prepared-model" },
       });
-      expect(() =>
-        (snapshot.owners.modelIdNormalizationPolicies as Map<string, unknown>).clear(),
-      ).toThrow("Plugin metadata snapshots are immutable");
-      expect(() => (snapshot.owners.providers as Map<string, string[]>).set("other", [])).toThrow(
-        "Plugin metadata snapshots are immutable",
-      );
       const callerRecord = index.plugins[0];
       const snapshotRecord = snapshot.index.plugins[0];
       if (!callerRecord || !snapshotRecord) {

@@ -18,55 +18,22 @@ import {
 } from "../terminal/session-manager.test-helpers.js";
 import { deleteGatewayAgent } from "./agents-delete.js";
 
-it("joins a cancelled connection terminal spawn through backend exit while preserving another agent", async () => {
-  const terminals = new TerminalSessionManager({ emit: () => {} });
-  const backend = createDeferred<ReturnType<typeof makeFakePty>>();
-  const doomed = makeFakePty();
-  const keeper = makeFakePty();
-  const opening = terminals.open(
-    baseOpenRequest({
-      agentId: "doomed",
-      createBackend: () => backend.promise,
-    }),
+async function openTerminal(
+  terminals: TerminalSessionManager,
+  pty: ReturnType<typeof makeFakePty>,
+  options: Parameters<typeof baseOpenRequest>[0],
+) {
+  return expectTerminalOpen(
+    await terminals.open(baseOpenRequest({ ...options, createBackend: async () => pty })),
   );
-  const drain = terminals.beginAgentSessionDrain("doomed");
-  try {
-    backend.resolve(doomed);
-    await expect(opening).resolves.toMatchObject({ ok: false, code: "closed" });
-    expect(doomed.killed).toBe(true);
-    expect(drain.hasWork()).toBe(true);
-    await expect(terminals.open(baseOpenRequest({ agentId: "doomed" }))).resolves.toMatchObject({
-      ok: false,
-      code: "closed",
-    });
-    const survivor = expectTerminalOpen(
-      await terminals.open(
-        baseOpenRequest({
-          agentId: "keeper",
-          createBackend: async () => keeper,
-        }),
-      ),
-    );
-    doomed.emitExit(0);
-    await drain.drained;
-    expect(drain.hasWork()).toBe(false);
-    expect(keeper.killed).toBe(false);
-    expect(terminals.write("conn-1", survivor.sessionId, "survived")).toBe(true);
-  } finally {
-    backend.resolve(doomed);
-    await opening;
-    doomed.emitExit(0);
-    drain.release();
-    terminals.disposeAll();
-    keeper.emitExit(0);
-  }
-});
+}
 
-it("keeps deletion draining until every connection terminal exits, without touching a survivor", async () => {
-  await withOpenClawTestState({ label: "agent-delete-terminals" }, async (state) => {
+it("keeps deletion draining until every connection terminal exits, without touching a survivor", () =>
+  withOpenClawTestState({ label: "agent-delete-terminals" }, async (state) => {
     const workspace = state.path("workspace-doomed");
+    const witness = "still owned by terminal work";
     await fs.mkdir(workspace);
-    await fs.writeFile(`${workspace}/witness.txt`, "still owned by terminal work");
+    await fs.writeFile(`${workspace}/witness.txt`, witness);
     await state.writeConfig({
       agents: {
         ownership: "explicit",
@@ -99,7 +66,16 @@ it("keeps deletion draining until every connection terminal exits, without touch
       withOpenAdmission: withAgentTerminalOpenAdmission,
       detachGraceMs: 60_000,
     });
+    const context = createDirectChatContext({
+      cron,
+      getRuntimeConfig,
+      terminalSessions: terminals,
+    });
     const ptys = [makeFakePty(), makeFakePty(), makeFakePty()];
+    const pendingPty = makeFakePty();
+    const backend = createDeferred<typeof pendingPty>();
+    const request = baseOpenRequest({ agentId: "doomed", createBackend: () => backend.promise });
+    const opening = terminals.open(request);
     const keeper = makeFakePty();
     const killed = createDeferred();
     const kill = ptys[0]!.kill.bind(ptys[0]);
@@ -109,41 +85,23 @@ it("keeps deletion draining until every connection terminal exits, without touch
     };
     let deleting: ReturnType<typeof deleteGatewayAgent> | undefined;
     try {
-      for (const [index, pty] of ptys.slice(0, 3).entries()) {
-        const opened = expectTerminalOpen(
-          await terminals.open(
-            baseOpenRequest({
-              agentId: "doomed",
-              owner: { kind: "conn", connId: `doomed-${index}` },
-              cwd: workspace,
-              createBackend: async () => pty,
-            }),
-          ),
-        );
+      for (const [index, pty] of ptys.entries()) {
+        const opened = await openTerminal(terminals, pty, {
+          agentId: "doomed",
+          owner: { kind: "conn", connId: `doomed-${index}` },
+          cwd: workspace,
+        });
         if (index === 1) {
           terminals.handleDisconnect("doomed-1");
         } else if (index === 2) {
           expect(terminals.close("doomed-2", opened.sessionId)).toBe(true);
         }
       }
-      const survivor = expectTerminalOpen(
-        await terminals.open(
-          baseOpenRequest({
-            agentId: "keeper",
-            owner: { kind: "conn", connId: "keeper" },
-            createBackend: async () => keeper,
-          }),
-        ),
-      );
-      deleting = deleteGatewayAgent(
-        "doomed",
-        true,
-        createDirectChatContext({
-          cron,
-          getRuntimeConfig,
-          terminalSessions: terminals,
-        }),
-      );
+      const survivor = await openTerminal(terminals, keeper, {
+        agentId: "keeper",
+        owner: { kind: "conn", connId: "keeper" },
+      });
+      deleting = deleteGatewayAgent("doomed", true, context);
       const settled = vi.fn();
       void deleting.then(settled, settled);
       await awaitGateBeforeSettlement(
@@ -151,21 +109,28 @@ it("keeps deletion draining until every connection terminal exits, without touch
         deleting,
         "deletion skipped connection terminals",
       );
+      backend.resolve(pendingPty);
+      await expect(opening).resolves.toMatchObject({ ok: false, code: "closed" });
+      expect(pendingPty.killed).toBe(true);
+      await expect(terminals.open(baseOpenRequest({ agentId: "doomed" }))).resolves.toMatchObject({
+        ok: false,
+        code: "closed",
+      });
       expect(ptys[1]!.killed).toBe(true);
       expect(keeper.killed).toBe(false);
       for (const index of [0, 1]) {
         ptys[index]!.emitExit(0);
       }
+      expect(settled).not.toHaveBeenCalled();
+      expect(await fs.readFile(`${workspace}/witness.txt`, "utf8")).toBe(witness);
+      expect(terminals.write("keeper", survivor.sessionId, "still usable")).toBe(true);
+      ptys[2]!.emitExit(0);
       expect(await readAgentDeletionJournalAsync("doomed")).toMatchObject({
         phase: "draining",
         cleanupCompleted: false,
       });
       expect(settled).not.toHaveBeenCalled();
-      expect(await fs.readFile(`${workspace}/witness.txt`, "utf8")).toBe(
-        "still owned by terminal work",
-      );
-      expect(terminals.write("keeper", survivor.sessionId, "still usable")).toBe(true);
-      ptys[2]!.emitExit(0);
+      pendingPty.emitExit(0);
       await expect(deleting).resolves.toMatchObject({ ok: true, failed: [] });
       expect(await readAgentDeletionJournalAsync("doomed")).toMatchObject({
         cleanupCompleted: true,
@@ -174,6 +139,9 @@ it("keeps deletion draining until every connection terminal exits, without touch
       expect(keeper.killed).toBe(false);
       expect(terminals.write("keeper", survivor.sessionId, "survived deletion")).toBe(true);
     } finally {
+      backend.resolve(pendingPty);
+      await opening;
+      pendingPty.emitExit(0);
       for (const pty of ptys) {
         pty.emitExit(0);
       }
@@ -185,5 +153,4 @@ it("keeps deletion draining until every connection terminal exits, without touch
       await cron.waitForIdle();
       await scheduler.stop();
     }
-  });
-});
+  }));

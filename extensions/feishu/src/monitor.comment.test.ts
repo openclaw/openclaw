@@ -158,12 +158,12 @@ function resolveCommentTurn(params: {
   botOpenId?: string | null;
   abortSignal?: AbortSignal;
 }) {
+  createFeishuClientMock.mockReturnValue(params.client ?? makeOpenApiClient());
   return resolveDriveCommentEventTurn({
     cfg,
     accountId: "default",
     event: params.event ?? makeDriveCommentEvent(),
     botOpenId: params.botOpenId === null ? undefined : (params.botOpenId ?? "ou_bot"),
-    createClient: () => (params.client ?? makeOpenApiClient()) as never,
     abortSignal: params.abortSignal,
   });
 }

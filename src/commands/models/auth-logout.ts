@@ -3,7 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   type AuthProfileCredential,
   type AuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   listProfilesForProvider,
   loadAuthProfileStoreWithoutExternalProfilesAsync,
   removeAuthProfilesAcrossOwnerStores,
@@ -340,7 +340,7 @@ export async function modelsAuthLogoutCommand(
   const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, { kind: "mutation" });
   // External CLI overlays (Claude/Codex CLI) are not ours to delete, so the
   // removable set is exactly the persisted store.
-  const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const store = await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
   const credential = store.profiles[profileId];
   if (!credential) {
     throw new Error(

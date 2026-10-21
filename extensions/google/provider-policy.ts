@@ -99,7 +99,7 @@ function normalizeProviderModels(
   normalizeId: (id: string) => string,
 ): ModelProviderConfig {
   const models = provider.models;
-  if (!Array.isArray(models) || models.length === 0) {
+  if (!models?.length) {
     return provider;
   }
 

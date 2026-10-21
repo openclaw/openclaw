@@ -1,4 +1,3 @@
-// Status overview surface tests cover JSON and terminal rows derived from shared overview surfaces.
 import { describe, expect, it } from "vitest";
 import {
   buildGatewayStatusJsonPayload,
@@ -6,8 +5,8 @@ import {
   buildStatusUpdateSurface,
 } from "./status-all/format.js";
 import {
-  baseStatusCfg,
   baseStatusExpectedUpdateChannelLabel,
+  baseStatusGatewaySnapshot,
   baseStatusOverviewSurface,
 } from "./status.test-support.ts";
 
@@ -27,45 +26,25 @@ describe("status-overview-surface", () => {
       },
     });
 
-    expect(update.updateLine).toBe(
-      "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
-    );
-    expect(update.updateAvailable).toBe(false);
-    expect(update.gitLabel).toBeNull();
+    expect(update).toMatchObject({
+      updateLine: "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+      updateAvailable: false,
+      gitLabel: null,
+    });
   });
   it("builds overview rows from the shared surface bundle", () => {
     expect(
       buildStatusOverviewSurfaceRows({
         ...baseStatusOverviewSurface,
-        cfg: baseStatusCfg,
-        update: {
-          installKind: "git",
-          git: {
-            branch: "main",
-            tag: "v1.2.3",
-            upstream: "origin/main",
-            behind: 2,
-            ahead: 0,
-            dirty: false,
-            fetchOk: true,
-          },
-          registry: { latestVersion: "2026.4.10" },
-        } as never,
         tailscaleMode: "off",
         tailscaleHttpsUrl: null,
-        gatewayConnection: {
-          url: "wss://gateway.example.com",
-          urlSource: "config",
-        },
         prefixRows: [{ Item: "OS", Value: "macOS · node 22" }],
         suffixRows: [{ Item: "Secrets", Value: "none" }],
         agentsValue: "2 total",
         updateValue: "available · custom update",
         gatewayAuthWarningValue: "warn(warn-text)",
-        gatewaySelfFallbackValue: "gateway-self",
         includeDnsNameWhenOff: true,
         decorateOk: (value) => `ok(${value})`,
-        decorateWarn: (value) => `warn(${value})`,
         decorateTailscaleOff: (value) => `muted(${value})`,
       }),
     ).toEqual([
@@ -90,21 +69,7 @@ describe("status-overview-surface", () => {
   });
 
   it("builds the shared gateway json payload from the overview surface", () => {
-    expect(
-      buildGatewayStatusJsonPayload({
-        gatewayMode: "remote",
-        remoteUrlMissing: false,
-        gatewayConnection: {
-          url: "wss://gateway.example.com",
-          urlSource: "config",
-          message: "Gateway target: wss://gateway.example.com",
-        },
-        gatewayReachable: true,
-        gatewayProbe: { connectLatencyMs: 42, error: null } as never,
-        gatewayProbeAuthWarning: "warn-text",
-        gatewaySelf: { host: "gateway", version: "1.2.3" },
-      } as never),
-    ).toEqual({
+    expect(buildGatewayStatusJsonPayload(baseStatusGatewaySnapshot)).toEqual({
       mode: "remote",
       url: "wss://gateway.example.com",
       urlSource: "config",

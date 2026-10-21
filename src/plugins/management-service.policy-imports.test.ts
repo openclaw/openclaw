@@ -1,15 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
@@ -29,22 +27,21 @@ import { resolveControlPlaneRegistryParams } from "./plugin-registry-snapshot.js
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
-vi.mock("../gateway/call.js", () => {
-  throw new Error("Offline plugin policy changes must not load Gateway RPC");
-});
-vi.mock("./management-install.js", () => {
-  throw new Error("Plugin policy changes must not load the installation implementation");
-});
-vi.mock("./management-uninstall.js", () => {
-  throw new Error("Plugin policy changes must not load the removal implementation");
-});
+const coldManifest = { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] };
 
-vi.mock("./install-persistence.js", () => {
-  throw new Error("Plugin policy changes must not load install persistence");
+const forbidServiceImport = vi.hoisted(() => () => {
+  throw new Error("Offline plugin policy must not import Gateway RPC or heavy plugin services");
 });
-vi.mock("./status.js", () => {
-  throw new Error("Bundled plugin policy changes must not load runtime diagnostics");
-});
+// mock-isolation: The offline policy boundary must never load Gateway RPC.
+vi.mock("../gateway/call.js", forbidServiceImport);
+// mock-isolation: The offline policy boundary must never load installation services.
+vi.mock("./management-install.js", forbidServiceImport);
+// mock-isolation: The offline policy boundary must never load uninstallation services.
+vi.mock("./management-uninstall.js", forbidServiceImport);
+// mock-isolation: The offline policy boundary must never load installation persistence.
+vi.mock("./install-persistence.js", forbidServiceImport);
+// mock-isolation: The offline policy boundary must never load the heavy status service.
+vi.mock("./status.js", forbidServiceImport);
 
 afterEach(() => {
   clearPluginMetadataLifecycleCaches();
@@ -65,13 +62,7 @@ it("persists offline CLI plugin policy without loading Gateway RPC or heavy plug
       pluginId: id,
       packageName: `@fixture/${id}`,
       packageVersion: version,
-      manifest: {
-        version,
-        providers: [],
-        channels: [],
-        channelConfigs: {},
-        providerAuthChoices: [],
-      },
+      manifest: { ...coldManifest, version },
     });
   };
   writeBundledPlugin(pluginId, "1.0.0");
@@ -89,9 +80,7 @@ it("persists offline CLI plugin policy without loading Gateway RPC or heavy plug
         await using cache = createPluginCache();
         return withPluginCache(cache, () => {
           const index = readPersistedInstalledPluginIndexSync();
-          if (!index) {
-            throw new Error("CLI policy mutation did not persist the plugin index");
-          }
+          assert(index, "CLI policy mutation did not persist the plugin index");
           const fresh = refreshInstalledPluginIndex(
             resolveControlPlaneRegistryParams({
               config: snapshot.runtimeConfig,
@@ -105,20 +94,20 @@ it("persists offline CLI plugin policy without loading Gateway RPC or heavy plug
           return { config: snapshot.sourceConfig, index };
         });
       };
+      const expectPolicy = async (id: string, enabled: boolean, packageVersion?: string) => {
+        const { config, index } = await readPolicy();
+        expect(config.plugins?.entries?.[id]?.enabled).toBe(enabled);
+        const plugin = index.plugins.find((entry) => entry.pluginId === id);
+        expect(plugin).toMatchObject({ enabled, ...(packageVersion ? { packageVersion } : {}) });
+        return plugin;
+      };
       await writeConfigFile({ plugins: { entries: { [pluginId]: { enabled: false } } } });
       const { runPluginsEnableCommand, runPluginsDisableCommand } =
         await import("../cli/plugins-cli.runtime.js");
       await runPluginsEnableCommand(pluginId);
-      const enabled = await readPolicy();
-      expect(enabled.config.plugins?.entries?.[pluginId]?.enabled).toBe(true);
-      const firstPlugin = enabled.index.plugins.find((plugin) => plugin.pluginId === pluginId);
-      expect(firstPlugin).toMatchObject({ enabled: true, packageVersion: "1.0.0" });
+      const firstPlugin = await expectPolicy(pluginId, true, "1.0.0");
       await runPluginsDisableCommand(pluginId);
-      const disabled = await readPolicy();
-      expect(disabled.config.plugins?.entries?.[pluginId]?.enabled).toBe(false);
-      expect(disabled.index.plugins.find((plugin) => plugin.pluginId === pluginId)?.enabled).toBe(
-        false,
-      );
+      await expectPolicy(pluginId, false);
 
       const addedId = "policy-added";
       writeBundledPlugin(pluginId, "2.0.0");
@@ -140,93 +129,69 @@ it("persists offline CLI plugin policy without loading Gateway RPC or heavy plug
   );
 });
 
-async function writeReloadArtifact(rootDir: string, pluginId: string, tool: string) {
-  await fs.promises.mkdir(rootDir);
-  createColdPluginFixture({
-    rootDir,
-    pluginId,
-    manifest: {
-      providers: [],
-      channels: [],
-      channelConfigs: {},
-      providerAuthChoices: [],
-      contracts: { tools: [tool] },
-    },
-  });
-}
-
 describe("reload consent and current install preconditions", () => {
-  let testState: OpenClawTestState | undefined;
-  afterEach(async () => {
-    await testState?.cleanup();
-  });
-
-  async function prepareReload() {
+  async function prepareReload(second = false) {
     const state = await createOpenClawTestState({ label: "reload-consent-record" });
-    testState = state;
-    const rootDir = state.path("plugin");
-    await writeReloadArtifact(rootDir, "reload-proof", "proof.read");
+    onTestFinished(() => state.cleanup());
+    const packages = [
+      { id: "reload-proof", root: state.path("plugin"), tool: "proof.read" },
+      ...(second
+        ? [{ id: "second-proof", root: state.path("second-plugin"), tool: "second.write" }]
+        : []),
+    ];
+    const installs: Record<string, PluginInstallRecord> = {};
+    for (const { id, root, tool } of packages) {
+      await fs.promises.mkdir(root);
+      createColdPluginFixture({
+        rootDir: root,
+        pluginId: id,
+        manifest: { ...coldManifest, contracts: { tools: [tool] } },
+      });
+      installs[id] = { source: "path", sourcePath: root, installPath: root, version: "1.0.0" };
+    }
     const config = {
       agents: { entries: { main: { workspace: state.workspaceDir } } },
       plugins: {
-        allow: ["reload-proof"],
-        load: { paths: [rootDir] },
-        entries: { "reload-proof": { enabled: true } },
+        allow: packages.map((pkg) => pkg.id),
+        load: { paths: packages.map((pkg) => pkg.root) },
+        entries: Object.fromEntries(packages.map((pkg) => [pkg.id, { enabled: true }])),
       },
     };
     await state.writeConfig(config);
-    await seedInstalledPluginIndex(
-      {
-        "reload-proof": {
-          source: "path",
-          sourcePath: rootDir,
-          installPath: rootDir,
-          version: "1.0.0",
-        },
-      },
-      { env: state.env, config },
-    );
-    const records = await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env });
-    const record = records?.["reload-proof"];
-    if (!record) {
-      throw new Error("Expected the actual persisted install record");
-    }
+    await seedInstalledPluginIndex(installs, { env: state.env, config });
+    const readRecords = () =>
+      readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env });
+    const record = (await readRecords())?.["reload-proof"];
+    assert(record, "Expected the actual persisted install record");
     const reviewToken = computeDeclaredSurfaceHash(
-      resolvePluginArtifactDeclaredSurface(rootDir, state.env, { config }),
+      resolvePluginArtifactDeclaredSurface(packages[0]!.root, state.env, { config }),
     );
     const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => {
       request.assertInvokerOwned?.();
       return { operationId: "reload-proof", generation: 1, pluginIds: [...request.pluginIds] };
     });
-    return { state, record, reviewToken, applyRuntime, config };
+    const reload = (
+      request: Omit<Parameters<typeof reloadManagedPlugin>[0], "env" | "applyRuntime">,
+    ) => reloadManagedPlugin({ ...request, env: state.env, applyRuntime });
+    return { record, reviewToken, applyRuntime, reload, readRecords };
   }
 
   it("rejects an expected install hash changed by the actual consent write before runtime publication", async () => {
-    const { state, record, reviewToken, applyRuntime } = await prepareReload();
+    const { record, reviewToken, applyRuntime, reload, readRecords } = await prepareReload();
     const target = { pluginId: "reload-proof", installHash: hashStableJson(record) };
     const request = { plugins: [target], acknowledgeCapabilities: { reviewToken } };
-    let failure: unknown;
-    await reloadManagedPlugin({ ...request, env: state.env, applyRuntime }).catch(
-      (error: unknown) => {
-        failure = error;
-      },
-    );
-    const current = (
-      await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env })
-    )?.[target.pluginId];
+    await expect(reload(request)).rejects.toMatchObject({
+      message:
+        "Plugin reload-proof changed after the installation batch. Inspect it before reloading.",
+    });
+    const current = (await readRecords())?.[target.pluginId];
     expect(current?.acceptedSurfaceHash).toBe(reviewToken);
     expect(hashStableJson(current)).not.toBe(target.installHash);
     expect(request.plugins[0]?.installHash).toBe(hashStableJson(record));
     expect(applyRuntime).not.toHaveBeenCalled();
-    expect(failure).toMatchObject({
-      message:
-        "Plugin reload-proof changed after the installation batch. Inspect it before reloading.",
-    });
     await expect(
-      reloadManagedPlugin({
+      reload({
         plugins: [{ pluginId: target.pluginId, installHash: hashStableJson(current) }],
-        env: state.env,
-        applyRuntime,
       }),
     ).resolves.toMatchObject({ pluginIds: [target.pluginId], application: { generation: 1 } });
     expect(applyRuntime).toHaveBeenCalledOnce();
@@ -235,10 +200,9 @@ describe("reload consent and current install preconditions", () => {
   it.each(["transaction", "commit"] as const)(
     "preserves durable consent when reload authority is revoked at worker %s admission",
     async (stage) => {
-      const { state, record, reviewToken, applyRuntime } = await prepareReload();
+      const { record, reviewToken, applyRuntime, reload, readRecords } = await prepareReload();
       const refused = new Error("plugin administrator authority revoked");
-      let current = true;
-      let reachedAdmission = false;
+      let revoked = false;
       const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       const admission = vi
         .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
@@ -249,21 +213,18 @@ describe("reload consent and current install preconditions", () => {
               isRecord(request.facts) &&
               request.facts.kind === "state-lease"
             ) {
-              reachedAdmission = true;
-              current = false;
+              revoked = true;
             }
             admit(request, grant);
           }, attachment),
         );
       try {
         await expect(
-          reloadManagedPlugin({
+          reload({
             plugins: [{ pluginId: "reload-proof" }],
             acknowledgeCapabilities: { reviewToken },
-            env: state.env,
-            applyRuntime,
             beforePersistentApply() {
-              if (!current) {
+              if (revoked) {
                 throw refused;
               }
             },
@@ -272,50 +233,21 @@ describe("reload consent and current install preconditions", () => {
       } finally {
         admission.mockRestore();
       }
-      expect(reachedAdmission).toBe(true);
-      expect(
-        (await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }))?.[
-          "reload-proof"
-        ],
-      ).toEqual(record);
+      expect(revoked).toBe(true);
+      expect((await readRecords())?.["reload-proof"]).toEqual(record);
       expect(applyRuntime).not.toHaveBeenCalled();
     },
   );
 
   it("stops a multi-target reload when another selected package needs a different review", async () => {
-    const { state, record, reviewToken, applyRuntime, config } = await prepareReload();
-    const secondRoot = state.path("second-plugin");
-    await writeReloadArtifact(secondRoot, "second-proof", "second.write");
-    const cohortConfig = {
-      ...config,
-      plugins: {
-        allow: ["reload-proof", "second-proof"],
-        load: { paths: [...config.plugins.load.paths, secondRoot] },
-        entries: { ...config.plugins.entries, "second-proof": { enabled: true } },
-      },
-    };
-    await state.writeConfig(cohortConfig);
-    await seedInstalledPluginIndex(
-      {
-        "reload-proof": record,
-        "second-proof": {
-          source: "path",
-          sourcePath: secondRoot,
-          installPath: secondRoot,
-          version: "1.0.0",
-        },
-      },
-      { env: state.env, config: cohortConfig },
-    );
+    const { reviewToken, applyRuntime, reload, readRecords } = await prepareReload(true);
     await expect(
-      reloadManagedPlugin({
+      reload({
         plugins: [{ pluginId: "reload-proof" }, { pluginId: "second-proof" }],
         acknowledgeCapabilities: { reviewToken },
-        env: state.env,
-        applyRuntime,
       }),
     ).rejects.toMatchObject({ capabilityConsent: { pluginId: "second-proof" } });
-    const current = await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env });
+    const current = await readRecords();
     expect(current?.["reload-proof"]?.acceptedSurfaceHash).toBe(reviewToken);
     expect(current?.["second-proof"]?.acceptedSurface).toBeUndefined();
     expect(applyRuntime).not.toHaveBeenCalled();

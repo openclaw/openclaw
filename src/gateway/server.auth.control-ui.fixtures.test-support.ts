@@ -48,7 +48,13 @@ export const createOperatorIdentityFixture = async (identityPrefix: string) => {
   if (!stateDir) {
     throw new Error("OPENCLAW_STATE_DIR must be set by the gateway test hooks");
   }
-  const identityPath = path.join(stateDir, `${identityPrefix}${randomUUID()}.sqlite`);
+  const identityPath = path.join(
+    stateDir,
+    "test-device-identities",
+    `${identityPrefix}${randomUUID()}`,
+    "client",
+    "credentials.sqlite",
+  );
   const identity = loadOrCreateDeviceIdentity({ path: identityPath });
   return {
     identityPath,

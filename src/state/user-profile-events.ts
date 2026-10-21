@@ -1,22 +1,24 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { getAdmittedSqlSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { isStateSchemaVersionAtLeast } from "./openclaw-state-db-admission.js";
 import type { OpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseLifecycleListener,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { readProfileAuthority, type ProfileAuthorityDescriptor } from "./user-profile-authority.js";
 import type { UserProfileMutationChanges } from "./user-profile-mutation.js";
 import type { UserProfileEmailBinding, UserProfilesDatabase } from "./user-profiles.types.js";
 
 type EmailBindingChange = {
-  db: DatabaseSync;
+  db: EngineConnection;
   email: string;
   binding: UserProfileEmailBinding | null;
 };
@@ -63,7 +65,7 @@ const changes = {
   bindingListeners: new Set<(change: EmailBindingChange) => void>(),
   listeners: new Set<() => void>(),
   authorityStores: new Map<string, ProfileAuthorityStore>(),
-  authorityHandles: new WeakMap<DatabaseSync, ProfileAuthorityStore>(),
+  authorityHandles: new WeakMap<EngineConnection, ProfileAuthorityStore>(),
   authorityLifecycleRegistered: false,
 };
 
@@ -206,13 +208,16 @@ function authorityBinding(
 }
 
 /** Authority revisions belong to the profile writer, independently of display notifications. */
-export function publishUserProfileAuthorityChange(db: DatabaseSync, ...profileIds: string[]): void {
+export function publishUserProfileAuthorityChange(
+  db: EngineConnection,
+  ...profileIds: string[]
+): void {
   // Native and worker mutations retire recovery custody in their original transaction.
-  const schema = profileIds.length ? getAdmittedSqliteSchemaFacts(db) : undefined;
+  const schema = profileIds.length ? getAdmittedSqlSchemaFacts(db) : undefined;
   if (profileIds.length && !schema) {
     throw new Error("Profile authority mutation requires admitted schema facts");
   }
-  if (schema && schema.userVersion >= 19 && schema.tables.has("user_profile_identities")) {
+  if (schema && isStateSchemaVersionAtLeast(db, 19) && tableExists(db, "user_profile_identities")) {
     executeSqliteQuerySync(
       db,
       getNodeSqliteKysely<UserProfilesDatabase>(db)
@@ -225,13 +230,16 @@ export function publishUserProfileAuthorityChange(db: DatabaseSync, ...profileId
 }
 
 /** Only changed merge pointers invalidate account selection; roles and login grants do not. */
-export function publishUserProfileIdentityChange(db: DatabaseSync, ...profileIds: string[]): void {
+export function publishUserProfileIdentityChange(
+  db: EngineConnection,
+  ...profileIds: string[]
+): void {
   publishAuthorityStoreChange(db, "profileIdentities", profileIds);
 }
 
 /** Default-link changes do not revoke explicit selections or saved session account pins. */
 export function publishUserProfileModelAccountLinksChange(
-  db: DatabaseSync,
+  db: EngineConnection,
   ...profileIds: string[]
 ): void {
   publishAuthorityStoreChange(db, "modelAccountLinks", profileIds);
@@ -339,12 +347,15 @@ export function fenceUserProfileModelAccountLinks(
   };
 }
 
-export function publishUserChannelIdentityAuthorityChange(db: DatabaseSync, subject: string): void {
+export function publishUserChannelIdentityAuthorityChange(
+  db: EngineConnection,
+  subject: string,
+): void {
   publishAuthorityStoreChange(db, "channelIdentities", [subject]);
 }
 
 function publishAuthorityStoreChange(
-  db: DatabaseSync,
+  db: EngineConnection,
   kind: ProfileAuthorityKind,
   ids: string[],
 ): void {
@@ -379,7 +390,6 @@ function publishAuthorityStoreChange(
   };
   if (
     !stageSqliteTransactionState(db, {
-      stage: () => {},
       // Native callbacks keep their committed facts until the physical COMMIT attempt.
       prepareCommit: () => {
         fence ??= fenceAuthorityEntries(store, entries, false);
@@ -526,13 +536,11 @@ export function onUserProfileEmailBindingChanged(
 
 /** Native writer facts become visible with the commit, before profile observers. */
 export function stageUserProfileEmailBindingChange(
-  db: DatabaseSync,
+  db: EngineConnection,
   email: string,
   binding: UserProfileEmailBinding | null,
 ): void {
   stageSqliteTransactionState(db, {
-    stage: () => {},
-    rollback: () => {},
     commit: () => {
       changes.bindingRevision += 1;
       for (const listener of changes.bindingListeners) {

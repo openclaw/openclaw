@@ -21,9 +21,11 @@ import {
   runBenchmarkEntrypoint,
 } from "./lib/benchmark-harness.mts";
 import { startBenchmarkIntervalDelay } from "./lib/benchmark-interval-delay.ts";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { stopChild } from "./lib/gateway-bench-child.ts";
 
 const exec = promisify(execFile);
+const diagnostics = channel("openclaw.worker.task");
 const scenarios = ["inventory", "manifest", "delta", "unchanged", "compare"] as const;
 type Scenario = (typeof scenarios)[number];
 type Options = {
@@ -244,9 +246,7 @@ function isolatedEnv(root: string): NodeJS.ProcessEnv {
     TMPDIR: process.env.TMPDIR,
     TEMP: process.env.TEMP,
     TMP: process.env.TMP,
-    HOME: path.join(root, "home"),
-    USERPROFILE: path.join(root, "home"),
-    OPENCLAW_HOME: path.join(root, "home"),
+    ...createBuildSmokeEnv(path.join(root, "home"), {}),
     OPENCLAW_STATE_DIR: path.join(root, "state"),
     OPENCLAW_CONFIG_PATH: path.join(root, "config.json"),
     NODE_ENV: "test",
@@ -320,7 +320,6 @@ async function childMain(fixturePath: string): Promise<void> {
   process.send?.({ type: "ready", port: address.port, moduleLoadMs });
   let sequence = 0;
   const taskEvents: Array<Record<string, unknown>> = [];
-  const diagnostics = channel("openclaw.worker.task");
   const observe = (event: unknown) => {
     taskEvents.push(event as Record<string, unknown>);
   };

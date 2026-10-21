@@ -1,33 +1,52 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  iMessageApprovalPollTargets,
-  maybeResolveIMessageApprovalPollVote,
-} from "./approval-polls.js";
-import { listPendingIMessageApprovalReactionPollTargets } from "./approval-reaction-poll-targets.js";
-import {
-  clearIMessageApprovalReactionTargetsForTest,
-  registerIMessageApprovalReactionTarget,
-  resolveIMessageApprovalReactionTargetWithPersistence,
-  unregisterIMessageApprovalReactionTarget,
-} from "./approval-reactions.js";
-import { getOptionalIMessageRuntime } from "./runtime.js";
-import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
+import { pollVote } from "./test-support/approval.js";
+import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
 
-const gatewayMocks = vi.hoisted(() => ({
-  resolveApprovalOverGateway: vi.fn(),
-}));
+let iMessageApprovalPollTargets: typeof import("./approval-polls.js").iMessageApprovalPollTargets;
+let maybeResolveIMessageApprovalPollVote: typeof import("./approval-polls.js").maybeResolveIMessageApprovalPollVote;
+let listTargets: typeof import("./approval-reaction-poll-targets.js").listPendingIMessageApprovalReactionPollTargets;
+let registerTarget: typeof import("./approval-reactions.js").registerIMessageApprovalReactionTarget;
+let lookupTarget: typeof import("./approval-reactions.js").resolveIMessageApprovalReactionTargetWithPersistence;
+let unregisterTarget: typeof import("./approval-reactions.js").unregisterIMessageApprovalReactionTarget;
+let getOptionalIMessageRuntime: typeof import("./runtime.js").getOptionalIMessageRuntime;
 
+async function loadTargets(preservePersistentState = false) {
+  await loadFreshIMessageReplyCacheForTest({
+    preservePersistentState,
+    reuseDatabase: preservePersistentState,
+  });
+  ({ iMessageApprovalPollTargets, maybeResolveIMessageApprovalPollVote } =
+    await import("./approval-polls.js"));
+  ({ listPendingIMessageApprovalReactionPollTargets: listTargets } =
+    await import("./approval-reaction-poll-targets.js"));
+  ({
+    registerIMessageApprovalReactionTarget: registerTarget,
+    resolveIMessageApprovalReactionTargetWithPersistence: lookupTarget,
+    unregisterIMessageApprovalReactionTarget: unregisterTarget,
+  } = await import("./approval-reactions.js"));
+  ({ getOptionalIMessageRuntime } = await import("./runtime.js"));
+}
+
+const gatewayMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
+
+// mock-isolation: exercise approval handling without a live gateway.
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
-  resolveApprovalOverGateway: gatewayMocks.resolveApprovalOverGateway,
+  resolveApprovalOverGateway: gatewayMocks.resolve,
 }));
+function requireState() {
+  const state = getOptionalIMessageRuntime()?.state;
+  if (!state) {
+    throw new Error("Expected synthetic iMessage state runtime");
+  }
+  return state;
+}
 
 describe("iMessage approval reaction persistence", () => {
-  beforeEach(() => {
-    clearIMessageApprovalReactionTargetsForTest();
-    iMessageApprovalPollTargets.clearForTest();
-    gatewayMocks.resolveApprovalOverGateway.mockReset().mockResolvedValue({
+  beforeEach(async () => {
+    await loadTargets();
+    gatewayMocks.resolve.mockReset().mockResolvedValue({
       applied: true,
       approval: { status: "allowed", decision: "allow-once", reason: "user" },
     });
@@ -35,122 +54,92 @@ describe("iMessage approval reaction persistence", () => {
 
   it("joins both system-agent target indexes before completion and restores them after reset", async () => {
     const approvalKind = "system-agent";
-    installIMessageStateRuntimeForTest();
-    clearIMessageApprovalReactionTargetsForTest();
-    const state = getOptionalIMessageRuntime()?.state;
-    if (!state) {
-      throw new Error("Expected synthetic iMessage state runtime");
-    }
-    const openStore = state.openKeyedStoreV2.bind(state);
     const pollGate = createDeferred<void>();
     const reactionGate = createDeferred<void>();
     const deletionGate = createDeferred<void>();
-    const writes: Promise<void>[] = [];
+    const writes: Record<"poll" | "reaction", Promise<void>[]> = { poll: [], reaction: [] };
     const deletions: Promise<boolean>[] = [];
-    const pollWrites: Promise<void>[] = [];
-    const openSpy = vi
-      .spyOn(state, "openKeyedStoreV2")
-      .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
-        const store = openStore<T>(options);
-        const register = store.register.bind(store);
-        const remove = store.delete.bind(store);
-        const isPollStore = options.namespace === "imessage.approval-reaction-poll-targets";
-        vi.spyOn(store, "register").mockImplementation((...args) => {
-          const write = (async () => {
-            await (isPollStore ? pollGate.promise : reactionGate.promise);
-            await register(...args);
-          })();
-          writes.push(write);
-          if (isPollStore) {
-            pollWrites.push(write);
-          }
-          return write;
+    const observeStores = () => {
+      const state = requireState();
+      const openStore = state.openKeyedStoreV2.bind(state);
+      return vi
+        .spyOn(state, "openKeyedStoreV2")
+        .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
+          const store = openStore<T>(options);
+          const register = store.register.bind(store);
+          const remove = store.delete.bind(store);
+          const isPollStore = options.namespace === "imessage.approval-reaction-poll-targets";
+          vi.spyOn(store, "register").mockImplementation((...args) => {
+            const write = (isPollStore ? pollGate : reactionGate).promise.then(() =>
+              register(...args),
+            );
+            writes[isPollStore ? "poll" : "reaction"].push(write);
+            return write;
+          });
+          vi.spyOn(store, "delete").mockImplementation((...args) => {
+            const deletion = remove(...args).then((removed) =>
+              deletionGate.promise.then(() => removed),
+            );
+            deletions.push(deletion);
+            return deletion;
+          });
+          return store;
         });
-        vi.spyOn(store, "delete").mockImplementation((...args) => {
-          const deletion = (async () => {
-            const removed = await remove(...args);
-            await deletionGate.promise;
-            return removed;
-          })();
-          deletions.push(deletion);
-          return deletion;
-        });
-        return store;
-      });
+    };
+    const openSpies = [observeStores()];
     const identity = {
       accountId: "restart-account",
       conversation: { chatId: 42, chatGuid: "iMessage;+;restart" },
       messageId: "restart-message",
-    };
-    const resolveTarget = () =>
-      resolveIMessageApprovalReactionTargetWithPersistence({ ...identity, reactionKey: "👍" });
-    const listTargets = () =>
-      listPendingIMessageApprovalReactionPollTargets({ accountId: identity.accountId });
-    let registered = false;
-    const registration = Promise.resolve(
-      registerIMessageApprovalReactionTarget({
-        ...identity,
-        approvalId: "exec-restart",
-        approvalKind,
-        allowedDecisions: ["allow-once", "deny"],
-      }),
-    ).then(() => {
-      registered = true;
-    });
+      approvalId: "exec-restart",
+      approvalKind,
+      allowedDecisions: ["allow-once", "deny"] as const,
+    } satisfies Parameters<typeof registerTarget>[0];
+    const resolveTarget = () => lookupTarget({ ...identity, reactionKey: "👍" });
+    const listAccountTargets = () => listTargets({ accountId: identity.accountId });
+    const resolution = { approvalId: "exec-restart", approvalKind, decision: "allow-once" };
+    const registered = vi.fn();
+    const registration = registerTarget(identity).then(registered);
     try {
-      expect(await resolveTarget()).toEqual({
-        approvalId: "exec-restart",
-        approvalKind,
-        decision: "allow-once",
-      });
-      expect(registered).toBe(false);
+      expect(await resolveTarget()).toEqual(resolution);
+      expect(registered).not.toHaveBeenCalled();
       pollGate.resolve();
-      await Promise.all(pollWrites);
-      expect(registered).toBe(false);
+      await Promise.all(writes.poll);
+      expect(registered).not.toHaveBeenCalled();
       reactionGate.resolve();
       await registration;
-      expect(registered).toBe(true);
+      expect(registered).toHaveBeenCalledOnce();
+      await loadTargets(true);
+      openSpies.push(observeStores());
 
-      clearIMessageApprovalReactionTargetsForTest();
-
-      expect(await listTargets()).toEqual([
+      expect(await listAccountTargets()).toEqual([
         expect.objectContaining({
           approvalId: "exec-restart",
           approvalKind,
           messageId: "restart-message",
-          conversation: expect.objectContaining({ chatId: 42, chatGuid: "iMessage;+;restart" }),
+          conversation: expect.objectContaining(identity.conversation),
         }),
       ]);
-      expect(await resolveTarget()).toEqual({
-        approvalId: "exec-restart",
-        approvalKind,
-        decision: "allow-once",
-      });
-
-      let deleted = false;
-      const deletion = Promise.resolve(unregisterIMessageApprovalReactionTarget(identity)).then(
-        () => {
-          deleted = true;
-        },
-      );
-      expect(await listTargets()).toEqual([]);
-      expect(deleted).toBe(false);
+      expect(await resolveTarget()).toEqual(resolution);
+      const deleted = vi.fn();
+      const deletion = unregisterTarget(identity).then(deleted);
+      expect(await listAccountTargets()).toEqual([]);
+      expect(deleted).not.toHaveBeenCalled();
       deletionGate.resolve();
       await deletion;
-      clearIMessageApprovalReactionTargetsForTest();
+      await loadTargets(true);
       expect(await resolveTarget()).toBeNull();
     } finally {
       pollGate.resolve();
       reactionGate.resolve();
       deletionGate.resolve();
-      await Promise.allSettled([...writes, ...deletions]);
+      await Promise.allSettled([...writes.poll, ...writes.reaction, ...deletions]);
       await registration;
-      openSpy.mockRestore();
+      openSpies.forEach((spy) => spy.mockRestore());
     }
   });
 
   it("resolves a persisted system-agent poll after memory reset without resolving late votes again", async () => {
-    installIMessageStateRuntimeForTest();
     const accountId = "poll-restart";
     const approver = "+15551230000";
     const chatGuid = "iMessage;+;system-agent-poll-restart";
@@ -169,25 +158,20 @@ describe("iMessage approval reaction persistence", () => {
         expiresAtMs: Date.now() + 60_000,
       }),
     ).resolves.toBe(true);
-    iMessageApprovalPollTargets.clearForTest();
+    await loadTargets(true);
 
     const vote = () =>
       maybeResolveIMessageApprovalPollVote({
         cfg,
         accountId,
-        message: {
-          sender: approver,
-          chat_guid: chatGuid,
-          is_group: true,
-          poll: {
-            kind: "vote",
-            original_guid: pollGuid,
-            votes: [{ option_id: optionId, participant: approver, event_type: "selected" }],
-          },
-        },
+        message: pollVote(
+          pollGuid,
+          [{ option_id: optionId, participant: approver, event_type: "selected" }],
+          { sender: approver, chat_guid: chatGuid, is_group: true },
+        ),
       });
     await expect(vote()).resolves.toBe(true);
-    expect(gatewayMocks.resolveApprovalOverGateway).toHaveBeenCalledExactlyOnceWith({
+    expect(gatewayMocks.resolve).toHaveBeenCalledExactlyOnceWith({
       cfg,
       approvalId,
       approvalKind: "system-agent",
@@ -198,17 +182,13 @@ describe("iMessage approval reaction persistence", () => {
       gatewayUrl: undefined,
     });
 
-    iMessageApprovalPollTargets.clearForTest();
+    await loadTargets(true);
     await expect(vote()).resolves.toBe(true);
-    expect(gatewayMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
+    expect(gatewayMocks.resolve).toHaveBeenCalledTimes(1);
   });
 
   it("persists new poll targets after a transient store-open failure", async () => {
-    installIMessageStateRuntimeForTest();
-    const state = getOptionalIMessageRuntime()?.state;
-    if (!state) {
-      throw new Error("Expected synthetic iMessage state runtime");
-    }
+    const state = requireState();
     const openStore = state.openKeyedStoreV2.bind(state);
     let failPollStore = true;
     const openSpy = vi
@@ -229,14 +209,11 @@ describe("iMessage approval reaction persistence", () => {
       allowedDecisions: ["allow-once", "deny"] as const,
     };
     try {
-      await registerIMessageApprovalReactionTarget(target);
-      await registerIMessageApprovalReactionTarget(target);
-      clearIMessageApprovalReactionTargetsForTest();
-      expect(await listPendingIMessageApprovalReactionPollTargets(target)).toEqual([
-        expect.objectContaining({
-          approvalId: target.approvalId,
-          messageId: target.messageId,
-        }),
+      await registerTarget(target);
+      await registerTarget(target);
+      await loadTargets(true);
+      expect(await listTargets(target)).toEqual([
+        expect.objectContaining({ approvalId: target.approvalId, messageId: target.messageId }),
       ]);
     } finally {
       openSpy.mockRestore();
@@ -246,37 +223,28 @@ describe("iMessage approval reaction persistence", () => {
   it.each([
     { name: "decision", approvalKind: "exec", allowedDecisions: ["allow-once", "invalid"] },
     { name: "kind", approvalKind: "unknown", allowedDecisions: ["allow-once"] },
-  ])("rejects persisted targets containing an invalid approval $name", async (invalid) => {
-    installIMessageStateRuntimeForTest();
-    clearIMessageApprovalReactionTargetsForTest();
-    const store = getOptionalIMessageRuntime()?.state.openKeyedStoreV2({
-      namespace: "imessage.approval-reactions",
-      maxEntries: 1000,
-      defaultTtlMs: 24 * 60 * 60 * 1000,
-    });
-    if (!store) {
-      throw new Error("Expected iMessage approval reaction state store");
-    }
-    await store.register(
-      "default:handle:+15551230000:corrupt-message",
-      {
-        version: 1,
-        target: {
-          approvalId: "exec-corrupt",
-          approvalKind: invalid.approvalKind,
-          allowedDecisions: invalid.allowedDecisions,
-        },
-      },
-      { ttlMs: 60_000 },
-    );
+  ])(
+    "rejects persisted targets containing an invalid approval $name",
+    async ({ approvalKind, allowedDecisions }) => {
+      const store = requireState().openKeyedStoreV2({
+        namespace: "imessage.approval-reactions",
+        maxEntries: 1000,
+        defaultTtlMs: 24 * 60 * 60 * 1000,
+      });
+      await store.register(
+        "default:handle:+15551230000:corrupt-message",
+        { version: 1, target: { approvalId: "exec-corrupt", approvalKind, allowedDecisions } },
+        { ttlMs: 60_000 },
+      );
 
-    await expect(
-      resolveIMessageApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversation: { handle: "+15551230000" },
-        messageId: "corrupt-message",
-        reactionKey: "👍",
-      }),
-    ).resolves.toBeNull();
-  });
+      await expect(
+        lookupTarget({
+          accountId: "default",
+          conversation: { handle: "+15551230000" },
+          messageId: "corrupt-message",
+          reactionKey: "👍",
+        }),
+      ).resolves.toBeNull();
+    },
+  );
 });

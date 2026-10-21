@@ -30,6 +30,7 @@ import {
 } from "./command/types.js";
 import { commitMainSessionRecovery } from "./main-session-recovery/main-session-recovery-store.js";
 import type { MainSessionRecoveryCommand } from "./main-session-recovery/main-session-recovery-types.js";
+import { capturePendingFinalRecoverySource } from "./pending-final-recovery-source.js";
 
 export type AgentCommandAdmissionIngress = ExecutionIdentityAdmissionFacts["ingress"];
 
@@ -64,6 +65,7 @@ function prepareAgentCommandRunAdmission(
   };
   const applicableGrants = spawnFacts?.applicableGrants;
   const assurance = spawnFacts?.assurance ?? admissionFacts.assurance;
+  const representedSubject = spawnFacts?.representedSubject ?? admissionFacts.representedSubject;
   return prepareAgentRunAdmission({
     cfg: params.cfg,
     operationalRunInstance: params.operationalRunInstance,
@@ -73,6 +75,7 @@ function prepareAgentCommandRunAdmission(
         runId: params.runId,
         agentId: params.agentId,
         ingress: spawnFacts?.ingress ?? admissionFacts.ingress,
+        ...(representedSubject ? { representedSubject } : {}),
         ...((spawnFacts?.invoker ?? admissionFacts.invoker)
           ? { invoker: spawnFacts?.invoker ?? admissionFacts.invoker }
           : {}),
@@ -130,6 +133,7 @@ export function prepareAgentCommandExecutionIdentity(params: {
   lifecycleGeneration: string;
 }) {
   const { opts, prepared } = params;
+  const pendingFinalRecoverySource = capturePendingFinalRecoverySource(prepared.sessionEntry);
   const operationalRunInstance =
     opts.operationalRunInstance ?? createOperationalRunInstanceRef(prepared.runId);
   const admissionFacts = getAgentCommandAdmissionFacts(params.opts.runContext ?? params.opts);
@@ -196,6 +200,7 @@ export function prepareAgentCommandExecutionIdentity(params: {
     : preparedAdmission;
   return Object.freeze({
     ...admission,
+    pendingFinalRecoverySource,
     // Observational events do not await consumers. Finish their recovery write
     // before releasing the admission; explicit close remains immediate.
     finish: async () => {

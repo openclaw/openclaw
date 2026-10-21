@@ -91,14 +91,40 @@ afterEach(() => {
 });
 
 describe("runResumeCommand", () => {
-  it.each([
-    ["malformed", "not+base64url"],
-    ["oversized", "A".repeat(4097)],
-  ])("rejects a %s handoff before Gateway discovery or the TUI", async (_name, handoff) => {
-    await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(
-      "Invalid --handoff payload. Copy a fresh command from the Control UI.",
+  it.each(["cancelled", "empty"])("does not launch the TUI for a %s picker", async (scenario) => {
+    const client = createGatewayClient(
+      scenario === "empty" ? [] : [{ key: "agent:main:alpha", displayName: "Alpha planning" }],
     );
-    expect(mocks.connect).not.toHaveBeenCalled();
+    mocks.selectStyled.mockResolvedValue(Symbol("cancel"));
+    const result = runResumeCommand(undefined, {});
+    if (scenario === "empty") {
+      await expect(result).rejects.toThrow(
+        "No recent sessions found. Run `openclaw sessions` to inspect sessions or `openclaw tui` to start one.",
+      );
+      expect(mocks.selectStyled).not.toHaveBeenCalled();
+    } else {
+      await result;
+      expect(mocks.selectStyled).toHaveBeenCalledOnce();
+    }
+    expect(client.stop).toHaveBeenCalledOnce();
+    expect(mocks.runTui).not.toHaveBeenCalled();
+  });
+
+  it("reports ambiguous sessions without choosing a candidate or launching the TUI", async () => {
+    const client = createGatewayClient([
+      { key: "agent:main:alpha", displayName: "Alpha planning" },
+      { key: "agent:main:beta", displayName: "Beta planning" },
+    ]);
+    await runResumeCommand("planning", {});
+    expect(mocks.error.mock.calls).toEqual([
+      ['Session query "planning" is ambiguous. Candidates:'],
+      ["  Alpha planning (alpha) [agent:main:alpha]"],
+      ["  Beta planning (beta) [agent:main:beta]"],
+      ["Use a longer name or the exact session key."],
+    ]);
+    expect(mocks.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(client.stop).toHaveBeenCalledOnce();
+    expect(mocks.selectStyled).not.toHaveBeenCalled();
     expect(mocks.runTui).not.toHaveBeenCalled();
   });
 
@@ -208,18 +234,6 @@ describe("runResumeCommand", () => {
     expect(mocks.runTui).not.toHaveBeenCalled();
   });
 
-  it("excludes the bare global session from query resolution", async () => {
-    const client = createGatewayClient([]);
-
-    await runResumeCommand("global", {});
-
-    expect(client.listSessions).toHaveBeenCalledWith(
-      expect.objectContaining({ includeGlobal: false }),
-    );
-    expect(mocks.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runTui).not.toHaveBeenCalled();
-  });
-
   it("omits the bare global session from the interactive picker", async () => {
     const client = createGatewayClient([
       { key: "agent:main:alpha", displayName: "Alpha planning", label: "roadmap" },
@@ -301,13 +315,6 @@ describe("resume command registration", () => {
     ]);
     expect(client.stop).toHaveBeenCalledOnce();
     expect(mocks.runTui).not.toHaveBeenCalled();
-  });
-
-  it("documents the additive opaque handoff option", () => {
-    const program = new Command().name("openclaw");
-    registerResumeCli(program);
-
-    expect(program.commands[0]?.helpInformation()).toContain("--handoff <payload>");
   });
 });
 

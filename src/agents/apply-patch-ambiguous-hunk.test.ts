@@ -49,17 +49,8 @@ describe("apply_patch ambiguous hunk matching", () => {
       /Found 2 occurrences.*include more surrounding lines/s,
     );
   });
-
   it("refuses an exact duplicate @@ context", async () => {
-    const source = [
-      "function target() {",
-      "  return 1;",
-      "}",
-      "function target() {",
-      "  return 2;",
-      "}",
-      "",
-    ].join("\n");
+    const source = "function target() {\n  return 1;\n}\nfunction target() {\n  return 2;\n}\n";
 
     await expect(
       applyTo(source, [
@@ -111,15 +102,7 @@ describe("apply_patch ambiguous hunk matching", () => {
   });
 
   it("uses a unique @@ context to disambiguate repeated exact hunk text", async () => {
-    const source = [
-      "function first() {",
-      "  return 1;",
-      "}",
-      "function second() {",
-      "  return 1;",
-      "}",
-      "",
-    ].join("\n");
+    const source = "function first() {\n  return 1;\n}\nfunction second() {\n  return 1;\n}\n";
 
     await expect(
       applyTo(source, [
@@ -130,17 +113,7 @@ describe("apply_patch ambiguous hunk matching", () => {
           contextOldIndexes: [undefined],
         }),
       ]),
-    ).resolves.toBe(
-      [
-        "function first() {",
-        "  return 1;",
-        "}",
-        "function second() {",
-        "  return 2;",
-        "}",
-        "",
-      ].join("\n"),
-    );
+    ).resolves.toBe("function first() {\n  return 1;\n}\nfunction second() {\n  return 2;\n}\n");
   });
 
   it("keeps sequential hunk searches after the prior match", async () => {
@@ -189,7 +162,9 @@ describe("apply_patch ambiguous hunk matching", () => {
 -target
 *** End Patch`;
 
-    await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Found 2 occurrences/);
+    await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+      /Found 2 occurrences.*include more surrounding lines/s,
+    );
     await expect(fs.readFile(file, "utf8")).resolves.toBe(source);
   });
 });

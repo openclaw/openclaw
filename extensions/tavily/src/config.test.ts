@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveTavilyApiKey } from "./config.js";
+import { resolveTavilyApiKey, resolveTavilyBaseUrl } from "./config.js";
 
 function configWithApiKey(apiKey: unknown, secrets?: OpenClawConfig["secrets"]): OpenClawConfig {
   return {
@@ -45,5 +45,20 @@ describe("resolveTavilyApiKey", () => {
         configWithApiKey({ source: "env", provider: "default", id: "OTHER_API_KEY" }),
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("resolveTavilyBaseUrl", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([undefined, "", "   "])("defaults an omitted or blank base URL %j", (baseUrl) => {
+    vi.stubEnv("TAVILY_BASE_URL", "");
+    const cfg: OpenClawConfig = {
+      plugins: { entries: { tavily: { config: { webSearch: { baseUrl } } } } },
+    };
+
+    expect(resolveTavilyBaseUrl(cfg)).toBe("https://api.tavily.com");
   });
 });

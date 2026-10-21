@@ -25,7 +25,6 @@ import {
   registerAgentSessionLoopTestLifecycle,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { ACTIVE_EMBEDDED_RUNS } from "../run-state.js";
 
 const mocks = vi.hoisted(() => ({
   clearActiveRun: vi.fn(),
@@ -38,9 +37,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../embedded-agent-subscribe.js", () => ({
   subscribeEmbeddedAgentSession: mocks.subscribe,
 }));
+// mock-isolation: Synthetic stream handles must not register with the live native-run owner.
 vi.mock("../runs.js", () => ({
-  clearActiveEmbeddedRun: mocks.clearActiveRun,
-  setActiveEmbeddedRun: mocks.setActiveRun,
+  detachActiveEmbeddedRun: mocks.clearActiveRun,
+  attachActiveEmbeddedRun: mocks.setActiveRun,
 }));
 vi.mock("../../../shared/tool-activity-heartbeat.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../shared/tool-activity-heartbeat.js")>()),
@@ -66,10 +66,12 @@ describe("nested tool activity ownership", () => {
   });
   beforeEach(async () => {
     vi.clearAllMocks();
-    ACTIVE_EMBEDDED_RUNS.clear();
     const runs = await vi.importActual<typeof import("../runs.js")>("../runs.js");
-    mocks.setActiveRun.mockImplementation(runs.setActiveEmbeddedRun);
-    mocks.clearActiveRun.mockImplementation(runs.clearActiveEmbeddedRun);
+    vi.doUnmock("../runs.js");
+    const { testing, registerTestEmbeddedRun } = await import("../runs.test-support.js");
+    testing.resetActiveEmbeddedRuns();
+    mocks.setActiveRun.mockImplementation(registerTestEmbeddedRun);
+    mocks.clearActiveRun.mockImplementation(runs.detachActiveEmbeddedRun);
     mocks.subscribe.mockReturnValue(createCatalogSubscription());
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
   });
@@ -170,7 +172,9 @@ describe("nested tool activity ownership", () => {
             await Promise.all([held, execution]);
           }
           await parent.release();
-          expect(await prepared.readActivities()).toHaveLength(owner === "current" ? 1 : 0);
+          expect(await prepared.readActivities()).toHaveLength(
+            owner === "current" || owner === "committed-abort" ? 1 : 0,
+          );
           expect(SessionManager.open(target).getEntries()).toHaveLength(
             originalEntries.length + (owner === "current" || owner === "committed-abort" ? 1 : 0),
           );

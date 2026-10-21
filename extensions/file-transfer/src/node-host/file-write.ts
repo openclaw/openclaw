@@ -1,7 +1,7 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { overwriteFileHandle } from "@openclaw/fs-safe/advanced";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   canonicalPathFromExistingAncestor,
   FsSafeError,
@@ -41,10 +41,6 @@ type FileWriteParams = {
   expectedCanonicalPath?: unknown;
   expectedBinding?: unknown;
 };
-
-function sha256Hex(buf: Buffer): string {
-  return crypto.createHash("sha256").update(buf).digest("hex");
-}
 
 async function writeBoundTarget(input: {
   binding: Extract<PathBinding, { kind: "write" }>;
@@ -214,26 +210,7 @@ export async function handleFileWrite(params: Partial<FileWriteParams> & Record<
     if (!createParents) {
       return err("PARENT_NOT_FOUND", `parent directory does not exist: ${parentDir}`);
     }
-    if (preflightOnly) {
-      const computedSha256 = sha256Hex(buf);
-      if (expectedSha256 && expectedSha256.toLowerCase() !== computedSha256) {
-        return err(
-          "INTEGRITY_FAILURE",
-          `sha256 mismatch: expected ${expectedSha256.toLowerCase()}, got ${computedSha256}`,
-          targetPath,
-        );
-      }
-      return {
-        ok: true as const,
-        path: canonicalTargetPath,
-        size: buf.length,
-        sha256: computedSha256,
-        overwritten: false,
-        binding: await captureWriteBinding(canonicalTargetPath),
-        ...(rejectHardlinks ? { rejectHardlinks: true as const } : {}),
-      };
-    }
-    if (!expectedBinding) {
+    if (!preflightOnly && !expectedBinding) {
       try {
         await fs.mkdir(parentDir, { recursive: true });
       } catch (mkdirErr) {

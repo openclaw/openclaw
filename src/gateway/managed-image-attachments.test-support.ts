@@ -39,13 +39,7 @@ export async function writeSource(sourcePath: string, body: string | Buffer) {
 }
 
 export async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.access(targetPath);
-  } catch (error) {
-    expect(error).toMatchObject({ code: "ENOENT" });
-    return;
-  }
-  throw new Error(`expected ${targetPath} to be missing`);
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 type ManagedOutgoingImageTestParams = Omit<
@@ -226,16 +220,17 @@ export async function createFixture(
     body?: Buffer;
     messageId?: string | null;
     createdAt?: string;
+    alt?: string;
   },
 ) {
   const attachmentId = options?.attachmentId ?? "11111111-1111-4111-8111-111111111111";
   const sessionKey = options?.sessionKey ?? "agent:main:main";
   const filename = options?.filename ?? "cat.png";
+  const contentType = options?.contentType ?? "image/png";
+  const body = options?.body ?? Buffer.from("original-image");
   const mediaId = `${randomUUID()}-${filename}`;
   const originalPath = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR, mediaId);
-  await fs.mkdir(path.dirname(originalPath), { recursive: true });
-  const body = options?.body ?? Buffer.from("original-image");
-  await fs.writeFile(originalPath, body);
+  await writeSource(originalPath, body);
   await insertManagedImageRecord(
     {
       attachmentId,
@@ -243,14 +238,14 @@ export async function createFixture(
       ...(options?.agentId ? { agentId: options.agentId } : {}),
       messageId: options?.messageId === undefined ? "msg-1" : options.messageId,
       createdAt: options?.createdAt ?? new Date().toISOString(),
-      alt: "Cat",
+      alt: options?.alt ?? "Cat",
       original: {
         mediaRoot: path.join(stateDir, "media"),
         mediaId,
         mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-        contentType: options?.contentType ?? "image/png",
-        width: options?.contentType?.startsWith("image/") === false ? null : 1024,
-        height: options?.contentType?.startsWith("image/") === false ? null : 768,
+        contentType,
+        width: contentType.startsWith("image/") ? 1024 : null,
+        height: contentType.startsWith("image/") ? 768 : null,
         sizeBytes: body.byteLength,
         filename,
       },

@@ -8,6 +8,5 @@ export type {
   InputSource,
   ToolDefinition,
   ToolInfo,
-  TreePreparation,
 } from "./types.js";
 export { wrapRegisteredTools } from "./wrapper.js";

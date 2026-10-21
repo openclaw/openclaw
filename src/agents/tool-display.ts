@@ -14,7 +14,7 @@ import {
   defaultTitle,
   formatDetailKey,
   normalizeToolDisplayName,
-  resolveToolVerbAndDetailForArgs,
+  resolveToolDetailForArgs,
 } from "./tool-display-common.js";
 import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
 import type { ToolDetailMode } from "./tool-display-exec.js";
@@ -24,7 +24,6 @@ type ToolDisplay = {
   icon: string;
   title: string;
   label: string;
-  verb?: string;
   detail?: string;
 };
 
@@ -62,7 +61,7 @@ export function resolveToolDisplay(params: {
   const spec = TOOL_MAP[key];
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
-  const { verb, detail } = resolveToolVerbAndDetailForArgs({
+  const detail = resolveToolDetailForArgs({
     toolKey: key,
     args: call.args,
     meta: params.meta,
@@ -77,7 +76,6 @@ export function resolveToolDisplay(params: {
     icon: spec?.icon ?? FALLBACK.icon,
     title,
     label,
-    verb,
     detail: detail ? shortenHomeInString(detail) : detail,
   };
 }

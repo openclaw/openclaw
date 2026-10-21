@@ -93,12 +93,8 @@ export async function executeSystemAgentOperation(
       return { applied: false, exitsInteractive: operation.message.includes("Bye.") };
     case "overview": {
       const overview = await loadOverviewForOperation(opts.deps);
-      if (opts.deps?.formatOverview) {
-        runtime.log(opts.deps.formatOverview(overview));
-      } else {
-        const { formatSystemAgentOverview } = await import("./overview.js");
-        runtime.log(formatSystemAgentOverview(overview));
-      }
+      const { formatSystemAgentOverview } = await import("./overview.js");
+      runtime.log(formatSystemAgentOverview(overview));
       return { applied: false };
     }
     case "agents": {
@@ -141,24 +137,14 @@ export async function executeSystemAgentOperation(
     }
     case "plugin-list": {
       const boundedRuntime = boundedPluginReadRuntime(runtime);
-      const runPluginsList =
-        opts.deps?.runPluginsList ??
-        (async (pluginRuntime: RuntimeEnv) => {
-          const { runPluginsListCommand } = await import("../cli/plugins-list-command.js");
-          await runPluginsListCommand({}, pluginRuntime);
-        });
-      await runPluginsList(boundedRuntime);
+      const { runPluginsListCommand } = await import("../cli/plugins-list-command.js");
+      await runPluginsListCommand({}, boundedRuntime);
       return { applied: false };
     }
     case "plugin-search": {
       const boundedRuntime = boundedPluginReadRuntime(runtime);
-      const runPluginsSearch =
-        opts.deps?.runPluginsSearch ??
-        (async (query: string, pluginRuntime: RuntimeEnv) => {
-          const { runPluginsSearchCommand } = await import("../cli/plugins-search-command.js");
-          await runPluginsSearchCommand(query, {}, pluginRuntime);
-        });
-      await runPluginsSearch(operation.query, boundedRuntime);
+      const { runPluginsSearchCommand } = await import("../cli/plugins-search-command.js");
+      await runPluginsSearchCommand(operation.query, {}, boundedRuntime);
       return { applied: false };
     }
     case "audit":
@@ -252,7 +238,7 @@ export async function executeSystemAgentOperation(
       // Use the same discovery as channel setup (bundled plugins + trusted
       // catalog), so the listing matches what `connect <channel>` can configure
       // even before any plugin registry is active.
-      const { resolved } = await resolveChannelSetupState(opts.deps);
+      const { resolved } = await resolveChannelSetupState();
       const entries = resolved.entries.toSorted((a, b) => a.id.localeCompare(b.id));
       runtime.log(
         [
@@ -267,9 +253,7 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "channel-info": {
-      const { cfg, installedPlugins, resolved, isConfigured } = await resolveChannelSetupState(
-        opts.deps,
-      );
+      const { cfg, installedPlugins, resolved, isConfigured } = await resolveChannelSetupState();
       const channel = operation.channel.toLowerCase();
       const entry = resolved.entries.find((candidate) => candidate.id === channel);
       if (!entry) {
@@ -346,8 +330,7 @@ export async function executeSystemAgentOperation(
       return await executeSetup(operation, runtime, opts);
     case "config-unset":
       return await apply("config.unset", async (ctx) => {
-        const runConfigUnset =
-          ctx.deps?.runConfigUnset ?? (await import("../cli/config-cli.js")).runConfigUnset;
+        const { runConfigUnset } = await import("../cli/config-cli.js");
         await ctx.commit(() =>
           runConfigUnset({
             path: operation.path,
@@ -397,17 +380,7 @@ export async function executeSystemAgentOperation(
         return { applied: false, message };
       }
       const result = await apply("plugin.uninstall", async (ctx) => {
-        const runPluginUninstall =
-          ctx.deps?.runPluginUninstall ??
-          (async (
-            pluginId: string,
-            pluginRuntime: RuntimeEnv,
-            options?: { beforePersistentApply?: () => void },
-          ) => {
-            const { runPluginUninstallCommand } =
-              await import("../cli/plugins-uninstall-command.js");
-            await runPluginUninstallCommand([pluginId], options, pluginRuntime);
-          });
+        const { runPluginUninstallCommand } = await import("../cli/plugins-uninstall-command.js");
         // A concurrent config write can retarget the default route between
         // the pre-approval check and this commit; re-verify before the
         // command's asynchronous preparation starts.
@@ -417,12 +390,12 @@ export async function executeSystemAgentOperation(
           );
         }
         await ctx.commit(() =>
-          runPluginUninstall(
-            operation.pluginId,
-            createNoExitRuntime(ctx.runtime),
+          runPluginUninstallCommand(
+            [operation.pluginId],
             ctx.assertPersistentApply
               ? { beforePersistentApply: ctx.assertPersistentApply }
               : undefined,
+            createNoExitRuntime(ctx.runtime),
           ),
         );
         return {
@@ -447,11 +420,10 @@ export async function executeSystemAgentOperation(
         );
       }
       return await apply("agents.create", async (ctx) => {
-        const createAgentForOperation =
-          ctx.deps?.createAgent ?? (await import("../agents/agent-create.js")).createAgent;
+        const { createAgent } = await import("../agents/agent-create.js");
         const { createAgentIdentityConfig } = await import("../agents/identity-file.js");
         const result = await ctx.commit(() =>
-          createAgentForOperation({
+          createAgent({
             entry: {
               id: operation.agentId,
               ...(operation.name
@@ -581,13 +553,7 @@ export async function executeSystemAgentOperation(
           ctx.runtime.log(summary);
           return { summary };
         }
-        const run =
-          action === "start"
-            ? ctx.deps?.runGatewayStart
-            : action === "stop"
-              ? ctx.deps?.runGatewayStop
-              : ctx.deps?.runGatewayRestart;
-        const result = await ctx.commit(run ?? (() => runGatewayLifecycle(action)));
+        const result = await ctx.commit(() => runGatewayLifecycle(action));
         if (result === false) {
           throw new Error("Gateway restart did not complete");
         }
@@ -613,7 +579,7 @@ export async function executeSystemAgentOperation(
         return { applied: false, message: setupNotice };
       }
       const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
-      const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
+      const { runTui } = await import("../tui/tui.js");
       // A reachable Gateway owns the state lock, so embedded mode would fail during hatch.
       // Keep embedded mode only as the no-Gateway fallback for standalone sessions.
       const useEmbeddedTui = !overview.gateway.reachable;

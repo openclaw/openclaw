@@ -5,7 +5,7 @@ export function createControlUiPaneRuntimeTestAdapterScript(): string {
 }
 
 /** Keeps the existing private pane probes on their actual owner during the Solid migration. */
-export function installControlUiPaneRuntimeTestAdapter() {
+function installControlUiPaneRuntimeTestAdapter() {
   // SAFETY: The existing opt-in render instrumentation uses this shared hook contract.
   const scope = window as Window & {
     openclawRenderLifecycleTestHook?: typeof notifyRenderLifecycleForTest;
@@ -27,14 +27,18 @@ export function installControlUiPaneRuntimeTestAdapter() {
       "catalogMessages",
       "loadingOlder",
       "historyIntentTimer",
-      "presencePayload",
+      "presence",
       "boardProviderLease",
     ] as const) {
       Object.defineProperty(element, key, {
         configurable: true,
         get() {
           const owner = readOwner();
-          return owner && Reflect.get(owner, key);
+          const source =
+            owner && (key === "catalogMessages" || key === "loadingOlder")
+              ? Reflect.get(owner, "history")
+              : owner;
+          return source && Reflect.get(source, key);
         },
       });
     }
@@ -46,22 +50,20 @@ export function installControlUiPaneRuntimeTestAdapter() {
           ? Reflect.apply(method, owner, args)
           : undefined;
       };
-    for (const key of ["requestUpdate", "render"] as const) {
-      Object.defineProperty(element, key, {
-        configurable: true,
-        get() {
-          const owner = readOwner();
-          const method: unknown = owner && Reflect.get(owner, key);
-          return typeof method === "function" ? forwardMethod(method) : method;
-        },
-        set(method: unknown) {
-          const owner = readOwner();
-          if (owner) {
-            Reflect.set(owner, key, method);
-          }
-        },
-      });
-    }
+    Object.defineProperty(element, "render", {
+      configurable: true,
+      get() {
+        const owner = readOwner();
+        const method: unknown = owner && Reflect.get(owner, "render");
+        return typeof method === "function" ? forwardMethod(method) : method;
+      },
+      set(method: unknown) {
+        const owner = readOwner();
+        if (owner) {
+          Reflect.set(owner, "render", method);
+        }
+      },
+    });
   };
 
   const notify: typeof notifyRenderLifecycleForTest = (host, phase) => {

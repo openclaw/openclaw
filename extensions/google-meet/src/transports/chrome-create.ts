@@ -227,7 +227,6 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     throw new Error("Browser fallback opened Google Meet but did not return a targetId.");
   }
   const notes = new Set<string>();
-  let lastResult: ReturnType<typeof readBrowserCreateResult> | undefined;
   let lastError: unknown;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
@@ -242,7 +241,6 @@ export async function createMeetWithBrowserProxyOnNode(params: {
         },
       });
       const result = readBrowserCreateResult(evaluated);
-      lastResult = result;
       for (const note of result.notes ?? []) {
         notes.add(note);
       }
@@ -280,11 +278,8 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     }
   }
   throw new Error(
-    lastResult?.manualAction?.message ??
-      `Google Meet did not return a meeting URL from the browser create flow before timeout.${
-        lastError
-          ? ` Last browser automation error: ${formatBrowserAutomationError(lastError)}`
-          : ""
-      }`,
+    `Google Meet did not return a meeting URL from the browser create flow before timeout.${
+      lastError ? ` Last browser automation error: ${formatBrowserAutomationError(lastError)}` : ""
+    }`,
   );
 }

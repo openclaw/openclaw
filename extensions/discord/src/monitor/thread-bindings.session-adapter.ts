@@ -6,6 +6,7 @@ import {
   projectThreadBindingRecord,
   registerSessionBindingAdapterV2,
   unregisterSessionBindingAdapter,
+  warnPluginSdkDeprecation,
   type SessionBindingAdapterV2,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
@@ -173,11 +174,17 @@ export function createNoopThreadBindingManager(accountIdRaw?: string): ThreadBin
     getIdleTimeoutMs: () => DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
     getMaxAgeMs: () => DEFAULT_THREAD_BINDING_MAX_AGE_MS,
     getByThreadId: () => undefined,
-    getBySessionKey: () => undefined,
     listBySessionKey: () => [],
     listBindings: () => [],
     touchThread: async () => null,
-    touchThreadSync: () => null,
+    touchThreadSync: () => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "ThreadBindingManager.touchThreadSync",
+        replacement: "ThreadBindingManager.touchThread",
+      });
+      return null;
+    },
     bindTarget: async () => null,
     unbindThread: async () => null,
     unbindBySessionKey: async () => [],

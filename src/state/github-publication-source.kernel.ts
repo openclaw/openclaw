@@ -10,6 +10,7 @@ import { validateCanonicalSessionRowEntry } from "../config/sessions/session-can
 import { listSessionMembersInDatabase } from "../config/sessions/session-sharing-store.kernel.js";
 import type { PersonalGitHubPublicationRow } from "../gateway/github-personal-publication-store.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { GitHubPublicationSourcePredicate } from "./github-publication-source-contract.js";
 import type {
   GitHubPublicationSourceFacts,
@@ -102,7 +103,7 @@ function readSessionFacts(
 /** Shared-state facts remain transaction-held for both durable and memory session sources. */
 export function readGitHubPublicationSourceFacts(
   source: DatabaseSync | GitHubPublicationSessionFacts,
-  stateDb: DatabaseSync,
+  stateDb: EngineConnection,
   selector: GitHubPublicationSourceSelector,
 ): GitHubPublicationSourceFacts {
   const facts: GitHubPublicationSourceFacts =
@@ -180,7 +181,7 @@ export function readGitHubPublicationSourceFacts(
 /** Equality is a source predicate, never a replacement for the requester's live capability. */
 export function assertGitHubPublicationSourceFacts(
   sourceDb: DatabaseSync | GitHubPublicationSessionFacts,
-  stateDb: DatabaseSync,
+  stateDb: EngineConnection,
   selector: GitHubPublicationSourceSelector,
   expected: GitHubPublicationSourceFacts,
 ): void {
@@ -194,6 +195,11 @@ export function assertGitHubPublicationWorktreeSource(
   worktree: { id: string; repoFingerprint: string; branch: string },
 ): void {
   const { entry, worktree: current, ownerWorktree } = source.expected;
+  if (entry?.worktree?.githubPullRequest) {
+    throw new Error(
+      "This workspace continues an existing PR; its original publication target must be handled explicitly.",
+    );
+  }
   if (
     source.selector.worktreeId !== worktree.id ||
     current?.id !== worktree.id ||

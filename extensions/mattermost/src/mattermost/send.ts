@@ -240,14 +240,7 @@ async function resolveMattermostSendContext(to: string, opts: MattermostSendOpts
     allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
     assertRequestCurrent: opts.assertDirectAdapterHandoff,
   });
-  const retry = account.config.dmChannelRetry;
-  const dmRetryOptions = retry && {
-    // Snapshot before the user lookup can yield.
-    maxRetries: retry.maxRetries,
-    initialDelayMs: retry.initialDelayMs,
-    maxDelayMs: retry.maxDelayMs,
-    timeoutMs: retry.timeoutMs,
-  };
+  const dmRetryOptions = account.config.dmChannelRetry;
 
   let channelId: string;
   try {
@@ -296,7 +289,7 @@ export async function sendMessageMattermost(
   client.assertRequestCurrent?.();
 
   let props = opts.props;
-  if (!props && Array.isArray(opts.buttons) && opts.buttons.length > 0) {
+  if (!props && opts.buttons?.length) {
     setInteractionSecret(accountId, client.token);
     props = buildButtonProps({
       callbackUrl: resolveInteractionCallbackUrl(accountId, {
@@ -328,7 +321,7 @@ export async function sendMessageMattermost(
         channelId,
         buffer: media.buffer,
         fileName: media.fileName ?? `upload${extensionForMime(media.contentType) ?? ""}`,
-        contentType: media.contentType ?? undefined,
+        contentType: media.contentType,
       });
       fileIds = [fileInfo.id];
     } catch (err) {

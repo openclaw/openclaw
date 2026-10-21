@@ -3,11 +3,12 @@ import { once } from "node:events";
 import fs from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { Writable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { resolveGatewayLockPaths } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
@@ -20,10 +21,7 @@ import * as exec from "../process/exec.js";
 import * as pidIdentity from "../shared/pid-alive.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import * as existingWrites from "../state/openclaw-state-db-existing-write.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import * as stateDb from "../state/openclaw-state-db.js";
 import * as launchctl from "./launchd-exec.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
@@ -34,11 +32,7 @@ import * as serviceMembership from "./service-process-membership.js";
 import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-const stdout = new Writable({
-  write(_chunk, _encoding, done) {
-    done();
-  },
-});
+const stdout = new Writable({ write: (_chunk, _encoding, done) => done() });
 let root: string;
 let env: NodeJS.ProcessEnv;
 let effectiveEnv: NodeJS.ProcessEnv;
@@ -54,27 +48,62 @@ let mutations: string[];
 let revoked: boolean;
 const label = "ai.openclaw.private-update-intent-test";
 const runId = "native-intent-test-run";
+const ownerError = "Cannot verify a live serving Gateway owner";
 
-function database() {
-  return openOpenClawStateDatabase({ env: effectiveEnv }).db;
+const database = () => stateDb.openOpenClawStateDatabase({ env: effectiveEnv }).db;
+const intentRow = () =>
+  database().prepare("SELECT pid, reason, updated_at_ms FROM gateway_restart_intent").get();
+const run = (sql: string, ...params: SQLInputValue[]) =>
+  database()
+    .prepare(sql)
+    .run(...params);
+const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
+function servingPayload(ownerPid = pid) {
+  return {
+    owner: {
+      pid: ownerPid,
+      host: hostname(),
+      startedAt: getFileLockProcessStartTime(ownerPid),
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
+    port: 19483,
+    mode: "supervised",
+    supervisor: { kind: "launchd", name: label },
+  };
 }
-function intentRow() {
-  return database().prepare("SELECT pid, reason, updated_at_ms FROM gateway_restart_intent").get();
+function mutateHandoff(sql: string, ...params: SQLInputValue[]) {
+  using db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
+  db.prepare(`UPDATE managed_update_handoffs SET ${sql}`).run(...params);
 }
-function writePlist(extra: NodeJS.ProcessEnv = {}) {
-  const plist = resolveLaunchAgentPlistPath(env);
-  fs.mkdirSync(path.dirname(plist), { recursive: true });
-  fs.writeFileSync(
-    plist,
-    buildLaunchAgentPlist({
-      label,
-      programArguments: [process.execPath, path.join(root, "dist", "index.js"), "gateway"],
-      stdoutPath: path.join(root, "stdout.log"),
-      stderrPath: path.join(root, "stderr.log"),
-      environment: { ...effectiveEnv, ...extra },
-    }),
+function replaceOwner(owner: string) {
+  run("UPDATE state_leases SET owner=? WHERE scope='gateway-owner'", owner);
+}
+function expectPreserved() {
+  expect([mutations, intentRow(), isPidAlive(pid)]).toEqual([[], undefined, true]);
+}
+function interceptIntent(after: (recorded: boolean) => void, fail = false) {
+  const write = existingWrites.runExistingOpenClawStateWriteTransaction;
+  vi.spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction").mockImplementation(
+    (mutate, options, contract) => {
+      const intent = contract.operationLabel === "gateway.restart-intent.write";
+      if (intent && fail) {
+        throw new Error("fixture storage unavailable");
+      }
+      const result = write(mutate, options, contract);
+      if (intent) {
+        after(result === true);
+      }
+      return result;
+    },
   );
 }
+const nativeResult = (code: number, output = "", stderr = "") => ({
+  code,
+  stdout: output,
+  stderr,
+  termination: "exit" as const,
+});
+const notLoaded = () => nativeResult(113, "", "Could not find service");
 async function stop(updateOwned = true, disable = false) {
   const invoke = () =>
     withGatewayServiceOperationLock(env, (assertCurrent) =>
@@ -102,31 +131,18 @@ async function transferred() {
   const databasePath = resolveManagedUpdateLeaseDatabasePath();
   const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: process.env });
   const acquired = store.acquire(root, "handoff-owner", { kind: "update" });
-  expect(acquired.kind).toBe("acquired");
   if (acquired.kind !== "acquired") {
     throw new Error("fixture acquisition failed");
   }
   // A transferred lease has a distinct live helper and executor, as in native handoff.
   const payload = JSON.parse(acquired.lease.payload);
   payload.helper = store.processIdentity(pid);
-  const db = new DatabaseSync(databasePath);
-  try {
-    db.prepare("UPDATE managed_update_handoffs SET payload_json = ?").run(JSON.stringify(payload));
-  } finally {
-    db.close();
-  }
-  const current = store.read(root);
-  if (current.kind !== "current") {
-    throw new Error("fixture lease missing");
-  }
+  mutateHandoff("payload_json = ?", JSON.stringify(payload));
   const meta = path.join(root, "handoff-meta.json");
-  fs.writeFileSync(
-    meta,
-    JSON.stringify({ version: 1, meta: { root, runId, handoffId: "handoff-owner" } }),
-  );
+  writeJson(meta, { version: 1, meta: { root, runId, handoffId: "handoff-owner" } });
   env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
   env.OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META = meta;
-  return { store, lease: current.lease, meta };
+  return { store, payload, meta };
 }
 
 beforeEach(async () => {
@@ -139,10 +155,7 @@ beforeEach(async () => {
   });
   root = fs.realpathSync(dirs.make("launchd-update-intent-"));
   fs.mkdirSync(path.join(root, "dist"));
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
-  );
+  writeJson(path.join(root, "package.json"), { name: "openclaw", version: "2026.9.4" });
   fs.writeFileSync(path.join(root, "dist", "index.js"), "// private service definition fixture\n");
   const tmp = path.join(root, "private-tmp");
   fs.mkdirSync(tmp, { mode: 0o700 });
@@ -178,27 +191,26 @@ beforeEach(async () => {
   vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockImplementation((target) =>
     target === pid ? "outside" : "unknown",
   );
-  const startedAt = getFileLockProcessStartTime(pid);
-  expect(startedAt).not.toBeNull();
+  const serving = servingPayload();
+  expect(serving.owner.startedAt).not.toBeNull();
   const now = Date.now();
-  database()
-    .prepare(`INSERT INTO state_leases
+  const insertOwner = `INSERT INTO state_leases
     (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
-    VALUES ('gateway-owner', 'global', 'serving-owner', ?, ?, ?, ?, ?)`)
-    .run(
-      now + 300000,
-      now,
-      JSON.stringify({
-        owner: { pid, host: hostname(), startedAt },
-        port: 19483,
-        mode: "supervised",
-        supervisor: { kind: "launchd", name: label },
-      }),
-      now,
-      now,
-    );
+    VALUES ('gateway-owner', 'global', 'serving-owner', ?, ?, ?, ?, ?)`;
+  run(insertOwner, now + 300000, now, JSON.stringify(serving), now, now);
   expect(readGatewayOwnerLease({ env: effectiveEnv, current: true })?.state).toBe("live");
-  writePlist();
+  const plist = resolveLaunchAgentPlistPath(env);
+  fs.mkdirSync(path.dirname(plist), { recursive: true });
+  fs.writeFileSync(
+    plist,
+    buildLaunchAgentPlist({
+      label,
+      programArguments: [process.execPath, path.join(root, "dist", "index.js"), "gateway"],
+      stdoutPath: path.join(root, "stdout.log"),
+      stderrPath: path.join(root, "stderr.log"),
+      environment: effectiveEnv,
+    }),
+  );
   bootoutFailure = false;
   onPrint = undefined;
   onBootout = undefined;
@@ -209,18 +221,13 @@ beforeEach(async () => {
   vi.spyOn(launchctl, "execLaunchctl").mockImplementation(async (args) => {
     if (args[0] === "print") {
       if (args[1]?.startsWith("system/")) {
-        return { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };
+        return notLoaded();
       }
       prints++;
       onPrint?.();
       return isPidAlive(pid)
-        ? {
-            code: 0,
-            termination: "exit",
-            stdout: `${args[1]} = {\n\tstate = running\n\tpid = ${pid}\n}`,
-            stderr: "",
-          }
-        : { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };
+        ? nativeResult(0, `${args[1]} = {\n\tstate = running\n\tpid = ${pid}\n}`)
+        : notLoaded();
     }
     if (args[0] === "bootout" || args[0] === "disable") {
       mutations.push(args[0]);
@@ -228,12 +235,12 @@ beforeEach(async () => {
         atBootout = intentRow();
         onBootout?.();
         if (bootoutFailure) {
-          return { code: 5, termination: "exit", stdout: "", stderr: "fixture bootout failure" };
+          return nativeResult(5, "", "fixture bootout failure");
         }
         await stopChildProcess(child, 5000);
         await closed;
       }
-      return { code: 0, termination: "exit", stdout: "", stderr: "" };
+      return nativeResult(0);
     }
     throw new Error(`Unexpected fixture launchctl: ${args.join(" ")}`);
   });
@@ -242,234 +249,167 @@ beforeEach(async () => {
 afterEach(async () => {
   await stopChildProcess(child, 5000);
   await closed;
-  closeOpenClawStateDatabaseForTest();
+  stateDb.closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
 
-describe("managed-update LaunchAgent stop intent", () => {
-  it.each(["direct-original", "transferred"])(
-    "records authenticated %s intent in the effective service database before bootout",
-    async (authority) => {
-      if (authority === "transferred") {
-        await transferred();
-      }
+it.each(["direct-original", "transferred", "already-stopped", "explicit-stop"])(
+  "%s stop records intent only for an authenticated running updater",
+  async (mode) => {
+    const authentic = mode === "direct-original" || mode === "transferred";
+    if (mode === "transferred") {
+      await transferred();
+    } else if (mode === "already-stopped") {
+      await stopChildProcess(child, 5000);
+      await closed;
+      run("DELETE FROM state_leases WHERE scope='gateway-owner'");
+    } else if (mode === "explicit-stop") {
+      env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
+    }
+    await stop(mode !== "explicit-stop");
+    expect(atBootout).toEqual(
+      authentic ? expect.objectContaining({ pid, reason: "update.run" }) : undefined,
+    );
+    expect(mutations).toEqual(["bootout"]);
+    expect(isPidAlive(pid)).toBe(false);
+    if (authentic) {
+      expect(fs.existsSync(env.OPENCLAW_STATE_DIR!)).toBe(false);
+    }
+  },
+);
+it.each(["unchanged", "lock-replaced", "native-pid-reused"])(
+  "revalidates legacy serving identity before bootout: %s",
+  async (change) => {
+    run("DELETE FROM state_leases WHERE scope='gateway-owner'");
+    const paths = resolveGatewayLockPaths(effectiveEnv);
+    expect(paths.stateLockPath.startsWith(root + path.sep)).toBe(true);
+    const lock = {
+      pid,
+      startTime: getFileLockProcessStartTime(pid),
+      ownerId: "legacy-owner",
+      createdAt: new Date().toISOString(),
+      configPath: paths.configPath,
+      stateDir: paths.stateDir,
+      port: 19483,
+    };
+    fs.mkdirSync(path.dirname(paths.stateLockPath), { recursive: true });
+    writeJson(paths.stateLockPath, lock);
+    let recorded = false;
+    if (change !== "unchanged") {
+      interceptIntent((result) => {
+        recorded = result;
+        queueMicrotask(() => {
+          if (change === "lock-replaced") {
+            writeJson(paths.stateLockPath, { ...lock, ownerId: "legacy-successor" });
+          } else {
+            const readStart = pidIdentity.getFileLockProcessStartTime;
+            vi.spyOn(pidIdentity, "getFileLockProcessStartTime").mockImplementation(
+              (target, processEnv) => (target === pid ? 0 : readStart(target, processEnv)),
+            );
+          }
+        });
+      });
+      await expect(stop()).rejects.toThrow(ownerError);
+      expect(recorded).toBe(true);
+      expectPreserved();
+    } else {
       await stop();
       expect(atBootout).toMatchObject({ pid, reason: "update.run" });
-      expect(mutations).toEqual(["bootout"]);
-      expect(isPidAlive(pid)).toBe(false);
-      expect(fs.existsSync(env.OPENCLAW_STATE_DIR!)).toBe(false);
-    },
-  );
-  it.each(["unchanged", "lock-replaced", "native-pid-reused"])(
-    "revalidates legacy serving identity before bootout: %s",
-    async (change) => {
-      database().prepare("DELETE FROM state_leases WHERE scope='gateway-owner'").run();
-      const paths = resolveGatewayLockPaths(effectiveEnv);
-      expect(paths.stateLockPath.startsWith(root + path.sep)).toBe(true);
-      const lock = {
-        pid,
-        startTime: getFileLockProcessStartTime(pid),
-        ownerId: "legacy-owner",
-        createdAt: new Date().toISOString(),
-        configPath: paths.configPath,
-        stateDir: paths.stateDir,
-        port: 19483,
-      };
-      fs.mkdirSync(path.dirname(paths.stateLockPath), { recursive: true });
-      fs.writeFileSync(paths.stateLockPath, JSON.stringify(lock));
-      let recorded = false;
-      if (change !== "unchanged") {
-        const write = existingWrites.runExistingOpenClawStateWriteTransaction;
-        vi.spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction").mockImplementation(
-          (mutate, options, contract) => {
-            const result = write(mutate, options, contract);
-            if (contract.operationLabel === "gateway.restart-intent.write") {
-              recorded = result === true;
-              queueMicrotask(() => {
-                if (change === "lock-replaced") {
-                  fs.writeFileSync(
-                    paths.stateLockPath,
-                    JSON.stringify({ ...lock, ownerId: "legacy-successor" }),
-                  );
-                } else {
-                  const readStart = pidIdentity.getFileLockProcessStartTime;
-                  vi.spyOn(pidIdentity, "getFileLockProcessStartTime").mockImplementation(
-                    (target, processEnv) => (target === pid ? 0 : readStart(target, processEnv)),
-                  );
-                }
-              });
-            }
-            return result;
-          },
-        );
-        await expect(stop()).rejects.toThrow("Cannot verify a live serving Gateway owner");
-        expect(recorded).toBe(true);
-        expect(mutations).toEqual([]);
-        expect(intentRow()).toBeUndefined();
-        expect(isPidAlive(pid)).toBe(true);
-      } else {
-        await stop();
-        expect(atBootout).toMatchObject({ pid, reason: "update.run" });
-      }
-    },
-  );
-  it.each(["already-stopped", "explicit-stop"])(
-    "does not record restart intent for %s",
-    async (mode) => {
-      if (mode === "already-stopped") {
-        await stopChildProcess(child, 5000);
-        await closed;
-        database().prepare("DELETE FROM state_leases WHERE scope='gateway-owner'").run();
-      } else {
-        env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
-      }
-      await stop(mode === "already-stopped");
-      expect(atBootout).toBeUndefined();
-      expect(mutations).toEqual(["bootout"]);
-    },
-  );
-  it.each(["missing", "missing-marker", "wrong-run", "replaced", "wrong-pid", "stale-process"])(
-    "refuses %s transferred authority without stopping",
-    async (fault) => {
-      const { store, lease, meta } = await transferred();
-      if (fault === "missing-marker") {
-        delete env.OPENCLAW_UPDATE_RUN_HANDOFF;
-      }
-      if (fault === "missing") {
-        fs.rmSync(meta);
-      }
-      if (fault === "wrong-run") {
-        fs.writeFileSync(
-          meta,
-          JSON.stringify({
-            version: 1,
-            meta: { root, runId: "wrong", handoffId: "handoff-owner" },
-          }),
-        );
-      }
-      if (fault === "replaced") {
-        // Fault injection represents replacement by the helper, not an executor's release grant.
-        const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-        try {
-          db.prepare("UPDATE managed_update_handoffs SET owner='replacement'").run();
-        } finally {
-          db.close();
-        }
-      }
-      if (fault === "stale-process" || fault === "wrong-pid") {
-        const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-        try {
-          const payload = JSON.parse(lease.payload);
-          payload.executor =
-            fault === "wrong-pid"
-              ? store.processIdentity(pid)
-              : { pid: process.pid, startIdentity: "0" };
-          db.prepare("UPDATE managed_update_handoffs SET payload_json = ?").run(
-            JSON.stringify(payload),
-          );
-        } finally {
-          db.close();
-        }
-      }
-      await expect(stop()).rejects.toThrow("Refusing to stop");
-      expect(mutations).toEqual([]);
-      expect(intentRow()).toBeUndefined();
-      expect(isPidAlive(pid)).toBe(true);
-    },
-  );
-  it.each([
-    ["foreign-pid", "Cannot verify a live serving Gateway owner"],
-    ["replaced-during-probe", "Cannot verify a live serving Gateway owner"],
-    ["missing-command", "Effective LaunchAgent service command could not be inspected."],
-    ["revoked", "update owner revoked"],
-    ["replaced-after-intent", "Cannot verify a live serving Gateway owner"],
-    ["storage-failure", "Cannot record restart intent"],
-  ])("preserves runtime and intent when preparation fails: %s", async (fault, error) => {
-    if (fault === "foreign-pid") {
-      const row = database()
-        .prepare("SELECT payload_json FROM state_leases WHERE scope='gateway-owner'")
-        .get()!;
-      const payload = JSON.parse(String(row.payload_json));
-      payload.owner = {
-        pid: process.pid,
-        host: hostname(),
-        startedAt: getFileLockProcessStartTime(process.pid),
-      };
-      database()
-        .prepare("UPDATE state_leases SET payload_json=? WHERE scope='gateway-owner'")
-        .run(JSON.stringify(payload));
-    } else if (fault === "missing-command") {
-      fs.rmSync(resolveLaunchAgentPlistPath(env));
-    } else if (fault === "replaced-during-probe" || fault === "revoked") {
-      onPrint = () => {
-        if (prints !== 3) {
-          return;
-        }
-        if (fault === "revoked") {
-          revoked = true;
-        } else {
-          database()
-            .prepare("UPDATE state_leases SET owner='new-owner' WHERE scope='gateway-owner'")
-            .run();
-        }
-      };
-    } else {
-      const write = existingWrites.runExistingOpenClawStateWriteTransaction;
-      vi.spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction").mockImplementation(
-        (mutate, options, contract) => {
-          if (
-            fault === "storage-failure" &&
-            contract.operationLabel === "gateway.restart-intent.write"
-          ) {
-            throw new Error("fixture storage unavailable");
-          }
-          const result = write(mutate, options, contract);
-          if (contract.operationLabel === "gateway.restart-intent.write") {
-            queueMicrotask(() =>
-              database()
-                .prepare("UPDATE state_leases SET owner='successor' WHERE scope='gateway-owner'")
-                .run(),
-            );
-          }
-          return result;
-        },
-      );
     }
-    await expect(stop(true, fault === "missing-command")).rejects.toThrow(error);
-    expect(mutations).toEqual([]);
-    expect(intentRow()).toBeUndefined();
-    expect(isPidAlive(pid)).toBe(true);
-  });
-  it.each(["none", "legacy", "successor", "update.run"])(
-    "clears only its own intent on failed bootout (successor=%s)",
-    async (writer) => {
-      bootoutFailure = true;
-      if (writer !== "none") {
-        onBootout = () => {
-          if (writer === "legacy") {
-            // Published writers use wall-clock timestamps, not monotonic increments.
-            database().prepare("UPDATE gateway_restart_intent SET reason='gateway.restart'").run();
-          } else {
-            vi.spyOn(Date, "now").mockReturnValue(
-              (atBootout as { updated_at_ms: number }).updated_at_ms,
-            );
-            expect(
-              writeGatewayRestartIntentSync({ env: effectiveEnv, targetPid: pid, reason: writer }),
-            ).toBe(true);
-          }
-        };
+  },
+);
+it.each(["missing", "missing-marker", "wrong-run", "replaced", "wrong-pid", "stale-process"])(
+  "refuses %s transferred authority without stopping",
+  async (fault) => {
+    const { store, payload, meta } = await transferred();
+    if (fault === "missing-marker") {
+      delete env.OPENCLAW_UPDATE_RUN_HANDOFF;
+    }
+    if (fault === "missing") {
+      fs.rmSync(meta);
+    }
+    if (fault === "wrong-run") {
+      writeJson(meta, { version: 1, meta: { root, runId: "wrong", handoffId: "handoff-owner" } });
+    }
+    if (fault === "replaced") {
+      // Fault injection represents replacement by the helper, not an executor's release grant.
+      mutateHandoff("owner='replacement'");
+    }
+    if (fault === "stale-process" || fault === "wrong-pid") {
+      payload.executor =
+        fault === "wrong-pid"
+          ? store.processIdentity(pid)
+          : { pid: process.pid, startIdentity: "0" };
+      mutateHandoff("payload_json = ?", JSON.stringify(payload));
+    }
+    await expect(stop()).rejects.toThrow("Refusing to stop");
+    expectPreserved();
+  },
+);
+it.each([
+  ["foreign-pid", ownerError],
+  ["replaced-during-probe", ownerError],
+  ["missing-command", "Effective LaunchAgent service command could not be inspected."],
+  ["revoked", "update owner revoked"],
+  ["replaced-after-intent", ownerError],
+  ["storage-failure", "Cannot record restart intent"],
+])("preserves runtime and intent when preparation fails: %s", async (fault, error) => {
+  if (fault === "foreign-pid") {
+    run(
+      "UPDATE state_leases SET payload_json=? WHERE scope='gateway-owner'",
+      JSON.stringify(servingPayload(process.pid)),
+    );
+  } else if (fault === "missing-command") {
+    fs.rmSync(resolveLaunchAgentPlistPath(env));
+  } else if (fault === "replaced-during-probe" || fault === "revoked") {
+    onPrint = () => {
+      if (prints !== 3) {
+        return;
       }
-      await expect(stop()).rejects.toThrow("fixture bootout failure");
-      expect(atBootout).toMatchObject({ pid, reason: "update.run" });
-      expect(isPidAlive(pid)).toBe(true);
-      if (writer === "none") {
-        expect(intentRow()).toBeUndefined();
+      if (fault === "revoked") {
+        revoked = true;
       } else {
-        expect(intentRow()).toMatchObject({
-          pid,
-          reason: writer === "legacy" ? "gateway.restart" : writer,
-        });
+        replaceOwner("new-owner");
       }
-    },
-  );
+    };
+  } else {
+    interceptIntent(
+      () => queueMicrotask(() => replaceOwner("successor")),
+      fault === "storage-failure",
+    );
+  }
+  await expect(stop(true, fault === "missing-command")).rejects.toThrow(error);
+  expectPreserved();
 });
+it.each(["none", "legacy", "successor", "update.run"])(
+  "clears only its own intent on failed bootout (successor=%s)",
+  async (writer) => {
+    bootoutFailure = true;
+    if (writer !== "none") {
+      onBootout = () => {
+        if (writer === "legacy") {
+          // Published writers use wall-clock timestamps, not monotonic increments.
+          run("UPDATE gateway_restart_intent SET reason='gateway.restart'");
+        } else {
+          vi.spyOn(Date, "now").mockReturnValue(
+            (atBootout as { updated_at_ms: number }).updated_at_ms,
+          );
+          expect(
+            writeGatewayRestartIntentSync({ env: effectiveEnv, targetPid: pid, reason: writer }),
+          ).toBe(true);
+        }
+      };
+    }
+    await expect(stop()).rejects.toThrow("fixture bootout failure");
+    expect(atBootout).toMatchObject({ pid, reason: "update.run" });
+    expect(isPidAlive(pid)).toBe(true);
+    expect(intentRow()).toEqual(
+      writer === "none"
+        ? undefined
+        : expect.objectContaining({
+            pid,
+            reason: writer === "legacy" ? "gateway.restart" : writer,
+          }),
+    );
+  },
+);

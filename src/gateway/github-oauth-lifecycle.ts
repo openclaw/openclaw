@@ -59,6 +59,7 @@ import {
   authorizationStillOwned,
   authorizationStillOwnedAsync,
   configuredOAuthIdentities,
+  captureGitHubOAuthAuthorizationIdentity,
   createGitHubOAuthInventoryReader,
   identityStillSelected,
   MAINTENANCE_INTERVAL_MS,
@@ -576,9 +577,7 @@ export function createGitHubOAuthLifecycle(params: {
         throw new Error("GitHub authorization lifecycle is stopping.");
       }
       assertGitHubCliAvailable();
-      const expectedIdentity = structuredClone(
-        resolveConfiguredGitHubToolIdentity({ config: params.getConfig(), ...input }) ?? null,
-      );
+      const expectedIdentity = captureGitHubOAuthAuthorizationIdentity(params.getConfig(), input);
       const agentLifecycleBinding =
         input.scope === "agent"
           ? await captureAgentLifecycleBinding(params.getConfig, input.agentId)
@@ -625,7 +624,7 @@ export function createGitHubOAuthLifecycle(params: {
       getOrCreatePromise(devicePolls, requestId, () => pollOnce(requestId), {
         evictOnSettled: true,
       }),
-    /** @deprecated Use cancelAuthorizationAsync; removed in the next Plugin SDK major. */
+    /** @deprecated Use cancelAuthorizationAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     cancelAuthorization(requestId: string): boolean {
       warnPluginSdkDeprecation({
         family: "github-publication",
@@ -653,7 +652,7 @@ export function createGitHubOAuthLifecycle(params: {
       return existed;
     },
     status,
-    /** @deprecated Use retireProfileAsync; removed in the next Plugin SDK major. */
+    /** @deprecated Use retireProfileAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     retireProfile(profileId: string): void {
       warnPluginSdkDeprecation({
         family: "github-publication",

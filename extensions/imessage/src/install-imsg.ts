@@ -10,7 +10,6 @@ import { IMESSAGE_INSTALL_COMMAND } from "./setup-core.js";
 type IMessageInstallResult = {
   ok: boolean;
   cliPath?: string;
-  version?: string;
   error?: string;
 };
 
@@ -138,16 +137,5 @@ export async function installIMessageCli(
     };
   }
 
-  let version: string | undefined;
-  try {
-    const versionResult = await runPluginCommandWithTimeout({
-      argv: [cliPath, "--version"],
-      timeoutMs: 10_000,
-    });
-    version = versionResult.stdout.trim() || undefined;
-  } catch {
-    // Version output is helpful but not required for setup.
-  }
-
-  return { ok: true, cliPath, version };
+  return { ok: true, cliPath };
 }

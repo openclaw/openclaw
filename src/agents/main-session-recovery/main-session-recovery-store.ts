@@ -8,11 +8,8 @@ import {
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
-  retryMainSessionRecoveryMutation,
-  scheduleMainSessionRecoveryMutation,
-} from "./main-session-recovery-lifecycle.js";
-import {
   isMainSessionRecoveryPending,
+  isMainSessionRecoveryReconciliationCandidate,
   transitionMainSessionRecovery,
   type MainSessionRecoveryCommand,
   type MainSessionRecoveryOwnerClaim,
@@ -301,6 +298,18 @@ export async function claimMainSessionRecoveryOwner(params: {
   ) {
     return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
+  if (
+    claim.entry?.sessionId === params.sessionId &&
+    claim.sessionKey &&
+    isMainSessionRecoveryReconciliationCandidate(claim.entry)
+  ) {
+    return {
+      kind: "invalidated",
+      reason: "recovery_pending",
+      entry: claim.entry,
+      sessionKey: claim.sessionKey,
+    } as const;
+  }
   const reason = claim.transition.kind === "rejected" ? claim.transition.reason : "state_changed";
   return { kind: "invalidated", reason } as const;
 }
@@ -337,18 +346,17 @@ export async function inspectMainSessionRecoveryRequired(params: {
   };
 }
 
-async function releaseMainSessionRecoveryOwnerWithRetries(
-  lease: MainSessionRecoveryOwnerLease,
+export async function releaseMainSessionRecoveryOwner(
+  lease: MainSessionRecoveryOwnerLease | undefined,
 ): Promise<MainSessionRecoveryPendingTarget | undefined> {
-  // A leaked current-generation token blocks automatic recovery until restart.
-  // Token-scoped release is idempotent, so transient writer failures are safe to retry.
-  const released = await retryMainSessionRecoveryMutation(async () =>
-    commitMainSessionRecovery({
-      command: { kind: "release_foreground", claim: lease },
-      requireWriteSuccess: true,
-      target: lease,
-    }),
-  );
+  if (!lease) {
+    return undefined;
+  }
+  const released = await commitMainSessionRecovery({
+    command: { kind: "release_foreground", claim: lease },
+    requireWriteSuccess: true,
+    target: lease,
+  });
   const { entry, sessionKey } = released;
   if (
     (released.transition.kind !== "applied" && released.transition.kind !== "no_change") ||
@@ -365,28 +373,4 @@ async function releaseMainSessionRecoveryOwnerWithRetries(
     sessionKey,
     storePath: lease.storePath,
   };
-}
-
-export async function releaseMainSessionRecoveryOwner(
-  lease: MainSessionRecoveryOwnerLease | undefined,
-): Promise<MainSessionRecoveryPendingTarget | undefined> {
-  if (!lease) {
-    return undefined;
-  }
-  try {
-    return await releaseMainSessionRecoveryOwnerWithRetries(lease);
-  } catch (error) {
-    // Exact-token cleanup survives transient writer outages without blocking its caller.
-    scheduleMainSessionRecoveryMutation({
-      mutation: () => releaseMainSessionRecoveryOwnerWithRetries(lease),
-      onSuccess: async (pending) => {
-        if (pending) {
-          const { scheduleMainSessionRecoveryPendingTarget } =
-            await import("./main-session-recovery-owner-release.js");
-          scheduleMainSessionRecoveryPendingTarget(pending);
-        }
-      },
-    });
-    throw error;
-  }
 }

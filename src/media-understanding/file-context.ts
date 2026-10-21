@@ -30,8 +30,8 @@ import {
 } from "./media-attachment-outcomes.js";
 import {
   createMediaAttachmentCache,
+  createScopedMediaAttachmentCache,
   normalizeMediaAttachments,
-  resolveMediaAttachmentLocalRoots,
 } from "./runner.attachments.js";
 import type { MediaAttachment } from "./types.js";
 
@@ -319,18 +319,7 @@ export async function renderInboundDocumentContext(params: {
   const { ctx, cfg } = params;
   const limits = resolveFileExtractionLimits(cfg);
   const attachments = normalizeMediaAttachments(ctx);
-  const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: resolveMediaAttachmentLocalRoots({
-      cfg,
-      ctx,
-      workspaceDir: params.workspaceDir,
-    }),
-    // The scoped root set is authoritative: merging sessionless defaults back in would restore
-    // the shared workspace/sandbox parents for sandboxed sessions.
-    includeDefaultLocalPathRoots: false,
-    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
-    workspaceDir: params.workspaceDir,
-  });
+  const cache = createScopedMediaAttachmentCache(attachments, params);
   try {
     const context = await extractFileContext({
       attachments,

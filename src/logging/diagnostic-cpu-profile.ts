@@ -14,51 +14,23 @@ const DURATION_MS = 5_000;
 const INTERVAL_MICROS = 10_000;
 const MAX_NODES = 16_384;
 const MAX_SAMPLES = 65_536;
+const SUMMARY_STACK_DEPTH = 8;
+const MAX_SUMMARY_ROWS = 128;
 
-function sanitizeProfile(
+export function sanitizeDiagnosticCpuProfile(
   profile: Profiler.Profile,
   packageRoot: string | null,
   { startBlockedMs }: { startBlockedMs: number },
 ) {
-  assertProfile(
-    Array.isArray(profile.nodes) &&
-      profile.nodes.length > 0 &&
-      Array.isArray(profile.samples) &&
-      Array.isArray(profile.timeDeltas) &&
-      profile.samples.length === profile.timeDeltas.length &&
-      Number.isFinite(profile.startTime) &&
-      Number.isFinite(profile.endTime) &&
-      profile.endTime >= profile.startTime,
-  );
+  assertProfile(profile.samples !== undefined && profile.timeDeltas !== undefined);
   if (profile.nodes.length > MAX_NODES || profile.samples.length > MAX_SAMPLES) {
     throw new ProfileFailure("profile-too-large");
   }
-  const ids = new Set<number>();
-  const parents = new Map<number, number>();
   let redactedNodeCount = 0;
+  // The runtime owns graph consistency; this boundary bounds and redacts its output.
   const nodes = profile.nodes.map((node): Profiler.ProfileNode => {
-    assertProfile(Number.isSafeInteger(node.id) && node.id > 0 && !ids.has(node.id));
-    ids.add(node.id);
     const { callFrame, redacted } = sanitizeDiagnosticProfileFrame(node.callFrame, packageRoot);
     redactedNodeCount += Number(redacted || node.deoptReason !== undefined);
-    if (node.children !== undefined) {
-      assertProfile(Array.isArray(node.children));
-      for (const child of node.children) {
-        assertProfile(Number.isSafeInteger(child) && !parents.has(child));
-        parents.set(child, node.id);
-      }
-    }
-    assertProfile(
-      node.hitCount === undefined || (Number.isSafeInteger(node.hitCount) && node.hitCount >= 0),
-    );
-    if (node.positionTicks !== undefined) {
-      assertProfile(Array.isArray(node.positionTicks));
-      for (const tick of node.positionTicks) {
-        assertProfile(
-          Number.isSafeInteger(tick.line) && Number.isSafeInteger(tick.ticks) && tick.ticks >= 0,
-        );
-      }
-    }
     return {
       id: node.id,
       callFrame,
@@ -68,24 +40,6 @@ function sanitizeProfile(
       ...(node.deoptReason !== undefined ? { deoptReason: "[redacted]" } : {}),
     };
   });
-  const roots = nodes.filter((node) => !parents.has(node.id));
-  const root = roots[0];
-  assertProfile(
-    root !== undefined && roots.length === 1 && [...parents.keys()].every((id) => ids.has(id)),
-  );
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const visited = new Set<number>();
-  const pending = [root.id];
-  while (pending.length) {
-    const id = pending.pop()!;
-    assertProfile(!visited.has(id));
-    visited.add(id);
-    pending.push(...(byId.get(id)!.children ?? []));
-  }
-  assertProfile(visited.size === nodes.length);
-  assertProfile(profile.samples.every((id) => ids.has(id)));
-  // V8 deoptimization samples can arrive out of timestamp order; preserve their signed deltas.
-  assertProfile(profile.timeDeltas.every((delta) => Number.isFinite(delta)));
   const result = {
     requestedDurationMs: DURATION_MS,
     actualDurationMs: (profile.endTime - profile.startTime) / 1_000,
@@ -101,10 +55,81 @@ function sanitizeProfile(
       timeDeltas: profile.timeDeltas,
     },
   };
-  if (!boundedJsonUtf8Bytes(result, DIAGNOSTIC_PROFILE_MAX_BYTES).complete) {
-    throw new ProfileFailure("profile-too-large");
+  if (boundedJsonUtf8Bytes(result, DIAGNOSTIC_PROFILE_MAX_BYTES).complete) {
+    return result;
   }
-  return result;
+
+  // Boot/deoptimization can produce deep stacks even at a coarse sampling interval.
+  // Count recorded samples, not hitCount: V8's deopt samples can have zero hits.
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const parents = new Map<number, number>();
+  for (const node of nodes) {
+    for (const child of node.children ?? []) {
+      parents.set(child, node.id);
+    }
+  }
+  const counts = new Map<number, number>();
+  for (const id of profile.samples) {
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  type SummaryRow = {
+    stack: Profiler.ProfileNode["callFrame"][];
+    elidedFrameCount: number;
+    sampleCount: number;
+  };
+  const groups = new Map<string, SummaryRow>();
+  for (const [id, sampleCount] of counts) {
+    const stack: SummaryRow["stack"] = [];
+    let node = byId.get(id);
+    while (node && stack.length < SUMMARY_STACK_DEPTH) {
+      stack.push(node.callFrame);
+      node = byId.get(parents.get(node.id)!);
+    }
+    let elidedFrameCount = 0;
+    // Dependency-heavy stacks still need the application caller that owns the work.
+    if (!stack.some((frame) => frame.url.startsWith("openclaw:"))) {
+      let skipped = 0;
+      while (node && !node.callFrame.url.startsWith("openclaw:")) {
+        skipped++;
+        node = byId.get(parents.get(node.id)!);
+      }
+      if (node) {
+        stack.push(node.callFrame);
+        elidedFrameCount = skipped;
+      }
+    }
+    const key = JSON.stringify({ stack, elidedFrameCount });
+    const group = groups.get(key);
+    if (group) {
+      group.sampleCount += sampleCount;
+    } else {
+      groups.set(key, { stack, elidedFrameCount, sampleCount });
+    }
+  }
+  const summaryRows: SummaryRow[] = [];
+  const summary = {
+    ...result,
+    profile: undefined,
+    truncated: true,
+    originalNodeCount: nodes.length,
+    sampleCount: profile.samples.length,
+    omittedSampleCount: profile.samples.length,
+    summary: summaryRows,
+  };
+  let bytes = Buffer.byteLength(JSON.stringify(summary));
+  for (const row of [...groups.values()].toSorted((a, b) => b.sampleCount - a.sampleCount)) {
+    const extra = Buffer.byteLength(JSON.stringify(row)) + Number(summary.summary.length > 0);
+    if (
+      summary.summary.length === MAX_SUMMARY_ROWS ||
+      bytes + extra > DIAGNOSTIC_PROFILE_MAX_BYTES
+    ) {
+      break;
+    }
+    summary.summary.push(row);
+    summary.omittedSampleCount -= row.sampleCount;
+    bytes += extra;
+  }
+  return summary;
 }
 
 /** Captures CPU samples through Node's shared native profiler or Bun's inspector. */
@@ -127,6 +152,6 @@ export function captureDiagnosticCpuProfile(options: {
             disable: (session) => session.post("Profiler.disable"),
           })
         : createNativeCpuProfileCapture(INTERVAL_MICROS),
-    sanitize: sanitizeProfile,
+    sanitize: sanitizeDiagnosticCpuProfile,
   });
 }

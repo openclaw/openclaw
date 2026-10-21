@@ -5,8 +5,8 @@ import {
 } from "openclaw/plugin-sdk/account-resolution";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  hasConfiguredSecretInput,
   normalizeSecretInputString,
+  resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasSlackAccountCredentials } from "./account-configured.js";
@@ -52,18 +52,12 @@ function inspectSlackToken(
   source: SlackTokenSource;
   status: SlackCredentialStatus;
 } {
-  const token = normalizeSecretInputString(value);
-  if (token || hasConfiguredSecretInput(value)) {
-    return {
-      token,
-      source: "config",
-      status: token ? "available" : "configured_unavailable",
-    };
-  }
-  // A configured SecretRef stays authoritative while unavailable.
-  return envToken
-    ? { token: envToken, source: "env", status: "available" }
-    : { source: "none", status: "missing" };
+  const credential = resolveSecretInputString({ value, path: "Slack token", mode: "inspect" });
+  return credential.status !== "missing"
+    ? { token: credential.value, source: "config", status: credential.status }
+    : envToken
+      ? { token: envToken, source: "env", status: "available" }
+      : { source: "none", status: "missing" };
 }
 
 export function inspectSlackAccount(params: {

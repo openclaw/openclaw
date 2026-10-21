@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asDateTimestampMs, asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
   listPendingIMessageApprovalReactionPollTargets,
@@ -186,7 +187,6 @@ export async function pollPendingIMessageApprovalReactions(params: {
   accountId: string;
   allowRecentChatDiscovery?: boolean;
   gatewayRuntime?: IMessageApprovalGatewayRuntime;
-  logVerboseMessage?: (message: string) => void;
 }): Promise<void> {
   const targets = await listPendingIMessageApprovalReactionPollTargets({
     accountId: params.accountId,
@@ -211,9 +211,7 @@ export async function pollPendingIMessageApprovalReactions(params: {
     try {
       messages = await fetchRecentHistory({ client: params.client, chatId });
     } catch (err) {
-      params.logVerboseMessage?.(
-        `imessage: approval reaction poll skipped chat_id=${chatId}: ${String(err)}`,
-      );
+      logVerbose(`imessage: approval reaction poll skipped chat_id=${chatId}: ${String(err)}`);
       continue;
     }
     for (const message of messages) {
@@ -245,7 +243,6 @@ export async function pollPendingIMessageApprovalReactions(params: {
           message: reactionPayload,
           bodyText: reactionPayload.text ?? "",
           gatewayRuntime: params.gatewayRuntime,
-          logVerboseMessage: params.logVerboseMessage,
         });
         if (handled.stopPolling) {
           return;

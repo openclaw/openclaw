@@ -21,6 +21,16 @@ function providerTts(provider: string, config: Record<string, unknown>) {
   return { providers: { [provider]: config } };
 }
 
+function voiceCall(config: Record<string, unknown>) {
+  return { entries: { "voice-call": { config } } };
+}
+
+function expectProperties(value: unknown, properties: Record<string, unknown>) {
+  for (const [path, expected] of Object.entries(properties)) {
+    expect(value).toHaveProperty(path, expected);
+  }
+}
+
 describe("legacy migrate provider-shaped config", () => {
   it.each([
     {
@@ -60,18 +70,12 @@ describe("legacy migrate provider-shaped config", () => {
   ])("persists inherited Talk settings with selected provider $provider", (fixture) => {
     const raw: Record<string, unknown> = {
       ...(fixture.talk ? { talk: fixture.talk } : {}),
-      plugins: {
-        entries: {
-          "voice-call": {
-            config: {
-              realtime: {
-                provider: fixture.inheritedProvider,
-                providers: { openai: { model: "inherited" } },
-              },
-            },
-          },
+      plugins: voiceCall({
+        realtime: {
+          provider: fixture.inheritedProvider,
+          providers: { openai: { model: "inherited" } },
         },
-      },
+      }),
     };
     const plugins = structuredClone(raw.plugins);
     const changes: string[] = [];
@@ -105,7 +109,7 @@ describe("legacy migrate provider-shaped config", () => {
     {
       name: "voice-call plugin",
       path: "plugins.entries",
-      value: { "voice-call": { config: { tts: legacyTts } } },
+      value: voiceCall({ tts: legacyTts }).entries,
       expected: ["tts.providers-generic-shape", ...voiceAndEnabled],
     },
     {
@@ -126,20 +130,11 @@ describe("legacy migrate provider-shaped config", () => {
 
   it("does not copy plain Talk speech provider config into talk.realtime", () => {
     const changes: string[] = [];
-    const migrated = normalizeLegacyTalkConfig(
-      {
-        talk: {
-          provider: "elevenlabs",
-          providers: { elevenlabs: { voiceId: "voice-1" } },
-        },
-      },
-      changes,
-    );
+    const talk = { provider: "elevenlabs", ...providerTts("elevenlabs", { voiceId: "voice-1" }) };
+    const before = structuredClone(talk);
+    const migrated = normalizeLegacyTalkConfig({ talk }, changes);
     expect(changes).toStrictEqual([]);
-    expect(migrated.talk).toEqual({
-      provider: "elevenlabs",
-      providers: { elevenlabs: { voiceId: "voice-1" } },
-    });
+    expect(migrated.talk).toEqual(before);
   });
 
   it.each([
@@ -234,41 +229,29 @@ describe("legacy migrate provider-shaped config", () => {
           },
         },
       },
-      plugins: {
-        entries: {
-          "voice-call": { config: { tts: providerTts("xai", { voiceId: "eve" }) } },
+      plugins: voiceCall({ tts: providerTts("xai", { voiceId: "eve" }) }),
+    });
+    expectProperties(res.config, {
+      tts: {
+        provider: "openai",
+        providers: {
+          elevenlabs: { speakerVoiceId: "canonical-voice" },
+          openai: { speakerVoice: "alloy" },
         },
+        personas: { narrator: providerTts("google", { speakerVoice: "Kore" }) },
       },
-    });
-    expect(res.config).toHaveProperty("tts", {
-      provider: "openai",
-      providers: {
-        elevenlabs: { speakerVoiceId: "canonical-voice" },
-        openai: { speakerVoice: "alloy" },
-      },
-      personas: { narrator: { providers: { google: { speakerVoice: "Kore" } } } },
-    });
-    expect(res.config).toHaveProperty("agents.defaults.tts", {
-      providers: { openai: { voice: "cedar", speakerVoice: "marin" } },
-    });
-    expect(res.config).toHaveProperty("agents.list.0", {
-      id: "voice-agent",
-      tts: { providers: { openai: { speakerVoice: "marin" } } },
-    });
-    expect(res.config).toHaveProperty("channels.discord.tts", {
-      providers: { microsoft: { voice: "en-US-AvaNeural" } },
-    });
-    expect(res.config).toHaveProperty("channels.discord.voice.tts", {
-      providers: { openai: { speakerVoice: "verse" } },
-    });
-    expect(res.config).toHaveProperty("channels.discord.accounts.primary.tts", {
-      providers: { gradium: { voiceId: "voice-2", speakerVoiceId: "voice-current" } },
-    });
-    expect(res.config).toHaveProperty("channels.discord.accounts.primary.voice.tts", {
-      providers: { openai: { speakerVoiceId: "nested-voice" } },
-    });
-    expect(res.config).toHaveProperty("plugins.entries.voice-call.config.tts", {
-      providers: { xai: { speakerVoiceId: "eve" } },
+      "agents.defaults.tts": providerTts("openai", { voice: "cedar", speakerVoice: "marin" }),
+      "agents.list.0": { id: "voice-agent", tts: providerTts("openai", { speakerVoice: "marin" }) },
+      "channels.discord.tts": providerTts("microsoft", { voice: "en-US-AvaNeural" }),
+      "channels.discord.voice.tts": providerTts("openai", { speakerVoice: "verse" }),
+      "channels.discord.accounts.primary.tts": providerTts("gradium", {
+        voiceId: "voice-2",
+        speakerVoiceId: "voice-current",
+      }),
+      "channels.discord.accounts.primary.voice.tts": providerTts("openai", {
+        speakerVoiceId: "nested-voice",
+      }),
+      "plugins.entries.voice-call.config.tts": providerTts("xai", { speakerVoiceId: "eve" }),
     });
     expect(res.changes).toContain(
       "Removed tts.providers.openai.voiceName (tts.providers.openai.speakerVoice already set).",
@@ -299,22 +282,19 @@ describe("legacy migrate provider-shaped config", () => {
           accounts: { english: { tts: { enabled: false } } },
         },
       },
-      plugins: { entries: { "voice-call": { config: { tts: { enabled: true } } } } },
+      plugins: voiceCall({ tts: { enabled: true } }),
     });
-    expect(res.config).toHaveProperty("tts", { auto: "always" });
-    expect(res.config).toHaveProperty("agents.defaults.tts", { enabled: false });
-    expect(res.config).toHaveProperty("agents.list.0", {
-      id: "voice-agent",
-      tts: { auto: "tagged" },
+    expectProperties(res.config, {
+      tts: { auto: "always" },
+      "agents.defaults.tts": { enabled: false },
+      "agents.list.0": { id: "voice-agent", tts: { auto: "tagged" } },
+      "channels.discord.tts": { enabled: true },
+      "channels.discord.voice.tts": { auto: "off" },
+      "channels.discord.accounts.primary.tts": { enabled: false },
+      "channels.discord.accounts.primary.voice.tts": { auto: "always" },
+      "channels.feishu.tts": { auto: "always" },
+      "channels.feishu.accounts.english.tts": { auto: "off" },
+      "plugins.entries.voice-call.config.tts": { auto: "always" },
     });
-    expect(res.config).toHaveProperty("channels.discord.tts", { enabled: true });
-    expect(res.config).toHaveProperty("channels.discord.voice.tts", { auto: "off" });
-    expect(res.config).toHaveProperty("channels.discord.accounts.primary.tts", { enabled: false });
-    expect(res.config).toHaveProperty("channels.discord.accounts.primary.voice.tts", {
-      auto: "always",
-    });
-    expect(res.config).toHaveProperty("channels.feishu.tts", { auto: "always" });
-    expect(res.config).toHaveProperty("channels.feishu.accounts.english.tts", { auto: "off" });
-    expect(res.config).toHaveProperty("plugins.entries.voice-call.config.tts", { auto: "always" });
   });
 });

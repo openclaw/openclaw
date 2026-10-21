@@ -40,9 +40,13 @@ export function isProviderRequestSizeCeilingError(errorMessage?: string): boolea
 
 // Match model-transport EOF contracts, not plugin lifecycle stream failures.
 // Unresolved calls at EOF differ from an inconsistent completed response.
-// A body cut inside an SSE frame is a disconnect; a whole frame of malformed JSON is not.
+// A body cut inside an SSE frame is a disconnect; a malformed whole frame is not a disconnect.
 export const INCOMPLETE_ASSISTANT_STREAM_RE =
   /^(?:[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason|with an incomplete frame)|Responses stream ended with unresolved tool calls)[.!]?$/i;
+// The OpenAI SDK uses this exact diagnostic for unreadable SSE event data.
+// Treat the failed response as a provider error, not arbitrary JSON/schema failures.
+export const MALFORMED_SSE_MESSAGE_RE =
+  /^Error reading response: malformed server-sent event JSON\.$/i;
 // Undici ends a stream body with this exact bare transport message. Keep it
 // anchored so unrelated failures that merely contain the word do not match.
 export const TERMINATED_TRANSPORT_MESSAGE_RE = /^terminated$/i;
@@ -59,7 +63,7 @@ export function isPreDispatchToolCallRejectionMessage(errorMessage?: string): bo
   return errorMessage !== undefined && PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES.has(errorMessage);
 }
 const PERIODIC_USAGE_LIMIT_RE =
-  /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
+  /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b|已达到 Token Plan 用量上限|已达到每[日周月天](?:\/每[日周月天])*使用上限|(?:配额|额度)已用尽/i;
 
 const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   /api[_ ]?key[_ ]?(?:revoked|deactivated|deleted)/i,
@@ -165,6 +169,7 @@ const ERROR_PATTERNS = {
     "访问量过大",
   ],
   serverError: [
+    MALFORMED_SSE_MESSAGE_RE,
     "an error occurred while processing",
     "internal server error",
     "internal_error",

@@ -438,7 +438,6 @@ describe("synthetic configured context publication", () => {
       undefined,
       auth("account-a"),
       (provider) => provider,
-      new Map(),
     );
     const catalog = materializePreparedModelCatalog(
       publication.catalog,
@@ -540,7 +539,6 @@ describe("synthetic configured context publication", () => {
       undefined,
       auth("account-a"),
       (provider) => provider,
-      new Map(),
     );
     const catalog = materializePreparedModelCatalog(
       publication.catalog,
@@ -603,7 +601,6 @@ describe("synthetic configured context publication", () => {
       undefined,
       auth("account-a"),
       (provider) => provider,
-      new Map(),
     );
     const catalog = materializePreparedModelCatalog(
       publication.catalog,
@@ -627,7 +624,6 @@ describe("synthetic configured context publication", () => {
       undefined,
       auth("account-a"),
       (provider) => provider,
-      new Map(),
     );
     for (const account of ["account-a", "account-b"]) {
       const failed = prepareModelCatalogPublication(
@@ -640,7 +636,6 @@ describe("synthetic configured context publication", () => {
         { ...accepted, providers: new Map() },
         auth(account),
         (provider) => provider,
-        new Map(),
       );
       const catalog = materializePreparedModelCatalog(
         failed.catalog,
@@ -659,4 +654,115 @@ describe("synthetic configured context publication", () => {
       }
     }
   });
+});
+
+it("carries typed-only manifest facts into static preparation without creating conversational registry rows", () => {
+  const model = {
+    id: "typed",
+    name: "Typed",
+    inference: {
+      chat: false as const,
+      decision: { protocol: "fixture", input: ["text" as const] },
+    },
+  };
+  const metadata = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "fixture",
+        providers: ["fixture"],
+        modelCatalog: { providers: { fixture: { models: [model] } } },
+      },
+    ],
+  });
+  const config: OpenClawConfig = { agents: { defaults: { decisionModel: "fixture/typed" } } };
+  const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:typed-models", {
+    config,
+    includePluginCatalogs: false,
+    pluginMetadataSnapshot: metadata,
+  });
+  const facts = prepareCapturedRuntimeFacts({
+    agentFacts: { input: { config }, configuredModelRefs: [] },
+    workspaceFacts: { pluginMetadataSnapshot: metadata, inlineProviderModels: [] },
+    templateModelRegistry: registry,
+    configuredRuntimeModels: [],
+  });
+  expect(
+    facts.modelCatalog.entries.find(
+      (entry) => entry.provider === "fixture" && entry.id === "typed",
+    ),
+  ).toMatchObject({ ...model, provider: "fixture" });
+  expect(registry.find("fixture", "typed")).toBeUndefined();
+});
+
+it.each([
+  { custom: false, chat: false },
+  { custom: true, chat: false },
+  { custom: false, chat: true },
+  { custom: true, chat: true },
+])("keeps declared inference bound to the configured physical route (%j)", ({ custom, chat }) => {
+  const inference = {
+    chat,
+    decision: { protocol: "fixture", input: ["text" as const] },
+  };
+  const metadata = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "fixture",
+        providers: ["fixture"],
+        modelCatalog: {
+          providers: {
+            fixture: {
+              api: "openai-responses",
+              baseUrl: "https://catalog.fixture.invalid/v1",
+              models: [{ id: "typed", name: "Typed", inference }],
+            },
+          },
+        },
+      },
+    ],
+  });
+  const config: OpenClawConfig = {
+    models: {
+      providers: {
+        fixture: {
+          api: "openai-responses",
+          baseUrl: "https://catalog.fixture.invalid/v1",
+          models: [
+            {
+              id: "typed",
+              name: "Configured",
+              ...(custom ? { baseUrl: "https://custom.fixture.invalid/v1" } : {}),
+              reasoning: false,
+              input: ["text"],
+              maxTokens: 256,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+      },
+    },
+  };
+  const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:typed-configured", {
+    config,
+    includePluginCatalogs: false,
+    pluginMetadataSnapshot: metadata,
+  });
+  const facts = prepareCapturedRuntimeFacts({
+    agentFacts: { input: { config }, configuredModelRefs: [] },
+    workspaceFacts: { pluginMetadataSnapshot: metadata, inlineProviderModels: [] },
+    templateModelRegistry: registry,
+    configuredRuntimeModels: [],
+  });
+  const rows = facts.modelCatalog.entries.filter(
+    (entry) => entry.provider === "fixture" && entry.id === "typed",
+  );
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({
+    name: "Configured",
+    baseUrl: custom ? "https://custom.fixture.invalid/v1" : "https://catalog.fixture.invalid/v1",
+    inference: custom ? { chat: false } : inference,
+  });
+  if (custom) {
+    expect(rows[0]!.inference).not.toHaveProperty("decision");
+  }
 });

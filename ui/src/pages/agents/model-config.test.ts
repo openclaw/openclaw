@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { createAgentModelActions } from "./model-config.ts";
+import { createAgentConfigActions } from "./agent-config-actions.ts";
 
 function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   const client = {
@@ -31,11 +31,12 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
 }
 
 function modelActionsFor(runtimeConfig: ReturnType<typeof createRuntimeConfig>) {
-  return createAgentModelActions({
+  return createAgentConfigActions({
     getRuntimeConfig: () => runtimeConfig,
+    getReport: () => null,
     canUpdate: () => true,
     onPrimaryChanged: () => undefined,
-  });
+  }).models;
 }
 
 describe("agent model config", () => {
@@ -47,11 +48,12 @@ describe("agent model config", () => {
     let selected = "main";
     let allowed = true;
     const onPrimaryChanged = vi.fn();
-    const actions = createAgentModelActions({
+    const actions = createAgentConfigActions({
       getRuntimeConfig: () => current,
+      getReport: () => null,
       canUpdate: (agentId) => allowed && agentId === selected,
       onPrimaryChanged,
-    });
+    }).models;
     current = replacement;
     selected = "scout";
     actions.onModelChange("main", "fixture/chat");

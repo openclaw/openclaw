@@ -1,6 +1,8 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, beforeEach, vi } from "vitest";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 
 const {
   authenticateMock,
@@ -161,6 +163,80 @@ vi.mock("./ingress.js", () => ({
 
 import { monitorTlonProvider } from "./index.js";
 
+export function messageEssay(author: string, content: unknown, sent = 1_700_000_000_000) {
+  return { author, content: typeof content === "string" ? [{ inline: [content] }] : content, sent };
+}
+
+function configureTlon(
+  tlon: Record<string, unknown>,
+  config: Omit<OpenClawConfig, "channels"> = {},
+) {
+  realUrbitFixture.config = {
+    ...config,
+    channels: { tlon: { code: "code", ship: "~zod", url: realUrbitFixture.url, ...tlon } },
+  };
+}
+
+function startMonitor(
+  options: Omit<Parameters<typeof monitorTlonProvider>[0], "scheduler" | "runtime"> & {
+    controller?: AbortController;
+  } = {},
+) {
+  const { controller = new AbortController(), ...monitorOptions } = options;
+  const scheduler = createTestPluginServiceScheduler();
+  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+  const monitor = monitorTlonProvider({
+    ...monitorOptions,
+    scheduler,
+    abortSignal: options.abortSignal
+      ? AbortSignal.any([controller.signal, options.abortSignal])
+      : controller.signal,
+    runtime,
+  });
+  void monitor.catch(() => {});
+  return {
+    scheduler,
+    runtime,
+    monitor,
+    stop: async () => {
+      controller.abort();
+      await monitor;
+    },
+  };
+}
+
+async function withMonitor(
+  run: (runtime: RuntimeEnv) => Promise<void>,
+  options: Parameters<typeof startMonitor>[0] & { waitForStart?: boolean } = {},
+) {
+  const { waitForStart, ...monitorOptions } = options;
+  const started = Promise.withResolvers<void>();
+  if (waitForStart) {
+    ingressMock.start.mockImplementationOnce(() => started.resolve());
+  }
+  const { runtime, monitor, stop } = startMonitor(monitorOptions);
+  try {
+    if (waitForStart) {
+      await Promise.race([started.promise, monitor]);
+    } else {
+      await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+    }
+    await run(runtime);
+  } finally {
+    await stop();
+  }
+}
+
+function getSubscription(app: string, path?: string) {
+  const subscription = sseClientMock.subscribe.mock.calls
+    .map(([value]) => value)
+    .findLast((value) => value.app === app && (path === undefined || value.path === path));
+  if (!subscription) {
+    throw new Error(`expected ${app} ${path ?? ""} subscription`);
+  }
+  return subscription;
+}
+
 export function useTlonMonitorFixture() {
   beforeEach(() => {
     const ingress = createPluginRuntimeMock().channel.inbound.ingress;
@@ -194,6 +270,10 @@ export function useTlonMonitorFixture() {
   });
 
   return {
+    configureTlon,
+    startMonitor,
+    withMonitor,
+    getSubscription,
     monitorTlonProvider,
     authenticateMock,
     buildChannelInboundEnvelopeMock,

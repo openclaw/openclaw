@@ -17,6 +17,17 @@ export function decisionDebugEnabled(): boolean {
   return log.isEnabled("debug");
 }
 
+/** Consumer observations describe policy changes, not provider success or task completion. */
+export function logDecisionToolPrefilter(params: {
+  effect: "proposed" | "retained" | "skipped" | "unavailable" | "applied" | "restored";
+  modelFacingToolsBefore?: number;
+  modelFacingToolsAfter?: number;
+}) {
+  if (decisionDebugEnabled()) {
+    log.debug("Decision tool prefilter observed", params);
+  }
+}
+
 // Caller/plugin-authored identifiers can contain private text too.
 const reference = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 24);
 
@@ -26,7 +37,7 @@ export function logDecisionEvaluation(params: {
   model?: string;
   facts: DecisionEvaluationFacts;
   started: number;
-  outcome?: DecisionOutcome;
+  outcome?: DecisionOutcome | import("./types-v2.js").DecisionOutcomeV2;
 }): void {
   const { options, facts, outcome } = params;
   if (

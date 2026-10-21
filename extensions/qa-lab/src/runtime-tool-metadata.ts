@@ -114,15 +114,11 @@ export function readRuntimeToolCoverageMetadata(params: {
     expectedLayer,
     capabilityLayer,
     required,
-    ...((readString(toolCoverage?.tracking) ?? readString(toolCoverage?.issue))
-      ? { tracking: readString(toolCoverage?.tracking) ?? readString(toolCoverage?.issue) }
-      : {}),
-    ...(readString(toolCoverage?.reason) ? { reason: readString(toolCoverage?.reason) } : {}),
-    ...(readString(toolCoverage?.codexDefaultImpact)
-      ? { codexDefaultImpact: readString(toolCoverage?.codexDefaultImpact) }
-      : {}),
-    ...(readString(toolCoverage?.qaImpact) ? { qaImpact: readString(toolCoverage?.qaImpact) } : {}),
-    ...(readString(toolCoverage?.action) ? { action: readString(toolCoverage?.action) } : {}),
+    tracking: readString(toolCoverage?.tracking) ?? readString(toolCoverage?.issue),
+    reason: readString(toolCoverage?.reason),
+    codexDefaultImpact: readString(toolCoverage?.codexDefaultImpact),
+    qaImpact: readString(toolCoverage?.qaImpact),
+    action: readString(toolCoverage?.action),
   };
 }
 

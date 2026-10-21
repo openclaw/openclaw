@@ -127,16 +127,17 @@ plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement are rejected.
 
 When supplied, `assertNativeSubagentSpawnAllowed()` must run at native spawn
-admission. It rejects ambiguous participant identity; direct the model to
-`sessions_spawn` with the requester's verified `requester_profile.id` as `user`. Bundled native hook admission may return a synchronous
-guard, which the relay rechecks after awaited preparation immediately before allow;
-a returned reason becomes a model-visible refusal.
-The participant check uses existing native model admission, including its default
-optional mode. When native admission is disabled or unavailable, solo Codex turns
-keep native delegation, and another person's input queues as a follow-up when native
-spawn remains available. Threads whose effective policy already disables native
-delegation still permit cross-profile steering.
-If a fallback attempt already includes several people and native spawn remains available without hook admission, Codex refuses the attempt and asks the sender to send the request again as a new message so it runs as its own turn.
+admission. It checks the current incumbent execution's authority. Native delegation
+keeps that execution's requester even after another person steers the turn; it does
+not select a person from the conversation. Bundled native hook admission may return
+a synchronous guard, which the relay rechecks after awaited preparation immediately
+before allow; a returned reason becomes a model-visible refusal.
+
+Native hook availability does not itself restrict collaborative steering. Existing
+model, workspace, cancellation, and source-authority checks still govern native work.
+Explicit participant selection on `sessions_spawn` is separate: it carries the
+selected authenticated requester into a new admission while retaining the parent
+execution as initiator.
 
 Backend handles can declare `supportsCrossProfileSteering: false` when steering
 must stay with the turn owner's operator profile; omitting the field permits

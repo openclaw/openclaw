@@ -1,4 +1,3 @@
-// Markdown Core tests cover frontmatter behavior.
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,6 +5,10 @@ import {
   parseFrontmatterBlockResult,
   stripFrontmatterBlock,
 } from "./frontmatter.js";
+
+const block = (body: string) => `---\n${body}\n---\n`;
+const parse = (body: string) => parseFrontmatterBlock(block(body));
+const parseResult = (body: string) => parseFrontmatterBlockResult(block(body));
 
 describe("parseFrontmatterBlock", () => {
   it("handles JSON5-style multi-line metadata", () => {
@@ -28,51 +31,27 @@ metadata:
   it.each(["", " # display metadata", " #"])(
     "preserves inline JSON values before %j",
     (comment) => {
-      const content = `---
-name: inline-json
-metadata: {"openclaw": {"events": ["test#tag"]}}${comment}
----
-`;
-      const result = parseFrontmatterBlock(content);
+      const result = parse(`metadata: {"openclaw": {"events": ["test#tag"]}}${comment}`);
       expect(result.metadata).toBe('{"openclaw": {"events": ["test#tag"]}}');
     },
   );
 
   it("normalizes an indented YAML flow mapping without a line-parser fallback", () => {
-    const result = parseFrontmatterBlock(`---
-  metadata: {openclaw: {emoji: lobster}} # display metadata
----`);
+    const result = parse("  metadata: {openclaw: {emoji: lobster}} # display metadata");
     expect(JSON.parse(result.metadata ?? "")).toEqual({ openclaw: { emoji: "lobster" } });
   });
 
   it("keeps a flow value that continues on the next line", () => {
-    const content = `---
-name: wrapped-flow
-metadata: {a: 1,
-  b: 2}
----
-`;
-    const result = parseFrontmatterBlock(content);
+    const result = parse("metadata: {a: 1,\n  b: 2}");
     expect(JSON.parse(result.metadata ?? "")).toEqual({ a: 1, b: 2 });
   });
 
   it("stringifies YAML objects and arrays", () => {
-    const content = `---
-name: yaml-objects
-enabled: true
-retries: 3
-tags:
-  - alpha
-  - beta
-metadata:
-  openclaw:
-    events:
-      - command:new
----
-`;
-    const result = parseFrontmatterBlock(content);
-    expect(result.enabled).toBe("true");
-    expect(result.retries).toBe("3");
+    const result = parse(
+      "enabled: true\nretries: 3\ntags:\n  - alpha\n  - beta\n" +
+        "metadata:\n  openclaw:\n    events:\n      - command:new",
+    );
+    expect(result).toMatchObject({ enabled: "true", retries: "3" });
     expect(JSON.parse(result.tags ?? "[]")).toEqual(["alpha", "beta"]);
     const parsed = JSON5.parse(result.metadata ?? "");
     expect(parsed.openclaw?.events).toEqual(["command:new"]);
@@ -90,24 +69,23 @@ description: Use anime style IMPORTANT: Must be kawaii
   });
 
   it("normalizes multiple colon-rich pure-text fields in one block", () => {
-    const content = `---
-name: sample-skill
-read_when: signals: user announcing a conversion task
-summary: handles formats: pdf and docx
----`;
-    const result = parseFrontmatterBlockResult(content);
-
-    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
-    expect(result.frontmatter.summary).toBe("handles formats: pdf and docx");
-    expect(result.issues).toEqual([]);
+    expect(
+      parseResult(
+        "read_when: signals: user announcing a conversion task\nsummary: handles formats: pdf and docx",
+      ),
+    ).toEqual({
+      frontmatter: {
+        read_when: "signals: user announcing a conversion task",
+        summary: "handles formats: pdf and docx",
+      },
+      issues: [],
+    });
   });
 
   it("keeps structured fields strict when a pure-text field is normalized", () => {
-    const result = parseFrontmatterBlockResult(`---
-name: sample-skill
-read_when: signals: user announcing a conversion task
-metadata: owner: value
----`);
+    const result = parseResult(
+      "read_when: signals: user announcing a conversion task\nmetadata: owner: value",
+    );
 
     expect(result.issues[0]).toMatchObject({ code: "BLOCK_AS_IMPLICIT_KEY" });
   });
@@ -139,16 +117,17 @@ read_when: signals: user announcing a conversion task
   });
 
   it("does not rewrite valid quoted sibling scalars with escape sequences", () => {
-    const content = `---
-name: sample-skill
-description: "line\\n: detail"
-read_when: signals: user announcing a conversion task
----`;
-    const result = parseFrontmatterBlockResult(content);
-
-    expect(result.frontmatter.description).toBe("line\n: detail");
-    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
-    expect(result.issues).toEqual([]);
+    expect(
+      parseResult(
+        'description: "line\\n: detail"\nread_when: signals: user announcing a conversion task',
+      ),
+    ).toEqual({
+      frontmatter: {
+        description: "line\n: detail",
+        read_when: "signals: user announcing a conversion task",
+      },
+      issues: [],
+    });
   });
 
   it("recovers quoted freeform keys with colon-rich values", () => {
@@ -163,14 +142,10 @@ name: sample-skill
   });
 
   it("recovers single-quoted freeform keys with colon-rich values", () => {
-    const content = `---
-name: sample-skill
-'read_when': signals: user announcing a conversion task
----`;
-    const result = parseFrontmatterBlockResult(content);
-
-    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
-    expect(result.issues).toEqual([]);
+    expect(parseResult("'read_when': signals: user announcing a conversion task")).toEqual({
+      frontmatter: { read_when: "signals: user announcing a conversion task" },
+      issues: [],
+    });
   });
 
   it("leaves valid YAML description semantics untouched", () => {
@@ -194,6 +169,16 @@ description: | # note
   line two
 ---`).description,
     ).toBe("line one\nline two");
+  });
+
+  it("drops comment-only values but keeps unquoted hash-led text", () => {
+    const parsed = parse(
+      "description: # Add a description here\nsummary: #1 pick for audits\ncolor: #ff8800",
+    );
+
+    expect(parsed.description).toBeUndefined();
+    expect(parsed.summary).toBe("#1 pick for audits");
+    expect(parsed.color).toBe("#ff8800");
   });
 
   it("retains structured-value parser errors for owning loaders", () => {
@@ -236,11 +221,7 @@ description: Working skill
   });
 
   it("normalizes description aliases without masking structured aliases", () => {
-    const result = parseFrontmatterBlockResult(`---
-name: sample-skill
-description: *legacy
-metadata: *missing
----`);
+    const result = parseResult("description: *legacy\nmetadata: *missing");
 
     expect(result.issues).toEqual([expect.objectContaining({ code: "YAML_EXCEPTION" })]);
   });
@@ -266,8 +247,7 @@ description: |-
   });
 
   it("returns empty when frontmatter is missing", () => {
-    const content = "# No frontmatter";
-    expect(parseFrontmatterBlock(content)).toStrictEqual({});
+    expect(parseFrontmatterBlock("# No frontmatter")).toStrictEqual({});
   });
 
   it("reports an unterminated frontmatter block", () => {
@@ -292,10 +272,7 @@ Body text`;
 
   it("ignores non-delimiter closing prefixes", () => {
     for (const closing of ["---not", "---\u2028Body text"]) {
-      const content = `---
-name: nope
-${closing}
-Body text`;
+      const content = `---\nname: nope\n${closing}\nBody text`;
       expect(parseFrontmatterBlock(content)).toStrictEqual({});
       expect(stripFrontmatterBlock(content)).toBe(content);
     }
@@ -308,24 +285,12 @@ Body text`;
   });
 
   it("preserves prototype-named keys when YAML value is null", () => {
-    const content = `---
-title: Hello
-toString: null
-constructor: null
-valueOf: null
-hasOwnProperty: null
----
-Body text`;
-    const result = parseFrontmatterBlock(content);
-    expect(Object.hasOwn(result, "toString")).toBe(true);
-    expect(result["toString"]).toBe("null");
-    expect(Object.hasOwn(result, "constructor")).toBe(true);
-    expect(result["constructor"]).toBe("null");
-    expect(Object.hasOwn(result, "valueOf")).toBe(true);
-    expect(result["valueOf"]).toBe("null");
-    expect(Object.hasOwn(result, "hasOwnProperty")).toBe(true);
-    expect(result["hasOwnProperty"]).toBe("null");
-    // normal key unaffected
+    const keys = ["toString", "constructor", "valueOf", "hasOwnProperty"];
+    const result = parse(`title: Hello\n${keys.map((key) => `${key}: null`).join("\n")}`);
+    for (const key of keys) {
+      expect(Object.hasOwn(result, key)).toBe(true);
+      expect(result[key]).toBe("null");
+    }
     expect(result.title).toBe("Hello");
   });
 

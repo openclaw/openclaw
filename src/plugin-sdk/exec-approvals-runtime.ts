@@ -5,7 +5,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
-/** @deprecated Await loadExecApprovalsReadOnlyAsync; removal follows a stable deprecation period. */
+/** @deprecated Await loadExecApprovalsReadOnlyAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 function loadExecApprovalsDeprecated() {
   warnPluginSdkDeprecation({
     family: "exec-approvals-sync-read",
@@ -15,7 +15,7 @@ function loadExecApprovalsDeprecated() {
   return loadExecApprovalsSync();
 }
 
-/** @deprecated Await readExecApprovalsSnapshotAsync; removal follows a stable deprecation period. */
+/** @deprecated Await readExecApprovalsSnapshotAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 function readExecApprovalsSnapshotDeprecated() {
   warnPluginSdkDeprecation({
     family: "exec-approvals-sync-read",

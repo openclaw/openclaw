@@ -17,6 +17,12 @@ node -v
 
 `v26.1.0` or newer is the recommended default. `v24.16.0` or newer 24.x is also supported and is the LTS line used by CI. Node 22, 23, 25, Node 24 before 24.16.0, and Node 26 before 26.1.0 are unsupported. If Node is missing or outside this range, pick an install method below.
 
+Node 27 is accepted, including well-formed development labels such as
+`v27.0.0-head` and `27.0.0-nightly20261018f88a1d25e9`. Prereleases on majors
+newer than Node 26 use their numeric version for installation and update checks;
+Node 24 and 26 prereleases remain unsupported. Development builds must pass the
+same SQLite safety checks as releases. Node 26 remains the recommended default.
+
 Upgrade Node before updating OpenClaw to avoid SQLite TEXT truncation. See [Node.js compatibility](/install/node-compatibility) for the SQLite safety floors and macOS/ARMv7 support limits.
 
 ### Update from the CLI
@@ -47,8 +53,10 @@ current working directory, unless an absolute PATH entry explicitly names their
 directory. OpenClaw's own private recovery directory is also allowed, so cached
 runtime reuse and the installation offer work when you launch from your home
 directory. This exception does not extend to other in-home executables or manager
-roots. On Windows, the service reader honors recorded code pages and Unicode
-byte-order marks. If the current Node build cannot decode a service script safely,
+roots. The POSIX root directory (`/`), where launchd jobs and system services
+commonly start, is not treated as a workspace. Windows drive and share roots keep
+the workspace checks. On Windows, the service reader honors recorded code pages
+and Unicode byte-order marks. If the current Node build cannot decode a service script safely,
 OpenClaw prints the code page and continues searching other sources. Unsupported
 OEM pages such as CP850 are skipped rather than guessed. CP949 is also skipped:
 Node's ICU `euc-kr` decoder silently misdecodes UHC extension characters. Neither

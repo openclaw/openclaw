@@ -19,14 +19,16 @@ import {
   buildPortableAuthProfileStoreForAgentCopy,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
-import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
-  inspectPersistedAuthProfileStoreRaw,
+  loadPersistedAuthProfileStoreFromRows,
+  prepareAgentAuthProfileRowsRead,
+} from "../agents/auth-profiles/sqlite-read.js";
+import {
+  resolveAuthProfileDatabaseOwnerId,
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { throwExpectedCliError } from "../cli/failure-output.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
@@ -41,7 +43,7 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { stageProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthProfile } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { defaultRuntime as runtime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -70,12 +72,21 @@ type AgentsAddOptions = {
   json?: boolean;
 };
 
-function loadReadablePersistedAuthProfileStore(agentDir: string): AuthProfileStore | null {
-  const store = loadPersistedAuthProfileStore(agentDir);
-  if (!store && inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing") {
-    throw new AuthProfileStoreUnreadableError(resolveAuthProfileDatabasePath(agentDir));
+async function loadReadablePersistedAuthProfileStore(
+  agentDir: string,
+): Promise<AuthProfileStore | null> {
+  const databasePath = resolveAuthProfileDatabasePath(agentDir);
+  const reader = prepareAgentAuthProfileRowsRead({
+    databasePath,
+    agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
+    env: process.env,
+    source: "canonical",
+  });
+  try {
+    return loadPersistedAuthProfileStoreFromRows(await reader.read(), databasePath);
+  } finally {
+    await reader.dispose();
   }
-  return store;
 }
 
 function formatSkippedOAuthProfilesMessage(
@@ -89,7 +100,6 @@ function formatSkippedOAuthProfilesMessage(
 
 export async function agentsAddCommand(
   opts: AgentsAddOptions,
-  runtime: RuntimeEnv = defaultRuntime,
   params?: { hasAutomationFlags?: boolean },
 ) {
   if (opts.role !== undefined) {
@@ -225,15 +235,11 @@ export async function agentsAddCommand(
     params: {},
     target: nameInput ?? "interactive agent setup",
     onForeignOwner: "refuse",
-    runLocal: () => runInteractiveAgentsAdd(opts, runtime, wizardOutput),
+    runLocal: () => runInteractiveAgentsAdd(opts, wizardOutput),
   });
 }
 
-async function runInteractiveAgentsAdd(
-  opts: AgentsAddOptions,
-  runtime: RuntimeEnv,
-  wizardOutput: NodeJS.WriteStream,
-) {
+async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: NodeJS.WriteStream) {
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
     return;
@@ -351,9 +357,9 @@ async function runInteractiveAgentsAdd(
         normalizeLowercaseStringOrEmpty(path.resolve(sharedMainAgentPath));
       if (!sameAuthPath) {
         const sourceStore = sourceIsInheritedMain
-          ? loadAuthProfileStoreWithoutExternalProfiles(sourceAgentDir)
-          : loadReadablePersistedAuthProfileStore(sourceAgentDir);
-        const destStore = loadReadablePersistedAuthProfileStore(agentDir);
+          ? await loadAuthProfileStoreWithoutExternalProfilesAsync(sourceAgentDir)
+          : await loadReadablePersistedAuthProfileStore(sourceAgentDir);
+        const destStore = await loadReadablePersistedAuthProfileStore(agentDir);
         const portable = sourceStore
           ? buildPortableAuthProfileStoreForAgentCopy(sourceStore)
           : undefined;
@@ -383,7 +389,7 @@ async function runInteractiveAgentsAdd(
             }
             stagedAuthOrder = portable.store.order;
             reportPortableAuthCopy = async () => {
-              const persisted = loadPersistedAuthProfileStore(agentDir);
+              const persisted = await loadReadablePersistedAuthProfileStore(agentDir);
               const persistedIds = new Set(Object.keys(persisted?.profiles ?? {}));
               const copiedCount = copiedProfileIds.filter((profileId) =>
                 persistedIds.has(profileId),

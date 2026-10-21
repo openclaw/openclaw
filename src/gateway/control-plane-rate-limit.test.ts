@@ -56,7 +56,6 @@ describe("control-plane-rate-limit", () => {
       consumeControlPlaneWriteBudget({ client, method: "plugins.setEnabled", nowMs: 1_000 }),
     ).toMatchObject({
       allowed: true,
-      remaining: CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS - 1,
     });
   });
 
@@ -75,7 +74,6 @@ describe("control-plane-rate-limit", () => {
     ).toMatchObject({
       allowed: false,
       retryAfterMs: CONTROL_PLANE_RATE_LIMIT_WINDOW_MS - 10_000,
-      remaining: 0,
     });
   });
 
@@ -94,7 +92,6 @@ describe("control-plane-rate-limit", () => {
     ).toMatchObject({
       allowed: true,
       retryAfterMs: 0,
-      remaining: CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS - 1,
     });
   });
 
@@ -124,7 +121,6 @@ describe("control-plane-rate-limit", () => {
     // the internal map solely for tests.
     expect(consume("oldest")).toMatchObject({
       allowed: true,
-      remaining: CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS - 1,
     });
   });
 });

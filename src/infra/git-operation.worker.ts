@@ -1,23 +1,20 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import type { DiffReadTiming } from "./diff-read-timing.js";
 import { serializeGitWorkerFailure, withGitWorkerContext } from "./git-worker-context.js";
 import type { GitWorkerCommand, GitWorkerReply, GitWorkerResult } from "./git-worker-contract.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
-serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
-  async (input, channel, control) => {
+serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
+  async (command, channel, control) => {
     try {
-      if (
-        !channel ||
-        !isRecord(input) ||
-        typeof input.type !== "string" ||
-        !isRecord(input.input)
-      ) {
+      if (!channel) {
         throw new Error("Git worker requires a typed operation and host channel");
       }
-      // SAFETY: This private entry consumes only commands created by its typed host broker.
-      const command = input as GitWorkerCommand;
       channel.consumeInput();
+      const diffTiming: DiffReadTiming | undefined =
+        command.type === "checkout.revision" && command.input.scope === "diff"
+          ? { durations: {} }
+          : undefined;
       const value = await withGitWorkerContext<GitWorkerResult>(
         channel,
         () => {
@@ -79,7 +76,7 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
                 ({ executeGitWorktreeOperation }) => executeGitWorktreeOperation(command),
               );
             case "repository.identities":
-              return import("../agents/worktrees/service-preparation.js").then(
+              return import("../agents/worktrees/repository-paths.js").then(
                 async ({ resolveRepositoryIdentity }) =>
                   (
                     await runTasksWithConcurrency({
@@ -97,12 +94,17 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
               );
             case "checkout.revision":
               return import("../gateway/control-ui-session-prs-git.runtime.js").then(
-                ({ readCheckoutGitRevision }) => readCheckoutGitRevision(command.input),
+                ({ readCheckoutGitRevision }) => readCheckoutGitRevision(command.input, diffTiming),
               );
             case "checkout.context":
               return import("../gateway/control-ui-session-prs-git.runtime.js").then(
                 ({ readCheckoutGitContext }) =>
                   readCheckoutGitContext(command.input.root, command.input.githubHost),
+              );
+            case "pull-request.branch-comparison":
+              return import("../gateway/control-ui-session-prs-git.runtime.js").then(
+                ({ readPullRequestBranchComparison }) =>
+                  readPullRequestBranchComparison(command.input),
               );
             case "pull-request.branch-facts":
               return import("../gateway/control-ui-session-prs-git.runtime.js").then(
@@ -121,7 +123,7 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
         },
         command.filesystemRefs,
       );
-      return { ok: true, value };
+      return { ok: true, value, revisionUnavailableReason: diffTiming?.revisionUnavailableReason };
     } catch (error) {
       return { ok: false, error: serializeGitWorkerFailure(error) };
     }

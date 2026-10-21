@@ -1,4 +1,5 @@
 import { realpathSync, statSync } from "node:fs";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { Option, type Command } from "commander";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
@@ -294,11 +295,15 @@ export function registerWorktreesCli(program: Command): void {
           retainedOid: string;
         },
       ) => {
+        const removedAt = parseStrictNonNegativeInteger(opts.removedAt);
+        if (removedAt === undefined) {
+          throw new Error("--removed-at must be a non-negative integer (epoch milliseconds).");
+        }
         const input = {
           id,
           expectedSnapshotRef: opts.expectedRef,
           expectedSnapshotOid: opts.expectedOid,
-          expectedRemovedAt: Number(opts.removedAt),
+          expectedRemovedAt: removedAt,
           retainedSourceRef: opts.retainedRef,
           expectedRetainedSourceOid: opts.retainedOid,
         };
@@ -367,6 +372,9 @@ export function registerWorktreesCli(program: Command): void {
     .option("--retry-deferred", "Reinspect deferred checkouts and retry Git maintenance", false)
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption & { job?: string; retryDeferred?: boolean }) => {
+      if (opts.job === "") {
+        throw new Error("--job must not be empty.");
+      }
       const { formatWorktreeGcResult } = await import("../agents/worktrees/gc-result.js");
       const result = await mutateWorktree<ManagedWorktreeGcResult | ManagedWorktreeGcReceipt>(
         "worktrees.gc",

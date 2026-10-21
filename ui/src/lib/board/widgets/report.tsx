@@ -1,8 +1,8 @@
 import { createMemo, For, Show } from "solid-js";
 import { parseBoardReport, type BoardReport } from "../../../../../src/boards/board-report.ts";
 import { BoardWidgetError } from "../../../components/board/board-widget-error.tsx";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { t } from "../../reactive/i18n.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
 import type { BoardWidget } from "../types.ts";
 import "./report.css";
 

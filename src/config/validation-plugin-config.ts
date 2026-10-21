@@ -76,10 +76,12 @@ function formatMissingOfficialExternalPluginWarning(
   if (!catalogEntry) {
     return null;
   }
-  const installSpec = resolveOfficialExternalPluginInstallSources(catalogEntry)[0]?.spec;
-  if (!installSpec) {
+  const installSource = resolveOfficialExternalPluginInstallSources(catalogEntry)[0];
+  if (!installSource) {
     return null;
   }
+  const installSpec =
+    installSource.source === "npm" ? `npm:${installSource.spec}` : installSource.spec;
   if (pluginId === "memory-lancedb" && opts?.selectedMissingMemorySlot) {
     return `plugin not installed: ${pluginId} — gateway will run without persistent memory until installed; install the official external plugin with: openclaw plugins install ${installSpec}`;
   }

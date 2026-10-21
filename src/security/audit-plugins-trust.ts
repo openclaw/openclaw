@@ -180,11 +180,11 @@ function isPinnedRegistrySpec(spec: string): boolean {
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
 }
 
-async function analyzeNpmInstalls(
+async function collectNpmInstallFindings(
   installs: Array<[string, Omit<InstallRecordBase, "source">]>,
   stateDir: string,
   directory: "extensions" | "hooks",
-) {
+): Promise<SecurityAuditFinding[]> {
   const unpinned = installs
     .filter(([, record]) => typeof record.spec === "string" && !isPinnedRegistrySpec(record.spec))
     .map(([id, record]) => `${id} (${record.spec})`);
@@ -206,7 +206,45 @@ async function analyzeNpmInstalls(
     }
     versionDrift.push(`${id} (recorded ${recordedVersion}, installed ${installedVersion})`);
   }
-  return { unpinned, missingIntegrity, versionDrift };
+  const plugins = directory === "extensions";
+  const owner = plugins ? "plugins" : "hooks";
+  const findings: SecurityAuditFinding[] = [];
+  const report = (entries: string[], finding: Omit<SecurityAuditFinding, "severity">) => {
+    if (entries.length > 0) {
+      findings.push({
+        ...finding,
+        severity: "warn",
+        detail: `${finding.detail}:\n${entries.map((entry) => `- ${entry}`).join("\n")}`,
+      });
+    }
+  };
+  report(unpinned, {
+    checkId: `${owner}.installs_unpinned_npm_specs`,
+    title: plugins
+      ? "Plugin index includes unpinned npm specs"
+      : "Hook installs include unpinned npm specs",
+    detail: `Unpinned ${plugins ? "plugin index" : "hook"} install records`,
+    remediation: plugins
+      ? "Pin install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability."
+      : "Pin hook install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
+  });
+  report(missingIntegrity, {
+    checkId: `${owner}.installs_missing_integrity`,
+    title: plugins
+      ? "Plugin index is missing integrity metadata"
+      : "Hook installs are missing integrity metadata",
+    detail: `${plugins ? "Plugin index" : "Hook install"} records missing integrity`,
+    remediation: `Reinstall or update ${owner} to refresh install metadata with resolved integrity hashes.`,
+  });
+  report(versionDrift, {
+    checkId: `${owner}.installs_version_drift`,
+    title: plugins
+      ? "Plugin index records drift from installed package versions"
+      : "Hook install records drift from installed package versions",
+    detail: `Detected ${plugins ? "plugin" : "hook"} install metadata drift`,
+    remediation: `Run \`openclaw ${owner} update --all\` (or reinstall affected ${owner}) to refresh install metadata.`,
+  });
+  return findings;
 }
 
 /** Collect supply-chain and reachable-tool findings for installed plugins and hook packs. */
@@ -399,41 +437,9 @@ export async function collectPluginsTrustFindings(params: {
   const npmPluginInstalls = Object.entries(pluginInstalls).filter(
     ([, record]) => record?.source === "npm",
   );
-  if (npmPluginInstalls.length > 0) {
-    const metadata = await analyzeNpmInstalls(npmPluginInstalls, params.stateDir, "extensions");
-    if (metadata.unpinned.length > 0) {
-      findings.push({
-        checkId: "plugins.installs_unpinned_npm_specs",
-        severity: "warn",
-        title: "Plugin index includes unpinned npm specs",
-        detail: `Unpinned plugin index install records:\n${metadata.unpinned.map((entry) => `- ${entry}`).join("\n")}`,
-        remediation:
-          "Pin install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
-      });
-    }
-
-    if (metadata.missingIntegrity.length > 0) {
-      findings.push({
-        checkId: "plugins.installs_missing_integrity",
-        severity: "warn",
-        title: "Plugin index is missing integrity metadata",
-        detail: `Plugin index records missing integrity:\n${metadata.missingIntegrity.map((entry) => `- ${entry}`).join("\n")}`,
-        remediation:
-          "Reinstall or update plugins to refresh install metadata with resolved integrity hashes.",
-      });
-    }
-
-    if (metadata.versionDrift.length > 0) {
-      findings.push({
-        checkId: "plugins.installs_version_drift",
-        severity: "warn",
-        title: "Plugin index records drift from installed package versions",
-        detail: `Detected plugin install metadata drift:\n${metadata.versionDrift.map((entry) => `- ${entry}`).join("\n")}`,
-        remediation:
-          "Run `openclaw plugins update --all` (or reinstall affected plugins) to refresh install metadata.",
-      });
-    }
-  }
+  findings.push(
+    ...(await collectNpmInstallFindings(npmPluginInstalls, params.stateDir, "extensions")),
+  );
 
   const hookInstalls = readHookInstalls({
     env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
@@ -441,41 +447,7 @@ export async function collectPluginsTrustFindings(params: {
   const npmHookInstalls = Object.entries(hookInstalls).filter(
     ([, record]) => record?.source === "npm",
   );
-  if (npmHookInstalls.length > 0) {
-    const metadata = await analyzeNpmInstalls(npmHookInstalls, params.stateDir, "hooks");
-    if (metadata.unpinned.length > 0) {
-      findings.push({
-        checkId: "hooks.installs_unpinned_npm_specs",
-        severity: "warn",
-        title: "Hook installs include unpinned npm specs",
-        detail: `Unpinned hook install records:\n${metadata.unpinned.map((entry) => `- ${entry}`).join("\n")}`,
-        remediation:
-          "Pin hook install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
-      });
-    }
-
-    if (metadata.missingIntegrity.length > 0) {
-      findings.push({
-        checkId: "hooks.installs_missing_integrity",
-        severity: "warn",
-        title: "Hook installs are missing integrity metadata",
-        detail: `Hook install records missing integrity:\n${metadata.missingIntegrity.map((entry) => `- ${entry}`).join("\n")}`,
-        remediation:
-          "Reinstall or update hooks to refresh install metadata with resolved integrity hashes.",
-      });
-    }
-
-    if (metadata.versionDrift.length > 0) {
-      findings.push({
-        checkId: "hooks.installs_version_drift",
-        severity: "warn",
-        title: "Hook install records drift from installed package versions",
-        detail: `Detected hook install metadata drift:\n${metadata.versionDrift.map((entry) => `- ${entry}`).join("\n")}`,
-        remediation:
-          "Run `openclaw hooks update --all` (or reinstall affected hooks) to refresh install metadata.",
-      });
-    }
-  }
+  findings.push(...(await collectNpmInstallFindings(npmHookInstalls, params.stateDir, "hooks")));
 
   return findings;
 }

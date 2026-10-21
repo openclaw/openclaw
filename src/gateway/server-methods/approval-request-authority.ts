@@ -21,6 +21,7 @@ import {
 } from "../operator-approval-authorization.js";
 import type { OperatorApprovalStoreGuard } from "../operator-approval-store.types.js";
 import {
+  authorizeCurrentOperatorRoleScopes,
   onOperatorRolePolicyChanged,
   resolveGatewayOperatorRoleActor,
 } from "../operator-role-policy.js";
@@ -127,6 +128,7 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
       const current = getConfig();
       configRevoked =
         !isGatewayAuthPolicyCurrent(authPolicy, current) ||
+        Boolean(authorizeCurrentOperatorRoleScopes(client, current)) ||
         !isDeepStrictEqual(configPolicy, captureConfigPolicy(current));
     } catch {
       configRevoked = true;

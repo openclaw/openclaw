@@ -3,24 +3,27 @@
 // grant is derivative correlation that lets the exact approved operation of
 // one cron job re-execute without re-prompting while it revalidates.
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { resolveCronJobGrantDefinitionRevision } from "../cron/store/job-config-codec.js";
 import {
   loadedCronStoreFromRows,
   resolveCronJobGrantDefinitionGenerationFloor,
-  resolveCronJobGrantDefinitionRevision,
 } from "../cron/store/row-codec.js";
 import { readCronRunReceiptCurrentFactsInDatabase } from "../cron/store/run-receipt-read.js";
+import type { CronStoredJob } from "../cron/types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -73,7 +76,11 @@ const installStandingGrantSchema = createSqliteSchemaEnsurer(() => STANDING_GRAN
   tables: [STANDING_GRANT_TABLE, STANDING_GRANT_GENERATION_TABLE],
 });
 
-function ensureStandingGrantSchema(db: DatabaseSync): void {
+function ensureStandingGrantSchema(db: EngineConnection): void {
+  if (isPostgresSqlConnection(db)) {
+    ensureStatePostgresFragment(db, STANDING_GRANT_TABLE);
+    return;
+  }
   const ddl = getAdmittedSqliteSchemaFacts(db)?.tableSql.get(STANDING_GRANT_TABLE);
   // This retired, unshipped shape is recognized from admission's existing DDL facts.
   if (ddl && /\bexpires_at_ms\s+INTEGER\s+NOT\s+NULL\b/iu.test(ddl)) {
@@ -84,6 +91,65 @@ function ensureStandingGrantSchema(db: DatabaseSync): void {
 
 function decodeDefinitionGeneration(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : null;
+}
+
+/** Preserve derivative references when offline Doctor only narrows a legacy job to an account. */
+export function migrateCronInferenceStandingGrantReferences(
+  db: EngineConnection,
+  previous: CronStoredJob,
+  next: CronStoredJob,
+  generation: number,
+): void {
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (!maintenance?.ownsSchemaMaintenance) {
+    throw new Error(
+      "Cron inference grant reference migration requires offline Doctor maintenance.",
+    );
+  }
+  maintenance.assertAdmission();
+  const { inferenceBinding, ...unchanged } = next;
+  if (
+    previous.inferenceBinding !== undefined ||
+    !inferenceBinding ||
+    !isDeepStrictEqual(previous, unchanged)
+  ) {
+    throw new Error("Cron inference migration must preserve the entire approved job definition.");
+  }
+  if (!tableExists(db, STANDING_GRANT_TABLE) || !tableExists(db, STANDING_GRANT_GENERATION_TABLE)) {
+    return;
+  }
+  const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(db);
+  // Neither the authorization owner, operation, generation, revocation nor expiry changes.
+  // Stale generations/revisions stay stale; use-time parent-approval checks remain mandatory.
+  const migrated = executeSqliteQuerySync(
+    db,
+    stateDb
+      .updateTable(STANDING_GRANT_TABLE)
+      .set({ job_config_revision: resolveCronJobConfigRevision(next) })
+      .where("cron_job_id", "=", previous.id)
+      .where("job_config_revision", "=", resolveCronJobConfigRevision(previous))
+      .where("revoked_at_ms", "is", null)
+      .where((eb) => eb.or([eb("expires_at_ms", "is", null), eb("expires_at_ms", ">", Date.now())]))
+      .where(
+        "minted_by_approval_id",
+        "in",
+        stateDb
+          .selectFrom("operator_approvals")
+          .select("approval_id")
+          .where("status", "=", "allowed")
+          .where("decision", "=", "allow-always"),
+      )
+      .where(
+        "grant_id",
+        "in",
+        stateDb
+          .selectFrom(STANDING_GRANT_GENERATION_TABLE)
+          .select("grant_id")
+          .where("job_definition_generation", "=", generation),
+      )
+      .returningAll(),
+  );
+  operatorStandingGrantPublication.stagePostimages(db, migrated.rows);
 }
 
 /**
@@ -205,7 +271,7 @@ export function mintCronStandingGrantLocked(
 
 /** Worker snapshot lookup; only committed consumption authorizes a launch. */
 export function lookupCronStandingGrantInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: CronStandingGrantLookupInput,
   recordUse: boolean,
 ): ConsumeCronStandingGrantResult {
@@ -370,7 +436,7 @@ export function consumeCronStandingGrantInDatabase(
 
 /** Includes revoked and expired grants so the operator ledger retains history. */
 export function listCronStandingGrantsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { limit?: number } = {},
 ): CronStandingGrantListing[] {
   const limit = Math.max(1, Math.min(params.limit ?? 200, 500));

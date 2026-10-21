@@ -1,6 +1,67 @@
 import { describe, expect, it } from "vitest";
 import { baseEvent, createMetricsHarness, trusted, untrusted } from "./service.test-helpers.js";
 
+it("exports trusted Control UI document timings in seconds with only bounded stage labels", () => {
+  const metrics = createMetricsHarness();
+  const event = {
+    type: "diagnostic.phase.completed" as const,
+    name: "control-ui.document.total",
+    startedAt: 10,
+    durationMs: 125,
+    details: { route: "/chat/synthetic-private-session", user: "synthetic-private-user" },
+  };
+  try {
+    for (const stage of [
+      "auth_grants",
+      "identity_avatar",
+      "plugin_catalog",
+      "git_branch",
+      "preferences",
+      "render",
+      "total",
+    ]) {
+      metrics.record({ ...event, name: `control-ui.document.${stage}` });
+      metrics.record({ ...event, name: `control-ui.document.${stage}`, durationMs: 0 });
+    }
+    const rendered = metrics.render();
+    expect(rendered).toContain("# TYPE openclaw_control_ui_document_duration_seconds histogram\n");
+    const sums = rendered
+      .split("\n")
+      .filter((line) => line.startsWith("openclaw_control_ui_document_duration_seconds_sum"));
+    expect(sums).toEqual([
+      'openclaw_control_ui_document_duration_seconds_sum{stage="auth_grants"} 0.125',
+      'openclaw_control_ui_document_duration_seconds_sum{stage="git_branch"} 0.125',
+      'openclaw_control_ui_document_duration_seconds_sum{stage="identity_avatar"} 0.125',
+      'openclaw_control_ui_document_duration_seconds_sum{stage="plugin_catalog"} 0.125',
+      'openclaw_control_ui_document_duration_seconds_sum{stage="preferences"} 0.125',
+      'openclaw_control_ui_document_duration_seconds_sum{stage="render"} 0.125',
+      'openclaw_control_ui_document_duration_seconds_sum{stage="total"} 0.125',
+    ]);
+    expect(rendered).toContain(
+      'openclaw_control_ui_document_duration_seconds_count{stage="total"} 2\n',
+    );
+    expect(rendered).toContain(
+      'openclaw_control_ui_document_duration_seconds_bucket{le="0.1",stage="total"} 1\n',
+    );
+    expect(rendered).toContain(
+      'openclaw_control_ui_document_duration_seconds_bucket{le="0.25",stage="total"} 2\n',
+    );
+    expect(rendered).not.toContain("synthetic-private");
+
+    metrics.record(event, untrusted);
+    metrics.record(event, { trusted: false, internal: true });
+    for (const name of ["control-ui.document.private-session", "other.total"]) {
+      metrics.record({ ...event, name });
+    }
+    for (const durationMs of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      metrics.record({ ...event, durationMs });
+    }
+    expect(metrics.render()).toBe(rendered);
+  } finally {
+    metrics.stop();
+  }
+});
+
 describe("catalog list stage metrics", () => {
   it("exports elapsed and synchronous CPU populations with fixed labels and no diagnostic content", () => {
     const metrics = createMetricsHarness();
@@ -187,6 +248,119 @@ it("exports warm/cold preparation phases without identifiers or untrusted series
     expect(rendered).not.toContain("synthetic-private-session");
     expect(rendered).not.toContain("sessionKey");
     expect(rendered).not.toContain('phase="checkout"');
+  } finally {
+    metrics.stop();
+  }
+});
+
+it("bounds diff histograms to two methods, six stages and two cache outcomes in seconds", () => {
+  const metrics = createMetricsHarness();
+  const event = {
+    type: "diagnostic.phase.completed" as const,
+    name: "sessions.diff",
+    startedAt: 0,
+    durationMs: 160,
+    details: {
+      outcome: "cache-hit",
+      admission: 1,
+      "checkout-resolve": 2,
+      "cache-validate": 150,
+      "worker-queue": 100,
+      "git-wall": 0,
+      encode: 7,
+      "/synthetic/private/checkout": 99,
+      sessionKey: "synthetic-private-session",
+    },
+  };
+  try {
+    for (const name of ["sessions.diff", "checkout.diff"]) {
+      for (const outcome of ["cache-hit", "cache-miss"]) {
+        metrics.record({ ...event, name, details: { ...event.details, outcome } }, trusted);
+      }
+    }
+    const rendered = metrics.render();
+    const counts = rendered
+      .split("\n")
+      .filter((line) => line.startsWith("openclaw_diff_stage_seconds_count"));
+    expect(counts).toHaveLength(24);
+    expect(rendered).toContain(
+      'openclaw_diff_stage_seconds_sum{method="sessions.diff",outcome="cache-hit",stage="cache-validate"} 0.15\n',
+    );
+    expect(rendered).toContain(
+      'openclaw_diff_stage_seconds_sum{method="checkout.diff",outcome="cache-miss",stage="git-wall"} 0\n',
+    );
+    expect(rendered).not.toContain("synthetic");
+    metrics.record(event, untrusted);
+    metrics.record(event, { trusted: false, internal: true });
+    metrics.record({ ...event, name: "sessions.diff.private" }, trusted);
+    metrics.record({ ...event, details: { ...event.details, outcome: "private" } }, trusted);
+    for (const elapsed of [-1, Number.NaN, Number.POSITIVE_INFINITY, "150"]) {
+      metrics.record(
+        { ...event, details: { outcome: "cache-hit", "cache-validate": elapsed } },
+        trusted,
+      );
+    }
+    expect(metrics.render()).toBe(rendered);
+  } finally {
+    metrics.stop();
+  }
+});
+
+it("bounds diff miss reasons without exporting revision keys or caller supplied labels", () => {
+  const metrics = createMetricsHarness();
+  const event = {
+    type: "diagnostic.phase.completed" as const,
+    name: "sessions.diff",
+    startedAt: 0,
+    durationMs: 1,
+    details: { outcome: "cache-miss", missReason: "cold", revision: "private-revision" },
+  };
+  try {
+    for (const name of ["sessions.diff", "checkout.diff"]) {
+      for (const missReason of [
+        "cold",
+        "evicted",
+        "pending",
+        "no-revision",
+        "no-revision-environment",
+        "no-revision-platform",
+        "no-revision-metadata",
+        "no-revision-git-installation",
+        "no-revision-config",
+        "no-revision-reftable",
+        "no-revision-alternates",
+        "no-revision-symlink",
+        "no-revision-nested-repository",
+        "no-revision-status",
+        "no-revision-unmerged",
+        "no-revision-submodule",
+        "no-revision-permission",
+        "no-revision-missing",
+        "no-revision-io",
+        "oversized",
+        "revision-changed-head",
+        "revision-changed-index",
+        "revision-changed-untracked-set",
+        "revision-changed-worktree-mtime",
+        "revision-changed-metadata",
+      ]) {
+        metrics.record({ ...event, name, details: { ...event.details, missReason } }, trusted);
+      }
+    }
+    const rendered = metrics.render();
+    const counters = rendered
+      .split("\n")
+      .filter((line) => line.startsWith("openclaw_diff_cache_misses_total{"));
+    expect(counters).toHaveLength(50);
+    expect(counters.every((line) => line.endsWith(" 1"))).toBe(true);
+    expect(rendered).not.toContain("private");
+    metrics.record(event, untrusted);
+    metrics.record({ ...event, name: "sessions.diff.private" }, trusted);
+    metrics.record({ ...event, details: { ...event.details, outcome: "cache-hit" } }, trusted);
+    for (const missReason of ["private-revision", "revision-changed-/private/path", 1, true]) {
+      metrics.record({ ...event, details: { ...event.details, missReason } }, trusted);
+    }
+    expect(metrics.render()).toBe(rendered);
   } finally {
     metrics.stop();
   }

@@ -1,3 +1,4 @@
+import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 // Preserve registry mocks before the cancellation entrypoints load.
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
@@ -12,7 +13,6 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { registerWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import {
@@ -129,7 +129,7 @@ it.each([false, true])(
     const context = createChatAbortContext({
       getRuntimeConfig,
       workerEnvironmentService: service,
-      chatAbortControllers: new Map([["worker-run", active]]),
+      sources: new Map([["worker-run", active]]),
     });
     const kill = vi
       .spyOn(subagentKill, "killSubagentRunAdmin")
@@ -158,7 +158,7 @@ it.each([false, true])(
       } else {
         await expect(pending).rejects.toBe(workerFailure);
       }
-      expect(active.controller.signal.aborted).toBe(true);
+      expect(active.input.abortSignal.aborted).toBe(true);
       expect(kill).toHaveBeenCalledOnce();
       expect(respond).not.toHaveBeenCalled();
     } finally {
@@ -189,14 +189,14 @@ it.each([
     updatedAt: Date.now(),
   });
   const runId = "run-save-failure";
-  const active: ChatAbortControllerEntry = createActiveRun(scope.sessionKey, scope);
+  const active: RpcSourceRef = createActiveRun(scope.sessionKey, scope);
   const refusal = new SessionMutationAuthorizationChangedError({
     code: "FORBIDDEN",
     message: "terminal authority changed",
     details: { reason: "fixture-revocation" },
   });
   const assertCurrent = () => {
-    if (active.controller.signal.aborted) {
+    if (active.input.abortSignal.aborted) {
       if (route === "stop-revoked") {
         throw refusal;
       }
@@ -208,8 +208,8 @@ it.each([
   const terminalFailure = route === "terminal" || route === "revoked";
   if (terminalFailure) {
     const error = route === "revoked" ? refusal : new Error("terminal write failed");
-    active.projectSessionTerminalPersistence = Promise.reject(error);
-    void active.projectSessionTerminalPersistence.catch(() => {});
+    active.adapter.projectSessionTerminalPersistence = Promise.reject(error);
+    void active.adapter.projectSessionTerminalPersistence.catch(() => {});
   }
   if (route === "queued") {
     await queueCollector(scope.sessionKey, "save-warning", "queued-save-warning");
@@ -218,7 +218,7 @@ it.each([
   const context = createChatAbortContext({
     getRuntimeConfig,
     getSessionEventSubscriberConnIds: () => new Set(),
-    chatAbortControllers: new Map([[runId, active]]),
+    sources: new Map([[runId, active]]),
     chatRunState: createAbortTestRunState([[runId, { buffer: "Already streamed reply" }]]),
   });
   const pending = invokeChatAbortHandler({
@@ -268,10 +268,8 @@ it.each([
       warning: expect.stringContaining("could not be saved to history"),
     });
   }
-  expect(active.controller.signal.aborted).toBe(true);
-  expect(context.logGateway.warn).toHaveBeenCalledWith(
-    expect.stringContaining("fixture transcript write failed"),
-  );
+  expect(active.input.abortSignal.aborted).toBe(true);
+
   expect(await loadTranscriptEvents(scope)).not.toContainEqual(
     expect.objectContaining({
       message: expect.objectContaining({ idempotencyKey: "run-save-failure:assistant" }),

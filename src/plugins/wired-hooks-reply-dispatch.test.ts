@@ -2,7 +2,9 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
+import { withClaimingHookAdmission } from "./hook-claim-admission.js";
 import type {
   PluginHookRegistrationOptions,
   PluginHookReplyDispatchContext,
@@ -10,6 +12,11 @@ import type {
 import { createHookRunner } from "./hooks.js";
 import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import {
+  nativeSubagentRuntime,
+  withNativeSubagentRequest,
+  withNativeSubagentRuntimeGuard,
+} from "./runtime/native-subagent-context.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 const replyDispatchEvent = {
@@ -56,6 +63,155 @@ function createRegisteredReplyHook(eligibleDispatchKinds: unknown) {
 }
 
 describe("reply_dispatch hook runner", () => {
+  it("closes native requester custody at timeout before advancing to another hook", async () => {
+    vi.useFakeTimers();
+    const late = createDeferred();
+    const spawn = vi.fn().mockResolvedValue({
+      runId: "child",
+      childSessionKey: "agent:test:subagent:child",
+      completionMode: "collect" as const,
+    });
+    let detached: Promise<unknown> | undefined;
+    const { registry, runner } = createHookRunnerWithRegistry(
+      [
+        {
+          hookName: "reply_dispatch",
+          handler: async () =>
+            withNativeSubagentRuntimeGuard({ pluginId: "slow", assertCurrent() {} }, async () => {
+              detached = late.promise.then(() =>
+                nativeSubagentRuntime.spawn({ requestId: "late", task: "must not start" }),
+              );
+              await new Promise(() => {});
+            }),
+        },
+        {
+          hookName: "reply_dispatch",
+          handler: async () =>
+            withNativeSubagentRuntimeGuard({ pluginId: "next", assertCurrent() {} }, async () => {
+              await nativeSubagentRuntime.spawn({ requestId: "current", task: "current request" });
+              return { handled: true, queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+            }),
+        },
+      ],
+      { logger: { error: vi.fn(), warn: vi.fn() } },
+    );
+    expectDefined(registry.typedHooks[0], "slow handler").timeoutMs = 5;
+    try {
+      const work = runner.runReplyDispatch(replyDispatchEvent, { ...replyDispatchCtx }, (invoke) =>
+        withNativeSubagentRequest(
+          () => ({ spawn, collect: async () => ({ completed: [], pending: [] }) }),
+          invoke,
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(5);
+      await expect(work).resolves.toMatchObject({ handled: true });
+      late.resolve();
+      await expect(detached).rejects.toThrow("requester-bound");
+      expect(spawn).toHaveBeenCalledExactlyOnceWith({
+        requestId: "current",
+        task: "current request",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it.each(["timeout", "declined", "rejected"] as const)(
+    "cannot reopen native requester custody from a captured context after %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const late = createDeferred();
+      const nextStarted = createDeferred();
+      const releaseFirst = createDeferred();
+      const releaseNext = createDeferred();
+      const spawn = vi.fn().mockResolvedValue({
+        runId: "child",
+        childSessionKey: "agent:test:subagent:child",
+        completionMode: "collect" as const,
+      });
+      let detached: Promise<unknown> | undefined;
+      const { runner } = createHookRunnerWithRegistry(
+        [
+          {
+            hookName: "reply_dispatch",
+            pluginId: "first",
+            timeoutMs: 5,
+            handler: async (_event, context) =>
+              withNativeSubagentRuntimeGuard(
+                { pluginId: "first", assertCurrent() {} },
+                async () => {
+                  await nativeSubagentRuntime.spawn({
+                    requestId: "first",
+                    task: "active first hook",
+                  });
+                  detached = late.promise.then(() => {
+                    const invoke = () =>
+                      nativeSubagentRuntime.spawn({
+                        requestId: "reopened",
+                        task: "must not start",
+                      });
+                    // Exercise the capability that a plugin could retain from the public context.
+                    if (!context || typeof context !== "object") {
+                      throw new Error("reply hook context was not supplied");
+                    }
+                    const admission = Reflect.get(
+                      context,
+                      Symbol.for("openclaw.claimingHookAdmission"),
+                    );
+                    return typeof admission?.run === "function" ? admission.run(invoke) : invoke();
+                  });
+                  if (outcome === "timeout") {
+                    await releaseFirst.promise;
+                  }
+                  if (outcome === "rejected") {
+                    throw new Error("first hook failed");
+                  }
+                },
+              ),
+          },
+          {
+            hookName: "reply_dispatch",
+            pluginId: "next",
+            handler: async () =>
+              withNativeSubagentRuntimeGuard({ pluginId: "next", assertCurrent() {} }, async () => {
+                await nativeSubagentRuntime.spawn({ requestId: "next", task: "active next hook" });
+                nextStarted.resolve();
+                await releaseNext.promise;
+                return {
+                  handled: true,
+                  queuedFinal: false,
+                  counts: { tool: 0, block: 0, final: 0 },
+                };
+              }),
+          },
+        ],
+        { logger: { error: vi.fn(), warn: vi.fn() } },
+      );
+      const work = runner.runReplyDispatch(
+        replyDispatchEvent,
+        withClaimingHookAdmission({ ...replyDispatchCtx }, { assertCurrent() {} }),
+        (invoke) =>
+          withNativeSubagentRequest(
+            () => ({ spawn, collect: async () => ({ completed: [], pending: [] }) }),
+            invoke,
+          ),
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(5);
+        await nextStarted.promise;
+        late.resolve();
+        await expect(detached).rejects.toThrow("requester-bound");
+        expect(spawn.mock.calls.map(([params]) => params.requestId)).toEqual(["first", "next"]);
+        releaseNext.resolve();
+        await expect(work).resolves.toMatchObject({ handled: true });
+      } finally {
+        releaseFirst.resolve();
+        releaseNext.resolve();
+        await work;
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     { dispatchKind: "agent", eligible: false },
     { dispatchKind: "acp", eligible: true },

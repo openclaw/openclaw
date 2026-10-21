@@ -1,14 +1,14 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { constants } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { constants, StatementSync } from "node:sqlite";
+import { beforeEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { closeOpenClawStateDatabaseByPath } from "./openclaw-state-db-cache.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
@@ -28,26 +28,22 @@ import {
   readUserModelAuthProfile,
   setUserProfileAuthLink,
   updateUserModelAuthProfile,
+  type UserProfileAuthLink,
 } from "./user-model-accounts.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { captureUserProfileModelAccountLinksAuthority } from "./user-profile-events.js";
 import { linkEmail, mergeProfiles, setAvatar } from "./user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
 import type { UserProfilesDatabase } from "./user-profiles.types.js";
+import { useUserStateFixture } from "./user-state.test-support.js";
 
-const tempDirs = createTempDirTracker();
-const statePaths: string[] = [];
+const stateOptions = useUserStateFixture("user-model-accounts-");
+let options: ReturnType<typeof stateOptions>;
+beforeEach(() => {
+  options = stateOptions();
+});
 
-function stateOptions() {
-  const path = join(tempDirs.make("user-model-accounts-"), "openclaw.sqlite");
-  statePaths.push(path);
-  return { path };
-}
-
-function hasPrivateAccountState(
-  profileId: string,
-  options: ReturnType<typeof stateOptions>,
-): boolean {
+function hasPrivateAccountState(profileId: string): boolean {
   const { db } = openOpenClawStateDatabase(options);
   return (
     tableExists(db, "secret_store_entries") &&
@@ -65,22 +61,36 @@ function hasPrivateAccountState(
   );
 }
 
-afterEach(() => {
-  for (const path of statePaths.splice(0)) {
-    closeOpenClawStateDatabaseByPath(path);
-  }
-  tempDirs.cleanup();
+const tokenCredential = (token = "synthetic-personal-token", provider = "anthropic") =>
+  ({ type: "token", provider, token }) satisfies AuthProfileCredential;
+const apiKeyCredential = (key: string) =>
+  ({ type: "api_key", provider: "xai", key }) satisfies AuthProfileCredential;
+const accountEmail = "account@example.test";
+const labelPrefix = "x".repeat(255);
+const labelCase = (credential: AuthProfileCredential, displayName: string, label: string) => ({
+  credential: { ...credential, displayName },
+  label,
 });
+const accountSummary = (
+  authProfileId: string,
+  provider: string,
+  label: string,
+  authType: string,
+) => ({ authProfileId, provider, label, authType, selected: true });
 
-function connectToken(
+function connect(
   ownerProfileId: string,
-  options: ReturnType<typeof stateOptions>,
-  token = "synthetic-personal-token",
+  credential: AuthProfileCredential,
+  assertCurrent = () => {},
 ) {
+  return connectUserModelAccount({ ownerProfileId, credential, assertCurrent }, options);
+}
+
+function connectToken(ownerProfileId: string, token = "synthetic-personal-token") {
   return connectUserModelAccount(
     {
       ownerProfileId,
-      credential: { type: "token", provider: "anthropic", token },
+      credential: tokenCredential(token),
       replacement: readSelectedUserModelAccount(ownerProfileId, "anthropic", options),
       assertCurrent() {},
     },
@@ -88,550 +98,427 @@ function connectToken(
   );
 }
 
-describe("personal model accounts", () => {
-  it("reads current linked credentials together after in-process refresh and unlink writes", () => {
-    const options = stateOptions();
-    const alice = ensureProfileForEmail("catalog-alice@example.test", options);
-    const first = connectToken(alice.id, options).authProfileId;
-    const second = connectUserModelAccount(
-      {
-        ownerProfileId: alice.id,
-        credential: { type: "token", provider: "openai", token: "synthetic-second-token" },
-        assertCurrent() {},
-      },
-      options,
-    ).authProfileId;
-    const { db } = openOpenClawStateDatabase(options);
-    const read = () => {
-      const result = readUserModelAccountCommand(db, {
-        type: "userModelAccounts.catalog",
-        selection: { requesterProfileId: alice.id },
-      });
-      if (result.type !== "userModelAccounts.catalog") {
-        throw new Error("Expected personal catalog");
-      }
-      return result.catalog;
-    };
-    expect(Object.keys(read().profiles)).toEqual([first, second]);
-    expect(
-      updateUserModelAuthProfile(
-        first,
-        (profile) => {
-          if (profile.credential.type !== "token") {
-            throw new Error("Expected token credential");
-          }
-          profile.credential.token = "synthetic-refreshed-token";
-          return true;
-        },
-        options,
-      ),
-    ).toBe(true);
-    clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" }, options);
-    expect(read()).toEqual({
-      links: [{ provider: "anthropic", authProfileId: first, updatedAt: expect.any(Number) }],
-      profiles: {
-        [first]: {
-          credential: { type: "token", provider: "anthropic", token: "synthetic-refreshed-token" },
-          usageStats: undefined,
-        },
-      },
+function owner(email = "alice@example.test") {
+  const { id } = ensureProfileForEmail(email, options);
+  return {
+    id,
+    accounts: (cursor?: string) => listUserModelAccounts({ profileId: id, cursor }, options),
+    links: () => listUserProfileAuthLinks(id, options),
+    summary: (authProfileId: string) =>
+      readUserModelAccountSummary({ profileId: id, authProfileId }, options),
+    clear: (provider: string) => clearUserProfileAuthLink({ profileId: id, provider }, options),
+    link: (provider: string, authProfileId: string) =>
+      setUserProfileAuthLink({ profileId: id, provider, authProfileId }, options),
+    connect: (credential: AuthProfileCredential, assertCurrent?: () => void) =>
+      connect(id, credential, assertCurrent),
+    token: (token?: string) => connectToken(id, token),
+    read: (authProfileId: string) => readUserModelAuthProfile(authProfileId, options),
+    update: (authProfileId: string, mutate: Parameters<typeof updateUserModelAuthProfile>[1]) =>
+      updateUserModelAuthProfile(authProfileId, mutate, options),
+  };
+}
+
+it("reads current linked credentials together after in-process refresh and unlink writes", () => {
+  const alice = owner();
+  const first = alice.token().authProfileId;
+  const second = alice.connect(tokenCredential("synthetic-second-token", "openai")).authProfileId;
+  const { db } = openOpenClawStateDatabase(options);
+  const read = () => {
+    const result = readUserModelAccountCommand(db, {
+      type: "userModelAccounts.catalog",
+      selection: { requesterProfileId: alice.id },
     });
-  });
-
-  it("refreshes cached default links after committed link and merge writes", async () => {
-    const options = stateOptions();
-    const alice = ensureProfileForEmail("worker-links@example.test", options);
-    const bob = ensureProfileForEmail("worker-link-target@example.test", options);
-    const { authProfileId } = connectToken(alice.id, options);
-    await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([
-      expect.objectContaining({ provider: "anthropic", authProfileId }),
-    ]);
-    clearUserProfileAuthLink({ profileId: alice.id, provider: "anthropic" }, options);
-    await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([]);
-    setUserProfileAuthLink({ profileId: alice.id, provider: "anthropic", authProfileId }, options);
-    await expect(listUserProfileAuthLinksAsync(bob.id, options)).resolves.toEqual([]);
-    mergeProfiles(alice.id, bob.id, options);
-    for (const profileId of [alice.id, bob.id]) {
-      await expect(listUserProfileAuthLinksAsync(profileId, options)).resolves.toEqual([
-        expect.objectContaining({ provider: "anthropic", authProfileId }),
-      ]);
+    if (result.type !== "userModelAccounts.catalog") {
+      throw new Error("Expected personal catalog");
     }
+    return result.catalog;
+  };
+  expect(Object.keys(read().profiles)).toEqual([first, second]);
+  expect(
+    alice.update(first, (profile) => {
+      if (profile.credential.type !== "token") {
+        throw new Error("Expected token credential");
+      }
+      profile.credential.token = "synthetic-refreshed-token";
+      return true;
+    }),
+  ).toBe(true);
+  alice.clear("openai");
+  expect(read()).toEqual({
+    links: [{ provider: "anthropic", authProfileId: first, updatedAt: expect.any(Number) }],
+    profiles: {
+      [first]: {
+        credential: { type: "token", provider: "anthropic", token: "synthetic-refreshed-token" },
+        usageStats: undefined,
+      },
+    },
   });
+});
 
-  it("publishes default-link authority only on commit and never revives an old selection", () => {
-    const options = stateOptions();
-    const alice = ensureProfileForEmail("link-alice@example.test", options);
-    const bob = ensureProfileForEmail("link-bob@example.test", options);
-    const { authProfileId } = connectToken(alice.id, options);
-    const admission = captureOpenClawStateReadContext(options.path).admission;
-    const aliceCurrent = captureUserProfileModelAccountLinksAuthority(admission, alice.id);
-    const bobCurrent = captureUserProfileModelAccountLinksAuthority(admission, bob.id);
-    const { db } = openOpenClawStateDatabase(options);
-    db.setAuthorizer(() => constants.SQLITE_DENY);
+it("reads one-statement default links and refreshes cached links after committed writes", async () => {
+  const alice = owner();
+  const bob = owner("bob@example.test");
+  const { authProfileId } = alice.token();
+  const { db } = openOpenClawStateDatabase(options);
+  const expectLinks = async (profileId: string, expected: UserProfileAuthLink[]) => {
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    const exec = vi.spyOn(requireNativeSqliteDatabase(db), "exec");
     try {
-      expect(aliceCurrent()).toBe(true);
-      expect(bobCurrent()).toBe(true);
-    } finally {
-      db.setAuthorizer(null);
-    }
-    expect(() =>
-      runOpenClawStateWriteTransaction(() => {
-        clearUserProfileAuthLink({ profileId: alice.id, provider: "anthropic" }, options);
-        expect(aliceCurrent()).toBe(true);
-        throw new Error("rollback link change");
-      }, options),
-    ).toThrow("rollback link change");
-    expect(aliceCurrent()).toBe(true);
-    expect(listUserProfileAuthLinks(alice.id, options)).toHaveLength(1);
-    connectToken(bob.id, options);
-    expect(aliceCurrent()).toBe(true);
-    expect(bobCurrent()).toBe(false);
-    clearUserProfileAuthLink({ profileId: alice.id, provider: "anthropic" }, options);
-    expect(aliceCurrent()).toBe(false);
-    setUserProfileAuthLink({ profileId: alice.id, provider: "anthropic", authProfileId }, options);
-    expect(aliceCurrent()).toBe(false);
-    const next = captureUserProfileModelAccountLinksAuthority(admission, alice.id);
-    expect(next()).toBe(true);
-    closeOpenClawStateDatabaseByPath(options.path);
-    expect(next()).toBe(false);
-  });
-
-  it.each(["direct", "merged", "missing target", "unflattened chain"])(
-    "resolves %s account ownership without reading profile avatars",
-    (kind) => {
-      const options = stateOptions();
-      const source = ensureProfileForEmail("owner-source@example.test", options);
-      const target = ensureProfileForEmail("owner-target@example.test", options);
-      const avatar = new Uint8Array(512 * 1024).fill(42);
-      expect(setAvatar(source.id, avatar, "image/png", options).ok).toBe(true);
-      expect(setAvatar(target.id, avatar, "image/png", options).ok).toBe(true);
-      const { authProfileId } = connectToken(source.id, options);
-      if (kind !== "direct") {
-        linkEmail("owner-source@example.test", target.id, options);
-      }
-      const { db } = openOpenClawStateDatabase(options);
-      if (kind === "missing target" || kind === "unflattened chain") {
-        const successor =
-          kind === "unflattened chain"
-            ? ensureProfileForEmail("owner-successor@example.test", options).id
-            : "missing-profile";
-        // Simulate damaged persisted lineage; only the merge writer may flatten it.
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<UserProfilesDatabase>(db)
-            .updateTable("user_profiles")
-            .set({ merged_into: successor })
-            .where("id", "=", kind === "missing target" ? source.id : target.id),
-        );
-      }
-      db.setAuthorizer((action, table, column) =>
-        action === constants.SQLITE_READ && table === "user_profiles" && column === "avatar"
-          ? constants.SQLITE_DENY
-          : constants.SQLITE_OK,
-      );
-      try {
-        const ownsCredential = kind === "direct" || kind === "merged";
-        expect(
-          listUserProfileAuthLinks(source.id, options).map((link) => link.authProfileId),
-        ).toEqual(ownsCredential ? [authProfileId] : []);
-        expect(readUserModelAuthProfile(authProfileId, options)?.credential).toEqual(
-          ownsCredential
-            ? { type: "token", provider: "anthropic", token: "synthetic-personal-token" }
-            : undefined,
-        );
-        expect(listUserProfileAuthLinks("missing-profile", options)).toEqual([]);
-        if (!ownsCredential) {
-          expect(() =>
-            setUserProfileAuthLink(
-              { profileId: source.id, provider: "anthropic", authProfileId },
-              options,
-            ),
-          ).toThrow("owner is unavailable");
-        }
-      } finally {
-        db.setAuthorizer(null);
-      }
-    },
-  );
-
-  it.each([false, true])(
-    "reads absent account storage without creating it (profile: %s)",
-    (withProfile) => {
-      const options = stateOptions();
-      const profileId = withProfile
-        ? ensureProfileForEmail("lazy@example.test", options).id
-        : "missing";
-      expect(listUserProfileAuthLinks(profileId, options)).toEqual([]);
-      expect(listUserModelAccounts({ profileId }, options)).toEqual({ accounts: [] });
-      if (withProfile) {
-        expect(hasPrivateAccountState(profileId, options)).toBe(false);
-      } else {
-        expect(existsSync(options.path)).toBe(false);
-        expect(() =>
-          setUserProfileAuthLink(
-            { profileId, provider: "openai", authProfileId: "openai:x" },
-            options,
-          ),
-        ).toThrow("owner is unavailable");
-      }
-    },
-  );
-
-  it.each([
-    {
-      credential: {
-        type: "api_key",
-        provider: "xai",
-        key: "  synthetic-personal-api-key\r\n",
-        displayName: `${"x".repeat(255)}🤖`,
-        metadata: { account: "synthetic-account" },
-      },
-      label: "x".repeat(255),
-    },
-    ...["\ud83e", "\udd16"].map((surrogate) => ({
-      credential: {
-        type: "token" as const,
-        provider: "anthropic",
-        token: "synthetic-malformed-label-token",
-        displayName: `${"x".repeat(255)}${surrogate}`,
-      },
-      label: `${"x".repeat(255)}\ufffd`,
-    })),
-    ...[
-      { displayName: "Sign in with ChatGPT", label: "account@example.test · Sign in with ChatGPT" },
-      { displayName: "account@example.test", label: "account@example.test" },
-    ].map(({ displayName, label }) => ({
-      credential: {
-        type: "token" as const,
-        provider: "example",
-        token: "synthetic-account-label-token",
-        email: "account@example.test",
-        displayName,
-      },
-      label,
-    })),
-  ] satisfies Array<{ credential: AuthProfileCredential; label: string }>)(
-    "retains the credential and exposes the repaired account label $label",
-    ({ credential, label }) => {
-      const options = stateOptions();
-      const alice = ensureProfileForEmail("label-alice@example.test", options);
-      const bob = ensureProfileForEmail("label-bob@example.test", options);
-      const { authProfileId } = connectUserModelAccount(
-        { ownerProfileId: alice.id, credential, assertCurrent() {} },
-        options,
-      );
-      closeOpenClawStateDatabaseByPath(options.path);
-      expect(readUserModelAuthProfile(authProfileId, options)?.credential).toEqual(
-        credential.type === "api_key"
-          ? { ...credential, key: "synthetic-personal-api-key" }
-          : credential,
-      );
-      expect(listUserModelAccounts({ profileId: alice.id }, options)).toEqual({
-        accounts: [
-          {
-            authProfileId,
-            provider: credential.provider,
-            label,
-            authType: credential.type,
-            selected: true,
-          },
-        ],
+      expect(
+        readUserModelAccountCommand(db, { type: "userModelAccounts.links", profileId }),
+      ).toEqual({
+        type: "userModelAccounts.links",
+        links: expected,
       });
-      expect(listUserModelAccounts({ profileId: bob.id }, options)).toEqual({ accounts: [] });
-      expect(
-        readUserModelAccountSummary({ profileId: alice.id, authProfileId }, options)?.label,
-      ).toBe(label);
-    },
-  );
+      expect(observation.queries).toHaveLength(1);
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      observation.restore();
+      exec.mockRestore();
+    }
+    await expect(listUserProfileAuthLinksAsync(profileId, options)).resolves.toEqual(expected);
+  };
+  const linked = [{ provider: "anthropic", authProfileId, updatedAt: expect.any(Number) }];
+  await expectLinks(alice.id, linked);
+  alice.clear("anthropic");
+  await expectLinks(alice.id, []);
+  alice.link("anthropic", authProfileId);
+  await expectLinks(bob.id, []);
+  mergeProfiles(alice.id, bob.id, options);
+  for (const profileId of [alice.id, bob.id]) {
+    await expectLinks(profileId, linked);
+  }
+});
 
-  it.each([
-    {
-      name: "API-key SecretRef",
-      credential: {
-        type: "api_key",
-        provider: "xai",
-        keyRef: { source: "env", provider: "default", id: "XAI_API_KEY" },
-      },
-    },
-    {
-      name: "token SecretRef",
-      credential: {
-        type: "token",
-        provider: "synthetic",
-        tokenRef: { source: "env", provider: "default", id: "SYNTHETIC_TOKEN" },
-      },
-    },
-    {
-      name: "inline API-key reference",
-      credential: { type: "api_key", provider: "xai", key: "${XAI_API_KEY}" },
-    },
-    {
-      name: "inline token reference",
-      credential: { type: "token", provider: "synthetic", token: "$SYNTHETIC_TOKEN" },
-    },
-    {
-      name: "portable credential",
-      credential: {
-        type: "api_key",
-        provider: "xai",
-        key: "synthetic-personal-key",
-        copyToAgents: true,
-      },
-    },
-  ] satisfies Array<{ name: string; credential: AuthProfileCredential }>)(
-    "rejects personal $name without changing owner state",
-    ({ credential }) => {
-      const options = stateOptions();
-      const owner = ensureProfileForEmail("inline-owner@example.test", options);
+it("publishes default-link authority only on commit and never revives an old selection", () => {
+  const alice = owner();
+  const bob = owner("bob@example.test");
+  const { authProfileId } = alice.token();
+  const admission = captureOpenClawStateReadContext(options.path).admission;
+  const aliceCurrent = captureUserProfileModelAccountLinksAuthority(admission, alice.id);
+  const bobCurrent = captureUserProfileModelAccountLinksAuthority(admission, bob.id);
+  const { db } = openOpenClawStateDatabase(options);
+  requireNativeSqliteDatabase(db).setAuthorizer(() => constants.SQLITE_DENY);
+  try {
+    expect([aliceCurrent(), bobCurrent()]).toEqual([true, true]);
+  } finally {
+    requireNativeSqliteDatabase(db).setAuthorizer(null);
+  }
+  expect(() =>
+    runOpenClawStateWriteTransaction(() => {
+      alice.clear("anthropic");
+      expect(aliceCurrent()).toBe(true);
+      throw new Error("rollback link change");
+    }, options),
+  ).toThrow("rollback link change");
+  expect(aliceCurrent()).toBe(true);
+  expect(alice.links()).toHaveLength(1);
+  bob.token();
+  expect([aliceCurrent(), bobCurrent()]).toEqual([true, false]);
+  alice.clear("anthropic");
+  expect(aliceCurrent()).toBe(false);
+  alice.link("anthropic", authProfileId);
+  expect(aliceCurrent()).toBe(false);
+  const next = captureUserProfileModelAccountLinksAuthority(admission, alice.id);
+  expect(next()).toBe(true);
+  closeOpenClawStateDatabaseByPath(options.path);
+  expect(next()).toBe(false);
+});
+
+it.each(["direct", "merged", "missing target", "unflattened chain"])(
+  "resolves %s account ownership without reading profile avatars",
+  (kind) => {
+    const source = owner("owner-source@example.test");
+    const target = owner("owner-target@example.test");
+    const avatar = new Uint8Array(512 * 1024).fill(42);
+    expect(setAvatar(source.id, avatar, "image/png", options).ok).toBe(true);
+    expect(setAvatar(target.id, avatar, "image/png", options).ok).toBe(true);
+    const { authProfileId } = source.token();
+    if (kind !== "direct") {
+      linkEmail("owner-source@example.test", target.id, options);
+    }
+    const { db } = openOpenClawStateDatabase(options);
+    if (kind === "missing target" || kind === "unflattened chain") {
+      const successor =
+        kind === "unflattened chain"
+          ? ensureProfileForEmail("owner-successor@example.test", options).id
+          : "missing-profile";
+      // Simulate damaged persisted lineage; only the merge writer may flatten it.
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<UserProfilesDatabase>(db)
+          .updateTable("user_profiles")
+          .set({ merged_into: successor })
+          .where("id", "=", kind === "missing target" ? source.id : target.id),
+      );
+    }
+    requireNativeSqliteDatabase(db).setAuthorizer((action, table, column) =>
+      action === constants.SQLITE_READ && table === "user_profiles" && column === "avatar"
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK,
+    );
+    try {
+      const ownsCredential = kind === "direct" || kind === "merged";
+      expect(source.links().map((link) => link.authProfileId)).toEqual(
+        ownsCredential ? [authProfileId] : [],
+      );
+      expect(source.read(authProfileId)?.credential).toEqual(
+        ownsCredential ? tokenCredential() : undefined,
+      );
+      expect(listUserProfileAuthLinks("missing-profile", options)).toEqual([]);
+      if (!ownsCredential) {
+        expect(() => source.link("anthropic", authProfileId)).toThrow("owner is unavailable");
+      }
+    } finally {
+      requireNativeSqliteDatabase(db).setAuthorizer(null);
+    }
+  },
+);
+
+it.each([false, true])(
+  "reads absent account storage without creating it (profile: %s)",
+  (withProfile) => {
+    const profileId = withProfile
+      ? ensureProfileForEmail("lazy@example.test", options).id
+      : "missing";
+    expect(listUserProfileAuthLinks(profileId, options)).toEqual([]);
+    expect(listUserModelAccounts({ profileId }, options)).toEqual({ accounts: [] });
+    if (withProfile) {
+      expect(hasPrivateAccountState(profileId)).toBe(false);
+    } else {
+      expect(existsSync(options.path)).toBe(false);
       expect(() =>
-        connectUserModelAccount(
-          { ownerProfileId: owner.id, credential, assertCurrent() {} },
+        setUserProfileAuthLink(
+          { profileId, provider: "openai", authProfileId: "openai:x" },
           options,
         ),
-      ).toThrow();
-      expect(listUserProfileAuthLinks(owner.id, options)).toEqual([]);
-      expect(hasPrivateAccountState(owner.id, options)).toBe(false);
+      ).toThrow("owner is unavailable");
+    }
+  },
+);
+
+it.each([
+  labelCase(
+    {
+      ...apiKeyCredential("  synthetic-personal-api-key\r\n"),
+      metadata: { account: "synthetic-account" },
     },
+    `${labelPrefix}🤖`,
+    labelPrefix,
+  ),
+  ...["\ud83e", "\udd16"].map((surrogate) =>
+    labelCase(tokenCredential(), `${labelPrefix}${surrogate}`, `${labelPrefix}\ufffd`),
+  ),
+  ...[
+    { displayName: "Sign in with ChatGPT", label: `${accountEmail} · Sign in with ChatGPT` },
+    { displayName: accountEmail, label: accountEmail },
+  ].map(({ displayName, label }) =>
+    labelCase(
+      { ...tokenCredential("synthetic-token", "example"), email: accountEmail },
+      displayName,
+      label,
+    ),
+  ),
+] satisfies Array<{ credential: AuthProfileCredential; label: string }>)(
+  "retains the credential and exposes the repaired account label $label",
+  ({ credential, label }) => {
+    const alice = owner();
+    const bob = owner("bob@example.test");
+    const { authProfileId } = alice.connect(credential);
+    closeOpenClawStateDatabaseByPath(options.path);
+    expect(alice.read(authProfileId)?.credential).toEqual(
+      credential.type === "api_key"
+        ? { ...credential, key: "synthetic-personal-api-key" }
+        : credential,
+    );
+    expect(alice.accounts()).toEqual({
+      accounts: [accountSummary(authProfileId, credential.provider, label, credential.type)],
+    });
+    expect(bob.accounts()).toEqual({ accounts: [] });
+    expect(alice.summary(authProfileId)?.label).toBe(label);
+  },
+);
+
+it.each([
+  [
+    "API-key SecretRef",
+    {
+      type: "api_key",
+      provider: "xai",
+      keyRef: { source: "env", provider: "default", id: "XAI_API_KEY" },
+    },
+  ],
+  [
+    "token SecretRef",
+    {
+      type: "token",
+      provider: "synthetic",
+      tokenRef: { source: "env", provider: "default", id: "SYNTHETIC_TOKEN" },
+    },
+  ],
+  ["inline API-key reference", apiKeyCredential("${XAI_API_KEY}")],
+  ["inline token reference", tokenCredential("$SYNTHETIC_TOKEN", "synthetic")],
+  ["portable credential", { ...apiKeyCredential("synthetic-personal-key"), copyToAgents: true }],
+] satisfies Array<[string, AuthProfileCredential]>)(
+  "rejects personal %s without changing owner state",
+  (_name, credential) => {
+    const rejectedOwner = owner();
+    expect(() => rejectedOwner.connect(credential)).toThrow();
+    expect(rejectedOwner.links()).toEqual([]);
+    expect(hasPrivateAccountState(rejectedOwner.id)).toBe(false);
+  },
+);
+
+it("lists retained owned accounts without secrets and can select them again after clearing a default", () => {
+  const alice = owner();
+  const bob = owner("bob@example.test");
+  const scopes = {
+    clientId: "synthetic-client",
+    authorizationScope: "openid profile resource.invoke offline_access",
+    grantedScope: "openid offline_access",
+  };
+  const first = alice.connect({
+    type: "oauth",
+    provider: "openai",
+    email: accountEmail,
+    access: "synthetic-inventory-access",
+    refresh: "synthetic-inventory-refresh",
+    expires: 123,
+    ...scopes,
+  });
+  const second = alice.token();
+  const expected = [
+    accountSummary(first.authProfileId, "openai", accountEmail, "oauth"),
+    accountSummary(second.authProfileId, "anthropic", "anthropic", "token"),
+  ].toSorted((a, b) => a.authProfileId.localeCompare(b.authProfileId));
+  expect(alice.accounts()).toEqual({ accounts: expected });
+  expect(bob.accounts()).toEqual({ accounts: [] });
+  expect(bob.summary(first.authProfileId)).toBeUndefined();
+
+  alice.clear("openai");
+  closeOpenClawStateDatabaseByPath(options.path);
+  expect(alice.read(first.authProfileId)?.credential).toMatchObject(scopes);
+  expect(alice.summary(first.authProfileId)).toMatchObject({
+    label: accountEmail,
+    selected: false,
+  });
+  alice.link("openai", first.authProfileId);
+  expect(alice.accounts()).toEqual({ accounts: expected });
+});
+
+it("paginates only the current owner's retained accounts without losing the selected one", () => {
+  const alice = owner();
+  const bob = owner("bob@example.test");
+  bob.token();
+  const ids = Array.from(
+    { length: 51 },
+    (_, index) => alice.connect(tokenCredential(`synthetic-page-${index}`)).authProfileId,
   );
-
-  it("lists retained owned accounts without secrets and can select them again after clearing a default", () => {
-    const options = stateOptions();
-    const alice = ensureProfileForEmail("inventory-alice@example.test", options);
-    const bob = ensureProfileForEmail("inventory-bob@example.test", options);
-    const first = connectUserModelAccount(
-      {
-        ownerProfileId: alice.id,
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          email: "account@example.test",
-          access: "synthetic-inventory-access",
-          refresh: "synthetic-inventory-refresh",
-          expires: 123,
-          clientId: "synthetic-client",
-          authorizationScope: "openid profile resource.invoke offline_access",
-          grantedScope: "openid offline_access",
-        },
-        assertCurrent() {},
-      },
-      options,
-    );
-    const second = connectToken(alice.id, options);
-    const expected = [
-      {
-        authProfileId: first.authProfileId,
-        provider: "openai",
-        label: "account@example.test",
-        authType: "oauth",
-        selected: true,
-      },
-      {
-        authProfileId: second.authProfileId,
-        provider: "anthropic",
-        label: "anthropic",
-        authType: "token",
-        selected: true,
-      },
-    ].toSorted((a, b) => a.authProfileId.localeCompare(b.authProfileId));
-    expect(listUserModelAccounts({ profileId: alice.id }, options)).toEqual({ accounts: expected });
-    expect(listUserModelAccounts({ profileId: bob.id }, options)).toEqual({ accounts: [] });
-    expect(
-      readUserModelAccountSummary(
-        { profileId: bob.id, authProfileId: first.authProfileId },
-        options,
-      ),
-    ).toBeUndefined();
-
-    clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" }, options);
-    closeOpenClawStateDatabaseByPath(options.path);
-    expect(readUserModelAuthProfile(first.authProfileId, options)?.credential).toMatchObject({
-      clientId: "synthetic-client",
-      authorizationScope: "openid profile resource.invoke offline_access",
-      grantedScope: "openid offline_access",
-    });
-    expect(
-      readUserModelAccountSummary(
-        { profileId: alice.id, authProfileId: first.authProfileId },
-        options,
-      ),
-    ).toMatchObject({ label: "account@example.test", selected: false });
-    setUserProfileAuthLink(
-      { profileId: alice.id, provider: "openai", authProfileId: first.authProfileId },
-      options,
-    );
-    expect(listUserModelAccounts({ profileId: alice.id }, options)).toEqual({ accounts: expected });
-  });
-
-  it("paginates only the current owner's retained accounts without losing the selected one", () => {
-    const options = stateOptions();
-    const alice = ensureProfileForEmail("pages-alice@example.test", options);
-    const bob = ensureProfileForEmail("pages-bob@example.test", options);
-    connectToken(bob.id, options);
-    const ids = Array.from(
-      { length: 51 },
-      (_, index) =>
-        connectUserModelAccount(
-          {
-            ownerProfileId: alice.id,
-            credential: { type: "token", provider: "anthropic", token: `synthetic-page-${index}` },
-            assertCurrent() {},
-          },
-          options,
-        ).authProfileId,
-    );
-    const first = listUserModelAccounts({ profileId: alice.id }, options);
-    expect(first.accounts).toHaveLength(50);
-    expect(first.nextCursor).toBeDefined();
-    const second = listUserModelAccounts(
-      { profileId: alice.id, cursor: first.nextCursor },
-      options,
-    );
-    expect(second.accounts).toHaveLength(1);
-    expect(second.nextCursor).toBeUndefined();
-    const all = [...first.accounts, ...second.accounts];
-    expect(all.map((account) => account.authProfileId)).toEqual(ids.toSorted());
-    expect(
-      all.filter((account) => account.selected).map((account) => account.authProfileId),
-    ).toEqual([ids.at(-1)]);
-  });
-
-  it("replaces only owned credentials, retaining exact session pins after unlink", () => {
-    const options = stateOptions();
-    const alice = ensureProfileForEmail("alice@example.test", options);
-    const bob = ensureProfileForEmail("bob@example.test", options);
-    setUserProfileAuthLink(
-      { profileId: alice.id, provider: "anthropic", authProfileId: "anthropic:shared" },
-      options,
-    );
-    const first = connectToken(alice.id, options);
-    expect(first.authProfileId).not.toBe("anthropic:shared");
-    const reconnect = connectToken(alice.id, options, "synthetic-new-token");
-    expect(reconnect.authProfileId).toBe(first.authProfileId);
-    expect(() =>
-      setUserProfileAuthLink(
-        {
-          profileId: bob.id,
-          provider: "anthropic",
-          authProfileId: first.authProfileId,
-        },
-        options,
-      ),
-    ).toThrow("does not belong");
-    expect(listUserProfileAuthLinks(bob.id, options)).toEqual([]);
-
-    clearUserProfileAuthLink({ profileId: alice.id, provider: "anthropic" }, options);
-    expect(listUserProfileAuthLinks(alice.id, options)).toEqual([]);
-    expect(readUserModelAuthProfile(first.authProfileId, options)?.credential).toMatchObject({
-      token: "synthetic-new-token",
-    });
-  });
-
-  it("commits neither credential nor link when final authorization is revoked", () => {
-    const options = stateOptions();
-    const alice = ensureProfileForEmail("alice@example.test", options);
-    expect(() =>
-      connectUserModelAccount(
-        {
-          ownerProfileId: alice.id,
-          credential: { type: "token", provider: "anthropic", token: "synthetic-revoked-token" },
-          assertCurrent: () => {
-            throw new Error("revoked");
-          },
-        },
-        options,
-      ),
-    ).toThrow("revoked");
-    expect(listUserProfileAuthLinks(alice.id, options)).toEqual([]);
-    expect(hasPrivateAccountState(alice.id, options)).toBe(false);
-  });
-
-  it("preserves private refresh and usage updates across reopen without changing the link", () => {
-    const options = stateOptions();
-    const alice = ensureProfileForEmail("alice@example.test", options);
-    const { authProfileId } = connectToken(alice.id, options);
-    expect(
-      updateUserModelAuthProfile(
-        authProfileId,
-        (current) => {
-          current.credential = {
-            type: "token",
-            provider: "anthropic",
-            token: "synthetic-rotated-token",
-          };
-          current.usageStats = { lastUsed: 42, cooldownUntil: 99, cooldownReason: "rate_limit" };
-          return true;
-        },
-        options,
-      ),
-    ).toBe(true);
-    expect(
-      updateUserModelAuthProfile(
-        authProfileId,
-        (current) => {
-          current.credential = {
-            type: "token",
-            provider: "anthropic",
-            token: "synthetic-stale-token",
-          };
-          return false;
-        },
-        options,
-      ),
-    ).toBe(false);
-    closeOpenClawStateDatabaseByPath(options.path);
-    expect(readUserModelAuthProfile(authProfileId, options)).toMatchObject({
-      credential: { token: "synthetic-rotated-token" },
-      usageStats: { lastUsed: 42, cooldownUntil: 99, cooldownReason: "rate_limit" },
-    });
-    expect(listUserProfileAuthLinks(alice.id, options)).toMatchObject([
-      { provider: "anthropic", authProfileId },
-    ]);
-  });
-
-  it.each([false, true])(
-    "merges account selections and bounded credentials without reviving disconnections (disconnected: %s)",
-    (disconnected) => {
-      const options = stateOptions();
-      const source = ensureProfileForEmail("source@example.test", options);
-      const target = ensureProfileForEmail("target@example.test", options);
-      const sourceToken = "synthetic-source-".repeat(2800);
-      const targetToken = "synthetic-target-".repeat(2800);
-      const sourceAccount = connectToken(source.id, options, sourceToken);
-      const targetAccount = connectToken(target.id, options, targetToken);
-      for (const [profileId, provider, authProfileId] of [
-        [source.id, "openai", "openai:source"],
-        [source.id, "mistral", "mistral:source"],
-        [target.id, "mistral", "mistral:target"],
-      ] as const) {
-        setUserProfileAuthLink({ profileId, provider, authProfileId }, options);
-      }
-      if (disconnected) {
-        clearUserProfileAuthLink({ profileId: target.id, provider: "anthropic" }, options);
-      }
-      linkEmail("source@example.test", target.id, options);
-      const expectedLinks = [
-        ...(disconnected
-          ? []
-          : [{ provider: "anthropic", authProfileId: targetAccount.authProfileId }]),
-        { provider: "mistral", authProfileId: "mistral:target" },
-        { provider: "openai", authProfileId: "openai:source" },
-      ];
-      expect(listUserProfileAuthLinks(target.id, options)).toMatchObject(expectedLinks);
-      expect(listUserProfileAuthLinks(source.id, options)).toMatchObject(expectedLinks);
-      expect(
-        readUserModelAccountSummary(
-          { profileId: target.id, authProfileId: sourceAccount.authProfileId },
-          options,
-        ),
-      ).toMatchObject({ authProfileId: sourceAccount.authProfileId });
-      expect(
-        readUserModelAuthProfile(sourceAccount.authProfileId, options)?.credential,
-      ).toMatchObject({ token: sourceToken });
-      expect(
-        readUserModelAuthProfile(targetAccount.authProfileId, options)?.credential,
-      ).toMatchObject({ token: targetToken });
-      expect(hasPrivateAccountState(source.id, options)).toBe(false);
-      expect(() => connectToken(source.id, options)).toThrow("owner changed");
-    },
+  const first = alice.accounts();
+  expect(first.accounts).toHaveLength(50);
+  expect(first.nextCursor).toBeDefined();
+  const second = alice.accounts(first.nextCursor);
+  expect(second.accounts).toHaveLength(1);
+  expect(second.nextCursor).toBeUndefined();
+  const all = [...first.accounts, ...second.accounts];
+  expect(all.map((account) => account.authProfileId)).toEqual(ids.toSorted());
+  expect(all.filter((account) => account.selected).map((account) => account.authProfileId)).toEqual(
+    [ids.at(-1)],
   );
 });
+
+it("replaces only owned credentials, retaining exact session pins after unlink", () => {
+  const alice = owner();
+  const bob = owner("bob@example.test");
+  alice.link("anthropic", "anthropic:shared");
+  const first = alice.token();
+  expect(first.authProfileId).not.toBe("anthropic:shared");
+  const reconnect = alice.token("synthetic-new-token");
+  expect(reconnect.authProfileId).toBe(first.authProfileId);
+  expect(() => bob.link("anthropic", first.authProfileId)).toThrow("does not belong");
+  expect(bob.links()).toEqual([]);
+
+  alice.clear("anthropic");
+  expect(alice.links()).toEqual([]);
+  expect(alice.read(first.authProfileId)?.credential).toMatchObject({
+    token: "synthetic-new-token",
+  });
+});
+
+it("commits neither credential nor link when final authorization is revoked", () => {
+  const alice = owner();
+  expect(() =>
+    alice.connect(tokenCredential("synthetic-revoked-token"), () => {
+      throw new Error("revoked");
+    }),
+  ).toThrow("revoked");
+  expect(alice.links()).toEqual([]);
+  expect(hasPrivateAccountState(alice.id)).toBe(false);
+});
+
+it("preserves private refresh and usage updates across reopen without changing the link", () => {
+  const alice = owner();
+  const { authProfileId } = alice.token();
+  expect(
+    alice.update(authProfileId, (current) => {
+      current.credential = tokenCredential("synthetic-rotated-token");
+      current.usageStats = { lastUsed: 42, cooldownUntil: 99, cooldownReason: "rate_limit" };
+      return true;
+    }),
+  ).toBe(true);
+  expect(
+    alice.update(authProfileId, (current) => {
+      current.credential = tokenCredential("synthetic-stale-token");
+      return false;
+    }),
+  ).toBe(false);
+  closeOpenClawStateDatabaseByPath(options.path);
+  expect(alice.read(authProfileId)).toMatchObject({
+    credential: { token: "synthetic-rotated-token" },
+    usageStats: { lastUsed: 42, cooldownUntil: 99, cooldownReason: "rate_limit" },
+  });
+  expect(alice.links()).toMatchObject([{ provider: "anthropic", authProfileId }]);
+});
+
+it.each([false, true])(
+  "merges account selections and bounded credentials without reviving disconnections (disconnected: %s)",
+  (disconnected) => {
+    const source = owner("source@example.test");
+    const target = owner("target@example.test");
+    const sourceToken = "synthetic-source-".repeat(2800);
+    const targetToken = "synthetic-target-".repeat(2800);
+    const sourceAccount = source.token(sourceToken);
+    const targetAccount = target.token(targetToken);
+    for (const [profileId, provider, authProfileId] of [
+      [source.id, "openai", "openai:source"],
+      [source.id, "mistral", "mistral:source"],
+      [target.id, "mistral", "mistral:target"],
+    ] as const) {
+      setUserProfileAuthLink({ profileId, provider, authProfileId }, options);
+    }
+    if (disconnected) {
+      target.clear("anthropic");
+    }
+    linkEmail("source@example.test", target.id, options);
+    const expectedLinks = [
+      ...(disconnected
+        ? []
+        : [{ provider: "anthropic", authProfileId: targetAccount.authProfileId }]),
+      { provider: "mistral", authProfileId: "mistral:target" },
+      { provider: "openai", authProfileId: "openai:source" },
+    ];
+    expect(target.links()).toMatchObject(expectedLinks);
+    expect(source.links()).toMatchObject(expectedLinks);
+    expect(target.summary(sourceAccount.authProfileId)).toMatchObject({
+      authProfileId: sourceAccount.authProfileId,
+    });
+    expect(source.read(sourceAccount.authProfileId)?.credential).toMatchObject({
+      token: sourceToken,
+    });
+    expect(target.read(targetAccount.authProfileId)?.credential).toMatchObject({
+      token: targetToken,
+    });
+    expect(hasPrivateAccountState(source.id)).toBe(false);
+    expect(() => source.token()).toThrow("owner changed");
+  },
+);

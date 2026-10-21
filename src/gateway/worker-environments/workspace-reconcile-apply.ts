@@ -19,9 +19,9 @@ import {
   type WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
+import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 import {
   applyWorkspaceDirectoryChanges,
-  assertActualWorkspaceManifest,
   ConcurrentWorkspacePathError,
   createWorkspaceManifestVerifier,
   manifestNodes,
@@ -63,6 +63,13 @@ export async function applyStagedWorkerWorkspace(params: {
 }): Promise<WorkerWorkspaceApplyResult> {
   return await withWorkspaceHashContext(async (): Promise<WorkerWorkspaceApplyResult> => {
     const root = await fs.realpath(params.root);
+    const buildCacheInputs =
+      params.base.buildCacheInputs === undefined && params.current.buildCacheInputs === undefined
+        ? undefined
+        : buildCacheInputPaths([
+            ...(params.base.buildCacheInputs ?? []),
+            ...(params.current.buildCacheInputs ?? []),
+          ]);
     const stagedInputDirectories = stagedInputDirectoriesFromEntries(params.current.entries);
     const baseNodes = manifestNodes(params.base);
     const currentNodes = manifestNodes(params.current);
@@ -117,7 +124,11 @@ export async function applyStagedWorkerWorkspace(params: {
     };
     await assertInputOwnership();
     const preserveDirectories = new Set(
-      reconciliationDirectories(params.current.directories, stagedInputDirectories),
+      reconciliationDirectories(
+        params.current.directories,
+        stagedInputDirectories,
+        buildCacheInputs && [...buildCacheInputs],
+      ),
     );
     // Git workspaces must keep the eligibility boundary established at dispatch.
     // Local-only ignored files are outside both manifests and must never enter the accepted state.
@@ -137,15 +148,18 @@ export async function applyStagedWorkerWorkspace(params: {
         baseCommit: params.current.baseCommit,
         preserveDirectories,
         includePaths,
+        buildCacheInputs,
       });
       const finalPreflight = preparedPreflight ?? (await inspectPaths());
-      await assertActualWorkspaceManifest({
+      const verifyLocalStable = createWorkspaceManifestVerifier({
         root,
         expectedRef: actual.manifestRef,
         baseCommit: actual.manifest.baseCommit,
         preserveDirectories,
         includePaths,
+        buildCacheInputs,
       });
+      await verifyLocalStable();
       const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
       params.assertCurrent?.();
       await reconcile.publish?.({ ...actual, conflictPaths });
@@ -154,13 +168,7 @@ export async function applyStagedWorkerWorkspace(params: {
       return {
         ...actual,
         conflictPaths,
-        verifyLocalStable: createWorkspaceManifestVerifier({
-          root,
-          expectedRef: actual.manifestRef,
-          baseCommit: actual.manifest.baseCommit,
-          preserveDirectories,
-          includePaths,
-        }),
+        verifyLocalStable,
       };
     };
     if (changed.size === 0) {
@@ -247,7 +255,14 @@ export async function applyStagedWorkerWorkspace(params: {
     params.assertCurrent?.();
     await params.journal.begin(journal);
     try {
-      await prepareNonDirectoryTargets(root, appliedEntries, undefined, params.assertCurrent);
+      const staged = createStagedInputPathMatcher(await openFsSafeRoot(root));
+      await prepareNonDirectoryTargets(
+        root,
+        appliedEntries,
+        async (entryPath) => Boolean(buildCacheInputs?.has(entryPath)) || (await staged(entryPath)),
+        params.assertCurrent,
+        buildCacheInputs !== undefined,
+      );
       await applyWorkspacePatch({
         root,
         patch: snapshot.patch,
@@ -277,6 +292,7 @@ export async function applyStagedWorkerWorkspace(params: {
         await recoverWorkerWorkspaceReconciliation({
           root,
           journal,
+          buildCacheInputs: buildCacheInputs && [...buildCacheInputs],
           assertCurrent: params.assertCurrent,
         });
         params.assertCurrent?.();

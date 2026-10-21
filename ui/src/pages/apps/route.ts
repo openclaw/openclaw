@@ -1,7 +1,7 @@
 import { definePage } from "@openclaw/uirouter";
 import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
-import type { SolidRouteProps } from "../../app-route-types.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 
 export const page = definePage({
   ...routePageSpec("apps"),

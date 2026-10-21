@@ -2,8 +2,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import { retireUnadoptedReplySource } from "../../auto-reply/reply/reply-source-binding.js";
 import { formatErrorMessage as formatError, readErrorName } from "../../infra/errors.js";
+import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import {
+  reserveSessionControllerSource,
+  type SessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resolveRealtimeVoiceAgentConsultToolsAllow,
@@ -38,8 +44,9 @@ import type {
   GatewayControlOwner,
 } from "./client-gateway-control.types.js";
 import {
-  createRealtimeControlQueue,
   createTalkRealtimeRunControlOwner,
+  createTalkRunCancel,
+  type TalkRunCancelContext,
 } from "./realtime-run-control.js";
 import { resolveOwnedActiveTalkRunTarget } from "./run-ownership.js";
 import { registerTalkConnectionCleanup } from "./session-registry.js";
@@ -48,6 +55,8 @@ import { isTalkVoiceSessionReplacing } from "./voice-selection.js";
 
 const owners = new Map<string, GatewayControlOwner>();
 const pendingOwners = new Set<GatewayControlOwner>();
+// Preserve the call's active-plus-eight-waiting admission bound; the controller owns order.
+const MAX_ACCEPTED_TALK_CONSULTS = 9;
 
 export type TalkAgentConsultAuthority = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -85,10 +94,7 @@ export function createTalkClientGatewayControlOwner(params: {
   controlSource?: "delegation" | "transcript";
   sessionTarget: PreparedTalkSessionTarget;
   connId: string;
-  context: Pick<
-    GatewayRequestContext,
-    "broadcastToConnIds" | "logGateway" | "chatAbortControllers"
-  >;
+  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "logGateway"> & TalkRunCancelContext;
   assertConnectionOpen?: () => void;
   runToolAgentConsult: ReusableTalkAgentConsult;
   runAgentConsult: LifecycleBoundTalkAgentConsult;
@@ -115,7 +121,8 @@ export function createTalkClientGatewayControlOwner(params: {
     flushTranscript: params.flushTranscript,
   });
   const entryPrefix = `gateway-${randomUUID()}`;
-  const consultQueue = createRealtimeControlQueue();
+  const consults = new Set<Promise<void>>();
+  let consultAdmissionSealed = false;
   const consultControllers = new Map<
     string | symbol,
     { controller: AbortController; closeDisposition: RealtimeVoiceCloseDisposition }
@@ -157,8 +164,10 @@ export function createTalkClientGatewayControlOwner(params: {
   const admitConsult = async (
     runner: ReusableTalkAgentConsult,
     args: unknown,
-    consultSignal: AbortSignal,
+    sourceInput: SessionControllerInput,
   ) => {
+    // The reserved input's signal joins this call's controller and session Stop.
+    const consultSignal = sourceInput.abortSignal;
     assertActive();
     consultSignal.throwIfAborted();
     await params.flushTranscript();
@@ -166,7 +175,7 @@ export function createTalkClientGatewayControlOwner(params: {
     // would let flush-completion teardown close the owner before the run starts.
     assertActive();
     consultSignal.throwIfAborted();
-    return runner(args, consultSignal, assertActive);
+    return runner(args, consultSignal, assertActive, "tool-call", sourceInput);
   };
   const awaitProviderConsultReadiness = async (consultSignal: AbortSignal): Promise<void> => {
     assertActive();
@@ -199,13 +208,18 @@ export function createTalkClientGatewayControlOwner(params: {
 
   const resolveRunTarget = () =>
     resolveOwnedActiveTalkRunTarget({
-      context: params.context,
       clientConnId: params.connId,
       sessionTarget: params.sessionTarget,
       scope: { kind: "voice-session", voiceSessionId: params.voiceSessionId },
       assertCurrent: assertActive,
     });
 
+  const cancelRun = createTalkRunCancel({
+    context: params.context,
+    sessionTarget: params.sessionTarget,
+    connId: params.connId,
+    assertCurrent: assertActive,
+  });
   const prepareControl = (args: unknown) => {
     assertActive();
     const parsed = parseRealtimeVoiceAgentControlToolArgs(args);
@@ -222,6 +236,7 @@ export function createTalkClientGatewayControlOwner(params: {
           : undefined,
         text: parsed.text,
         mode: parsed.mode,
+        cancelRun,
       });
       assertActive();
       if (result.mode === "cancel" && result.ok) {
@@ -236,9 +251,10 @@ export function createTalkClientGatewayControlOwner(params: {
   const runConsult = async (
     event: RealtimeVoiceToolCallEvent,
     controller: AbortController,
+    input: SessionControllerInput,
   ): Promise<void> => {
     try {
-      const result = await admitConsult(params.runToolAgentConsult, event.args, controller.signal);
+      const result = await admitConsult(params.runToolAgentConsult, event.args, input);
       if (signal.aborted) {
         return;
       }
@@ -248,11 +264,12 @@ export function createTalkClientGatewayControlOwner(params: {
         return;
       }
       const result =
-        controller.signal.aborted || readErrorName(error) === "AbortError"
+        input.abortSignal.aborted || readErrorName(error) === "AbortError"
           ? buildRealtimeVoiceAgentCancelProviderResult()
           : { error: formatError(error) };
       await submit(event.callId, result);
     } finally {
+      retireUnadoptedReplySource(input);
       if (consultControllers.get(event.callId)?.controller === controller) {
         consultControllers.delete(event.callId);
       }
@@ -356,17 +373,29 @@ export function createTalkClientGatewayControlOwner(params: {
       return;
     }
     if (event.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      const controller = new AbortController();
-      consultControllers.set(event.callId, { controller, closeDisposition: "abort" });
-      const admission = consultQueue.enqueue(() => runConsult(event, controller));
-      if (!admission.accepted) {
-        consultControllers.delete(event.callId);
+      if (consultAdmissionSealed || consults.size >= MAX_ACCEPTED_TALK_CONSULTS) {
+        consultAdmissionSealed = true;
         rejectToolCall(event.callId, "Realtime Talk consult queue is full");
         return;
       }
-      void admission.completion.catch((error: unknown) => {
-        warn(`talk Gateway control consult failed: ${formatError(error)}`);
+      const controller = new AbortController();
+      // Reserve mailbox order on arrival; consult preparation is asynchronous.
+      const input = reserveSessionControllerSource(params.sessionTarget.canonicalKey, {
+        policy: { mode: "followup" },
+        target: captureSessionTarget({
+          storeScope: params.sessionTarget.storePath,
+          sessionKey: params.sessionTarget.canonicalKey,
+          agentId: params.sessionTarget.agentId,
+        }),
+        adapter: { signal: controller.signal },
       });
+      consultControllers.set(event.callId, { controller, closeDisposition: "abort" });
+      const consult = runConsult(event, controller, input)
+        .catch((error: unknown) => {
+          warn(`talk Gateway control consult failed: ${formatError(error)}`);
+        })
+        .finally(() => consults.delete(consult));
+      consults.add(consult);
       return;
     }
     if (event.name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
@@ -565,7 +594,6 @@ export function createTalkClientGatewayControlOwner(params: {
                 }
               }
             }
-            consultQueue.seal();
             const providerClose = Promise.resolve()
               .then(() => (options?.skipProvider ? undefined : closeProvider?.()))
               .finally(() => {
@@ -574,7 +602,7 @@ export function createTalkClientGatewayControlOwner(params: {
             // A voice-change consult awaits its replacement; its own run admission keeps it alive.
             const controlCleanup = Promise.allSettled([
               runControl.close(),
-              preserveRuns ? undefined : consultQueue.flush(),
+              preserveRuns ? undefined : Promise.all(consults),
             ]);
             const [providerResult] = await Promise.allSettled([providerClose, controlCleanup]);
             // Provider shutdown can append final speech; its complete write prefix owns this barrier.

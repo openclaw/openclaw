@@ -23,6 +23,9 @@ type CreateStaticCatalogResolver =
   typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
 type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
 
+const materializationChanges = vi.hoisted<{
+  onChange?: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void;
+}>(() => ({}));
 const preparedModelRuntimeMocks = vi.hoisted(() => ({
   pluginMetadataSnapshot: {
     plugins: [],
@@ -56,6 +59,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     getOAuthProviders: vi.fn(() => []),
   },
   modelRegistry: {
+    getProviderMetadataOwners: () => undefined,
     fork: vi.fn((authStorage: AuthStorage) => ({ authStorage })),
     getAll: vi.fn<() => ModelCatalogSnapshot["entries"]>(() => []),
     find: vi.fn(() => null),
@@ -91,7 +95,6 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
       routeVariants: [],
     }),
   ),
-  catalogHookRows: new Map<string, Set<string>>(),
   runtimeSyntheticAuthProviderRefs: [] as string[],
   resolveNativeModelPrimary: vi.fn<typeof import("./agent-scope.js").resolveNativeModelPrimary>(
     () => undefined,
@@ -113,9 +116,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
       profileSetChanged?: boolean;
     }) => void
   >(),
-  materializationListeners: new Set<
-    (event: { agentDir?: string; affectsInheritedStores: boolean }) => void
-  >(),
+  materializationChanges,
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
@@ -128,7 +129,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   resolvePluginMetadataSnapshotAsync: async () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
 }));
 
-vi.mock("./prepared-model-catalog-worker.js", () => ({
+vi.mock("./prepared-model-catalog-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./prepared-model-catalog-worker.js")>()),
   createPreparedModelCatalogWorker: (
     ...factoryArgs: Parameters<typeof preparedModelRuntimeMocks.createPreparedModelCatalogWorker>
   ) => {
@@ -152,7 +154,6 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
           modelCatalog: catalog,
           runtimeModels: new Map(),
           providerExpiries: new Map(),
-          hookRows: preparedModelRuntimeMocks.catalogHookRows,
           configuredRuntimeModels: factoryArgs[0].agentFacts.configuredRuntimeModels,
         };
       },
@@ -284,21 +285,10 @@ vi.mock("./legacy-inherited-auth-dir.js", async (importOriginal) => ({
 }));
 
 vi.mock("./auth-profiles/runtime-materializations.js", async (importOriginal) => ({
-  clearRuntimeAuthMaterializationsAtDatabasePath: (
-    await importOriginal<typeof import("./auth-profiles/runtime-materializations.js")>()
-  ).clearRuntimeAuthMaterializationsAtDatabasePath,
+  ...(await importOriginal<typeof import("./auth-profiles/runtime-materializations.js")>()),
   getPreparedRuntimeAuthMaterializations: () =>
     preparedModelRuntimeMocks.preparedAuthMaterializations,
-  registerRuntimeAuthMaterializationMutationListener: (
-    listener: (event: {
-      agentDir?: string;
-      affectsInheritedStores: boolean;
-      profileSetChanged?: boolean;
-    }) => void,
-  ) => {
-    preparedModelRuntimeMocks.materializationListeners.add(listener);
-    return () => preparedModelRuntimeMocks.materializationListeners.delete(listener);
-  },
+  runtimeAuthMaterializationChanges: preparedModelRuntimeMocks.materializationChanges,
   recordRuntimeAuthMaterialization: (params: {
     agentDir?: string;
     provider: string;
@@ -324,9 +314,7 @@ vi.mock("./auth-profiles/runtime-materializations.js", async (importOriginal) =>
       agentDir: params.agentDir,
       affectsInheritedStores: params.agentDir === undefined,
     };
-    for (const listener of preparedModelRuntimeMocks.materializationListeners) {
-      listener(event);
-    }
+    preparedModelRuntimeMocks.materializationChanges.onChange?.(event);
     return true;
   },
   revokeRuntimeAuthMaterializations: (params: {
@@ -347,9 +335,7 @@ vi.mock("./auth-profiles/runtime-materializations.js", async (importOriginal) =>
       agentDir: params.agentDir,
       affectsInheritedStores: params.agentDir === undefined,
     };
-    for (const listener of preparedModelRuntimeMocks.materializationListeners) {
-      listener(event);
-    }
+    preparedModelRuntimeMocks.materializationChanges.onChange?.(event);
     return true;
   },
 }));
@@ -418,12 +404,15 @@ vi.mock("./models-config.providers.implicit.js", () => ({
     preparedModelRuntimeMocks.prepareStaticCatalog(...args),
 }));
 
+// mock-isolation: lifecycle fixtures own registry results without evaluating plugin runtimes.
 vi.mock("./runtime-plugins.js", () => ({
   acquireAgentRuntimePluginRegistry: async (...args: unknown[]) => {
     const registry = preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args);
     return { registry, primaryRegistry: registry };
   },
   loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) =>
+    preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args),
+  loadAgentRuntimePluginRegistryHandleAsync: async (...args: unknown[]) =>
     preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args),
 }));
 
@@ -555,7 +544,6 @@ export async function resetPreparedModelRuntimeHarness(state: OpenClawTestState)
     routeVariants: [],
   });
   preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs = [];
-  preparedModelRuntimeMocks.catalogHookRows = new Map();
   preparedModelRuntimeMocks.resolveNativeModelPrimary.mockReset().mockReturnValue(undefined);
   preparedModelRuntimeMocks.resolveAmbientCredentials.mockReset().mockReturnValue({});
   preparedModelRuntimeMocks.resolveStaticCatalogModel.mockReset().mockReturnValue(undefined);

@@ -262,7 +262,7 @@ describe("Tool Search selectors", () => {
       const catalogRef = createToolSearchCatalogRef();
       expect(
         applyToolSearchCatalog({ tools, config: { tools: { toolSearch } }, catalogRef }).tools,
-      ).toBe(tools);
+      ).toEqual(tools);
       expect(catalogRef.current).toBeUndefined();
     },
   );

@@ -1,14 +1,23 @@
 import { PassThrough } from "node:stream";
 import { select as clackSelect } from "@clack/prompts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
+import type { GatewayService } from "../daemon/service-types.js";
+import { defaultRuntime as runtime } from "../runtime.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 
 const progressSetLabel = vi.hoisted(() => vi.fn());
 const loadConfig = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
-const readDaemonRuntimePinForInstall = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall }));
+const readPin = vi.hoisted(() =>
+  vi.fn<typeof import("../daemon/runtime-pin-state.js").readDaemonRuntimePinForInstall>(),
+);
+// mock-isolation: Service-planning fixtures replace pin admission without opening stores or native locks.
+vi.mock("../daemon/runtime-pin-state.js", () => ({
+  readDaemonRuntimePinForInstall: readPin,
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T): Promise<T> =>
+    read(),
+}));
 const runExec = vi.hoisted(() => vi.fn());
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
@@ -17,16 +26,17 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
-const serviceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
-const serviceReadCommand = vi.hoisted(() => vi.fn());
-const serviceInstall = vi.hoisted(() => vi.fn(async () => {}));
-const serviceUninstall = vi.hoisted(() => vi.fn(async () => {}));
-const serviceRestart = vi.hoisted(() =>
-  vi.fn<() => Promise<{ outcome: "completed" } | { outcome: "scheduled" }>>(async () => ({
-    outcome: "completed",
-  })),
+const service = vi.hoisted(() => ({
+  isLoaded: vi.fn(async () => false),
+  hasInstalledDefinition: vi.fn(async () => false),
+  readCommand: vi.fn(),
+  install: vi.fn<GatewayService["install"]>(async () => {}),
+  uninstall: vi.fn(async () => {}),
+  restart: vi.fn<() => Promise<{ outcome: "completed" | "scheduled" }>>(),
+}));
+const select = vi.hoisted(() =>
+  vi.fn<(options: { message: string }) => Promise<string | symbol>>(async () => "node"),
 );
-const select = vi.hoisted(() => vi.fn<() => Promise<string | symbol>>(async () => "node"));
 
 vi.mock("../cli/progress.js", () => ({
   withProgress: vi.fn(async (_opts, run) => run({ setLabel: progressSetLabel })),
@@ -39,18 +49,16 @@ vi.mock("../config/config.js", () => ({
   captureRuntimeConfigAsyncReader: () => async () => loadConfig(),
 }));
 
-vi.mock("./gateway-install-token.js", () => ({
-  resolveGatewayInstallToken,
-}));
+// mock-isolation: Supply token-resolution outcomes without reading operator credentials.
+vi.mock("./gateway-install-token.js", () => ({ resolveGatewayInstallToken }));
 
 vi.mock("./daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan,
   gatewayInstallErrorHint: vi.fn(() => "hint"),
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note,
-}));
+// mock-isolation: Capture install diagnostics without rendering interactive terminal notes.
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 vi.mock("./configure.shared.js", () => ({
   confirm: vi.fn(async () => true),
@@ -59,13 +67,7 @@ vi.mock("./configure.shared.js", () => ({
 
 vi.mock("../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service.js")>()),
-  resolveGatewayService: vi.fn(() => ({
-    isLoaded: serviceIsLoaded,
-    readCommand: serviceReadCommand,
-    install: serviceInstall,
-    uninstall: serviceUninstall,
-    restart: serviceRestart,
-  })),
+  resolveGatewayService: vi.fn(() => service),
 }));
 
 vi.mock("./systemd-linger.js", () => ({
@@ -73,224 +75,210 @@ vi.mock("./systemd-linger.js", () => ({
 }));
 
 function runInstall(daemonRuntime?: Parameters<typeof maybeInstallDaemon>[0]["daemonRuntime"]) {
-  return maybeInstallDaemon({
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    port: 18789,
-    daemonRuntime,
-  });
+  return maybeInstallDaemon({ port: 18789, daemonRuntime });
 }
 
-describe("maybeInstallDaemon", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    readDaemonRuntimePinForInstall.mockReturnValue({ revision: "empty", stored: false });
-    runExec.mockReset().mockResolvedValue({
-      stdout: JSON.stringify({
-        nodeVersion: "26.8.1",
-        bunVersion: "1.4.2",
-        sqliteVersion: "3.53.4",
-        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-      }),
-      stderr: "",
-    });
-    serviceIsLoaded.mockResolvedValue(false);
-    serviceReadCommand.mockResolvedValue(null);
-    serviceInstall.mockResolvedValue(undefined);
-    select.mockReset().mockResolvedValue("node");
-    serviceRestart.mockResolvedValue({ outcome: "completed" });
-    loadConfig.mockReturnValue({});
-    resolveGatewayInstallToken.mockResolvedValue({
-      warnings: [],
-    });
-    buildGatewayInstallPlan.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
-      workingDirectory: "/tmp",
-      environment: {},
-    });
-  });
+function reinstall() {
+  service.isLoaded.mockResolvedValue(true);
+  select.mockResolvedValueOnce("reinstall");
+}
 
-  it.each([true])("blocks install with unresolved auth (reinstall=%s)", async (loaded) => {
-    serviceIsLoaded.mockResolvedValue(loaded);
-    if (loaded) {
-      select.mockResolvedValueOnce("reinstall");
-    }
-    resolveGatewayInstallToken.mockResolvedValue({
-      unavailableReason: "gateway.auth.token SecretRef is configured but unresolved (boom).",
-      warnings: [],
-    });
+function expectUncalled(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
 
-    const outcome = await runInstall();
-
-    expect(outcome).toBe("failed");
-    expect(note).toHaveBeenCalledWith(
-      "Gateway service install failed: Gateway install blocked: gateway.auth.token SecretRef is configured but unresolved (boom). Fix gateway auth config/token input and rerun configure.",
-      "Gateway",
-    );
-    expect(buildGatewayInstallPlan).not.toHaveBeenCalled();
-    expect(serviceInstall).not.toHaveBeenCalled();
-    expect(serviceUninstall).not.toHaveBeenCalled();
-  });
-
-  it("keeps the installed service when runtime selection is cancelled", async () => {
-    serviceIsLoaded.mockResolvedValue(true);
-    const cancelled = await clackSelect({
-      message: "Runtime",
-      options: [{ value: "node", label: "Node" }],
-      signal: AbortSignal.abort(),
-      input: new PassThrough(),
-      output: new PassThrough(),
-    });
-    select.mockResolvedValueOnce("reinstall").mockResolvedValueOnce(cancelled);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("setup cancelled");
-      }),
-    };
-
-    await expect(maybeInstallDaemon({ runtime, port: 18789 })).rejects.toThrow("setup cancelled");
-
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(serviceUninstall).not.toHaveBeenCalled();
-    expect(resolveGatewayInstallToken).not.toHaveBeenCalled();
-    expect(serviceInstall).not.toHaveBeenCalled();
-  });
-
-  it("rejects picked Node on a Bun-only host before replacing the service", async () => {
-    const { buildGatewayInstallPlan: realPlan } = await vi.importActual<
-      typeof import("./daemon-install-helpers.js")
-    >("./daemon-install-helpers.js");
-    const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
-    const discoverNode = vi
-      .spyOn(runtimePaths, "resolvePreferredNodePath")
-      .mockResolvedValue(undefined);
-    const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
-      status: "supported",
-      version: "1.4.2",
+afterEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.spyOn(runtime, "exit").mockImplementation(() => {});
+  readPin.mockReturnValue({ revision: "empty", stored: false });
+  runExec.mockReset().mockResolvedValue({
+    stdout: JSON.stringify({
+      nodeVersion: "26.8.1",
+      bunVersion: "1.4.3",
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-      nodeSharedSqlite: false,
-    });
-    serviceIsLoaded.mockResolvedValue(true);
-    select.mockResolvedValueOnce("reinstall").mockResolvedValueOnce("node");
-    buildGatewayInstallPlan.mockImplementationOnce(realPlan);
-    try {
-      await expect(runInstall()).rejects.toThrow("No supported Node runtime was selected");
-      expect(serviceInstall).not.toHaveBeenCalled();
-      expect(serviceUninstall).not.toHaveBeenCalled();
-    } finally {
-      discoverNode.mockRestore();
-      probeBun.mockRestore();
-      if (bunVersion) {
-        Object.defineProperty(process.versions, "bun", bunVersion);
-      } else {
-        delete process.versions.bun;
-      }
-    }
+    }),
+    stderr: "",
   });
-
-  it("continues daemon install flow when service status probe throws", async () => {
-    serviceIsLoaded.mockRejectedValueOnce(
-      new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
-    );
-
-    await runInstall();
-
-    expect(serviceInstall).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["bun"])("defaults the runtime picker to recorded Bun and honors %s", async (choice) => {
-    const recordedPath = "/opt/recorded/bin/bun";
-    serviceIsLoaded.mockResolvedValue(true);
-    serviceReadCommand.mockResolvedValue({
-      programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],
-    });
-    select.mockResolvedValueOnce("reinstall").mockResolvedValueOnce(choice);
-
-    expect(await runInstall()).toBe("succeeded");
-
-    expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Gateway service runtime",
-        initialValue: "bun",
-      }),
-    );
-    const plan = buildGatewayInstallPlan.mock.calls[0]?.[0];
-    expect(plan?.runtime).toBe(choice);
-    expect(plan?.runtimePath).toBe(choice === "bun" ? recordedPath : undefined);
-    expect(plan?.pinnedRuntimePath).toBeUndefined();
-  });
-
-  it("rethrows install probe failures that are not the known non-fatal Linux systemd cases", async () => {
-    serviceIsLoaded.mockRejectedValueOnce(
-      new Error("systemctl is-enabled unavailable: read-only file system"),
-    );
-
-    await expect(runInstall()).rejects.toThrow(
-      "systemctl is-enabled unavailable: read-only file system",
-    );
-
-    expect(serviceInstall).not.toHaveBeenCalled();
-  });
-
-  it("shows restart scheduled when a loaded service defers restart handoff", async () => {
-    serviceIsLoaded.mockResolvedValue(true);
-    select.mockResolvedValueOnce("restart");
-    serviceRestart.mockResolvedValueOnce({ outcome: "scheduled" });
-
-    await runInstall();
-
-    expect(serviceRestart).toHaveBeenCalledTimes(1);
-    expect(readDaemonRuntimePinForInstall).not.toHaveBeenCalled();
-    expect(serviceReadCommand).not.toHaveBeenCalled();
-    expect(serviceInstall).not.toHaveBeenCalled();
-    expect(progressSetLabel).toHaveBeenLastCalledWith("Gateway service restart scheduled.");
-  });
-  it.each([undefined, "node"] as const)(
-    "carries installed pin intent through setup (explicit=%s)",
-    async (daemonRuntime) => {
-      const pin = { runtime: "bun", path: "/opt/pinned/bun" };
-      const expected = { revision: "installed-pin", stored: true, pin };
-      const existingCommand = {
-        programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],
-        environment: { OPENCLAW_WRAPPER: "/opt/wrapper" },
-      };
-      serviceReadCommand.mockResolvedValue(existingCommand);
-      readDaemonRuntimePinForInstall.mockReturnValue(expected);
-      serviceIsLoaded.mockResolvedValue(true);
-      select.mockResolvedValueOnce("reinstall");
-      await runInstall(daemonRuntime);
-      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runtime: daemonRuntime ?? "bun",
-          runtimeExplicit: true,
-          pinnedRuntimePath: daemonRuntime ? undefined : pin.path,
-          existingCommand,
-          env: expect.objectContaining({ OPENCLAW_WRAPPER: "/opt/wrapper" }),
-        }),
-      );
-      expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("token");
-      expect(serviceUninstall).not.toHaveBeenCalled();
-      expect(serviceInstall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runtimePinUpdate: { expected, pin: daemonRuntime ? undefined : pin },
-        }),
-      );
-      expect(select).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each(["skip"])("does not inspect runtime pins for %s", async (action) => {
-    serviceIsLoaded.mockResolvedValue(true);
-    select.mockResolvedValueOnce(action);
-    readDaemonRuntimePinForInstall.mockImplementation(() => {
-      throw new Error("unreadable pin");
-    });
-    await runInstall();
-    expect(readDaemonRuntimePinForInstall).not.toHaveBeenCalled();
-    expect(serviceReadCommand).not.toHaveBeenCalled();
-    expect(serviceInstall).not.toHaveBeenCalled();
+  service.isLoaded.mockResolvedValue(false);
+  service.hasInstalledDefinition.mockResolvedValue(false);
+  service.readCommand.mockResolvedValue(null);
+  service.install.mockResolvedValue(undefined);
+  select.mockReset().mockResolvedValue("node");
+  service.restart.mockResolvedValue({ outcome: "completed" });
+  loadConfig.mockReturnValue({});
+  resolveGatewayInstallToken.mockResolvedValue({ warnings: [] });
+  buildGatewayInstallPlan.mockResolvedValue({
+    programArguments: ["openclaw", "gateway", "run"],
+    workingDirectory: "/tmp",
+    environment: {},
   });
 });
+
+it("blocks reinstall with unresolved auth", async () => {
+  reinstall();
+  resolveGatewayInstallToken.mockResolvedValue({
+    unavailableReason: "gateway.auth.token SecretRef is configured but unresolved (boom).",
+    warnings: [],
+  });
+
+  expect(await runInstall()).toBe("failed");
+  expect(note).toHaveBeenCalledWith(
+    "Gateway service install failed: Gateway install blocked: gateway.auth.token SecretRef is configured but unresolved (boom). Fix gateway auth config/token input and rerun configure.",
+    "Gateway",
+  );
+  expectUncalled(buildGatewayInstallPlan, service.install, service.uninstall);
+});
+
+it("keeps the installed service when runtime selection is cancelled", async () => {
+  reinstall();
+  const cancelled = await clackSelect({
+    message: "Runtime",
+    options: [{ value: "node", label: "Node" }],
+    signal: AbortSignal.abort(),
+    input: new PassThrough(),
+    output: new PassThrough(),
+  });
+  select.mockResolvedValueOnce(cancelled);
+  vi.mocked(runtime.exit).mockImplementationOnce(() => {
+    throw new Error("setup cancelled");
+  });
+
+  await expect(runInstall()).rejects.toThrow("setup cancelled");
+
+  expect(runtime.exit).toHaveBeenCalledWith(1);
+  expectUncalled(service.uninstall, resolveGatewayInstallToken, service.install);
+});
+
+it("rejects picked Node on a Bun-only host before replacing the service", async () => {
+  const { buildGatewayInstallPlan: realPlan } = await vi.importActual<
+    typeof import("./daemon-install-helpers.js")
+  >("./daemon-install-helpers.js");
+  const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+  Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
+  const discoverNode = vi
+    .spyOn(runtimePaths, "resolvePreferredNodePath")
+    .mockResolvedValue(undefined);
+  const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
+    status: "supported",
+    version: "1.4.3",
+    sqliteVersion: "3.53.4",
+    sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+    nodeSharedSqlite: false,
+  });
+  reinstall();
+  select.mockResolvedValueOnce("node");
+  buildGatewayInstallPlan.mockImplementationOnce(realPlan);
+  try {
+    await expect(runInstall()).rejects.toThrow("No supported Node runtime was selected");
+    expectUncalled(service.install, service.uninstall);
+  } finally {
+    discoverNode.mockRestore();
+    probeBun.mockRestore();
+    if (bunVersion) {
+      Object.defineProperty(process.versions, "bun", bunVersion);
+    } else {
+      delete process.versions.bun;
+    }
+  }
+});
+
+it.each([
+  ["Failed to connect to bus", true],
+  ["read-only file system", false],
+] as const)("handles systemd probe failure: %s", async (reason, recoverable) => {
+  const message = `systemctl is-enabled unavailable: ${reason}`;
+  service.isLoaded.mockRejectedValueOnce(new Error(message));
+  if (recoverable) {
+    await runInstall();
+  } else {
+    await expect(runInstall()).rejects.toThrow(message);
+  }
+  expect(service.install).toHaveBeenCalledTimes(recoverable ? 1 : 0);
+});
+
+it("defaults the runtime picker to recorded Bun and honors it", async () => {
+  const recordedPath = "/opt/recorded/bin/bun";
+  reinstall();
+  service.readCommand.mockResolvedValue({
+    programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],
+  });
+  select.mockResolvedValueOnce("bun");
+
+  expect(await runInstall()).toBe("succeeded");
+
+  expect(select).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: "Gateway service runtime",
+      initialValue: "bun",
+    }),
+  );
+  const plan = buildGatewayInstallPlan.mock.calls[0]?.[0];
+  expect(plan).toMatchObject({ runtime: "bun", runtimePath: recordedPath });
+  expect(plan?.pinnedRuntimePath).toBeUndefined();
+});
+
+it.each([true, false])("offers the service menu only with a definition: %s", async (installed) => {
+  service.hasInstalledDefinition.mockResolvedValue(installed);
+  select.mockResolvedValueOnce(installed ? "skip" : "node");
+  if (installed) {
+    readPin.mockImplementation(() => {
+      throw new Error("unreadable pin");
+    });
+  }
+  expect(await runInstall()).toBe(installed ? "skipped" : "succeeded");
+  expect(
+    select.mock.calls.some(([options]) => options.message === "Gateway service already installed"),
+  ).toBe(installed);
+  expect(service.install).toHaveBeenCalledTimes(installed ? 0 : 1);
+  if (installed) {
+    expectUncalled(service.restart, readPin, service.readCommand);
+  }
+});
+
+it("shows restart scheduled when a loaded service defers restart handoff", async () => {
+  service.isLoaded.mockResolvedValue(true);
+  select.mockResolvedValueOnce("restart");
+  service.restart.mockResolvedValueOnce({ outcome: "scheduled" });
+
+  await runInstall();
+
+  expect(service.restart).toHaveBeenCalledTimes(1);
+  expectUncalled(readPin, service.readCommand, service.install);
+  expect(progressSetLabel).toHaveBeenLastCalledWith("Gateway service restart scheduled.");
+});
+it.each([undefined, "node"] as const)(
+  "carries installed pin intent through setup (explicit=%s)",
+  async (daemonRuntime) => {
+    const pin = { runtime: "bun", path: "/opt/pinned/bun" } as const;
+    const expected = { revision: "installed-pin", stored: true, pin };
+    const existingCommand = {
+      programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],
+      environment: { OPENCLAW_WRAPPER: "/opt/wrapper" },
+    };
+    service.readCommand.mockResolvedValue(existingCommand);
+    readPin.mockReturnValue(expected);
+    reinstall();
+    await runInstall(daemonRuntime);
+    const plan = buildGatewayInstallPlan.mock.calls[0]?.[0];
+    expect(plan).toEqual(
+      expect.objectContaining({
+        runtime: daemonRuntime ?? "bun",
+        runtimeExplicit: true,
+        pinnedRuntimePath: daemonRuntime ? undefined : pin.path,
+        existingCommand,
+        env: expect.objectContaining({ OPENCLAW_WRAPPER: "/opt/wrapper" }),
+      }),
+    );
+    expect(plan).not.toHaveProperty("token");
+    expect(service.uninstall).not.toHaveBeenCalled();
+    expect(service.install.mock.calls[0]?.[0]?.runtimePinUpdate).toEqual({
+      expected,
+      pin: daemonRuntime ? undefined : pin,
+    });
+    expect(select).toHaveBeenCalledTimes(1);
+  },
+);

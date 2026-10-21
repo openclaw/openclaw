@@ -19,7 +19,7 @@ export function selectProgressLabel(params: {
     return undefined;
   }
   const index =
-    typeof params.seed === "string" && params.seed.length > 0
+    params.seed && params.seed.length > 0
       ? hashProgressSeed(params.seed) % labels.length
       : Math.floor(Math.max(0, Math.min(0.999999, params.random?.() ?? 0)) * labels.length);
   return labels[index] ?? labels[0];

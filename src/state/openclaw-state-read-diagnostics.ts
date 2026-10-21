@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
 import type { ExecutionIdentityInspectionOutcome } from "../audit/execution-identity-inspection.types.js";
 import { readConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   readDebugProxyCaptureBlob,
   readDebugProxyCaptureSessionEvents,
@@ -33,7 +33,7 @@ export function isStateDiagnosticCommand(
   );
 }
 
-export function readStateDiagnosticCommand(db: DatabaseSync, command: StateDiagnosticCommand) {
+export function readStateDiagnosticCommand(db: EngineConnection, command: StateDiagnosticCommand) {
   if (command.type === "capture.readOnlyEvents") {
     return {
       type: command.type,
@@ -54,7 +54,7 @@ export function readStateDiagnosticCommand(db: DatabaseSync, command: StateDiagn
       type: command.type,
       result: {
         status: "inspected",
-        inspection: runSqliteDeferredTransactionSync(db, () =>
+        inspection: runSqliteReadSnapshotSync(db, () =>
           inspectExecutionIdentityRunInDatabase(db, command.input, {
             executionIdentityContexts: tableExists(db, "execution_identity_contexts"),
             auditEvents: tableExists(db, "audit_events"),

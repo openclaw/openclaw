@@ -3,7 +3,10 @@ import {
   recordCodexCatalogResponseSource,
   type CodexCatalogSource,
 } from "../session-catalog-source.js";
-import type { CodexClientRequestAttempt } from "./client-catalog-response.js";
+import type {
+  CodexCatalogDecodeResult,
+  CodexClientRequestAttempt,
+} from "./client-catalog-response.js";
 import { isJsonObject, type RpcResponse } from "./protocol.js";
 import { CODEX_APP_SERVER_OVERLOADED_ERROR_CODE, CodexAppServerRpcError } from "./rpc-error.js";
 
@@ -12,7 +15,7 @@ export function dispatchCodexAppServerResponse(
   response: RpcResponse,
   attempts: Map<number | string, CodexClientRequestAttempt>,
   source: CodexCatalogSource,
-  previewStates?: (boolean | undefined)[],
+  preview?: CodexCatalogDecodeResult["preview"],
 ): boolean {
   const pending = attempts.get(response.id);
   if (!pending) {
@@ -30,27 +33,13 @@ export function dispatchCodexAppServerResponse(
     Array.isArray(response.result.data) &&
     response.result.data.length > 0;
   const cache = pending.catalogProjection?.preview;
-  if (
-    cache &&
-    previewStates &&
-    isJsonObject(response.result) &&
-    Array.isArray(response.result.data)
-  ) {
+  if (cache && preview) {
     try {
-      for (const [index, row] of response.result.data.entries()) {
-        if (isJsonObject(row) && typeof row.id === "string" && row.ephemeral !== true) {
-          const preview = reuseCodexCatalogPreview(
-            {
-              id: row.id,
-              path: typeof row.path === "string" ? row.path : null,
-              updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : null,
-              recencyAt: typeof row.recencyAt === "number" ? row.recencyAt : null,
-            },
-            previewStates[index],
-            cache,
-          );
-          if (preview !== undefined) {
-            row.preview = preview;
+      for (const [index, row] of preview.rows.entries()) {
+        if (row.ephemeral !== true) {
+          const cached = reuseCodexCatalogPreview(row, preview.states[index], cache);
+          if (cached !== undefined) {
+            row.preview = cached;
           }
         }
       }

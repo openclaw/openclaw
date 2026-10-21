@@ -27,17 +27,10 @@ export async function prepareRecoveryHolds(
   ],
 ) {
   for (const target of held) {
+    const key = `agent:${target.agentId}:main`;
+    const entry = { sessionId: `preserved-${target.agentId}`, updatedAt: 1 };
     runOpenClawAgentWriteTransaction(
-      (database) =>
-        writeSessionEntry(
-          database,
-          `agent:${target.agentId}:main`,
-          {
-            sessionId: `preserved-${target.agentId}`,
-            updatedAt: 1,
-          },
-          { previousEntry: null },
-        ),
+      (database) => writeSessionEntry(database, key, entry, { previousEntry: null }),
       { ...target, env: state.env },
     );
   }
@@ -56,10 +49,11 @@ export async function prepareRecoveryHolds(
   };
 }
 
+type PreparationPhase = "workspace" | "workspace-write" | "config";
 export function installWorkspacePreparationPause(
   workspace: string,
-  phase: "workspace" | "workspace-write" | "config",
-  pause: (phase: "workspace" | "workspace-write" | "config") => Promise<void>,
+  phase: PreparationPhase,
+  pause: (phase: PreparationPhase) => Promise<void>,
 ): () => void {
   const nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
   if (phase === "workspace-write") {

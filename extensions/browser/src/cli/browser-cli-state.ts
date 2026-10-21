@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
+  filterStringRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   parseBooleanValue,
@@ -94,12 +95,8 @@ export function registerBrowserStateCommands(
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
           throw new Error("Headers JSON must be a JSON object");
         }
-        const headers: Record<string, string> = {};
-        for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-          if (typeof v === "string") {
-            headers[k] = v;
-          }
-        }
+        const headers = filterStringRecord(parsed) ?? {};
+        Reflect.deleteProperty(headers, "__proto__");
         const profile = parent?.browserProfile;
         const result = await callBrowserRequest(parent, {
           method: "POST",

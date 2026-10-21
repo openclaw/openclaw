@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type MockInstance } from "vitest";
 import * as runtimePaths from "../../daemon/runtime-paths.js";
 import * as activationPaths from "../../infra/package-update-activation-paths.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
@@ -12,6 +12,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import { registerUpdateCli } from "../update-cli.js";
 import * as shared from "./shared.js";
+import { runtimeFixture } from "./update-command-fixtures.test-support.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
@@ -21,6 +22,16 @@ import { updateCommand } from "./update-command.js";
 
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
 const { fixture } = installFreshUpdateFixture();
+const lastJsonCall = () => vi.mocked(defaultRuntime.writeJson).mock.lastCall;
+function preflightOutcome(
+  preflight: MockInstance<typeof runtimePlan.resolvePackageRuntimePreflight>,
+) {
+  const result = expectDefined(preflight.mock.results.at(-1), "runtime refusal");
+  if (result.type !== "return") {
+    throw new Error("Runtime preflight did not return its outcome");
+  }
+  return result.value;
+}
 
 it.each([
   ["extended-stable", "2026.8.33", "--channel extended-stable", null],
@@ -73,25 +84,17 @@ it.each([
     };
     await updateCommand({ ...options, dryRun: true });
 
-    const previewResult = expectDefined(preflight.mock.results.at(-1), "runtime refusal");
-    if (previewResult.type !== "return") {
-      throw new Error("Runtime preflight did not return its outcome");
-    }
-    const refusal = await previewResult.value;
+    const refusal = await preflightOutcome(preflight);
     expect(refusal.ok).toBe(false);
-    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-      expect.objectContaining({
+    expect(lastJsonCall()).toMatchObject([
+      {
         storedChannel: channel,
         targetVersion: version,
         failures: [expect.objectContaining({ reason: "node-runtime-preflight" })],
-      }),
-    );
+      },
+    ]);
     await expect(updateCommand(options)).rejects.toBeInstanceOf(Error);
-    const mutableResult = expectDefined(preflight.mock.results.at(-1), "mutable runtime refusal");
-    if (mutableResult.type !== "return") {
-      throw new Error("Mutable runtime preflight did not return its outcome");
-    }
-    const mutableRefusal = await mutableResult.value;
+    const mutableRefusal = await preflightOutcome(preflight);
     expect(mutableRefusal.recoverySteps).toEqual(refusal.recoverySteps);
     const continuation = expectDefined(
       refusal.recoverySteps?.find((step) => step.kind === "continue-update"),
@@ -104,36 +107,22 @@ it.each([
     const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
     const launcher = `node ${quote(path.join(fixture.root, "openclaw.mjs"))} `;
     expect(command.slice(0, launcher.length)).toBe(launcher);
-    runtime.mockResolvedValue({
-      status: "supported",
-      version: "26.1.0",
-      sqliteVersion: "3.53.0",
-      nodeSharedSqlite: false,
-      sqliteProbe: { available: true, version: "3.53.0", text: true, blob: true, json: true },
-    });
+    runtime.mockResolvedValue(runtimeFixture("26.1.0", "3.53.0"));
     const program = new Command();
     registerUpdateCli(program);
 
-    await program.parseAsync(
-      [
-        ...command.slice(launcher.length).split(" "),
-        "--dry-run",
-        "--json",
-        "--yes",
-        "--no-restart",
-      ],
-      { from: "user" },
-    );
+    const replayArgs = command.slice(launcher.length).split(" ");
+    await program.parseAsync([...replayArgs, "--dry-run", "--json", "--yes", "--no-restart"], {
+      from: "user",
+    });
 
-    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-      expect.objectContaining({
+    expect(lastJsonCall()).toMatchObject([
+      {
         effectiveChannel: requestedChannel ?? channel,
         targetVersion: version,
-      }),
-    );
-    expect(vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0]).not.toHaveProperty(
-      "failures",
-    );
+      },
+    ]);
+    expect(lastJsonCall()?.[0]).not.toHaveProperty("failures");
     expect(command).toBe(`${launcher}update ${selector}`);
     expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
     expect(fs.readFileSync(configPath, "utf8")).toBe(config);

@@ -96,32 +96,6 @@ function appendWorkspaceDirToLocalRoots(
   return [...roots, resolvedWorkspaceDir];
 }
 
-function createWorkspaceAwareMediaReadFile(params: {
-  workspaceMediaAccess?: OutboundMediaAccess;
-  hostReadFile?: OutboundMediaReadFile;
-  localRoots: readonly string[];
-  excludedLocalRoots?: readonly string[];
-}): OutboundMediaReadFile | undefined {
-  const workspaceReadFile = params.workspaceMediaAccess?.readFile;
-  const workspaceLocalRoots = params.workspaceMediaAccess?.localRoots ?? [];
-  if (!workspaceReadFile || workspaceLocalRoots.length === 0) {
-    return params.hostReadFile;
-  }
-  return createBoundedOutboundMediaReadFile(async (filePath, options) => {
-    const readFile = workspaceOwnsMediaPath(params.workspaceMediaAccess, filePath)
-      ? workspaceReadFile
-      : params.hostReadFile;
-    const maxBytes = options?.maxBytes ?? Number.MAX_SAFE_INTEGER;
-    if (readFile) {
-      return await readOutboundMediaFile(readFile, filePath, { maxBytes });
-    }
-    return await readLocalMediaFile(filePath, params.localRoots, {
-      maxBytes,
-      excludedRoots: params.excludedLocalRoots,
-    });
-  });
-}
-
 function workspaceOwnsMediaPath(access: OutboundMediaAccess | undefined, filePath: string) {
   return (
     access?.readFile &&
@@ -223,29 +197,45 @@ function resolveAgentScopedMediaAccess(
       });
     });
   }
+  const createWorkspaceAwareMediaReadFile = (
+    workspaceMediaAccess: OutboundMediaAccess | undefined,
+    fallbackReadFile: OutboundMediaReadFile | undefined,
+  ): OutboundMediaReadFile | undefined => {
+    const workspaceReadFile = workspaceMediaAccess?.readFile;
+    const readRoots = workspaceMediaAccess?.localRoots ?? [];
+    if (!workspaceReadFile || readRoots.length === 0) {
+      return fallbackReadFile;
+    }
+    return createBoundedOutboundMediaReadFile(async (filePath, options) => {
+      const selectedReadFile = workspaceOwnsMediaPath(workspaceMediaAccess, filePath)
+        ? workspaceReadFile
+        : fallbackReadFile;
+      const maxBytes = options?.maxBytes ?? Number.MAX_SAFE_INTEGER;
+      if (selectedReadFile) {
+        return await readOutboundMediaFile(selectedReadFile, filePath, { maxBytes });
+      }
+      return await readLocalMediaFile(filePath, localRoots, {
+        maxBytes,
+        excludedRoots: registeredRoots,
+      });
+    });
+  };
   const registeredReadFile =
     mediaReadAllowed && registeredMedia
-      ? createWorkspaceAwareMediaReadFile({
-          workspaceMediaAccess: {
+      ? createWorkspaceAwareMediaReadFile(
+          {
             localRoots: registeredRoots,
             readFile: createBoundedOutboundMediaReadFile((filePath, options) =>
               registeredMedia.readFile(filePath, options?.maxBytes ?? Number.MAX_SAFE_INTEGER),
             ),
           },
           hostReadFile,
-          localRoots,
-          excludedLocalRoots: registeredRoots,
-        })
+        )
       : hostReadFile;
   // An explicit sandbox capability owns its declared roots for this turn, even
   // when an rw sandbox uses the same host path as the registered agent workspace.
   const readFile = mediaReadAllowed
-    ? createWorkspaceAwareMediaReadFile({
-        workspaceMediaAccess: params.workspaceMediaAccess,
-        hostReadFile: registeredReadFile,
-        localRoots,
-        excludedLocalRoots: registeredRoots,
-      })
+    ? createWorkspaceAwareMediaReadFile(params.workspaceMediaAccess, registeredReadFile)
     : undefined;
   const mediaAccess: OutboundMediaAccess = {
     ...(localRoots.length ? { localRoots } : {}),

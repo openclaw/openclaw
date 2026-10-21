@@ -1,33 +1,23 @@
 import { spawnSync } from "node:child_process";
-import { chmod, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { once } from "node:events";
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../../src/infra/tmp-openclaw-dir.js";
 import { createSuiteTempRootTracker } from "../../src/test-helpers/temp-dir.js";
 
-export const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "../..");
+export const repoRoot = resolve(import.meta.dirname, "../..");
 
-export type DockerSetupSandbox = {
-  rootDir: string;
-  scriptPath: string;
-  logPath: string;
-  binDir: string;
-};
+export type DockerSetupSandbox = Awaited<ReturnType<typeof createDockerSetupSandbox>>;
 
 const sandboxRootTracker = createSuiteTempRootTracker({
   prefix: "openclaw-docker-setup-",
   parentDir: resolvePreferredOpenClawTmpDir(),
 });
 
-export async function setupDockerSetupSandboxRoot(): Promise<void> {
-  await sandboxRootTracker.setup();
-}
-
-export async function cleanupDockerSetupSandboxRoot(): Promise<void> {
-  await sandboxRootTracker.cleanup();
-}
+export const setupDockerSetupSandboxRoot = sandboxRootTracker.setup;
+export const cleanupDockerSetupSandboxRoot = sandboxRootTracker.cleanup;
 
 async function writeDockerStub(binDir: string, logPath: string) {
   const stub = `#!/usr/bin/env bash
@@ -42,22 +32,21 @@ fi
 if [[ "\${1:-}" == "compose" && "\${2:-}" == "version" ]]; then
   exit 0
 fi
+if [[ "\${1:-}" == "compose" && -n "$fail_match" && "$*" == *"$fail_match"* ]]; then
+  echo "$1-fail $*" >>"$log"
+  exit 1
+fi
 if [[ "\${1:-}" == "image" && "\${2:-}" == "inspect" ]]; then
   format=""
+  image="\${3:-}"
   if [[ "\${3:-}" == "-f" || "\${3:-}" == "--format" ]]; then
     format="\${4:-}"
     image="\${5:-}"
-  else
-    image="\${3:-}"
   fi
   echo "image inspect $image host=$docker_host" >>"$log"
   missing_images=",\${DOCKER_STUB_MISSING_IMAGES:-},"
-  if [[ "$missing_images" == *",$image,"* ]]; then
-    exit 1
-  fi
-  if [[ -n "$format" ]]; then
-    printf '%s\n' "\${DOCKER_STUB_BROWSER_CONTRACT:-<no value>}"
-  fi
+  [[ "$missing_images" != *",$image,"* ]] || exit 1
+  [[ -z "$format" ]] || printf '%s\n' "\${DOCKER_STUB_BROWSER_CONTRACT:-<no value>}"
   exit 0
 fi
 if [[ "\${1:-}" == "pull" ]]; then
@@ -65,10 +54,6 @@ if [[ "\${1:-}" == "pull" ]]; then
   exit 0
 fi
 if [[ "\${1:-}" == "build" ]]; then
-  if [[ -n "$fail_match" && "$*" == *"$fail_match"* ]]; then
-    echo "build-fail $*" >>"$log"
-    exit 1
-  fi
   echo "build DOCKER_BUILDKIT=\${DOCKER_BUILDKIT:-} $*" >>"$log"
   exit 0
 fi
@@ -76,56 +61,30 @@ if [[ "\${1:-}" == "run" ]]; then
   echo "run $*" >>"$log"
   args=("$@")
   for ((i = 0; i + 3 < \${#args[@]}; i++)); do
-    if [[ "\${args[$i]}" == "--entrypoint" && "\${args[$((i + 1))]}" == "node" ]]; then
-      for ((j = i + 2; j + 1 < \${#args[@]}; j++)); do
-        if [[ "\${args[$j]}" == "-e" ]]; then
-          node -e "\${args[$((j + 1))]}" "\${args[@]:$((j + 2))}"
-          exit $?
-        fi
-      done
-    fi
+    [[ "\${args[$i]}" == "--entrypoint" && "\${args[$((i + 1))]}" == "node" ]] || continue
+    for ((j = i + 2; j + 1 < \${#args[@]}; j++)); do
+      [[ "\${args[$j]}" == "-e" ]] || continue
+      exec node -e "\${args[$((j + 1))]}" "\${args[@]:$((j + 2))}"
+    done
   done
   exit 0
 fi
 if [[ "\${1:-}" == "compose" ]]; then
-  if [[ -n "$fail_match" && "$*" == *"$fail_match"* ]]; then
-    echo "compose-fail $*" >>"$log"
-    exit 1
-  fi
   echo "compose $*" >>"$log"
-  if [[ "$*" == *"config get gateway.controlUi.allowedOrigins"* ]]; then
-    printf '%s\n' "\${DOCKER_STUB_CONTROL_UI_ORIGINS:-}"
-    exit 0
-  fi
-  if [[ "$*" == *"config get gateway.publicOrigin"* ]]; then
-    printf '%s\n' "\${DOCKER_STUB_PUBLIC_ORIGIN:-}"
-    exit 0
-  fi
-  if [[ "$*" == *"config get tools.sandbox.tools --json"* ]]; then
-    if [[ -n "\${DOCKER_STUB_SANDBOX_TOOLS_JSON:-}" ]]; then
-      printf '%s\n' "$DOCKER_STUB_SANDBOX_TOOLS_JSON"
-    else
-      printf '{}\n'
-    fi
-    exit 0
-  fi
-  if [[ "$*" == *"config get agents --json"* ]]; then
-    if [[ -n "\${DOCKER_STUB_AGENTS_JSON:-}" ]]; then
-      printf '%s\n' "$DOCKER_STUB_AGENTS_JSON"
-    else
-      printf '{}\n'
-    fi
-    exit 0
-  fi
+  empty_json='{}'
+  case "$*" in
+    *"config get gateway.controlUi.allowedOrigins"*) printf '%s\n' "\${DOCKER_STUB_CONTROL_UI_ORIGINS:-}"; exit 0 ;;
+    *"config get gateway.publicOrigin"*) printf '%s\n' "\${DOCKER_STUB_PUBLIC_ORIGIN:-}"; exit 0 ;;
+    *"config get tools.sandbox.tools --json"*) printf '%s\n' "\${DOCKER_STUB_SANDBOX_TOOLS_JSON:-$empty_json}"; exit 0 ;;
+    *"config get agents --json"*) printf '%s\n' "\${DOCKER_STUB_AGENTS_JSON:-$empty_json}"; exit 0 ;;
+  esac
   args=("$@")
   for ((i = 0; i + 4 < \${#args[@]}; i++)); do
-    if [[ "\${args[$i]}" == "--entrypoint" &&
+    [[ "\${args[$i]}" == "--entrypoint" &&
       "\${args[$((i + 1))]}" == "node" &&
       "\${args[$((i + 2))]}" == "openclaw-gateway" &&
-      "\${args[$((i + 3))]}" == "-e" ]]; then
-      node -e "\${args[$((i + 4))]}" "\${args[@]:$((i + 5))}"
-      exit $?
-    fi
+      "\${args[$((i + 3))]}" == "-e" ]] || continue
+    exec node -e "\${args[$((i + 4))]}" "\${args[@]:$((i + 5))}"
   done
   exit 0
 fi
@@ -156,11 +115,9 @@ export async function expectMissingPath(path: string): Promise<void> {
   await expect(stat(path)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
-export async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
+export async function createDockerSetupSandbox() {
   const rootDir = await sandboxRootTracker.make("suite");
   const scriptPath = join(rootDir, "scripts", "docker", "setup.sh");
-  const dockerfilePath = join(rootDir, "Dockerfile");
-  const composePath = join(rootDir, "docker-compose.yml");
   const binDir = join(rootDir, "bin");
   const logPath = join(rootDir, "docker-stub.log");
 
@@ -178,10 +135,9 @@ export async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   ]) {
     await copyFile(join(repoRoot, "scripts", "lib", file), join(rootDir, "scripts", "lib", file));
   }
-  await chmod(scriptPath, 0o755);
-  await writeFile(dockerfilePath, "FROM scratch\n");
+  await writeFile(join(rootDir, "Dockerfile"), "FROM scratch\n");
   await writeFile(
-    composePath,
+    join(rootDir, "docker-compose.yml"),
     "services:\n  openclaw-gateway:\n    image: noop\n  openclaw-cli:\n    image: noop\n",
   );
   await writeDockerStub(binDir, logPath);
@@ -202,50 +158,24 @@ export const noFollowOwnershipRepair = (root: string) =>
   `/usr/bin/find -P ${root} -xdev -execdir /usr/bin/chown -h node:node {} +`;
 export const prestartSafePath = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-export async function resetDockerLog(sandbox: DockerSetupSandbox) {
-  await writeFile(sandbox.logPath, "");
-}
-
-export async function readDockerLog(sandbox: DockerSetupSandbox) {
-  return readFile(sandbox.logPath, "utf8");
-}
-
-export async function readDockerLogLines(sandbox: DockerSetupSandbox) {
-  return (await readDockerLog(sandbox)).split("\n").filter(Boolean);
-}
-
-export function collectMatchingLines(
-  lines: string[],
-  predicate: (line: string) => boolean,
-): string[] {
-  return lines.filter(predicate);
-}
-
-export function isGatewayStartLine(line: string) {
-  return line.includes("compose") && line.includes(" up -d") && line.includes("openclaw-gateway");
-}
-
-export function findGatewayStartLineIndex(lines: string[]) {
-  return lines.findIndex((line) => isGatewayStartLine(line));
-}
+export const resetDockerLog = (sandbox: DockerSetupSandbox) => writeFile(sandbox.logPath, "");
+export const readDockerLog = (sandbox: DockerSetupSandbox) => readFile(sandbox.logPath, "utf8");
+export const isGatewayStartLine = (line: string) =>
+  line.includes("compose") && line.includes(" up -d") && line.includes("openclaw-gateway");
 
 export function expectOfflineComposePolicy(
   lines: string[],
   options: { gatewayStarts?: boolean } = {},
 ) {
-  const composeLines = collectMatchingLines(lines, (line) => line.startsWith("compose "));
+  const composeLines = lines.filter((line) => line.startsWith("compose "));
   expect(composeLines.length).toBeGreaterThan(0);
   for (const line of composeLines) {
     if (line.includes(" run ")) {
       expect(line).toContain(" run --pull never ");
     }
   }
-  const gatewayStarts = collectMatchingLines(composeLines, (line) => isGatewayStartLine(line));
-  if (options.gatewayStarts === false) {
-    expect(gatewayStarts).toHaveLength(0);
-    return;
-  }
-  expect(gatewayStarts.length).toBeGreaterThan(0);
+  const gatewayStarts = composeLines.filter(isGatewayStartLine);
+  expect(gatewayStarts.length > 0).toBe(options.gatewayStarts !== false);
   for (const line of gatewayStarts) {
     expect(line).toContain(" up -d --pull never --no-build");
   }
@@ -253,19 +183,9 @@ export function expectOfflineComposePolicy(
 
 export async function withUnixSocket<T>(socketPath: string, run: () => Promise<T>): Promise<T> {
   const server = createServer();
-  await new Promise<void>((resolveValue, reject) => {
-    const onError = (error: Error) => {
-      server.off("listening", onListening);
-      reject(error);
-    };
-    const onListening = () => {
-      server.off("error", onError);
-      resolveValue();
-    };
-    server.once("error", onError);
-    server.once("listening", onListening);
-    server.listen(socketPath);
-  });
+  const listening = once(server, "listening");
+  server.listen(socketPath);
+  await listening;
 
   try {
     return await run();

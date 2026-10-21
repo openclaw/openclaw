@@ -7,7 +7,10 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import type { RetainedSqliteSnapshotPreparation } from "./sqlite-readonly-location.types.js";
-import { startSqliteReadOnlyLocationAsync } from "./sqlite-snapshot-source.js";
+import {
+  prepareSqliteReadOnlyLocationSync,
+  startSqliteReadOnlyLocationAsync,
+} from "./sqlite-snapshot-source.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 let cleanupJoined = true;
@@ -63,6 +66,16 @@ it("keeps queued stale and current source admissions independent through the rea
   expect(currentIdentity.key).not.toBe(originalIdentity.key);
   const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot();
   const stagingBefore = fs.readdirSync(stagingRoot).toSorted();
+  expect(() => prepareSqliteReadOnlyLocationSync(source, originalIdentity)).toThrow(
+    /file identity changed/,
+  );
+  const synchronous = prepareSqliteReadOnlyLocationSync(source, currentIdentity);
+  try {
+    expect(readValue(synchronous.location)).toEqual({ value: "successor" });
+  } finally {
+    expect(synchronous.cleanup()).toBe(true);
+  }
+  expect(fs.readdirSync(stagingRoot).toSorted()).toEqual(stagingBefore);
   cleanupJoined = false;
   const accepted: RetainedSqliteSnapshotPreparation[] = [];
   try {

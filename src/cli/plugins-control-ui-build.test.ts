@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,8 @@ import {
   CONTROL_UI_PLUGIN_MAX_ASSETS,
   readPluginControlUiAssets,
 } from "../plugins/control-ui-assets.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
+import { resetPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { execNodeEvalSync } from "../test-utils/node-process.js";
 import {
@@ -21,6 +24,7 @@ import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-contro
 const directories: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
+  resetPluginCache();
   vi.unstubAllGlobals();
   await Promise.all(
     directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
@@ -89,6 +93,79 @@ console.log(JSON.stringify({ mode: (await fs.stat(manifest)).mode & 0o7777, cont
 });
 
 describe("native plugin browser builds", () => {
+  it.each([true, false, "settings-only", "channel-settings"])(
+    "builds runtime browser artifacts without changing authored plugin metadata (authored UI: %s)",
+    async (authoredUi) => {
+      const project = await fixture();
+      const packagePath = path.join(project.rootDir, "package.json");
+      const packageJson = JSON.parse(await fs.readFile(packagePath, "utf8"));
+      packageJson.openclaw = { controlUi: project.source };
+      await fs.writeFile(packagePath, JSON.stringify(packageJson));
+      const manifestPath = path.join(project.rootDir, "openclaw.plugin.json");
+      const settingsViews =
+        authoredUi === "channel-settings"
+          ? [{ section: "channels", panel: "detail", channelId: "custom" }]
+          : authoredUi === "settings-only"
+            ? [
+                { section: "memory", panel: "overview" },
+                { section: "memory", panel: "memories" },
+              ]
+            : undefined;
+      const authored = {
+        id: "fixture",
+        ...(authoredUi === "channel-settings" ? { channels: ["custom"] } : {}),
+        configSchema: { type: "object", properties: { token: { type: "string" } } },
+        activation: { onStartup: true },
+        ...(authoredUi
+          ? {
+              controlUi: {
+                entry: "dist/control-ui/authored/index.js",
+                ...(settingsViews
+                  ? {
+                      activation: "settings-only",
+                      settingsViews,
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+      const original = JSON.stringify(authored, null, 2);
+      await fs.writeFile(manifestPath, original);
+      execFileSync(
+        process.execPath,
+        [
+          "--import",
+          path.resolve("scripts/tsx.mjs"),
+          path.resolve("scripts/build-plugin-control-ui.mts"),
+          project.rootDir,
+        ],
+        { timeout: 10_000 },
+      );
+      expect(await fs.readFile(manifestPath, "utf8")).toBe(original);
+      const generatedPath = path.join(project.rootDir, "dist/openclaw.plugin.json");
+      const generated = JSON.parse(await fs.readFile(generatedPath, "utf8"));
+      expect(generated.controlUi.activation).toBe(settingsViews ? "settings-only" : undefined);
+      expect(generated.controlUi.settingsViews).toEqual(settingsViews);
+      expect(await buildPluginControlUi({ ...project, check: true })).toEqual(generated.controlUi);
+      generated.id = "previous-name";
+      generated.configSchema = { type: "object", properties: {} };
+      generated.activation = { onStartup: false };
+      await fs.writeFile(generatedPath, JSON.stringify(generated));
+      const loaded = loadPluginManifest(project.rootDir);
+      expect(loaded).toMatchObject({
+        ok: true,
+        manifest: { ...authored, controlUi: generated.controlUi },
+      });
+      const assets = await readPluginControlUiAssets(project.rootDir, generated.controlUi);
+      expect(assets.entryName).toBe("index.js");
+      const built = await import(
+        pathToFileURL(path.join(project.rootDir, generated.controlUi.entry)).href
+      );
+      expect(built.message).toBe("first");
+    },
+  );
+
   it("preserves esbuild's existing non-Solid JSX compilation", async () => {
     const project = await fixture();
     await fs.writeFile(

@@ -1,11 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -14,7 +13,6 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type { NodeWorkerSupervisorIdentity } from "../worker/node-supervisor-protocol.js";
 import type {
   NodeWorkerLaunchClaim,
@@ -35,6 +33,7 @@ import {
   type NodeWorkerLaunchRow,
   type NodeWorkerTerminalState,
 } from "./node-worker-launch-receipt.js";
+import { ensureNodeWorkerLaunchSchema } from "./node-worker-launch-schema.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import { settleNodeWorkerActiveTurns } from "./node-worker-turn-settlement.worker.js";
 
@@ -52,49 +51,18 @@ type LaunchSchema = ReturnType<typeof getAdmittedSqliteSchemaFacts>;
 type LaunchTable = keyof NodeWorkerLaunchDatabase;
 type LaunchIdentity = Pick<NodeWorkerLaunchReceipt, "launchId" | "planHash">;
 
-const NODE_WORKER_LAUNCH_SCHEMA_END = "\n  WHERE completed_at_ms IS NOT NULL;";
 const TERMINAL_RECEIPT_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const TERMINAL_PRUNE_BATCH_LIMIT = 256;
 
-const launchSchemaEnsurers = new Map(
-  (
-    [
-      "node_worker_launches",
-      "node_worker_launch_boots",
-      "node_worker_launch_containers",
-      "node_worker_launch_cleanup",
-      "node_worker_launch_process_scopes",
-    ] as const
-  ).map((table) => [
-    table,
-    createSqliteSchemaEnsurer(
-      () =>
-        getOpenClawStateFeatureSchemaSql(table, {
-          endMarker: table === "node_worker_launches" ? NODE_WORKER_LAUNCH_SCHEMA_END : undefined,
-        }),
-      {
-        tables: [table],
-        indexes:
-          table === "node_worker_launches" ? ["idx_node_worker_launches_terminal_completed"] : [],
-      },
-    ),
-  ]),
-);
-
-const ensureNodeWorkerLaunchSchema = (
-  database: DatabaseSync,
-  table: Exclude<keyof NodeWorkerLaunchDatabase, "node_worker_turns">,
-): void => launchSchemaEnsurers.get(table)!(database);
-
-function query(database: DatabaseSync) {
+function query(database: EngineConnection) {
   return getNodeSqliteKysely<NodeWorkerLaunchDatabase>(database);
 }
 
-function hasLaunchTable(database: DatabaseSync, schema: LaunchSchema, table: LaunchTable): boolean {
-  return schema ? schema.tables.has(table) : tableExists(database, table);
+function hasLaunchTable(db: EngineConnection, schema: LaunchSchema, table: LaunchTable): boolean {
+  return schema ? schema.tables.has(table) : tableExists(db, table);
 }
 
-function selectLaunchRows(database: DatabaseSync, schema: LaunchSchema) {
+function selectLaunchRows(database: EngineConnection, schema: LaunchSchema) {
   return query(database)
     .selectFrom("node_worker_launches")
     .selectAll("node_worker_launches")
@@ -142,14 +110,14 @@ function selectLaunchRows(database: DatabaseSync, schema: LaunchSchema) {
     );
 }
 
-function readRow(database: DatabaseSync, launchId: string, schema: LaunchSchema) {
+function readRow(database: EngineConnection, launchId: string, schema: LaunchSchema) {
   return executeSqliteQueryTakeFirstSync(
     database,
     selectLaunchRows(database, schema).where("node_worker_launches.launch_id", "=", launchId),
   );
 }
 
-function readNonterminalCount(database: DatabaseSync): number {
+function readNonterminalCount(database: EngineConnection): number {
   return (
     executeSqliteQueryTakeFirstSync(
       database,
@@ -161,7 +129,7 @@ function readNonterminalCount(database: DatabaseSync): number {
   );
 }
 
-function readNonterminalRows(database: DatabaseSync, schema: LaunchSchema) {
+function readNonterminalRows(database: EngineConnection, schema: LaunchSchema) {
   return executeSqliteQuerySync(
     database,
     selectLaunchRows(database, schema)
@@ -171,7 +139,7 @@ function readNonterminalRows(database: DatabaseSync, schema: LaunchSchema) {
 }
 
 function pruneTerminalRows(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   schema: LaunchSchema;
   cutoffMs: number;
   limit: number;
@@ -215,7 +183,7 @@ function pruneTerminalRows(params: {
 
 /** Read the authoritative physical owner within an already-open journal transaction. */
 export function readNodeWorkerLaunchReceipt(
-  database: DatabaseSync,
+  database: EngineConnection,
   launchId: string,
 ): NodeWorkerLaunchReceipt | undefined {
   const schema = getAdmittedSqliteSchemaFacts(database);
@@ -245,7 +213,7 @@ function validatePruneLimit(limit: number): void {
 }
 
 function requireMatchingRow(
-  database: DatabaseSync,
+  database: EngineConnection,
   identity: LaunchIdentity,
   schema: LaunchSchema,
 ): NodeWorkerLaunchRow {
@@ -302,7 +270,7 @@ function rowMatchesImmutableIdentity(
 }
 
 function finishOwnedRow(
-  database: DatabaseSync,
+  database: EngineConnection,
   current: NodeWorkerLaunchRow,
   params: Omit<Parameters<NodeWorkerLaunchKernel["finish"]>[0], "launchId" | "planHash" | "nowMs">,
   nowMs: number,
@@ -362,7 +330,7 @@ export class NodeWorkerLaunchKernel {
 
   private write<T>(
     operationLabel: string,
-    operation: (database: DatabaseSync, schema: LaunchSchema, path: string) => T,
+    operation: (database: EngineConnection, schema: LaunchSchema, path: string) => T,
   ): T {
     return runOpenClawStateWriteTransaction(
       ({ db, path }) => {

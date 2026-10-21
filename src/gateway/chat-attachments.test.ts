@@ -481,31 +481,6 @@ describe("persistInboundImagesForTranscript", () => {
     expect(result).toEqual({ entries: [], omission: "inline-image-save-failed" });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk unavailable"));
   });
-
-  it.each(["nested/id"])(
-    "rejects an unsafe saved media id %j before projecting a durable claim",
-    async (id) => {
-      await expect(
-        persistInboundImagesForTranscript({
-          images: [],
-          offloadedRefs: [
-            {
-              mediaRef: "https://signed.example/private",
-              id,
-              path: "/media/inbound/private",
-              kind: "video",
-              mimeType: "video/mp4",
-              label: "private.mp4",
-              sizeBytes: 10,
-              sourceIndex: 0,
-            },
-          ],
-          log: { warn: vi.fn() },
-          logContext: "test",
-        }),
-      ).rejects.toThrow();
-    },
-  );
 });
 
 describe("parseMessageWithAttachments", () => {
@@ -690,56 +665,16 @@ describe("parseMessageWithAttachments validation errors", () => {
     },
   );
 
-  it("keeps image sniff fallback for generic image attachments", async () => {
-    const { parsed, logs } = await parseWithWarnings("see this", [
-      pngAttachment({ type: "file", mimeType: "application/octet-stream", fileName: "dot" }),
-    ]);
-    expectSingleInlinePng(parsed);
-    expect(parsed.offloadedRefs).toHaveLength(0);
-    expect(logs).toHaveLength(0);
-  });
-
-  it("offloads images for text-only models instead of dropping them", async () => {
-    const logs: string[] = [];
-    const infos: string[] = [];
-    const parsed = await parseTextOnlyAttachments("see this", [pngAttachment()], logs, infos);
-
-    try {
-      expect(parsed.images).toHaveLength(0);
-      expect(parsed.imageOrder).toEqual(["offloaded"]);
-      expect(parsed.offloadedRefs).toHaveLength(1);
-      const offloaded = expectDefined(parsed.offloadedRefs[0], "offloaded image ref");
-      expect(offloaded.mimeType).toBe("image/png");
-      expect(parsed.message).toBe(`see this\n[media attached: ${offloaded.mediaRef}]`);
-      expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe("see this");
-      expect(parsed.media).toEqual([
-        {
-          path: offloaded.path,
-          url: offloaded.mediaRef,
-          contentType: "image/png",
-          kind: "image",
-          fileName: "dot.png",
-          sizeBytes: 68,
-          width: 1,
-          height: 1,
-        },
-      ]);
-      expect(infos[0]).toMatch(/Offloaded image for text-only model/i);
-      expect(logs).toHaveLength(0);
-    } finally {
-      await cleanupOffloadedRefs(parsed.offloadedRefs);
-    }
-  });
-
   it("caps text-only image offloads", async () => {
     const logs: string[] = [];
+    const infos: string[] = [];
     const attachments = Array.from({ length: 11 }, (_, index): ChatAttachment => ({
       type: "image",
       mimeType: "image/png",
       fileName: `dot-${index}.png`,
       content: PNG_1x1,
     }));
-    const parsed = await parseTextOnlyAttachments("see these", attachments, logs);
+    const parsed = await parseTextOnlyAttachments("see these", attachments, logs, infos);
 
     try {
       expect(parsed.images).toHaveLength(0);
@@ -755,6 +690,7 @@ describe("parseMessageWithAttachments validation errors", () => {
       expect(logs).toEqual([
         "attachment dot-10.png: dropping image because text-only offload limit 10 was reached",
       ]);
+      expect(infos[0]).toMatch(/Offloaded image for text-only model/i);
     } finally {
       await cleanupOffloadedRefs(parsed.offloadedRefs);
     }

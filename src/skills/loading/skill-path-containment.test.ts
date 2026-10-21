@@ -1,8 +1,7 @@
-// Skill path containment tests cover root escapes, allowed symlinks, and diagnostics.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
@@ -17,6 +16,14 @@ import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
 }));
+
+const skill = (dir: string, name: string, description = name) =>
+  writeSkill({ dir, name, description });
+async function link(target: string, destination: string, type: "dir" | "file" = "dir") {
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.symlink(target, destination, type);
+  return destination;
+}
 
 let fakeHome = "";
 let envSnapshot: SkillsHomeEnvSnapshot;
@@ -67,25 +74,6 @@ function loadTestWorkspaceSkills(
   });
 }
 
-async function createEscapedBundledSkillFixture(params?: {
-  workspaceDir?: string;
-  outsideDir?: string;
-}) {
-  const workspaceDir = params?.workspaceDir ?? (await createTempWorkspaceDir());
-  const outsideDir = params?.outsideDir ?? (await createTempWorkspaceDir());
-  const bundledDir = path.join(workspaceDir, ".bundled");
-  const escapedSkillDir = path.join(outsideDir, "outside-bundled-skill");
-  await writeSkill({
-    dir: escapedSkillDir,
-    name: "outside-bundled-skill",
-    description: "Outside bundled",
-  });
-  await fs.mkdir(bundledDir, { recursive: true });
-  const requestedPath = path.join(bundledDir, "escaped-bundled-skill");
-  await fs.symlink(escapedSkillDir, requestedPath, "dir");
-  return { workspaceDir, outsideDir, bundledDir, escapedSkillDir, requestedPath };
-}
-
 beforeAll(async () => {
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-containment-"));
   fakeHome = path.join(tempRoot, "home");
@@ -105,275 +93,183 @@ afterAll(async () => {
   });
 });
 
-describe("skill path containment", () => {
-  it.each([{ source: "workspace", expectedSource: "openclaw-workspace" }] as const)(
-    "rejects hardlinked $source skills while preserving ordinary files",
-    async ({ source, expectedSource }) => {
-      const workspaceDir = await createTempWorkspaceDir();
-      const skillRoot = path.join(workspaceDir, "skills");
-      const rejectedSkillName = `${source}-hardlinked-skill`;
-      const acceptedSkillName = `${source}-ordinary-skill`;
-      await writeHardlinkedSkill({
-        dir: path.join(skillRoot, rejectedSkillName),
-        name: rejectedSkillName,
-        description: `Untrusted ${source} hardlink`,
-      });
-      await writeSkill({
-        dir: path.join(skillRoot, acceptedSkillName),
-        name: acceptedSkillName,
-        description: `Ordinary ${source} skill`,
-      });
-      const warn = captureWarningLogger();
-
-      const entries = loadTestWorkspaceSkills(workspaceDir);
-
-      expect(entries).toEqual([
-        expect.objectContaining({
-          skill: expect.objectContaining({ name: acceptedSkillName, source: expectedSource }),
-        }),
-      ]);
-      const warningLine = firstWarningLine(warn);
-      expect(warningLine).toContain("Skipping invalid skill:");
-      expect(warningLine).toContain(rejectedSkillName);
-      expect(warningLine).toMatch(/hardlink/iu);
-    },
+it("rejects hardlinked workspace skills while preserving ordinary files", async () => {
+  const workspaceDir = await createTempWorkspaceDir();
+  const skillRoot = path.join(workspaceDir, "skills");
+  const rejectedSkillName = "workspace-hardlinked-skill";
+  const acceptedSkillName = "workspace-ordinary-skill";
+  await writeHardlinkedSkill({
+    dir: path.join(skillRoot, rejectedSkillName),
+    name: rejectedSkillName,
+    description: "Untrusted workspace hardlink",
+  });
+  await skill(
+    path.join(skillRoot, acceptedSkillName),
+    acceptedSkillName,
+    "Ordinary workspace skill",
   );
+  const warn = captureWarningLogger();
 
-  it.runIf(process.platform !== "win32")(
-    "skips workspace skill paths that resolve outside the workspace root",
-    async () => {
-      const workspaceDir = await createTempWorkspaceDir();
-      const outsideDir = await createTempWorkspaceDir();
-      const escapedSkillDir = path.join(outsideDir, "outside-skill");
-      await writeSkill({
-        dir: escapedSkillDir,
-        name: "outside-skill",
-        description: "Outside",
-      });
-      await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
-      const requestedPath = path.join(workspaceDir, "skills", "escaped-skill");
-      await fs.symlink(escapedSkillDir, requestedPath, "dir");
-      const fileLinkSkillDir = path.join(workspaceDir, "skills", "escaped-file");
-      await fs.mkdir(fileLinkSkillDir, { recursive: true });
-      await fs.symlink(path.join(outsideDir, "SKILL.md"), path.join(fileLinkSkillDir, "SKILL.md"));
-      const targetDir = path.join(workspaceDir, "safe-target");
-      await writeSkill({
-        dir: targetDir,
-        name: "symlink-target",
-        description: "Target skill",
-      });
-      const symlinkedSkillDir = path.join(workspaceDir, "skills", "symlinked");
-      await fs.mkdir(symlinkedSkillDir, { recursive: true });
-      await fs.symlink(path.join(targetDir, "SKILL.md"), path.join(symlinkedSkillDir, "SKILL.md"));
-      const warn = captureWarningLogger();
+  const entries = loadTestWorkspaceSkills(workspaceDir);
 
-      const entries = loadTestWorkspaceSkills(workspaceDir);
-
-      expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
-      expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
-      expect(entries.map((entry) => entry.skill.name)).not.toContain("symlink-target");
-      const warningLine = firstWarningLine(warn);
-      expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
-      expect(warningLine).toContain("reason=symlink-escape");
-      expect(warningLine).toContain("source=openclaw-workspace");
-      expect(warningLine).toContain(`root=${path.join(workspaceDir, "skills")}`);
-      expect(warningLine).toContain(`requested=${requestedPath}`);
-      expect(warningLine).toContain("resolved=");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "rejects symlinked skills in the Workshop-owned directory",
-    async () => {
-      const workspaceDir = await createTempWorkspaceDir();
-      const config = {
-        agents: { entries: { main: { agentDir: path.join(workspaceDir, ".agent") } } },
-      };
-      const workshopSkillsDir = resolveWorkshopSkillsDir(config, "main");
-      const outsideDir = await createTempWorkspaceDir();
-      const outsideSkillDir = path.join(outsideDir, "outside-workshop-skill");
-      await writeSkill({
-        dir: outsideSkillDir,
-        name: "outside-workshop-skill",
-        description: "Outside Workshop",
-      });
-      await fs.mkdir(workshopSkillsDir, { recursive: true });
-      await fs.symlink(
-        outsideSkillDir,
-        path.join(workshopSkillsDir, "outside-workshop-skill"),
-        "dir",
-      );
-      const warn = captureWarningLogger();
-
-      const entries = loadTestWorkspaceSkills(workspaceDir, { config, agentId: "main" });
-
-      expect(entries).toEqual([]);
-      expect(firstWarningLine(warn)).toContain("source=openclaw-workshop");
-      expect(firstWarningLine(warn)).toContain("reason=symlink-escape");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "allows configured skill symlink targets outside their source root",
-    async () => {
-      const workspaceDir = await createTempWorkspaceDir();
-      const skillName = `manager-${++workspaceCaseIndex}`;
-      const targetRoot = path.join(tempRoot, `${skillName}-skills`);
-      const targetSkillDir = path.join(targetRoot, skillName);
-      await writeSkill({
-        dir: targetSkillDir,
-        name: skillName,
-        description: "Manager skill",
-      });
-      const workspaceSkillsDir = path.join(workspaceDir, "skills");
-      await fs.mkdir(workspaceSkillsDir, { recursive: true });
-      const symlinkPath = path.join(workspaceSkillsDir, skillName);
-      await fs.symlink(targetSkillDir, symlinkPath, "dir");
-      const warn = captureWarningLogger();
-
-      try {
-        const entries = loadTestWorkspaceSkills(workspaceDir, {
-          config: {
-            skills: {
-              load: {
-                allowSymlinkTargets: [targetRoot],
-              },
-            },
-          },
-        });
-
-        expect(entries.map((entry) => entry.skill.name)).toContain(skillName);
-        expect(warn).not.toHaveBeenCalled();
-      } finally {
-        await fs.unlink(symlinkPath).catch(() => undefined);
-      }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "keeps SKILL.md containment for managed symlinked skill directories",
-    async () => {
-      const workspaceDir = await createTempWorkspaceDir();
-      const managedDir = path.join(workspaceDir, ".managed");
-      const skillName = `managed-file-link-${++workspaceCaseIndex}`;
-      const targetSkillDir = path.join(tempRoot, `${skillName}-target`, skillName);
-      const outsideDir = path.join(tempRoot, `${skillName}-outside`);
-      await fs.mkdir(targetSkillDir, { recursive: true });
-      await fs.mkdir(outsideDir, { recursive: true });
-      await writeSkill({
-        dir: outsideDir,
-        name: skillName,
-        description: "Escaped metadata",
-      });
-      await fs.symlink(path.join(outsideDir, "SKILL.md"), path.join(targetSkillDir, "SKILL.md"));
-      await fs.mkdir(managedDir, { recursive: true });
-      const symlinkPath = path.join(managedDir, skillName);
-      await fs.symlink(targetSkillDir, symlinkPath, "dir");
-      const warn = captureWarningLogger();
-
-      try {
-        const entries = loadTestWorkspaceSkills(workspaceDir, {
-          managedSkillsDir: managedDir,
-        });
-
-        expect(entries.map((entry) => entry.skill.name)).not.toContain(skillName);
-        const warningLine = firstWarningLine(warn);
-        expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
-        expect(warningLine).toContain("source=openclaw-managed");
-        expect(warningLine).toContain("reason=symlink-escape");
-      } finally {
-        await fs.unlink(symlinkPath).catch(() => undefined);
-      }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "uses compact home-relative paths in escaped skill console warnings",
-    async () => {
-      const { workspaceDir, bundledDir } = await createEscapedBundledSkillFixture({
-        workspaceDir: path.join(fakeHome, "workspace"),
-        outsideDir: path.join(fakeHome, "outside"),
-      });
-      const warn = captureWarningLogger();
-
-      expect(
-        loadTestWorkspaceSkills(workspaceDir, {
-          bundledSkillsDir: bundledDir,
-        }),
-      ).toEqual([]);
-
-      const warningLine = firstWarningLine(warn);
-      expect(warningLine).toContain("root=~/workspace/.bundled");
-      expect(warningLine).toContain("requested=~/workspace/.bundled/escaped-bundled-skill");
-      expect(warningLine).toContain("resolved=~/outside/outside-bundled-skill");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "does not follow outside symlink dirs during repo-root detection",
-    async () => {
-      const workspaceDir = await createTempWorkspaceDir();
-      const repoDir = await createTempWorkspaceDir();
-      const outsideDir = await createTempWorkspaceDir();
-      await writeSkill({
-        dir: path.join(outsideDir, "linked"),
-        name: "outside-linked-skill",
-        description: "Outside linked skill",
-      });
-      await fs.mkdir(path.join(repoDir, "examples"), { recursive: true });
-      await fs.symlink(outsideDir, path.join(repoDir, "examples", "linked"), "dir");
-      await writeSkill({
-        dir: path.join(repoDir, "skills", "group", "valid"),
-        name: "repo-nested-skill",
-        description: "Valid nested repo skill",
-      });
-
-      const names = loadTestWorkspaceSkills(workspaceDir, {
-        config: {
-          skills: {
-            load: { extraDirs: [repoDir] },
-          },
-        },
-      }).map((entry) => entry.skill.name);
-
-      expect(names).toContain("repo-nested-skill");
-      expect(names).not.toContain("outside-linked-skill");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "keeps configured roots with possible symlink skills outside nested skills",
-    async () => {
-      const workspaceDir = await createTempWorkspaceDir();
-      const repoDir = await createTempWorkspaceDir();
-      const targetRoot = path.join(tempRoot, `linked-root-${workspaceCaseIndex++}`);
-      const targetSkillDir = path.join(targetRoot, "linked-skill");
-      await writeSkill({
-        dir: targetSkillDir,
-        name: "linked-skill",
-        description: "Allowed linked skill",
-      });
-      await fs.mkdir(path.join(repoDir, "group"), { recursive: true });
-      await fs.symlink(targetSkillDir, path.join(repoDir, "group", "linked-skill"), "dir");
-      await writeSkill({
-        dir: path.join(repoDir, "skills", "group", "valid"),
-        name: "repo-nested-skill",
-        description: "Valid nested repo skill",
-      });
-
-      const names = loadTestWorkspaceSkills(workspaceDir, {
-        config: {
-          skills: {
-            load: {
-              allowSymlinkTargets: [targetRoot],
-              extraDirs: [repoDir],
-            },
-          },
-        },
-      }).map((entry) => entry.skill.name);
-
-      expect(names).toContain("linked-skill");
-      expect(names).toContain("repo-nested-skill");
-    },
-  );
+  expect(entries).toEqual([
+    expect.objectContaining({
+      skill: expect.objectContaining({ name: acceptedSkillName, source: "openclaw-workspace" }),
+    }),
+  ]);
+  const warningLine = firstWarningLine(warn);
+  expect(warningLine).toContain("Skipping invalid skill:");
+  expect(warningLine).toContain(rejectedSkillName);
+  expect(warningLine).toMatch(/hardlink/iu);
 });
+
+it.runIf(process.platform !== "win32")(
+  "skips workspace skill paths that resolve outside the workspace root",
+  async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const outsideDir = await createTempWorkspaceDir();
+    const escapedSkillDir = path.join(outsideDir, "outside-skill");
+    await skill(escapedSkillDir, "outside-skill", "Outside");
+    const requestedPath = path.join(workspaceDir, "skills", "escaped-skill");
+    await link(escapedSkillDir, requestedPath);
+    const fileLinkSkillDir = path.join(workspaceDir, "skills", "escaped-file");
+    await link(path.join(outsideDir, "SKILL.md"), path.join(fileLinkSkillDir, "SKILL.md"), "file");
+    const targetDir = path.join(workspaceDir, "safe-target");
+    await skill(targetDir, "symlink-target", "Target skill");
+    const symlinkedSkillDir = path.join(workspaceDir, "skills", "symlinked");
+    await link(path.join(targetDir, "SKILL.md"), path.join(symlinkedSkillDir, "SKILL.md"), "file");
+    const warn = captureWarningLogger();
+
+    const entries = loadTestWorkspaceSkills(workspaceDir);
+
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("symlink-target");
+    const warningLine = firstWarningLine(warn);
+    expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
+    expect(warningLine).toContain("reason=symlink-escape");
+    expect(warningLine).toContain("source=openclaw-workspace");
+    expect(warningLine).toContain(`root=${path.join(workspaceDir, "skills")}`);
+    expect(warningLine).toContain(`requested=${requestedPath}`);
+    expect(warningLine).toContain("resolved=");
+  },
+);
+
+it.runIf(process.platform !== "win32")(
+  "rejects symlinked skills in the Workshop-owned directory",
+  async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const config = {
+      agents: { entries: { main: { agentDir: path.join(workspaceDir, ".agent") } } },
+    };
+    const workshopSkillsDir = resolveWorkshopSkillsDir(config, "main");
+    const outsideDir = await createTempWorkspaceDir();
+    const outsideSkillDir = path.join(outsideDir, "outside-workshop-skill");
+    await skill(outsideSkillDir, "outside-workshop-skill", "Outside Workshop");
+    await link(outsideSkillDir, path.join(workshopSkillsDir, "outside-workshop-skill"));
+    const warn = captureWarningLogger();
+
+    const entries = loadTestWorkspaceSkills(workspaceDir, { config, agentId: "main" });
+
+    expect(entries).toEqual([]);
+    expect(firstWarningLine(warn)).toContain("source=openclaw-workshop");
+    expect(firstWarningLine(warn)).toContain("reason=symlink-escape");
+  },
+);
+
+it.runIf(process.platform !== "win32")(
+  "allows configured skill symlink targets outside their source root",
+  async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const skillName = `manager-${++workspaceCaseIndex}`;
+    const targetRoot = path.join(tempRoot, `${skillName}-skills`);
+    const targetSkillDir = path.join(targetRoot, skillName);
+    await skill(targetSkillDir, skillName, "Manager skill");
+    const workspaceSkillsDir = path.join(workspaceDir, "skills");
+    const symlinkPath = path.join(workspaceSkillsDir, skillName);
+    await link(targetSkillDir, symlinkPath);
+    const warn = captureWarningLogger();
+
+    const entries = loadTestWorkspaceSkills(workspaceDir, {
+      config: { skills: { load: { allowSymlinkTargets: [targetRoot] } } },
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain(skillName);
+    expect(warn).not.toHaveBeenCalled();
+  },
+);
+
+it.runIf(process.platform !== "win32")(
+  "keeps SKILL.md containment for managed symlinked skill directories",
+  async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const skillName = `managed-file-link-${++workspaceCaseIndex}`;
+    const targetSkillDir = path.join(tempRoot, `${skillName}-target`, skillName);
+    const outsideDir = path.join(tempRoot, `${skillName}-outside`);
+    await skill(outsideDir, skillName, "Escaped metadata");
+    await link(path.join(outsideDir, "SKILL.md"), path.join(targetSkillDir, "SKILL.md"), "file");
+    const symlinkPath = path.join(managedDir, skillName);
+    await link(targetSkillDir, symlinkPath);
+    const warn = captureWarningLogger();
+
+    const entries = loadTestWorkspaceSkills(workspaceDir, {
+      managedSkillsDir: managedDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).not.toContain(skillName);
+    const warningLine = firstWarningLine(warn);
+    expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
+    expect(warningLine).toContain("source=openclaw-managed");
+    expect(warningLine).toContain("reason=symlink-escape");
+  },
+);
+
+it.runIf(process.platform !== "win32")(
+  "uses compact home-relative paths in escaped skill console warnings",
+  async () => {
+    const workspaceDir = path.join(fakeHome, "workspace");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const escaped = path.join(fakeHome, "outside", "outside-bundled-skill");
+    await skill(escaped, "outside-bundled-skill");
+    await link(escaped, path.join(bundledDir, "escaped-bundled-skill"));
+    const warn = captureWarningLogger();
+
+    expect(
+      loadTestWorkspaceSkills(workspaceDir, {
+        bundledSkillsDir: bundledDir,
+      }),
+    ).toEqual([]);
+
+    const warningLine = firstWarningLine(warn);
+    expect(warningLine).toContain("root=~/workspace/.bundled");
+    expect(warningLine).toContain("requested=~/workspace/.bundled/escaped-bundled-skill");
+    expect(warningLine).toContain("resolved=~/outside/outside-bundled-skill");
+  },
+);
+
+it.runIf(process.platform !== "win32").each([false, true])(
+  "discovers nested roots without following unapproved symlinks (allowed=%s)",
+  async (allowed) => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const repoDir = await createTempWorkspaceDir();
+    const outsideDir = await createTempWorkspaceDir();
+    const target = allowed ? path.join(outsideDir, "linked") : outsideDir;
+    const name = allowed ? "linked-skill" : "outside-linked-skill";
+    await skill(path.join(outsideDir, "linked"), name);
+    await link(target, path.join(repoDir, allowed ? "group" : "examples", "linked"));
+    await skill(path.join(repoDir, "skills", "group", "valid"), "repo-nested-skill");
+    const names = loadTestWorkspaceSkills(workspaceDir, {
+      config: {
+        skills: {
+          load: {
+            extraDirs: [repoDir],
+            ...(allowed ? { allowSymlinkTargets: [outsideDir] } : {}),
+          },
+        },
+      },
+    }).map((entry) => entry.skill.name);
+    expect(names).toContain("repo-nested-skill");
+    expect(names.includes(name)).toBe(allowed);
+  },
+);

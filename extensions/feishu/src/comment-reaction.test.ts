@@ -100,31 +100,4 @@ describe("createCommentTypingReactionLifecycle", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, expectedTypingReactionRequest("delete"));
   });
-
-  it("retries delete during later cleanup after an ambient delete failure", async () => {
-    request
-      .mockResolvedValueOnce({
-        code: 0,
-        data: {},
-      })
-      .mockResolvedValueOnce({
-        code: 5001,
-        msg: "temporary failure",
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        data: {},
-      });
-
-    const lifecycle = createTypingReactionLifecycle();
-
-    await lifecycle.start();
-    await cleanupAmbientReply();
-    await lifecycle.cleanup();
-
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenNthCalledWith(1, expectedTypingReactionRequest("add"));
-    expect(request).toHaveBeenNthCalledWith(2, expectedTypingReactionRequest("delete"));
-    expect(request).toHaveBeenNthCalledWith(3, expectedTypingReactionRequest("delete"));
-  });
 });

@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import { z } from "zod";
 
@@ -12,6 +13,15 @@ const Command = z.union([
 ]);
 const Lifecycle = z.union([Command, z.record(z.string(), Command)]);
 const Blob = z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u);
+const SecretName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u);
+const SecretRequests = z
+  .record(
+    SecretName,
+    z
+      .object({ description: z.string().optional(), documentationUrl: z.string().optional() })
+      .passthrough(),
+  )
+  .refine((value) => Object.keys(value).length <= 16, "At most 16 setup secrets may be requested");
 const Environment = z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u), ProcessString);
 export const EnvironmentRecipeSchema = z
   .object({
@@ -19,6 +29,7 @@ export const EnvironmentRecipeSchema = z
     identity: Blob.optional(),
     inputs: z.record(z.string(), Blob),
     env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u), ProcessString.nullable()),
+    secretNames: z.array(SecretName).max(16).optional(),
     ignoredPropertiesNote: z.string().optional(),
     onCreate: Lifecycle.optional(),
     updateContent: Lifecycle.optional(),
@@ -33,6 +44,7 @@ const Devcontainer = z
     updateContentCommand: Lifecycle.optional(),
     postCreateCommand: Lifecycle.optional(),
     postStartCommand: Lifecycle.optional(),
+    secrets: SecretRequests.optional(),
     containerEnv: Environment.optional(),
     remoteEnv: z
       .record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u), ProcessString.nullable())
@@ -54,6 +66,7 @@ const supportedProperties = new Set([
   "postCreateCommand",
   "postStartCommand",
   "containerEnv",
+  "secrets",
   "remoteEnv",
   "name",
   "$schema",
@@ -78,6 +91,7 @@ function parseDevcontainer(entry: EnvironmentRecipeEntry, file: string): Environ
     identity: entry.blob,
     inputs: { [file]: entry.blob },
     env: { ...config.containerEnv, ...config.remoteEnv },
+    secretNames: Object.keys(config.secrets ?? {}).toSorted(),
     ...(ignored.length
       ? { ignoredPropertiesNote: `devcontainer ${ignored.join(", ")} ignored on cloud machines` }
       : {}),
@@ -88,6 +102,21 @@ function parseDevcontainer(entry: EnvironmentRecipeEntry, file: string): Environ
     ...(config.postCreateCommand !== undefined ? { postCreate: config.postCreateCommand } : {}),
     ...(config.postStartCommand !== undefined ? { postStart: config.postStartCommand } : {}),
   };
+}
+
+/** Repository declarations request operator-approved names, never grant secret access. */
+export function assertEnvironmentRecipeSecretsMapped(
+  recipe: EnvironmentRecipe | undefined,
+  setupSecrets: unknown,
+): void {
+  const missing = recipe?.secretNames?.filter(
+    (name) => !isRecord(setupSecrets) || !Object.hasOwn(setupSecrets, name),
+  );
+  if (missing?.length) {
+    throw new Error(
+      `Cloud environment requests unmapped setup secrets: ${missing.join(", ")}. Configure these names in the profile's settings.setupSecrets with protected store SecretRefs and allowed hosts before starting a session.`,
+    );
+  }
 }
 
 function yarnMajor(packageEntry: EnvironmentRecipeEntry | undefined): number | undefined {
@@ -163,20 +192,20 @@ export async function resolveEnvironmentRecipe(
     }
     return {
       source: "detected",
-      identity: createHash("sha256")
-        .update(
-          JSON.stringify({
-            version: 2,
-            inputs: Object.entries(inputs).toSorted(([left], [right]) =>
-              left.localeCompare(right, "en"),
-            ),
-          }),
-        )
-        .digest("hex"),
+      identity: sha256Hex(
+        JSON.stringify({
+          version: 2,
+          inputs: Object.entries(inputs).toSorted(([left], [right]) =>
+            left.localeCompare(right, "en"),
+          ),
+        }),
+      ),
       inputs,
       // Corepack auto-pinning must not rewrite the admitted package.json during detection.
       env:
-        file === "pnpm-lock.yaml" || file === "yarn.lock" ? { COREPACK_ENABLE_AUTO_PIN: "0" } : {},
+        file === "pnpm-lock.yaml" || file === "yarn.lock"
+          ? { COREPACK_ENABLE_AUTO_PIN: "0", COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" }
+          : {},
       detectedInstall,
     };
   }

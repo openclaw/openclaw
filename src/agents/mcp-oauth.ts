@@ -1,6 +1,5 @@
 /** MCP OAuth credential provider, flow coordinator, and login helpers. */
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { auth, type FetchLike } from "@modelcontextprotocol/client";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   type OpenClawStateAsyncLeaseContext,
@@ -336,6 +335,7 @@ async function runMcpOAuthAuthorizationAttempt(
     config: params.config,
     allowAuthorizationRedirect: true,
     suppressStoredTokens: params.suppressStoredTokens,
+    replaceAuthorization: Boolean(params.authorizationCode) || params.suppressStoredTokens,
     lease,
     login: params.login,
     storeContext: context,
@@ -380,11 +380,11 @@ export async function startMcpOAuthAuthorization(
       const pendingChallenge = store.pendingAuthorizationChallenge;
       const configuredRedirectUrl =
         normalizeOptionalString(opts.redirectUrl) ??
-        normalizeOptionalString(config.oauth?.redirectUrl) ??
-        store.redirectUrl;
+        normalizeOptionalString(config.oauth?.redirectUrl);
+      const redirectUrl = configuredRedirectUrl ?? store.redirectUrl;
       const oauthConfig: McpOAuthConfig = {
         ...config.oauth,
-        ...(configuredRedirectUrl ? { redirectUrl: configuredRedirectUrl } : {}),
+        ...(redirectUrl ? { redirectUrl } : {}),
       };
       const attempt = {
         identity,
@@ -402,11 +402,7 @@ export async function startMcpOAuthAuthorization(
         result = await runMcpOAuthAuthorizationAttempt(attempt, lease, context);
       } catch (error) {
         opts.login?.assertCurrent();
-        if (
-          !normalizeOptionalString(opts.redirectUrl) &&
-          !normalizeOptionalString(config.oauth?.redirectUrl) &&
-          isMcpOAuthRedirectRegistrationError(error)
-        ) {
+        if (!configuredRedirectUrl && isMcpOAuthRedirectRegistrationError(error)) {
           result = await runMcpOAuthAuthorizationAttempt(
             {
               ...attempt,

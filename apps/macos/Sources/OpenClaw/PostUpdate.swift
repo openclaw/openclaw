@@ -894,7 +894,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         self.receipt = nil
         self.close()
         if self.migrationOnlyLaunchCheck {
-            CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+            CLIInstallPrompter.shared.checkAndPromptIfNeeded()
         }
     }
 
@@ -1007,8 +1007,8 @@ extension PostUpdateController {
         }
         // App-owned children were seeded by this launch. Services can still pin an
         // older concrete build even when runtime/current already points at this app.
-        return manager.hasAppHostedGateway || GatewayLaunchAgentManager.installedServiceCLI()?.prefix ==
-            GatewayLaunchAgentManager.concreteServicePrefix(runtime.cliCommand)
+        return manager.hasAppHostedGateway ||
+            GatewayLaunchAgentManager.installedServiceCLI()?.matchesBundledRuntime(runtime) == true
     }
 
     static func captureRuntimeContext(
@@ -1135,6 +1135,7 @@ extension PostUpdateController {
         generation: UInt64) async -> PostUpdateRuntimeVerification
     {
         self.markGatewayUpdateIncomplete(receipt: receipt)
+        let dispatchedReceipt = self.receipt ?? receipt
         self.model.phase = .updating
         self.model.message = String(localized: "Preparing the bundled Gateway runtime…")
         self.show()
@@ -1142,7 +1143,11 @@ extension PostUpdateController {
             let activation = try await GatewayProcessManager.shared.prepareBundledRuntimeAfterUpdate(
                 source: self.activationSource(source, generation: generation))
             switch activation {
-            case .ready: return .verified
+            case .ready:
+                // Bundled preparation joins Doctor and activation before settling this exact core checkpoint.
+                self.receipt = PostAppUpdateReceiptStore.completeCoreRepair(
+                    receipt: dispatchedReceipt, owner: .gateway)
+                return .verified
             case .deferred: return .deferred
             case let .failed(reason):
                 self.fail(
@@ -1259,7 +1264,20 @@ extension PostUpdateController {
             self.show()
             self.fail(
                 message: String(localized: "Gateway verification failed."),
-                details: String(localized: "The managed runtime does not match the updated Mac app."))
+                details: GatewayProcessManager.shared.lastFailureReason?.nonEmpty ??
+                    (resolution.installedCLI == nil
+                        ?
+                        String(
+                            localized: """
+                            The installed Gateway service command could not be inspected.
+                            Repair this Mac app's managed installation, then retry recovery.
+                            """)
+                        :
+                        String(
+                            localized: """
+                            The managed Gateway CLI is unavailable.
+                            Repair the installation selected by this Mac app, then retry recovery.
+                            """)))
             return false
         case .none:
             if !resolution.prepareLocalCompanion, !verifiedCompanion {

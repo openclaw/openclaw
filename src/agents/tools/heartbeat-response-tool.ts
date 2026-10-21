@@ -1,6 +1,4 @@
 /**
- * Heartbeat response tool.
- *
  * Auto-reply heartbeat turns use this tool to accept the agent's outcome,
  * notification decision, and next-check metadata exactly once per turn.
  */
@@ -12,7 +10,9 @@ import {
   HEARTBEAT_TOOL_PRIORITIES,
   normalizeHeartbeatToolResponse,
 } from "../../auto-reply/heartbeat-tool-response.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertCronJobScratchContent } from "../../cron/scratch-contract.js";
+import { isHeartbeatEnabledForAgent } from "../../infra/heartbeat-summary.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { optionalStringEnum, stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
@@ -37,7 +37,45 @@ const HeartbeatResponseToolSchema = Type.Object(
 );
 
 /** Creates the one-shot heartbeat response tool for an auto-reply turn. */
-export function createHeartbeatResponseTool(): AnyAgentTool {
+/**
+ * A heartbeat-enabled agent offers the tool on every turn, so heartbeat turns keep the
+ * session's tool definitions; only a heartbeat run accepts a response.
+ */
+export function resolveHeartbeatTools(
+  options:
+    | {
+        enableHeartbeatTool?: boolean;
+        forceHeartbeatTool?: boolean;
+        trigger?: string;
+        config?: OpenClawConfig;
+      }
+    | undefined,
+  agentId?: string,
+): { enableHeartbeatTool: boolean; offerHeartbeatTool: boolean } {
+  const enableHeartbeatTool =
+    options?.enableHeartbeatTool === true ||
+    (options?.trigger === "heartbeat" &&
+      options?.config?.messages?.visibleReplies === "message_tool");
+  return {
+    enableHeartbeatTool,
+    offerHeartbeatTool:
+      enableHeartbeatTool ||
+      options?.forceHeartbeatTool === true ||
+      (options?.config !== undefined && isHeartbeatEnabledForAgent(options.config, agentId)),
+  };
+}
+
+/** Every turn of a heartbeat-enabled session offers the tool; only a heartbeat run accepts it. */
+export function resolveHeartbeatResponseTool(options?: {
+  enableHeartbeatTool?: boolean;
+  offerHeartbeatTool?: boolean;
+}): AnyAgentTool | null {
+  return options?.enableHeartbeatTool || options?.offerHeartbeatTool
+    ? createHeartbeatResponseTool({ acceptsResponses: options.enableHeartbeatTool === true })
+    : null;
+}
+
+function createHeartbeatResponseTool(options: { acceptsResponses?: boolean } = {}): AnyAgentTool {
   let recorded = false;
   return {
     label: "Heartbeat",
@@ -50,6 +88,12 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
       "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
     parameters: HeartbeatResponseToolSchema,
     execute: async (_toolCallId, args) => {
+      if (options.acceptsResponses === false) {
+        // Offered for tool-list stability; preserve the run's configured reply mode.
+        throw new ToolInputError(
+          "heartbeat_respond is not accepted in this run; follow the configured reply instructions instead",
+        );
+      }
       if (!isRecord(args)) {
         throw new ToolInputError("Heartbeat response arguments required");
       }

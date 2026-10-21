@@ -82,7 +82,6 @@ async function main() {
     require.resolve("solid-js");
     require.resolve("signal-utils/map");
     require.resolve("@a2ui/web_core/v0_9");
-    require.resolve("@a2ui/lit/ui");
   } catch {
     hasA2uiPackage = false;
   }

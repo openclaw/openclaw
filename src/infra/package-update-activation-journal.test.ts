@@ -1,38 +1,26 @@
 import { spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  installPrivateUpdateHandoffStore,
-  writePrivateUpdateHandoffChildGuard,
-} from "../../test/helpers/private-update-handoff-store.js";
 import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  captureUpdateCommandExecutorAuthority,
-  withUpdateCommandExecutor,
-} from "../cli/update-cli/update-command-executor.js";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import { withDatabase } from "./package-update-activation-fixtures.test-support.js";
 import {
-  createPackageActivationJournal,
   openPackageActivationJournal,
   resolvePackageActivationJournalPath,
-  resolvePackageActivationHelper,
-  resolvePackageActivationControl,
-  packageActivationIdentity,
-  resolvePackageActivationAnchor,
-  type PackageActivationDescriptor,
   type PackageActivationIntent,
   type PackageActivationPhase,
   type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
+import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
 import {
   readPackageActivationStatus,
   runPackageActivationRecovery,
 } from "./package-update-activation.js";
-import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 
@@ -42,19 +30,16 @@ let root: string;
 let assertDatabasePath: (path: string) => void;
 let childGuardEnv: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
 
+const lifetimeFixture = createPackageActivationLifetimeFixture();
 beforeEach(() => {
-  root = fs.realpathSync(dirs.make("package-activation-journal-"));
-  const temporary = path.join(root, "private-tmp");
-  fs.mkdirSync(temporary, { mode: 0o700 });
-  ({ assertDatabasePath } = installPrivateUpdateHandoffStore(temporary));
-  childGuardEnv = writePrivateUpdateHandoffChildGuard(
-    path.join(temporary, "managed-update-handoffs.sqlite"),
-    temporary,
-  );
+  ({ root, assertDatabasePath, childGuardEnv } = lifetimeFixture.setup());
 });
-
-afterEach(() => {
-  vi.restoreAllMocks();
+afterEach(async () => {
+  try {
+    await lifetimeFixture.lifetime.cleanup();
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 it("refuses foreign or aliased handoff and state paths before opening any store", () => {
@@ -66,12 +51,7 @@ it("refuses foreign or aliased handoff and state paths before opening any store"
   }
   const privatePath = path.join(root, "private-tmp", "managed-update-handoffs.sqlite");
   expect(() => assertDatabasePath(privatePath)).not.toThrow();
-  const env = writePrivateUpdateHandoffChildGuard(
-    privatePath,
-    path.dirname(privatePath),
-  )({
-    ...process.env,
-  });
+  const env = childGuardEnv(process.env);
   // Use another owned fixture as the refusal target; a broken guard must never
   // open the developer's live state store while proving this boundary.
   const foreignDirectory = fs.realpathSync(dirs.make("package-activation-foreign-state-"));
@@ -91,7 +71,6 @@ it("refuses foreign or aliased handoff and state paths before opening any store"
   fs.symlinkSync(foreignNested, nestedAlias, "junction");
   // Do not use path.join: it would erase the traversal this case must exercise.
   const traversedState = `${nestedAlias}${path.sep}..${path.sep}traversed-state.sqlite`;
-  const blockedResults = [];
   const refusedPaths = [
     "/tmp/openclaw/managed-update-handoffs.sqlite",
     "/private/tmp/openclaw/managed-update-handoffs.sqlite",
@@ -103,19 +82,17 @@ it("refuses foreign or aliased handoff and state paths before opening any store"
     `file:${traversedState.replace(`${path.sep}..${path.sep}`, `${path.sep}%2e%2e${path.sep}`)}`,
   ];
   const requireGuard = `require('node:assert/strict').equal(globalThis[Symbol.for('openclaw.test.privateHandoffGuard')], ${JSON.stringify(privatePath)});`;
-  for (const livePath of refusedPaths) {
-    // Refuse the probe itself if the runtime did not install the guard.
-    const blocked = spawnSync(
+  const probe = (file: string, close = false) =>
+    spawnSync(
       process.execPath,
       [
         "-e",
-        `${requireGuard}new (require('node:sqlite').DatabaseSync)(${JSON.stringify(livePath)})`,
+        `${requireGuard}new (require('node:sqlite').DatabaseSync)(${JSON.stringify(file)})${close ? ".close()" : ""}`,
       ],
       { env, encoding: "utf8" },
     );
-    blockedResults.push(blocked);
-  }
-  expect(blockedResults.map((result) => result.status)).toEqual(refusedPaths.map(() => 1));
+  // The guard assertion runs before each attempt to open an untrusted path.
+  const blockedResults = refusedPaths.map((file) => probe(file));
   for (const blocked of blockedResults) {
     expect(blocked.error).toBeUndefined();
     expect(blocked.status).toBe(1);
@@ -129,14 +106,7 @@ it("refuses foreign or aliased handoff and state paths before opening any store"
     expect(fs.existsSync(foreignPath)).toBe(false);
   }
   for (const privateDatabase of [privatePath, path.join(root, "openclaw-state.sqlite")]) {
-    const accepted = spawnSync(
-      process.execPath,
-      [
-        "-e",
-        `${requireGuard}new (require('node:sqlite').DatabaseSync)(${JSON.stringify(privateDatabase)}).close()`,
-      ],
-      { env, encoding: "utf8" },
-    );
+    const accepted = probe(privateDatabase, true);
     expect(accepted.error).toBeUndefined();
     expect(accepted.status, accepted.stderr).toBe(0);
     expect(fs.realpathSync(privateDatabase)).toBe(privateDatabase);
@@ -144,14 +114,7 @@ it("refuses foreign or aliased handoff and state paths before opening any store"
       nodeSqlite.resolveExistingSqliteFileUri(privateDatabase),
       nodeSqlite.resolveImmutableSqliteFileUri(privateDatabase),
     ]) {
-      const reopened = spawnSync(
-        process.execPath,
-        [
-          "-e",
-          `${requireGuard}new (require('node:sqlite').DatabaseSync)(${JSON.stringify(uri)}).close()`,
-        ],
-        { env, encoding: "utf8" },
-      );
+      const reopened = probe(uri, true);
       expect(reopened.error).toBeUndefined();
       expect(reopened.status, reopened.stderr).toBe(0);
     }
@@ -159,150 +122,46 @@ it("refuses foreign or aliased handoff and state paths before opening any store"
 });
 
 async function fixture() {
-  const packages = await createPackageSwapFixture(root);
-  const anchor = resolvePackageActivationAnchor(packages.packageRoot);
-  const stagedAnchor = `${anchor}.staged`;
-  const launcherRoot = path.join(stagedAnchor, "launchers");
-  fs.mkdirSync(stagedAnchor, { mode: 0o700 });
-  fs.mkdirSync(launcherRoot, { mode: 0o700 });
-  const stagedControl = resolvePackageActivationControl(stagedAnchor);
-  fs.mkdirSync(stagedControl, { mode: 0o700 });
-  const helperBytes = Buffer.from("// sealed helper fixture\n");
-  fs.writeFileSync(resolvePackageActivationHelper(stagedAnchor), helperBytes, { mode: 0o600 });
-  const initial = await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-    const fence = await executor.enter(packages.packageRoot);
-    const authority = captureUpdateCommandExecutorAuthority(fence);
-    const descriptor: Omit<PackageActivationDescriptor, "journalIdentity"> = {
-      version: 1,
-      layout: "external-helper",
-      recoveryNodePath: fs.realpathSync(process.execPath),
-      helperIdentity: packageActivationIdentity(
-        resolvePackageActivationHelper(stagedAnchor),
-        false,
-      ),
-      preparation: [
-        {
-          name: "anchor",
-          source: stagedAnchor,
-          sourceParentIdentity: packageActivationIdentity(path.dirname(stagedAnchor), true),
-          identity: packageActivationIdentity(stagedAnchor, true),
-        },
-        {
-          name: "helper",
-          source: resolvePackageActivationHelper(anchor),
-          sourceParentIdentity: packageActivationIdentity(stagedControl, true),
-          identity: packageActivationIdentity(resolvePackageActivationHelper(stagedAnchor), false),
-        },
-        {
-          name: "candidate",
-          source: packages.params.stage.packageRoot,
-          sourceParentIdentity: packageActivationIdentity(
-            path.dirname(packages.params.stage.packageRoot),
-            true,
-          ),
-          identity: packageActivationIdentity(packages.params.stage.packageRoot, true),
-        },
-        {
-          name: "launchers",
-          source: packages.params.stage.layout.binDir,
-          sourceParentIdentity: packageActivationIdentity(
-            path.dirname(packages.params.stage.layout.binDir),
-            true,
-          ),
-          identity: packageActivationIdentity(launcherRoot, true),
-        },
-      ],
-      operationId: randomUUID(),
-      authority,
-      anchorIdentity: packageActivationIdentity(stagedAnchor, true),
-      parentIdentity: packageActivationIdentity(path.dirname(anchor), true),
-      journalParentIdentity: packageActivationIdentity(stagedControl, true),
-      binDir: path.dirname(packages.launcher),
-      binIdentity: packageActivationIdentity(path.dirname(packages.launcher), true),
-      originalStageRoot: packages.params.stage.packageRoot,
-      previous: {
-        digest: "a".repeat(64),
-        identity: packageActivationIdentity(packages.packageRoot, true),
-        version: "1.0.0",
-      },
-      candidate: {
-        digest: "b".repeat(64),
-        identity: packageActivationIdentity(packages.params.stage.packageRoot, true),
-        version: "2.0.0",
-      },
-      launcherRootIdentity: packageActivationIdentity(launcherRoot, true),
-      previousLauncherRootIdentity: null,
-      helperDigest: createHash("sha256").update(helperBytes).digest("hex"),
-      launchers: [
-        {
-          name: "openclaw",
-          previous: "old launcher\n",
-          candidate: "candidate launcher\n",
-          previousIdentity: packageActivationIdentity(packages.launcher, "launcher"),
-          candidateIdentity: packageActivationIdentity(
-            path.join(packages.params.stage.layout.binDir, "openclaw"),
-            "launcher",
-          ),
-        },
-      ],
-    };
-    const journal = createPackageActivationJournal(
-      anchor,
-      descriptor,
-      stagedControl,
-      fence.assertCurrent,
-    );
-    fs.renameSync(stagedAnchor, anchor);
-    return {
-      authority,
-      journal,
-      record: journal.transition(journal.read(), "prepared", null, fence.assertCurrent),
-    };
-  });
-  const journalPath = resolvePackageActivationJournalPath(anchor);
+  const f = await lifetimeFixture.prepare();
+  const journal = openPackageActivationJournal(f.anchor);
+  const record = journal.read();
+  const authority = record.descriptor.authority;
   const transition = (
-    record: PackageActivationRecord,
+    previous: PackageActivationRecord,
     phase: PackageActivationPhase,
     intent: PackageActivationIntent,
   ) =>
     withUpdateCommandExecutor(
       randomUUID(),
-      async (executor) => {
-        const fence = await executor.enter(packages.packageRoot);
-        return initial.journal.transition(record, phase, intent, fence.assertCurrent);
-      },
-      { existingAuthority: initial.authority },
+      async (executor) =>
+        journal.transition(
+          previous,
+          phase,
+          intent,
+          (await executor.enter(f.packageRoot)).assertCurrent,
+        ),
+      { existingAuthority: authority },
     );
-  return { ...packages, ...initial, anchor, journalPath, transition };
+  return {
+    ...f,
+    journal,
+    record,
+    authority,
+    transition,
+    journalPath: resolvePackageActivationJournalPath(f.anchor),
+  };
 }
 
-function journalFiles(anchor: string) {
-  return fs
-    .readdirSync(resolvePackageActivationControl(anchor))
-    .toSorted()
-    .map((name) => {
-      const file = path.join(resolvePackageActivationControl(anchor), name);
-      const stat = fs.lstatSync(file);
-      return {
-        name,
-        mode: stat.mode,
-        ino: stat.ino,
-        content: stat.isFile() ? fs.readFileSync(file) : undefined,
-      };
-    });
-}
+const journalFiles = lifetimeFixture.snapshotControl;
 
 function replaceField(
   journalPath: string,
   column: "descriptor_json" | "revision" | "phase" | "intent_json" | "publications_json",
   value: string | number,
 ) {
-  const db = new DatabaseSync(journalPath);
-  try {
-    db.prepare(`UPDATE package_activation SET ${column} = ? WHERE slot = 1`).run(value);
-  } finally {
-    db.close();
-  }
+  withDatabase(journalPath, (db) =>
+    db.prepare(`UPDATE package_activation SET ${column} = ? WHERE slot = 1`).run(value),
+  );
 }
 
 function createHotJournal(journalPath: string) {
@@ -314,92 +173,84 @@ function createHotJournal(journalPath: string) {
 }
 
 describe.skipIf(process.platform === "win32")("package activation journal", () => {
-  it.each(["journal links", "journal mode", "control mode"] as const)(
-    "keeps unsafe %s details local and reports the code without changing recovery evidence",
-    async (change) => {
-      const f = await fixture();
-      const control = resolvePackageActivationControl(f.anchor);
-      const file = change === "control mode" ? control : f.journalPath;
-      if (change === "journal links") {
-        fs.linkSync(file, path.join(root, "retained-journal.sqlite"));
-      } else {
-        fs.chmodSync(file, change === "control mode" ? 0o750 : 0o640);
-      }
-      const before = journalFiles(f.anchor);
-      const observed = fs.lstatSync(file);
-      let failure: unknown;
-      try {
-        openPackageActivationJournal(f.anchor);
-      } catch (error) {
-        failure = error;
-      }
-      expect(failure).toBeInstanceOf(Error);
-      const fact = createUpdateErrorFact("package-swap", failure);
-      const expected = [
-        `Package recovery ${change === "control mode" ? "control" : "journal"}`,
-        JSON.stringify(path.basename(file)),
-        `mode=0${(observed.mode & 0o777).toString(8)}`,
-        `nlink=${observed.nlink}`,
-        `uid=${observed.uid}`,
-        "expected owner-only mode",
-        ...(change === "control mode" ? [] : ["nlink=1"]),
-        ...(change === "journal links" ? ["openclaw doctor --fix"] : []),
-      ];
-      const report = await prepareUpdateFailureReport(
-        {
-          attemptId: "recovery-permissions",
-          result: {
-            mode: "npm",
-            status: "error",
-            durationMs: 1,
-            steps: [
-              {
-                name: "package-swap",
-                command: "",
-                cwd: "",
-                durationMs: 1,
-                exitCode: 1,
-                failureFacts: [fact],
-              },
-            ],
-          },
+  let f: Awaited<ReturnType<typeof fixture>>;
+  beforeEach(async () => {
+    f = await fixture();
+  });
+  it("keeps unsafe journal link details local and reports the code without changing recovery evidence", async () => {
+    const file = f.journalPath;
+    fs.linkSync(file, path.join(root, "retained-journal.sqlite"));
+    const before = journalFiles(f.anchor);
+    const observed = fs.lstatSync(file);
+    let failure: unknown;
+    try {
+      openPackageActivationJournal(f.anchor);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    const fact = createUpdateErrorFact("package-swap", failure);
+    const expected = [
+      "Package recovery journal",
+      JSON.stringify(file),
+      `mode=0${(observed.mode & 0o777).toString(8)}`,
+      `nlink=${observed.nlink}`,
+      `uid=${observed.uid}`,
+      "expected nlink=1",
+      "openclaw doctor --fix",
+    ];
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "recovery-permissions",
+        result: {
+          mode: "npm",
+          status: "error",
+          durationMs: 1,
+          steps: [
+            {
+              name: "package-swap",
+              command: "",
+              cwd: "",
+              durationMs: 1,
+              exitCode: 1,
+              failureFacts: [fact],
+            },
+          ],
         },
-        { env: {}, stateDir: root },
-      );
-      for (const text of expected) {
-        expect(failure).toMatchObject({ message: expect.stringContaining(text) });
-      }
-      expect(report.body).toContain(
-        "Failing check package-swap (package-recovery-permissions-unsafe)",
-      );
-      expect(report.body).not.toContain(fact.message);
-      expect(fact.message!.length).toBeLessThanOrEqual(200);
-      expect(report.body).not.toContain(root);
-      expect(journalFiles(f.anchor)).toEqual(before);
-      expect(fs.lstatSync(file).nlink).toBe(observed.nlink);
-      expect(fs.lstatSync(file).mode).toBe(observed.mode);
-    },
-  );
+      },
+      { env: {}, stateDir: root },
+    );
+    for (const text of expected) {
+      expect(failure).toMatchObject({ message: expect.stringContaining(text) });
+    }
+    expect(report.body).toContain(
+      "Failing check package-swap (package-recovery-permissions-unsafe)",
+    );
+    expect(report.body).not.toContain(fact.message);
+    expect(fact.message!.length).toBeLessThanOrEqual(200);
+    expect(report.body).not.toContain(root);
+    expect(journalFiles(f.anchor)).toEqual(before);
+    expect(fs.lstatSync(file).nlink).toBe(observed.nlink);
+    expect(fs.lstatSync(file).mode).toBe(observed.mode);
+  });
 
   it.each([false, true])(
     "preserves a hot journal until recovery admission (replaced=%s)",
     async (replaced) => {
-      const f = await fixture();
       createHotJournal(f.journalPath);
       const rollbackPath = `${f.journalPath}-journal`;
       expect(fs.statSync(rollbackPath).size).toBeGreaterThan(512);
       const before = journalFiles(f.anchor);
-      const readOnly = new DatabaseSync(f.journalPath, { readOnly: true });
-      try {
-        expect(() => readOnly.prepare("SELECT phase FROM package_activation").get()).toThrow(
-          expect.objectContaining({ errcode: 776 }),
-        );
-      } finally {
-        readOnly.close();
-      }
-      await expect(
-        readPackageActivationStatus(f.anchor, f.record.descriptor.operationId),
-      ).rejects.toThrow();
+      withDatabase(
+        f.journalPath,
+        (db) => {
+          expect(() => db.prepare("SELECT phase FROM package_activation").get()).toThrow(
+            expect.objectContaining({ errcode: 776 }),
+          );
+        },
+        true,
+      );
+      await expect(readPackageActivationStatus(f.anchor, f.operationId)).rejects.toThrow();
       expect(journalFiles(f.anchor)).toEqual(before);
       expect(fs.existsSync(`${f.journalPath}-wal`)).toBe(false);
       expect(fs.existsSync(`${f.journalPath}-shm`)).toBe(false);
@@ -441,7 +292,6 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
   it.each([false, true])(
     "status refuses foreign WAL without touching its files (liveWriter=%s)",
     async (liveWriter) => {
-      const f = await fixture();
       const database = new DatabaseSync(f.journalPath);
       try {
         database.exec("PRAGMA journal_mode = WAL");
@@ -455,12 +305,10 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
         expect(fs.existsSync(`${f.journalPath}-wal`)).toBe(liveWriter);
         expect(fs.existsSync(`${f.journalPath}-shm`)).toBe(liveWriter);
         const before = journalFiles(f.anchor);
-        await expect(
-          readPackageActivationStatus(f.anchor, f.record.descriptor.operationId),
-        ).rejects.toThrow();
+        await expect(readPackageActivationStatus(f.anchor, f.operationId)).rejects.toThrow();
         expect(journalFiles(f.anchor)).toEqual(before);
         await expect(
-          runPackageActivationRecovery(f.anchor, "repair", f.record.descriptor.operationId),
+          runPackageActivationRecovery(f.anchor, "repair", f.operationId),
         ).rejects.toThrow();
         expect(journalFiles(f.anchor)).toEqual(before);
       } finally {
@@ -472,7 +320,6 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
   );
 
   it("keeps all 64 bounded launcher entries while exact-revision intents advance", async () => {
-    const f = await fixture();
     const launchers = Array.from({ length: 64 }, (_, index) => ({
       ...f.record.descriptor.launchers[0]!,
       name: `launcher-${index}`,
@@ -486,10 +333,10 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     );
     const record = openPackageActivationJournal(f.anchor).read();
     expect(record.descriptor.launchers).toEqual(launchers);
-    expect(record).toMatchObject({ revision: 1, phase: "prepared", intent: null });
+    expect(record).toMatchObject({ revision: f.record.revision, phase: "prepared", intent: null });
     const publishing = await f.transition(record, "publishing", { kind: "displace" });
     expect(publishing).toMatchObject({
-      revision: 2,
+      revision: f.record.revision + 1,
       phase: "publishing",
       intent: { kind: "displace" },
       descriptor: record.descriptor,
@@ -502,18 +349,19 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     const restored = await f.transition(disarmed, "rolled-back", null);
     expect(openPackageActivationJournal(f.anchor).read()).toEqual(restored);
     expect(restored).toMatchObject({
-      revision: 4,
+      revision: f.record.revision + 3,
       phase: "rolled-back",
       descriptor: record.descriptor,
     });
-    const db = new DatabaseSync(f.journalPath, { readOnly: true });
-    try {
-      expect(db.prepare("SELECT COUNT(*) AS count FROM package_activation").get()).toEqual({
-        count: 1,
-      });
-    } finally {
-      db.close();
-    }
+    withDatabase(
+      f.journalPath,
+      (db) => {
+        expect(db.prepare("SELECT COUNT(*) AS count FROM package_activation").get()).toEqual({
+          count: 1,
+        });
+      },
+      true,
+    );
   });
 
   it.each([
@@ -562,14 +410,8 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
         "INSERT INTO package_activation SELECT 2, revision, phase, descriptor_json, intent_json, publications_json FROM package_activation WHERE slot = 1",
     },
   ] as const)("preserves a journal with $name", async ({ name, column, value }) => {
-    const f = await fixture();
     if (column === null) {
-      const db = new DatabaseSync(f.journalPath);
-      try {
-        db.exec(value());
-      } finally {
-        db.close();
-      }
+      withDatabase(f.journalPath, (db) => db.exec(value()));
     } else {
       replaceField(f.journalPath, column, value(f.record));
     }
@@ -584,21 +426,18 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
   it.each(["rollback-in-progress", "retiring"] as const)(
     "refuses forward repair after %s is durable",
     async (phase) => {
-      const f = await fixture();
       const disarmed = await f.transition(f.record, phase, null);
       const before = journalFiles(f.anchor);
-      await expect(
-        readPackageActivationStatus(f.anchor, f.record.descriptor.operationId),
-      ).resolves.toEqual({
+      await expect(readPackageActivationStatus(f.anchor, f.operationId)).resolves.toEqual({
         phase,
         operationId: disarmed.descriptor.operationId,
         installKey: f.packageRoot,
       });
-      await expect(
-        runPackageActivationRecovery(f.anchor, "repair", f.record.descriptor.operationId),
-      ).rejects.toThrow(`Forward publication is disarmed (${phase})`);
+      await expect(runPackageActivationRecovery(f.anchor, "repair", f.operationId)).rejects.toThrow(
+        `Forward publication is disarmed (${phase})`,
+      );
       expect(journalFiles(f.anchor)).toEqual(before);
-      expect(fs.existsSync(f.params.stage.packageRoot)).toBe(true);
+      expect(fs.existsSync(path.join(f.anchor, "candidate"))).toBe(true);
       expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
       expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain(
         '"version":"1.0.0"',
@@ -607,7 +446,6 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
   );
 
   it("observes a committed intent after its acknowledgement is lost", async () => {
-    const f = await fixture();
     const failure = new Error("journal commit acknowledgement lost");
     let lost = false;
     const spy = vi
@@ -636,20 +474,19 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     expect(lost).toBe(true);
     const committed = openPackageActivationJournal(f.anchor).read();
     expect(committed).toMatchObject({
-      revision: 2,
+      revision: f.record.revision + 1,
       phase: "publishing",
       intent: { kind: "displace" },
       descriptor: f.record.descriptor,
     });
     expect(() => f.journal.assertCurrent(f.record)).toThrow("no longer current");
     const disarmed = await f.transition(committed, "rollback-in-progress", null);
-    expect(disarmed.revision).toBe(3);
-    expect(fs.existsSync(f.params.stage.packageRoot)).toBe(true);
+    expect(disarmed.revision).toBe(f.record.revision + 2);
+    expect(fs.existsSync(path.join(f.anchor, "candidate"))).toBe(true);
     expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
   });
 
   it("preserves the current intent when its live executor refuses the write", async () => {
-    const f = await fixture();
     const failure = new Error("executor authority revoked");
     const before = journalFiles(f.anchor);
     expect(() =>
@@ -664,38 +501,14 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
 
 const jsonColumns = ["descriptor_json", "intent_json", "publications_json"] as const;
 
-function byteBoundsFixture(oversized: (typeof jsonColumns)[number]) {
-  const anchor = path.join(dirs.make("package-journal-byte-bound-"), "anchor");
-  fs.mkdirSync(anchor, { mode: 0o700 });
-  fs.mkdirSync(resolvePackageActivationControl(anchor), { mode: 0o700 });
-  const file = resolvePackageActivationJournalPath(anchor);
-  const db = new DatabaseSync(file);
-  try {
-    db.exec(
-      "CREATE TABLE package_activation (slot INTEGER, revision INTEGER, phase TEXT, descriptor_json TEXT, intent_json TEXT, publications_json TEXT)",
-    );
-    const row = { descriptor_json: "{", intent_json: "null", publications_json: "[]" };
-    // Under one million characters, but over the one MiB byte bound.
-    row[oversized] = "é".repeat(512 * 1024 + 1);
-    db.prepare("INSERT INTO package_activation VALUES (1, 0, 'prepared', ?, ?, ?)").run(
-      row.descriptor_json,
-      row.intent_json,
-      row.publications_json,
-    );
-  } finally {
-    db.close();
-  }
-  fs.chmodSync(file, 0o600);
+async function byteBoundsFixture(oversized: (typeof jsonColumns)[number]) {
+  const { anchor, journalPath: file } = await fixture();
+  replaceField(file, "descriptor_json", "{");
+  // Under one million characters, but over the one MiB byte bound.
+  replaceField(file, oversized, "é".repeat(512 * 1024 + 1));
   const snapshot = () => {
-    const stat = fs.statSync(file);
-    return {
-      names: fs.readdirSync(anchor),
-      dev: stat.dev,
-      ino: stat.ino,
-      mode: stat.mode,
-      mtime: stat.mtimeMs,
-      digest: createHash("sha256").update(fs.readFileSync(file)).digest("hex"),
-    };
+    const { dev, ino, mode, mtimeMs } = fs.statSync(file);
+    return { names: fs.readdirSync(anchor), dev, ino, mode, mtimeMs, bytes: fs.readFileSync(file) };
   };
   return { anchor, snapshot };
 }
@@ -703,8 +516,8 @@ function byteBoundsFixture(oversized: (typeof jsonColumns)[number]) {
 describe.skipIf(process.platform === "win32")("existing package journal byte bounds", () => {
   it.each(jsonColumns)(
     "refuses oversized %s before decoding without modifying the original journal",
-    (column) => {
-      const { anchor, snapshot } = byteBoundsFixture(column);
+    async (column) => {
+      const { anchor, snapshot } = await byteBoundsFixture(column);
       const before = snapshot();
       expect(() => openPackageActivationJournal(anchor).read()).toThrow(
         "Package publication journal must contain one bounded operation.",

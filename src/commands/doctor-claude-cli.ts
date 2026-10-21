@@ -32,7 +32,10 @@ type ClaudeCliDiscoveryApi = {
   ) => { executable: string } | undefined;
 };
 
-function isClaudeCliAuthenticated(commandPath: string, env: NodeJS.ProcessEnv): boolean {
+function readClaudeCliAuthentication(
+  commandPath: string,
+  env: NodeJS.ProcessEnv,
+): boolean | undefined {
   const result = spawnSync(commandPath, ["auth", "status", "--json"], {
     encoding: "utf8",
     env,
@@ -40,14 +43,17 @@ function isClaudeCliAuthenticated(commandPath: string, env: NodeJS.ProcessEnv): 
     timeout: 3_000,
     windowsHide: true,
   });
-  if (result.error || result.status !== 0) {
-    return false;
+  if (result.error || result.status === null) {
+    return undefined;
   }
   try {
     const parsed: unknown = JSON.parse(result.stdout);
-    return isRecord(parsed) && parsed.loggedIn === true;
+    if (!isRecord(parsed) || typeof parsed.loggedIn !== "boolean") {
+      return undefined;
+    }
+    return parsed.loggedIn ? (result.status === 0 ? true : undefined) : false;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -152,7 +158,7 @@ export function noteClaudeCliHealth(
   for (const envName of backend?.config.clearEnv ?? []) {
     delete authEnv[envName];
   }
-  const authenticated = commandPath ? isClaudeCliAuthenticated(commandPath, authEnv) : false;
+  const authenticated = commandPath ? readClaudeCliAuthentication(commandPath, authEnv) : undefined;
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const showAgentLabels =
     workspaceTargets.length > 1 ||
@@ -170,7 +176,12 @@ export function noteClaudeCliHealth(
     lines.push(`- Binary: found at ${shortenHomePath(commandPath)} (not on service PATH).`);
   }
 
-  if (commandPath && !authenticated) {
+  if (commandPath && authenticated === undefined) {
+    lines.push("- Claude auth: status check unavailable.");
+    fixHints.push(
+      `- Fix: run ${formatCliCommand("claude auth status --json")} to check Claude CLI authentication.`,
+    );
+  } else if (commandPath && !authenticated) {
     lines.push("- Claude auth: not logged in.");
     fixHints.push(`- Fix: run ${formatCliCommand("claude auth login")}.`);
   }

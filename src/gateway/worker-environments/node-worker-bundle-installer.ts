@@ -39,7 +39,6 @@ export type GatewayNodeWorkerBundleInstall = (params: {
 
 type ActiveInstall = {
   observation: GatewayNodeWorkerBundleInstallObservation;
-  references: number;
   environmentReferences: Map<string, number>;
   // Callers share one node download, so every joined caller hears its progress.
   progressListeners: Set<() => void>;
@@ -136,7 +135,6 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
             startedAtMs,
             updatedAtMs: startedAtMs,
           },
-          references: 0,
           environmentReferences: new Map(),
           progressListeners: new Set(),
           lastProgressLogAtMs: startedAtMs,
@@ -147,7 +145,6 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           `worker runtime install started (${params.reason}): node=${node.nodeId} bundle=${artifact.bundleHash.slice(0, 12)} size=${megabytes(artifact.tarballBytes)} MB`,
         );
       }
-      entry.references++;
       // A per-caller wrapper keeps shared callbacks from unsubscribing each other.
       const progressListener = params.onProgress && (() => params.onProgress?.());
       if (progressListener) {
@@ -292,7 +289,10 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
         if (!receipt || !sameWorkerBuild(receipt, artifact)) {
           throw new Error("Device worker bundle installer returned a mismatched build receipt");
         }
-        if (currentEntry.references === 1) {
+        if (
+          currentEntry.environmentReferences.size === 1 &&
+          currentEntry.environmentReferences.get(params.environmentId) === 1
+        ) {
           options.log.info(`${prefix} installed in ${elapsedSeconds().toFixed(1)}s`);
         }
         return receipt;
@@ -300,7 +300,6 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
         if (prepared) {
           options.transfer.revoke(prepared.token);
         }
-        currentEntry.references--;
         if (progressListener) {
           currentEntry.progressListeners.delete(progressListener);
         }
@@ -311,7 +310,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
             ...currentEntry.observation,
             environmentIds: [...currentEntry.environmentReferences.keys()],
           };
-          if (currentEntry.references === 0) {
+          if (currentEntry.environmentReferences.size === 0) {
             active.delete(key);
           }
           version++;

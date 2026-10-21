@@ -1,4 +1,3 @@
-// Feishu plugin module implements monitor.card action.lifecycle support behavior.
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Preserve module setup before modules that consume it.
@@ -65,10 +64,20 @@ const lifecycleAccount = createResolvedFeishuLifecycleAccount({
   },
 });
 
+function quickAction(chatId?: string, chatType: "group" | "p2p" = "p2p") {
+  return {
+    tag: "button",
+    value: createFeishuCardInteractionEnvelope({
+      k: "quick",
+      a: "feishu.quick_actions.help",
+      q: "/help",
+      c: { u: "ou_user1", h: chatId, t: chatType, e: Date.now() + 60_000 },
+    }),
+  };
+}
+
 function createCardActionEvent(params: {
   token: string;
-  action: string;
-  command: string;
   chatId?: string;
   chatType?: "group" | "p2p";
   contextOpenMessageId?: string;
@@ -85,20 +94,7 @@ function createCardActionEvent(params: {
     },
     token: params.token,
     ...(params.openMessageId ? { open_message_id: params.openMessageId } : {}),
-    action: {
-      tag: "button",
-      value: createFeishuCardInteractionEnvelope({
-        k: "quick",
-        a: params.action,
-        q: params.command,
-        c: {
-          u: openId,
-          h: chatId,
-          t: chatType,
-          e: Date.now() + 60_000,
-        },
-      }),
-    },
+    action: quickAction(chatId, chatType),
     context: {
       open_id: openId,
       user_id: "user_1",
@@ -142,6 +138,11 @@ function latestFinalizedContext() {
     SessionKey?: string;
     MessageSid?: string;
   };
+}
+
+function expectOneDispatch() {
+  expect(lastRuntime.error).not.toHaveBeenCalled();
+  expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
 }
 
 describe("Feishu card-action lifecycle", () => {
@@ -195,11 +196,7 @@ describe("Feishu card-action lifecycle", () => {
 
   it("routes one reply across duplicate callback delivery", async () => {
     const onCardAction = await setupLifecycleMonitor();
-    const event = createCardActionEvent({
-      token: "tok-card-once",
-      action: "feishu.quick_actions.help",
-      command: "/help",
-    });
+    const event = createCardActionEvent({ token: "tok-card-once" });
 
     await expectFeishuReplyPipelineDedupedAcrossReplay({
       handler: onCardAction,
@@ -208,17 +205,18 @@ describe("Feishu card-action lifecycle", () => {
       createFeishuReplyDispatcherMock,
     });
 
-    expect(lastRuntime?.error).not.toHaveBeenCalled();
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    expectOneDispatch();
     expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
-    const dispatcherParams = latestReplyDispatcherParams();
-    expect(dispatcherParams.accountId).toBe("acct-card");
-    expect(dispatcherParams.chatId).toBe("p2p:ou_user1");
-    expect(dispatcherParams.replyToMessageId).toBeUndefined();
-    const finalized = latestFinalizedContext();
-    expect(finalized.AccountId).toBe("acct-card");
-    expect(finalized.SessionKey).toBe("agent:bound-agent:feishu:direct:ou_user1");
-    expect(finalized.MessageSid).toBe("card-action-tok-card-once");
+    expect(latestReplyDispatcherParams()).toMatchObject({
+      accountId: "acct-card",
+      chatId: "p2p:ou_user1",
+    });
+    expect(latestReplyDispatcherParams().replyToMessageId).toBeUndefined();
+    expect(latestFinalizedContext()).toMatchObject({
+      AccountId: "acct-card",
+      SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+      MessageSid: "card-action-tok-card-once",
+    });
     expect(touchBindingMock).toHaveBeenCalledWith("binding-card");
 
     expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
@@ -232,15 +230,12 @@ describe("Feishu card-action lifecycle", () => {
     await onCardAction(
       createCardActionEvent({
         token: "tok-card-require-mention",
-        action: "feishu.quick_actions.help",
-        command: "/help",
         chatId: "oc_group_require_mention",
         chatType: "group",
       }),
     );
 
-    expect(lastRuntime?.error).not.toHaveBeenCalled();
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    expectOneDispatch();
     expect(latestReplyDispatcherParams().chatId).toBe("oc_group_require_mention");
     expect(latestFinalizedContext().MessageSid).toBe("card-action-tok-card-require-mention");
   });
@@ -249,16 +244,13 @@ describe("Feishu card-action lifecycle", () => {
     const onCardAction = await setupLifecycleMonitor();
     const event = createCardActionEvent({
       token: "tok-card-original-target",
-      action: "feishu.quick_actions.help",
-      command: "/help",
       openMessageId: "card-action-c-temporary",
       contextOpenMessageId: "om_card_original",
     });
 
     await onCardAction(event);
 
-    expect(lastRuntime?.error).not.toHaveBeenCalled();
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    expectOneDispatch();
     expect(latestReplyDispatcherParams().replyToMessageId).toBe("om_card_original");
   });
 
@@ -275,44 +267,24 @@ describe("Feishu card-action lifecycle", () => {
         },
       },
       token: "tok-card-v2-nested-operator",
-      action: {
-        tag: "button",
-        value: createFeishuCardInteractionEnvelope({
-          k: "quick",
-          a: "feishu.quick_actions.help",
-          q: "/help",
-          c: {
-            u: "ou_user1",
-            h: chatId,
-            t: "p2p",
-            e: Date.now() + 60_000,
-          },
-        }),
-      },
+      action: quickAction(chatId),
       context: {
         open_message_id: "om_card_v2_nested",
         open_chat_id: chatId,
       },
     });
 
-    expect(lastRuntime?.error).not.toHaveBeenCalled();
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-    expect(createFeishuReplyDispatcherMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "acct-card",
-        chatId,
-        replyToMessageId: "om_card_v2_nested",
-      }),
-    );
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          AccountId: "acct-card",
-          SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
-          MessageSid: "card-action-tok-card-v2-nested-operator",
-        }),
-      }),
-    );
+    expectOneDispatch();
+    expect(latestReplyDispatcherParams()).toMatchObject({
+      accountId: "acct-card",
+      chatId,
+      replyToMessageId: "om_card_v2_nested",
+    });
+    expect(latestFinalizedContext()).toMatchObject({
+      AccountId: "acct-card",
+      SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+      MessageSid: "card-action-tok-card-v2-nested-operator",
+    });
   });
 
   it("routes SDK-style card callbacks without context as direct callbacks", async () => {
@@ -324,27 +296,15 @@ describe("Feishu card-action lifecycle", () => {
       tenant_key: "tenant_1",
       open_message_id: "om_sdk_card",
       token: "tok-card-sdk-flat",
-      action: {
-        tag: "button",
-        value: createFeishuCardInteractionEnvelope({
-          k: "quick",
-          a: "feishu.quick_actions.help",
-          q: "/help",
-          c: {
-            u: "ou_user1",
-            t: "p2p",
-            e: Date.now() + 60_000,
-          },
-        }),
-      },
+      action: quickAction(),
     });
 
-    expect(lastRuntime?.error).not.toHaveBeenCalled();
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-    const dispatcherParams = latestReplyDispatcherParams();
-    expect(dispatcherParams.accountId).toBe("acct-card");
-    expect(dispatcherParams.chatId).toBe("ou_user1");
-    expect(dispatcherParams.replyToMessageId).toBe("om_sdk_card");
+    expectOneDispatch();
+    expect(latestReplyDispatcherParams()).toMatchObject({
+      accountId: "acct-card",
+      chatId: "ou_user1",
+      replyToMessageId: "om_sdk_card",
+    });
     expect(latestFinalizedContext().MessageSid).toBe("card-action-tok-card-sdk-flat");
   });
 
@@ -352,25 +312,18 @@ describe("Feishu card-action lifecycle", () => {
     const onCardAction = await setupLifecycleMonitor();
     const event = createCardActionEvent({
       token: "tok-card-temporary-target",
-      action: "feishu.quick_actions.help",
-      command: "/help",
       openMessageId: "card-action-c-temporary",
     });
 
     await onCardAction(event);
 
-    expect(lastRuntime?.error).not.toHaveBeenCalled();
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    expectOneDispatch();
     expect(latestReplyDispatcherParams().replyToMessageId).toBeUndefined();
   });
 
   it("does not duplicate delivery when retrying after a post-send failure", async () => {
     const onCardAction = await setupLifecycleMonitor();
-    const event = createCardActionEvent({
-      token: "tok-card-retry",
-      action: "feishu.quick_actions.help",
-      command: "/help",
-    });
+    const event = createCardActionEvent({ token: "tok-card-retry" });
 
     dispatchReplyFromConfigMock.mockImplementationOnce(async ({ dispatcher }) => {
       await dispatcher.sendFinalReply({ text: "card action reply once" });
@@ -392,33 +345,7 @@ describe("Feishu card-action lifecycle", () => {
   it("drops malformed card-action events with empty tokens before handler dispatch", async () => {
     const onCardAction = await setupLifecycleMonitor();
 
-    await onCardAction({
-      operator: {
-        open_id: "ou_user1",
-        user_id: "user_1",
-        union_id: "union_1",
-      },
-      token: "",
-      action: {
-        tag: "button",
-        value: createFeishuCardInteractionEnvelope({
-          k: "quick",
-          a: "feishu.quick_actions.help",
-          q: "/help",
-          c: {
-            u: "ou_user1",
-            h: "p2p:ou_user1",
-            t: "p2p",
-            e: Date.now() + 60_000,
-          },
-        }),
-      },
-      context: {
-        open_id: "ou_user1",
-        user_id: "user_1",
-        chat_id: "p2p:ou_user1",
-      },
-    });
+    await onCardAction(createCardActionEvent({ token: "" }));
 
     expect(lastRuntime?.error).toHaveBeenCalledWith(
       "feishu[acct-card]: ignoring malformed card action payload",

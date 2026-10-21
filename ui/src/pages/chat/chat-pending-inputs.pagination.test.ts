@@ -28,7 +28,7 @@ import {
 } from "./chat-pending-inputs.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
@@ -415,7 +415,9 @@ describe("server-owned pending input pagination", () => {
 
       await vi.waitFor(() => {
         expect(getChatPendingInputs(host)?.before).toBe(21);
-        expect(getChatPendingInputs(host)?.page).toEqual(refreshedOlderPage);
+        expect(getChatPendingInputs(host)?.page).toEqual(
+          order === "refresh-first" ? olderPage : refreshedOlderPage,
+        );
       });
       expect(host.chatMessages).toEqual([canonical]);
       expect(host.chatQueue).toEqual([]);

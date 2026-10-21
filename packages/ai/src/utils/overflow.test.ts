@@ -3,6 +3,8 @@ import type { AssistantMessage } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { isContextOverflow, matchesContextOverflowMessage } from "./overflow.js";
 
+type ContextUsage = AssistantMessage["usage"]["contextUsage"];
+
 function errorMessage(message: string): AssistantMessage {
   return {
     role: "assistant",
@@ -17,19 +19,17 @@ function errorMessage(message: string): AssistantMessage {
   };
 }
 
-function successfulMessage(
-  contextUsage?: AssistantMessage["usage"]["contextUsage"],
-): AssistantMessage {
+function successfulMessage(contextUsage?: ContextUsage): AssistantMessage {
   return {
     ...errorMessage(""),
     usage: {
+      ...createZeroUsage(),
       input: 12,
       output: 15_104,
       cacheRead: 1_100_000,
       cacheWrite: 93_130,
       ...(contextUsage ? { contextUsage } : {}),
       totalTokens: 1_208_246,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
     errorMessage: undefined,
@@ -48,45 +48,28 @@ describe("provider overflow messages", () => {
 
   it.each([
     "Context window exceeded: estimated input 35137 leaves only 0 output tokens within the 32768-token context.",
+    "Input validation error: `inputs` tokens + `max_new_tokens` must be <= 32768. Given: 28897 `inputs` tokens and 3872 `max_new_tokens`",
+    "Input validation error: `inputs` must have less than 32768 tokens. Given: 40000",
     "Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input.",
+    "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
   ])("detects %s", (text) => {
     expect(isContextOverflow(errorMessage(text), 262_144)).toBe(true);
   });
-});
 
-describe("scoped overflow messages", () => {
+  it("does not compact an output-only TGI validation error", () => {
+    const text = "Input validation error: `max_new_tokens` must be <= 4096. Given: 8192";
+    expect(isContextOverflow(errorMessage(text))).toBe(false);
+  });
   it("recognizes the provider input-length wording in the strict failover scope", () => {
-    expect(
-      matchesContextOverflowMessage(
-        "input length 14295 tokens exceeds the model limit",
-        "failover-explicit",
-      ),
-    ).toBe(true);
+    const text = "input length 14295 tokens exceeds the model limit";
+    expect(matchesContextOverflowMessage(text, "failover-explicit")).toBe(true);
   });
-});
-
-describe("usage-based overflow", () => {
-  it("prefers an available context snapshot over aggregate billing usage", () => {
-    expect(
-      isContextOverflow(
-        successfulMessage({
-          state: "available",
-          promptTokens: 148_874,
-          totalTokens: 163_978,
-        }),
-        1_000_000,
-      ),
-    ).toBe(false);
-  });
-
-  it("does not infer overflow from aggregate billing when context is unavailable", () => {
-    expect(isContextOverflow(successfulMessage({ state: "unavailable" }), 1_000_000)).toBe(false);
-  });
-
-  it("counts cache-write tokens toward the context when no snapshot is available", () => {
-    // input + cacheRead alone is 1_100_012, under this window; the 93_130 cache-write
-    // tokens are prompt tokens too, and providers that report them separately keep
-    // them out of `input`. Omitting the bucket silently under-counts the context.
-    expect(isContextOverflow(successfulMessage(), 1_150_000)).toBe(true);
+  it.each<[ContextUsage, number, boolean]>([
+    [{ state: "available", promptTokens: 148_874, totalTokens: 163_978 }, 1_000_000, false],
+    [{ state: "unavailable" }, 1_000_000, false],
+    // input + cacheRead is below this window; cacheWrite must also count.
+    [undefined, 1_150_000, true],
+  ])("uses context %j before billing usage", (context, window, overflow) => {
+    expect(isContextOverflow(successfulMessage(context), window)).toBe(overflow);
   });
 });

@@ -35,21 +35,15 @@ export type SkillsState = {
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
   skillsError: string | null;
-  skillsFilter: string;
-  skillsStatusFilter: "all" | "ready" | "needs-setup" | "disabled";
-  skillsDetailKey: string | null;
-  skillsDetailTab: "overview" | "card";
   skillOperation: SkillOperation;
   skillEdits: Record<string, string>;
   skillMessages: Record<string, SkillMessage>;
-  clawhubSearchQuery: string;
   clawhubSearchResults: ClawHubSearchResult[] | null;
   clawhubSearchLoading: boolean;
   clawhubSearchError: string | null;
   clawhubIconUrls: Record<string, string>;
   clawhubDetail: ClawHubSkillDetail | null;
   clawhubDetailRef: string | null;
-  clawhubDetailLoading: boolean;
   clawhubDetailError: string | null;
   clawhubInstallMessage: {
     kind: "success" | "error";
@@ -241,25 +235,6 @@ export async function loadSkills(
   }
 }
 
-async function loadCurrentSkillsForOperation(
-  state: SkillsState,
-  client: GatewayBrowserClient,
-  operation: ActiveSkillOperation,
-  clearMessages = false,
-) {
-  let shouldClearMessages = clearMessages;
-  // Reconciliation can change scope while a status request is pending. Keep
-  // the operation owner until one response belongs to the current scope.
-  while (ownsSkillOperation(state, client, operation)) {
-    const isCurrentAgent = captureSkillsAgentScope(state);
-    await loadSkills(state, { clearMessages: shouldClearMessages, operation });
-    shouldClearMessages = false;
-    if (!ownsSkillOperation(state, client, operation) || isCurrentAgent()) {
-      return;
-    }
-  }
-}
-
 export async function refreshSkills(state: SkillsState, loadAgents: () => Promise<void>) {
   const client = state.client;
   if (!client || !state.connected || state.skillsLoading || state.skillOperation) {
@@ -274,7 +249,11 @@ export async function refreshSkills(state: SkillsState, loadAgents: () => Promis
     if (!ownsSkillOperation(state, client, operation)) {
       return;
     }
-    await loadCurrentSkillsForOperation(state, client, operation, true);
+    const isCurrentAgent = captureSkillsAgentScope(state);
+    await loadSkills(state, { clearMessages: true, operation });
+    if (ownsSkillOperation(state, client, operation) && !isCurrentAgent()) {
+      await loadSkills(state, { operation });
+    }
   } finally {
     releaseSkillOperation(state, operation);
   }
@@ -455,7 +434,7 @@ async function runSkillMutation(
     }
   } finally {
     if (ownsSkillOperation(state, client, operation) && !isCurrentAgent()) {
-      await loadCurrentSkillsForOperation(state, client, operation);
+      await loadSkills(state, { operation });
     }
     releaseSkillOperation(state, operation);
   }
@@ -544,7 +523,6 @@ export async function loadClawHubDetail(state: SkillsState, ref: string) {
   const client = state.client;
   const isCurrentAgent = captureSkillsAgentScope(state);
   state.clawhubDetailRef = ref;
-  state.clawhubDetailLoading = true;
   state.clawhubDetailError = null;
   state.clawhubDetail = null;
   const isCurrent = () =>
@@ -564,14 +542,12 @@ export async function loadClawHubDetail(state: SkillsState, ref: string) {
     }
     state.clawhubDetailError = formatUiError(err);
   }
-  state.clawhubDetailLoading = false;
 }
 
 export function closeClawHubDetail(state: SkillsState) {
   state.clawhubDetailRef = null;
   state.clawhubDetail = null;
   state.clawhubDetailError = null;
-  state.clawhubDetailLoading = false;
 }
 
 export async function installFromClawHub(state: SkillsState, ref: string, version?: string) {

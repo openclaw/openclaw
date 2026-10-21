@@ -1,8 +1,5 @@
-import { createHash } from "node:crypto";
-import {
-  loadAuthProfileStoreWithoutExternalProfiles,
-  resolveAuthStorePathForDisplay,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "openclaw/plugin-sdk/agent-runtime";
+import { AuthStorage } from "openclaw/plugin-sdk/agent-sessions";
 import {
   createMigrationItem,
   markMigrationItemConflict,
@@ -10,6 +7,7 @@ import {
   markMigrationItemSkipped,
 } from "openclaw/plugin-sdk/migration";
 import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildOpenAICodexCredentialExtra,
@@ -54,34 +52,16 @@ const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_DEFAULT_MODEL = "openai/gpt-6-astra";
 const HERMES_AUTH_DISPLAY_NAME = "Hermes import";
 
-type AgentDefaultModelConfigs = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"]
->;
-type AgentDefaultModelConfigEntry = AgentDefaultModelConfigs[string];
-
 type HermesCodexAuthProfile = {
   candidate: HermesCodexAuthCandidate;
   credential: OAuthCredential;
-  result: ProviderAuthResult;
   sourceProfileId: string;
 };
 
-function authProfileTarget(agentDir: string, profileId: string): string {
-  return `${resolveAuthStorePathForDisplay(agentDir)}#${profileId}`;
-}
-
 function sourceCredentialFingerprint(candidate: HermesCodexAuthCandidate): string {
-  const hash = createHash("sha256");
-  for (const part of [
-    candidate.sourceKind,
-    candidate.accountId ?? "",
-    candidate.access,
-    candidate.refresh,
-  ]) {
-    hash.update(part);
-    hash.update("\0");
-  }
-  return hash.digest("hex");
+  return sha256Hex(
+    `${candidate.sourceKind}\0${candidate.accountId ?? ""}\0${candidate.access}\0${candidate.refresh}\0`,
+  );
 }
 
 async function readOpenCodeOpenAICandidates(
@@ -133,46 +113,18 @@ function buildAuthResult(
   });
 }
 
-function readProviderAuthModelConfigs(result: ProviderAuthResult): AgentDefaultModelConfigs {
-  const models = result.configPatch?.agents?.defaults?.models;
-  if (isRecord(models)) {
-    return { ...models };
-  }
-  const defaultModel = normalizeOptionalString(result.defaultModel) ?? OPENAI_CODEX_DEFAULT_MODEL;
-  return { [defaultModel]: {} };
-}
-
-function mergeModelConfigEntry(
-  existing: AgentDefaultModelConfigEntry | undefined,
-  patch: AgentDefaultModelConfigEntry,
-): AgentDefaultModelConfigEntry {
-  if (existing && isRecord(existing) && isRecord(patch)) {
-    return { ...existing, ...patch } as AgentDefaultModelConfigEntry;
-  }
-  return existing ?? patch;
-}
-
-function applyOAuthModelConfigsToConfig(
-  cfg: OpenClawConfig,
-  result: ProviderAuthResult,
-): OpenClawConfig {
-  const patchModels = readProviderAuthModelConfigs(result);
-  const existingModels = cfg.agents?.defaults?.models ?? {};
-  const models: AgentDefaultModelConfigs = result.replaceDefaultModels
-    ? { ...patchModels }
-    : { ...existingModels };
-  if (!result.replaceDefaultModels) {
-    for (const [modelRef, modelConfig] of Object.entries(patchModels)) {
-      models[modelRef] = mergeModelConfigEntry(models[modelRef], modelConfig);
-    }
-  }
+function applyOAuthModelConfig(cfg: OpenClawConfig): OpenClawConfig {
   return {
     ...cfg,
     agents: {
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        models,
+        models: {
+          ...cfg.agents?.defaults?.models,
+          [OPENAI_CODEX_DEFAULT_MODEL]:
+            cfg.agents?.defaults?.models?.[OPENAI_CODEX_DEFAULT_MODEL] ?? {},
+        },
       },
     },
   };
@@ -221,7 +173,6 @@ async function readCodexAuthProfilesFromSource(
     const entry = {
       candidate,
       credential: profile.credential,
-      result,
       sourceProfileId: profile.profileId,
     };
     const dedupeKey = authProfileDedupeKey(entry);
@@ -310,7 +261,10 @@ export async function buildAuthItems(params: {
   if (profiles.length === 0) {
     return items;
   }
-  const store = loadAuthProfileStoreWithoutExternalProfiles(params.targets.agentDir);
+  const [store, authStorePath] = await Promise.all([
+    loadAuthProfileStoreWithoutExternalProfilesAsync(params.targets.agentDir),
+    AuthStorage.resolvePathForDisplayAsync(params.targets.agentDir),
+  ]);
   items.push(
     ...profiles.map((profile) => {
       const matchedProfileId = findMatchingProfile(store, profile.credential);
@@ -334,7 +288,7 @@ export async function buildAuthItems(params: {
         kind: "auth",
         action: skipped ? "skip" : "create",
         source: profile.candidate.sourcePath,
-        target: authProfileTarget(params.targets.agentDir, profileId),
+        target: `${authStorePath}#${profileId}`,
         status: skipped ? "skipped" : conflict ? "conflict" : "planned",
         sensitive: true,
         reason: skipped
@@ -348,7 +302,7 @@ export async function buildAuthItems(params: {
         details: {
           provider: OPENAI_PROVIDER_ID,
           profileId,
-          ...(typeof profile.candidate.sourceCredentialIndex === "number"
+          ...(profile.candidate.sourceCredentialIndex !== undefined
             ? { sourceCredentialIndex: profile.candidate.sourceCredentialIndex }
             : {}),
           sourceCredentialFingerprint: sourceCredentialFingerprint(profile.candidate),
@@ -367,9 +321,6 @@ export async function applyAuthItem(
   item: MigrationItem,
   targets: PlannedMigrationTargets,
 ): Promise<MigrationItem> {
-  if (item.status !== "planned") {
-    return item;
-  }
   const source = item.source;
   const profileId = typeof item.details?.profileId === "string" ? item.details.profileId : "";
   const sourceProfileId =
@@ -444,7 +395,7 @@ export async function applyAuthItem(
     ctx,
     profile: configProfile,
     applyConfigPatch(config) {
-      const next = applyOAuthModelConfigsToConfig(config, profile.result);
+      const next = applyOAuthModelConfig(config);
       return resolveAgentModelPrimaryValue(next.agents?.defaults?.model) === undefined
         ? applyAgentDefaultModelPrimary(next, OPENAI_CODEX_DEFAULT_MODEL)
         : next;

@@ -12,6 +12,7 @@ const lazyColumns = [
   ["agent_database_leases", "provenance", "TEXT", true],
   ["user_profile_identities", "authorization_id", "TEXT"],
   ["user_profile_identities", "authorization_basis_json", "TEXT"],
+  ["user_profile_identities", "verified_email_json", "TEXT", true],
   ["claw_installs", "bootstrap_content_digest", "TEXT"],
   ["claw_installs", "bootstrap_source_path", "TEXT"],
   ["worker_environments", "desktop_json", "TEXT"],

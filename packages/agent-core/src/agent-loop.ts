@@ -14,8 +14,10 @@ import {
   TranscriptNotContinuableError,
 } from "./errors.js";
 import {
+  commitInternalToolTurnInput,
   copyInternalToolResultState,
   getInternalToolExecutionPreparer,
+  getInternalToolTurnInputScope,
   getInternalSteeringQueueObserver,
   type InternalToolExecutionPreparation,
   takeInternalToolBatchLifecycle,
@@ -45,6 +47,7 @@ import {
 } from "./tool-call-outcome.js";
 import {
   type AgentToolExecutionContext,
+  captureAgentToolInputScope,
   resolveAgentAssistantTurnId,
   runWithAgentToolExecutionContext,
 } from "./tool-execution-context.js";
@@ -107,9 +110,11 @@ export async function runAgentLoop(
     if (config.consumeQueuedMessageCancellation?.(prompt)) {
       continue;
     }
-    await emit({ type: "message_end", message: prompt });
     state.context.messages.push(prompt);
     newMessages.push(prompt);
+    // Acceptance precedes fallible publication so continuation cannot reuse the prior input.
+    commitInternalToolTurnInput(config.completesToolTurn);
+    await emit({ type: "message_end", message: prompt });
   }
   if (inputPrompts.length > 0 && newMessages.length === 0) {
     // A drained queue batch can be cancelled while turn_start listeners settle.
@@ -211,9 +216,12 @@ async function runLoop(
       if (message.role === "user") {
         turnTainted = false;
       }
-      await emit({ type: "message_end", message });
       state.context.messages.push(message);
       newMessages.push(message);
+      if (!isOpenClawSystemUpdateMessage(message)) {
+        commitInternalToolTurnInput(config.completesToolTurn);
+      }
+      await emit({ type: "message_end", message });
       injectedMessage = true;
     }
     return injectedMessage;
@@ -476,6 +484,12 @@ async function executeToolCalls(
   scheduling?: AsyncToolBatchScheduling,
   hasUnobservedAsyncToolResults = false,
 ): Promise<ExecutedToolCallBatch> {
+  if (config.completesToolTurn) {
+    const inputScope = getInternalToolTurnInputScope(config.completesToolTurn);
+    for (const toolCall of toolCalls) {
+      captureAgentToolInputScope({ assistantMessage, toolCall }, inputScope);
+    }
+  }
   const batch: ToolBatchContext = {
     currentContext,
     assistantMessage,

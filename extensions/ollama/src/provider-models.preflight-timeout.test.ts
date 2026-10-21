@@ -1,4 +1,7 @@
 // Exercise the real guard: its timeout owns DNS/proxy preflight as well as fetch.
+// This suite owns real-guard DNS deadlines, including caller overrides; the
+// node inference deadline tests in node-inference.test.ts own the total HTTP
+// workflow.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchOllamaModels } from "./provider-models.js";
 

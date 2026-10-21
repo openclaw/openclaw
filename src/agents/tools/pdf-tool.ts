@@ -1,5 +1,6 @@
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -54,7 +55,6 @@ import {
   applyAgentDefaultModelConfig,
   hasToolModelConfig,
   prepareToolAuthProfileStore,
-  loadLegacyToolAuthProfileStore,
 } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
@@ -112,11 +112,6 @@ export function createPdfTool(options?: {
   sandbox?: MediaToolSandbox;
   fsPolicy?: ToolFsPolicy;
   activeModel?: PdfToolActiveModel;
-  /**
-   * Avoid resolving auto PDF-provider/model candidates while registering the
-   * tool. The concrete PDF model is still resolved before execution.
-   */
-  deferAutoModelResolution?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
   const hasExplicitModelConfig = hasExplicitPdfToolModelConfig(options?.config);
@@ -127,8 +122,6 @@ export function createPdfTool(options?: {
     return null;
   }
 
-  const shouldDeferAutoModelResolution =
-    options?.deferAutoModelResolution === true && !hasExplicitModelConfig;
   const resolveInitialModelConfig = (authStore: AuthProfileStore | undefined) =>
     resolvePdfModelConfigForTool({
       cfg: options?.config,
@@ -137,13 +130,10 @@ export function createPdfTool(options?: {
       authStore,
       activeModel: options?.activeModel,
     });
-  const registrationPdfModelConfig = shouldDeferAutoModelResolution
-    ? null
-    : resolveInitialModelConfig(
-        options?.authProfileStore ??
-          (hasExplicitModelConfig ? undefined : loadLegacyToolAuthProfileStore(agentDir)),
-      );
-  if (!registrationPdfModelConfig && !shouldDeferAutoModelResolution) {
+  const registrationPdfModelConfig = hasExplicitModelConfig
+    ? resolveInitialModelConfig(options?.authProfileStore)
+    : null;
+  if (!registrationPdfModelConfig && hasExplicitModelConfig) {
     return null;
   }
 
@@ -574,10 +564,7 @@ export function createPdfTool(options?: {
     description,
     parameters: PdfToolSchema,
     execute: async (_toolCallId, args, signal) => {
-      const record: Record<string, unknown> = args && typeof args === "object" ? { ...args } : {};
-      if (Array.isArray(record.pdfs)) {
-        record.pdfs = [...record.pdfs];
-      }
+      const record = asRecord(args);
       return runWithAsyncWorkResources(async (onAcquired) => {
         const runtimeResources = new AsyncDisposableStack();
         const capturedOperator = await captureAmbientGatewayOperatorAuthority({

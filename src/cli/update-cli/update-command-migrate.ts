@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import type { BackupSqliteSnapshotFact } from "../../commands/backup-resource-inventory.js";
+import { projectHeartbeatConfigForUpdateAdmission } from "../../commands/doctor-automatic-heartbeat-repair.js";
 import { prepareDoctorDatabasePreflight } from "../../commands/doctor-database-preflight.js";
 import {
   assertConfigFileWritePathSnapshot,
@@ -17,17 +18,19 @@ import {
   requireDirectorySync,
   syncDirectory,
 } from "../../infra/directory-durability.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { readJsonIfExists, writeJsonAtomic, writeTextAtomic } from "../../infra/json-files.js";
 import { removePackageUpdatePath } from "../../infra/package-update-filesystem.js";
-import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { readExistingStateRootMode } from "../../infra/private-dir-mode.js";
 import {
   createUpdateDatabaseBackup,
   UpdateDatabaseBackupSchema,
 } from "../../infra/update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../../infra/update-database-restore.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
+import { withArtifactPreservingStateReads } from "../../state/artifact-preserving-state-reads.js";
 import {
   captureTargetDatabaseSchemaContext,
   formatSchemaRefusalLines,
@@ -108,12 +111,7 @@ async function saveReceipt(file: string, receipt: Receipt) {
 async function readIdentities(databases: readonly string[]) {
   const identities: Record<string, FileIdentity> = {};
   for (const database of databases) {
-    const info = await fs.stat(database, { bigint: true }).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const info = await fs.stat(database, { bigint: true }).catch(ignoreMissingPath);
     if (info) {
       identities[database] = { dev: info.dev, ino: info.ino };
     }
@@ -140,7 +138,10 @@ async function readConfigIdentity(configPath: string): Promise<Receipt["configId
 }
 
 /** The external supervisor owns drain/start; the candidate owns backup and schema repair. */
-export async function updateMigrateCommand(backupRoot: string): Promise<void> {
+export async function updateMigrateCommand(
+  backupRoot: string,
+  options: { fullIntegrityCheck?: boolean } = {},
+): Promise<void> {
   const file = receiptPath(backupRoot);
   if ((await readJsonIfExists(file)) !== null) {
     throw new Error(
@@ -148,7 +149,13 @@ export async function updateMigrateCommand(backupRoot: string): Promise<void> {
     );
   }
   const env = process.env;
-  const source = await captureTargetDatabaseSchemaContext(env);
+  // Validate Doctor's projection without retiring config before its state is backed up.
+  const source = await withArtifactPreservingStateReads(() =>
+    captureTargetDatabaseSchemaContext(env, {
+      validateConfigForAdmission: (snapshot) =>
+        projectHeartbeatConfigForUpdateAdmission(snapshot, env, false),
+    }),
+  );
   const preflight = await prepareDoctorDatabasePreflight();
   if (hasSchemaRefusal(preflight)) {
     throw new Error(formatSchemaRefusalLines(preflight).join("\n"));
@@ -250,6 +257,7 @@ export async function updateMigrateCommand(backupRoot: string): Promise<void> {
           repair: true,
           nonInteractive: true,
           workspaceSuggestions: false,
+          fullIntegrityCheck: options.fullIntegrityCheck,
         },
         undefined,
         preflight,
@@ -358,7 +366,11 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
             // Keep the selected config readable until its original is atomically restored.
             const staged = `${target}.pending-${randomUUID()}`;
             try {
-              await writeTextAtomic(staged, current.raw, { mode: 0o600, durable: true });
+              await writeTextAtomic(staged, current.raw, {
+                mode: 0o600,
+                dirMode: readExistingStateRootMode(path.dirname(staged), receipt.stateDir),
+                durable: true,
+              });
               const identity = await fs.lstat(staged);
               assertCurrent();
               await publishFileExclusive({
@@ -383,6 +395,7 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
           if (config.raw !== null) {
             await writeTextAtomic(configPath, config.raw, {
               mode: 0o600,
+              dirMode: readExistingStateRootMode(path.dirname(configPath), receipt.stateDir),
               durable: true,
               beforeRename: async () => assertCurrent(),
             });

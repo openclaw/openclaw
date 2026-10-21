@@ -38,7 +38,8 @@ export async function prepareAttachment(input: AttachmentInput): Promise<Prepare
     facts.decodedBytes <= MAX_IMAGE_BYTES
       ? Buffer.from(input.base64, "base64")
       : undefined;
-  const hints = [normalizeMimeType(input.mime), mimeTypeFromFilePath(input.label)];
+  const inputMime = normalizeMimeType(input.mime);
+  const hints = [inputMime, mimeTypeFromFilePath(input.label)];
   let mime =
     (await sniffMimeFromBase64(
       { ...facts, buffer },
@@ -52,7 +53,7 @@ export async function prepareAttachment(input: AttachmentInput): Promise<Prepare
   if (
     buffer &&
     mime.startsWith("text/") &&
-    (!normalizeMimeType(input.mime) || normalizeMimeType(input.mime) === "application/octet-stream")
+    (!inputMime || inputMime === "application/octet-stream")
   ) {
     const classification = await classifyAttachmentBytes({ buffer, name: input.label });
     if (classification.class === "text" && classification.charset) {

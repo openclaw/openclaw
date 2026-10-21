@@ -13,7 +13,6 @@ import {
 import {
   createConfig,
   createRuntime,
-  createStores,
   updateMSTeamsConfig,
 } from "./monitor-lifecycle.test-helpers.js";
 import {
@@ -31,7 +30,7 @@ import {
 } from "./monitor-lifecycle.test-support.js";
 import { createNativeSsoProcessor, createSigninEvent } from "./monitor-sso.test-helpers.js";
 import { monitorMSTeamsProvider } from "./monitor.js";
-import type { MSTeamsPollStore } from "./polls.js";
+import { createMSTeamsPollStoreState, type MSTeamsPollStore } from "./polls.js";
 
 async function waitForMSTeamsTestState(assertion: () => void | Promise<void>): Promise<void> {
   await routeState.ready.promise;
@@ -47,7 +46,6 @@ function runProvider(
     cfg,
     runtime: createRuntime(),
     abortSignal: abort.signal,
-    ...createStores(),
     ...overrides,
   });
 }
@@ -534,7 +532,8 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     };
     isCardActionInvokeAuthorized.mockResolvedValueOnce(false);
 
-    const task = runProvider(abort, cfg, { pollStore });
+    vi.mocked(createMSTeamsPollStoreState).mockReturnValueOnce(pollStore);
+    const task = runProvider(abort, cfg);
 
     await waitForMSTeamsTestState(() => {
       expect(createMSTeamsActivityHandler).toHaveBeenCalled();
@@ -584,7 +583,8 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       recordVote: vi.fn(async () => null),
     };
 
-    const task = runProvider(abort, cfg, { pollStore });
+    vi.mocked(createMSTeamsPollStoreState).mockReturnValueOnce(pollStore);
+    const task = runProvider(abort, cfg);
 
     await waitForMSTeamsTestState(() => {
       expect(createMSTeamsActivityHandler).toHaveBeenCalled();
@@ -910,7 +910,7 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
           : { webhook: { path } },
       );
       await expect(
-        monitorMSTeamsProvider({ cfg, accountId, runtime: createRuntime(), ...createStores() }),
+        monitorMSTeamsProvider({ cfg, accountId, runtime: createRuntime() }),
       ).rejects.toThrow(
         accountKey
           ? `Set channels.msteams.accounts.${accountKey}.webhook.path to /api/messages/${accountId}`
@@ -926,7 +926,6 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
       monitorMSTeamsProvider({
         cfg: createConfig(),
         runtime: createRuntime(),
-        ...createStores(),
       }),
     ).rejects.toThrow("route conflict");
     expect(getMSTeamsIngressMockState().instances[0]?.stop).toHaveBeenCalledOnce();
@@ -1007,8 +1006,7 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
         await completedResponse.text();
         await activeResponseWork;
         expect(settled).toBe(true);
-        const result = await task;
-        expect(result.app).toBeTruthy();
+        await task;
         expect(taskSettled).toBe(true);
         expect(routeState.unregister).toHaveBeenCalledOnce();
         expect(getMSTeamsIngressMockState().instances[0]?.stop).toHaveBeenCalledOnce();

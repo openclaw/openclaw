@@ -1,14 +1,15 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { createMemo, For } from "solid-js";
-import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
+import { createMemo, For, Show } from "solid-js";
+import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
-import { renderModelPicker } from "../../components/model-picker.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon.ts";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
+import { createCronEditorClearance } from "./editor-clearance.ts";
+import { CronScratchEditor } from "./scratch-editor.tsx";
 import { DeliverySection, Advanced } from "./view-delivery.tsx";
 import {
   collectBlockingFields,
@@ -27,12 +28,10 @@ export function Editor(
   },
 ) {
   const payloadLocked = () => props.form.payloadLocked;
-  const systemOwned = () =>
-    props.mode === "job" && isSystemMonitorDeclaration(props.editingJob?.declarationKey);
   const isAgentTurn = () => !payloadLocked() && props.form.payloadKind === "agentTurn";
   const supportsAnnounce = () =>
-    props.form.sessionTarget !== "main" &&
-    (props.form.payloadKind === "agentTurn" || payloadLocked());
+    props.form.payloadKind === "agentTurn" ||
+    (props.form.sessionTarget !== "main" && payloadLocked());
   const selectedDeliveryMode = () =>
     props.form.deliveryMode === "announce" && !supportsAnnounce()
       ? "none"
@@ -48,81 +47,92 @@ export function Editor(
         : t("cron.form.fixFieldsPlural", { count: String(blockingFields().length) })
       : "";
   return (
-    <fieldset
-      class="cron-editor"
-      disabled={props.busy || !props.canManage || systemOwned()}
-      aria-busy={props.busy ? "true" : "false"}
-    >
-      <PromptSection {...props} payloadLocked={payloadLocked()} isAgentTurn={isAgentTurn()} />{" "}
-      <GeneralSection {...props} />
-      <ScheduleSection {...props} />
-      <DeliverySection
-        {...props}
-        supportsAnnounce={supportsAnnounce()}
-        selectedDeliveryMode={selectedDeliveryMode()}
-      />
-      <Advanced
-        {...props}
-        mode={props.mode}
-        isAgentTurn={isAgentTurn()}
-        selectedDeliveryMode={selectedDeliveryMode()}
-      />
-      {blockedByValidation() ? (
-        <div class="cron-form-status" role="status" aria-live="polite">
-          <div class="cron-form-status__title">{t("cron.form.cantAddYet")}</div>
-          <div class="cron-help">{t("cron.form.fillRequired")}</div>
-          <ul class="cron-form-status__list">
-            <For each={blockingFields()} keyed={(field) => field.inputId}>
-              {(field) => (
-                <li>
+    <>
+      <fieldset
+        class="cron-editor"
+        disabled={props.busy || !props.canManage}
+        aria-busy={props.busy ? "true" : "false"}
+      >
+        <PromptSection {...props} payloadLocked={payloadLocked()} isAgentTurn={isAgentTurn()} />{" "}
+        <GeneralSection {...props} />
+        <ScheduleSection {...props} />
+        <DeliverySection
+          {...props}
+          supportsAnnounce={supportsAnnounce()}
+          selectedDeliveryMode={selectedDeliveryMode()}
+        />
+        <Advanced
+          {...props}
+          mode={props.mode}
+          isAgentTurn={isAgentTurn()}
+          selectedDeliveryMode={selectedDeliveryMode()}
+        />
+        {blockedByValidation() ? (
+          <div class="cron-form-status" role="status" aria-live="polite">
+            <div class="cron-form-status__title">{t("cron.form.cantAddYet")}</div>
+            <div class="cron-help">{t("cron.form.fillRequired")}</div>
+            <ul class="cron-form-status__list">
+              <For each={blockingFields()} keyed={(field) => field.inputId}>
+                {(field) => (
+                  <li>
+                    <button
+                      type="button"
+                      class="cron-form-status__link"
+                      onClick={() => focusFormField(field().inputId)}
+                    >
+                      {field().label}: {t(field().message)}
+                    </button>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </div>
+        ) : undefined}
+        <Show when={props.canManage}>
+          {(_visible) => {
+            const footer = createCronEditorClearance();
+            const footerControl = createFooterControlRef();
+            return (
+              <div ref={[footer, footerControl]} class="cron-editor-actions">
+                <button
+                  class="btn primary"
+                  data-test-id="cron-submit"
+                  disabled={props.busy || !props.canSubmit}
+                  onClick={() => props.onSubmit()}
+                >
+                  {props.busy
+                    ? t("cron.form.saving")
+                    : props.mode === "job"
+                      ? t("cron.form.saveChanges")
+                      : t("cron.form.createTask")}
+                </button>
+                {props.mode === "create" && props.form.scheduleKind !== "event" ? (
                   <button
-                    type="button"
-                    class="cron-form-status__link"
-                    onClick={() => focusFormField(field().inputId)}
+                    class="btn"
+                    data-test-id="cron-submit-run"
+                    disabled={props.busy || !props.canSubmit}
+                    onClick={() => props.onSubmitRunNow()}
                   >
-                    {field().label}: {t(field().message)}
+                    {t("cron.form.createAndRun")}
                   </button>
-                </li>
-              )}
-            </For>
-          </ul>
-        </div>
+                ) : undefined}
+                <button class="btn" disabled={props.busy} onClick={() => props.onClosePanel()}>
+                  {t("cron.form.cancel")}
+                </button>
+                {submitDisabledReason() ? (
+                  <div class="cron-submit-reason" aria-live="polite">
+                    {submitDisabledReason()}
+                  </div>
+                ) : undefined}
+              </div>
+            );
+          }}
+        </Show>
+      </fieldset>
+      {props.editingJob && props.canManage ? (
+        <CronScratchEditor jobId={props.editingJob.id} gateway={props.gateway} />
       ) : undefined}
-      {props.canManage && !systemOwned() ? (
-        <div class="cron-editor-actions">
-          <button
-            class="btn primary"
-            data-test-id="cron-submit"
-            disabled={props.busy || !props.canSubmit}
-            onClick={() => props.onSubmit()}
-          >
-            {props.busy
-              ? t("cron.form.saving")
-              : props.mode === "job"
-                ? t("cron.form.saveChanges")
-                : t("cron.form.createTask")}
-          </button>
-          {props.mode === "create" ? (
-            <button
-              class="btn"
-              data-test-id="cron-submit-run"
-              disabled={props.busy || !props.canSubmit}
-              onClick={() => props.onSubmitRunNow()}
-            >
-              {t("cron.form.createAndRun")}
-            </button>
-          ) : undefined}
-          <button class="btn" disabled={props.busy} onClick={() => props.onClosePanel()}>
-            {t("cron.form.cancel")}
-          </button>
-          {submitDisabledReason() ? (
-            <div class="cron-submit-reason" aria-live="polite">
-              {submitDisabledReason()}
-            </div>
-          ) : undefined}
-        </div>
-      ) : undefined}
-    </fieldset>
+    </>
   );
 }
 // Only the read-only payload kinds carry source text; the rest are prose prompts,
@@ -130,7 +140,6 @@ export function Editor(
 const CRON_PAYLOAD_CODE_LANGUAGES: Record<CronFormState["payloadKind"], string> = {
   script: "javascript",
   command: "bash",
-  heartbeat: "",
   systemEvent: "",
   agentTurn: "",
 };
@@ -141,13 +150,7 @@ function PromptSection(
   },
 ) {
   const lockedPayloadLabel = () =>
-    props.form.payloadKind === "script"
-      ? t("cron.form.script")
-      : props.form.payloadKind === "heartbeat"
-        ? "Heartbeat monitor"
-        : props.form.payloadKind === "agentTurn"
-          ? t("cron.form.assistantTaskPrompt")
-          : t("cron.form.command");
+    props.form.payloadKind === "script" ? t("cron.form.script") : t("cron.form.command");
   const promptLabel = () =>
     props.payloadLocked
       ? lockedPayloadLabel()
@@ -166,8 +169,7 @@ function PromptSection(
   // for locked payloads, so this branch can never render a payload error.
   const codeLanguage = () =>
     props.payloadLocked ? CRON_PAYLOAD_CODE_LANGUAGES[props.form.payloadKind] : "";
-  const payloadText = () =>
-    props.form.payloadKind === "heartbeat" ? props.heartbeatScratch : props.form.payloadText;
+  const payloadText = () => props.form.payloadText;
   const actionLabel = () => t("cron.form.action");
   const modelLabel = () => t("cron.form.model");
   const modelError = () => props.fieldErrors.payloadModel;
@@ -260,26 +262,22 @@ function PromptSection(
             error={modelError()}
             errorId={errorIdForField("payloadModel")}
             control={
-              <LitContent
-                render={() =>
-                  renderModelPicker({
-                    id: "cron-payload-model-picker",
-                    label: modelLabel(),
-                    value: props.form.payloadModel,
-                    options: [
-                      { value: "", label: t("quickSettings.model.default") },
-                      ...modelOptions(),
-                    ],
-                    custom: {
-                      id: inputIdForField("payloadModel"),
-                      label: t("cron.form.customModel"),
-                      placeholder: t("cron.form.modelPlaceholder"),
-                      invalid: Boolean(modelError()),
-                      describedBy: modelError() ? errorIdForField("payloadModel") : undefined,
-                    },
-                    onChange: (payloadModel) => props.onFormChange({ payloadModel }),
-                  })
-                }
+              <ModelPicker
+                id="cron-payload-model-picker"
+                label={modelLabel()}
+                value={props.form.payloadModel}
+                options={[
+                  { value: "", label: t("quickSettings.model.default") },
+                  ...modelOptions(),
+                ]}
+                custom={{
+                  id: inputIdForField("payloadModel"),
+                  label: t("cron.form.customModel"),
+                  placeholder: t("cron.form.modelPlaceholder"),
+                  invalid: Boolean(modelError()),
+                  describedBy: modelError() ? errorIdForField("payloadModel") : undefined,
+                }}
+                onChange={(payloadModel) => props.onFormChange({ payloadModel })}
               />
             }
           />

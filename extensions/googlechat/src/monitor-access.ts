@@ -179,11 +179,11 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.space,
     log: logVerbose,
   });
-  warnMutableGroupKeysConfigured(logVerbose, account.config.groups ?? undefined);
+  warnMutableGroupKeysConfigured(logVerbose, account.config.groups);
   const groupConfigResolved = resolveGoogleChatGroupConfig({
     groupId: spaceId,
     groupName: space.displayName ?? null,
-    groups: account.config.groups ?? undefined,
+    groups: account.config.groups,
   });
   const groupEntry = groupConfigResolved.entry;
   const groupUsers = groupEntry?.users ?? account.config.groupAllowFrom ?? [];

@@ -23,29 +23,19 @@ describe("Mention Inbox worker snapshots", () => {
     }
   });
 
-  function open(location: string) {
-    const database = openNodeSqliteDatabase(location);
-    databases.push(database);
-    return database;
-  }
-
   function createStore() {
     const filename = path.join(tempDirs.make("mention-snapshot-"), "state.sqlite");
-    const writer = open(filename);
+    const writer = openNodeSqliteDatabase(filename);
+    databases.push(writer);
     writer.exec(`PRAGMA journal_mode = WAL;
       CREATE TABLE config_machine_state (
         state_key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL
       )`);
     admitSqliteSchema(writer);
-    const reader = open(filename);
+    const reader = openNodeSqliteDatabase(filename);
+    databases.push(reader);
     admitSqliteSchema(reader);
     return { writer, reader };
-  }
-
-  function write<T>(database: DatabaseSync, operation: () => T): T {
-    return withSqlitePostCommitPublications(database, () =>
-      runSqliteImmediateTransactionSync(database, operation),
-    );
   }
 
   const first: MentionStoreSource = {
@@ -56,15 +46,29 @@ describe("Mention Inbox worker snapshots", () => {
   };
   const second: MentionStoreSource = { ...first, key: "b".repeat(64), sequence: 1 };
 
+  function addSource(writer: DatabaseSync, source: MentionStoreSource, afterWrite = () => {}) {
+    withSqlitePostCommitPublications(writer, () =>
+      runSqliteImmediateTransactionSync(writer, () => {
+        writeMentionStoreChanges(
+          writer,
+          { revision: source.sequence, nextSequence: source.sequence + 1 },
+          new Map([[source.key, source]]),
+        );
+        afterWrite();
+      }),
+    );
+  }
+
+  function snapshot(sources: MentionStoreSource[]) {
+    return { head: { revision: sources.length, nextSequence: sources.length }, sources };
+  }
+
   it("reads one initial snapshot, reuses its head, and refreshes only committed own writes", () => {
     const { writer, reader } = createStore();
     const reads = observeSqliteReadSql(StatementSync.prototype);
     const exec = vi.spyOn(reader, "exec");
     try {
-      expect(read(-1, reader).snapshot).toEqual({
-        head: { revision: 0, nextSequence: 0 },
-        sources: [],
-      });
+      expect(read(-1, reader).snapshot).toEqual(snapshot([]));
       expect(reads.queries.filter((sql) => /from "config_machine_state"/iu.test(sql))).toHaveLength(
         1,
       );
@@ -73,24 +77,10 @@ describe("Mention Inbox worker snapshots", () => {
       expect(reads.queries).toEqual([]);
       expect(exec).not.toHaveBeenCalled();
 
-      write(writer, () =>
-        writeMentionStoreChanges(
-          writer,
-          { revision: 0, nextSequence: 1 },
-          new Map([[first.key, first]]),
-        ),
-      );
-      expect(read(0, reader).snapshot).toEqual({
-        head: { revision: 1, nextSequence: 1 },
-        sources: [first],
-      });
+      addSource(writer, first);
+      expect(read(0, reader).snapshot).toEqual(snapshot([first]));
       expect(() =>
-        write(writer, () => {
-          writeMentionStoreChanges(
-            writer,
-            { revision: 1, nextSequence: 2 },
-            new Map([[second.key, second]]),
-          );
+        addSource(writer, second, () => {
           throw new Error("rollback mention");
         }),
       ).toThrow("rollback mention");
@@ -101,10 +91,7 @@ describe("Mention Inbox worker snapshots", () => {
       reads.queries.length = 0;
       expect(read(1, reader).snapshot).toBeUndefined();
       expect(reads.queries).toEqual([]);
-      expect(read(-1, reader).snapshot).toEqual({
-        head: { revision: 1, nextSequence: 1 },
-        sources: [first],
-      });
+      expect(read(-1, reader).snapshot).toEqual(snapshot([first]));
     } finally {
       reads.restore();
     }
@@ -112,13 +99,7 @@ describe("Mention Inbox worker snapshots", () => {
 
   it("keeps an atomic header and source snapshot when its owner commits during result delivery", () => {
     const { writer, reader } = createStore();
-    write(writer, () =>
-      writeMentionStoreChanges(
-        writer,
-        { revision: 0, nextSequence: 1 },
-        new Map([[first.key, first]]),
-      ),
-    );
+    addSource(writer, first);
     let committed = false;
     for (const method of ["all", "iterate"] as const) {
       const original = StatementSync.prototype[method];
@@ -130,27 +111,15 @@ describe("Mention Inbox worker snapshots", () => {
             const rows = method === "iterate" ? [...result] : result;
             if (!committed && receiver.sourceSQL.includes('from "config_machine_state"')) {
               committed = true;
-              write(writer, () =>
-                writeMentionStoreChanges(
-                  writer,
-                  { revision: 1, nextSequence: 2 },
-                  new Map([[second.key, second]]),
-                ),
-              );
+              addSource(writer, second);
             }
             return method === "iterate" ? rows.values() : rows;
           },
         }),
       );
     }
-    expect(read(-1, reader).snapshot).toEqual({
-      head: { revision: 1, nextSequence: 1 },
-      sources: [first],
-    });
+    expect(read(-1, reader).snapshot).toEqual(snapshot([first]));
     expect(committed).toBe(true);
-    expect(read(1, reader).snapshot).toEqual({
-      head: { revision: 2, nextSequence: 2 },
-      sources: [first, second],
-    });
+    expect(read(1, reader).snapshot).toEqual(snapshot([first, second]));
   });
 });

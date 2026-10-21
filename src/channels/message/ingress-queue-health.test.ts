@@ -1,11 +1,10 @@
-// Ingress queue health tests cover conservative active-lane pressure aggregation.
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { INGRESS_CLAIM_LEASE_MS } from "./ingress-claim-owner.js";
 import {
-  countChannelIngressQueuePressure,
+  countChannelIngressQueueHealth,
   countFailedChannelIngressQueueEntries,
 } from "./ingress-queue-health.js";
 import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
@@ -13,16 +12,20 @@ import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "./ingress-retry-policy.js";
 
 async function recordAttempts(
   queue: ChannelIngressQueue<{ privatePayload: string }>,
-  id: string,
-  count: number,
-  lastError?: string,
+  name: string,
+  count = DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+  withError = true,
 ) {
+  const id = `${name}-private-id`;
   for (let attempt = 0; attempt < count; attempt += 1) {
     const claim = await queue.claim(id, { ownerId: "private-owner" });
     if (!claim) {
       throw new Error(`Expected ${id} claim ${attempt + 1}`);
     }
-    await queue.release(claim, { lastError, releasedAt: 1_000 + attempt });
+    await queue.release(claim, {
+      lastError: withError ? `${name}-private-error` : undefined,
+      releasedAt: 1_000 + attempt,
+    });
   }
 }
 
@@ -34,7 +37,10 @@ describe("channel ingress queue health", () => {
       { layout: "state-only", prefix: "openclaw-ingress-health-absent-", applyEnv: false },
       async ({ stateDir }) => {
         expect(await countFailedChannelIngressQueueEntries(stateDir)).toEqual([]);
-        expect(await countChannelIngressQueuePressure(stateDir)).toEqual([]);
+        expect(await countChannelIngressQueueHealth(stateDir)).toEqual({
+          failed: [],
+          pressure: [],
+        });
         expect(await fs.readdir(stateDir)).toEqual([]);
       },
     );
@@ -42,11 +48,7 @@ describe("channel ingress queue health", () => {
 
   it("reports durable pressured lanes without leaking private or null-lane rows", async () => {
     await withOpenClawTestState(
-      {
-        layout: "state-only",
-        prefix: "openclaw-ingress-health-",
-        applyEnv: false,
-      },
+      { layout: "state-only", prefix: "openclaw-ingress-health-", applyEnv: false },
       async ({ stateDir }) => {
         const now = 10 * INGRESS_CLAIM_LEASE_MS;
         vi.spyOn(Date, "now").mockReturnValue(now);
@@ -58,94 +60,41 @@ describe("channel ingress queue health", () => {
           now: () => clock,
         });
 
-        await queue.enqueue(
-          "retry-private-id",
-          { privatePayload: "retry-private-payload" },
-          { laneKey: "retry-private-lane", receivedAt: 100 },
-        );
-        await recordAttempts(
-          queue,
-          "retry-private-id",
-          DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-          "retry-private-error",
-        );
-        await queue.enqueue(
-          "retry-follower-private-id",
-          { privatePayload: "retry-follower-private-payload" },
-          { laneKey: "retry-private-lane", receivedAt: 200 },
-        );
-
-        await queue.enqueue(
-          "ordinary-private-id",
-          { privatePayload: "ordinary-private-payload" },
-          { laneKey: "ordinary-private-lane", receivedAt: 300 },
-        );
-        await recordAttempts(queue, "ordinary-private-id", 1, "ordinary-private-error");
-        await queue.enqueue(
-          "no-error-private-id",
-          { privatePayload: "no-error-private-payload" },
-          { laneKey: "no-error-private-lane", receivedAt: 400 },
-        );
-        await recordAttempts(queue, "no-error-private-id", DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
+        const enqueue = (name: string, receivedAt: number, lane: string | null = name) =>
+          queue.enqueue(
+            `${name}-private-id`,
+            { privatePayload: `${name}-private-payload` },
+            { laneKey: lane === null ? undefined : `${lane}-private-lane`, receivedAt },
+          );
+        const claim = async (name: string) => {
+          const result = await queue.claim(`${name}-private-id`, {
+            ownerId: `${name}-private-owner`,
+          });
+          if (!result) {
+            throw new Error(`Expected ${name} claim`);
+          }
+        };
+        await enqueue("retry", 100);
+        await recordAttempts(queue, "retry");
+        await enqueue("retry-follower", 200, "retry");
+        await enqueue("ordinary", 300);
+        await recordAttempts(queue, "ordinary", 1);
+        await enqueue("no-error", 400);
+        await recordAttempts(queue, "no-error", undefined, false);
 
         clock = now - INGRESS_CLAIM_LEASE_MS;
-        await queue.enqueue(
-          "stale-private-id",
-          { privatePayload: "stale-private-payload" },
-          { laneKey: "stale-private-lane", receivedAt: 500 },
-        );
-        const staleClaim = await queue.claim("stale-private-id", {
-          ownerId: "stale-private-owner",
-        });
-        if (!staleClaim) {
-          throw new Error("Expected stale claim");
-        }
+        await enqueue("stale", 500);
+        await claim("stale");
         clock = now;
-        await queue.enqueue(
-          "stale-follower-private-id",
-          { privatePayload: "stale-follower-private-payload" },
-          { laneKey: "stale-private-lane", receivedAt: 600 },
-        );
-        await queue.enqueue(
-          "fresh-private-id",
-          { privatePayload: "fresh-private-payload" },
-          { laneKey: "fresh-private-lane", receivedAt: 700 },
-        );
-        const freshClaim = await queue.claim("fresh-private-id", {
-          ownerId: "fresh-private-owner",
-        });
-        if (!freshClaim) {
-          throw new Error("Expected fresh claim");
-        }
-
-        await queue.enqueue(
-          "null-pressured-private-id",
-          { privatePayload: "null-pressured-private-payload" },
-          { receivedAt: 800 },
-        );
-        await recordAttempts(
-          queue,
-          "null-pressured-private-id",
-          DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-          "null-pressured-private-error",
-        );
-        await queue.enqueue(
-          "null-unrelated-private-id",
-          { privatePayload: "null-unrelated-private-payload" },
-          { receivedAt: 900 },
-        );
+        await enqueue("stale-follower", 600, "stale");
+        await enqueue("fresh", 700);
+        await claim("fresh");
+        await enqueue("null-pressured", 800, null);
+        await recordAttempts(queue, "null-pressured");
+        await enqueue("null-unrelated", 900, null);
         clock = now - INGRESS_CLAIM_LEASE_MS;
-        await queue.enqueue(
-          "null-stale-private-id",
-          { privatePayload: "null-stale-private-payload" },
-          { receivedAt: 1_000 },
-        );
-        const nullStaleClaim = await queue.claim("null-stale-private-id", {
-          ownerId: "null-stale-private-owner",
-        });
-        if (!nullStaleClaim) {
-          throw new Error("Expected null-lane stale claim");
-        }
+        await enqueue("null-stale", 1_000, null);
+        await claim("null-stale");
         clock = now;
 
         const hostQueries = vi
@@ -154,8 +103,8 @@ describe("channel ingress queue health", () => {
             throw new Error("Ingress health must not query SQLite on the calling thread");
           });
         try {
-          expect(await countFailedChannelIngressQueueEntries(stateDir)).toEqual([]);
-          const pressure = await countChannelIngressQueuePressure(stateDir);
+          const { failed, pressure } = await countChannelIngressQueueHealth(stateDir);
+          expect(failed).toEqual([]);
           expect(pressure).toEqual([
             {
               channelId: "telegram",

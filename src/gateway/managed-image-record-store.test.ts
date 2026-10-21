@@ -9,6 +9,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
+import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -62,6 +66,17 @@ function record(overrides: Partial<ManagedImageRecord> = {}): ManagedImageRecord
 
 describe("managed image record SQLite store", () => {
   let stateDir: string;
+  const database = () =>
+    openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+  const attach = (attachment: ManagedImageRecord, messageId: string, updatedAt: string) =>
+    attachManagedImageRecordsToMessage({
+      attachments: [attachment],
+      messageId,
+      updatedAt,
+      stateDir,
+    });
 
   beforeEach(async () => {
     stateDir = tempDirs.make("managed-image-record-store-");
@@ -74,7 +89,9 @@ describe("managed image record SQLite store", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  it("creates, reads, and reopens managed metadata without parent SQL", async () => {
+  it("creates, reads, and reopens managed metadata without parent SQL", async ({
+    onTestFinished,
+  }) => {
     requireNodeSqlite();
     const counters = observeMainThreadSql();
     try {
@@ -82,7 +99,9 @@ describe("managed image record SQLite store", () => {
       expect(await readManagedImageRecord("missing", stateDir)).toBeNull();
       expect(await listManagedImageRecordEntries({ stateDir })).toEqual([]);
       expect(await listManagedImageOriginalMediaIds(stateDir)).toEqual([]);
-      expect((await fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).isFile()).toBe(true);
+      await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
       counters.expectIdle();
 
       const first = record();
@@ -100,6 +119,21 @@ describe("managed image record SQLite store", () => {
       counters.expectIdle();
       await closeOpenClawStateDatabaseAsync();
       counters.clear();
+      const readerQueues: string[] = [];
+      onTestFinished(
+        onInternalDiagnosticEvent(
+          (event) => {
+            if (
+              event.type === "worker.request" &&
+              event.phase === "queued" &&
+              event.requestClass === "managedImages"
+            ) {
+              readerQueues.push(event.kind);
+            }
+          },
+          { include: ["worker.request"] },
+        ),
+      );
       expect(await readManagedImageRecord(first.attachmentId, stateDir)).toEqual(first);
       expect(await readManagedImageRecord(claimed.attachmentId, stateDir)).toBeNull();
       expect(await listManagedImageRecordEntries({ stateDir })).toEqual([
@@ -120,6 +154,8 @@ describe("managed image record SQLite store", () => {
         { record: first, cleanupPending: false },
         { record: claimed, cleanupPending: true },
       ]);
+      await waitForDiagnosticEventsDrained();
+      expect(readerQueues).toEqual(Array(5).fill("stateRead"));
       await closeOpenClawStateDatabaseAsync();
       counters.expectIdle();
     } finally {
@@ -137,12 +173,10 @@ describe("managed image record SQLite store", () => {
     await insertManagedImageRecord(expected, stateDir);
 
     expect(await readManagedImageRecord(expected.attachmentId, stateDir)).toEqual(expected);
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const { db } = database();
     executeSqliteQuerySync(
-      database.db,
-      getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db)
+      db,
+      getNodeSqliteKysely<ManagedImageRecordDatabase>(db)
         .updateTable("managed_outgoing_image_records")
         .set({ record_json: '{"attachmentId":"wrong"}' })
         .where("attachment_id", "=", expected.attachmentId),
@@ -157,14 +191,7 @@ describe("managed image record SQLite store", () => {
 
     expect(await claimManagedImageRecordCleanupIfCurrent(planned, stateDir)).toBe(true);
     expect(await readManagedImageRecord(planned.attachmentId, stateDir)).toBeNull();
-    expect(
-      await attachManagedImageRecordsToMessage({
-        attachments: [planned],
-        messageId: "too-late",
-        updatedAt: "2026-07-15T00:02:00.000Z",
-        stateDir,
-      }),
-    ).toBe(false);
+    expect(await attach(planned, "too-late", "2026-07-15T00:02:00.000Z")).toBe(false);
     expect(await listManagedImageRecordEntries({ stateDir })).toEqual([
       { record: planned, cleanupPending: true },
     ]);
@@ -186,12 +213,7 @@ describe("managed image record SQLite store", () => {
         await release.promise;
         return await run(...args);
       });
-    const attaching = attachManagedImageRecordsToMessage({
-      attachments: [initial],
-      messageId: "message-committed",
-      updatedAt: "2026-07-15T00:02:00.000Z",
-      stateDir,
-    });
+    const attaching = attach(initial, "message-committed", "2026-07-15T00:02:00.000Z");
     let claiming: Promise<boolean> | undefined;
     void attaching.catch(() => {});
     try {
@@ -209,12 +231,10 @@ describe("managed image record SQLite store", () => {
         retentionClass: "history",
         updatedAt: "2026-07-15T00:02:00.000Z",
       });
-      const database = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
+      const { db } = database();
       const row = executeSqliteQueryTakeFirstSync(
-        database.db,
-        getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db)
+        db,
+        getNodeSqliteKysely<ManagedImageRecordDatabase>(db)
           .selectFrom("managed_outgoing_image_records")
           .select("record_json")
           .where("attachment_id", "=", initial.attachmentId),
@@ -229,36 +249,39 @@ describe("managed image record SQLite store", () => {
 
   it("recovers exact native mutation receipts after ordinary replies are lost", async () => {
     const initial = record();
+    const dispatch = brokerReply.dispatchSqliteWorkerJob;
     const receive = brokerReply.receiveSqliteWorkerReply;
+    const commandTypes = new WeakMap<object, string>();
     const corrupted: string[] = [];
+    vi.spyOn(brokerReply, "dispatchSqliteWorkerJob").mockImplementation((slot, job, onRejected) => {
+      if (job.request.type === "execute") {
+        const command: unknown = deserialize(job.request.input);
+        if (isRecord(command) && typeof command.type === "string") {
+          commandTypes.set(job.request, command.type);
+        }
+      }
+      return dispatch(slot, job, onRejected);
+    });
     vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
       if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
-        const command: unknown = deserialize(slot.current.request.input);
+        const commandType = commandTypes.get(slot.current.request);
         if (
-          isRecord(command) &&
-          typeof command.type === "string" &&
+          commandType &&
           [
             "managedImages.insert",
             "managedImages.attach",
             "managedImages.claimCleanup",
             "managedImages.deleteClaimed",
-          ].includes(command.type)
+          ].includes(commandType)
         ) {
-          corrupted.push(command.type);
+          corrupted.push(commandType);
           return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
         }
       }
       return receive(slot, reply, owner);
     });
     await insertManagedImageRecord(initial, stateDir);
-    expect(
-      await attachManagedImageRecordsToMessage({
-        attachments: [initial],
-        messageId: "committed",
-        updatedAt: initial.createdAt,
-        stateDir,
-      }),
-    ).toBe(true);
+    expect(await attach(initial, "committed", initial.createdAt)).toBe(true);
     const promoted = await readManagedImageRecord(initial.attachmentId, stateDir);
     if (!promoted) {
       throw new Error("Expected native promotion after lost reply");

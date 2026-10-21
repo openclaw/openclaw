@@ -1,7 +1,6 @@
+import type { ProviderModelRef as AgentRunTerminalModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactSensitiveText } from "../logging/redact.js";
-
-type AgentRunTerminalModelRef = { provider: string; model: string };
 
 const AGENT_RUN_ROUTE_CHANGE_MAX_CHARS = 320;
 

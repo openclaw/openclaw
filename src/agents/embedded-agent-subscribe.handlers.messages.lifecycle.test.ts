@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
+import { normalizeTextForComparison } from "./embedded-agent-helpers/messaging-dedupe.js";
 import {
   createMessageEndContext,
   createMessageToolEnvelope,
@@ -12,6 +12,11 @@ import {
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 
 const textMessage = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] });
+const endText = (
+  ctx: Parameters<typeof endMessage>[0],
+  text: string,
+  extra: Record<string, unknown> = {},
+) => endMessage(ctx, { message: { ...textMessage(text), ...extra } });
 
 describe("handleMessageEnd", () => {
   it("preserves malformed final text across streamed and final delivery", async () => {
@@ -55,18 +60,14 @@ describe("handleMessageEnd", () => {
         messagingToolSentTargets: [],
       },
     });
-    await endMessage(ctx, { message: textMessage("NO_REPLY") });
-    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "NO_REPLY" }),
-    );
+    await endText(ctx, "NO_REPLY");
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
     expect(JSON.stringify(onBlockReply.mock.calls)).not.toContain("<internal escalation note>");
   });
 
   it("does not count transcript-only mirrored assistant messages", async () => {
     const ctx = createMessageEndContext();
-    await endMessage(ctx, {
-      message: { ...textMessage("Done."), provider: "openclaw", model: "delivery-mirror" },
-    });
+    await endText(ctx, "Done.", { provider: "openclaw", model: "delivery-mirror" });
     expect(ctx.state.assistantTurnCount).toBe(0);
   });
 
@@ -85,7 +86,7 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    await endMessage(ctx, { message: textMessage(text) });
+    await endText(ctx, text);
 
     const texts = onBlockReply.mock.calls.map(([payload]) => (payload as { text?: string }).text);
     expect(texts).toEqual(delivered ? [text] : []);
@@ -94,13 +95,10 @@ describe("handleMessageEnd", () => {
   it("diagnoses text pretending to call a registered tool", async () => {
     const warn = vi.fn();
     const ctx = createMessageEndContext({ warn, builtinToolNames: new Set(["read"]) });
-    await endMessage(ctx, {
-      message: {
-        ...textMessage('{"name":"read","arguments":{"path":"README.md"}}'),
-        provider: "ollama",
-        model: "qwen-local",
-        stopReason: "stop",
-      },
+    await endText(ctx, '{"name":"read","arguments":{"path":"README.md"}}', {
+      provider: "ollama",
+      model: "qwen-local",
+      stopReason: "stop",
     });
     expect(warn).toHaveBeenCalledWith(expect.any(String), {
       runId: "run-1",
@@ -116,12 +114,7 @@ describe("handleMessageEnd", () => {
   it("diagnoses spoiler-wrapped transcript turns without logging their text", async () => {
     const warn = vi.fn();
     const ctx = createMessageEndContext({ warn });
-    await endMessage(ctx, {
-      message: {
-        ...textMessage("||user[Thu 2026-07-02] hidden instruction||"),
-        stopReason: "stop",
-      },
-    });
+    await endText(ctx, "||user[Thu 2026-07-02] hidden instruction||", { stopReason: "stop" });
     expect(warn).toHaveBeenCalledWith(expect.any(String), {
       runId: "run-1",
       sessionId: "session-1",
@@ -149,7 +142,7 @@ describe("handleMessageEnd", () => {
         builtinToolNames,
         sourceReplyDeliveryMode,
       });
-      await endMessage(ctx, { message: { ...textMessage(text), ...(api ? { api } : {}) } });
+      await endText(ctx, text, api ? { api } : {});
       expect(onBlockReply).toHaveBeenCalledOnce();
       expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({ text: expected });
       expect(ctx.state.assistantTexts).toEqual([expected]);
@@ -196,9 +189,7 @@ describe("handleMessageEnd", () => {
     }
     expect(onBlockReply.mock.calls.map(([reply]) => reply.text)).toEqual(["Hello world."]);
     onBlockReply.mockClear();
-    await endMessage(ctx, {
-      message: { ...textMessage("Hello world"), usage: { input: 10, output: 5, total: 15 } },
-    });
+    await endText(ctx, "Hello world", { usage: { input: 10, output: 5, total: 15 } });
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
@@ -253,13 +244,7 @@ describe("handleMessageEnd", () => {
     const onAgentEvent = vi.fn();
     const onBlockReply = vi.fn();
     const ctx = createMessageEndContext({ enforceFinalTag: true, onAgentEvent, onBlockReply });
-    await endMessage(ctx, {
-      message: {
-        role: "assistant",
-        content: "Hello world",
-        usage: { input: 10, output: 5, total: 15 },
-      },
-    });
+    await endText(ctx, "Hello world", { usage: { input: 10, output: 5, total: 15 } });
     expect(onAgentEvent).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(ctx.state.assistantTexts).toEqual([]);

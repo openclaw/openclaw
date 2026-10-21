@@ -26,7 +26,8 @@ import {
   assertOfficialObsidianCliSupported,
   runObsidianAction,
 } from "./obsidian.js";
-import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
+import { WIKI_SEARCH_MODES } from "./query-scoring.js";
+import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { buildMemoryWikiDoctorReport, resolveMemoryWikiStatus } from "./status.js";
 import { initializeMemoryWikiVault } from "./vault.js";
@@ -100,7 +101,6 @@ function respondError(respond: GatewayRespond, error: unknown) {
 export function registerMemoryWikiGatewayMethods(params: {
   api: OpenClawPluginApi;
   config: ResolvedMemoryWikiConfig;
-  appConfig?: OpenClawConfig;
   getAppConfig?: () => OpenClawConfig | undefined;
   resolveConfig?: (agentId?: string, appConfig?: OpenClawConfig) => ResolvedMemoryWikiConfig;
   resolveSourceSyncSignal?: () => AbortSignal | undefined;
@@ -168,10 +168,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     if (params.getAppConfig) {
       return params.getAppConfig();
     }
-    if (typeof api.runtime.config?.current === "function") {
-      return api.runtime.config.current() as OpenClawConfig;
-    }
-    return params.appConfig;
+    return api.runtime.config.current() as OpenClawConfig;
   };
   const resolveSourceSyncSignal = () => {
     const signal = params.resolveSourceSyncSignal?.();
@@ -236,7 +233,12 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.compile", WRITE_SCOPE, async (requestParams) => {
     const { appConfig, config, signal } = resolveRequestContext(requestParams);
-    await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
+    await syncMemoryWikiImportedSources({
+      config,
+      appConfig,
+      deferIndexRefresh: true,
+      ...(signal ? { signal } : {}),
+    });
     return await compileMemoryWikiVault(config, signal ? { signal } : undefined);
   });
 
@@ -254,7 +256,12 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.lint", WRITE_SCOPE, async (requestParams) => {
     const { appConfig, config, signal } = resolveRequestContext(requestParams);
-    await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
+    await syncMemoryWikiImportedSources({
+      config,
+      appConfig,
+      deferIndexRefresh: true,
+      ...(signal ? { signal } : {}),
+    });
     return await lintMemoryWikiVault(config, signal ? { signal } : undefined);
   });
 

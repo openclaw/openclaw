@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { endianness } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -11,30 +11,60 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { planLegacyStateMigrationsReadOnly } from "./state-migrations.doctor.js";
-import { captureLegacyStateSnapshotIdentity } from "./state-migrations.plan.js";
+import { captureLegacyStateSnapshotIdentity as captureIdentity } from "./state-migrations.plan.js";
 
 const tempDirs = createTrackedTempDirs();
+const byteOrder = endianness();
+const read32 = (buffer: Buffer, offset: number) => buffer[`readUInt32${byteOrder}`](offset);
+const write32 = (buffer: Buffer, value: number, offset: number) =>
+  buffer[`writeUInt32${byteOrder}`](value, offset);
 
-function sha256(value: string | Buffer): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+const sha256 = (value: string | Buffer) =>
+  `sha256:${createHash("sha256").update(value).digest("hex")}`;
+const durableHashes = (databasePath: string) =>
+  ["", "-wal"].map((suffix) => sha256(fs.readFileSync(databasePath + suffix)));
+
+function openWal(databasePath: string) {
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA wal_autocheckpoint = 0;
+      CREATE TABLE planner_probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO planner_probe(value) VALUES ('copied-state');
+    `);
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+}
+
+function copyWal(sourcePath: string, databasePath: string) {
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  for (const suffix of ["", "-wal"]) {
+    fs.copyFileSync(`${sourcePath}${suffix}`, `${databasePath}${suffix}`);
+  }
+}
+
+function requireDigest(plan: Awaited<ReturnType<typeof planLegacyStateMigrationsReadOnly>>) {
+  const digest = plan.snapshot.stateDigest;
+  if (!digest) {
+    throw new Error("expected the copied state to have a bound digest");
+  }
+  return digest;
 }
 
 function writeWalIndexHeaderChecksum(header: Buffer): void {
-  const readUint32 = (offset: number) =>
-    endianness() === "LE" ? header.readUInt32LE(offset) : header.readUInt32BE(offset);
   let first = 0;
   let second = 0;
   for (let offset = 0; offset < 40; offset += 8) {
-    first = (first + readUint32(offset) + second) >>> 0;
-    second = (second + readUint32(offset + 4) + first) >>> 0;
+    first = (first + read32(header, offset) + second) >>> 0;
+    second = (second + read32(header, offset + 4) + first) >>> 0;
   }
-  if (endianness() === "LE") {
-    header.writeUInt32LE(first, 40);
-    header.writeUInt32LE(second, 44);
-  } else {
-    header.writeUInt32BE(first, 40);
-    header.writeUInt32BE(second, 44);
-  }
+  write32(header, first, 40);
+  write32(header, second, 44);
 }
 
 async function makeFixture() {
@@ -51,21 +81,20 @@ async function makeFixture() {
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
   };
-  return { root, homeDir, stateDir, configPath, env };
-}
-
-async function planFixture(fixture: Awaited<ReturnType<typeof makeFixture>>, stateDigest?: string) {
-  return planLegacyStateMigrationsReadOnly({
-    mode: "doctor",
-    candidate: { root: fixture.root, version: "test" },
-    snapshot: {
-      homeDir: fixture.homeDir,
-      configPath: fixture.configPath,
-      stateDir: fixture.stateDir,
-      ...(stateDigest ? { stateDigest } : {}),
+  const snapshot = { homeDir, stateDir, configPath };
+  return {
+    root,
+    ...snapshot,
+    env,
+    plan(stateDigest?: string) {
+      return planLegacyStateMigrationsReadOnly({
+        mode: "doctor",
+        candidate: { root, version: "test" },
+        snapshot: { ...snapshot, ...(stateDigest ? { stateDigest } : {}) },
+        env,
+      });
     },
-    env: fixture.env,
-  });
+  };
 }
 
 afterEach(async () => {
@@ -74,237 +103,128 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-describe("legacy state migration plan identity", () => {
-  it("defers the Workshop proposal export without touching copied proposal files", async () => {
-    const fixture = await makeFixture();
-    const draft = path.join(
-      fixture.stateDir,
-      "skill-workshop",
-      "proposals",
-      "retained-workshop-20260905-1234567890",
-      "PROPOSAL.md",
-    );
-    fs.mkdirSync(path.dirname(draft), { recursive: true });
-    fs.writeFileSync(draft, "---\nname: retained\ndescription: Retained skill\n---\n");
-    const before = await captureLegacyStateSnapshotIdentity(fixture);
+it("defers the Workshop proposal export without touching copied proposal files", async () => {
+  const fixture = await makeFixture();
+  const draft = path.join(
+    fixture.stateDir,
+    "skill-workshop/proposals/retained-workshop-20260905-1234567890/PROPOSAL.md",
+  );
+  fs.mkdirSync(path.dirname(draft), { recursive: true });
+  fs.writeFileSync(draft, "---\nname: retained\ndescription: Retained skill\n---\n");
+  const before = await captureIdentity(fixture);
 
-    const plan = await planFixture(fixture);
-
-    expect(plan.steps.find((step) => step.id === "skill-workshop")).toMatchObject({
-      phase: "final",
-      source: [
-        { kind: "sqlite", path: resolveOpenClawStateSqlitePath(fixture.env) },
-        { kind: "path", path: path.join(fixture.stateDir, "skill-workshop") },
-        { kind: "owner", id: "core:skill-workshop" },
-      ],
-      target: [
-        { kind: "sqlite", path: resolveOpenClawStateSqlitePath(fixture.env) },
-        { kind: "owner", id: "core:skill-workshop" },
-      ],
-      requiredness: "conditional",
-      outcome: "deferred",
-      refusal: { code: "skill-workshop-planning-deferred" },
-    });
-    expect(await captureLegacyStateSnapshotIdentity(fixture)).toEqual(before);
-    expect(fs.readFileSync(draft, "utf8")).toContain("name: retained");
+  const plan = await fixture.plan();
+  const store = { kind: "sqlite", path: resolveOpenClawStateSqlitePath(fixture.env) };
+  const owner = { kind: "owner", id: "core:skill-workshop" };
+  expect(plan.steps.find((step) => step.id === "skill-workshop")).toMatchObject({
+    phase: "final",
+    source: [store, { kind: "path", path: path.join(fixture.stateDir, "skill-workshop") }, owner],
+    target: [store, owner],
+    requiredness: "conditional",
+    outcome: "deferred",
+    refusal: { code: "skill-workshop-planning-deferred" },
   });
+  expect(await captureIdentity(fixture)).toEqual(before);
+  expect(fs.readFileSync(draft, "utf8")).toContain("name: retained");
+});
 
-  it("does not treat SQLite shared-memory coordination as a copied-state mutation", async () => {
-    const fixture = await makeFixture();
-    const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const database = new DatabaseSync(databasePath);
-    database.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA wal_autocheckpoint = 0;
-      CREATE TABLE planner_probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
-      INSERT INTO planner_probe(value) VALUES ('copied-state');
-    `);
-    const durableBefore = {
-      database: sha256(fs.readFileSync(databasePath)),
-      wal: sha256(fs.readFileSync(`${databasePath}-wal`)),
-    };
-    const sharedMemoryBefore = sha256(fs.readFileSync(`${databasePath}-shm`));
+it.each([false, true])("plans without mutating WAL state (missing shm: %s)", async (missing) => {
+  const fixture = await makeFixture();
+  const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
+  const sourcePath = missing ? path.join(fixture.root, "wal-source.sqlite") : databasePath;
+  using database = openWal(sourcePath);
+  if (missing) {
+    copyWal(sourcePath, databasePath);
+  }
+  const durableBefore = durableHashes(databasePath);
+  const shmPath = `${databasePath}-shm`;
+  const sharedMemoryBefore = missing ? undefined : sha256(fs.readFileSync(shmPath));
+  const plan = await fixture.plan();
+  expect(durableHashes(databasePath)).toEqual(durableBefore);
+  expect(plan.refusal?.code).toBe("candidate-artifact-digest-required");
+  if (missing) {
+    expect(fs.existsSync(shmPath)).toBe(false);
+  } else {
+    expect(sha256(fs.readFileSync(shmPath))).toBe(sharedMemoryBefore);
+    const stateDigest = requireDigest(plan);
+    database.exec("INSERT INTO planner_probe(value) VALUES ('durable-change');");
+    expect((await fixture.plan(stateDigest)).refusal?.code).toBe("snapshot-identity-mismatch");
+  }
+});
 
-    try {
-      const plan = await planFixture(fixture);
+it("continues binding ordinary copied-state files whose names end in -shm", async () => {
+  const fixture = await makeFixture();
+  const pairedPath = path.join(fixture.stateDir, "operator-notes");
+  const similarlyNamedPath = `${pairedPath}-shm`;
+  fs.writeFileSync(pairedPath, "not a SQLite database\n");
+  fs.writeFileSync(similarlyNamedPath, "first\n");
 
-      expect({
-        database: sha256(fs.readFileSync(databasePath)),
-        wal: sha256(fs.readFileSync(`${databasePath}-wal`)),
-      }).toEqual(durableBefore);
-      expect(sha256(fs.readFileSync(`${databasePath}-shm`))).toBe(sharedMemoryBefore);
-      expect(plan.refusal?.code).toBe("candidate-artifact-digest-required");
+  const first = await fixture.plan();
+  const stateDigest = requireDigest(first);
 
-      const stateDigest = plan.snapshot.stateDigest;
-      if (!stateDigest) {
-        throw new Error("expected the copied state to have a bound digest");
-      }
-      database.exec("INSERT INTO planner_probe(value) VALUES ('durable-change');");
-      const stale = await planFixture(fixture, stateDigest);
-      expect(stale.refusal?.code).toBe("snapshot-identity-mismatch");
-    } finally {
-      database.close();
-    }
-  });
+  fs.writeFileSync(similarlyNamedPath, "second\n");
+  const stale = await fixture.plan(stateDigest);
+  expect(stale.refusal?.code).toBe("snapshot-identity-mismatch");
+});
 
-  it("does not create missing SQLite shared-memory state while planning", async () => {
-    const fixture = await makeFixture();
-    const sourcePath = path.join(fixture.root, "wal-source.sqlite");
-    const source = new DatabaseSync(sourcePath);
-    try {
-      source.exec(`
-        PRAGMA journal_mode = WAL;
-        PRAGMA wal_autocheckpoint = 0;
-        CREATE TABLE planner_probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
-        INSERT INTO planner_probe(value) VALUES ('copied-state');
-      `);
-      const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
-      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-      fs.copyFileSync(sourcePath, databasePath);
-      fs.copyFileSync(`${sourcePath}-wal`, `${databasePath}-wal`);
-      const durableBefore = {
-        database: sha256(fs.readFileSync(databasePath)),
-        wal: sha256(fs.readFileSync(`${databasePath}-wal`)),
-      };
+it("binds fake files and directories at a SQLite shared-memory path", async () => {
+  const fixture = await makeFixture();
+  const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  const database = new DatabaseSync(databasePath);
+  database.exec("CREATE TABLE planner_probe (id INTEGER PRIMARY KEY);");
+  database.close();
+  const sharedMemoryPath = `${databasePath}-shm`;
 
-      const plan = await planFixture(fixture);
+  fs.writeFileSync(sharedMemoryPath, "not a wal-index\n");
+  const fileBefore = await captureIdentity(fixture);
+  fs.writeFileSync(sharedMemoryPath, "changed durable bytes\n");
+  const fileAfter = await captureIdentity(fixture);
+  expect(fileAfter.stateDigest).not.toBe(fileBefore.stateDigest);
 
-      expect(plan.refusal?.code).toBe("candidate-artifact-digest-required");
-      expect(fs.existsSync(`${databasePath}-shm`)).toBe(false);
-      expect({
-        database: sha256(fs.readFileSync(databasePath)),
-        wal: sha256(fs.readFileSync(`${databasePath}-wal`)),
-      }).toEqual(durableBefore);
-    } finally {
-      source.close();
-    }
-  });
+  fs.rmSync(sharedMemoryPath);
+  fs.mkdirSync(sharedMemoryPath);
+  const nestedPath = path.join(sharedMemoryPath, "operator-state");
+  fs.writeFileSync(nestedPath, "first\n");
+  const directoryBefore = await captureIdentity(fixture);
+  fs.writeFileSync(nestedPath, "second\n");
+  const directoryAfter = await captureIdentity(fixture);
+  expect(directoryAfter.stateDigest).not.toBe(directoryBefore.stateDigest);
+});
 
-  it("continues binding ordinary copied-state files whose names end in -shm", async () => {
-    const fixture = await makeFixture();
-    const pairedPath = path.join(fixture.stateDir, "operator-notes");
-    const similarlyNamedPath = `${pairedPath}-shm`;
-    fs.writeFileSync(pairedPath, "not a SQLite database\n");
-    fs.writeFileSync(similarlyNamedPath, "first\n");
-
-    const first = await planFixture(fixture);
-    const stateDigest = first.snapshot.stateDigest;
-    if (!stateDigest) {
-      throw new Error("expected the copied state to have a bound digest");
-    }
-
-    fs.writeFileSync(similarlyNamedPath, "second\n");
-    const stale = await planFixture(fixture, stateDigest);
-    expect(stale.refusal?.code).toBe("snapshot-identity-mismatch");
-  });
-
-  it("binds fake files and directories at a SQLite shared-memory path", async () => {
-    const fixture = await makeFixture();
-    const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const database = new DatabaseSync(databasePath);
-    database.exec("CREATE TABLE planner_probe (id INTEGER PRIMARY KEY);");
-    database.close();
-    const sharedMemoryPath = `${databasePath}-shm`;
-
-    fs.writeFileSync(sharedMemoryPath, "not a wal-index\n");
-    const fileBefore = await captureLegacyStateSnapshotIdentity(fixture);
-    fs.writeFileSync(sharedMemoryPath, "changed durable bytes\n");
-    const fileAfter = await captureLegacyStateSnapshotIdentity(fixture);
-    expect(fileAfter.stateDigest).not.toBe(fileBefore.stateDigest);
-
-    fs.rmSync(sharedMemoryPath);
-    fs.mkdirSync(sharedMemoryPath);
-    const nestedPath = path.join(sharedMemoryPath, "operator-state");
-    fs.writeFileSync(nestedPath, "first\n");
-    const directoryBefore = await captureLegacyStateSnapshotIdentity(fixture);
-    fs.writeFileSync(nestedPath, "second\n");
-    const directoryAfter = await captureLegacyStateSnapshotIdentity(fixture);
-    expect(directoryAfter.stateDigest).not.toBe(directoryBefore.stateDigest);
-  });
-
-  it("binds an authentic associated wal-index body outside volatile read marks", async () => {
-    const fixture = await makeFixture();
-    const sourcePath = path.join(fixture.root, "wal-index-source.sqlite");
-    const source = new DatabaseSync(sourcePath);
-    try {
-      source.exec(`
-        PRAGMA journal_mode = WAL;
-        PRAGMA wal_autocheckpoint = 0;
-        CREATE TABLE planner_probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
-        INSERT INTO planner_probe(value) VALUES ('copied-state');
-      `);
-      const authenticHeader = fs.readFileSync(`${sourcePath}-shm`).subarray(0, 48);
-      const databasePath = path.join(fixture.stateDir, "copied.sqlite");
-      fs.copyFileSync(sourcePath, databasePath);
-      fs.copyFileSync(`${sourcePath}-wal`, `${databasePath}-wal`);
-      const fakeSharedMemory = Buffer.alloc(32_768, 0x5a);
-      authenticHeader.copy(fakeSharedMemory, 0);
-      authenticHeader.copy(fakeSharedMemory, 48);
-      const sharedMemoryPath = `${databasePath}-shm`;
-      fs.writeFileSync(sharedMemoryPath, fakeSharedMemory);
-
-      const before = await captureLegacyStateSnapshotIdentity(fixture);
-      fakeSharedMemory.writeUInt8(fakeSharedMemory.readUInt8(200) ^ 0xff, 200);
-      fs.writeFileSync(sharedMemoryPath, fakeSharedMemory);
-      const after = await captureLegacyStateSnapshotIdentity(fixture);
-
-      expect(after.stateDigest).not.toBe(before.stateDigest);
-    } finally {
-      source.close();
-    }
-  });
-
-  it("binds forged wal-index structural fields despite valid checksums and WAL salts", async () => {
-    const fixture = await makeFixture();
-    const sourcePath = path.join(fixture.root, "wal-index-structure-source.sqlite");
-    const source = new DatabaseSync(sourcePath);
-    try {
-      source.exec(`
-        PRAGMA journal_mode = WAL;
-        PRAGMA wal_autocheckpoint = 0;
-        CREATE TABLE planner_probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
-        INSERT INTO planner_probe(value) VALUES ('copied-state');
-      `);
-      const databasePath = path.join(fixture.stateDir, "copied.sqlite");
-      fs.copyFileSync(sourcePath, databasePath);
-      fs.copyFileSync(`${sourcePath}-wal`, `${databasePath}-wal`);
-      const forged = Buffer.alloc(32_768, 0x5a);
-      fs.readFileSync(`${sourcePath}-shm`).copy(forged, 0, 0, 48);
-      forged.writeUInt8(forged.readUInt8(13) ^ 1, 13);
-      if (endianness() === "LE") {
-        forged.writeUInt16LE(1, 14);
-        forged.writeUInt32LE(0xffff_ffff, 16);
-      } else {
-        forged.writeUInt16BE(1, 14);
-        forged.writeUInt32BE(0xffff_ffff, 16);
-      }
-      writeWalIndexHeaderChecksum(forged);
-      forged.copy(forged, 48, 0, 48);
-      const sharedMemoryPath = `${databasePath}-shm`;
-      fs.writeFileSync(sharedMemoryPath, forged);
-      const before = await captureLegacyStateSnapshotIdentity(fixture);
-
-      if (endianness() === "LE") {
-        forged.writeUInt32LE(0xffff_fffe, 16);
-      } else {
-        forged.writeUInt32BE(0xffff_fffe, 16);
-      }
-      writeWalIndexHeaderChecksum(forged);
-      forged.copy(forged, 48, 0, 48);
-      fs.writeFileSync(sharedMemoryPath, forged);
-      const after = await captureLegacyStateSnapshotIdentity(fixture);
-
-      expect(after.stateDigest).not.toBe(before.stateDigest);
-
-      forged.writeUInt8(forged.readUInt8(120) ^ 0xff, 120);
-      forged.writeUInt8(forged.readUInt8(132) ^ 0xff, 132);
-      fs.writeFileSync(sharedMemoryPath, forged);
-      const nonVolatileCheckpointChange = await captureLegacyStateSnapshotIdentity(fixture);
-      expect(nonVolatileCheckpointChange.stateDigest).not.toBe(after.stateDigest);
-    } finally {
-      source.close();
-    }
-  });
+it.each([false, true])("binds wal-index changes (forged structure: %s)", async (forged) => {
+  const fixture = await makeFixture();
+  const sourcePath = path.join(fixture.root, "wal-index-source.sqlite");
+  using source = openWal(sourcePath);
+  const databasePath = path.join(fixture.stateDir, "copied.sqlite");
+  copyWal(sourcePath, databasePath);
+  const index = Buffer.alloc(32_768, 0x5a);
+  fs.readFileSync(`${source.location()}-shm`).copy(index, 0, 0, 48);
+  if (forged) {
+    index.writeUInt8(index.readUInt8(13) ^ 1, 13);
+    index[`writeUInt16${byteOrder}`](1, 14);
+    write32(index, 0xffff_ffff, 16);
+    writeWalIndexHeaderChecksum(index);
+  }
+  index.copy(index, 48, 0, 48);
+  const sharedMemoryPath = `${databasePath}-shm`;
+  fs.writeFileSync(sharedMemoryPath, index);
+  const before = await captureIdentity(fixture);
+  if (forged) {
+    write32(index, 0xffff_fffe, 16);
+    writeWalIndexHeaderChecksum(index);
+    index.copy(index, 48, 0, 48);
+  } else {
+    index.writeUInt8(index.readUInt8(200) ^ 0xff, 200);
+  }
+  fs.writeFileSync(sharedMemoryPath, index);
+  const after = await captureIdentity(fixture);
+  expect(after.stateDigest).not.toBe(before.stateDigest);
+  if (forged) {
+    index.writeUInt8(index.readUInt8(120) ^ 0xff, 120);
+    index.writeUInt8(index.readUInt8(132) ^ 0xff, 132);
+    fs.writeFileSync(sharedMemoryPath, index);
+    const checkpoint = await captureIdentity(fixture);
+    expect(checkpoint.stateDigest).not.toBe(after.stateDigest);
+  }
 });

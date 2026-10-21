@@ -4,7 +4,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/themes.ts";
 import {
   isBuiltinThemeId,
-  normalizeThemeDefinition,
   resolveThemeBranding,
   type ThemeBranding,
   type ThemeColorMode,
@@ -46,17 +45,8 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     gateway.snapshot.selfUser?.id === profile;
 
   const rememberDefinition = (result: ThemesGetResult) => {
-    let definition;
+    const definition = result.definition;
     const artwork = result.theme.source === "plugin" ? result.theme.artwork : undefined;
-    try {
-      definition = normalizeThemeDefinition(result.definition, {
-        iconIds: Object.keys(artwork?.icons ?? {}),
-        hatIds: Object.keys(artwork?.hats ?? {}),
-        critterIds: Object.keys(artwork?.critters ?? {}),
-      });
-    } catch {
-      return;
-    }
     const light = definition?.light ?? definition?.dark;
     const dark = definition?.dark ?? definition?.light;
     if (definition && light && dark) {
@@ -145,6 +135,7 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     snapshot = { themes: [], error: null };
     onChange();
   };
+  // Retire profile-scoped catalog data immediately when connection ownership changes.
   const stopGateway = gateway.subscribe(() => {
     const connected = gateway.snapshot.phase === "connected";
     const scopeChanged = gateway.connection.gatewayUrl !== ownerScope;

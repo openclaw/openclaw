@@ -16,6 +16,7 @@ import {
 } from "../../../../src/config/sessions/session-actor-storage-binding.js";
 import { warnPluginSdkDeprecation } from "../../../../src/plugins/sdk-deprecation.js";
 import { getAsyncWorkSignal } from "../../../../src/shared/async-work-scope.js";
+import { createLazyRuntimeMethodBinder } from "../../../../src/shared/lazy-runtime.js";
 import { IncognitoSessionSyncAccessError } from "../../../../src/state/incognito-session-error.js";
 
 export { readAccessorTranscriptStatsSync as readTranscriptStatsSync };
@@ -42,7 +43,7 @@ export function assertBoundIncognitoMemorySyncAccess(
   }
 }
 
-/** @deprecated Await readTranscriptStatsBatchReadOnlyAsync. Retained during stable deprecation. */
+/** @deprecated Await readTranscriptStatsBatchReadOnlyAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readTranscriptStatsBatchReadOnlySync(
   scopes: Parameters<typeof readAccessorTranscriptStatsBatchReadOnlySync>[0],
 ) {
@@ -149,56 +150,35 @@ export function captureIncognitoMemoryReader(scope: SessionTranscriptReadScope) 
 }
 
 /** Keep worker launch machinery behind the memory host's existing lazy runtime bridge. */
-export async function prepareSessionEntriesInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntriesInWorker
-  >
-) {
-  const { prepareSessionEntriesInWorker: prepare } =
-    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return prepare(...args);
-}
+const bindTranscriptRead = createLazyRuntimeMethodBinder(
+  () => import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js"),
+);
+const bindTranscriptInventory = createLazyRuntimeMethodBinder(
+  () => import("../../../../src/config/sessions/session-transcript-inventory-runtime.js"),
+);
 
-export async function prepareSessionEntryInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntryInWorker
-  >
-) {
-  const { prepareSessionEntryInWorker: prepare } =
-    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return prepare(...args);
-}
+export const prepareSessionEntriesInWorker = bindTranscriptRead(
+  (runtime) => runtime.prepareSessionEntriesInWorker,
+);
 
-export async function readSessionEntrySnapshotInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").readSessionEntrySnapshotInWorker
-  >
-) {
-  const { readSessionEntrySnapshotInWorker: read } =
-    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return read(...args);
-}
+export const prepareSessionEntryInWorker = bindTranscriptRead(
+  (runtime) => runtime.prepareSessionEntryInWorker,
+);
 
-export async function readSessionTranscriptCorpusInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-inventory-runtime.js").readSessionTranscriptCorpusInWorker
-  >
-) {
-  const { readSessionTranscriptCorpusInWorker: read } =
-    await import("../../../../src/config/sessions/session-transcript-inventory-runtime.js");
-  return read(...args);
-}
+export const readSessionEntrySnapshotInWorker = bindTranscriptRead(
+  (runtime) => runtime.readSessionEntrySnapshotInWorker,
+);
+
+export const readSessionTranscriptCorpusInWorker = bindTranscriptInventory(
+  (runtime) => runtime.readSessionTranscriptCorpusInWorker,
+);
 
 export { resolveSessionAgentId } from "../../../../src/agents/agent-scope.js";
 export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 export { isHeartbeatUserMessage } from "../../../../src/auto-reply/heartbeat-filter.js";
 export { HEARTBEAT_PROMPT } from "../../../../src/auto-reply/heartbeat.js";
 export { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
-export {
-  HEARTBEAT_TOKEN,
-  SILENT_REPLY_TOKEN,
-  isSilentReplyPayloadText,
-} from "../../../../src/auto-reply/tokens.js";
+export { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../../../../src/auto-reply/tokens.js";
 export { getRuntimeConfig } from "../../../../src/config/config.js";
 export {
   isCompactionCheckpointTranscriptFileName,
@@ -222,6 +202,7 @@ export {
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
+export { prepareAssistantTranscriptText } from "../../../../src/shared/chat-message-content.js";
 
 /**
  * Returns an opaque revision that changes for every canonical transcript mutation.
@@ -301,14 +282,8 @@ export function extractAgentIdFromSessionPath(absPath: string): string | null {
 export {
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
-} from "./session-transcript-corpus-policy.js";
+} from "./openclaw-runtime-paths.js";
 
-export async function readSessionResetRecallCutoffInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").readSessionResetRecallCutoffInWorker
-  >
-) {
-  const { readSessionResetRecallCutoffInWorker: read } =
-    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return read(...args);
-}
+export const readSessionResetRecallCutoffInWorker = bindTranscriptRead(
+  (runtime) => runtime.readSessionResetRecallCutoffInWorker,
+);

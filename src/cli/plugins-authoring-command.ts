@@ -2,12 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
-import {
-  filterStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { root } from "../infra/fs-safe.js";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
-import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
+import { getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
+import { loadPluginControlUiDeclaration } from "../plugins/control-ui-build-manifest.js";
 import {
   loadPluginManifest,
   PLUGIN_MANIFEST_FILENAME,
@@ -15,14 +13,21 @@ import {
 } from "../plugins/manifest.js";
 import { unwrapDefaultModuleExport } from "../plugins/module-export.js";
 import { controlUiSource } from "../plugins/package-manifest.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
-import { isRecord, shortenHomeInString } from "../utils.js";
+import { shortenHomeInString } from "../utils.js";
 import { VERSION } from "../version.js";
 import { formatCliOperatorError } from "./failure-output.js";
 import { readPluginAuthoringJson as readJsonFile } from "./plugins-authoring-json.js";
+import {
+  buildToolPluginManifest,
+  buildToolPluginPackageManifest,
+  createConfigSchema,
+  validateToolPluginProject,
+} from "./plugins-authoring-metadata.js";
 import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-control-ui-build.js";
 import { writeFeaturePluginScaffold } from "./plugins-feature-scaffold.js";
 
@@ -127,129 +132,6 @@ export async function loadToolPlugin(params: { rootDir: string; entryPath: strin
   return { entry, metadata };
 }
 
-export function buildToolPluginManifest(params: {
-  metadata: ToolPluginMetadata;
-  packageManifest: JsonObject;
-  existingManifest?: JsonObject;
-}): JsonObject {
-  const toolMetadata = buildToolPluginToolMetadata(params.metadata, params.existingManifest);
-  const existingContracts = isRecord(params.existingManifest?.contracts)
-    ? params.existingManifest.contracts
-    : {};
-  const {
-    contracts: _existingContracts,
-    toolMetadata: _existingToolMetadata,
-    ...existingManifestFields
-  } = params.existingManifest ?? {};
-  const manifest: JsonObject = {
-    ...existingManifestFields,
-    id: params.metadata.id,
-    name: params.metadata.name,
-    description: params.metadata.description,
-    version:
-      typeof params.packageManifest.version === "string" ? params.packageManifest.version : "0.0.0",
-    configSchema: params.metadata.configSchema,
-    activation: params.metadata.activation,
-    contracts: {
-      ...existingContracts,
-      tools: params.metadata.tools.map((tool) => tool.name),
-    },
-    ...(toolMetadata ? { toolMetadata } : {}),
-  };
-  // Runtime schema options can contain undefined fields that the manifest writer drops.
-  const serialized = JSON.stringify(manifest);
-  return JSON.parse(serialized) as JsonObject;
-}
-
-function buildToolPluginToolMetadata(
-  metadata: ToolPluginMetadata,
-  existingManifest: JsonObject | undefined,
-): Record<string, unknown> | undefined {
-  const existingToolMetadata = isRecord(existingManifest?.toolMetadata)
-    ? existingManifest.toolMetadata
-    : {};
-  const nextEntries = metadata.tools
-    .map((tool) => {
-      const existingValue = existingToolMetadata[tool.name];
-      const existing = isRecord(existingValue) ? { ...existingValue } : {};
-      if (tool.optional) {
-        existing.optional = true;
-      } else {
-        delete existing.optional;
-      }
-      return [tool.name, existing] as const;
-    })
-    .filter(([, value]) => Object.keys(value).length > 0);
-  return nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined;
-}
-
-export function buildToolPluginPackageManifest(params: {
-  packageManifest: JsonObject;
-  entry: string;
-}): JsonObject {
-  const openclaw = isRecord(params.packageManifest.openclaw) ? params.packageManifest.openclaw : {};
-  const existingExtensions = filterStringEntries(openclaw.extensions);
-  const extensions = uniqueStrings([...existingExtensions, params.entry]);
-  return {
-    ...params.packageManifest,
-    openclaw: {
-      ...openclaw,
-      extensions,
-    },
-  };
-}
-
-export function validateToolPluginProject(params: {
-  metadata: ToolPluginMetadata;
-  manifest: JsonObject;
-  packageManifest: JsonObject;
-  entry: string;
-}): string[] {
-  const errors: string[] = [];
-  const expectedManifest = buildToolPluginManifest({
-    metadata: params.metadata,
-    packageManifest: params.packageManifest,
-    existingManifest: params.manifest,
-  });
-  if (!jsonSchemaValuesEqual(params.manifest, expectedManifest)) {
-    errors.push("openclaw.plugin.json generated metadata is stale. Run openclaw plugins build.");
-  }
-  if (params.manifest.id !== params.metadata.id) {
-    errors.push(
-      `openclaw.plugin.json id (${String(params.manifest.id)}) must match entry id (${params.metadata.id})`,
-    );
-  }
-  if (!params.manifest.configSchema || typeof params.manifest.configSchema !== "object") {
-    errors.push("openclaw.plugin.json must include object configSchema");
-  }
-  const manifestContracts = params.manifest.contracts as { tools?: unknown } | undefined;
-  const manifestTools = filterStringEntries(manifestContracts?.tools);
-  const metadataTools = params.metadata.tools.map((tool) => tool.name);
-  const missing = metadataTools.filter((tool) => !manifestTools.includes(tool));
-  const extra = manifestTools.filter((tool) => !metadataTools.includes(tool));
-  if (missing.length > 0) {
-    errors.push(`openclaw.plugin.json contracts.tools is missing: ${missing.join(", ")}`);
-  }
-  if (extra.length > 0) {
-    errors.push(
-      `openclaw.plugin.json contracts.tools has no matching defineToolPlugin tool: ${extra.join(
-        ", ",
-      )}`,
-    );
-  }
-  const extensionResolution = resolvePackageExtensionEntries(params.packageManifest);
-  if (extensionResolution.status !== "ok") {
-    errors.push(
-      extensionResolution.status === "missing" || extensionResolution.status === "empty"
-        ? "package.json must include openclaw.extensions"
-        : extensionResolution.error,
-    );
-  } else if (!extensionResolution.entries.includes(params.entry)) {
-    errors.push(`package.json openclaw.extensions must include ${params.entry}`);
-  }
-  return errors;
-}
-
 export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise<void> {
   const rootDir = path.resolve(opts.root ?? process.cwd());
   const entryPath = resolveEntryPath(rootDir, opts.entry);
@@ -279,7 +161,18 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
 
   if (opts.check) {
     const currentPackage = readJsonFile(packagePath);
+    const currentControlUi = withPluginCache(createPluginCache(), () =>
+      loadPluginControlUiDeclaration({
+        rootDir,
+        controlUi: currentManifest?.controlUi,
+        channels: currentManifest?.channels,
+        rejectHardlinks: false,
+      }),
+    );
     if (
+      (browserSource &&
+        (!currentControlUi.ok ||
+          !jsonSchemaValuesEqual(currentControlUi.value, manifest.controlUi))) ||
       !jsonSchemaValuesEqual(currentManifest, manifest) ||
       !jsonSchemaValuesEqual(currentPackage, nextPackageManifest)
     ) {
@@ -299,6 +192,13 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
     syncTempFile: true,
     syncParentDir: true,
   });
+  // Retire the derived pointer before publishing the authored declaration;
+  // failed retirement must leave the previous authored pointer and assets usable.
+  if (browserSource) {
+    await (
+      await root(realRootDir, { symlinks: "reject" })
+    ).remove(`dist/${PLUGIN_MANIFEST_FILENAME}`, { force: true });
+  }
   await writePluginBuildManifest(realRootDir, manifest);
   defaultRuntime.log(`Wrote ${formatOutputPath(manifestPath, PLUGIN_MANIFEST_FILENAME)}`);
   defaultRuntime.log(`Updated ${formatOutputPath(packagePath, "package.json")}`);
@@ -311,7 +211,9 @@ export async function collectPluginsValidationResult(
   const entryPath = resolveEntryPath(rootDir, opts.entry);
   const entryRelative = normalizeRelativePath(rootDir, entryPath);
   const packageManifest = readPackageManifest(rootDir);
-  const manifestResult = loadPluginManifest(rootDir, false);
+  const manifestResult = withPluginCache(createPluginCache(), () =>
+    loadPluginManifest(rootDir, false),
+  );
   if (!manifestResult.ok) {
     return { valid: false, errors: [manifestResult.error] };
   }
@@ -326,7 +228,10 @@ export async function collectPluginsValidationResult(
   const browserSource = controlUiSource(packageManifest);
   if (browserSource) {
     const declaration = await buildPluginControlUi({ rootDir, source: browserSource, check: true });
-    if (!jsonSchemaValuesEqual(manifest.controlUi, declaration)) {
+    if (
+      !jsonSchemaValuesEqual(manifest.controlUi, declaration) ||
+      !jsonSchemaValuesEqual(manifestResult.manifest.controlUi, declaration)
+    ) {
       errors.push("Control UI manifest is stale. Run openclaw plugins build.");
     }
   }
@@ -409,14 +314,6 @@ function lowerCamelFromId(id: string): string {
   return parts
     .map((part, index) => (index === 0 ? part : `${part.charAt(0).toUpperCase()}${part.slice(1)}`))
     .join("");
-}
-
-function createConfigSchema() {
-  return {
-    type: "object",
-    additionalProperties: false,
-    properties: {},
-  };
 }
 
 const createPluginPackageMetadata = (pluginApi: string) => ({
@@ -855,4 +752,3 @@ export async function runPluginsInitCommand(
   }
   defaultRuntime.log(`Created ${formatOutputPath(rootDir, ".")}`);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

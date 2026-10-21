@@ -93,7 +93,7 @@ jobs:
 
       - name: Setup supported Node runtime
         timeout-minutes: 3
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
           package-manager-cache: false
@@ -202,19 +202,21 @@ jobs:
         timeout-minutes: 3
         uses: ./.github/actions/setup-security-review
 
-      - name: Detect dependency changes
+      # Preparation is limited to direct PR events. CI-completion, scheduled,
+      # and command reviews retain their own fresh enforcement/publication step.
+      - name: Prepare security review
         id: detect
         if: github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          OPENCLAW_SECURITY_REVIEW_MODE: detect
+          OPENCLAW_SECURITY_REVIEW_MODE: prepare
         run: node scripts/github/security-review.mjs
 
       - name: Create autoscrub app token
         id: app-token
         if: github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number && steps.detect.outputs.autoscrub == 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -226,7 +228,7 @@ jobs:
         id: app-token-fallback
         if: github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number && steps.detect.outputs.autoscrub == 'true' && steps.app-token.outcome == 'failure'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
@@ -247,7 +249,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENCLAW_SECURITY_REVIEW_MODE: enforce
-        run: node scripts/github/security-review.mjs
+        run: |
+          if [ "${{ steps.detect.outputs.completed }}" = "true" ]; then
+            echo "Security review completed during preparation."
+          else
+            node scripts/github/security-review.mjs
+          fi
 
       # Bootstrap failures cannot load the repository's normal status publisher.
       # This checkout-independent path can only fail the scheduled head closed.

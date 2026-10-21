@@ -78,6 +78,7 @@ export function createDispatchTestHarness(
   const context = { broadcast: vi.fn(), getRuntimeConfig: () => config };
   const dispatcher = createGatewayAuthenticatedRequestDispatcher({
     handler: {
+      socket: { acceptsDeflatedSegments: false },
       clients,
       connId: options.connId ?? "dispatch-test-connection",
       extraHandlers: options.extraHandlers ?? {},
@@ -107,8 +108,19 @@ export function createDispatchTestHarness(
     awaitResponseFrame,
     close,
     dispatcher: {
-      dispatch: (frame: unknown, client: GatewayWsClient) =>
-        dispatcher.dispatch(frame, client, Buffer.byteLength(JSON.stringify(frame))),
+      dispatch: (
+        frame: unknown,
+        client: GatewayWsClient,
+        admission?: "continuation",
+        sendResponse?: GatewayWsMessageHandlerParams["send"],
+      ) =>
+        dispatcher.dispatch(
+          frame,
+          client,
+          Buffer.byteLength(JSON.stringify(frame)),
+          admission,
+          sendResponse,
+        ),
     },
     logGateway,
     send,

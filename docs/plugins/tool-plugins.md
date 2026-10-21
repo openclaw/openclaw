@@ -82,8 +82,8 @@ for complete workspace preparation; an omitted static declaration waits only
 at execution. Explicit declarations preserve early first replies during checkout.
 
 ```typescript
-import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
 
 export default defineToolPlugin({
   id: "stock-quotes",
@@ -196,6 +196,12 @@ in the captured lineage changes incarnation or lifecycle.
 `assertInvocationCurrent` separately checks the admitted tool invocation and
 plugin lifetime. Use a version 2 tool context when the tool depends on these live
 authority checks.
+
+`toolContext.approvalReviewerDeviceIds` contains the host-selected devices for
+an approval initiated by this tool. Pass it to `plugin.approval.request` when
+using the trusted in-process Gateway runtime. It only routes review to those
+devices; each reviewer still needs `operator.approvals`, and the tool must not
+take reviewer IDs from model-authored arguments.
 
 A factory may return a core `AgentTool`, an array of them, or `null` or
 `undefined` to opt out, as the example above does. When it returns a concrete
@@ -609,14 +615,15 @@ clawhub package publish ./stock-quotes --dry-run
 clawhub package publish ./stock-quotes
 ```
 
-Install with an explicit ClawHub locator:
+Install from ClawHub:
 
 ```bash
-openclaw plugins install clawhub:your-org/stock-quotes
+openclaw plugins install your-org/stock-quotes
 ```
 
-Bare npm package specs install from npm, but ClawHub is the preferred
-discovery and distribution surface for OpenClaw plugins. See [ClawHub publishing](/clawhub/publishing) for owner scope and
+ClawHub is the default source for package specs and the preferred
+discovery and distribution surface for OpenClaw plugins. Use `npm:<package>`
+for an npm install. See [ClawHub publishing](/clawhub/publishing) for owner scope and
 release review.
 
 ## Troubleshooting

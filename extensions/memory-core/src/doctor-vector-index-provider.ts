@@ -106,11 +106,12 @@ export async function collectVectorProviderFindings(
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
     stateDir: string;
+    shouldInspectAgent: (agentId: string) => boolean;
   },
   inspectProvider: InspectConfiguredProvider,
 ): Promise<VectorProviderFinding[]> {
   const findings: VectorProviderFinding[] = [];
-  for (const agentId of listConfiguredAgentIds(params.config)) {
+  for (const agentId of listConfiguredAgentIds(params.config).filter(params.shouldInspectAgent)) {
     // A custom agentDir does not move the canonical per-agent memory index.
     const agentDatabasePath = path.join(
       params.stateDir,

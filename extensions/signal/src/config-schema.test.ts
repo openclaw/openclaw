@@ -1,11 +1,10 @@
-// Signal tests cover config schema plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SignalConfigSchema } from "../config-api.js";
 
 function expectValidSignalConfig(config: unknown) {
-  const res = SignalConfigSchema.safeParse(config);
-  expect(res.success).toBe(true);
+  expect(SignalConfigSchema.safeParse(config).success).toBe(true);
 }
+const container = { kind: "container", url: "http://signal-container:8080" };
 
 function expectInvalidSignalConfig(config: unknown) {
   const res = SignalConfigSchema.safeParse(config);
@@ -33,14 +32,7 @@ describe("signal groups schema", () => {
 
   it("rejects a named container transport without an inherited or owned account", () => {
     const issues = expectInvalidSignalConfig({
-      accounts: {
-        work: {
-          transport: {
-            kind: "container",
-            url: "http://signal-container:8080",
-          },
-        },
-      },
+      accounts: { work: { transport: container } },
     });
 
     expect(issues.map((issue) => issue.path.join("."))).toContain("accounts.work.account");
@@ -49,35 +41,17 @@ describe("signal groups schema", () => {
   it("allows disabled account-less container transports", () => {
     expectValidSignalConfig({
       enabled: false,
-      transport: {
-        kind: "container",
-        url: "http://signal-container:8080",
-      },
+      transport: container,
     });
     expectValidSignalConfig({
-      accounts: {
-        work: {
-          enabled: false,
-          transport: {
-            kind: "container",
-            url: "http://signal-container:8080",
-          },
-        },
-      },
+      accounts: { work: { enabled: false, transport: container } },
     });
   });
 
   it("accepts a default-account number stored beside a root container transport", () => {
     expectValidSignalConfig({
-      transport: {
-        kind: "container",
-        url: "http://signal-container:8080",
-      },
-      accounts: {
-        Default: {
-          account: "+15555550123",
-        },
-      },
+      transport: container,
+      accounts: { Default: { account: "+15555550123" } },
     });
   });
 
@@ -101,28 +75,19 @@ describe("signal groups schema", () => {
 
   it("rejects managed transport ports outside the TCP range", () => {
     expectInvalidSignalConfig({
-      transport: {
-        kind: "managed-native",
-        httpPort: 65_536,
-      },
+      transport: { kind: "managed-native", httpPort: 65_536 },
     });
   });
 
   it("rejects non-HTTP transport URLs", () => {
     expectInvalidSignalConfig({
-      transport: {
-        kind: "external-native",
-        url: "ftp://signal-native:8080",
-      },
+      transport: { kind: "external-native", url: "ftp://signal-native:8080" },
     });
   });
 
   it("rejects transport URLs containing credentials", () => {
     expectInvalidSignalConfig({
-      transport: {
-        kind: "container",
-        url: "http://user@signal-container:8080",
-      },
+      transport: { kind: "container", url: "http://user@signal-container:8080" },
     });
   });
 });

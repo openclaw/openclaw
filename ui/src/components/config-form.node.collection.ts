@@ -1,5 +1,5 @@
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { removePathValue, setPathValue } from "../lib/config-form-utils.ts";
+import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
 import {
   canApplyObjectCandidate,
   isObjectPropertyNameValid,
@@ -54,25 +54,12 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     ) {
       return false;
     }
-    let candidate: Record<string, unknown>;
     const relativePath = childPath.slice(path.length);
-    if (relativePath.length === 0) {
-      if (!isRecord(childValue)) {
-        return false;
-      }
-      candidate = childValue;
-    } else {
-      try {
-        candidate = structuredClone(objectValue);
-      } catch {
-        return false;
-      }
-      if (childValue === undefined) {
-        removePathValue(candidate, relativePath);
-      } else {
-        setPathValue(candidate, relativePath, childValue);
-      }
+    const patched = copyWithPathPatch(objectValue, relativePath, childValue);
+    if (!patched.ok || !isRecord(patched.value)) {
+      return false;
     }
+    const candidate = patched.value;
     if (!canApplyObjectCandidate(schema, objectValue, candidate)) {
       return false;
     }

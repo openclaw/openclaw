@@ -4,6 +4,7 @@ import { serialize } from "node:v8";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import { receiveSqliteWorkerReply } from "./sqlite-worker-broker-reply.js";
 import type { Actor, Job } from "./sqlite-worker-broker.types.js";
@@ -36,7 +37,10 @@ it.each(["valid", "framed", "close", "mismatched", "unsafe", "malformed"])(
       const unexpected = () => {
         throw new Error("Runtime admission must not add a request or fail the operation");
       };
-      const actor: Pick<Actor, "id" | "closeReceipt"> = { id: 1 };
+      const actor: Pick<Actor, "id" | "closeReceipt" | "openDispatch"> = {
+        id: 1,
+        openDispatch: { custody: new SqliteWorkerSlotCustody().createRequest() },
+      };
       const closeReceipt: SqliteWorkerCloseReceipt = {
         identity: { key: "fixture", canonicalPath: "/fixture/state.sqlite" },
         incarnation: "closed-incarnation",
@@ -63,6 +67,7 @@ it.each(["valid", "framed", "close", "mismatched", "unsafe", "malformed"])(
             ? { type: "close", id: 1, actor: 1 }
             : { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
         bytes: 0,
+        result: createDeferredCore().promise,
         resolve: unexpected,
         reject: unexpected,
         detach: unexpected,
@@ -157,6 +162,7 @@ it("hydrates cached-context execute-frame errors without an explicit request con
     observation: { started() {}, completed() {} },
     request: { type: "execute-frame", id: 1, actor: 1, input: new Uint8Array() },
     bytes: 0,
+    result: createDeferredCore().promise,
     resolve: unexpected,
     reject: unexpected,
     detach: unexpected,

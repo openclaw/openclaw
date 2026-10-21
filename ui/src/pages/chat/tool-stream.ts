@@ -1,8 +1,6 @@
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
-import { Value } from "typebox/value";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
-import { AgentActivityItemSchema } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
   MAX_TOOL_APPROVAL_REVIEWS,
   normalizeToolApprovalReview,
@@ -17,6 +15,10 @@ import {
 import { readLiveDiffStat } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
+import {
+  cleanAgentActivityItem,
+  isAgentActivityItem,
+} from "../../lib/protocol-validators.generated/activity.js";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { updateChatReasoning } from "./chat-reasoning.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
@@ -181,8 +183,6 @@ function publishToolStreamEntry(host: ToolStreamHost, entry: ToolStreamEntry, fo
   }
   host.toolStreamSyncTimer = window.setTimeout(() => {
     flushToolStreamSync(host);
-    // The initial event rendered before this deferred projection existed.
-    host.requestUpdate?.();
   }, TOOL_STREAM_THROTTLE_MS);
 }
 
@@ -533,16 +533,17 @@ export function handleAgentEvent(
   }
 
   const activityItem =
-    payload.stream === "item"
-      ? Value.Clean(AgentActivityItemSchema, { ...payload.data })
-      : undefined;
-  if (Value.Check(AgentActivityItemSchema, activityItem)) {
+    payload.stream === "item" ? cleanAgentActivityItem({ ...payload.data }) : undefined;
+  if (isAgentActivityItem(activityItem)) {
     // Analysis items (Codex reasoning, context compaction) are not tool calls;
     // a tool card would show a fabricated empty input and a completion.
     if (!acceptsToolStreamSession(host, payload) || activityItem.kind === "analysis") {
       return true;
     }
     const item = activityItem;
+    if (item.kind === "tool" && item.phase === "start") {
+      reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    }
     const toolCallId = item.toolCallId ?? item.itemId;
     const identity = buildToolStreamIdentity(payload.runId, toolCallId);
     let entry = host.toolStreamById.get(identity);
@@ -550,7 +551,6 @@ export function handleAgentEvent(
       entry = {
         toolCallId,
         runId: payload.runId,
-        sessionKey,
         name: item.name ?? item.title,
         startedAt: item.startedAt ?? payload.ts,
         receivedAt: Date.now(),
@@ -628,7 +628,6 @@ export function handleAgentEvent(
     entry = {
       toolCallId,
       runId: payload.runId,
-      sessionKey,
       name,
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       receivedAt: now,

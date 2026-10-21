@@ -91,7 +91,6 @@ export function reserveDiscussionBindingGeneration(params: {
   accountId: string;
   credentialFingerprint: string;
   destinationIdentity: string;
-  createGeneration?: () => string;
 }): Promise<string> {
   let generation: string | undefined;
   return mutateGeneration(params.runtime, params.sessionKey, (existing) => {
@@ -115,7 +114,7 @@ export function reserveDiscussionBindingGeneration(params: {
         result: existing.generation,
       };
     }
-    generation ??= (params.createGeneration ?? randomUUID)();
+    generation ??= randomUUID();
     return {
       value: {
         accountId: params.accountId,
@@ -161,6 +160,18 @@ export function recordPendingDiscussionOpen(params: {
       throw new Error("ClickClack discussion ownership changed before channel creation");
     }
     return { value: { ...existing, pending: params.pending }, result: undefined };
+  });
+}
+
+export function getPendingDiscussionOpen(
+  runtime: PluginRuntime,
+  sessionKey: string,
+): Promise<PendingDiscussionOpen | undefined> {
+  return withGenerationStore(runtime, async ({ store }) => {
+    const entry = await store.lookup(sessionKey);
+    return entry?.pending
+      ? { sessionKey, generation: entry.generation, ...entry.pending }
+      : undefined;
   });
 }
 

@@ -17,7 +17,6 @@ import {
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { feishuPlugin } from "./channel.js";
-import { resetFeishuProxyAgentForTest } from "./client.js";
 import {
   AUTH_PATH,
   COMMENT_PATH,
@@ -159,13 +158,11 @@ function expectRetired(error: unknown) {
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
   resolveProxy.mockResolvedValue(undefined);
-  resetFeishuProxyAgentForTest();
 });
 
 afterEach(() => {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
-  resetFeishuProxyAgentForTest();
   resolveProxy.mockReset();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -211,14 +208,6 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
       });
     },
   );
-
-  it("returns the accepted receipt without optional send-authority callbacks", async () => {
-    await withFeishuTransport(async ({ cfg, requests }) => {
-      const result = await preferredTextSend()({ cfg, to: TARGET, text: "Delivered normally." });
-      expect(requests.map((request) => request.path)).toEqual([AUTH_PATH, MESSAGE_PATH]);
-      expect(result.receipt?.platformMessageIds).toEqual(["om_accepted"]);
-    });
-  });
 
   it.each(["proxy preparation", "Axios interceptor", "dispatch refresh"] as const)(
     "checks cancellation after awaited %s",

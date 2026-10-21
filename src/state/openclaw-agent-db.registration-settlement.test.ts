@@ -274,54 +274,51 @@ describe("agent registration native settlement", () => {
           });
         let execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
         let opening: Promise<unknown> | undefined;
+        // Intercept the physical owner's receipt, independently of a caller's admission.
+        // oxlint-disable-next-line typescript/unbound-method -- Forwarded below with the intercepted native MessagePort receiver.
+        const on = MessagePort.prototype.on;
+        const receive = vi.spyOn(MessagePort.prototype, "on").mockImplementation(function (
+          this: MessagePort,
+          event,
+          listener,
+        ) {
+          if (event !== "message") {
+            return on.call(this, event, listener);
+          }
+          return on.call(this, event, (message: unknown) => {
+            const facts = isRecord(message) ? message.facts : undefined;
+            if (
+              isRecord(message) &&
+              message.stage === "prepare" &&
+              isRecord(facts) &&
+              facts.kind === "agent-registration-committed" &&
+              isRecord(facts.registration) &&
+              facts.registration.agentId === fixture.target.agentId
+            ) {
+              // Pause before the normal receiver handles the real post-COMMIT receipt.
+              deliverCommitted = () => listener(message);
+              endScope.resolve();
+            } else {
+              listener(message);
+            }
+          });
+        });
         const scope = withExistingOpenClawStateSchema({ path: fixture.shared.path }, async () => {
           const retained = captureOpenClawAgentDatabaseExecution(fixture.target);
           execution = retained;
           const source: AgentDatabaseRequestExecutionSource = {
             assertCurrent: () => retained.assertCurrent(),
             createAdmission(binding) {
-              return () => {
-                // oxlint-disable-next-line typescript/unbound-method -- Forwarded below with the intercepted native MessagePort receiver.
-                const on = MessagePort.prototype.on;
-                const receive = vi.spyOn(MessagePort.prototype, "on").mockImplementation(function (
-                  this: MessagePort,
-                  event,
-                  listener,
-                ) {
-                  if (event !== "message") {
-                    return on.call(this, event, listener);
+              return () => ({
+                nativeLocations: binding.nativeLocations,
+                admission: createSqliteWorkerOperationAdmission((request, grant) => {
+                  binding.authorize(request);
+                  retained.assertCurrent();
+                  if (!grant()) {
+                    throw new Error("Registration fixture lost admission");
                   }
-                  return on.call(this, event, (message: unknown) => {
-                    const facts = isRecord(message) ? message.facts : undefined;
-                    if (
-                      isRecord(message) &&
-                      message.stage === "prepare" &&
-                      isRecord(facts) &&
-                      facts.kind === "agent-registration-committed"
-                    ) {
-                      // Pause before the normal receiver handles the real post-COMMIT receipt.
-                      deliverCommitted = () => listener(message);
-                      endScope.resolve();
-                    } else {
-                      listener(message);
-                    }
-                  });
-                });
-                try {
-                  return {
-                    nativeLocations: binding.nativeLocations,
-                    admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                      binding.authorize(request);
-                      retained.assertCurrent();
-                      if (!grant()) {
-                        throw new Error("Registration fixture lost admission");
-                      }
-                    }, binding.attachment),
-                  };
-                } finally {
-                  receive.mockRestore();
-                }
-              };
+                }, binding.attachment),
+              });
             },
           };
           opening = retained.prepare(source).then(
@@ -367,6 +364,7 @@ describe("agent registration native settlement", () => {
           endScope.resolve();
           deliverCommitted?.();
           await Promise.allSettled([scope, opening]);
+          receive.mockRestore();
           registration.mockRestore();
           await execution?.release();
         }

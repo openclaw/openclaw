@@ -12,6 +12,7 @@ export type ConfigIoDeps = {
   lowerPrecedenceEnv?: Readonly<Record<string, string>>;
   homedir?: () => string;
   configPath?: string;
+  mapIncludePath?: (absolutePath: string) => string;
   logger?: Pick<typeof console, "error" | "warn">;
   measure?: ConfigSnapshotReadMeasure;
   suppressFutureVersionWarning?: boolean;

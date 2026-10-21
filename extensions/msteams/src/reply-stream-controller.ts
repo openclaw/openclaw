@@ -33,14 +33,14 @@ type MSTeamsNativeDeliveryFinalization = {
   postNativePayloads?: ReplyPayload[];
 };
 
-// The SDK throws StreamCancelledError synchronously from stream.emit/update
-// when the user pressed Stop in Teams (Teams replies 403 to the next chunk
-// update and the SDK flips _canceled). Match by `name` rather than importing
-// the class — tsgo can't resolve the re-export chain through
-// @microsoft/teams.apps/dist/types/streamer, and the SDK's own code at
-// utils/promises/retry.js falls back to this same name check.
+// Match SDK Stop failures by name: tsgo cannot resolve its error re-export
+// chain, and the SDK retry helper uses the same check.
 function isStreamCancelledError(err: unknown): boolean {
   return err instanceof Error && err.name === "StreamCancelledError";
+}
+
+function hasUnstreamedContent(payload: ReplyPayload): boolean {
+  return Boolean(payload.presentation || payload.mediaUrl || payload.mediaUrls?.length);
 }
 
 /** Bridge reply callbacks to the SDK stream; shared conversations use block delivery. */
@@ -67,7 +67,6 @@ export function createTeamsReplyStreamController(params: {
   let nativeDispatchStarted = false;
   let nativeDeliveryClaimed = false;
   let streamFinalizationPending = false;
-  let canceledLocally = false;
   let pendingFinalPayload: ReplyPayload | undefined;
   // The SDK appends deltas to cumulative pipeline text. Retain the text, not just
   // its length, because later snapshots can normalize trailing whitespace.
@@ -117,7 +116,9 @@ export function createTeamsReplyStreamController(params: {
     });
   }
 
-  const wasCanceled = () => canceledLocally || Boolean(stream?.canceled);
+  // SDK emit/update check this same flag synchronously; no cancellation can
+  // arrive between this check and those calls without yielding.
+  const wasCanceled = () => Boolean(stream?.canceled);
 
   const releaseStreamChunkSubscription = (): void => {
     if (streamChunkSubscription === undefined) {
@@ -149,8 +150,7 @@ export function createTeamsReplyStreamController(params: {
       return payload;
     }
     const remainingText = payload.text.slice(acknowledgedLogicalText.length);
-    const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-    if (!remainingText && !hasMedia) {
+    if (!remainingText && !hasUnstreamedContent(payload)) {
       return undefined;
     }
     return { ...payload, text: remainingText || undefined };
@@ -191,9 +191,8 @@ export function createTeamsReplyStreamController(params: {
       if (entry.kind === "payload") {
         return [entry.payload];
       }
-      const hasMedia = Boolean(entry.payload.mediaUrl || entry.payload.mediaUrls?.length);
       const text = replacementFallback?.text;
-      if (!text && !hasMedia) {
+      if (!text && !hasUnstreamedContent(entry.payload)) {
         return [];
       }
       return [{ ...entry.payload, text: text || undefined }];
@@ -230,17 +229,8 @@ export function createTeamsReplyStreamController(params: {
       if (!stream || wasCanceled() || streamFinalizationPending) {
         return false;
       }
-      try {
-        stream.update(flattenInformativeStatus(text));
-        return true;
-      } catch (err) {
-        if (isStreamCancelledError(err)) {
-          canceledLocally = true;
-        } else {
-          params.log?.debug?.(`stream informative update failed: ${coerceErrorMessage(err)}`);
-        }
-        return false;
-      }
+      stream.update(flattenInformativeStatus(text));
+      return true;
     },
   });
 
@@ -294,19 +284,10 @@ export function createTeamsReplyStreamController(params: {
         streamFinalizationPending = true;
         return;
       }
-      try {
-        stream.emit(delta);
-        emittedText = fullText;
-        tokensEmitted = true;
-        nativeDispatchStarted = true;
-      } catch (err) {
-        if (isStreamCancelledError(err)) {
-          canceledLocally = true;
-          return;
-        }
-        // HttpStream.emit queues synchronously; network failures surface at close.
-        throw err;
-      }
+      stream.emit(delta);
+      emittedText = fullText;
+      tokensEmitted = true;
+      nativeDispatchStarted = true;
     },
 
     pushItemEvent: progressDraft.pushItemEvent.bind(progressDraft),
@@ -342,46 +323,35 @@ export function createTeamsReplyStreamController(params: {
         replacementFinalPending = false;
         deferredReplacementEntries.push({ kind: "replacement", payload });
         pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
-        try {
-          queueFinalReplacement(stream, payload.text);
-          tokensEmitted = false;
-          // Replacement delivery owns all later payloads until close() proves
-          // that Teams accepted the replacement or did not receive a Stop.
-          return undefined;
-        } catch (err) {
-          replacementTextAwaitingAcknowledgement = undefined;
-          tokensEmitted = false;
-          if (isStreamCancelledError(err)) {
-            canceledLocally = true;
-            pendingFinalPayload = undefined;
-            deferredReplacementEntries = [];
-            return undefined;
-          }
-          throw err;
-        }
+        queueFinalReplacement(stream, payload.text);
+        tokensEmitted = false;
+        // Replacement delivery owns all later payloads until close() proves
+        // that Teams accepted the replacement or did not receive a Stop.
+        return undefined;
       }
       // A native stream owns one final segment. Later progress payloads use
       // block delivery, just like later partial-mode segments after tools.
       if (streamMode === "progress" && payload.text && !nativeDispatchStarted) {
-        try {
-          stream.emit(payload.text);
-          emittedText = payload.text;
-          nativeDispatchStarted = true;
-          tokensEmitted = true;
-        } catch (err) {
-          if (isStreamCancelledError(err)) {
-            canceledLocally = true;
-            return undefined;
-          }
-          throw err;
-        }
+        stream.emit(payload.text);
+        emittedText = payload.text;
+        nativeDispatchStarted = true;
+        tokensEmitted = true;
       }
       if (tokensEmitted) {
         const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
         pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
         streamFinalizationPending = true;
         tokensEmitted = false;
-        return hasMedia ? { ...payload, text: undefined } : undefined;
+        if (!hasMedia) {
+          return undefined;
+        }
+        // Cards must wait for close() to observe Stop; media keeps its existing delivery path.
+        const {
+          presentation: _presentation,
+          presentationTextMode: _mode,
+          ...mediaPayload
+        } = payload;
+        return { ...mediaPayload, text: undefined };
       }
       return payload;
     },
@@ -446,7 +416,9 @@ export function createTeamsReplyStreamController(params: {
         const messageId = extractMessageId(result) ?? acknowledgedStreamId;
         const postNativePayloads = replacementSettlementPending
           ? deferredReplacementPayloads(undefined)
-          : [];
+          : pendingFinalPayload?.presentation
+            ? [{ ...pendingFinalPayload, text: undefined }]
+            : [];
         return {
           visibleReplySent: true,
           ...(content === undefined ? {} : { content }),
@@ -456,7 +428,6 @@ export function createTeamsReplyStreamController(params: {
         };
       } catch (err) {
         if (isStreamCancelledError(err)) {
-          canceledLocally = true;
           return acknowledgedNativeDelivery();
         }
         // Non-cancel failure during the closing emit/close. Preserve only a

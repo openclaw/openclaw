@@ -4,7 +4,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { ConnectingSplash } from "../solid/loading-skeleton.tsx";
 import { BrowserPanelHost } from "./browser-panel.ts";
 import { readBrowserTabTarget } from "./browser-target.ts";
@@ -12,8 +12,10 @@ import { readBrowserTabTarget } from "./browser-target.ts";
 export type BrowserDocumentViewProps = {
   context: ApplicationContext;
   target: Extract<ControlUiFocusTarget, { kind: "browser" }>;
-  renderEscape: (label: string) => unknown;
+  renderEscape: (label: string) => HTMLElement | null;
 };
+
+export type BrowserDocumentProps = BrowserDocumentViewProps;
 
 export function BrowserDocumentContent(props: { value: BrowserDocumentViewProps | null }) {
   const snapshot = createMemo(() => props.value?.context.gateway.snapshot);
@@ -51,12 +53,31 @@ export function BrowserDocumentContent(props: { value: BrowserDocumentViewProps 
             <main class="connect-splash" role="status">
               <div class="stack">
                 <span>{t(tab() ? "browser.unavailable" : "focus.unsupported")}</span>
-                <LitContent value={props.value!.renderEscape(t("common.back"))} />
+                {props.value!.renderEscape(t("common.back"))}
               </div>
             </main>
           ) : null}
         </>
       ) : null}
     </>
+  );
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-browser-document": HTMLElement & {
+      props: BrowserDocumentProps | null;
+    };
+  }
+}
+
+if (!customElements.get("openclaw-browser-document")) {
+  defineSolidBridge<{ props: BrowserDocumentProps | null }>(
+    "openclaw-browser-document",
+    (props, host) => {
+      host.style.display = "contents";
+      return <BrowserDocumentContent value={props.props} />;
+    },
+    { properties: { props: { default: null, attribute: false } } },
   );
 }

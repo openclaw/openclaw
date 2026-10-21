@@ -48,9 +48,6 @@ function identityMutationHandler(
         params.identity,
         { assertCurrent },
       );
-      if (result.kind !== (action === "link" ? "linked" : "unlinked")) {
-        throw new Error("Channel identity mutation returned an unexpected result");
-      }
       respond(true, result.kind === "linked" ? result.link : { removed: result.removed });
     },
     identityError,

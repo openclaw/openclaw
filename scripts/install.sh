@@ -42,6 +42,7 @@ installer_step() { run_quiet_step "$@"; }
 installer_error() { ui_error "$@"; }
 installer_npm_version_error() {
     echo "Unable to determine npm version from ${1}; no package changes were made." >&2
+    echo "Support: https://community.openclaw.ai/" >&2
 }
 installer_clone_error() {
     ui_error "Could not publish the cloned checkout: ${1}"
@@ -187,7 +188,7 @@ run_remote_bash() {
     /bin/bash "$tmp"
 }
 
-GUM_VERSION="${OPENCLAW_GUM_VERSION:-2.0.0}"
+GUM_VERSION="${OPENCLAW_GUM_VERSION:-2.0.2}"
 GUM=""
 GUM_STATUS="skipped"
 GUM_REASON=""
@@ -465,7 +466,7 @@ ui_success() {
 }
 
 ui_error() {
-    local msg="$*"
+    local msg="$*"$'\nSupport: https://community.openclaw.ai/'
     if [[ -n "$GUM" ]]; then
         "$GUM" log --level error "$msg"
     else
@@ -551,11 +552,12 @@ show_footer_links() {
     local faq_url="https://docs.openclaw.ai/start/faq"
     if [[ -n "$GUM" ]]; then
         local content
-        content="$(printf '%s\n%s' "Need help?" "FAQ: ${faq_url}")"
+        content="$(printf '%s\n%s\n%s' "Need help?" "FAQ: ${faq_url}" "Support: https://community.openclaw.ai/")"
         ui_panel "$content"
     else
         echo ""
         echo -e "FAQ: ${INFO}${faq_url}${NC}"
+        echo "Support: https://community.openclaw.ai/"
     fi
 }
 
@@ -1258,6 +1260,9 @@ print_usage() {
     cat <<EOF
 OpenClaw installer (macOS + Linux)
 
+Support: https://community.openclaw.ai/
+FAQ: https://docs.openclaw.ai/start/faq
+
 Usage:
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- [options]
 
@@ -1533,7 +1538,7 @@ parse_node_version_components_for_binary() {
 
     # This standalone installer runs before OpenClaw exists on disk. Mirror the
     # release grammar in node-version.mjs; parity cases guard this boundary.
-    if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+    if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
         return 1
     fi
     major="${BASH_REMATCH[1]}"
@@ -1547,6 +1552,9 @@ parse_node_version_components_for_binary() {
             return 1
         fi
     done
+    if [[ -n "${BASH_REMATCH[4]}" ]] && ((major <= 26)); then
+        return 1
+    fi
     echo "${major} ${minor} ${patch}"
     return 0
 }
@@ -2374,7 +2382,7 @@ ensure_pnpm() {
     local repo_dir="${1:-$PWD}"
     local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
     spec="$(repo_pnpm_spec "$repo_dir" || true)"
-    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.9.0"
+    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.12.1"
     version="${spec#pnpm@}"
     version="${version%%+*}"
     pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -2404,22 +2412,6 @@ ensure_pnpm() {
     fi
     ui_success "pnpm ready ($(pnpm_cmd_pretty))"
 }
-
-validate_git_checkout_head() {
-    local repo_dir="$1"
-
-    if [[ ! -d "$repo_dir/.git" ]]; then
-        return 0
-    fi
-    if git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
-        return 0
-    fi
-
-    ui_error "Git checkout has no commit: ${repo_dir}"
-    ui_info "Move or remove this incomplete checkout, then retry the installer."
-    return 1
-}
-
 
 ensure_user_local_bin_on_path() {
     local target="$HOME/.local/bin"
@@ -2865,7 +2857,7 @@ install_openclaw_from_git() {
         repo_dir="$(cd "$(dirname "$repo_dir")" && pwd -P)/$(basename "$repo_dir")"
     fi
 
-    if [[ -d "$repo_dir/.git" ]]; then
+    if [[ -e "$repo_dir/.git" ]]; then
         ui_info "Installing OpenClaw from git checkout: ${repo_dir}"
     else
         ui_info "Installing OpenClaw from GitHub (${repo_url})"
@@ -2875,8 +2867,8 @@ install_openclaw_from_git() {
         install_git
     fi
 
-    validate_git_checkout_head "$repo_dir" || return 1
-    if [[ ! -d "$repo_dir" || -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
+    validate_git_checkout "$repo_dir" || return 1
+    if [[ ! -e "$repo_dir/.git" ]]; then
         # Blobless clone: the installer checks out one release tag, so full blob
         # history is downloaded and then discarded. blob:none keeps ref metadata
         # (unlike --depth 1) so ref switching and later updates still work, and

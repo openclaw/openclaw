@@ -4,7 +4,6 @@ import {
   getSessionActorStorageBinding,
   captureSessionActorStorageOwner,
 } from "../config/sessions/session-actor-storage-binding.js";
-import { withCanonicalSessionValidationDeferral } from "../config/sessions/session-canonical-validation-deferral.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -19,7 +18,6 @@ import type { SessionRowPlacementFacts } from "./session-row-placement-projectio
 import {
   privateSessionRowReadKey,
   readPreparedSessionRows,
-  type withPreparedSessionRows,
   type PreparedPrivateSessionRepository,
   type SessionRowReadView,
 } from "./session-row-prepared-read.js";
@@ -37,14 +35,10 @@ const MAX_CONCURRENT_PLACEMENT_READS = 2;
 const MAX_COALESCED_PLACEMENT_IDS = 256;
 const MAX_COALESCED_PLACEMENT_BYTES = 64 * 1024;
 type PlacementReadKind = "resident" | "exact";
-type PrivatePlacementTarget = Pick<Row, "storeTarget"> & { sessionId: string };
 type PlacementReadBatch = {
   kind: PlacementReadKind;
   ids: Set<string>;
-  privateSessions: Map<string, PrivatePlacementTarget>;
   inputBytes: number;
-  stale: Set<string>;
-  staleAll: boolean;
   started: boolean;
   settled: boolean;
   readers: number;
@@ -72,19 +66,6 @@ export function createSessionRowPlacementProjection(
   const queuedReads: PlacementReadBatch[] = [];
   const reads = new Set<PlacementReadBatch>();
   let retainedInputBytes = 0;
-  const invalidateReads = (id?: string) => {
-    for (const read of reads) {
-      // Queued reads capture state when dispatched, after these publications.
-      if (!read.started) {
-        continue;
-      }
-      if (id === undefined) {
-        read.staleAll = true;
-      } else if (read.ids.has(id)) {
-        read.stale.add(id);
-      }
-    }
-  };
   const releaseRead = (read: PlacementReadBatch) => {
     if (read.settled && read.readers === 0 && reads.delete(read)) {
       retainedInputBytes -= read.inputBytes;
@@ -111,30 +92,16 @@ export function createSessionRowPlacementProjection(
       batch.settled = true;
       activeReads.delete(batch);
       releaseRead(batch);
-      // Physical settlement frees capacity before consumers release their freshness leases.
+      // Physical settlement frees capacity before consumers release their input reservations.
       dispatchQueuedReads();
     }
   }
-  const acquireRead = (
-    ids: readonly string[],
-    kind: PlacementReadKind,
-    privateSessions: ReadonlyMap<string, PrivatePlacementTarget> = new Map(),
-  ) => {
+  const acquireRead = (ids: readonly string[], kind: PlacementReadKind) => {
     if (disposed) {
       throw new Error("Session row projection is no longer active");
     }
     const covers = (batch: PlacementReadBatch) =>
-      batch.kind === kind &&
-      !batch.staleAll &&
-      ids.every((id) => batch.ids.has(id) && !batch.stale.has(id)) &&
-      [...privateSessions].every(([key, target]) => {
-        const previous = batch.privateSessions.get(key);
-        return (
-          previous?.sessionId === target.sessionId &&
-          previous.storeTarget.agentId === target.storeTarget.agentId &&
-          previous.storeTarget.storePath === target.storeTarget.storePath
-        );
-      });
+      batch.kind === kind && ids.every((id) => batch.ids.has(id));
     // Exact requests must not join broader resident preparation and wait for unrelated work.
     let read = [...activeReads].find(covers) ?? queuedReads.find(covers);
     let addedBytes = 0;
@@ -177,10 +144,7 @@ export function createSessionRowPlacementProjection(
       const batch: PlacementReadBatch = {
         kind,
         ids: new Set(),
-        privateSessions: new Map(),
         inputBytes: 0,
-        stale: new Set(),
-        staleAll: false,
         started: false,
         settled: false,
         readers: 0,
@@ -195,16 +159,12 @@ export function createSessionRowPlacementProjection(
       for (const id of ids) {
         read.ids.add(id);
       }
-      for (const [key, id] of privateSessions) {
-        read.privateSessions.set(key, id);
-      }
       read.inputBytes += addedBytes;
       retainedInputBytes += addedBytes;
     }
     read.readers++;
     return {
       result: read.completion.promise,
-      isCurrent: (id: string) => read.ids.has(id) && !read.staleAll && !read.stale.has(id),
       release() {
         read.readers--;
         releaseRead(read);
@@ -229,21 +189,24 @@ export function createSessionRowPlacementProjection(
   const missing = (ids: readonly string[]) =>
     reader ? [...new Set(ids)].filter((id) => !resident.has(id)) : [];
   const owner = {
-    getProjectionFacts: (id: string) => exact?.get(id) ?? resident.get(id),
+    getProjectionFacts: (id: string) => resident.get(id) ?? exact?.get(id),
     isPrepared: (id: string) => !reader || exact?.has(id) === true || resident.has(id),
     get needsPreparation() {
-      return !disposed && dirty.size > 0;
+      return (
+        !disposed &&
+        (dirty.size > 0 || [...reads].some((read) => read.kind === "resident" && !read.settled))
+      );
     },
     register(id: string) {
       if (!reader || registered.has(id)) {
         return;
       }
       registered.add(id);
-      let prepared = exact?.get(id);
+      let prepared = resident.get(id) ?? exact?.get(id);
       if (!prepared) {
         // Row preparation can yield after its exact placement read has settled.
         for (const read of reads) {
-          if (read.snapshot && !read.staleAll && read.ids.has(id) && !read.stale.has(id)) {
+          if (read.snapshot && read.ids.has(id)) {
             prepared = select(read.snapshot, id);
             break;
           }
@@ -256,7 +219,6 @@ export function createSessionRowPlacementProjection(
       }
     },
     forget(id: string) {
-      invalidateReads(id);
       registered.delete(id);
       dirty.delete(id);
       resident.delete(id);
@@ -266,13 +228,11 @@ export function createSessionRowPlacementProjection(
       if (!published?.placements.has(id) || !registered.has(id)) {
         return false;
       }
-      invalidateReads(id);
       resident.set(id, select(published, id));
       dirty.delete(id);
       return true;
     },
     invalidate(id?: string) {
-      invalidateReads(id);
       if (id) {
         resident.delete(id);
         if (registered.has(id)) {
@@ -286,21 +246,6 @@ export function createSessionRowPlacementProjection(
       }
     },
     invalidateChange(change: SessionRowChange) {
-      if ("sessionKey" in change && change.scope === "acp") {
-        return;
-      }
-      if ("sessionKey" in change) {
-        for (const read of reads) {
-          const target = read.privateSessions.get(change.sessionKey);
-          if (
-            target &&
-            (!change.agentId || change.agentId === target.storeTarget.agentId) &&
-            (!change.storePath || change.storePath === target.storeTarget.storePath)
-          ) {
-            invalidateReads(target.sessionId);
-          }
-        }
-      }
       if (
         "all" in change &&
         (change.scope === "worker-placements" ||
@@ -341,7 +286,7 @@ export function createSessionRowPlacementProjection(
       prepareRows: (queries: readonly Lookup[]) => Promise<void> | undefined,
       consume: (read: SessionRowReadView, queries: readonly Lookup[]) => T,
       prepareSelection?: () => Promise<void> | undefined,
-    ): ReturnType<typeof withPreparedSessionRows<T>> {
+    ): Promise<T> {
       const signal = getAsyncWorkSignal();
       const memory = getSessionActorStorageBinding({});
       const assertActive = () => {
@@ -351,76 +296,60 @@ export function createSessionRowPlacementProjection(
         }
       };
       const prepareFacts = () => prepareReadFacts() ?? prepareSelection?.();
-      let deferred:
-        | Extract<ReturnType<typeof withCanonicalSessionValidationDeferral>, { kind: "pending" }>
-        | undefined;
       let preparedQueries: readonly Lookup[] = [];
       let hasPrivateQueries = false;
       let selectedIds: readonly string[] = [];
-      const privateTargets = new Map<string, PrivatePlacementTarget>();
       const privateRepositories = new Map<string, PreparedPrivateSessionRepository>();
       let privateSelections: Array<{ key: string; row: Row; workspaceId: string }> = [];
       let selectedConfig: OpenClawConfig | undefined;
       const selectRows = () => {
-        const selected = withCanonicalSessionValidationDeferral(() => {
-          const cfg = projection.state.cfg;
-          if (selectedConfig !== cfg) {
-            privateRepositories.clear();
-            selectedConfig = cfg;
-          }
-          privateSelections = [];
-          privateTargets.clear();
-          preparedQueries = queries(cfg);
-          hasPrivateQueries = false;
-          const ids: string[] = [];
-          for (const query of preparedQueries) {
-            const key = privateSessionRowReadKey(cfg, query);
-            hasPrivateQueries ||= key !== undefined;
-            const privateMemory = key
-              ? captureSessionActorStorageOwner(
-                  { ...query, sessionKey: query.key, sessionActor: memory, env },
-                  { assertCurrent: assertActive, authorize: assertActive },
-                )
-              : undefined;
-            const snapshot = privateMemory?.owner?.readSession(query.key, privateMemory.authority);
-            const assertSessionCurrent = privateMemory?.owner?.captureSessionReadGuard(query.key);
-            const row = privateMemory
-              ? snapshot?.entry &&
-                createIncognitoSessionRow({
-                  cfg,
-                  key: query.key,
-                  agentId: query.agentId,
-                  storePath: privateMemory.path,
-                  entry: snapshot.entry,
-                  membership: new Set(snapshot.members.map((member) => member.identityId)),
-                  source: {
-                    identity: snapshot.version.epoch,
-                    assertCurrent() {
-                      assertActive();
-                      assertSessionCurrent?.();
-                      privateMemory.binding?.actor.assertReadable();
-                      privateMemory.authority.assertCurrent();
-                    },
+        const cfg = projection.state.cfg;
+        if (selectedConfig !== cfg) {
+          privateRepositories.clear();
+          selectedConfig = cfg;
+        }
+        privateSelections = [];
+        preparedQueries = queries(cfg);
+        hasPrivateQueries = false;
+        const ids: string[] = [];
+        for (const query of preparedQueries) {
+          const key = privateSessionRowReadKey(cfg, query);
+          hasPrivateQueries ||= key !== undefined;
+          const privateMemory = key
+            ? captureSessionActorStorageOwner(
+                { ...query, sessionKey: query.key, sessionActor: memory, env },
+                { assertCurrent: assertActive, authorize: assertActive },
+              )
+            : undefined;
+          const snapshot = privateMemory?.owner?.readSession(query.key, privateMemory.authority);
+          const assertSessionCurrent = privateMemory?.owner?.captureSessionReadGuard(query.key);
+          const row = privateMemory
+            ? snapshot?.entry &&
+              createIncognitoSessionRow({
+                cfg,
+                key: query.key,
+                agentId: query.agentId,
+                storePath: privateMemory.path,
+                entry: snapshot.entry,
+                membership: new Set(snapshot.members.map((member) => member.identityId)),
+                source: {
+                  identity: snapshot.version.epoch,
+                  assertCurrent() {
+                    assertActive();
+                    assertSessionCurrent?.();
+                    privateMemory.authority.assertCurrent();
                   },
-                })
-              : inOwnerContext(() => lookup(query));
-            if (key && row?.entry?.repositoryWorkspaceId) {
-              privateSelections.push({ key, row, workspaceId: row.entry.repositoryWorkspaceId });
-            }
-            if (row?.entry) {
-              ids.push(row.entry.sessionId);
-              if (key) {
-                privateTargets.set(row.key, {
-                  sessionId: row.entry.sessionId,
-                  storeTarget: row.storeTarget,
-                });
-              }
-            }
+                },
+              })
+            : inOwnerContext(() => lookup(query));
+          if (key && row?.entry?.repositoryWorkspaceId) {
+            privateSelections.push({ key, row, workspaceId: row.entry.repositoryWorkspaceId });
           }
-          return ids;
-        }, env);
-        deferred = selected.kind === "pending" ? selected : undefined;
-        selectedIds = selected.kind === "complete" ? selected.value : [];
+          if (row?.entry) {
+            ids.push(row.entry.sessionId);
+          }
+        }
+        selectedIds = ids;
         if (privateRepositories.size) {
           const selectedPrivateKeys = new Set(privateSelections.map(({ key }) => key));
           for (const key of privateRepositories.keys()) {
@@ -431,42 +360,29 @@ export function createSessionRowPlacementProjection(
         }
       };
       const prepareSelectedRows = () => {
-        if (deferred) {
-          return undefined;
+        let pending = inOwnerContext(() => prepareRows(preparedQueries));
+        if (pending) {
+          return pending;
         }
-        let pending: Promise<void> | undefined;
-        const prepared = withCanonicalSessionValidationDeferral(() => {
-          pending = inOwnerContext(() => prepareRows(preparedQueries));
-          if (pending) {
-            return;
+        for (const { key, row, workspaceId } of privateSelections) {
+          const existing = privateRepositories.get(key);
+          if (existing?.workspaceId === workspaceId && isCurrentGeneration(existing.row, row)) {
+            continue;
           }
-          for (const { key, row, workspaceId } of privateSelections) {
-            const existing = privateRepositories.get(key);
-            if (existing?.workspaceId === workspaceId && isCurrentGeneration(existing.row, row)) {
-              continue;
+          const cfg = selectedConfig;
+          pending = inOwnerContext(async () => {
+            const repository = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
+            assertActive();
+            if (projection.state.cfg === cfg) {
+              privateRepositories.set(key, { row, workspaceId, repository });
             }
-            const cfg = selectedConfig;
-            pending = inOwnerContext(async () => {
-              const repository = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
-              assertActive();
-              if (projection.state.cfg === cfg) {
-                privateRepositories.set(key, { row, workspaceId, repository });
-              }
-            });
-            break;
-          }
-        }, env);
-        deferred = prepared.kind === "pending" ? prepared : undefined;
+          });
+          break;
+        }
         return pending;
       };
       const stalePrivatePreparation = Symbol("stale-private-row-preparation");
-      const consumeRows = (
-        placement?: ReadonlyMap<string, SessionRowPlacementFacts>,
-        placementCurrent: () => boolean = () => true,
-      ) => {
-        if (deferred) {
-          return Promise.resolve(deferred);
-        }
+      const consumeRows = (placement?: ReadonlyMap<string, SessionRowPlacementFacts>) => {
         const cfg = projection.state.cfg;
         const consumePrepared = (
           privateRows?: ReadonlyMap<string, Row | undefined>,
@@ -476,7 +392,6 @@ export function createSessionRowPlacementProjection(
             ? [...privateRows.values()].flatMap((row) => (row?.entry ? [row.entry.sessionId] : []))
             : [];
           if (
-            !placementCurrent() ||
             projection.state.cfg !== cfg ||
             missing(privateIds).some((id) => !placement?.has(id))
           ) {
@@ -494,7 +409,6 @@ export function createSessionRowPlacementProjection(
               (read) => consume(read, preparedQueries),
               privateRepositories,
               privateRows,
-              env,
             );
           } finally {
             exact = previous;
@@ -512,13 +426,13 @@ export function createSessionRowPlacementProjection(
         selectRows();
         return prepareSelectedRows();
       };
-      const assertPublicationCurrent = (placementCurrent = true) => {
+      const assertPublicationCurrent = () => {
         // Only actor-backed preparation retains resources past the synchronous consumer.
         if (!hasPrivateQueries) {
           return;
         }
         assertActive();
-        if (!placementCurrent || projection.state.cfg !== selectedConfig) {
+        if (projection.state.cfg !== selectedConfig) {
           throw new Error("Session row facts changed during cleanup");
         }
       };
@@ -543,7 +457,7 @@ export function createSessionRowPlacementProjection(
           assertPublicationCurrent();
           return result;
         }
-        const read = acquireRead(requested, "exact", privateTargets);
+        const read = acquireRead(requested, "exact");
         try {
           const snapshot = await read.result;
           assertActive();
@@ -552,11 +466,10 @@ export function createSessionRowPlacementProjection(
             await pending;
             assertActive();
           }
-          const prepared = new Map(requested.map((id) => [id, select(snapshot, id)]));
-          if (
-            requested.some((id) => !read.isCurrent(id)) ||
-            selectedIds.some((id) => !resident.has(id) && !prepared.has(id))
-          ) {
+          const prepared = new Map(
+            requested.map((id) => [id, resident.get(id) ?? select(snapshot, id)]),
+          );
+          if (selectedIds.some((id) => !resident.has(id) && !prepared.has(id))) {
             continue;
           }
           for (const [id, facts] of prepared) {
@@ -565,13 +478,11 @@ export function createSessionRowPlacementProjection(
               dirty.delete(id);
             }
           }
-          const result = await consumeRows(prepared, () =>
-            requested.every((id) => read.isCurrent(id)),
-          );
+          const result = await consumeRows(prepared);
           if (result === stalePrivatePreparation) {
             continue;
           }
-          assertPublicationCurrent(requested.every((id) => read.isCurrent(id)));
+          assertPublicationCurrent();
           return result;
         } finally {
           read.release();
@@ -585,23 +496,32 @@ export function createSessionRowPlacementProjection(
       }
       const read = acquireRead(requested, "resident");
       try {
+        // Dequeue this batch; invalidations during its read remain queued for the next pass.
+        for (const id of requested) {
+          dirty.delete(id);
+        }
         const snapshot = await read.result;
         if (disposed) {
           return;
         }
         for (const id of requested) {
-          if (registered.has(id) && read.isCurrent(id)) {
-            resident.set(id, select(snapshot, id));
-            dirty.delete(id);
+          if (registered.has(id) && !dirty.has(id)) {
+            resident.set(id, resident.get(id) ?? select(snapshot, id));
           }
         }
+      } catch (error) {
+        for (const id of requested) {
+          if (registered.has(id)) {
+            dirty.add(id);
+          }
+        }
+        throw error;
       } finally {
         read.release();
       }
     },
     dispose() {
       disposed = true;
-      invalidateReads();
       for (const read of queuedReads) {
         read.settled = true;
         read.completion.reject(new Error("Session row projection is no longer active"));

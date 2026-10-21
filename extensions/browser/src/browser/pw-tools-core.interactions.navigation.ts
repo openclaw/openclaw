@@ -1,11 +1,8 @@
-import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { Frame, Page } from "playwright-core";
-import {
-  BROWSER_ACTION_NAVIGATION_GRACE_MS,
-  normalizeActBoundedNonNegativeMs,
-} from "./act-policy.js";
+import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import {
   assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
@@ -87,14 +84,6 @@ type NavigationObservablePage = Pick<Page, "url" | "mainFrame" | "on" | "off">;
 
 const pendingInteractionNavigationGuardCleanup = new WeakMap<Page, () => void>();
 
-export function resolveBoundedDelayMs(
-  value: number | undefined,
-  label: string,
-  maxMs: number,
-): number {
-  return normalizeActBoundedNonNegativeMs(Math.floor(value ?? 0), label, maxMs) ?? 0;
-}
-
 export async function getRestoredPageForTarget(opts: InteractionTargetOptions) {
   const page = await getPageForTargetId(opts);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -119,6 +108,28 @@ export function throwIfInteractionAborted(signal?: AbortSignal): void {
   }
 }
 
+export async function runGuardedPageInteraction<T>(
+  page: Page,
+  opts: GuardedInteractionOptions,
+  action: () => Promise<T>,
+): Promise<T> {
+  // Keep the navigation guard alive after foreground interruption until the
+  // underlying native operation settles.
+  return await awaitNavigationGuardedInteraction(
+    {
+      action,
+      cdpUrl: opts.cdpUrl,
+      page,
+      ...interactionNavigationPolicy(opts),
+      targetId: opts.targetId,
+      assertCurrent: opts.assertCurrent,
+    },
+    opts.signal,
+    opts.signal,
+    () => reconcileRemoteDialogAfterActionSettled(page, opts.signal),
+  );
+}
+
 export async function runCancellablePageInteraction<T>(
   page: Page,
   opts: GuardedInteractionOptions,
@@ -139,7 +150,6 @@ export async function runCancellablePageInteraction<T>(
   if (opts.signal?.aborted) {
     onAbort();
   }
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(interruption.signal);
   try {
     const result = await awaitNavigationGuardedInteraction(
       {
@@ -150,7 +160,7 @@ export async function runCancellablePageInteraction<T>(
         targetId: opts.targetId,
         assertCurrent: opts.assertCurrent,
       },
-      abortPromise,
+      interruption.signal,
       opts.signal,
       () => reconcileRemoteDialogAfterActionSettled(page, opts.signal),
     );
@@ -167,7 +177,6 @@ export async function runCancellablePageInteraction<T>(
     throw errorLabel === undefined ? error : toFriendlyInteractionError(error, errorLabel);
   } finally {
     opts.signal?.removeEventListener("abort", onAbort);
-    cleanup();
   }
 }
 
@@ -377,14 +386,16 @@ async function assertInteractionNavigationCompletedSafely<T>(
 
 export async function awaitActionWithAbort<T>(
   actionPromise: Promise<T>,
-  abortPromise?: Promise<never>,
+  signal?: AbortSignal,
   onActionResolvedAfterAbort?: () => void,
 ): Promise<T> {
-  if (!abortPromise) {
+  if (!signal) {
     return await actionPromise;
   }
   try {
-    return await Promise.race([actionPromise, abortPromise]);
+    return await racePromiseWithAbortSignal(actionPromise, signal, ({ reason }) =>
+      toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
+    );
   } catch (err) {
     // If abort wins the race, the action may reject later; avoid unhandled rejections.
     void actionPromise.then(
@@ -395,7 +406,7 @@ export async function awaitActionWithAbort<T>(
   }
 }
 
-export async function awaitNavigationGuardedInteraction<T>(
+async function awaitNavigationGuardedInteraction<T>(
   opts: {
     action: () => Promise<T>;
     cdpUrl: string;
@@ -403,7 +414,7 @@ export async function awaitNavigationGuardedInteraction<T>(
     targetId?: string;
     assertCurrent?: InteractionTargetOptions["assertCurrent"];
   } & BrowserNavigationPolicyOptions,
-  abortPromise?: Promise<never>,
+  interruptionSignal?: AbortSignal,
   signal?: AbortSignal,
   onActionResolvedAfterAbort?: () => void,
 ): Promise<T> {
@@ -493,7 +504,11 @@ export async function awaitNavigationGuardedInteraction<T>(
     throw err;
   });
   try {
-    return await awaitActionWithAbort(guardedAction, abortPromise, onActionResolvedAfterAbort);
+    return await awaitActionWithAbort(
+      guardedAction,
+      interruptionSignal,
+      onActionResolvedAfterAbort,
+    );
   } catch (err) {
     if (observedPolicyError === undefined && activePolicyChecks.size > 0) {
       const outcomes = await Promise.all(activePolicyChecks);
@@ -511,32 +526,4 @@ export async function awaitNavigationGuardedInteraction<T>(
     }
     throw err;
   }
-}
-
-export function createAbortPromiseWithListener(
-  signal?: AbortSignal,
-  onAbort?: (reason: unknown) => void,
-): {
-  abortPromise?: Promise<never>;
-  cleanup: () => void;
-} {
-  if (!signal) {
-    return { cleanup: () => {} };
-  }
-  const { promise: abortPromise, reject } = createDeferred<never>();
-  const abortListener = () => {
-    onAbort?.(signal.reason);
-    reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
-  };
-  if (signal.aborted) {
-    abortListener();
-  } else {
-    signal.addEventListener("abort", abortListener, { once: true });
-  }
-  // Avoid unhandled rejections on early returns.
-  void abortPromise.catch(() => {});
-  return {
-    abortPromise,
-    cleanup: () => signal.removeEventListener("abort", abortListener),
-  };
 }

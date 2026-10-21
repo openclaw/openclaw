@@ -29,7 +29,7 @@ import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "..
 import { runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import { getResolvedImageRuntimeContext, resolveImageRuntime } from "./image-model-runtime.js";
+import { resolveImageRuntime } from "./image-model-runtime.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
@@ -343,8 +343,7 @@ export async function describeImagesWithModelPayloadTransformCore(
       params.cfg,
       params.provider,
     );
-    let runtimeValue: string;
-    let model: Model | undefined;
+    let resolved: Awaited<ReturnType<typeof resolveImageRuntime>>;
     const resolutionTask = trackAsyncWork(() =>
       resolveImageRuntime({ ...params, signal: requestSignal }, (resources) => {
         onAcquired({ release: async () => await resources[Symbol.asyncDispose]() });
@@ -353,7 +352,7 @@ export async function describeImagesWithModelPayloadTransformCore(
     );
 
     try {
-      const resolved = await withImageDescriptionTimeout({
+      resolved = await withImageDescriptionTimeout({
         controller,
         signal: params.signal,
         timeoutMs: configuredTimeoutMs,
@@ -361,8 +360,6 @@ export async function describeImagesWithModelPayloadTransformCore(
           buildImageDescriptionTimeoutError({ phase: "setup", timeoutMs }),
         task: resolutionTask,
       });
-      runtimeValue = resolved.runtimeValue;
-      model = resolved.model;
     } catch (err) {
       params.signal?.throwIfAborted();
       if (!isMinimaxVlmModel(params.provider, params.model) || !isUnknownModelError(err)) {
@@ -390,6 +387,7 @@ export async function describeImagesWithModelPayloadTransformCore(
       });
     }
 
+    const { runtimeValue, model, cfg, agentDir, workspaceDir } = resolved;
     const apiKey = runtimeValue;
     params.signal?.throwIfAborted();
     assertResourcesOpen?.();
@@ -410,7 +408,6 @@ export async function describeImagesWithModelPayloadTransformCore(
       });
     }
 
-    const resolvedRuntimeContext = getResolvedImageRuntimeContext(model);
     // Prepared auth may carry sentinel-protected request headers. Resolve them only at this
     // final direct-completion boundary so provider SDKs never receive sentinel placeholders.
     const requestModel = unwrapModelHeaderSentinelsForProviderEgress(
@@ -419,14 +416,10 @@ export async function describeImagesWithModelPayloadTransformCore(
     );
     const providerStreamFn = registerProviderStreamForModel({
       model: requestModel,
-      cfg: resolvedRuntimeContext?.cfg ?? params.cfg,
-      agentDir: resolvedRuntimeContext?.agentDir ?? params.agentDir,
+      cfg,
+      agentDir,
       wrapProviderStream: true,
-      ...(resolvedRuntimeContext?.workspaceDir
-        ? { workspaceDir: resolvedRuntimeContext.workspaceDir }
-        : params.workspaceDir
-          ? { workspaceDir: params.workspaceDir }
-          : {}),
+      ...(workspaceDir ? { workspaceDir } : {}),
     });
 
     const promptInUserContent = shouldPlaceImagePromptInUserContent(model);

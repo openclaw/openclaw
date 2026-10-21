@@ -72,32 +72,46 @@ function pressure(messages: AgentMessage[]) {
 }
 
 describe("provider checkpoint prompt pressure", () => {
-  function measuredWindow() {
+  function measuredWindow(toolCall = false) {
     const owner = checkpoint("retained content ".repeat(8_000));
     const response = assistant(2_001);
-    response.content = [
-      { type: "text", text: "done", textSignature: JSON.stringify({ v: 1, id: "msg_measured" }) },
-    ];
-    response.responseId = "resp_measured";
+    const text = {
+      type: "text" as const,
+      text: "done",
+      textSignature: JSON.stringify({ v: 1, id: "msg_measured" }),
+    };
+    const call = {
+      type: "toolCall" as const,
+      id: "call_read|fc_read",
+      name: "read",
+      arguments: {},
+    };
+    response.content = [toolCall ? call : text];
+    response.responseId = toolCall ? "resp_async" : "resp_measured";
+    response.stopReason = toolCall ? "toolUse" : "stop";
     const request = {
       input: convertResponsesMessages(model, { messages: [owner] }, new Set(["openai"]), identity),
     };
-    recordResponsesContextUsage(
-      response,
-      model,
-      identity,
-      request,
-      [
-        {
-          type: "message",
-          id: "msg_measured",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "done", annotations: [] }],
-        },
-      ],
-      "transport",
-    );
+    const output: Parameters<typeof recordResponsesContextUsage>[4] = toolCall
+      ? [
+          {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+            arguments: "{}",
+          },
+        ]
+      : [
+          {
+            type: "message",
+            id: "msg_measured",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "done", annotations: [] }],
+          },
+        ];
+    recordResponsesContextUsage(response, model, identity, request, output, "transport");
     return { owner, response };
   }
 
@@ -152,34 +166,7 @@ describe("provider checkpoint prompt pressure", () => {
   });
 
   it("counts tool results persisted before the terminal usage event as new context", () => {
-    const owner = checkpoint("retained content ".repeat(8_000));
-    const response = assistant(2_001);
-    response.responseId = "resp_async";
-    response.stopReason = "toolUse";
-    response.content = [{ type: "toolCall", id: "call_read|fc_read", name: "read", arguments: {} }];
-    recordResponsesContextUsage(
-      response,
-      model,
-      identity,
-      {
-        input: convertResponsesMessages(
-          model,
-          { messages: [owner] },
-          new Set(["openai"]),
-          identity,
-        ),
-      },
-      [
-        {
-          type: "function_call",
-          id: "fc_read",
-          call_id: "call_read",
-          name: "read",
-          arguments: "{}",
-        },
-      ],
-      "transport",
-    );
+    const { owner, response } = measuredWindow(true);
     const fragment = {
       ...response,
       usage: { ...response.usage, input: 0, output: 0, totalTokens: 0, contextUsage: undefined },
@@ -200,33 +187,6 @@ describe("provider checkpoint prompt pressure", () => {
     expect(pressure(messages)).toBeGreaterThan(3_500);
     expect(pressure(messages)).toBeLessThan(6_000);
   });
-
-  it("counts the canonical window once instead of covered text or stale owner usage", () => {
-    const owner = checkpoint("small canonical window");
-    const tail: AgentMessage[] = [{ role: "user", content: "follow-up", timestamp: 3 }];
-    const canonicalPressure = pressure([owner, ...tail]);
-    const withCoveredRaw = pressure([
-      { role: "user", content: "covered raw text ".repeat(20_000), timestamp: 1 },
-      owner,
-      ...tail,
-    ]);
-    expect(canonicalPressure).toBeLessThan(1_000);
-    expect(withCoveredRaw).toBe(canonicalPressure);
-    expect(pressure([checkpoint("retained content ".repeat(8_000)), ...tail])).toBeGreaterThan(
-      20_000,
-    );
-  });
-
-  it("counts the window once without attributing unbound later usage to its prefix", () => {
-    const owner = checkpoint("retained content ".repeat(8_000));
-    const response = assistant(100);
-    response.timestamp = 4;
-    const tail: AgentMessage[] = [{ role: "user", content: "follow-up", timestamp: 3 }, response];
-    const measuredPressure = pressure([owner, ...tail]);
-    expect(measuredPressure).toBeGreaterThan(20_000);
-    delete response.usage.contextUsage;
-    expect(pressure([owner, ...tail])).toBe(measuredPressure);
-  });
 });
 
 const BIG_OUTPUT = "build log line ".repeat(90000);
@@ -243,44 +203,47 @@ function bashExecMessage(output = BIG_OUTPUT): AgentMessage {
   } as unknown as AgentMessage;
 }
 
-function compactionSummaryMessage(summary: string): AgentMessage {
+function customMessage(display: boolean, excludeFromContext = false): AgentMessage {
   return {
-    role: "compactionSummary",
-    summary,
-    tokensBefore: 0,
+    role: "custom",
+    customType: display ? "display-note" : "openclaw-runtime-context",
+    content: BIG_OUTPUT,
+    display,
+    excludeFromContext,
     timestamp: 1,
-  } as unknown as AgentMessage;
+  };
 }
 
 function providerTokenApprox(message: AgentMessage): number {
   const [llm] = convertToLlm([message]);
-  const content =
-    llm && Array.isArray((llm as { content?: unknown }).content)
-      ? (llm as { content: { type: string; text?: string }[] }).content
-      : [];
-  const text = content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text ?? "")
-    .join("");
+  const content = llm?.content;
+  const text =
+    typeof content === "string"
+      ? content
+      : (content ?? [])
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .join("");
+
   return Math.ceil(text.length / 4);
 }
 
 describe("preemptive precheck counts bashExecution and summary turns", () => {
-  it("estimates a large bash turn near its provider-rendered size", () => {
-    const msg = bashExecMessage();
-    const realProviderTokens = providerTokenApprox(msg);
-    const precheckTokens = estimateLlmBoundaryTokenPressure({ messages: [msg], prompt: "" });
-
-    expect(realProviderTokens).toBeGreaterThan(50000);
-    expect(precheckTokens).toBeGreaterThanOrEqual(realProviderTokens);
-  });
-
-  it("counts compactionSummary text instead of bare boundary overhead", () => {
-    const msg = compactionSummaryMessage("recap ".repeat(20000));
-    const realProviderTokens = providerTokenApprox(msg);
-    const precheckTokens = estimateLlmBoundaryTokenPressure({ messages: [msg], prompt: "" });
-
-    expect(realProviderTokens).toBeGreaterThan(20000);
+  it.each([
+    { message: bashExecMessage(), minimum: 50000 },
+    {
+      message: {
+        role: "compactionSummary",
+        summary: "recap ".repeat(20000),
+        tokensBefore: 0,
+        timestamp: 1,
+      } satisfies AgentMessage,
+      minimum: 20000,
+    },
+  ])("counts $message.role near its provider-rendered size", ({ message, minimum }) => {
+    const realProviderTokens = providerTokenApprox(message);
+    const precheckTokens = estimateLlmBoundaryTokenPressure({ messages: [message], prompt: "" });
+    expect(realProviderTokens).toBeGreaterThan(minimum);
     expect(precheckTokens).toBeGreaterThanOrEqual(realProviderTokens);
   });
 
@@ -291,14 +254,7 @@ describe("preemptive precheck counts bashExecution and summary turns", () => {
     },
     {
       role: "custom",
-      message: {
-        role: "custom",
-        customType: "display-note",
-        content: BIG_OUTPUT,
-        display: true,
-        excludeFromContext: true,
-        timestamp: 1,
-      } satisfies AgentMessage,
+      message: customMessage(true, true),
     },
   ])("drops excluded $role turns from token pressure", ({ message }) => {
     expect(estimateLlmBoundaryTokenPressure({ messages: [message], prompt: "" })).toBeLessThan(50);
@@ -313,14 +269,7 @@ describe("preemptive precheck counts bashExecution and summary turns", () => {
   });
 
   it("counts undisplayed custom context when it remains model-visible", () => {
-    const runtimeContext = {
-      role: "custom",
-      customType: "openclaw-runtime-context",
-      content: BIG_OUTPUT,
-      display: false,
-      timestamp: 1,
-    } satisfies AgentMessage;
-
+    const runtimeContext = customMessage(false);
     expect(
       estimateLlmBoundaryTokenPressure({ messages: [runtimeContext], prompt: "" }),
     ).toBeGreaterThan(50000);

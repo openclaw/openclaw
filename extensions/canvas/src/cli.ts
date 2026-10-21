@@ -40,13 +40,8 @@ function parseCanvasFiniteNumberOption(raw: string | undefined, flag: string): n
 }
 
 function parseNodeCandidates(raw: unknown): NodeMatchCandidate[] {
-  const payload =
-    raw && typeof raw === "object" ? (raw as { nodes?: unknown; paired?: unknown }) : {};
-  const list = Array.isArray(payload.nodes)
-    ? payload.nodes
-    : Array.isArray(payload.paired)
-      ? payload.paired
-      : [];
+  const payload = raw && typeof raw === "object" ? (raw as { nodes?: unknown }) : {};
+  const list = Array.isArray(payload.nodes) ? payload.nodes : [];
   return list
     .map((entry) => {
       if (!entry || typeof entry !== "object") {
@@ -94,22 +89,8 @@ async function callGatewayCli(
 }
 
 async function resolveNodeId(opts: CanvasNodesRpcOpts): Promise<string> {
-  const { isGatewayClientRequestError, resolveNodeFromNodeList } =
-    await import("openclaw/plugin-sdk/gateway-runtime");
-  let raw: unknown;
-  try {
-    raw = await callGatewayCli("node.list", opts, {});
-  } catch (error) {
-    if (
-      !isGatewayClientRequestError(error) ||
-      error.gatewayCode !== "INVALID_REQUEST" ||
-      error.retryable ||
-      error.message !== "unknown method: node.list"
-    ) {
-      throw error;
-    }
-    raw = await callGatewayCli("node.pair.list", opts, {});
-  }
+  const { resolveNodeFromNodeList } = await import("openclaw/plugin-sdk/gateway-runtime");
+  const raw = await callGatewayCli("node.list", opts, {});
   return resolveNodeFromNodeList(parseNodeCandidates(raw), normalizeOptionalString(opts.node) ?? "")
     .nodeId;
 }

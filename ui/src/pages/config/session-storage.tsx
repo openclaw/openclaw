@@ -1,7 +1,17 @@
 import type { SessionsStorageStatusResult } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  onSettled,
+} from "solid-js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
@@ -19,7 +29,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatByteSize, formatDateTimeMs } from "../../lib/format.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import { createSettingsStatus } from "./settings-status.ts";
 import { SESSION_STORAGE_SETTINGS_TARGET_ID } from "./settings-targets.ts";
 
@@ -39,16 +49,18 @@ function externalizedTranscripts(count: number): string {
 }
 
 type SettingsProps = {
-  mutationDisabled: boolean;
-  buildEditor: (() => JSX.Element) | undefined;
-  advancedExpanded: boolean;
+  mutationDisabled?: boolean;
+  buildEditor?: () => JSX.Element;
+  advancedExpanded?: boolean;
 };
-function SessionStorageSettingsContent(props: SettingsProps) {
+export function SessionStorageSettings(props: SettingsProps) {
   const context = useApplication();
   const {
     client,
-    state: requestStatus,
-    error: requestError,
+    pending,
+    read: readStatus,
+    scopeKey,
+    requestKey,
     result,
     refresh: refreshStatus,
     capture,
@@ -68,7 +80,9 @@ function SessionStorageSettingsContent(props: SettingsProps) {
   const [ageDraft, setAgeDraft] = createSignal<string | null>(null);
   const [runError, setRunError] = createSignal<string | null>(null);
   const [runOutcome, setRunOutcome] = createSignal<string | null>(null);
-  const [runOperation, setRunOperation] = createSignal<object | null>(null);
+  const [submitting, setSubmitting] = createOptimistic(false);
+  // Admission and retirement are synchronous; Solid owns the visible submission state.
+  let runOperation: AbortController | null = null;
   let followingRun = false;
   let maintenanceTimer: ReturnType<typeof setInterval> | undefined;
   function stopPolling() {
@@ -82,20 +96,26 @@ function SessionStorageSettingsContent(props: SettingsProps) {
     maintenanceTimer = setInterval(() => {
       if (!client()) {
         stopPolling();
-      } else if (requestStatus() !== "pending") {
+      } else if (!pending()) {
         refreshStatus();
       }
     }, 2_000);
   }
-  function retireRequests() {
+  function retireRequests(identityChanged: boolean) {
     stopPolling();
-    followingRun = false;
-    setAgeDraft(null);
-    setRunOperation(null);
-    setRunError(null);
-    setRunOutcome(null);
+    runOperation?.abort();
+    runOperation = null;
+    if (identityChanged) {
+      followingRun = false;
+      setAgeDraft(null);
+      setRunError(null);
+      setRunOutcome(null);
+    }
   }
-  onCleanup(retireRequests);
+  onSettled(() => () => {
+    stopPolling();
+    runOperation?.abort();
+  });
   function observeMaintenance(status: SessionsStorageStatusResult) {
     if (status.maintenance.running) {
       followingRun = true;
@@ -126,7 +146,8 @@ function SessionStorageSettingsContent(props: SettingsProps) {
     const config = context.runtimeConfig;
     return (
       props.mutationDisabled ||
-      runOperation() !== null ||
+      submissionPending() ||
+      runOperation !== null ||
       !client() ||
       !config.canSet ||
       !config.state.connected ||
@@ -135,6 +156,10 @@ function SessionStorageSettingsContent(props: SettingsProps) {
       config.state.configApplying ||
       (config.state.configFormMode === "raw" && config.state.configFormDirty)
     );
+  }
+  function submissionPending() {
+    gatewayProjection.read();
+    return submitting() && runOperation !== null;
   }
   function storageConfig() {
     configProjection.read();
@@ -163,37 +188,31 @@ function SessionStorageSettingsContent(props: SettingsProps) {
       !config.configNeedsApply &&
       typeof config.configSnapshot?.appliedConfigHash === "string" &&
       coldStorage?.enabled === true &&
-      requestStatus() === "complete" &&
+      !pending() &&
       currentResult?.isCurrent() === true &&
       !currentResult.status.maintenance.running
     );
   }
-  let ageInput: HTMLInputElement | undefined;
-  createEffect(
-    () => ageDraft() ?? String(storageConfig().afterDays),
-    (value) => {
-      // Preserve the native number draft when an owner publication leaves it unchanged.
-      if (ageInput && ageInput.value !== value) {
-        ageInput.value = value;
-      }
-    },
-  );
-  async function runNow() {
+  const ageValue = liveValue(() => ageDraft() ?? String(storageConfig().afterDays));
+  const runNow = action(function* () {
     const currentClient = client();
     const ownsConnection = capture();
     if (!canRun() || !currentClient || !ownsConnection()) {
       return;
     }
-    const operation = {};
-    setRunOperation(operation);
+    const operation = new AbortController();
+    runOperation = operation;
+    setSubmitting(true);
     setRunError(null);
     setRunOutcome(null);
-    const isCurrent = () => runOperation() === operation && ownsConnection();
+    const isCurrent = () => runOperation === operation && ownsConnection();
     try {
-      const response = await currentClient.request<SessionsStorageStatusResult>(
-        "sessions.storage.run",
-        {},
-      );
+      const response: SessionsStorageStatusResult =
+        yield currentClient.request<SessionsStorageStatusResult>(
+          "sessions.storage.run",
+          {},
+          { signal: operation.signal },
+        );
       if (!isCurrent()) {
         return;
       }
@@ -209,10 +228,10 @@ function SessionStorageSettingsContent(props: SettingsProps) {
       }
     } finally {
       if (isCurrent()) {
-        setRunOperation(null);
+        runOperation = null;
       }
     }
-  }
+  });
   function setAge(event: Event) {
     // SAFETY: The native number input calls this synchronously from its own change binding.
     const input = event.currentTarget as HTMLInputElement;
@@ -224,47 +243,50 @@ function SessionStorageSettingsContent(props: SettingsProps) {
       setAgeDraft(null);
     }
   }
-  function renderInventory(status: SessionsStorageStatusResult) {
-    const totals = status.agents.reduce(
-      (sum, agent) => ({
-        transcripts: sum.transcripts + agent.hotTranscripts + agent.coldTranscripts,
-        cold: sum.cold + agent.coldTranscripts,
-        database: sum.database + agent.databaseBytes,
-        wal: sum.wal + agent.walBytes,
-        archives: sum.archives + agent.archiveBytes,
-        embedded: sum.embedded + agent.embeddedArchiveBytes,
-      }),
-      { transcripts: 0, cold: 0, database: 0, wal: 0, archives: 0, embedded: 0 },
+  function StorageInventory(inventoryProps: { status: SessionsStorageStatusResult }) {
+    const totals = createMemo(() =>
+      inventoryProps.status.agents.reduce(
+        (sum, agent) => ({
+          transcripts: sum.transcripts + agent.hotTranscripts + agent.coldTranscripts,
+          cold: sum.cold + agent.coldTranscripts,
+          database: sum.database + agent.databaseBytes,
+          wal: sum.wal + agent.walBytes,
+          archives: sum.archives + agent.archiveBytes,
+          embedded: sum.embedded + agent.embeddedArchiveBytes,
+        }),
+        { transcripts: 0, cold: 0, database: 0, wal: 0, archives: 0, embedded: 0 },
+      ),
     );
-    const externalized = externalizedTranscripts(status.maintenance.externalizedTranscripts);
+    const externalized = () =>
+      externalizedTranscripts(inventoryProps.status.maintenance.externalizedTranscripts);
     return (
       <>
         <SettingsRow
           title={t("configView.sessionStorage.transcripts")}
           description={t("configView.sessionStorage.transcriptCounts", {
-            hot: String(totals.transcripts - totals.cold),
-            cold: String(totals.cold),
+            hot: String(totals().transcripts - totals().cold),
+            cold: String(totals().cold),
           })}
-          control={<SettingsValue value={String(totals.transcripts)} />}
+          control={<SettingsValue value={String(totals().transcripts)} />}
         />
         <SettingsRow
           title={t("configView.sessionStorage.database")}
-          description={t("configView.sessionStorage.walSize", { size: storageSize(totals.wal) })}
-          control={<SettingsValue value={storageSize(totals.database)} />}
+          description={t("configView.sessionStorage.walSize", { size: storageSize(totals().wal) })}
+          control={<SettingsValue value={storageSize(totals().database)} />}
         />
         <SettingsRow
           title={t("configView.sessionStorage.archives")}
-          control={<SettingsValue value={storageSize(totals.archives)} />}
+          control={<SettingsValue value={storageSize(totals().archives)} />}
         />
         <SettingsRow
           title={t("configView.sessionStorage.embeddedArchives")}
           description={t("configView.sessionStorage.embeddedArchivesHint")}
-          control={<SettingsValue value={storageSize(totals.embedded)} />}
+          control={<SettingsValue value={storageSize(totals().embedded)} />}
         />
-        {status.agents.length > 1 ? (
+        {inventoryProps.status.agents.length > 1 ? (
           <details class="settings-row settings-row--stacked">
             <summary>{t("configView.sessionStorage.byAgent")}</summary>
-            <For each={status.agents}>
+            <For each={inventoryProps.status.agents}>
               {(agent) => (
                 <SettingsRow
                   title={agent.agentId}
@@ -284,18 +306,18 @@ function SessionStorageSettingsContent(props: SettingsProps) {
         <SettingsRow
           title={t("configView.sessionStorage.worker")}
           description={
-            status.maintenance.running
+            inventoryProps.status.maintenance.running
               ? t("configView.sessionStorage.runningProgress", {
-                  archived: String(status.maintenance.archivedTranscripts),
-                  externalized: String(status.maintenance.externalizedTranscripts),
+                  archived: String(inventoryProps.status.maintenance.archivedTranscripts),
+                  externalized: String(inventoryProps.status.maintenance.externalizedTranscripts),
                 })
-              : status.maintenance.lastCompletedAt
+              : inventoryProps.status.maintenance.lastCompletedAt
                 ? [
                     t("configView.sessionStorage.completed", {
-                      time: formatDateTimeMs(status.maintenance.lastCompletedAt),
-                      count: String(status.maintenance.archivedTranscripts),
+                      time: formatDateTimeMs(inventoryProps.status.maintenance.lastCompletedAt),
+                      count: String(inventoryProps.status.maintenance.archivedTranscripts),
                     }),
-                    externalized,
+                    externalized(),
                   ]
                     .filter(Boolean)
                     .join(" ")
@@ -304,76 +326,84 @@ function SessionStorageSettingsContent(props: SettingsProps) {
           control={
             <SettingsStatus
               kind={
-                status.maintenance.lastError
+                inventoryProps.status.maintenance.lastError
                   ? "danger"
-                  : status.maintenance.running
+                  : inventoryProps.status.maintenance.running
                     ? "accent"
                     : "muted"
               }
               label={t(
-                status.maintenance.running
+                inventoryProps.status.maintenance.running
                   ? "configView.sessionStorage.running"
-                  : status.maintenance.lastError
+                  : inventoryProps.status.maintenance.lastError
                     ? "configView.sessionStorage.failed"
                     : "configView.sessionStorage.idle",
               )}
             />
           }
         />
-        {status.maintenance.lastError ? (
-          <SettingsEmpty message={<span role="alert">{status.maintenance.lastError}</span>} />
+        {inventoryProps.status.maintenance.lastError ? (
+          <SettingsEmpty
+            message={<span role="alert">{inventoryProps.status.maintenance.lastError}</span>}
+          />
         ) : undefined}
       </>
     );
   }
 
-  const status = () => {
-    const currentResult = result();
-    return requestStatus() !== "error" && currentResult?.isCurrent() ? currentResult.status : null;
-  };
+  const status = () => result()?.status;
   return (
-    <>
+    <openclaw-session-storage-settings>
       <SettingsPage>
         <div class="settings-stack" id={SESSION_STORAGE_SETTINGS_TARGET_ID}>
           <SettingsSection
             title={t("configView.sessionStorage.title")}
             description={t("configView.sessionStorage.description")}
             actions={
-              <button
-                class="btn"
-                disabled={!client() || requestStatus() === "pending"}
-                onClick={() => refreshStatus()}
-              >
+              <button class="btn" disabled={!client() || pending()} onClick={() => refreshStatus()}>
                 {t("common.refresh")}
               </button>
             }
           >
-            <Show
-              when={status()}
-              keyed
-              fallback={
+            <Errored
+              fallback={(error) => (
                 <SettingsEmpty
                   message={
-                    requestStatus() === "error" ? (
+                    pending() ? (
+                      t("common.loading")
+                    ) : (
                       <span role="alert">
-                        {formatUiError(requestError())}
+                        {formatUiError(error())}
                         {t("configView.sessionStorage.refreshAfterError")}
                       </span>
-                    ) : (
-                      t(
+                    )
+                  }
+                />
+              )}
+            >
+              <Loading
+                on={[scopeKey(), result() ? undefined : requestKey()]}
+                fallback={<SettingsEmpty message={t("common.loading")} />}
+              >
+                <Show
+                  when={readStatus()?.status}
+                  keyed
+                  fallback={
+                    <SettingsEmpty
+                      message={t(
                         client()
                           ? "common.loading"
                           : context.gateway.snapshot.phase === "connected"
                             ? "configView.sessionStorage.adminRequired"
                             : "configView.sessionStorage.disconnected",
-                      )
-                    )
+                      )}
+                    />
                   }
-                />
-              }
-            >
-              {(currentStatus) => renderInventory(currentStatus)}
-            </Show>
+                >
+                  {(currentStatus) => <StorageInventory status={currentStatus} />}
+                </Show>
+              </Loading>
+            </Errored>
           </SettingsSection>
           <SettingsSection title={t("configView.sessionStorage.automatic")}>
             <>
@@ -404,9 +434,7 @@ function SessionStorageSettingsContent(props: SettingsProps) {
                     step="1"
                     required
                     disabled={disabled()}
-                    ref={(element) => {
-                      ageInput = element;
-                    }}
+                    ref={ageValue}
                     onInput={(event: Event) => {
                       // SAFETY: This handler is bound directly to the native number input.
                       setAgeDraft((event.currentTarget as HTMLInputElement).value);
@@ -426,14 +454,15 @@ function SessionStorageSettingsContent(props: SettingsProps) {
                 control={
                   <button class="btn" disabled={!canRun()} onClick={() => void runNow()}>
                     {t(
-                      runOperation() !== null || status()?.maintenance.running
+                      submissionPending() || status()?.maintenance.running
                         ? "configView.sessionStorage.running"
                         : "configView.sessionStorage.runNow",
                     )}
                   </button>
                 }
               />
-              {runError() && runError() !== status()?.maintenance.lastError ? (
+              {submissionPending() ? undefined : runError() &&
+                runError() !== status()?.maintenance.lastError ? (
                 <SettingsEmpty message={<span role="alert">{runError()}</span>} />
               ) : runOutcome() ? (
                 <SettingsEmpty message={<span role="status">{runOutcome()}</span>} />
@@ -454,18 +483,6 @@ function SessionStorageSettingsContent(props: SettingsProps) {
           {props.buildEditor?.()}
         </details>
       </ShellLayoutBoundary>
-    </>
+    </openclaw-session-storage-settings>
   );
 }
-
-export const SessionStorageSettings = defineSolidBridge<SettingsProps>(
-  "openclaw-session-storage-settings",
-  (props) => <SessionStorageSettingsContent {...props} />,
-  {
-    properties: {
-      mutationDisabled: { default: false, type: Boolean },
-      buildEditor: { default: undefined, attribute: false },
-      advancedExpanded: { default: false, type: Boolean },
-    },
-  },
-);

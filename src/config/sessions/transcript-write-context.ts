@@ -32,6 +32,7 @@ import type {
   InitialSessionTranscriptWriter,
   SessionTranscriptWriterFence,
 } from "./session-transcript-writer.types.js";
+import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";
 import {
   captureSessionTranscriptStorageEnvironment,
   captureSessionTranscriptTargetBinding,
@@ -387,7 +388,7 @@ function contextMatches(
       contextTarget &&
       requestedTarget &&
       contextTarget.sessionKey === requestedTarget.sessionKey &&
-      contextTarget.storePath === requestedTarget.storePath &&
+      sameSessionTranscriptStorePath(contextTarget.storePath, requestedTarget.storePath) &&
       sameSessionTranscriptStorageEnvironment(contextTarget.env, requestedTarget.env) &&
       (!contextTarget.agentId ||
         !requestedTarget.agentId ||

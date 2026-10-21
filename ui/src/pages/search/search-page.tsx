@@ -1,16 +1,6 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  getOwner,
-  isDisposed,
-  onCleanup,
-  untrack,
-} from "solid-js";
+import { Show, createMemo, createSignal, onCleanup } from "solid-js";
 import type {
   WebSearchStatusParams,
   WebSearchStatusResult,
@@ -18,7 +8,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import { renderModelPicker } from "../../components/model-picker.ts";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
@@ -31,6 +21,7 @@ import {
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -41,7 +32,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { LitContent, defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { newSessionModelSearch } from "../new-session/model-location.ts";
 import { readConfigValue, searchConfigRevision, isSearchConfigSettled } from "./search-config.ts";
 import { renderSearchTestResult } from "./search-results.tsx";
@@ -49,43 +40,10 @@ import { SearchSetup, AdvancedSearchSettings } from "./search-setup.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-function SettingsSelectRow(props: {
-  title: string;
-  value: string;
-  description?: string;
-  options: ReadonlyArray<{ value: string; label: string }>;
-  disabled?: boolean;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <SettingsRow
-      title={props.title}
-      description={props.description}
-      control={
-        <select
-          class="settings-select"
-          aria-label={props.title}
-          disabled={props.disabled}
-          value={props.value}
-          onChange={(event) => props.onChange(event.currentTarget.value)}
-        >
-          <For each={props.options} keyed={(option) => option.value}>
-            {(option) => (
-              <option value={option().value} selected={option().value === props.value}>
-                {option().label}
-              </option>
-            )}
-          </For>
-        </select>
-      }
-    />
-  );
-}
-
-function SearchPageContent() {
+export function SearchPage() {
   const context = useApplication();
-  const owner = getOwner();
-  const active = () => owner !== null && !isDisposed(owner);
+  let disposed = false;
+  const active = () => !disposed;
   const [result, setResult] = createSignal<WebSearchStatusResult | null>(null);
   const [error, setError] = createSignal("");
   const [loading, setLoading] = createSignal(false);
@@ -95,9 +53,12 @@ function SearchPageContent() {
   const [models, setModels] = createSignal<ModelCatalogEntry[]>([]);
   const [model, setModel] = createSignal("");
   const [setupProvider, setSetupProvider] = createSignal("");
-  const [query, setQuery] = createSignal(untrack(() => t("searchPage.queryDefault")));
+  // The localized default seeds an editable draft; locale changes must not replace user input.
+  const initialQuery = i18n.t("searchPage.queryDefault");
+  const [query, setQuery] = createSignal(initialQuery);
   let selectedAgent = "";
-  let configRevision = "";
+  // Capture the initial receipt before the Gateway binding admits its first load.
+  let configRevision = searchConfigRevision(context.runtimeConfig.state);
   let loadingActive = false;
   let testingActive = false;
   let queryInput: HTMLInputElement | undefined;
@@ -105,11 +66,6 @@ function SearchPageContent() {
   const runtimeView = projectRuntimeConfig(context.runtimeConfig);
   const agents = projectAgents(context.agents);
   const selectionProjection = projectAgentSelection(context.settingsAgentSelection);
-  // Record the initial config receipt before the Gateway effect starts loading.
-  createEffect(
-    () => undefined,
-    () => untrack(syncRuntime),
-  );
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: () => {
@@ -140,9 +96,11 @@ function SearchPageContent() {
       void load();
     }
   }
-  const stopRuntime = runtimeView.subscribe(() => untrack(syncRuntime));
-  const stopSelection = selectionProjection.subscribe(() => untrack(syncAgent));
+  // Invalidate admitted tests and reads before config or selection changes can settle them.
+  const stopRuntime = runtimeView.subscribe(syncRuntime);
+  const stopSelection = selectionProjection.subscribe(syncAgent);
   onCleanup(() => {
+    disposed = true;
     stopRuntime();
     stopSelection();
   });
@@ -161,7 +119,7 @@ function SearchPageContent() {
   }
 
   function syncAgent() {
-    const id = context?.settingsAgentSelection.state.selectedId ?? "";
+    const id = context.settingsAgentSelection.state.selectedId ?? "";
     if (id === selectedAgent) {
       return false;
     }
@@ -344,9 +302,7 @@ function SearchPageContent() {
   const providers = createMemo(() =>
     (result()?.providers ?? []).toSorted((a, b) => a.label.localeCompare(b.label)),
   );
-  const providerOptions = createMemo(() =>
-    providers().map(({ id, label }) => ({ value: id, label })),
-  );
+  const providerOptions = () => providers().map(({ id, label }) => ({ value: id, label }));
   const configuredProvider = () => {
     const value = search()?.provider;
     return config() ? (typeof value === "string" ? value : "") : (result()?.provider ?? "");
@@ -405,7 +361,7 @@ function SearchPageContent() {
   const disabled = () => !canEdit() || busy() || !configState().configSnapshot;
 
   return (
-    <>
+    <openclaw-search-page>
       <SettingsPageHeader title={t("tabs.search")} subtitle={t("subtitles.search")} />
       <SettingsWorkspace>
         <SettingsPage>
@@ -476,19 +432,15 @@ function SearchPageContent() {
                       title={t("searchPage.model")}
                       description={current().model.runtimeLabel}
                       control={
-                        <LitContent
-                          render={() =>
-                            renderModelPicker({
-                              label: t("searchPage.model"),
-                              value: model(),
-                              options: modelOptions(),
-                              disabled: !gateway.connected,
-                              onChange: (value) => {
-                                setModel(value);
-                                void load(value);
-                              },
-                            })
-                          }
+                        <ModelPicker
+                          label={t("searchPage.model")}
+                          value={model()}
+                          options={modelOptions()}
+                          disabled={!gateway.connected}
+                          onChange={(value) => {
+                            setModel(value);
+                            void load(value);
+                          }}
                         />
                       }
                     />
@@ -652,9 +604,14 @@ function SearchPageContent() {
           </Show>
         </SettingsPage>
       </SettingsWorkspace>
-    </>
+    </openclaw-search-page>
   );
 }
-export const SearchPage = defineSolidBridge("openclaw-search-page", SearchPageContent, {
-  properties: {},
-});
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-search-page": HTMLAttributes<HTMLElement>;
+    }
+  }
+}

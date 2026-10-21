@@ -1,4 +1,3 @@
-// User-turn media persistence tests cover canonical fact normalization.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,18 +5,32 @@ import {
   buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMessage,
 } from "./user-turn-transcript.js";
+import type {
+  PersistedUserTurnMediaInput,
+  PersistedUserTurnMessage,
+} from "./user-turn-transcript.types.js";
+
+const userMessage = { role: "user" as const, content: "", timestamp: 123 };
+const sparsePath = "/media/sparse.png";
+const videoMetadata = { durationMs: 12_346, width: 1280, height: 720 };
+const workspaceMedia = {
+  url: "https://example.test/original.png",
+  contentType: "image/png",
+  workspaceDir: "/tmp/workspace",
+};
 
 describe("buildPersistedUserTurnMediaInputsFromFields", () => {
   it("builds media inputs from canonical persisted facts", () => {
     expect(
       buildPersistedUserTurnMediaInputsFromFields({
+        ...userMessage,
         __openclaw: {
           media: [
             { path: "/tmp/a.png", contentType: "image/png" },
             { url: "https://example.test/b.jpg", contentType: "image/jpeg" },
           ],
         },
-      } as never),
+      }),
     ).toEqual([
       { path: "/tmp/a.png", contentType: "image/png", kind: "image" },
       { url: "https://example.test/b.jpg", contentType: "image/jpeg", kind: "image" },
@@ -30,124 +43,72 @@ describe("buildPersistedUserTurnMediaInputsFromFields", () => {
   });
 });
 
-describe("buildLateMediaAttachedProjection canonical persistence", () => {
-  it.each([
-    {
-      name: "legacy-only",
-      message: { MediaPath: "/media/legacy.png", MediaType: "image/png" },
-      expectedPath: undefined,
-    },
-    {
-      name: "sparse",
-      message: { __openclaw: { media: [{}, { path: "/media/sparse.png" }] } },
-      expectedPath: "/media/sparse.png",
-      expectedIndex: 1,
-    },
-  ])("reconstructs $name rows from canonical facts first", (testCase) => {
-    const metadata = (testCase.message as { __openclaw?: Record<string, unknown> })["__openclaw"];
-    const projection = buildLateMediaAttachedProjection({
-      role: "user",
-      content: "",
-      ...testCase.message,
-      __openclaw: { ...metadata, lateMedia: true },
-    } as never);
-    const expectedIndex = "expectedIndex" in testCase ? (testCase.expectedIndex ?? 0) : 0;
-
-    expect(projection.media[expectedIndex]?.path).toBe(testCase.expectedPath);
-    expect(projection.text).toBe(
-      testCase.expectedPath ? `[media attached: ${testCase.expectedPath}]` : undefined,
-    );
-  });
+it.each<
+  [
+    string,
+    Partial<PersistedUserTurnMessage> & { MediaPath?: string; MediaType?: string },
+    string | undefined,
+    number,
+  ]
+>([
+  ["legacy-only", { MediaPath: "/media/legacy.png", MediaType: "image/png" }, undefined, 0],
+  ["sparse", { __openclaw: { media: [{}, { path: sparsePath }] } }, sparsePath, 1],
+])("reconstructs %s rows from canonical facts first", (_name, fields, expectedPath, index) => {
+  const message: PersistedUserTurnMessage = {
+    ...userMessage,
+    ...fields,
+    __openclaw: { ...fields["__openclaw"], lateMedia: true },
+  };
+  const projection = buildLateMediaAttachedProjection(message);
+  expect(projection.media[index]?.path).toBe(expectedPath);
+  expect(projection.text).toBe(expectedPath ? `[media attached: ${expectedPath}]` : undefined);
 });
 
-describe("buildPersistedUserTurnMessage media projection", () => {
-  it.each([
+it.each<[string, PersistedUserTurnMediaInput | undefined, unknown]>([
+  ["zero attachments", undefined, undefined],
+  ["bare kind", { kind: "image" }, { kind: "image" }],
+  [
+    "provider MIME-like kind",
+    { path: " /tmp/provider.bin ", kind: " provider/custom-media " },
+    { path: "/tmp/provider.bin", contentType: "provider/custom-media" },
+  ],
+  [
+    "transcribed attachment",
+    { path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true },
+    { path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true },
+  ],
+  [
+    "probed video metadata",
+    { path: "/tmp/clip.mp4", contentType: "video/mp4", ...videoMetadata },
+    { path: "/tmp/clip.mp4", contentType: "video/mp4", ...videoMetadata },
+  ],
+  [
+    "workspace-relative attachment",
+    { path: "media/inbound/a.png", ...workspaceMedia },
     {
-      name: "zero attachments",
-      media: undefined,
-      expectedMedia: undefined,
+      path: path.join("/tmp/workspace", "media/inbound/a.png"),
+      ...workspaceMedia,
     },
+  ],
+  [
+    "hydration-suppressed attachment",
+    { path: "/tmp/described.png", contentType: "image/png", hydrationSuppressed: true },
     {
-      name: "bare kind",
-      media: [{ kind: "image" }],
-      expectedMedia: [{ kind: "image" }],
+      path: "/tmp/described.png",
+      contentType: "image/png",
+      hydrationSuppressed: true,
     },
-    {
-      name: "provider MIME-like kind",
-      media: [{ path: " /tmp/provider.bin ", kind: " provider/custom-media " }],
-      expectedMedia: [{ path: "/tmp/provider.bin", contentType: "provider/custom-media" }],
-    },
-    {
-      name: "transcribed attachment",
-      media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true }],
-      expectedMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true }],
-    },
-    {
-      name: "probed video metadata",
-      media: [
-        {
-          path: "/tmp/clip.mp4",
-          contentType: "video/mp4",
-          durationMs: 12_346,
-          width: 1280,
-          height: 720,
-        },
-      ],
-      expectedMedia: [
-        {
-          path: "/tmp/clip.mp4",
-          contentType: "video/mp4",
-          durationMs: 12_346,
-          width: 1280,
-          height: 720,
-        },
-      ],
-    },
-    {
-      name: "workspace-relative attachment",
-      media: [
-        {
-          path: "media/inbound/a.png",
-          url: "https://example.test/original.png",
-          contentType: "image/png",
-          workspaceDir: "/tmp/workspace",
-        },
-      ],
-      expectedMedia: [
-        {
-          path: path.join("/tmp/workspace", "media/inbound/a.png"),
-          url: "https://example.test/original.png",
-          contentType: "image/png",
-          workspaceDir: "/tmp/workspace",
-        },
-      ],
-    },
-    {
-      name: "hydration-suppressed attachment",
-      media: [
-        {
-          path: "/tmp/described.png",
-          contentType: "image/png",
-          hydrationSuppressed: true,
-        },
-      ],
-      expectedMedia: [
-        {
-          path: "/tmp/described.png",
-          contentType: "image/png",
-          hydrationSuppressed: true,
-        },
-      ],
-    },
-  ])("persists $name as canonical facts without legacy fields", ({ media, expectedMedia }) => {
-    const message = buildPersistedUserTurnMessage({ text: "inspect", timestamp: 123, media });
-    expect(message).toMatchObject({ role: "user", content: "inspect", timestamp: 123 });
-    expect(message).not.toHaveProperty("MediaPath");
-    expect(message).not.toHaveProperty("MediaPaths");
-    expect(message).not.toHaveProperty("MediaType");
-    expect(message).not.toHaveProperty("MediaTypes");
-    expect(
-      (message as unknown as { __openclaw?: { media?: unknown } })["__openclaw"]?.media,
-    ).toEqual(expectedMedia);
+  ],
+])("persists %s as canonical facts without legacy fields", (_name, media, expectedMedia) => {
+  const message = buildPersistedUserTurnMessage({
+    text: "inspect",
+    timestamp: 123,
+    media: media && [media],
   });
+  expect(message).toMatchObject({ role: "user", content: "inspect", timestamp: 123 });
+  expect(message).not.toHaveProperty("MediaPath");
+  expect(message).not.toHaveProperty("MediaPaths");
+  expect(message).not.toHaveProperty("MediaType");
+  expect(message).not.toHaveProperty("MediaTypes");
+  expect(message["__openclaw"]?.media).toEqual(expectedMedia && [expectedMedia]);
 });

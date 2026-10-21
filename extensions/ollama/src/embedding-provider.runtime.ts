@@ -69,6 +69,8 @@ export type OllamaEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl"> & {
   outputDimensionality?: number;
   localServiceTarget?: Parameters<MemoryCoreAcquireLocalService>[0];
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  /** Provider ownership permits the guard to check its narrow Podman origin exception. */
+  allowPodmanHostGatewayLinkLocal?: boolean;
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
@@ -94,8 +96,7 @@ const QUERY_INSTRUCTION_TEMPLATES = [
 ] as const;
 
 function normalizeOllamaEmbedding(vec: unknown[], outputDimensionality?: number): number[] {
-  const selected =
-    typeof outputDimensionality === "number" ? vec.slice(0, outputDimensionality) : vec;
+  const selected = outputDimensionality !== undefined ? vec.slice(0, outputDimensionality) : vec;
   if (selected.length === 0) {
     throw new Error("Ollama embed response contains an empty embedding");
   }
@@ -136,8 +137,6 @@ function resolveConfiguredProvider(options: OllamaEmbeddingOptions) {
 
 type OllamaEmbeddingBaseUrlOrigin = "remote-config" | "provider-config" | "default";
 type OllamaEmbeddingSourceResolution = "unset" | "opt-out" | { apiKey: string };
-
-type OllamaEmbeddingResolvedKeys = Awaited<ReturnType<typeof resolveOllamaEmbeddingResolvedKeys>>;
 
 function resolveSourcedOllamaEmbeddingKey(params: {
   configString: string | undefined;
@@ -246,25 +245,6 @@ function areOllamaHostsEquivalent(a: string, b: string): boolean {
   return aKey !== undefined && bKey !== undefined && aKey === bKey;
 }
 
-function selectOllamaEmbeddingApiKey(params: {
-  resolved: OllamaEmbeddingResolvedKeys;
-  baseUrl: string;
-  providerOwnsHost: boolean;
-}): string | undefined {
-  if (params.resolved.remote !== "unset") {
-    return typeof params.resolved.remote === "object" ? params.resolved.remote.apiKey : undefined;
-  }
-  if (params.resolved.provider !== "unset" && params.providerOwnsHost) {
-    return typeof params.resolved.provider === "object"
-      ? params.resolved.provider.apiKey
-      : undefined;
-  }
-  if (params.resolved.env && areOllamaHostsEquivalent(params.baseUrl, OLLAMA_CLOUD_BASE_URL)) {
-    return params.resolved.env;
-  }
-  return undefined;
-}
-
 async function resolveOllamaEmbeddingClient(
   options: OllamaEmbeddingOptions,
 ): Promise<OllamaEmbeddingClientConfig> {
@@ -308,17 +288,21 @@ async function resolveOllamaEmbeddingClient(
   const hasAuthorizationHeader = Object.entries(headers).some(
     ([name, value]) => name.toLowerCase() === "authorization" && value.trim().length > 0,
   );
-  const apiKey = hasAuthorizationHeader
-    ? undefined
-    : selectOllamaEmbeddingApiKey({
-        resolved: await resolveOllamaEmbeddingResolvedKeys(
-          options,
-          providerConfig,
-          providerOwnsHost,
-        ),
-        baseUrl,
-        providerOwnsHost,
-      });
+  let apiKey: string | undefined;
+  if (!hasAuthorizationHeader) {
+    const resolved = await resolveOllamaEmbeddingResolvedKeys(
+      options,
+      providerConfig,
+      providerOwnsHost,
+    );
+    if (resolved.remote !== "unset") {
+      apiKey = typeof resolved.remote === "object" ? resolved.remote.apiKey : undefined;
+    } else if (resolved.provider !== "unset" && providerOwnsHost) {
+      apiKey = typeof resolved.provider === "object" ? resolved.provider.apiKey : undefined;
+    } else if (resolved.env && areOllamaHostsEquivalent(baseUrl, OLLAMA_CLOUD_BASE_URL)) {
+      apiKey = resolved.env;
+    }
+  }
   if (apiKey) {
     headers.Authorization = `Bearer ${apiKey}`;
   }
@@ -327,6 +311,7 @@ async function resolveOllamaEmbeddingClient(
     baseUrl,
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
+    allowPodmanHostGatewayLinkLocal: providerOwnsHost,
     model,
     outputDimensionality: options.dimensions,
     ...(localService && baseUrlOrigin !== "remote-config"
@@ -375,6 +360,7 @@ export async function createOllamaEmbeddingProvider(
         url: embedUrl,
         policy: client.ssrfPolicy,
         configuredLocalOriginBaseUrl: client.baseUrl,
+        allowPodmanHostGatewayLinkLocal: client.allowPodmanHostGatewayLinkLocal,
         auditContext: "ollama-memory-embedding",
         signal,
         init: {

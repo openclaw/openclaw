@@ -10,7 +10,6 @@ import type { GatewaySessionRow } from "./session-utils.js";
 export function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
   agentId?: string;
-  includeSession?: boolean;
   lifecycle?: boolean;
   event?: AgentEventRuntimePayload;
   lifecycleRunId?: string;
@@ -134,6 +133,8 @@ export function buildGatewaySessionSnapshot(params: {
     category: sessionRow.category ?? null,
     boardPresentation: sessionRow.boardPresentation ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,
+    titlePending: sessionRow.titlePending ?? false,
+    lastAssistantMessage: sessionRow.lastAssistantMessage ?? null,
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
     childSessions: sessionRow.childSessions,
@@ -146,11 +147,13 @@ export function buildGatewaySessionSnapshot(params: {
     verboseLevel: sessionRow.verboseLevel,
     traceLevel: sessionRow.traceLevel,
     reasoningLevel: sessionRow.reasoningLevel,
+    reasoningDefault: sessionRow.reasoningDefault,
     elevatedLevel: sessionRow.elevatedLevel,
     sendPolicy: sessionRow.sendPolicy,
     systemSent: sessionRow.systemSent,
     abortedLastRun: sessionRow.abortedLastRun,
     restartRecoveryStatus: sessionRow.restartRecoveryStatus ?? null,
+    restartRecoveryCycleId: sessionRow.restartRecoveryCycleId ?? null,
     inputTokens: sessionRow.inputTokens,
     outputTokens: sessionRow.outputTokens,
     usageReport: sessionRow.usageReport,
@@ -175,6 +178,7 @@ export function buildGatewaySessionSnapshot(params: {
     runtimeSelectionLocked: sessionRow.runtimeSelectionLocked,
     status: status ?? sessionRow.status,
     lastRunError: sessionRow.lastRunError ?? null,
+    suppressErrorNotice: sessionRow.suppressErrorNotice ?? false,
     providerReview: sessionRow.providerReview ?? null,
     lastRunId: sessionRow.lastRunId ?? null,
     hasAutomation: sessionRow.hasAutomation ?? false,
@@ -205,20 +209,21 @@ export function buildGatewaySessionSnapshot(params: {
       delete eventFields[field];
     }
   }
-  const session: Record<string, unknown> | undefined = params.includeSession
-    ? Object.assign(
-        sessionRow,
-        Object.fromEntries(Object.entries(eventFields).filter(([, value]) => value !== undefined)),
-      )
-    : undefined;
-  if (session && sessionRow.key === "global" && !params.agentId) {
+  const session: Record<string, unknown> = sessionRow;
+  for (const key in eventFields) {
+    const value = eventFields[key];
+    if (value !== undefined) {
+      session[key] = value;
+    }
+  }
+  if (sessionRow.key === "global" && !params.agentId) {
     delete session.goal;
   }
-  if (session && (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
+  if ((sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
     delete session.swarm;
   }
   return {
-    ...(session ? { session } : {}),
+    session,
     ...eventFields,
     subagentRunState: sessionRow.subagentRunState,
     hasActiveSubagentRun: sessionRow.hasActiveSubagentRun,

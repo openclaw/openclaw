@@ -18,14 +18,12 @@ import { runPackageUpdateDoctor } from "./update-command-package.js";
 const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
-it.each([
-  { kind: "git", fault: "healthy" },
-  { kind: "package", fault: "requester-revoked" },
-] as const)(
-  "delegates $kind Doctor without reusing its suspended parent ($fault)",
-  async ({ kind, fault }) => {
-    await withTestDir({ prefix: "update-doctor-delegation-" }, async (dir) => {
+it.each(["git", "package"] as const)(
+  "delegates %s Doctor without reusing its suspended parent",
+  async (kind) =>
+    withTestDir({ prefix: "update-doctor-delegation-" }, async (dir) => {
       const root = await fs.realpath(dir);
+      const dist = path.join(root, "dist");
       const control = path.join(root, "leases");
       await fs.mkdir(control);
       vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
@@ -35,17 +33,17 @@ it.each([
       };
       await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
-      await fs.mkdir(path.join(root, "dist", "infra"), { recursive: true });
+      await fs.mkdir(path.join(dist, "infra"), { recursive: true });
       await fs.writeFile(
         path.join(root, "package.json"),
         JSON.stringify({ name: "openclaw", type: "module", version: "2026.9.4" }),
       );
-      await fs.writeFile(path.join(root, "dist", "index.js"), "");
+      await fs.writeFile(path.join(dist, "index.js"), "");
       const owner = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
       const marker = path.join(root, "doctor-ran");
       const received = path.join(root, "doctor-input-received");
       await fs.writeFile(
-        path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
+        path.join(dist, runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
         `
       import fs from "node:fs";
       ${owner.pathname.endsWith(".ts") ? `await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});` : ""}
@@ -53,7 +51,7 @@ it.each([
       // Wait for parent admission and decode UTF-8 across pipe chunks.
       process.stdin.setEncoding("utf8");
       let raw=""; for await (const chunk of process.stdin) raw+=chunk;
-      if(raw) fs.writeFileSync(${JSON.stringify(received)},"received");
+      if(raw) fs.writeFileSync(${JSON.stringify(received)},raw);
       const input=JSON.parse(raw);
       await withDelegatedUpdateCommandExecutor(input.executor,input.runId,input.root,async fence=>{
         fence.assertCurrent();
@@ -70,15 +68,13 @@ it.each([
           ...commandOptions,
           beforeInput: (pid, spawnedArgv) => {
             reachedSpawn = true;
-            if (fault === "requester-revoked") {
-              requesterCurrent = false;
-            }
+            requesterCurrent = kind === "git";
             commandOptions.beforeInput?.(pid, spawnedArgv);
           },
         });
       });
-      const params = executionParams(kind);
-      params.root = root;
+      const params = { ...executionParams(kind), root };
+      params.opts.fullIntegrityCheck = true;
       params.opts.run = {
         runId,
         env,
@@ -94,7 +90,10 @@ it.each([
         doctorConfigWrites: true,
       });
       const runUpdate = async (
-        options: Pick<Parameters<typeof runPackageUpdateDoctor>[0], "getDoctorContext"> & {
+        options: Pick<
+          Parameters<typeof runPackageUpdateDoctor>[0],
+          "getDoctorContext" | "fullIntegrityCheck"
+        > & {
           validateCandidate?: (root: string) => Promise<unknown>;
         },
       ) => {
@@ -105,6 +104,7 @@ it.each([
           progress: {},
           managedServiceEnv: env,
           getDoctorContext: options.getDoctorContext,
+          fullIntegrityCheck: options.fullIntegrityCheck,
         });
         return {
           ...successfulUpdate,
@@ -120,19 +120,22 @@ it.each([
         params.opts.run!.executorFence = await executor.enter(root);
         return executeMutableUpdate(await bindExecutionGuards(params));
       });
-      if (fault !== "healthy") {
+      if (kind === "package") {
         await expect(update).rejects.toThrow("requester-revoked");
-        await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.stat(received)).rejects.toMatchObject({ code: "ENOENT" });
+        for (const file of [marker, received]) {
+          await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+        }
       } else {
         expect((await update)?.result).toMatchObject({
           status: "ok",
           steps: [{ name: "openclaw doctor", exitCode: 0 }],
         });
         expect(await fs.readFile(marker, "utf8")).toBe("owned");
+        expect(JSON.parse(await fs.readFile(received, "utf8"))).toMatchObject({
+          fullIntegrityCheck: true,
+        });
       }
       expect(reachedSpawn).toBe(true);
       expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
-    });
-  },
+    }),
 );

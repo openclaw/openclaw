@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
@@ -5,7 +6,6 @@ import {
   createCodeExecutionToolDefinition,
 } from "./code-execution-tool-shared.js";
 import {
-  readCodeExecutionConfigRecord,
   readPluginCodeExecutionConfig,
   resolveCodeExecutionEnabled,
 } from "./src/code-execution-config.js";
@@ -17,8 +17,8 @@ import {
 import { resolveXaiToolApiKeyWithAuth, type XaiToolAuthContext } from "./src/tool-auth-shared.js";
 
 export function createCodeExecutionTool(options?: {
-  config?: unknown;
-  runtimeConfig?: Record<string, unknown> | null;
+  config?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig | null;
   auth?: XaiToolAuthContext;
 }) {
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
@@ -39,8 +39,8 @@ export function createCodeExecutionTool(options?: {
   return createCodeExecutionToolDefinition(
     async (_toolCallId: string, args: Record<string, unknown>) => {
       const apiKey = await resolveXaiToolApiKeyWithAuth({
-        runtimeConfig: (runtimeConfig ?? undefined) as never,
-        sourceConfig: options?.config as never,
+        runtimeConfig: runtimeConfig ?? undefined,
+        sourceConfig: options?.config,
         auth: options?.auth,
       });
       if (!apiKey) {
@@ -48,13 +48,12 @@ export function createCodeExecutionTool(options?: {
       }
 
       const task = readStringParam(args, "task", { required: true });
-      const codeExecutionConfigRecord = readCodeExecutionConfigRecord(codeExecutionConfig);
-      const model = resolveXaiCodeExecutionModel(codeExecutionConfigRecord);
-      const maxTurns = resolveXaiCodeExecutionMaxTurns(codeExecutionConfigRecord);
+      const model = resolveXaiCodeExecutionModel(codeExecutionConfig);
+      const maxTurns = resolveXaiCodeExecutionMaxTurns(codeExecutionConfig);
       const timeoutSeconds =
-        typeof codeExecutionConfigRecord?.timeoutSeconds === "number" &&
-        Number.isFinite(codeExecutionConfigRecord.timeoutSeconds)
-          ? codeExecutionConfigRecord.timeoutSeconds
+        typeof codeExecutionConfig?.timeoutSeconds === "number" &&
+        Number.isFinite(codeExecutionConfig.timeoutSeconds)
+          ? codeExecutionConfig.timeoutSeconds
           : 30;
       const startedAt = Date.now();
       const result = await requestXaiCodeExecution({

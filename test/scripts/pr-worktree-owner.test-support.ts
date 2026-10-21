@@ -27,6 +27,7 @@ export function createProvisionOwnerFixture(
     HOME: home,
     TMPDIR: root,
     XDG_CONFIG_HOME: join(home, ".config"),
+    XDG_CACHE_HOME: isolation.snapshotCache,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_PARAMETERS: "'maintenance.auto=false' 'gc.auto=0'",

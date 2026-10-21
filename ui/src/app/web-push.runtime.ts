@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import { readWebPushAccess, type WebPushAccess } from "./web-push-access.ts";
 
 const SW_READY_TIMEOUT = 10_000;
 const VAPID_MISMATCH_MESSAGE =
@@ -18,7 +19,7 @@ type WebPushReconcileResult =
   | { state: "registered" }
   | { state: "vapid-mismatch"; error: string };
 
-export type WebPushSubscriptionState = WebPushReconcileResult["state"] | "unknown";
+export type WebPushSubscriptionState = WebPushReconcileResult["state"] | "unknown" | "local";
 
 export type WebPushPreferencesResult = {
   durableIdentity: boolean;
@@ -35,7 +36,7 @@ export type WebPushCapabilityAction =
       preferences: WebPushNotificationPreferences | WebPushDevicePreferences;
     };
 
-export type WebPushCapabilityPatch = {
+export type WebPushCapabilityPatch = Partial<WebPushAccess> & {
   error?: string | null;
   loading?: boolean;
   permission?: NotificationPermission | "unsupported";
@@ -48,6 +49,40 @@ export type WebPushCapabilityRuntime = {
   run: (action: WebPushCapabilityAction) => Promise<void>;
   dispose: () => void;
 };
+
+type WebPushClient = Pick<GatewayBrowserClient, "request"> & {
+  canReadPreferences: () => boolean;
+  assertCanManage: () => void;
+};
+
+function webPushClient(gateway: ApplicationGateway, client: GatewayBrowserClient): WebPushClient {
+  const access = () => {
+    if (gateway.snapshot.phase !== "connected" || gateway.snapshot.client !== client) {
+      throw new Error("Gateway changed before the notification change could be saved.");
+    }
+    return readWebPushAccess(gateway.snapshot);
+  };
+  const assertCanManage = () => {
+    if (!access().canManage) {
+      throw new Error("Your Gateway access does not allow managing browser notifications.");
+    }
+  };
+  return {
+    assertCanManage,
+    canReadPreferences: () => access().canReadPreferences,
+    request(...args) {
+      const [method] = args;
+      if (method === "push.web.preferences.get") {
+        if (!access().canReadPreferences) {
+          throw new Error("Your Gateway access does not allow reading notification preferences.");
+        }
+      } else {
+        assertCanManage();
+      }
+      return client.request(...args);
+    },
+  };
+}
 
 function pushManagerFor(registration: ServiceWorkerRegistration | undefined): PushManager | null {
   const manager = registration?.pushManager;
@@ -79,7 +114,9 @@ export async function getExistingSubscription(): Promise<PushSubscription | null
   return (await pushManagerFor(registration)?.getSubscription()) ?? null;
 }
 
-async function resolveGatewayVapidPublicKey(client: GatewayBrowserClient): Promise<Uint8Array> {
+async function resolveGatewayVapidPublicKey(
+  client: Pick<GatewayBrowserClient, "request">,
+): Promise<Uint8Array> {
   const { vapidPublicKey } = await client.request<{ vapidPublicKey: string }>(
     "push.web.vapidPublicKey",
     {},
@@ -117,7 +154,7 @@ function serializePushSubscription(subscription: PushSubscription) {
 }
 
 async function registerPushSubscription(
-  client: GatewayBrowserClient,
+  client: Pick<GatewayBrowserClient, "request">,
   subscription: PushSubscription,
   vapidPublicKey: Uint8Array,
 ): Promise<WebPushReconcileResult> {
@@ -134,20 +171,35 @@ async function registerPushSubscription(
 }
 
 async function resolveWebPushCapabilityPatch(
-  client: GatewayBrowserClient,
+  client: WebPushClient,
   result: WebPushReconcileResult,
 ): Promise<WebPushCapabilityPatch> {
   return {
     subscription: result.state,
-    preferences: result.state === "registered" ? await getWebPushPreferences(client) : null,
+    preferences:
+      result.state === "registered" && client.canReadPreferences()
+        ? await getWebPushPreferences(client)
+        : null,
     error: result.state === "vapid-mismatch" ? result.error : null,
   };
 }
 
 async function reconcileWebPushCapability(
-  client: GatewayBrowserClient,
+  client: WebPushClient,
+  canManage: boolean,
 ): Promise<WebPushCapabilityPatch> {
   const subscription = await getExistingSubscription();
+  if (subscription && !canManage) {
+    const patch: WebPushCapabilityPatch = { subscription: "local", preferences: null, error: null };
+    if (client.canReadPreferences()) {
+      try {
+        patch.preferences = await getWebPushPreferences(client);
+      } catch (error) {
+        patch.error = formatUiError(error);
+      }
+    }
+    return patch;
+  }
   const result = subscription
     ? await registerPushSubscription(
         client,
@@ -164,12 +216,16 @@ export function startWebPushReconciliation(params: {
   publish: (patch: WebPushCapabilityPatch) => void;
 }): () => void {
   let connectedClient: GatewayBrowserClient | null = null;
+  let lastAccess: WebPushAccess | null = null;
   let generation = 0;
   let disposed = false;
   const reconcile = async (client: GatewayBrowserClient, currentGeneration: number) => {
     let patch: WebPushCapabilityPatch;
     try {
-      patch = await reconcileWebPushCapability(client);
+      patch = await reconcileWebPushCapability(
+        webPushClient(params.gateway, client),
+        readWebPushAccess(params.gateway.snapshot).canManage,
+      );
     } catch (error) {
       patch = { error: formatUiError(error) };
     }
@@ -184,20 +240,29 @@ export function startWebPushReconciliation(params: {
   };
   const handleGateway = (snapshot: ApplicationGateway["snapshot"]) => {
     const client = snapshot.phase === "connected" ? snapshot.client : null;
-    if (client === connectedClient) {
+    const access = readWebPushAccess(snapshot);
+    if (
+      client === connectedClient &&
+      access.canManage === lastAccess?.canManage &&
+      access.canReadPreferences === lastAccess?.canReadPreferences
+    ) {
       return;
     }
+    const clientChanged = client !== connectedClient;
     connectedClient = client;
+    lastAccess = access;
     const currentGeneration = ++generation;
     params.publish({ subscription: "unknown", preferences: null, error: null });
     if (client) {
       const reconcileCurrentClient = () => reconcile(client, currentGeneration);
       void (
-        params.connectionBootstrap?.run("web-push-reconcile", reconcileCurrentClient) ??
-        reconcileCurrentClient()
+        clientChanged && params.connectionBootstrap
+          ? params.connectionBootstrap.run("web-push-reconcile", reconcileCurrentClient)
+          : reconcileCurrentClient()
       ).catch(() => undefined);
     }
   };
+  // Connection receipts invalidate prior registration work before reconciling the new client.
   const stopGateway = params.gateway.subscribe(handleGateway);
   const stopEvents = params.gateway.subscribeEvents((event) => {
     const payload = event.payload;
@@ -205,6 +270,7 @@ export function startWebPushReconciliation(params: {
     if (
       event.event !== "users.prefs.changed" ||
       !client ||
+      !readWebPushAccess(params.gateway.snapshot).canReadPreferences ||
       !payload ||
       typeof payload !== "object" ||
       !params.gateway.snapshot.selfUser?.id ||
@@ -250,7 +316,10 @@ export function createWebPushCapabilityRuntime(params: {
             throw new Error("Gateway changed before the notification change could be saved.");
           }
           params.publish({ error: null });
-          const patch = await runWebPushCapabilityAction(client, action);
+          const patch = await runWebPushCapabilityAction(
+            webPushClient(params.gateway, client),
+            action,
+          );
           if (isCurrentClient()) {
             params.publish(patch);
           }
@@ -277,8 +346,10 @@ export function createWebPushCapabilityRuntime(params: {
 }
 
 export async function subscribeToWebPush(
-  client: GatewayBrowserClient,
+  client: Pick<GatewayBrowserClient, "request">,
+  assertCanManage: () => void,
 ): Promise<WebPushReconcileResult> {
+  assertCanManage();
   const permission = await Notification.requestPermission();
   if (permission !== "granted") {
     throw new Error(`Notification permission ${permission}`);
@@ -297,6 +368,8 @@ export async function subscribeToWebPush(
   if (existingSubscription) {
     return await registerPushSubscription(client, existingSubscription, vapidPublicKey);
   }
+  // This browser API creates a push subscription; it does not observe rendering state.
+  assertCanManage();
   const pushSubscription = await pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: vapidPublicKey.buffer as ArrayBuffer,
@@ -314,7 +387,9 @@ export async function subscribeToWebPush(
   }
 }
 
-export async function unsubscribeFromWebPush(client: GatewayBrowserClient): Promise<void> {
+export async function unsubscribeFromWebPush(
+  client: Pick<GatewayBrowserClient, "request">,
+): Promise<void> {
   const subscription = await getExistingSubscription();
   if (!subscription) {
     return;
@@ -337,9 +412,7 @@ async function requireExistingSubscription(): Promise<PushSubscription> {
   return subscription;
 }
 
-async function getWebPushPreferences(
-  client: GatewayBrowserClient,
-): Promise<WebPushPreferencesResult> {
+async function getWebPushPreferences(client: WebPushClient): Promise<WebPushPreferencesResult> {
   const subscription = await requireExistingSubscription();
   return await client.request<WebPushPreferencesResult>("push.web.preferences.get", {
     endpoint: subscription.endpoint,
@@ -347,12 +420,15 @@ async function getWebPushPreferences(
 }
 
 async function runWebPushCapabilityAction(
-  client: GatewayBrowserClient,
+  client: WebPushClient,
   action: WebPushCapabilityAction,
 ): Promise<WebPushCapabilityPatch> {
   switch (action.kind) {
     case "enable":
-      return await resolveWebPushCapabilityPatch(client, await subscribeToWebPush(client));
+      return await resolveWebPushCapabilityPatch(
+        client,
+        await subscribeToWebPush(client, client.assertCanManage),
+      );
     case "disable":
       await unsubscribeFromWebPush(client);
       return { subscription: "missing", preferences: null };
@@ -360,6 +436,7 @@ async function runWebPushCapabilityAction(
       await client.request("push.web.test", {});
       return {};
     case "set": {
+      client.assertCanManage();
       const subscription = await requireExistingSubscription();
       await client.request("push.web.preferences.set", {
         endpoint: subscription.endpoint,

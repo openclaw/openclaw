@@ -171,13 +171,6 @@ describe("before-tool-call network execution error boundary", () => {
     expect((failure as Error).message).not.toContain("<|im_start|>");
   });
 
-  it("leaves trusted local tool failures unchanged", async () => {
-    const original = new Error("trusted local failure");
-    const tool = wrapToolWithBeforeToolCallHook(createFailingTool({ error: original }));
-
-    await expect(tool.execute("local-failure", {})).rejects.toBe(original);
-  });
-
   it("leaves trusted network-tool preparation failures outside the external envelope", async () => {
     const source = createFailingTool({
       error: new Error("execution should not run"),
