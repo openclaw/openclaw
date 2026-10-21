@@ -26,14 +26,18 @@ const mocks = vi.hoisted(() => ({
   apply: vi.fn<typeof applyHermesPlan>(),
 }));
 
+// mock-isolation: Detect source-module loading without importing real Hermes filesystem readers.
 vi.mock("./source.js", () =>
   mocks.load("source", {
     discoverHermesSource: mocks.discover,
     hasHermesSource: mocks.hasSource,
   }),
 );
+// mock-isolation: Track lazy memory-module loading without importing its runtime dependencies.
 vi.mock("./memory.js", () => mocks.load("memory", { isMemoryOnlyMigration: mocks.memoryOnly }));
+// mock-isolation: Track plan loading and hold fixture-owned planning promises.
 vi.mock("./plan.js", () => mocks.load("plan", { buildHermesPlan: mocks.plan }));
+// mock-isolation: Track apply loading without executing real migration writes.
 vi.mock("./apply.js", () => mocks.load("apply", { applyHermesPlan: mocks.apply }));
 
 it("registers synchronously and loads only the invoked migration operations", async () => {

@@ -23,6 +23,7 @@ vi.mock("baileys", () => ({
   downloadMediaMessage,
 }));
 
+// mock-isolation: Exercise inbound media streams without writing to the real media store.
 vi.mock("openclaw/plugin-sdk/media-store", () => ({ saveMediaStream }));
 
 const mockSock = {

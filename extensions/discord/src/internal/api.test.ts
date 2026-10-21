@@ -1,3 +1,4 @@
+import { Routes } from "discord-api-types/v10";
 import { expect, it } from "vitest";
 import * as api from "./discord.js";
 import { createFakeRestClient } from "./test-builders.test-support.js";
@@ -65,7 +66,7 @@ it("routes user helpers through the typed REST client", async () => {
   await expect(api.createUserDmChannel(rest, "u1")).resolves.toEqual({ id: "dm1" });
 
   expect(rest.calls).toEqual([
-    { method: "GET", path: "/users/@me" },
+    { method: "GET", path: Routes.user("@me") },
     { method: "GET", path: "/users/u1" },
     { method: "POST", path: "/users/@me/channels", data: { body: { recipient_id: "u1" } } },
   ]);
