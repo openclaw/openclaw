@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
@@ -187,34 +187,6 @@ export function DebugPage() {
     await live.run(scope.client);
   }
 
-  // Every connection transition aborts diagnostics and retires RPC results before reconnect.
-  const stopGateway = gateway.subscribe(() => {
-    const snapshot = gateway.read().snapshot;
-    if (lifecycle.transition(snapshot)) {
-      invalidate();
-    }
-    if (client !== snapshot.client) {
-      client = snapshot.client;
-      state.data = emptyDiagnostics();
-      state.callResult = state.callError = state.diagnosticsError = state.liveError = null;
-    }
-    if (needsRefresh) {
-      void loadDiagnostics();
-    }
-    syncPolling();
-    publish();
-  });
-  // Each agent transition aborts prior diagnostics, including A-to-B-to-A changes before rendering.
-  const stopSelection = context.settingsAgentSelection.subscribe(({ selectedId: next }) => {
-    if (agent === next) {
-      return;
-    }
-    agent = next;
-    state.data = { ...state.data, models: [] };
-    invalidate();
-    void loadDiagnostics();
-    publish();
-  });
   function syncPolling() {
     if (lifecycle.capture()) {
       polling.start();
@@ -222,14 +194,44 @@ export function DebugPage() {
       polling.stop();
     }
   }
-  syncPolling();
-  void loadDiagnostics();
-  onCleanup(() => {
-    disposed = true;
-    invalidate();
-    stopSelection();
-    stopGateway();
-    lifecycle.dispose();
+  onSettled(() => {
+    // Every connection transition aborts diagnostics and retires RPC results before reconnect.
+    const stopGateway = gateway.subscribe(() => {
+      const snapshot = gateway.read().snapshot;
+      if (lifecycle.transition(snapshot)) {
+        invalidate();
+      }
+      if (client !== snapshot.client) {
+        client = snapshot.client;
+        state.data = emptyDiagnostics();
+        state.callResult = state.callError = state.diagnosticsError = state.liveError = null;
+      }
+      if (needsRefresh) {
+        void loadDiagnostics();
+      }
+      syncPolling();
+      publish();
+    });
+    // Each agent transition aborts prior diagnostics, including A-to-B-to-A changes before rendering.
+    const stopSelection = context.settingsAgentSelection.subscribe(({ selectedId: next }) => {
+      if (agent === next) {
+        return;
+      }
+      agent = next;
+      state.data = { ...state.data, models: [] };
+      invalidate();
+      void loadDiagnostics();
+      publish();
+    });
+    syncPolling();
+    void loadDiagnostics();
+    return () => {
+      disposed = true;
+      invalidate();
+      stopSelection();
+      stopGateway();
+      lifecycle.dispose();
+    };
   });
 
   async function callDebugMethod() {

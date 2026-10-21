@@ -234,7 +234,7 @@ suite.define(() => {
             }
             const subagents = details.locator('[data-details-group="subagents"]');
             const summary = subagents.getByRole("button", {
-              name: "All subagents. 2 Working, 3 Done, 1 Failed",
+              name: "All subagents. 2 Working, 4 Done",
               exact: true,
             });
             await summary.waitFor();

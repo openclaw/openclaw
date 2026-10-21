@@ -12,9 +12,8 @@ import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ProcessesPanelData } from "../processes-panel-data.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
-import { ChatDetailsContextContent, ChatDetailsContextSummary } from "./chat-details-context.tsx";
+import { ChatDetailsDesktopContext } from "./chat-details-context.tsx";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsContext, ChatDetailsEnvironment } from "./chat-details-environment.tsx";
@@ -26,7 +25,7 @@ import type {
   ChatDetailsOutputs,
   ChatDetailsProps,
 } from "./chat-details-types.ts";
-import { ChatOutputsDesktop, getChatOutputsCount, isChatOutputsEmpty } from "./chat-outputs.tsx";
+import { ChatOutputsDesktop, getChatOutputsCount, hasChatDesktopOutputs } from "./chat-outputs.tsx";
 import { hasChatPullRequests } from "./chat-pull-requests.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
@@ -429,26 +428,12 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                   when={props.desktop}
                   fallback={<ChatDetailsContext details={props.props!} presented={active()} />}
                 >
-                  <Show when={getContextNoticeViewModel(session())}>
-                    <ChatDetailsDesktopSection
-                      section="context"
-                      title={t("chat.sessionDetails.context")}
-                      expanded={sectionExpanded("context")}
-                      presented={active()}
-                      onExpandedChange={(expanded) => changeSection("context", expanded)}
-                      metadata={
-                        <span class="chat-details-desktop-context-summary">
-                          <ChatDetailsContextSummary details={props.props!} />
-                        </span>
-                      }
-                    >
-                      <ChatDetailsContextContent
-                        desktop
-                        details={props.props!}
-                        presented={active() && sectionExpanded("context")}
-                      />
-                    </ChatDetailsDesktopSection>
-                  </Show>
+                  <ChatDetailsDesktopContext
+                    details={props.props!}
+                    presented={active()}
+                    expanded={sectionExpanded("context")}
+                    onExpandedChange={(expanded) => changeSection("context", expanded)}
+                  />
                 </Show>
                 <Show when={!props.desktop}>
                   <Background details={props.props!} presented={active()} />
@@ -604,7 +589,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 </Show>
                 <Show when={desktopPresentation() && outputs()}>
                   {(data) => (
-                    <Show when={!isChatOutputsEmpty(data())}>
+                    <Show when={hasChatDesktopOutputs(data())}>
                       <ChatDetailsDesktopSection
                         section="outputs"
                         title={desktopPresentation()!.outputsLabel}
@@ -675,12 +660,7 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
         dismissed={props.dismissed}
         desktop
       />
-      <Show
-        when={
-          props.props?.progressCard ||
-          (props.props?.progressCardInitialLoading && !props.props?.progressCardError)
-        }
-      >
+      <Show when={props.props?.progressCard}>
         <ChatDetailsProgress
           desktop
           props={props.props}

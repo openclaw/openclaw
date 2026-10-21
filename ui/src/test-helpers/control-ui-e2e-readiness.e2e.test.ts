@@ -121,7 +121,7 @@ suite.define(() => {
           await gateway.setOnline(false);
           await page
             .locator(".sidebar-shell__footer .gateway-status")
-            .getByRole("button", { name: /Reconnecting…/ })
+            .getByText("Reconnecting…", { exact: true })
             .waitFor();
         }
         expect(requests).toEqual([]);

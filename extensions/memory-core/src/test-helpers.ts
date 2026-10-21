@@ -35,38 +35,11 @@ import {
 } from "./memory-session-tombstones.js";
 import { applyShortTermPromotions } from "./short-term-promotion-apply.js";
 import { readPhaseSignalStore, readShortTermStore } from "./short-term-promotion-store.js";
-import type {
-  PromotionCandidate,
-  ShortTermLockEntry,
-  ShortTermRecallEntry,
-} from "./short-term-promotion-types.js";
+import type { PromotionCandidate, ShortTermLockEntry } from "./short-term-promotion-types.js";
 import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 const MEMORY_CORE_TEST_AGENT_ID = "memory-core-test";
-
-export function createRecallEntryForTest(
-  params: Pick<ShortTermRecallEntry, "key"> & Partial<ShortTermRecallEntry>,
-): ShortTermRecallEntry {
-  return {
-    path: "memory/2026-04-01.md",
-    startLine: 1,
-    endLine: 1,
-    source: "memory",
-    snippet: `${params.key} recall`,
-    recallCount: 2,
-    dailyCount: 0,
-    groundedCount: 0,
-    totalScore: 1.8,
-    maxScore: 0.95,
-    firstRecalledAt: "2026-04-01T00:00:00.000Z",
-    lastRecalledAt: "2026-04-04T00:00:00.000Z",
-    queryHashes: ["a", "b"],
-    recallDays: ["2026-04-04"],
-    conceptTags: [],
-    ...params,
-  };
-}
 
 export function createPromotionCandidateForTest(
   params: Pick<PromotionCandidate, "path" | "snippet"> & Partial<PromotionCandidate>,

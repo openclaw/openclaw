@@ -38,7 +38,7 @@ export async function prepareGatewayCliFixture(
 }
 
 // Establish SQLite coordination files before asserting persistent RPC non-mutation.
-export function prepareSharedStateReadArtifacts(stateDir: string): void {
+function prepareSharedStateReadArtifacts(stateDir: string): void {
   const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
     readOnly: true,
   });

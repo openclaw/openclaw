@@ -18,6 +18,7 @@ import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
 import { ShellOwner } from "./app-host.tsx";
+import { readShellView } from "./app-shell-view-state.ts";
 import { ApplicationShell } from "./app-shell-view.tsx";
 import { bootstrapApplication } from "./bootstrap.ts";
 import { NATIVE_HISTORY_STATE_EVENT } from "./native-web-chrome.ts";
@@ -58,6 +59,20 @@ async function mountShell() {
   flush();
   return { owner, runtime, view };
 }
+
+it("exposes the Claws navigation entry only while its Labs toggle is enabled", async () => {
+  const { owner, runtime } = await mountShell();
+  const initial = runtime.context.runtimeConfig.state;
+  const config = vi.spyOn(runtime.context.runtimeConfig, "state", "get");
+  for (const enabled of [false, true, false]) {
+    config.mockReturnValue({
+      ...initial,
+      bootstrapConfig: { gateway: { controlUi: { experimental: { claws: enabled } } } },
+    });
+    expect(readShellView(owner).sidebarProperties.enabledRouteIds.includes("claws")).toBe(enabled);
+    expect(readShellView(owner).sidebarProperties.enabledRouteIds).toContain("agents");
+  }
+});
 
 it("updates native history buttons only while connected and refreshes them on reconnect", async () => {
   Object.assign(window, {

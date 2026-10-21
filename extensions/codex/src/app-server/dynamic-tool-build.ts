@@ -16,6 +16,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { applyGatewayToolPolicy } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveCodexScheduledToolProjectionFactory } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
@@ -440,9 +441,12 @@ export async function buildDynamicTools(
     const webSearchFilteredTools = webSearchPlan.suppressManagedWebSearch
       ? normalizedTools.filter((tool) => tool.name !== "web_search")
       : normalizedTools;
-    const exposedTools = placeDisabledNativeShellToolsInDirectNamespace(
-      webSearchFilteredTools,
-      input.nativeToolSurfaceEnabled,
+    const exposedTools = applyGatewayToolPolicy(
+      placeDisabledNativeShellToolsInDirectNamespace(
+        webSearchFilteredTools,
+        input.nativeToolSurfaceEnabled,
+      ),
+      params.config,
     );
     if (preNormalizationDiagnostics.length > 0) {
       embeddedAgentLog.warn(

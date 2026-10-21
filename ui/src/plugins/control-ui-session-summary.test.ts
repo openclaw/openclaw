@@ -27,11 +27,12 @@ function setup(identity?: () => AgentIdentityResult) {
   const requests: Array<{
     params: unknown;
     resolve: (history: ChatHistoryResponse) => void;
+    reject: (error: unknown) => void;
   }> = [];
   current().request.mockImplementation((method, params) => {
     if (method === "chat.history") {
-      return new Promise<ChatHistoryResponse>((resolve) => {
-        requests.push({ params, resolve });
+      return new Promise<ChatHistoryResponse>((resolve, reject) => {
+        requests.push({ params, resolve, reject });
       });
     }
     if (method === "agent.identity.get" && identity) {
@@ -174,6 +175,36 @@ it("normalizes visible message text without reviving assistant commentary or too
   expect(messages(element)).toHaveLength(2);
   expect(element.querySelector(".sidebar-markdown strong")?.textContent).toBe("answer");
   expect(element.textContent).not.toMatch(/Hidden|hidden-envelope|openclaw:ctx|MEDIA:|proof\.png/);
+});
+
+it("retains its successful history and cursor when retrying a failed refresh", async () => {
+  useClock();
+  const { element, requests, emit, reply } = setup();
+  await reply(0, "Retained reply", {
+    ...history("Retained reply"),
+    deltaCursor: "last-successful",
+  });
+
+  emit("session.message");
+  await vi.advanceTimersByTimeAsync(5_000);
+  await vi.waitFor(() => expect(requests).toHaveLength(2));
+  requests[1]!.reject(new Error("History read unavailable"));
+  const error = () => element.querySelector(".plugin-session-summary__history [role=alert]");
+  await vi.waitFor(() => expect(error()).not.toBeNull());
+  expect(element.textContent).not.toContain("Retained reply");
+
+  const retry = element.querySelector<HTMLButtonElement>(".plugin-session-summary > button");
+  expect(retry).not.toBeNull();
+  retry!.click();
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.waitFor(() => expect(requests).toHaveLength(3));
+  expect(requests[2]!.params).toMatchObject({ cursor: "last-successful" });
+  await vi.waitFor(() => {
+    expect(element.textContent).toContain("Retained reply");
+    expect(error()).toBeNull();
+  });
+  await reply(2, "Recovered reply");
+  expect(element.textContent).not.toContain("Retained reply");
 });
 
 it("paces durable events and retains one catch-up during a pending load", async () => {

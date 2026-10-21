@@ -3,7 +3,7 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
@@ -11,6 +11,8 @@ import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { LogsPage } from "./logs-page.tsx";
 
 type TestContext = ReturnType<typeof contextWithClient>;
+
+const TRUNCATION_NOTICE = "Log output truncated; showing latest chunk.";
 
 function contextWithClient(client: GatewayBrowserClient, connected = false, bootId?: string) {
   const { gateway, publish } = createApplicationGateway({
@@ -95,6 +97,115 @@ afterEach(() => {
   cleanupSolid();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it.each([{ lines: [] }, { lines: ["next line"] }])(
+  "retains the truncation notice after an incremental response with $lines",
+  async ({ lines }) => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...tail(100, ["retained line"], "/tmp/truncated.log"),
+        truncated: true,
+      })
+      .mockResolvedValueOnce({ ...tail(110, lines, "/tmp/truncated.log"), truncated: false });
+    const { page } = await setup(request);
+    expect(page.container.textContent).toContain(TRUNCATION_NOTICE);
+
+    await poll();
+
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: 100 });
+    expect(page.lines()).toEqual(["retained line", ...lines]);
+    expect(page.container.textContent).toContain(TRUNCATION_NOTICE);
+  },
+);
+
+it("warns only after the display buffer evicts rows and retains that notice", async () => {
+  const lines = Array.from({ length: 2001 }, (_, index) => `line ${index + 1}`);
+  let cursor = 0;
+  const request = vi.fn(async () => {
+    const pageLines = lines.slice(cursor, cursor + 500);
+    cursor += pageLines.length;
+    return { ...tail(cursor, pageLines, "/tmp/buffer.log"), truncated: false };
+  });
+  const { page } = await setup(request);
+  expect(page.container.textContent).not.toContain(TRUNCATION_NOTICE);
+  for (const count of [1000, 1500, 2000]) {
+    await poll();
+    expect(page.lines()).toHaveLength(count);
+    expect(page.container.textContent).not.toContain(TRUNCATION_NOTICE);
+  }
+
+  await poll();
+  const retained = page.lines();
+  expect(retained).toHaveLength(2000);
+  expect(retained[0]).toBe("line 2");
+  expect(retained.at(-1)).toBe("line 2001");
+  expect(page.container.textContent).toContain(TRUNCATION_NOTICE);
+
+  await poll();
+  expect(page.lines()).toEqual(retained);
+  expect(page.container.textContent).toContain(TRUNCATION_NOTICE);
+});
+
+it.each(["manual refresh", "server reset", "file replacement"])(
+  "clears truncation when %s replaces the displayed history with a complete tail",
+  async (replacement) => {
+    const request = vi.fn().mockResolvedValueOnce({
+      ...tail(100, ["old tail"], "/tmp/old.log"),
+      truncated: true,
+    });
+    const { page } = await setup(request);
+    expect(page.container.textContent).toContain(TRUNCATION_NOTICE);
+    if (replacement === "file replacement") {
+      request.mockResolvedValueOnce(tail(150, ["discarded cross-file suffix"], "/tmp/new.log"));
+    }
+    request.mockResolvedValueOnce({
+      ...tail(
+        150,
+        ["complete replacement"],
+        replacement === "file replacement" ? "/tmp/new.log" : "/tmp/old.log",
+      ),
+      truncated: false,
+      reset: replacement === "server reset",
+    });
+
+    await (replacement === "manual refresh" ? page.refresh() : poll());
+
+    expect(page.lines()).toEqual(["complete replacement"]);
+    expect(page.container.textContent).not.toContain(TRUNCATION_NOTICE);
+    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({
+      cursor: replacement === "server reset" ? 100 : undefined,
+    });
+  },
+);
+
+it("retains truncation with stale rows and clears it when read access clears them", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce({ ...tail(100, ["retained tail"], "/tmp/stale.log"), truncated: true })
+    .mockRejectedValueOnce(new Error("log read failed"))
+    .mockRejectedValueOnce(
+      new GatewayRequestError({
+        code: "FORBIDDEN",
+        message: "permission denied",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.read",
+          requiredScopes: ["operator.read"],
+        },
+      }),
+    );
+  const { page } = await setup(request);
+  await poll();
+  expect(page.lines()).toEqual(["retained tail"]);
+  expect(page.container.textContent).toContain("Showing stale data");
+  expect(page.container.textContent).toContain(TRUNCATION_NOTICE);
+
+  await poll();
+  expect(page.lines()).toEqual([]);
+  expect(page.container.textContent).toContain("You don't have permission to view logs.");
+  expect(page.container.textContent).not.toContain(TRUNCATION_NOTICE);
 });
 
 it("retains one initial request across metadata snapshots with empty logs", async () => {

@@ -464,6 +464,32 @@ describe("exec approval card", () => {
     expect(view.getByRole<HTMLButtonElement>("button", { name: "Allow once" }).disabled).toBe(true);
   });
 
+  it("cancels an active pointer-triggered mobile disclosure animation on unmount", () => {
+    const view = renderSurface(
+      approval({
+        kind: "exec",
+        request: { command: "echo review", host: "gateway", cwd: "/workspace" },
+        expiresAtMs: Date.now() + 60_000,
+      }),
+      "inline",
+      undefined,
+      "mobile",
+    );
+    const disclosure = container.querySelector<HTMLDetailsElement>("details")!;
+    const cancel = vi.fn();
+    // JSDOM lacks Web Animations; retain the resource returned to the real click handler.
+    const animate = vi.fn(() => ({ cancel, onfinish: null }));
+    Object.defineProperty(disclosure, "animate", { configurable: true, value: animate });
+    disclosure
+      .querySelector("summary")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+    expect(disclosure.open).toBe(true);
+    expect(animate).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+    view.unmount();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it.each([
     [undefined, undefined, ["Always allow", "Deny", "Allow once"]],
     [undefined, "always", ["Deny", "Allow once"]],

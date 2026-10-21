@@ -9,6 +9,8 @@ import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 
 export type ModelProviderRefreshReason = "publication" | "replacement" | "forced";
 
+export type ModelProviderCoreReceipt = { promise: Promise<void> };
+
 type CoreLoadOptions = {
   onStart: (reason: ModelProviderRefreshReason) => void;
   onComplete: (result: { client: GatewayBrowserClient; data: ModelProvidersData }) => void;
@@ -49,6 +51,8 @@ async function loadConnectedProviderData(
 
 export class ModelProviderCoreLoader {
   private active = false;
+  receipt: ModelProviderCoreReceipt | null = null;
+  private completion: ReturnType<typeof Promise.withResolvers<void>> | null = null;
   private catalogRequest: AbortController | null = null;
   catalogError: string | null = null;
   retryProvider: string | undefined;
@@ -59,6 +63,16 @@ export class ModelProviderCoreLoader {
     private readonly notify: () => void,
     private readonly options: CoreLoadOptions,
   ) {}
+
+  adopt(): void {
+    this.receipt = { promise: Promise.resolve() };
+  }
+
+  private retireCompletion(): void {
+    // A retired transport may ignore abort; release its presentation lifetime now.
+    this.completion?.resolve();
+    this.completion = null;
+  }
 
   get loading(): boolean {
     return this.active;
@@ -127,6 +141,9 @@ export class ModelProviderCoreLoader {
     }
     this.publicationPending = false;
     this.request?.abort();
+    this.retireCompletion();
+    this.completion = Promise.withResolvers<void>();
+    this.receipt = { promise: this.completion.promise };
     const request = new AbortController();
     this.request = request;
     this.active = true;
@@ -149,12 +166,15 @@ export class ModelProviderCoreLoader {
         this.active = false;
         this.retryProvider = target && data.error ? target.providerId : undefined;
         this.options.onComplete({ client, data });
+        this.completion?.resolve();
+        this.completion = null;
       }
     } catch {
       // Each source reports its own error; a retired request has no result to publish.
     } finally {
       if (this.request === request) {
         this.request = null;
+        this.retireCompletion();
         this.active = false;
         this.refreshPendingPublication(client, agentId);
         this.notify();
@@ -174,6 +194,8 @@ export class ModelProviderCoreLoader {
     this.publicationPending = false;
     this.resetCatalog();
     this.retryProvider = undefined;
+    this.retireCompletion();
+    this.receipt = null;
     this.active = false;
     this.request?.abort();
     this.request = null;

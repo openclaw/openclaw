@@ -239,216 +239,6 @@ function collectSlackMentionMetadata(text: string): SlackMentionMetadata {
   };
 }
 
-function resolveSlackMentionSource(params: {
-  explicitBotMention: boolean;
-  explicitSubteamMention: boolean;
-  matchedImplicitMentionKinds: readonly string[];
-  shouldBypassMention: boolean;
-  wasMentioned: boolean;
-}): NonNullable<FinalizedMsgContext["MentionSource"]> {
-  if (params.explicitBotMention) {
-    return "explicit_bot";
-  }
-  if (params.explicitSubteamMention) {
-    return "subteam";
-  }
-  if (params.shouldBypassMention) {
-    return "command_bypass";
-  }
-  if (params.wasMentioned) {
-    return "mention_pattern";
-  }
-  if (params.matchedImplicitMentionKinds.length > 0) {
-    return "implicit_thread";
-  }
-  return "none";
-}
-
-async function resolveSlackConversationContext(params: {
-  ctx: SlackMonitorContext;
-  account: ResolvedSlackAccount;
-  message: SlackMessageEvent;
-  eventScope?: SlackEventScope;
-}) {
-  const { ctx, account, message } = params;
-  const cfg = ctx.cfg;
-
-  let channelInfo: Awaited<ReturnType<SlackMonitorContext["resolveChannelName"]>> = {};
-  let resolvedChannelType = normalizeSlackChannelType(message.channel_type, message.channel);
-  // D-prefixed channels are always direct messages. Skip channel lookups in
-  // that common path to avoid an unnecessary API round-trip.
-  if (resolvedChannelType !== "im" && message.channel_type !== "im") {
-    channelInfo = await ctx.resolveChannelName(message.channel, params.eventScope);
-    resolvedChannelType = normalizeSlackChannelType(
-      message.channel_type ??
-        channelInfo.type ??
-        ctx.recallSlackChannelType(message.channel, params.eventScope),
-      message.channel,
-    );
-  }
-  const channelName = channelInfo.name;
-  const isDirectMessage = resolvedChannelType === "im";
-  const isGroupDm = resolvedChannelType === "mpim";
-  const isRoom = resolvedChannelType === "channel" || resolvedChannelType === "group";
-  const isRoomish = isRoom || isGroupDm;
-  const channelConfig = isRoom
-    ? resolveSlackChannelConfig({
-        teamId: params.eventScope?.teamId ?? ctx.teamId,
-        allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
-        channelId: message.channel,
-        channelName,
-        channels: ctx.channelsConfig,
-        channelKeys: ctx.channelsConfigKeys,
-        defaultRequireMention: ctx.defaultRequireMention,
-        allowNameMatching: ctx.allowNameMatching,
-      })
-    : null;
-  const allowBotsSetting =
-    channelConfig?.allowBots ?? account.config?.allowBots ?? cfg.channels?.slack?.allowBots ?? true;
-  const allowBotsMode: "off" | "all" | "mentions" =
-    allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting ? "all" : "off";
-
-  return {
-    channelInfo,
-    channelName,
-    resolvedChannelType,
-    isDirectMessage,
-    isGroupDm,
-    isRoom,
-    isRoomish,
-    channelConfig,
-    allowBotsMode,
-    isBotMessage: Boolean(message.bot_id),
-  };
-}
-
-async function authorizeSlackInboundMessage(params: {
-  ctx: SlackMonitorContext;
-  account: ResolvedSlackAccount;
-  message: SlackMessageEvent;
-  conversation: Awaited<ReturnType<typeof resolveSlackConversationContext>>;
-  explicitBotMention: boolean;
-  eventScope?: SlackEventScope;
-  onVisibleDrop?: () => void;
-  drop: (reason: SlackInboundDropReason) => null;
-}) {
-  const { ctx, account, message, conversation, drop } = params;
-  const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBotsMode } =
-    conversation;
-
-  if (isBotMessage) {
-    if (
-      (ctx.botUserId && message.user === ctx.botUserId) ||
-      (ctx.botId && message.bot_id === ctx.botId)
-    ) {
-      return null;
-    }
-    if (allowBotsMode === "off") {
-      return drop("bot-disabled");
-    }
-  }
-
-  if (isDirectMessage && !message.user) {
-    return drop("missing-user");
-  }
-
-  const senderId = message.user ?? (isBotMessage ? message.bot_id : undefined);
-  if (!senderId) {
-    return drop("missing-sender");
-  }
-
-  if (
-    !ctx.isChannelAllowed({
-      teamId: params.eventScope?.teamId ?? ctx.teamId,
-      channelId: message.channel,
-      channelName,
-      channelType: resolvedChannelType,
-    })
-  ) {
-    if (
-      conversation.isRoom &&
-      ctx.groupPolicy === "allowlist" &&
-      params.explicitBotMention &&
-      !isBotMessage &&
-      message.user
-    ) {
-      let subject = "This OpenClaw bot";
-      if (ctx.botUserId) {
-        try {
-          const botIdentity = await ctx.resolveUserName(ctx.botUserId, params.eventScope);
-          const botName = normalizeOptionalString(botIdentity?.name);
-          if (botName) {
-            subject = escapeSlackMrkdwn(botName);
-          }
-        } catch (error) {
-          logVerbose(`slack allowlist denial bot-name lookup failed: ${formatSlackError(error)}`);
-        }
-      }
-      try {
-        await (params.eventScope?.client ?? ctx.app.client).chat.postEphemeral({
-          token: ctx.botToken,
-          channel: message.channel,
-          user: message.user,
-          text: `${subject} can’t reply here because this channel isn’t in its OpenClaw channel allowlist. Ask the OpenClaw owner to allow this channel. <${SLACK_CHANNEL_ACCESS_DOCS_URL}|Learn how to configure Slack channel access.>`,
-        });
-        params.onVisibleDrop?.();
-      } catch (error) {
-        ctx.runtime.error?.(
-          `slack allowlist denial notice failed for channel ${message.channel}: ${formatSlackError(error)}`,
-        );
-      }
-    }
-    return drop("channel-not-allowed");
-  }
-
-  const allowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
-    includePairingStore: isDirectMessage,
-    eventScope: params.eventScope,
-  });
-
-  if (isDirectMessage) {
-    const directUserId = message.user;
-    if (!directUserId) {
-      return drop("missing-user");
-    }
-    let dropReason: SlackInboundDropReason = "dm-unauthorized";
-    const allowed = await authorizeSlackDirectMessage({
-      ctx,
-      accountId: account.accountId,
-      senderId: directUserId,
-      eventScope: params.eventScope,
-      allowFromLower,
-      resolveSenderName: (userId) => ctx.resolveUserName(userId, params.eventScope),
-      sendPairingReply: async (text) => {
-        await sendMessageSlack(message.channel, text, {
-          cfg: ctx.cfg,
-          token: ctx.botToken,
-          client: params.eventScope?.client ?? ctx.app.client,
-          accountId: account.accountId,
-          eventScope: params.eventScope,
-        });
-      },
-      onDisabled: () => {
-        dropReason = "dm-disabled";
-      },
-      onUnauthorized: ({ allowMatchMeta }) => {
-        logVerbose(
-          `Blocked unauthorized slack sender ${message.user} (dmPolicy=${ctx.dmPolicy}, ${allowMatchMeta})`,
-        );
-      },
-      log: logVerbose,
-    });
-    if (!allowed) {
-      return drop(dropReason);
-    }
-  }
-
-  return {
-    senderId,
-    allowFromLower,
-  };
-}
-
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -486,43 +276,158 @@ export async function prepareSlackMessage(params: {
     teamId: opts.eventScope?.teamId ?? ctx.teamId,
   };
   const cfg = ctx.cfg;
-  const conversation = await resolveSlackConversationContext({
-    ctx,
-    account,
-    message,
-    eventScope: opts.eventScope,
-  });
-  const {
-    channelInfo,
-    channelName,
-    isDirectMessage,
-    isGroupDm,
-    isRoom,
-    isRoomish,
-    channelConfig,
-    allowBotsMode,
-    isBotMessage,
-  } = conversation;
+  const conversationEventScope = opts.eventScope;
+  let channelInfo: Awaited<ReturnType<SlackMonitorContext["resolveChannelName"]>> = {};
+  let resolvedChannelType = normalizeSlackChannelType(message.channel_type, message.channel);
+  // D-prefixed channels are always direct messages. Skip channel lookups in
+  // that common path to avoid an unnecessary API round-trip.
+  if (resolvedChannelType !== "im" && message.channel_type !== "im") {
+    channelInfo = await ctx.resolveChannelName(message.channel, conversationEventScope);
+    resolvedChannelType = normalizeSlackChannelType(
+      message.channel_type ??
+        channelInfo.type ??
+        ctx.recallSlackChannelType(message.channel, conversationEventScope),
+      message.channel,
+    );
+  }
+  const channelName = channelInfo.name;
+  const isDirectMessage = resolvedChannelType === "im";
+  const isGroupDm = resolvedChannelType === "mpim";
+  const isRoom = resolvedChannelType === "channel" || resolvedChannelType === "group";
+  const isRoomish = isRoom || isGroupDm;
+  const channelConfig = isRoom
+    ? resolveSlackChannelConfig({
+        teamId: conversationEventScope?.teamId ?? ctx.teamId,
+        allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
+        channelId: message.channel,
+        channelName,
+        channels: ctx.channelsConfig,
+        channelKeys: ctx.channelsConfigKeys,
+        defaultRequireMention: ctx.defaultRequireMention,
+        allowNameMatching: ctx.allowNameMatching,
+      })
+    : null;
+  const allowBotsSetting =
+    channelConfig?.allowBots ?? account.config?.allowBots ?? cfg.channels?.slack?.allowBots ?? true;
+  const allowBotsMode: "off" | "all" | "mentions" =
+    allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting ? "all" : "off";
+
+  const isBotMessage = Boolean(message.bot_id);
   const messageText = message.text ?? "";
   const mentionMetadata = collectSlackMentionMetadata(messageText);
   const normalizedBotUserId = normalizeSlackId(ctx.botUserId);
   const explicitBotMention =
     opts.source === "app_mention" ||
     Boolean(normalizedBotUserId && mentionMetadata.mentionedUserIds.includes(normalizedBotUserId));
-  const authorization = await authorizeSlackInboundMessage({
-    ctx,
-    account,
-    message,
-    conversation,
-    explicitBotMention,
-    eventScope: opts.eventScope,
-    onVisibleDrop: opts.onVisibleDrop,
-    drop,
-  });
-  if (!authorization) {
-    return null;
+  const authorizationEventScope = opts.eventScope;
+  const onVisibleDrop = opts.onVisibleDrop;
+  if (isBotMessage) {
+    if (
+      (ctx.botUserId && message.user === ctx.botUserId) ||
+      (ctx.botId && message.bot_id === ctx.botId)
+    ) {
+      return null;
+    }
+    if (allowBotsMode === "off") {
+      return drop("bot-disabled");
+    }
   }
-  const { senderId, allowFromLower } = authorization;
+
+  if (isDirectMessage && !message.user) {
+    return drop("missing-user");
+  }
+
+  const senderId = message.user ?? (isBotMessage ? message.bot_id : undefined);
+  if (!senderId) {
+    return drop("missing-sender");
+  }
+
+  if (
+    !ctx.isChannelAllowed({
+      teamId: authorizationEventScope?.teamId ?? ctx.teamId,
+      channelId: message.channel,
+      channelName,
+      channelType: resolvedChannelType,
+    })
+  ) {
+    if (
+      isRoom &&
+      ctx.groupPolicy === "allowlist" &&
+      explicitBotMention &&
+      !isBotMessage &&
+      message.user
+    ) {
+      let subject = "This OpenClaw bot";
+      if (ctx.botUserId) {
+        try {
+          const botIdentity = await ctx.resolveUserName(ctx.botUserId, authorizationEventScope);
+          const botName = normalizeOptionalString(botIdentity?.name);
+          if (botName) {
+            subject = escapeSlackMrkdwn(botName);
+          }
+        } catch (error) {
+          logVerbose(`slack allowlist denial bot-name lookup failed: ${formatSlackError(error)}`);
+        }
+      }
+      try {
+        await (authorizationEventScope?.client ?? ctx.app.client).chat.postEphemeral({
+          token: ctx.botToken,
+          channel: message.channel,
+          user: message.user,
+          text: `${subject} can’t reply here because this channel isn’t in its OpenClaw channel allowlist. Ask the OpenClaw owner to allow this channel. <${SLACK_CHANNEL_ACCESS_DOCS_URL}|Learn how to configure Slack channel access.>`,
+        });
+        onVisibleDrop?.();
+      } catch (error) {
+        ctx.runtime.error?.(
+          `slack allowlist denial notice failed for channel ${message.channel}: ${formatSlackError(error)}`,
+        );
+      }
+    }
+    return drop("channel-not-allowed");
+  }
+
+  const allowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
+    includePairingStore: isDirectMessage,
+    eventScope: authorizationEventScope,
+  });
+
+  if (isDirectMessage) {
+    const directUserId = message.user;
+    if (!directUserId) {
+      return drop("missing-user");
+    }
+    let dropReason: SlackInboundDropReason = "dm-unauthorized";
+    const allowed = await authorizeSlackDirectMessage({
+      ctx,
+      accountId: account.accountId,
+      senderId: directUserId,
+      eventScope: authorizationEventScope,
+      allowFromLower,
+      resolveSenderName: (userId) => ctx.resolveUserName(userId, authorizationEventScope),
+      sendPairingReply: async (text) => {
+        await sendMessageSlack(message.channel, text, {
+          cfg: ctx.cfg,
+          token: ctx.botToken,
+          client: authorizationEventScope?.client ?? ctx.app.client,
+          accountId: account.accountId,
+          eventScope: authorizationEventScope,
+        });
+      },
+      onDisabled: () => {
+        dropReason = "dm-disabled";
+      },
+      onUnauthorized: ({ allowMatchMeta }) => {
+        logVerbose(
+          `Blocked unauthorized slack sender ${message.user} (dmPolicy=${ctx.dmPolicy}, ${allowMatchMeta})`,
+        );
+      },
+      log: logVerbose,
+    });
+    if (!allowed) {
+      return drop(dropReason);
+    }
+  }
+
   let resolvedSenderName = normalizeOptionalString(message.username);
   const resolveSenderName = async (): Promise<string> => {
     if (resolvedSenderName) {
@@ -585,7 +490,7 @@ export async function prepareSlackMessage(params: {
   // the root lands on the channel session while later thread replies land on
   // a fresh `:thread:<root_ts>` session, breaking continuity.
   const channelRequireMention = channelConfig?.requireMention ?? ctx.defaultRequireMention ?? true;
-  const chatType = resolveSlackChatType(conversation.resolvedChannelType);
+  const chatType = resolveSlackChatType(resolvedChannelType);
   const restoredAssistantThreadContext = await restoredAssistantThreadContextPromise;
   const assistantThreadContext = mergeSlackAssistantThreadContext(
     messageAssistantThreadContext,
@@ -769,7 +674,7 @@ export async function prepareSlackMessage(params: {
       ctx,
       account,
       message,
-      conversation,
+      conversation: { isRoom, isDirectMessage, channelConfig },
       thread: routing,
       wasMentioned,
       teamId: opts.eventScope?.teamId,
@@ -804,7 +709,7 @@ export async function prepareSlackMessage(params: {
       senderId,
       senderAuthentication: message.user ? opts.senderAuthentication : undefined,
       senderName: senderNameForAuth,
-      channelType: conversation.resolvedChannelType ?? "channel",
+      channelType: resolvedChannelType ?? "channel",
       channelId: message.channel,
       threadId,
       ownerAllowFromLower: allowFromLower,
@@ -1006,13 +911,18 @@ export async function prepareSlackMessage(params: {
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
   const shouldBypassMention = mentionDecision.shouldBypassMention;
   const matchedImplicitMentionKinds = mentionDecision.matchedImplicitMentionKinds;
-  const mentionSource = resolveSlackMentionSource({
-    explicitBotMention: explicitlyMentionedBotUser || opts.source === "app_mention",
-    explicitSubteamMention: explicitlyMentionedBotSubteam,
-    matchedImplicitMentionKinds,
-    shouldBypassMention,
-    wasMentioned,
-  });
+  const mentionSource: NonNullable<FinalizedMsgContext["MentionSource"]> =
+    explicitlyMentionedBotUser || opts.source === "app_mention"
+      ? "explicit_bot"
+      : explicitlyMentionedBotSubteam
+        ? "subteam"
+        : shouldBypassMention
+          ? "command_bypass"
+          : wasMentioned
+            ? "mention_pattern"
+            : matchedImplicitMentionKinds.length > 0
+              ? "implicit_thread"
+              : "none";
 
   if (isBotMessage && allowBotsMode === "mentions") {
     const botMentioned = isDirectMessage || effectiveWasMentioned || shouldBypassMention;

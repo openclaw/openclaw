@@ -3,7 +3,11 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { SessionsRecoverResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  patchSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import * as sessionLifecycle from "../sessions/session-controller.lifecycle.js";
 import {
@@ -24,7 +28,7 @@ import {
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
-import { resolveWorkerPlacementSessionRuntimeAsync } from "./worker-environments/placement-session-runtime.js";
+import * as sessionRuntime from "./worker-environments/placement-session-runtime.js";
 
 afterEach(() => drainGlobalSingletonLifecycleState());
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
@@ -164,8 +168,10 @@ async function recover(
   options: {
     client?: GatewayRequestHandlerOptions["client"];
     hasCurrentClientAuthority?: () => boolean;
+    mode?: "in-place" | "new-session";
   } = {},
 ) {
+  const { mode = "in-place", ...requestOptions } = options;
   const respond = vi.fn<Parameters<typeof handleGatewayRequest>[0]["respond"]>();
   await handleGatewayRequest({
     req: {
@@ -175,12 +181,12 @@ async function recover(
       params: {
         agentId: "main",
         key: current.key,
-        mode: "in-place",
+        mode,
         sessionId: current.sessionId,
         recoveryCycleId: current.recoveryCycleId,
       },
     },
-    ...options,
+    ...requestOptions,
     client: options.client ?? current.operator,
     context: current.context,
     isWebchatConnect: () => false,
@@ -201,14 +207,22 @@ function expectContinuation(
   });
 }
 
-test.for([false, true])(
-  "operator resume keeps session identity and admits one durable continuation (native: %s)",
-  async (native, { signal }) => {
-    const current = await fixture(
-      native ? "native-resume" : "builtin-resume",
-      native ? "codex" : undefined,
-      true,
-    );
+test.for(["builtin", "native", "pending"] as const)(
+  "operator resume keeps session identity and admits one durable continuation (%s)",
+  async (scenario, { signal }) => {
+    const native = scenario === "native";
+    const current = await fixture(`${scenario}-resume`, native ? "codex" : undefined, true);
+    if (scenario === "pending") {
+      await patchSessionEntryCore(current.scope, () => ({
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: current.recoveryCycleId,
+          revision: 4,
+          chargedAttempts: 0,
+        },
+      }));
+    }
     const before = await current.transcript();
     const dispatched = createDeferredCore();
     const finish = createDeferredCore();
@@ -276,15 +290,28 @@ test.for([false, true])(
   },
 );
 
-test.for([undefined, "media", "message", "text"] as const)(
-  "restricted CLI resume leaves its tombstone actionable without admitting input (%s)",
-  async (deliveryConstraint) => {
+test.for([undefined, "media", "message", "text", "pending", "pending-revoked"] as const)(
+  "restricted CLI resume preserves actionable recovery (%s)",
+  async (scenario) => {
+    const pending = scenario === "pending" || scenario === "pending-revoked";
+    const deliveryConstraint = pending ? undefined : scenario;
     const current = await fixture(
-      `cli-restricted-resume-${deliveryConstraint ?? "guarded"}`,
+      `cli-restricted-resume-${scenario ?? "guarded"}`,
       "claude-cli",
       true,
       deliveryConstraint,
     );
+    if (pending) {
+      await patchSessionEntryCore(current.scope, () => ({
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: current.recoveryCycleId,
+          revision: 4,
+          chargedAttempts: 0,
+        },
+      }));
+    }
     const previousRegistry = { ...getTestPluginRegistry() };
     setTestPluginRegistry({
       ...previousRegistry,
@@ -307,7 +334,7 @@ test.for([undefined, "media", "message", "text"] as const)(
         throw new Error("CLI fixture session is missing");
       }
       expect(
-        await resolveWorkerPlacementSessionRuntimeAsync({
+        await sessionRuntime.resolveWorkerPlacementSessionRuntimeAsync({
           cfg: current.context.getRuntimeConfig(),
           entry: before,
           agentId: "main",
@@ -315,12 +342,47 @@ test.for([undefined, "media", "message", "text"] as const)(
         }),
       ).toBe("claude-cli");
       const expectUnchanged = await current.expectUnchangedAfter(before);
+      if (scenario === "pending-revoked") {
+        let authorized = true;
+        const resolveRuntime = sessionRuntime.resolveWorkerPlacementSessionRuntimeAsync;
+        const runtime = vi
+          .spyOn(sessionRuntime, "resolveWorkerPlacementSessionRuntimeAsync")
+          .mockImplementation(async (params) => {
+            const resolved = await resolveRuntime(params);
+            authorized = false;
+            return resolved;
+          });
+        try {
+          await expect(
+            recover(current, { hasCurrentClientAuthority: () => authorized }),
+          ).rejects.toThrow("Gateway requester authority changed");
+          await expectUnchanged();
+        } finally {
+          runtime.mockRestore();
+        }
+        return;
+      }
+      const transcript = await current.transcript();
       const rejected = await recover(current);
       expectContinuation(current, rejected, {
         status: "rejected",
         error: { details: { reason: "restart-safe-tools-unavailable" } },
       });
-      await expectUnchanged();
+      if (scenario === "pending") {
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        expect((await listSessionPendingInputs(current.scope)).items).toEqual([]);
+        expect(await current.transcript()).toEqual(transcript);
+        const rollover = await recover(current, { mode: "new-session" });
+        expect(rollover, JSON.stringify(rollover.error)).toMatchObject({
+          ok: true,
+          payload: { continuation: { status: "started" } },
+        });
+        expect(rollover.payload?.key).not.toBe(current.key);
+        expect(current.entry()?.archivedAt).toBeDefined();
+        expect(await current.transcript()).toEqual(transcript);
+      } else {
+        await expectUnchanged();
+      }
     } finally {
       try {
         await current.drain();

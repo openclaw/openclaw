@@ -327,6 +327,50 @@ describe("resolveEffectivePluginActivationState", () => {
 });
 
 describe("resolveEnableState", () => {
+  it("uses declared non-channel ownership without discovering the bundled channel catalog", () => {
+    const rootConfig: OpenClawConfig = {
+      channels: { telegram: { enabled: false } },
+      plugins: { entries: { helper: { enabled: true }, telegram: { enabled: true } } },
+    };
+    const catalog = vi.spyOn(bundledChannelCatalog, "listBundledChannelCatalogEntries");
+    try {
+      expect(
+        resolveEffectivePluginActivationState({
+          id: "helper",
+          origin: "bundled",
+          channelIds: [],
+          config: normalizePluginsConfig(rootConfig.plugins),
+          rootConfig,
+        }),
+      ).toEqual(activation(true, true, "explicit", "enabled in config"));
+      expect(catalog).not.toHaveBeenCalled();
+
+      expect(
+        resolveEffectivePluginActivationState({
+          id: "telegram",
+          origin: "bundled",
+          channelIds: [],
+          config: normalizePluginsConfig(rootConfig.plugins),
+          rootConfig,
+        }),
+      ).toEqual(activation(true, true, "explicit", "enabled in config"));
+
+      for (const channelIds of [undefined, ["telegram"]]) {
+        expect(
+          resolveEffectivePluginActivationState({
+            id: "telegram",
+            origin: "bundled",
+            channelIds,
+            config: normalizePluginsConfig(rootConfig.plugins),
+            rootConfig,
+          }),
+        ).toMatchObject({ enabled: false, reason: "channel disabled in config" });
+      }
+    } finally {
+      catalog.mockRestore();
+    }
+  });
+
   it.each([undefined, true])("resolves bundled default=%s", (enabledByDefault) => {
     const reason = "bundled (disabled by default)";
     checkEnable(

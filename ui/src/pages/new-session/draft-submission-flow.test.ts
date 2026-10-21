@@ -4,7 +4,11 @@ import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/
 import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { requestSessionCreate, type SessionCreateOutcome } from "../../lib/sessions/create.ts";
+import {
+  requestSessionCreate,
+  type SessionCreateOutcome,
+  type SessionCreateParams,
+} from "../../lib/sessions/create.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../../lib/toast.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -14,7 +18,6 @@ import {
   getChatAttachmentPreviewUrl,
 } from "../chat/attachment-payload-store.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
 import {
   createDraftFixture,
   registerTextPayload,
@@ -890,13 +893,11 @@ describe("DraftSubmissionFlow", () => {
       { profileId: "profile-alex", start: 0, end: 5 },
     ]);
     const apiAttachments = [{ fileName: "note.txt", content: "SGk=" }];
-    const createParams = buildDraftSessionCreateParams({
+    const createParams: SessionCreateParams = {
       agentId: "cloud",
       message: "",
       worktree: true,
-      cwd: "/workspace",
-      workspace: "/workspace",
-    });
+    };
     flow.pendingPlacement.stageCreate({
       agentId: "cloud",
       target: { kind: "profile", profileId: "aws" },

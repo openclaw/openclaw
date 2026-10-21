@@ -8,7 +8,7 @@ import {
   projectSessionParticipants,
   projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
-import { compareSessionEntryPairs, type SessionEntryPair } from "./session-list-order.js";
+import { compareSessionEntries, type SessionListEntry } from "./session-list-order.js";
 import {
   identity as rowIdentity,
   type SelectionRow as SelectionTarget,
@@ -21,7 +21,7 @@ import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 const sentinel = (key: string) => key === "global" || key === "unknown";
 type SelectionScope = ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>;
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
-type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair; position: number };
+type IndexedTarget = { row: SelectionTarget; pair: SessionListEntry; position: number };
 
 export function createSessionRowSelection(
   cfg: OpenClawConfig,
@@ -38,11 +38,11 @@ export function createSessionRowSelection(
     {
       sortBy: NonNullable<SessionsListParams["sortBy"]>;
       archived: SessionsListParams["archived"];
-      entries: SessionEntryPair[];
+      entries: SessionListEntry[];
     }
   >();
   // Fixed partitions bound refiltering after exact publications without retaining old rosters.
-  let partitions: Array<{ revision: object; entries: Map<string, SessionEntryPair> }> | undefined;
+  let partitions: Array<{ revision: object; entries: Map<string, SessionListEntry> }> | undefined;
   const partitionFor = (key: string) => {
     let hash = 0;
     for (let i = 0; i < key.length; i++) {
@@ -194,7 +194,11 @@ export function createSessionRowSelection(
         isConfiguredGatewaySessionEntry(cfg, scope.configuredAgentIds, row.key, row.entry));
     const group = previous ?? new Map<string, IndexedTarget>();
     if (eligible) {
-      group.set(id, { row, pair: [key, row.entry], position: candidate?.position ?? position++ });
+      group.set(id, {
+        row,
+        pair: [key, row.entry, row.selection],
+        position: candidate?.position ?? position++,
+      });
       groups.set(key, group);
     } else {
       group.delete(id);
@@ -246,12 +250,13 @@ export function createSessionRowSelection(
       }
     }
     for (const { sortBy, archived, entries } of orders.values()) {
-      const locate = (pair: SessionEntryPair) => {
+      const locate = (pair: SessionListEntry) => {
         let lo = 0,
           hi = entries.length;
         while (lo < hi) {
           const mid = (lo + hi) >>> 1;
-          if (compareSessionEntryPairs(entries[mid]!, pair, sortBy) < 0) {
+          const other = entries[mid]!;
+          if (compareSessionEntries(other[0], other[2], pair[0], pair[2], sortBy) < 0) {
             lo = mid + 1;
           } else {
             hi = mid;
@@ -311,7 +316,7 @@ export function createSessionRowSelection(
       if (!candidates && !partitions) {
         partitions = Array.from({ length: 64 }, () => ({
           revision: {},
-          entries: new Map<string, SessionEntryPair>(),
+          entries: new Map<string, SessionListEntry>(),
         }));
         for (const [key, target] of winners) {
           partitionFor(key)!.entries.set(key, target.pair);
@@ -336,7 +341,7 @@ export function createSessionRowSelection(
             }
             entries = targets.map((target) => target.pair);
             if (sortBy) {
-              entries.sort((a, b) => compareSessionEntryPairs(a, b, sortBy));
+              entries.sort((a, b) => compareSessionEntries(a[0], a[2], b[0], b[2], sortBy));
               if (!candidates) {
                 orders.set(orderKey, { sortBy, archived, entries });
               }

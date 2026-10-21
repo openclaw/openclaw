@@ -59,18 +59,14 @@ describe("resolveSessionForRun", () => {
   });
 
   it.each([
-    {
-      agentId: "main",
-      key: "agent:main:acp:run-1",
-      expected: { sessionKey: "agent:main:acp:run-1", agentId: "main" },
-    },
-    {
-      agentId: "retired",
-      key: "agent:retired:acp:run-1",
-      expected: { sessionKey: "agent:retired:acp:run-1", agentId: "retired" },
-    },
-    { agentId: "main", key: "agent:work:acp:run-1", expected: undefined },
-  ])("keeps stored keys scoped to $agentId for $key", ({ agentId, key, expected }) => {
+    ["main", "agent:main:acp:run-1", { sessionKey: "agent:main:acp:run-1", agentId: "main" }],
+    [
+      "retired",
+      "agent:retired:acp:run-1",
+      { sessionKey: "agent:retired:acp:run-1", agentId: "retired" },
+    ],
+    ["main", "agent:work:acp:run-1", undefined],
+  ] as const)("keeps stored keys scoped to %s for %s", (agentId, key, expected) => {
     const projection = indexedProjection({ [key]: { sessionId: "run-1", updatedAt: 123 } });
     expect(resolveSessionForRun("run-1", { agentId, projection })).toEqual(expected);
   });

@@ -578,7 +578,7 @@ suite.define(() => {
         await gateway.setSessionsListResponse({ sessions: [parent, completedChild, fork] });
         if (refuse) {
           // A route can advance before the chat page retires its presentation.
-          await page.evaluate(() => history.pushState(null, "", "/agents"));
+          await page.evaluate(() => history.pushState(null, "", "/sessions"));
         }
         await gateway.resolveDeferred("sessions.fork", {
           sessionKey: fork.key,
@@ -590,7 +590,7 @@ suite.define(() => {
         );
         await forkLink.waitFor();
         if (refuse) {
-          expect(new URL(page.url()).pathname).toBe("/agents");
+          expect(new URL(page.url()).pathname).toBe("/sessions");
           expect(await composer.inputValue()).toBe("Keep the original parent draft");
           await page.evaluate((url) => history.replaceState(null, "", url), originalUrl);
           await forkLink.click();

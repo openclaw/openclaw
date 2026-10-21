@@ -216,7 +216,17 @@ export function prepareGroupedMessage(
   // Classify completed bare JSON before Markdown can interpret its literal values.
   const jsonResult = markdown && !opts.isStreaming ? parseMarkdownJson(markdown) : null;
 
+  const inlineComments =
+    normalizedRole === "user" &&
+    !markdown &&
+    !normalizedMessage.replyTarget &&
+    !hasImagesOrNotices &&
+    !hasToolCards &&
+    !asyncQuestions &&
+    visibleAttachments.length > 0 &&
+    visibleAttachments.every(isSentCommentAttachment);
   const onlyPreviewChips =
+    !inlineComments &&
     normalizedRole === "user" &&
     !markdown &&
     !normalizedMessage.replyTarget &&
@@ -231,6 +241,7 @@ export function prepareGroupedMessage(
     videoPreviews.length > 0 ||
     hasUserFiles ||
     (normalizedRole === "user" &&
+      !inlineComments &&
       cardAttachments.some(
         (item) => isSentCommentAttachment(item) || isSentPastedTextAttachment(item),
       ));
@@ -347,6 +358,7 @@ export function prepareGroupedMessage(
     supplementalAttachments,
     videoPreviews,
     cardAttachments,
+    inlineComments,
     imageRenderOptions,
     actionText,
     omittedMedia,

@@ -21,6 +21,7 @@ import {
 } from "./chat-detail-file-presentation.ts";
 import { createFileCopy } from "./chat-file-copy.ts";
 import { captureFileEditorDraft, readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
+import { createFileSessionAttachment } from "./chat-file-session-attachment.ts";
 import { createFileHtmlPreview } from "./chat-html-preview.ts";
 import type {
   FileSidebarNavigation,
@@ -38,6 +39,7 @@ import type { FileEditorViewHandle } from "./file-editor-view.ts";
 registerEnglishCatalog(registerFilePreviewEnglish);
 
 function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
+  const fileAttachment = createFileSessionAttachment(props);
   const gateways = nativeGatewaysCapability();
   const nativeGateways = gateways && projectOwner(gateways, (owner) => owner);
   let disposed = false;
@@ -512,10 +514,6 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
     return version === fileOperationVersion && !fileDirty && !fileSaveNotice;
   };
 
-  const reloadFile = () => startLatestFileOperation("reload");
-
-  const overwriteFile = () => startLatestFileOperation("overwrite");
-
   function startLatestFileOperation(action: "reload" | "overwrite"): void {
     const content = visibleContent;
     if (content?.kind !== "file" || !content.edit || fileSaving) {
@@ -648,6 +646,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
 
     t("common.loading");
     return renderFilePanelPresentation({
+      fileAttachment: fileAttachment(),
       props,
       presentation,
       htmlPreview,
@@ -680,8 +679,8 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
         editFile,
         moveFileSearch,
         openInEditor,
-        overwriteFile,
-        reloadFile,
+        overwriteFile: () => startLatestFileOperation("overwrite"),
+        reloadFile: () => startLatestFileOperation("reload"),
         saveFile,
         updateFileSearch,
         handleFileSearchKeydown,

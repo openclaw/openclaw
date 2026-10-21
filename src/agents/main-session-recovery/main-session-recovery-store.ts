@@ -61,6 +61,7 @@ function currentGenerationRequiredBy(command: MainSessionRecoveryCommand): strin
 }
 
 export async function commitMainSessionRecovery(params: {
+  assertCommitAllowed?: () => void;
   command: MainSessionRecoveryCommand;
   expectedSessionId?: string;
   requireWriteSuccess?: boolean;
@@ -94,6 +95,7 @@ export async function commitMainSessionRecovery(params: {
       params.expectedSessionId,
     storePath: params.target.storePath,
     assertCommitAllowed: () => {
+      params.assertCommitAllowed?.();
       if (
         yieldedContinuation &&
         (!yieldedContinuation() ||

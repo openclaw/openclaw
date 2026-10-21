@@ -201,10 +201,7 @@ export async function writeGitFixtureManifest(
   );
 }
 
-export async function createGitFixtureCheckout(
-  directory: string,
-  manifest: Record<string, unknown> = {},
-) {
+async function createGitFixtureCheckout(directory: string, manifest: Record<string, unknown> = {}) {
   // Keep fixture-local identity authoritative during candidate rebases.
   isolateGitIdentity();
   const seed = await getOrCreatePromise(gitFixtureSeeds, JSON.stringify(manifest), async () => {
@@ -247,7 +244,7 @@ async function createGitFixtureSeed(directory: string, manifest: Record<string, 
   return { root, remote, beforeSha };
 }
 
-export async function advanceFixtureRemote(remote: string) {
+async function advanceFixtureRemote(remote: string) {
   await fs.writeFile(path.join(remote, "candidate.txt"), "candidate\n");
   await runFixtureGit(remote, "add", ".");
   await runFixtureGit(remote, "commit", "-m", "candidate");

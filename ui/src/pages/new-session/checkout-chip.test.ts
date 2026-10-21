@@ -1,11 +1,13 @@
 import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resolveCheckoutChip } from "./checkout-chip.ts";
 import { CheckoutChip } from "./checkout-chip.tsx";
 import type { DraftRepositoryState } from "./discovery.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
+import type { DraftRepositoryRead } from "./draft-repository-state.ts";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 type CheckoutFixture = {
@@ -19,6 +21,8 @@ type CheckoutFixture = {
   repositoryUnavailable?: boolean;
   branches: Omit<Extract<DraftRepositoryState, { kind: "git" }>, "kind"> | null;
   branchesLoading: boolean;
+  repositoryRead?: DraftRepositoryRead<unknown>;
+  checkoutRead?: DraftRepositoryRead<unknown>;
   baseRef: string;
   worktreeName: string;
   submitting: boolean;
@@ -45,6 +49,9 @@ function mountCheckout(initial: CheckoutFixture) {
       get: () => (params().repository ? { url: "https://example.com/repo.git" } : undefined),
     },
     currentCheckoutUnavailableReason: { get: () => params().currentCheckoutUnavailableReason },
+    repositoryState: {
+      get: () => ({ repositoryRead: params().repositoryRead, checkoutRead: params().checkoutRead }),
+    },
     repository: {
       get: () => {
         const current = params();
@@ -412,6 +419,85 @@ describe("Checkout chip state", () => {
       );
     },
   );
+
+  it("preserves editable fields through repository discovery failure and retry", async () => {
+    const initial = createDeferred();
+    const initialRead = { completed: initial.promise };
+    const params: CheckoutFixture = {
+      state: { label: "New worktree" },
+      remotePlacement: false,
+      folderLabel: "Fixture project",
+      worktree: true,
+      worktreeAvailable: false,
+      branches: null,
+      branchesLoading: true,
+      repositoryRead: initialRead,
+      checkoutRead: initialRead,
+      currentCheckoutUnavailableReason: "Checking fixture checkout",
+      baseRef: "typed-branch",
+      worktreeName: "typed-name",
+      submitting: false,
+      pendingPlacement: false,
+      popoverOpen: true,
+      onPopoverShow: vi.fn(),
+      onPopoverHide: vi.fn(),
+      onPopoverAfterHide: vi.fn(),
+      onSelectWorktree: vi.fn(),
+      onBaseRefInput: vi.fn(),
+      onWorktreeNameInput: vi.fn(),
+      onConfirm: vi.fn(),
+    };
+    const { container, update } = mountCheckout(params);
+    await waitForSolid(() =>
+      expect(
+        container.querySelector(".new-session-page__checkout-popover")?.getAttribute("data-phase"),
+      ).toBe("open"),
+    );
+    const branch = container.querySelector<HTMLInputElement>("#new-session-worktree-base-ref")!;
+    const name = container.querySelector<HTMLInputElement>("[data-worktree-name]")!;
+    name.focus();
+    expect(branch.placeholder).toBe("Loading…");
+    expect(container.querySelector<HTMLButtonElement>('[data-value="checkout"]')?.disabled).toBe(
+      true,
+    );
+    initial.reject(new Error("Fixture branch lookup failed"));
+    update({
+      ...params,
+      branchesLoading: false,
+      repositoryUnavailable: true,
+      currentCheckoutUnavailableReason: "Fixture checkout unavailable",
+    });
+    await waitForSolid(() => expect(branch.placeholder).toBe("From"));
+    expect(container.querySelector("#new-session-worktree-base-ref")).toBe(branch);
+    expect(container.querySelector("[data-worktree-name]")).toBe(name);
+    expect(document.activeElement).toBe(name);
+    expect([branch.value, name.value]).toEqual(["typed-branch", "typed-name"]);
+
+    const retry = createDeferred();
+    const retryRead = { completed: retry.promise };
+    update({ ...params, repositoryRead: retryRead, checkoutRead: retryRead });
+    const branches = { repoRoot: "/fixture", branches: [{ name: "main", kind: "local" as const }] };
+    update({
+      ...params,
+      repositoryRead: retryRead,
+      checkoutRead: retryRead,
+      currentCheckoutUnavailableReason: undefined,
+      branchesLoading: false,
+      branches,
+      worktreeAvailable: true,
+    });
+    retry.resolve();
+    await waitForSolid(() =>
+      expect(container.querySelector('[data-worktree-suggestion="main"]')).not.toBeNull(),
+    );
+    expect(container.querySelector("#new-session-worktree-base-ref")).toBe(branch);
+    expect(container.querySelector("[data-worktree-name]")).toBe(name);
+    expect(document.activeElement).toBe(name);
+    expect([branch.value, name.value]).toEqual(["typed-branch", "typed-name"]);
+    expect(container.querySelector<HTMLButtonElement>('[data-value="checkout"]')?.disabled).toBe(
+      false,
+    );
+  });
 
   it("keeps suggestion identities current and only confirms valid input", async () => {
     const onConfirm = vi.fn();

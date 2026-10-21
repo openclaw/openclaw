@@ -321,7 +321,7 @@ extensions/google/music-generation-provider.ts	1
 extensions/google/oauth-token-shared.ts	1
 extensions/google/provider-registration.ts	2
 extensions/google/realtime-voice-provider.ts	3
-extensions/google/transport-stream.ts	11
+extensions/google/transport-stream.ts	10
 extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
 extensions/googlechat/src/approval-card-actions.ts	1
@@ -489,7 +489,7 @@ extensions/memory-wiki/src/apply.ts	1
 extensions/memory-wiki/src/bounded-walk.ts	1
 extensions/memory-wiki/src/cli.ts	3
 extensions/memory-wiki/src/compiled-cache.ts	1
-extensions/memory-wiki/src/gateway.ts	3
+extensions/memory-wiki/src/gateway.ts	2
 extensions/memory-wiki/src/log.ts	1
 extensions/memory-wiki/src/mutation-coordinator.ts	1
 extensions/memory-wiki/src/tool.ts	2
@@ -2289,7 +2289,7 @@ src/secrets/store/secret-store.ts	2
 src/secrets/target-registry-query.ts	1
 src/security/audit-channel.ts	4
 src/security/audit-extra.summary.ts	2
-src/security/audit-extra.sync.ts	12
+src/security/audit-extra.sync.ts	8
 src/security/audit-model-refs.ts	5
 src/security/audit-plugins-trust.ts	5
 src/security/config-regex.ts	1
@@ -2425,7 +2425,6 @@ ui/src/app/web-push.runtime.ts	1
 ui/src/components/app-sidebar-session-narration.ts	4
 ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
-ui/src/components/config-form-copy-on-write.ts	1
 ui/src/components/config-form.analyze.ts	1
 ui/src/components/desktop/desktop-client.ts	2
 ui/src/components/desktop/desktop-mobile-keyboard.ts	1
@@ -2452,7 +2451,6 @@ ui/src/lib/chat/outbox-store-codec.ts	1
 ui/src/lib/chat/outbox-store.ts	1
 ui/src/lib/chat/tool-call-patch.ts	1
 ui/src/lib/chat/tool-cards.ts	1
-ui/src/lib/config-form-utils.ts	1
 ui/src/lib/config/config-draft-model.ts	2
 ui/src/lib/keyboard-shortcuts.ts	1
 ui/src/lib/nodes/index.ts	2
