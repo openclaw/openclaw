@@ -8,6 +8,19 @@ const baseParams = {
   token: "ollama-local",
   timeoutMs: 5000,
 };
+const malformedResponse =
+  "Malformed balance response. Check the configured Ollama server's /api/balance response, then retry.";
+
+function fetchUsage(
+  body: unknown,
+  overrides: Partial<Parameters<typeof fetchOllamaUsage>[0]> = {},
+) {
+  return fetchOllamaUsage({
+    ...baseParams,
+    fetchFn: vi.fn(async () => Response.json(body)),
+    ...overrides,
+  });
+}
 
 describe("Ollama balance usage", () => {
   it.each(["literal", "SecretRef"] as const)(
@@ -85,24 +98,22 @@ describe("Ollama balance usage", () => {
   });
 
   it("maps current plan balance to a resettable included window", async () => {
-    const snapshot = await fetchOllamaUsage({
-      ...baseParams,
-      baseUrl: "https://ollama.example",
-      token: "remote-key",
-      fetchFn: vi.fn(async () =>
-        Response.json({
-          included: {
-            allowance_usd: 100,
-            balance_usd: 72.5,
-            period: { until: "2026-10-15T09:30:00Z" },
-          },
-          purchased: { balance_usd: 25 },
-        }),
-      ),
+    const snapshot = await fetchUsage(
+      {
+        included: {
+          allowance_usd: 100,
+          balance_usd: 72.5,
+          period: { until: "2026-10-15T09:30:00Z" },
+        },
+        purchased: { balance_usd: 25 },
+      },
+      { baseUrl: "https://ollama.example", token: "remote-key" },
+    );
+    expect(snapshot.windows[0]).toMatchObject({
+      label: "Included",
+      usedPercent: expect.closeTo(27.5),
+      resetAt: Date.parse("2026-10-15T09:30:00Z"),
     });
-    expect(snapshot.windows[0]?.label).toBe("Included");
-    expect(snapshot.windows[0]?.usedPercent).toBeCloseTo(27.5);
-    expect(snapshot.windows[0]?.resetAt).toBe(Date.parse("2026-10-15T09:30:00Z"));
     expect(snapshot.billing).toEqual([
       { type: "balance", label: "Included balance", amount: 72.5, unit: "USD" },
       { type: "balance", label: "Purchased balance", amount: 25, unit: "USD" },
@@ -110,40 +121,27 @@ describe("Ollama balance usage", () => {
   });
 
   it.each([
-    [403, "HTTP 403: Check the configured Ollama server's access permissions"],
-    [500, "HTTP 500: Check the configured Ollama server and retry"],
-  ])(
-    "gives recovery guidance for HTTP %i without exposing response contents",
-    async (status, error) => {
-      const snapshot = await fetchOllamaUsage({
-        ...baseParams,
-        fetchFn: vi.fn(async () => new Response("private", { status })),
-      });
-      expect(snapshot.error).toBe(error);
-      expect(snapshot.windows).toEqual([]);
-    },
-  );
-
-  it("gives recovery guidance when the server is unreachable", async () => {
-    const snapshot = await fetchOllamaUsage({
-      ...baseParams,
-      fetchFn: vi.fn(async () => {
+    [
+      "HTTP 403",
+      async () => new Response("private", { status: 403 }),
+      "HTTP 403: Check the configured Ollama server's access permissions",
+    ],
+    [
+      "HTTP 500",
+      async () => new Response("private", { status: 500 }),
+      "HTTP 500: Check the configured Ollama server and retry",
+    ],
+    [
+      "unreachable server",
+      async () => {
         throw new Error("private network details");
-      }),
-    });
-    expect(snapshot.error).toBe(
+      },
       "Usage unavailable. Check that the configured Ollama server is reachable, then retry.",
-    );
-  });
-
-  it("gives recovery guidance for an invalid JSON response", async () => {
-    const snapshot = await fetchOllamaUsage({
-      ...baseParams,
-      fetchFn: vi.fn(async () => new Response("private invalid JSON")),
-    });
-    expect(snapshot.error).toBe(
-      "Malformed balance response. Check the configured Ollama server's /api/balance response, then retry.",
-    );
+    ],
+    ["invalid JSON", async () => new Response("private invalid JSON"), malformedResponse],
+  ] as const)("gives safe recovery guidance for %s", async (_name, response, error) => {
+    const snapshot = await fetchOllamaUsage({ ...baseParams, fetchFn: vi.fn(response) });
+    expect(snapshot).toMatchObject({ error, windows: [] });
   });
 
   it("does not manufacture a quota from malformed or empty responses", async () => {
@@ -152,13 +150,10 @@ describe("Ollama balance usage", () => {
       { included: {} },
       { included: { session: { remaining_percent: 200 } } },
     ]) {
-      const snapshot = await fetchOllamaUsage({
-        ...baseParams,
-        fetchFn: vi.fn(async () => Response.json(body)),
-      });
+      const snapshot = await fetchUsage(body);
       expect(snapshot.error).toBe(
         body === null
-          ? "Malformed balance response. Check the configured Ollama server's /api/balance response, then retry."
+          ? malformedResponse
           : "No balance data. Check the configured server's Ollama Cloud account.",
       );
       expect(snapshot.windows).toEqual([]);

@@ -1,35 +1,31 @@
 import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pullOllamaModel } from "./setup-pull.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const baseUrl = "http://127.0.0.1:11434";
+
+function mockPull(body: BodyInit, update: () => void = vi.fn()) {
+  const release = vi.fn(async () => {});
+  fetchWithSsrFGuardMock.mockResolvedValue({ response: new Response(body), release });
+  const progress = { update, stop: vi.fn() };
+  const prompter = createTestWizardPrompter({ progress: () => progress });
+  return { release, progress, pull: () => pullOllamaModel(baseUrl, "gemma4:e2b", prompter) };
+}
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
-  return {
-    ...actual,
-    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-  };
+  return { ...actual, fetchWithSsrFGuard: fetchWithSsrFGuardMock };
 });
 
 describe("Ollama onboarding model pulls", () => {
-  afterEach(() => {
-    fetchWithSsrFGuardMock.mockReset();
-  });
+  afterEach(() => fetchWithSsrFGuardMock.mockReset());
 
   it("uses the canonical Ollama model request field and requires its success terminal", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response('{"status":"pulling manifest"}\n{"status":"success"}\n'),
-      release,
-    });
-    const progress = { update: vi.fn(), stop: vi.fn() };
-    const prompter = { progress: vi.fn(() => progress) } as unknown as WizardPrompter;
-
-    await expect(pullOllamaModel("http://127.0.0.1:11434", "gemma4:e2b", prompter)).resolves.toBe(
-      true,
+    const { release, progress, pull } = mockPull(
+      '{"status":"pulling manifest"}\n{"status":"success"}\n',
     );
+    await expect(pull()).resolves.toBe(true);
 
     const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as { init?: { body?: string } };
     expect(JSON.parse(request.init?.body ?? "null")).toEqual({ model: "gemma4:e2b" });
@@ -45,14 +41,8 @@ describe("Ollama onboarding model pulls", () => {
     { label: "malformed stream", body: "not valid json\n" },
     { label: "incomplete trailing record", body: '{"status":"success"' },
   ])("does not report a completed model pull for an $label", async ({ body }) => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({ response: new Response(body), release });
-    const progress = { update: vi.fn(), stop: vi.fn() };
-    const prompter = { progress: vi.fn(() => progress) } as unknown as WizardPrompter;
-
-    await expect(pullOllamaModel("http://127.0.0.1:11434", "gemma4:e2b", prompter)).resolves.toBe(
-      false,
-    );
+    const { release, progress, pull } = mockPull(body);
+    await expect(pull()).resolves.toBe(false);
 
     expect(progress.stop).toHaveBeenCalledWith(
       "Failed to download gemma4:e2b: pull stream ended before success",
@@ -75,16 +65,8 @@ describe("Ollama onboarding model pulls", () => {
       ]),
     },
   ])("accepts $label", async ({ body }) => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(body),
-      release: vi.fn(async () => {}),
-    });
-    const progress = { update: vi.fn(), stop: vi.fn() };
-    const prompter = { progress: vi.fn(() => progress) } as unknown as WizardPrompter;
-
-    await expect(pullOllamaModel("http://127.0.0.1:11434", "gemma4:e2b", prompter)).resolves.toBe(
-      true,
-    );
+    const { progress, pull } = mockPull(body);
+    await expect(pull()).resolves.toBe(true);
     expect(progress.stop).toHaveBeenCalledWith("Downloaded gemma4:e2b");
   });
 
@@ -92,22 +74,13 @@ describe("Ollama onboarding model pulls", () => {
     { status: "pulling manifest" },
     { status: "pulling abcdef123456", total: 100, completed: 40 },
   ])("reports progress failures instead of a successful pull for %j", async (chunk) => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(`${JSON.stringify(chunk)}\n{"status":"success"}\n`),
-      release,
-    });
-    const progress = {
-      update: vi.fn(() => {
+    const { release, progress, pull } = mockPull(
+      `${JSON.stringify(chunk)}\n{"status":"success"}\n`,
+      vi.fn(() => {
         throw new Error("progress display failed");
       }),
-      stop: vi.fn(),
-    };
-    const prompter = createTestWizardPrompter({ progress: () => progress });
-
-    await expect(pullOllamaModel("http://127.0.0.1:11434", "gemma4:e2b", prompter)).resolves.toBe(
-      false,
     );
+    await expect(pull()).resolves.toBe(false);
     expect(progress.stop).toHaveBeenCalledWith(
       "Failed to download gemma4:e2b: progress display failed",
     );
@@ -115,23 +88,14 @@ describe("Ollama onboarding model pulls", () => {
   });
 
   it("coerces non-Error stream failures through the shared error contract", async () => {
-    const release = vi.fn(async () => {});
-    const response = new Response(
+    const { release, progress, pull } = mockPull(
       new ReadableStream<Uint8Array>({
         pull(controller) {
           controller.error({ code: "OLLAMA_PULL_INTERRUPTED" });
         },
       }),
     );
-    fetchWithSsrFGuardMock.mockResolvedValue({ response, release });
-    const progress = { update: vi.fn(), stop: vi.fn() };
-    const prompter = {
-      progress: vi.fn(() => progress),
-    } as unknown as WizardPrompter;
-
-    await expect(pullOllamaModel("http://127.0.0.1:11434", "gemma4:e2b", prompter)).resolves.toBe(
-      false,
-    );
+    await expect(pull()).resolves.toBe(false);
 
     expect(progress.stop).toHaveBeenCalledWith(
       expect.stringContaining("Failed to download gemma4:e2b: Non-Error rejection"),
@@ -152,19 +116,8 @@ describe("Ollama onboarding model pulls", () => {
         canceled = true;
       },
     });
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(body, { status: 200 }),
-      release,
-    });
-    const progress = { update: vi.fn(), stop: vi.fn() };
-    const prompter = {
-      progress: vi.fn(() => progress),
-    } as unknown as WizardPrompter;
-
-    await expect(pullOllamaModel("http://127.0.0.1:11434", "gemma4:e2b", prompter)).resolves.toBe(
-      false,
-    );
+    const { release, progress, pull } = mockPull(body);
+    await expect(pull()).resolves.toBe(false);
 
     expect(readCount).toBeGreaterThan(16);
     expect(readCount).toBeLessThan(32);

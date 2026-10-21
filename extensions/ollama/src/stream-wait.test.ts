@@ -1,6 +1,6 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { guardedFetch } = vi.hoisted(() => ({
   guardedFetch: vi.fn<typeof fetchWithSsrFGuard>(),
@@ -25,6 +25,22 @@ const model: Model = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
+const notify = vi.fn();
+const start = (options: { signal?: AbortSignal } = {}, id = model.id) =>
+  createOllamaStreamFn(model.baseUrl)(
+    { ...model, id },
+    { messages: [] },
+    { onProviderWait: notify, ...options },
+  );
+const pendingFetch = () => {
+  const pending = Promise.withResolvers<Awaited<ReturnType<typeof fetchWithSsrFGuard>>>();
+  guardedFetch.mockReturnValue(pending.promise);
+  return pending;
+};
+beforeEach(() => {
+  vi.useFakeTimers();
+  notify.mockReset();
+});
 afterEach(() => {
   vi.useRealTimers();
   guardedFetch.mockReset();
@@ -32,8 +48,6 @@ afterEach(() => {
 
 describe("native Ollama held request status", () => {
   it("uses honest fallback wording after HTTP acceptance and clears on the first record", async () => {
-    vi.useFakeTimers();
-    const notify = vi.fn();
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
     const body = new ReadableStream<Uint8Array>({
       start(value) {
@@ -45,46 +59,28 @@ describe("native Ollama held request status", () => {
       response: new Response(body),
       release: async () => {},
     });
-    const stream = await createOllamaStreamFn(model.baseUrl)(
-      model,
-      { messages: [] },
-      {
-        onProviderWait: notify,
-      },
-    );
+    const stream = await start();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(notify.mock.calls).toEqual([["response"]]);
-    controller?.enqueue(
-      new TextEncoder().encode(
-        JSON.stringify({ message: { role: "assistant", content: "ok" }, done: false }) + "\n",
-      ),
-    );
+    const enqueue = (content: string, done: boolean) =>
+      controller?.enqueue(
+        new TextEncoder().encode(
+          `${JSON.stringify({ message: { role: "assistant", content }, done })}\n`,
+        ),
+      );
+    enqueue("ok", false);
     await vi.advanceTimersByTimeAsync(0);
     expect(notify.mock.calls).toEqual([["response"], [null]]);
-    controller?.enqueue(
-      new TextEncoder().encode(
-        JSON.stringify({ message: { role: "assistant", content: "" }, done: true }) + "\n",
-      ),
-    );
+    enqueue("", true);
     controller?.close();
     expect((await stream.result()).stopReason).toBe("stop");
     expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(["cancel", "failure"] as const)("clears a held request on %s", async (ending) => {
-    vi.useFakeTimers();
-    const notify = vi.fn();
     const controller = new AbortController();
-    const pending = Promise.withResolvers<Awaited<ReturnType<typeof fetchWithSsrFGuard>>>();
-    guardedFetch.mockReturnValue(pending.promise);
-    const stream = await createOllamaStreamFn(model.baseUrl)(
-      model,
-      { messages: [] },
-      {
-        onProviderWait: notify,
-        signal: controller.signal,
-      },
-    );
+    const pending = pendingFetch();
+    const stream = await start({ signal: controller.signal });
     await vi.advanceTimersByTimeAsync(1_000);
     expect(notify.mock.calls).toEqual([["response"]]);
     if (ending === "cancel") {
@@ -98,15 +94,8 @@ describe("native Ollama held request status", () => {
   });
 
   it("does not label a held cloud request as a local-model wait", async () => {
-    vi.useFakeTimers();
-    const notify = vi.fn();
-    const pending = Promise.withResolvers<Awaited<ReturnType<typeof fetchWithSsrFGuard>>>();
-    guardedFetch.mockReturnValue(pending.promise);
-    const stream = await createOllamaStreamFn(model.baseUrl)(
-      { ...model, id: "qwen3:cloud" },
-      { messages: [] },
-      { onProviderWait: notify },
-    );
+    const pending = pendingFetch();
+    const stream = await start({}, "qwen3:cloud");
     await vi.advanceTimersByTimeAsync(1_000);
     expect(notify).not.toHaveBeenCalled();
     pending.reject(new Error("request stopped"));
