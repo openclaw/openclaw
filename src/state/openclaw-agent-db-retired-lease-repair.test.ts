@@ -1,8 +1,8 @@
-import { afterEach, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { expect, it } from "vitest";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
+import { useAgentDatabaseDirectories } from "./openclaw-agent-db-lifecycle.test-support.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { migrateOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
@@ -11,16 +11,20 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import { expectRows, readRow as row } from "./openclaw-state-db-fixtures.test-support.js";
+import {
+  expectRow,
+  expectRows,
+  readRow as row,
+} from "./openclaw-state-db-fixtures.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAgentDatabaseDirectories();
 type Database = EngineConnection;
 const leaseTable = "SELECT name FROM sqlite_schema WHERE name = 'state_leases'";
 const metadata = "SELECT * FROM schema_meta WHERE meta_key = 'primary'";
 
 function fixture(retired = false) {
-  const stateDir = makeTempDir(tempDirs, "agent-db-retired-lease-");
+  const stateDir = tempDirs.make("agent-db-retired-lease-");
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
   closeOpenClawAgentDatabasesForTest();
@@ -35,10 +39,8 @@ function fixture(retired = false) {
   const before = withDb((db) => row(db, metadata), true);
   const verify = (run: (db: Database) => void) =>
     withDb((db) => {
-      expect(row(db, metadata)).toEqual(before);
-      expect(row(db, "PRAGMA user_version")).toEqual({
-        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      });
+      expectRow(db, metadata, before);
+      expectRow(db, "PRAGMA user_version", { user_version: OPENCLAW_AGENT_SCHEMA_VERSION });
       run(db);
     }, true);
   return { databasePath, env, withDb, verify };
@@ -70,37 +72,25 @@ function migrate(databasePath: string, env: NodeJS.ProcessEnv) {
   );
 }
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  cleanupTempDirs(tempDirs);
-});
-
 it("repairs a mis-stamped v17 database while preserving auth and ownership", async () => {
   const { env, withDb, verify } = fixture(true);
   withDb((database) => {
-    database
-      .prepare(
-        "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES (?, ?, ?)",
-      )
-      .run("last-good", '{"profile":"primary"}', 10);
-    database
-      .prepare(
-        "INSERT INTO auth_profile_store (store_key, store_json, updated_at) VALUES (?, ?, ?)",
-      )
-      .run("primary", '{"profiles":{"primary":{"provider":"openai"}}}', 10);
+    database.exec(`
+      INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES ('last-good', '{"profile":"primary"}', 10);
+      INSERT INTO auth_profile_store (store_key, store_json, updated_at) VALUES ('primary', '{"profiles":{"primary":{"provider":"openai"}}}', 10);
+    `);
   });
 
   expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
   expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
 
   verify((repaired) => {
-    expect(
-      row(repaired, "SELECT state_json FROM auth_profile_state WHERE state_key = 'last-good'"),
-    ).toEqual({ state_json: '{"profile":"primary"}' });
-    expect(
-      row(repaired, "SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'"),
-    ).toEqual({ store_json: '{"profiles":{"primary":{"provider":"openai"}}}' });
+    expectRow(repaired, "SELECT state_json FROM auth_profile_state WHERE state_key = 'last-good'", {
+      state_json: '{"profile":"primary"}',
+    });
+    expectRow(repaired, "SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'", {
+      store_json: '{"profiles":{"primary":{"provider":"openai"}}}',
+    });
     expectRows(
       repaired,
       `SELECT type, name FROM sqlite_schema
@@ -108,7 +98,7 @@ it("repairs a mis-stamped v17 database while preserving auth and ownership", asy
       [],
     );
     expectRows(repaired, "SELECT tbl, idx FROM sqlite_stat1 WHERE tbl = 'state_leases'", []);
-    expect(row(repaired, "PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
+    expectRow(repaired, "PRAGMA integrity_check", { integrity_check: "ok" });
     expectRows(repaired, "PRAGMA foreign_key_check", []);
   });
 });
@@ -118,7 +108,7 @@ it("leaves a clean v17 database unchanged", async () => {
   const beforeSchemaVersion = withDb((db) => row(db, "PRAGMA schema_version"), true);
   await migrate(databasePath, env);
   verify((after) => {
-    expect(row(after, "PRAGMA schema_version")).toEqual(beforeSchemaVersion);
+    expectRow(after, "PRAGMA schema_version", beforeSchemaVersion);
     expect(row(after, leaseTable)).toBeUndefined();
   });
 });
@@ -178,7 +168,7 @@ it("repairs the same canonical drift through the writable schema owner", () => {
       { agentId: "worker-1", env },
     ),
   ).toEqual({ found: true, value: { count: 1 } });
-  withDb((db) => expect(row(db, leaseTable)).toEqual({ name: "state_leases" }), true);
+  withDb((db) => expectRow(db, leaseTable, { name: "state_leases" }), true);
 
   const repaired = openOpenClawAgentDatabase({ agentId: "worker-1", env });
 
