@@ -1,3 +1,4 @@
+import type { RealtimeVoiceBridgeEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -190,7 +191,7 @@ describe("OpenAI realtime voice bridge events", () => {
       const { bridge, socket, onAudio } = await connectBridge({
         onAudio: vi.fn(),
         getPlaybackState: () => [],
-        onEvent: (event) => {
+        onEvent: (event: RealtimeVoiceBridgeEvent) => {
           if (event.direction === "server" && event.type === interruptOn) {
             bridge.handleBargeIn?.({ force: true });
           }

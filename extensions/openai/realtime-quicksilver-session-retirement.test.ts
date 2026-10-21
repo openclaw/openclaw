@@ -42,13 +42,13 @@ function offerRequest(token: string) {
 const offer = (realtime: TestBroker, token: string, origin?: string) =>
   postOffer(realtime, { token, body: AUDIO_ONLY_SDP, ...(origin ? { origin } : {}) });
 
-async function expectRetrySchedule(readAttempts: () => number, check = expect) {
+async function expectRetrySchedule(readAttempts: () => number, check: typeof expect.soft = expect) {
   for (const [delay, attempts] of [
     [999, 1],
     [1, 2],
     [4_999, 2],
     [1, 3],
-  ]) {
+  ] as const) {
     await vi.advanceTimersByTimeAsync(delay);
     check(readAttempts()).toBe(attempts);
   }

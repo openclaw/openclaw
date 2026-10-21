@@ -429,6 +429,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
   });
 });
 
+type Socket = ReturnType<typeof requireSocket>;
 const responses = (socket: Socket, type = "response.create") =>
   parseSent(socket).filter((event) => event.type === type);
 function playResponse(socket: Socket, responseId: string, itemId: string) {

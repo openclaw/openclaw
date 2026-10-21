@@ -566,6 +566,7 @@ describe("GPT-Live browser session lifecycle", () => {
           /<shared_session_history>\n(.*)\n<\/shared_session_history>$/s,
         );
         expect(background).not.toBeNull();
+        expect(Buffer.byteLength(background[1], "utf8")).toBeLessThanOrEqual(8_000);
         expect(JSON.parse(background[1])).toEqual(request.initialItems);
         expect(background[1]).not.toContain("</shared_session_history>");
         for (const instruction of [
