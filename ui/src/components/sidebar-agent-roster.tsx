@@ -141,7 +141,7 @@ export function SidebarAgentRoster(props: RosterProps) {
       await currentContext.agents.refreshList();
     }
   };
-  const agentMenu = (card: () => { id: string; name: string }) => (
+  const agentMenu = (card: () => { id: string; name: string }, pinned = false) => (
     <Menu
       id={`sidebar-agent-roster-${card().id}`}
       class="sidebar-customize-menu sidebar-agent-roster__menu"
@@ -183,18 +183,22 @@ export function SidebarAgentRoster(props: RosterProps) {
         }
       }}
       items={[
-        {
-          id: "pin",
-          label: t("nav.pin"),
-          class: "sidebar-customize-menu__item",
-          icon: <Icon name="pin" />,
-        },
-        {
-          id: "sessions",
-          label: t("agentsHome.viewSessions"),
-          class: "sidebar-customize-menu__item",
-          icon: <Icon name="listTree" />,
-        },
+        ...(!pinned
+          ? [
+              {
+                id: "pin",
+                label: t("nav.pin"),
+                class: "sidebar-customize-menu__item",
+                icon: <Icon name="pin" />,
+              },
+              {
+                id: "sessions",
+                label: t("agentsHome.viewSessions"),
+                class: "sidebar-customize-menu__item",
+                icon: <Icon name="listTree" />,
+              },
+            ]
+          : []),
         ...(canCreateClawDraft(context)
           ? [
               {
@@ -205,20 +209,24 @@ export function SidebarAgentRoster(props: RosterProps) {
               },
             ]
           : []),
-        {
-          id: "settings",
-          label: t("nav.settings"),
-          class: "sidebar-customize-menu__item",
-          icon: <Icon name="settings" />,
-        },
-        {
-          id: "delete",
-          label: t("common.delete"),
-          class: "sidebar-customize-menu__item",
-          icon: <Icon name="trash" />,
-          variant: "danger",
-          disabled: !canDeleteAgent(card().id),
-        },
+        ...(!pinned
+          ? [
+              {
+                id: "settings",
+                label: t("nav.settings"),
+                class: "sidebar-customize-menu__item",
+                icon: <Icon name="settings" />,
+              },
+              {
+                id: "delete",
+                label: t("common.delete"),
+                class: "sidebar-customize-menu__item",
+                icon: <Icon name="trash" />,
+                variant: "danger" as const,
+                disabled: !canDeleteAgent(card().id),
+              },
+            ]
+          : []),
       ]}
     />
   );
@@ -294,6 +302,9 @@ export function SidebarAgentRoster(props: RosterProps) {
                           </span>
                         </span>
                       </openclaw-tooltip>
+                      <Show when={canCreateClawDraft(context)}>
+                        <span class="sidebar-pinned-agent__actions">{agentMenu(card, true)}</span>
+                      </Show>
                     </div>
                   );
                 }}

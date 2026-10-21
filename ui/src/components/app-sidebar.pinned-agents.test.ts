@@ -216,3 +216,48 @@ it("offers Create Claw from the agent-row menu when the Gateway supports creatio
     expect(request).toHaveBeenCalledWith("claws.drafts.create", { agentId: "main" }),
   );
 });
+
+it("keeps Create Claw available for pinned agents without restoring their full menu", async () => {
+  const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
+  context.runtimeConfig.state.configForm = {
+    gateway: { controlUi: { experimental: { claws: true } } },
+  };
+  context.navigation.update({ pinnedAgentIds: ["main"] });
+  gatewayHarness.publish({
+    hello: gatewayHelloForMethods([
+      ...SESSION_MUTATION_TEST_METHODS,
+      "claws.drafts.create",
+      "chat.send",
+    ]),
+  });
+  sidebar.sidebarAgentsMode = "roster";
+  await vi.waitFor(() =>
+    expect(sidebar.querySelector('[data-pinned-agent="main"]')).not.toBeNull(),
+  );
+  await settleRoster(sidebar);
+
+  const previousRequest = request.getMockImplementation()!;
+  request.mockImplementation((...args) =>
+    args[0] === "claws.drafts.create"
+      ? Promise.reject(new Error("The agent workspace is unavailable."))
+      : previousRequest(...args),
+  );
+  const pinnedAgent = sidebar.querySelector('[data-pinned-agent="main"]')!;
+  const trigger = pinnedAgent.querySelector<HTMLButtonElement>(
+    'button[aria-label="Options for Harbor"]',
+  );
+  expect(trigger).not.toBeNull();
+  trigger!.click();
+  await vi.waitFor(() =>
+    expect(pinnedAgent.querySelector('[data-value="create-claw"]')).not.toBeNull(),
+  );
+  expect(pinnedAgent.querySelector('[data-value="pin"]')).toBeNull();
+  expect(pinnedAgent.querySelector('[data-value="sessions"]')).toBeNull();
+  expect(pinnedAgent.querySelector('[data-value="settings"]')).toBeNull();
+  expect(pinnedAgent.querySelector('[data-value="delete"]')).toBeNull();
+  pinnedAgent.querySelector<HTMLElement>('[data-value="create-claw"]')!.click();
+  await vi.waitFor(() =>
+    expect(request).toHaveBeenCalledWith("claws.drafts.create", { agentId: "main" }),
+  );
+  expect(context.navigation.snapshot.pinnedAgentIds).toEqual(["main"]);
+});
