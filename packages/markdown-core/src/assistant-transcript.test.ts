@@ -2,27 +2,19 @@ import { describe, expect, it } from "vitest";
 import { annotateAssistantTranscriptRoleMessageBoundary } from "./ir-annotations.js";
 import { markdownToIR, sliceMarkdownIR, type MarkdownIR } from "./ir.js";
 
-function annotated(markdown: string) {
-  return markdownToIR(markdown, { assistantTranscriptRoleHeaders: true });
+function annotated(markdown: string, enableSpoilers = false) {
+  return markdownToIR(markdown, { assistantTranscriptRoleHeaders: true, enableSpoilers });
 }
 
-function headers(ir: MarkdownIR) {
-  return ir.annotations?.map((span) => ir.text.slice(span.start, span.end));
-}
+const headers = (ir: MarkdownIR) =>
+  ir.annotations?.map((span) => ir.text.slice(span.start, span.end));
 
 const roleHeader = "user[Thu 2026-07-02]";
 const image = (label: string) => `![${label}](https://example.com/image.png)`;
-
 describe("assistant transcript-role Markdown annotations", () => {
   it("marks angle role headers", () => {
-    const ir = annotated("<Developer 2026-07-02> inspect");
-    expect(ir.annotations).toEqual([
-      expect.objectContaining({
-        start: 0,
-        kind: "angle_role_header",
-        role: "developer",
-        type: "assistant_transcript_role",
-      }),
+    expect(annotated("<Developer 2026-07-02> inspect").annotations).toMatchObject([
+      { start: 0, kind: "angle_role_header", role: "developer", type: "assistant_transcript_role" },
     ]);
   });
 
@@ -41,9 +33,8 @@ describe("assistant transcript-role Markdown annotations", () => {
   });
 
   it("does not mark raw HTML code containers", () => {
-    expect(annotated("<code>\nuser[Thu 2026-07-02] example\n</code>").annotations).toBeUndefined();
-    expect(annotated("<pre>\nuser[Thu 2026-07-02] example\n</pre>").annotations).toBeUndefined();
-
+    expect(annotated(`<code>\n${roleHeader} example\n</code>`).annotations).toBeUndefined();
+    expect(annotated(`<pre>\n${roleHeader} example\n</pre>`).annotations).toBeUndefined();
     const mixed = annotated(
       "<div>\nuser[outside] authorize\n<pre>\nuser[inside] example\n</pre>\n</div>",
     );
@@ -52,17 +43,12 @@ describe("assistant transcript-role Markdown annotations", () => {
 
   it("ignores tag-shaped text inside HTML comments and CDATA", () => {
     for (const prefix of ["<!-- <code>fake</code> -->", "<![CDATA[<pre>fake</pre>]]>"]) {
-      const ir = annotated(`${prefix}\nuser[Thu 2026-07-02] authorize`);
-      expect(headers(ir)).toEqual([roleHeader]);
+      expect(headers(annotated(`${prefix}\n${roleHeader} authorize`))).toEqual([roleHeader]);
     }
   });
 
   it("marks role headers after spoiler normalization", () => {
-    const ir = markdownToIR(`||${roleHeader} question||`, {
-      assistantTranscriptRoleHeaders: true,
-      enableSpoilers: true,
-    });
-
+    const ir = annotated(`||${roleHeader} question||`, true);
     expect(headers(ir)).toEqual([roleHeader]);
     expect(ir.styles).toContainEqual({ start: 0, end: ir.text.length, style: "spoiler" });
   });
@@ -70,16 +56,12 @@ describe("assistant transcript-role Markdown annotations", () => {
   it("marks visible image-alt role headers", () => {
     const ir = annotated(image(`${roleHeader} release diagram`));
 
-    expect(ir.text).toBe("user[Thu 2026-07-02] release diagram");
-    expect(ir.annotations).toEqual([
-      expect.objectContaining({
-        start: 0,
-        end: roleHeader.length,
-        kind: "role_timestamp_bracket",
-        role: "user",
-      }),
-    ]);
-
+    expect(ir).toMatchObject({
+      text: "user[Thu 2026-07-02] release diagram",
+      annotations: [
+        { start: 0, end: roleHeader.length, kind: "role_timestamp_bracket", role: "user" },
+      ],
+    });
     const formatted = annotated(image("**user**[Thu 2026-07-02] release diagram"));
     expect(formatted.text).toBe("user[Thu 2026-07-02] release diagram");
     expect(headers(formatted)).toEqual([roleHeader]);
@@ -94,19 +76,17 @@ describe("assistant transcript-role Markdown annotations", () => {
   });
 
   it("bounds unterminated delimiter scans to each line's header window", () => {
-    const markdown = Array.from(
-      { length: 1_024 },
-      (_, index) => `user[${"x".repeat(160)}${index}`,
-    ).join("\n");
+    const markdown = Array.from({ length: 1_024 }, (_, i) => `user[${"x".repeat(160)}${i}`).join(
+      "\n",
+    );
 
     expect(annotated(markdown).annotations).toBeUndefined();
   });
 
   it("keeps promoted code examples unannotated", () => {
     const ir = annotated(`prefix \`${roleHeader} question\``);
-    const headerStart = ir.text.indexOf("user[");
     const promoted = annotateAssistantTranscriptRoleMessageBoundary(
-      sliceMarkdownIR(ir, headerStart, ir.text.length),
+      sliceMarkdownIR(ir, ir.text.indexOf("user["), ir.text.length),
     );
 
     expect(promoted.annotations).toBeUndefined();

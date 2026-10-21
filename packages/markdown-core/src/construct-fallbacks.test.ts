@@ -138,14 +138,10 @@ describe("applyConstructFallbacks", () => {
     }
   });
 
-  it("clips trailing empty list-marker provenance during finalization", () => {
-    const cases = [
-      { markdown: "-", construct: "bulletList" as const },
-      { markdown: "1.", construct: "orderedList" as const },
-    ];
-    for (const { markdown, construct } of cases) {
-      const ir = markdownToIR(markdown);
-      expect(project(ir, { [construct]: "strip" }).text, markdown).toBe("");
-    }
+  it.each([
+    ["-", "bulletList"],
+    ["1.", "orderedList"],
+  ] as const)("clips trailing empty %s provenance", (markdown, construct) => {
+    expect(project(markdownToIR(markdown), { [construct]: "strip" }).text).toBe("");
   });
 });

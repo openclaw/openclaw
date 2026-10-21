@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownToIR } from "./ir.js";
+import { markdownToIR, type MarkdownIR } from "./ir.js";
 import { renderMarkdownWithMarkers, type RenderOptions } from "./render.js";
 
 const renderOptions: RenderOptions = {
@@ -16,6 +16,9 @@ const renderOptions: RenderOptions = {
     close: "</a>",
   }),
 };
+function render(ir: MarkdownIR, styleMarkers = renderOptions.styleMarkers) {
+  return renderMarkdownWithMarkers(ir, { ...renderOptions, styleMarkers });
+}
 
 describe("renderMarkdownWithMarkers crossing spans", () => {
   it("prepares independent link copies before invoking callbacks", () => {
@@ -40,8 +43,7 @@ describe("renderMarkdownWithMarkers crossing spans", () => {
     );
 
     expect(seen).toEqual(["first", "second"]);
-    expect(first.href).toBe("first");
-    expect(second.href).toBe("changed by earlier callback");
+    expect([first.href, second.href]).toEqual(["first", "changed by earlier callback"]);
   });
 
   it.each([
@@ -56,7 +58,7 @@ describe("renderMarkdownWithMarkers crossing spans", () => {
     ],
   ])("preserves crossing text and formatting: %s", (markdown, html) => {
     const ir = markdownToIR(markdown, { enableSpoilers: true });
-    expect(renderMarkdownWithMarkers(ir, renderOptions)).toBe(html);
+    expect(render(ir)).toBe(html);
   });
 
   it("keeps marker callback order and link nesting for unsorted same-start styles", () => {
@@ -67,7 +69,7 @@ describe("renderMarkdownWithMarkers crossing spans", () => {
     });
 
     expect(
-      renderMarkdownWithMarkers(
+      render(
         {
           text: "abcd 🌍",
           styles: [
@@ -79,14 +81,7 @@ describe("renderMarkdownWithMarkers crossing spans", () => {
           ],
           links: [{ start: 0, end: 7, href: "https://example.com" }],
         },
-        {
-          ...renderOptions,
-          styleMarkers: {
-            bold: marker("b"),
-            italic: marker("i"),
-            blockquote: marker("blockquote"),
-          },
-        },
+        { bold: marker("b"), italic: marker("i"), blockquote: marker("blockquote") },
       ),
     ).toBe(
       '<blockquote data-open="1"><a href="https://example.com"><b data-open="2"><i data-open="3"><b data-open="4"><i data-open="5">ab</i></b>cd 🌍</i></b></a></blockquote>',
@@ -99,11 +94,8 @@ describe("renderMarkdownWithMarkers code content", () => {
     ["[`name `](https://example.com)", '<a href="https://example.com"><code>name </code></a>'],
     ["Copy `name ` next", "Copy <code>name </code> next"],
   ])("renders authored code whitespace: %s", (markdown, html) => {
-    expect(
-      renderMarkdownWithMarkers(markdownToIR(markdown), {
-        ...renderOptions,
-        styleMarkers: { code: { open: "<code>", close: "</code>" } },
-      }),
-    ).toBe(html);
+    expect(render(markdownToIR(markdown), { code: { open: "<code>", close: "</code>" } })).toBe(
+      html,
+    );
   });
 });
