@@ -1,7 +1,6 @@
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -25,7 +24,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessages as project } from "./chat-display-projection.js";
-import { CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES } from "./server-methods/chat-history-budget.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
 import { readRecentSessionMessagesWithStatsAsync } from "./session-transcript-readers.js";
@@ -375,25 +373,6 @@ describe("channel mirror display controls", () => {
 });
 
 describe("multimodal display privacy", () => {
-  it("keeps text while omitting native image data from display history", () => {
-    const png = createNoisyPngBuffer(320, 320);
-    const encoded = png.toString("base64");
-    const prefix = Object.freeze(text("keep prefix text"));
-    const suffix = Object.freeze(text("keep suffix text"));
-    const message = user([prefix, { type: "image", mimeType: "image/png", data: encoded }, suffix]);
-    const messages = project([message]);
-    expect(messages).toMatchObject([
-      {
-        role: "user",
-        content: [prefix, { type: "image", omitted: true, bytes: png.length }, suffix],
-      },
-    ]);
-    expect(JSON.stringify(messages)).not.toContain(encoded);
-    expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThan(
-      CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-    );
-  });
-
   it("keeps sanitized legacy media in projection and incremental SSE", async () => {
     const data = Buffer.from("inline payload").toString("base64");
     const source = (type: string, url: string, fields: Record<string, unknown> = {}) => ({

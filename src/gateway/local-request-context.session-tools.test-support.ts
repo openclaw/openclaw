@@ -31,6 +31,8 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
+  loadSessionEntry,
+  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -54,6 +56,14 @@ export const INCOGNITO = "agent:main:dashboard:incognito-session-tools";
 export const PARTICIPANT_SHARED = "agent:main:dashboard:participant-shared";
 export const PARTICIPANT_DRAFT = "agent:main:dashboard:participant-draft";
 export const PARTICIPANT_DRAFT_ID = "participant-draft-id";
+export const sessionToolsContext = () =>
+  expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "local Gateway context");
+export const sessionToolsEntry = (sessionKey: string) =>
+  loadSessionEntry({ agentId: "main", sessionKey });
+export const sessionToolsStorePath = (cfg: OpenClawConfig) =>
+  resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
+export const sessionToolsTranscript = (sessionKey: string, sessionId: string) =>
+  loadTranscriptEvents({ agentId: "main", sessionKey, sessionId });
 let fixtureRun: Promise<void> | undefined;
 
 export async function seedSessionToolsFixtureSession({
@@ -213,7 +223,7 @@ export async function withDelayedSessionToolsSteering(
     agentId: "main",
     sessionKey: PARTICIPANT_SHARED,
     sessionId: "participant-shared-id",
-    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+    storePath: sessionToolsStorePath(cfg),
   };
   const manager = guardSessionManager(await SessionManager.openAsync(target), {
     ...target,

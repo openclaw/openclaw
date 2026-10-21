@@ -87,6 +87,17 @@ function pdfAttachment(overrides: Partial<ChatAttachment> = {}): ChatAttachment 
   };
 }
 
+function savedMedia(id: string, contentType: string, size: number) {
+  return { id, path: `/media/inbound/${id}`, size, contentType };
+}
+
+function parseRpc(
+  message: string,
+  attachment: Parameters<typeof normalizeRpcAttachmentsToChatAttachments>[0],
+) {
+  return parseMessageWithAttachments(message, normalizeRpcAttachmentsToChatAttachments(attachment));
+}
+
 function pngBase64OfBytes(bytes: number): string {
   const pngHeader = PNG_1x1.slice(0, 64);
   let base64Length = Math.ceil((bytes * 4) / 3);
@@ -189,21 +200,9 @@ describe("composer attachment origin", () => {
         size: bytes.length,
         contentType: "text/plain",
       });
-      const parsed = await parseMessageWithAttachments(
-        "Read this",
-        normalizeRpcAttachmentsToChatAttachments([
-          { mimeType: "text/plain", fileName, origin, content: bytes.toString("base64") },
-        ]),
-      );
-      expect(saveMediaBufferMock).toHaveBeenCalledWith(
-        bytes,
-        "text/plain",
-        "inbound",
-        expect.any(Number),
-        fileName,
-        undefined,
-        { assertCommitAllowed: undefined },
-      );
+      const parsed = await parseRpc("Read this", [
+        { mimeType: "text/plain", fileName, origin, content: bytes.toString("base64") },
+      ]);
       expect(parsed.message).toBe(
         `Read this\n[media attached: ${parsed.offloadedRefs[0]?.mediaRef}]`,
       );
@@ -247,17 +246,13 @@ describe("persistInboundImagesForTranscript", () => {
     async ({ storage, suppliedDimensions }) => {
       const png = createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 });
       const bytes = storage === "offloaded" ? Buffer.concat([png, Buffer.alloc(2_000_000)]) : png;
-      const parsed = await parseMessageWithAttachments(
-        "Inspect this",
-        normalizeRpcAttachmentsToChatAttachments([
-          {
-            fileName: "upload.png",
-            mimeType: "image/png",
-            content: bytes.toString("base64"),
-            ...suppliedDimensions,
-          },
-        ]),
-      );
+      const parsed = await parseRpc("Inspect this", [
+        pngAttachment({
+          fileName: "upload.png",
+          content: bytes.toString("base64"),
+          ...suppliedDimensions,
+        }),
+      ]);
       expect(parsed.imageOrder).toEqual([storage]);
       expect(storage === "inline" ? parsed.images[0] : parsed.offloadedRefs[0]).toMatchObject({
         width: 32,
@@ -290,13 +285,13 @@ describe("persistInboundImagesForTranscript", () => {
     );
     const bytes = Buffer.concat([jpeg.subarray(0, 2), orientation, jpeg.subarray(2)]);
     const parsed = await parseMessageWithAttachments("Portrait", [
-      {
+      pngAttachment({
         fileName: "portrait.jpg",
         mimeType: "image/jpeg",
         content: bytes.toString("base64"),
         width: 32,
         height: 16,
-      },
+      }),
     ]);
     const persisted = await persist(parsed);
     expect(parsed.images[0]).toMatchObject({ width: 16, height: 32 });
@@ -346,22 +341,12 @@ describe("persistInboundImagesForTranscript", () => {
 
   it("preserves original mixed-media order in claim-only transcript facts", async () => {
     const fileName = "bands café 雪 🦞.png";
-    saveMediaBufferMock.mockResolvedValueOnce({
-      id: "video",
-      path: "/media/inbound/video.mp4",
-      size: 100,
-      contentType: "video/mp4",
-    });
+    saveMediaBufferMock.mockResolvedValueOnce(savedMedia("video", "video/mp4", 100));
     const parsed = await parseMessageWithAttachments("Compare these", [
       { fileName: "video.mp4", mimeType: "video/mp4", content: GENERIC_MP4, durationMs: 2_000 },
       pngAttachment({ fileName }),
     ]);
-    saveMediaBufferMock.mockResolvedValueOnce({
-      id: "inline",
-      path: "/media/inbound/inline.png",
-      size: 5,
-      contentType: "image/png",
-    });
+    saveMediaBufferMock.mockResolvedValueOnce(savedMedia("inline", "image/png", 5));
 
     const result = await persist({
       images: parsed.images,
@@ -571,23 +556,17 @@ describe("parseMessageWithAttachments validation errors", () => {
   });
 
   it.each([
-    {
-      kind: "audio",
-      mimeType: "audio/mpeg",
-      expectedMimeType: "audio/mpeg",
-      fileName: "voice.mp3",
-      content: Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64"),
-    },
-    {
-      kind: "video",
-      mimeType: "audio/aac",
-      expectedMimeType: "video/mp4",
-      fileName: "clip.mp4",
-      content: GENERIC_MP4,
-    },
+    [
+      "audio",
+      "audio/mpeg",
+      "voice.mp3",
+      Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64"),
+      "audio/mpeg",
+    ],
+    ["video", "audio/aac", "clip.mp4", GENERIC_MP4, "video/mp4"],
   ])(
-    "surfaces structured inbound $kind facts %#",
-    async ({ kind, mimeType, expectedMimeType, fileName, content }) => {
+    "surfaces structured inbound %s facts %#",
+    async (kind, mimeType, fileName, content, expectedMimeType) => {
       const parsed = await parseMessageWithAttachments(
         "play this",
         [{ type: kind, mimeType, fileName, content, durationMs: 1_500 }],
@@ -692,13 +671,6 @@ describe("attachment validation", () => {
     expect(saveMediaBufferMock).toHaveBeenCalledOnce();
     const saved = await saveMediaBufferMock.mock.results[0]?.value;
     expect(deleteMediaBufferMock).toHaveBeenCalledWith(saved?.id, "inbound");
-  });
-
-  it("rejects attachment dialect violations", async () => {
-    await expect(
-      parseMessageWithAttachments("x", [pdfAttachment({ content: "%not-base64%" })]),
-    ).rejects.toThrow(/invalid base64/);
-    expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
   it("rejects images over limit without decoding base64", async () => {

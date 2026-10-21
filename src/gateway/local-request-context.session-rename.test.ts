@@ -7,8 +7,6 @@ import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
 import {
   appendTranscriptMessage,
-  loadSessionEntry,
-  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { ToolAllowDenyPolicyConfig } from "../config/types.tools.js";
@@ -16,6 +14,8 @@ import {
   drainSessionToolsFixture,
   TARGET,
   withSessionToolsFixture,
+  sessionToolsEntry,
+  sessionToolsTranscript,
 } from "./local-request-context.session-tools.test-support.js";
 import { roleClient } from "./session-sharing.test-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -53,8 +53,8 @@ describe("guest session rename through the agent catalog", () => {
         { ...scope, sessionId: original.sessionId },
         { message: { role: "user", content: "Keep researching while renaming this session." } },
       );
-      const history = await loadTranscriptEvents({ ...scope, sessionId: original.sessionId });
-      const beforeRename = loadSessionEntry(scope)!;
+      const history = await sessionToolsTranscript(sessionKey, original.sessionId);
+      const beforeRename = sessionToolsEntry(sessionKey)!;
       expect(beforeRename.createdActor).toEqual(original.createdActor);
       const controller = new AbortController();
       const operatorAuthority = createAdmittedRunOperatorAuthority({
@@ -102,11 +102,9 @@ describe("guest session rename through the agent catalog", () => {
             updated: ["label"],
           });
           const { updatedAt: _beforeTime, ...before } = beforeRename;
-          const { updatedAt: _afterTime, ...after } = loadSessionEntry(scope)!;
+          const { updatedAt: _afterTime, ...after } = sessionToolsEntry(sessionKey)!;
           expect(after).toEqual({ ...before, label: "Research plan" });
-          expect(await loadTranscriptEvents({ ...scope, sessionId: original.sessionId })).toEqual(
-            history,
-          );
+          expect(await sessionToolsTranscript(sessionKey, original.sessionId)).toEqual(history);
           expect(operation.abortSignal.aborted).toBe(false);
           for (const [args, error] of [
             [
@@ -130,18 +128,18 @@ describe("guest session rename through the agent catalog", () => {
           ] as const) {
             await expect(tool.execute("denied", args)).rejects.toThrow(error);
           }
-          expect(loadSessionEntry(scope)?.label).toBe("Research plan");
-          expect(loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.label).toBeUndefined();
+          expect(sessionToolsEntry(sessionKey)?.label).toBe("Research plan");
+          expect(sessionToolsEntry(TARGET)?.label).toBeUndefined();
           const denied = createOpenClawCodingTools({
             ...options,
             config: { ...options.config, tools: { ...options.config.tools, deny: ["sessions"] } },
           });
           expect(denied.some((candidate) => candidate.name === "sessions")).toBe(false);
           await upsertSessionEntryCore(scope, {
-            ...loadSessionEntry(scope)!,
+            ...sessionToolsEntry(sessionKey)!,
             sessionId: "replacement-session",
           });
-          expect(loadSessionEntry(scope)?.sessionId).toBe("replacement-session");
+          expect(sessionToolsEntry(sessionKey)?.sessionId).toBe("replacement-session");
           await expect(
             tool.execute("replaced", { action: "patch", label: "Stale run rename" }),
           ).rejects.toMatchObject({ details: { reason: "session-changed" } });
@@ -156,7 +154,7 @@ describe("guest session rename through the agent catalog", () => {
           await expect(
             tool.execute("revoked", { action: "patch", label: "Revoked rename" }),
           ).rejects.toThrow("guest access revoked");
-          expect(loadSessionEntry(scope)?.label).toBe("Research plan");
+          expect(sessionToolsEntry(sessionKey)?.label).toBe("Research plan");
         },
       );
     });
@@ -327,11 +325,9 @@ describe("guest session rename through the agent catalog", () => {
                 }
                 const result = await tool.execute("rename", args);
                 expect(result.details).toMatchObject({ status: "updated", updated: ["label"] });
-                expect(loadSessionEntry({ agentId: "main", sessionKey })?.label).toBe(label);
-                expect(loadSessionEntry({ agentId: "main", sessionKey })?.icon).toBeUndefined();
-                expect(
-                  loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.label,
-                ).toBeUndefined();
+                expect(sessionToolsEntry(sessionKey)).toMatchObject({ label });
+                expect(sessionToolsEntry(sessionKey)?.icon).toBeUndefined();
+                expect(sessionToolsEntry(TARGET)?.label).toBeUndefined();
               }
               if (name === "default") {
                 const absent = (tools: ReturnType<typeof createOpenClawCodingTools>) =>

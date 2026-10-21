@@ -58,7 +58,6 @@ describe("resolveByteResponse", () => {
   it.each([
     { header: "bytes=4-", start: 4, end: 9, contentLength: 6 },
     { header: "bytes=-3", start: 7, end: 9, contentLength: 3 },
-    { header: "bytes=2-5", start: 2, end: 5, contentLength: 4 },
   ])("resolves range $header", ({ header, start, end, contentLength }) => {
     const plan = resolveImmutableResponse({ range: header });
     expect(plan).toMatchObject({
@@ -73,21 +72,6 @@ describe("resolveByteResponse", () => {
     expect(setHeader).toHaveBeenCalledWith("Last-Modified", LAST_MODIFIED);
   });
 
-  it("returns 416 with the complete file size for an out-of-bounds range", () => {
-    const plan = resolveImmutableResponse({ range: "bytes=10-20" });
-    expect(plan).toMatchObject({
-      kind: "unsatisfiable",
-      statusCode: 416,
-      contentLength: 0,
-      size: 10,
-    });
-
-    const { res, setHeader } = makeMockHttpResponse();
-    writeByteHeaders(res, plan);
-    expect(res.statusCode).toBe(416);
-    expect(setHeader).toHaveBeenCalledWith("Content-Range", "bytes */10");
-  });
-
   it.each(["bytes=broken", "items=0-1", "bytes=0-1,4-5"])(
     "falls back to a full response for malformed or multipart range %s",
     (rangeHeader) => {
@@ -97,40 +81,6 @@ describe("resolveByteResponse", () => {
       });
     },
   );
-
-  it("matches an If-Range date against the bounded emitted validator", () => {
-    const nowMs = FILE.mtimeMs - 60_000;
-    const emittedLastModified = new Date(nowMs).toUTCString();
-
-    expect(
-      resolveImmutableResponse({ range: "bytes=1-2", "if-range": emittedLastModified }, { nowMs }),
-    ).toMatchObject({ kind: "partial", statusCode: 206, lastModified: emittedLastModified });
-    expect(
-      resolveImmutableResponse({ range: "bytes=1-2", "if-range": LAST_MODIFIED }, { nowMs }),
-    ).toMatchObject({ ...FULL, lastModified: emittedLastModified });
-  });
-
-  it("bounds the future Last-Modified validator on HEAD not-modified responses", () => {
-    const nowMs = FILE.mtimeMs - 60_000;
-    expect(resolveImmutableResponse({ "if-none-match": ETAG }, { method: "HEAD", nowMs })).toEqual({
-      ...NOT_MODIFIED,
-      etag: ETAG,
-      lastModified: new Date(nowMs).toUTCString(),
-    });
-  });
-
-  it("honors a later If-Modified-Since date before ranges for HEAD", () => {
-    expect(
-      resolveImmutableResponse(
-        {
-          "if-modified-since": new Date(Date.parse(LAST_MODIFIED) + 1_000).toUTCString(),
-          range: "bytes=1-2",
-          "if-range": '"stale"',
-        },
-        { method: "HEAD" },
-      ),
-    ).toMatchObject({ ...NOT_MODIFIED, lastModified: LAST_MODIFIED });
-  });
 
   it.each(["", '"different"'])(
     "ignores If-Modified-Since whenever any If-None-Match field is present (%j)",

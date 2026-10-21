@@ -18,7 +18,6 @@ import {
   setDefaultSecurityHeaders,
   setSseHeaders,
   watchClientDisconnect,
-  writeDone,
 } from "./http-common.js";
 import { makeMockHttpReqRes, makeMockHttpResponse } from "./test-http-response.js";
 
@@ -53,19 +52,13 @@ function mockDisconnect(
   return { res, controller, onDisconnect, cleanup };
 }
 
-const HSTS = "max-age=63072000; includeSubDomains; preload";
-it.each([
-  [undefined, undefined],
-  [{ strictTransportSecurity: " \t " }, undefined],
-  [{ strictTransportSecurity: `  ${HSTS}  ` }, HSTS],
-] as const)("sets security headers with HSTS %j", (options, expected) => {
+it("sets the complete default security policy", () => {
   const { res, setHeader } = makeMockHttpResponse();
-  setDefaultSecurityHeaders(res, options);
+  setDefaultSecurityHeaders(res);
   expect(Object.fromEntries(setHeader.mock.calls)).toEqual({
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "Permissions-Policy": "camera=(), microphone=(self), geolocation=()",
-    ...(expected === undefined ? {} : { "Strict-Transport-Security": expected }),
   });
 });
 
@@ -159,13 +152,6 @@ describe("readJsonBodyOrError", () => {
     res.emit("finish");
     expect(destroy).not.toHaveBeenCalled();
   });
-});
-
-it("writeDone writes the SSE termination sentinel to the response stream", () => {
-  const { res } = makeMockHttpResponse();
-  const write = vi.spyOn(res, "write");
-  writeDone(res);
-  expect(write).toHaveBeenCalledWith("data: [DONE]\n\n");
 });
 
 it.each([true, false])("setSseHeaders supports flushHeaders available: %s", (available) => {

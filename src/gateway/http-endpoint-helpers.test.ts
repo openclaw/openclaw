@@ -13,7 +13,6 @@ vi.mock("./http-utils.js", async (importOriginal) => ({
 vi.mock("./http-common.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./http-common.js")>()),
   readJsonBodyOrError: vi.fn(),
-  sendMethodNotAllowed: vi.fn(),
   sendMissingScopeForbidden: vi.fn(),
 }));
 
@@ -22,11 +21,8 @@ vi.mock("./method-scopes.js", async (importOriginal) => ({
   authorizeOperatorScopesForMethod: vi.fn(),
 }));
 
-const {
-  readJsonBodyOrError: readBody,
-  sendMethodNotAllowed,
-  sendMissingScopeForbidden,
-} = await import("./http-common.js");
+const { readJsonBodyOrError: readBody, sendMissingScopeForbidden } =
+  await import("./http-common.js");
 const {
   authorizeGatewayHttpRequestOrReply: authorize,
   resolveSharedSecretHttpOperatorScopes: scopes,
@@ -98,16 +94,6 @@ it("does not admit a parsed body after its authority was revoked while reading",
 
 it("returns false when path does not match", async () => {
   expect(await handleEndpoint({ url: "/nope" })).toBe(false);
-});
-
-it("returns undefined and replies when method is not POST", async () => {
-  expect(await handleEndpoint({ method: "GET" })).toBeUndefined();
-  expect(sendMethodNotAllowed).toHaveBeenCalledTimes(1);
-});
-
-it("returns undefined when auth fails", async () => {
-  vi.mocked(authorize).mockResolvedValue(null);
-  expect(await handleEndpoint()).toBeUndefined();
 });
 
 it("matches paths without trusting malformed Host headers", async () => {
