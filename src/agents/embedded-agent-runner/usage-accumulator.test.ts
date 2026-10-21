@@ -7,6 +7,7 @@ import {
 } from "./usage-accumulator.js";
 
 type UsageInput = NonNullable<Parameters<typeof mergeUsageIntoAccumulator>[1]>;
+const ZERO_USAGE = { input: 0, output: 0, total: 0 };
 const FIRST_USAGE: UsageInput = {
   input: 100,
   output: 50,
@@ -16,20 +17,12 @@ const FIRST_USAGE: UsageInput = {
   cacheWrite1h: 3_000,
   total: 85_150,
 };
-const SECOND_USAGE: UsageInput = {
-  input: 120,
-  output: 30,
-  cacheRead: 82_000,
-  cacheWrite: 0,
-  total: 82_150,
-};
 const FINAL_USAGE: UsageInput = {
   input: 150,
   output: 40,
   reasoningTokens: 7,
   cacheRead: 84_000,
   cacheWrite: 0,
-  contextUsage: { state: "available", promptTokens: 84_150, totalTokens: 84_190 },
   total: 84_190,
 };
 function createAccumulatorWithUsage(...usages: (UsageInput | undefined)[]) {
@@ -39,14 +32,14 @@ function createAccumulatorWithUsage(...usages: (UsageInput | undefined)[]) {
   }
   return acc;
 }
-function normalizedAttempt(usage: UsageInput) {
-  return toNormalizedUsage(createAccumulatorWithUsage(usage));
+function normalizedAttempt(...usages: (UsageInput | undefined)[]) {
+  return toNormalizedUsage(createAccumulatorWithUsage(...usages));
 }
 
 describe("usage-accumulator", () => {
   it("preserves complete zero accounting without a price across attempts", () => {
-    const zero: UsageInput = { input: 0, output: 0, total: 0, usageReport: { state: "available" } };
-    expect(toNormalizedUsage(createAccumulatorWithUsage(normalizedAttempt(zero)))).toEqual({
+    const zero: UsageInput = { ...ZERO_USAGE, usageReport: { state: "available" } };
+    expect(normalizedAttempt(normalizedAttempt(zero))).toEqual({
       input: 0,
       output: 0,
       total: 0,
@@ -55,19 +48,20 @@ describe("usage-accumulator", () => {
   });
 
   it("does not present completed calls as a complete run total after an interrupted call", () => {
-    const acc = createAccumulatorWithUsage(
-      FIRST_USAGE,
-      { usageReport: { state: "unavailable" } },
-      FINAL_USAGE,
-    );
-    expect(toNormalizedUsage(acc)).toEqual({
+    expect(
+      normalizedAttempt(FIRST_USAGE, { usageReport: { state: "unavailable" } }, FINAL_USAGE),
+    ).toEqual({
       usageReport: { state: "unavailable" },
       contextUsage: { state: "unavailable" },
     });
   });
 
   it("accumulates usage across multiple API calls", () => {
-    const acc = createAccumulatorWithUsage(FIRST_USAGE, SECOND_USAGE, FINAL_USAGE);
+    const acc = createAccumulatorWithUsage(
+      FIRST_USAGE,
+      { input: 120, output: 30, cacheRead: 82_000, cacheWrite: 0, total: 82_150 },
+      FINAL_USAGE,
+    );
     expect(acc).toMatchObject({
       input: 370,
       output: 120,
@@ -106,13 +100,7 @@ describe("usage-accumulator", () => {
 
   it("ignores undefined or zero-only usage", () => {
     expect(
-      createAccumulatorWithUsage(undefined, {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      }),
+      createAccumulatorWithUsage(undefined, { ...ZERO_USAGE, cacheRead: 0, cacheWrite: 0 }),
     ).toEqual(createUsageAccumulator());
   });
 
@@ -138,10 +126,9 @@ describe("usage-accumulator", () => {
   });
 
   it("preserves reported zero cache counters across attempt and run totals", () => {
-    const run = createAccumulatorWithUsage(
-      normalizedAttempt({ input: 100, cacheRead: 0, cacheWrite: 0 }),
-    );
-    expect(toNormalizedUsage(run)).toMatchObject({
+    expect(
+      normalizedAttempt(normalizedAttempt({ input: 100, cacheRead: 0, cacheWrite: 0 })),
+    ).toMatchObject({
       input: 100,
       cacheRead: 0,
       cacheWrite: 0,
