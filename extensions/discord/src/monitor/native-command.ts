@@ -178,9 +178,6 @@ export function createDiscordNativeCommand(
         prompt,
         command: commandDefinition,
         commandArgs: commandArgsWithRaw,
-        // Slash commands are deferred up front, so all later responses must use
-        // follow-up/edit semantics instead of the initial reply endpoint.
-        preferFollowUp: true,
         responseEphemeral: ephemeralDefault,
         pluginCommandDispatch: preparedPluginCommand ?? NON_PLUGIN_COMMAND_DISPATCH,
       });
@@ -200,7 +197,6 @@ async function dispatchDiscordCommandInteraction(
     discordConfig: inputDiscordConfig,
     accountId,
     sessionPrefix,
-    preferFollowUp,
     threadBindings,
     responseEphemeral,
     suppressReplies,
@@ -218,7 +214,7 @@ async function dispatchDiscordCommandInteraction(
       ...(ephemeral !== undefined ? { ephemeral } : {}),
     };
     const delivered = await safeDiscordInteractionCall("interaction reply", async () => {
-      await interaction[preferFollowUp ? "followUp" : "reply"](payload);
+      await interaction.followUp(payload);
     });
     return delivered !== null;
   };
@@ -467,14 +463,12 @@ async function dispatchDiscordCommandInteraction(
       menu,
       userId: interaction.user?.id ?? "",
     });
-    const delivered = await safeDiscordInteractionCall(
-      preferFollowUp ? "interaction follow-up" : "interaction reply",
-      () =>
-        interaction[preferFollowUp ? "followUp" : "reply"]({
-          content: menuPayload.content,
-          components: menuPayload.components,
-          ephemeral: true,
-        }),
+    const delivered = await safeDiscordInteractionCall("interaction follow-up", () =>
+      interaction.followUp({
+        content: menuPayload.content,
+        components: menuPayload.components,
+        ephemeral: true,
+      }),
     );
     if (delivered !== null) {
       await recordDeliveredCommandExchange({
@@ -550,7 +544,6 @@ async function dispatchDiscordCommandInteraction(
         interaction,
         payload: pluginReply,
         ...resolveDiscordInteractionReplyOptions({ cfg, discordConfig, accountId }),
-        preferFollowUp,
         responseEphemeral,
         onDelivered: recordReply,
       });
@@ -572,7 +565,6 @@ async function dispatchDiscordCommandInteraction(
       userId: user.id,
       accountId,
       threadBindings,
-      preferFollowUp,
       safeInteractionCall: safeDiscordInteractionCall,
     });
     return { accepted: true };
@@ -605,7 +597,6 @@ async function dispatchDiscordCommandInteraction(
       !isGuild ? "always" : channelConfig?.requireMention === false ? "always" : "mention",
     interaction,
     mediaLocalRoots,
-    preferFollowUp,
     responseEphemeral,
     effectiveRoute,
     respond,
@@ -624,7 +615,6 @@ async function dispatchDiscordCommandInteraction(
     effectiveRoute,
     channelConfig,
     mediaLocalRoots,
-    preferFollowUp,
     responseEphemeral,
     suppressReplies,
     dispatchReplyFromConfig,

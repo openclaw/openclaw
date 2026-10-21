@@ -525,7 +525,6 @@ async function handleDiscordModelPickerInteraction(
             discordConfig: ctx.discordConfig,
             accountId: ctx.accountId,
             sessionPrefix: ctx.sessionPrefix,
-            preferFollowUp: true,
             threadBindings: ctx.threadBindings,
             suppressReplies: true,
             buildContext: ctx.buildContext,
