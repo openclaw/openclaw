@@ -554,76 +554,36 @@ sendReceipt(process.argv[2], "ready");
     expect(signalExitCode("SIGKILL")).toBe(137);
   });
 
-  it("wraps Windows shell argv through cmd.exe without Node shell mode", () => {
+  it.each([
+    {
+      bin: "pnpm.cmd",
+      args: ["lint:scripts", "--", "scripts"],
+      shell: true,
+      line: "pnpm.cmd lint:scripts -- scripts",
+    },
+    {
+      bin: "C:\\repo\\node_modules\\.bin\\tsgo",
+      args: ["-p", "packages/plugin-sdk/tsconfig.json", "--listFilesOnly", "--noEmit"],
+      shell: undefined,
+      line: "C:\\repo\\node_modules\\.bin\\tsgo -p packages/plugin-sdk/tsconfig.json --listFilesOnly --noEmit",
+    },
+    { bin: "node.exe", args: ["--version"], shell: false, line: undefined },
+  ])("normalizes Windows argv for $bin (shell=$shell)", ({ bin, args, shell, line }) => {
+    const command = "C:\\Windows\\System32\\cmd.exe";
+    const env = shell === false ? undefined : {};
+    const expectedArgs = line ? ["/d", "/s", "/c", line] : [...args];
     expect(
-      createManagedCommandSpawnSpec({
-        args: ["lint:scripts", "--", "scripts"],
-        bin: "pnpm.cmd",
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: {},
-        platform: "win32",
-        shell: true,
-      }),
+      createManagedCommandSpawnSpec({ bin, args, shell, env, platform: "win32", comSpec: command }),
     ).toEqual({
-      args: ["/d", "/s", "/c", "pnpm.cmd lint:scripts -- scripts"],
-      command: "C:\\Windows\\System32\\cmd.exe",
+      args: expectedArgs,
+      command: line ? command : bin,
       options: {
         cwd: undefined,
         detached: false,
-        env: {},
+        env: shell === false ? undefined : {},
         shell: false,
         stdio: "inherit",
-        windowsVerbatimArguments: true,
-      },
-    });
-  });
-
-  it("uses Windows shell normalization when the platform override is win32", () => {
-    expect(
-      createManagedCommandSpawnSpec({
-        args: ["-p", "packages/plugin-sdk/tsconfig.json", "--listFilesOnly", "--noEmit"],
-        bin: "C:\\repo\\node_modules\\.bin\\tsgo",
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: {},
-        platform: "win32",
-      }),
-    ).toEqual({
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        "C:\\repo\\node_modules\\.bin\\tsgo -p packages/plugin-sdk/tsconfig.json --listFilesOnly --noEmit",
-      ],
-      command: "C:\\Windows\\System32\\cmd.exe",
-      options: {
-        cwd: undefined,
-        detached: false,
-        env: {},
-        shell: false,
-        stdio: "inherit",
-        windowsVerbatimArguments: true,
-      },
-    });
-  });
-
-  it("preserves explicit non-shell Windows subprocesses", () => {
-    expect(
-      createManagedCommandSpawnSpec({
-        args: ["--version"],
-        bin: "node.exe",
-        platform: "win32",
-        shell: false,
-      }),
-    ).toEqual({
-      args: ["--version"],
-      command: "node.exe",
-      options: {
-        cwd: undefined,
-        detached: false,
-        env: undefined,
-        shell: false,
-        stdio: "inherit",
-        windowsVerbatimArguments: undefined,
+        windowsVerbatimArguments: line ? true : undefined,
       },
     });
   });
@@ -724,20 +684,23 @@ sendReceipt(process.argv[2], "ready");
     });
   });
 
-  it("preserves direct Windows signaling when a caller does not own taskkill", () => {
-    const child = { kill: vi.fn(() => true), pid: 12345 };
-    const runTaskkill = vi.fn();
-
-    expect(
-      terminateManagedChild(child, "SIGTERM", {
-        platform: "win32",
-        runTaskkill,
-        useWindowsTaskkill: false,
-      }),
-    ).toEqual({ processTreeState: "signaled" });
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(runTaskkill).not.toHaveBeenCalled();
-  });
+  it.each(["win32", "linux"] as const)(
+    "signals the direct child without %s tree ownership",
+    (platform) => {
+      const child = { kill: vi.fn(() => true), pid: 12345 };
+      const runTaskkill = vi.fn();
+      expect(
+        terminateManagedChild(child, "SIGTERM", {
+          platform,
+          runTaskkill,
+          useWindowsTaskkill: false,
+          useProcessGroup: false,
+        }),
+      ).toEqual({ processTreeState: "signaled" });
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(runTaskkill).not.toHaveBeenCalled();
+    },
+  );
 
   it("signals POSIX process groups without signaling their leaders twice", () => {
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);
@@ -1067,18 +1030,6 @@ if (mode === "waiter") {
       );
     },
   );
-
-  it("signals the direct child when process-group ownership is disabled", () => {
-    const child = { kill: vi.fn(() => true), pid: 12345 };
-
-    expect(
-      terminateManagedChild(child, "SIGTERM", {
-        platform: "linux",
-        useProcessGroup: false,
-      }),
-    ).toEqual({ processTreeState: "signaled" });
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-  });
 
   it("reports process-group signal errors before falling back to the direct child", () => {
     const originalKill = process.kill.bind(process);
@@ -2036,14 +1987,11 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
 
   it("allows bounded retry output to complete", async () => {
     await expect(
-      runManagedCommand({
-        bin: process.execPath,
+      runNodeCommand({
         args: [
           "-e",
           "process.stderr.write('network retry 1\\n'); setTimeout(() => process.exit(0), 100)",
         ],
-        shell: false,
-        stdio: "ignore",
         timeoutMs: 1_000,
       }),
     ).resolves.toBe(0);
@@ -2051,12 +1999,9 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
 
   posixIt("allows strict normal long-running work to complete", async () => {
     await expect(
-      runManagedCommand({
-        bin: process.execPath,
+      runNodeCommand({
         args: ["-e", "setTimeout(() => process.exit(0), 200)"],
         requireProcessTreeExit: true,
-        shell: false,
-        stdio: "ignore",
         timeoutMs: 1_000,
       }),
     ).resolves.toBe(0);

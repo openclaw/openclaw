@@ -192,6 +192,20 @@ function patchReuseOptions(
   return { loadCiReuseCandidates: () => [candidate], execGit };
 }
 
+function forkRun(overrides: Partial<WorkflowRunFixture>) {
+  return {
+    head_branch: "fix/token-listener",
+    head_repository: { full_name: "contributor/openclaw" },
+    pull_requests: [],
+    ...overrides,
+  };
+}
+const forkMembership = {
+  pullRequestCommitShas: [previousSha, sha],
+  pullRequestHeadBranch: "fix/token-listener",
+  pullRequestHeadRepository: "contributor/openclaw",
+};
+
 describe("verify-pr-hosted-gates", () => {
   it("compares patch IDs against one main snapshot while the shared ref advances", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "openclaw-patch-snapshot-")));
@@ -670,28 +684,11 @@ describe("verify-pr-hosted-gates", () => {
   });
 
   it("accepts a recent green fork head when GitHub omits pull request links", () => {
-    const headBranch = "fix/token-listener";
-    const headRepository = "contributor/openclaw";
-    const priorRun = makeRun("CI", 1, 50, {
-      head_sha: previousSha,
-      head_branch: headBranch,
-      head_repository: { full_name: headRepository },
-      pull_requests: [],
-    });
+    const priorRun = makeRun("CI", 1, 50, forkRun({ head_sha: previousSha }));
     const evidence = collectHostedGateEvidence(
-      [
-        priorRun,
-        makeRun("CI", 2, 54, {
-          head_branch: headBranch,
-          head_repository: { full_name: headRepository },
-          pull_requests: [],
-          conclusion: "failure",
-        }),
-      ],
+      [priorRun, makeRun("CI", 2, 54, forkRun({ conclusion: "failure" }))],
       {
-        pullRequestCommitShas: [previousSha, sha],
-        pullRequestHeadBranch: headBranch,
-        pullRequestHeadRepository: headRepository,
+        ...forkMembership,
         ...patchReuseOptions(priorRun),
       },
     );
@@ -715,24 +712,16 @@ describe("verify-pr-hosted-gates", () => {
       accepted: false,
     },
   ])("validates scheduled fallback membership for $name", ({ commits, links, accepted }) => {
-    const headBranch = "fix/token-listener";
-    const headRepository = "contributor/openclaw";
     const collect = () =>
       collectHostedGateEvidence(
         [
           makeRun("CI", 1, 50),
           makeRun(ARM, 2, 54, { status: "queued", conclusion: null }),
-          makeRun(ARM, 3, 53, {
-            head_sha: previousSha,
-            head_branch: headBranch,
-            head_repository: { full_name: headRepository },
-            pull_requests: links,
-          }),
+          makeRun(ARM, 3, 53, forkRun({ head_sha: previousSha, pull_requests: links })),
         ],
         {
+          ...forkMembership,
           pullRequestCommitShas: commits,
-          pullRequestHeadBranch: headBranch,
-          pullRequestHeadRepository: headRepository,
         },
       );
 
