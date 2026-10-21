@@ -1,13 +1,19 @@
 import { channel } from "node:diagnostics_channel";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { constants, DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync, StatementSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { load as loadSqliteVec } from "sqlite-vec";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readSqliteSchemaCatalog } from "../../scripts/lib/sqlite-schema-catalog.mts";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { AGENT_SCHEMA_COMPATIBILITY } from "../state/openclaw-agent-db-schema-compatibility.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync.js";
+import { runSqliteSchemaReadSnapshotSync as withSchemaSnapshot } from "./sqlite-pinned-read-snapshot.js";
 import type { SqliteSchemaCatalog } from "./sqlite-schema-catalog-types.js";
 import {
   collectSqliteNamedIndexContract,
@@ -17,6 +23,8 @@ import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
   collectSqliteSchemaIssues,
+  collectSqliteSchemaIssues as schemaIssues,
+  sqliteSchemaFixture,
 } from "./sqlite-schema-contract.test-support.js";
 
 const [nodeMajor = 0, nodeMinor = 0] = process.versions.node.split(".").map(Number);
@@ -674,6 +682,180 @@ it("refuses table presence when the authorizer ignores the SELECT", () => {
     );
   } finally {
     database.setAuthorizer(null);
+    database.close();
+  }
+});
+
+describe("schema snapshot", () => {
+  const recordsSchema = "CREATE TABLE records (id INTEGER);";
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(["top-level", "nested"] as const)(
+    "compares one committed schema during %s inspection and observes the next commit",
+    (scope) => {
+      const filename = path.join(tempDirs.make("openclaw-schema-snapshot-"), "state.sqlite");
+      using writer = new DatabaseSync(filename);
+      const schemaSql = "CREATE TABLE a (id INTEGER); CREATE TABLE z (id INTEGER);";
+      const schema = sqliteSchemaFixture(schemaSql);
+      writer.exec(`PRAGMA journal_mode=WAL; ${schemaSql}`);
+      using reader = new DatabaseSync(filename, { readOnly: true });
+      const observation = observeSqliteReadSql(StatementSync.prototype);
+      const readTable = createSqliteTableContractReader(reader);
+      let changed = false;
+      const inspect = () =>
+        schemaIssues(reader, schema, {}, (name) => {
+          if (!changed) {
+            changed = true;
+            writer.exec(`ALTER TABLE ${name === "a" ? "z" : "a"} ADD COLUMN later TEXT`);
+          }
+          return readTable(name);
+        });
+      const issues = scope === "nested" ? withSchemaSnapshot(reader, inspect) : inspect();
+      const reads = () =>
+        observation.queries.filter((sql) => /^PRAGMA schema_version\b/iu.test(sql)).length;
+      expect([changed, issues, reads(), reader.isTransaction]).toEqual([true, [], 1, false]);
+      expect(schemaIssues(reader, schema)).not.toEqual([]);
+      expect([reads(), reader.isTransaction]).toEqual([2, false]);
+    },
+  );
+
+  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
+    "does not require transaction-control authorization for top-level or nested inspections",
+    () => {
+      using database = new DatabaseSync(":memory:");
+      database.exec(recordsSchema);
+      const denyTransactionControl = (action: number) =>
+        action === constants.SQLITE_TRANSACTION || action === constants.SQLITE_SAVEPOINT
+          ? constants.SQLITE_DENY
+          : constants.SQLITE_OK;
+      for (const nested of [false, true]) {
+        if (nested) {
+          database.exec("BEGIN; INSERT INTO records VALUES (1)");
+        }
+        database.setAuthorizer(denyTransactionControl);
+        expect(schemaIssues(database, recordsSchema)).toEqual([]);
+        expect(database.isTransaction).toBe(nested);
+        database.setAuthorizer(null);
+      }
+      database.exec("ROLLBACK");
+      expect(database.prepare("SELECT * FROM records").all()).toEqual([]);
+    },
+  );
+
+  it.each(["inspection callback", "exclusive writer"] as const)(
+    "releases a failed %s snapshot so a cached retry reads fresh facts",
+    (failureAt) => {
+      const filename = path.join(
+        tempDirs.make("openclaw-schema-snapshot-failure-"),
+        "state.sqlite",
+      );
+      using writer = new DatabaseSync(filename);
+      writer.exec(`PRAGMA journal_mode=DELETE; PRAGMA busy_timeout=0; ${recordsSchema}`);
+      using reader = new DatabaseSync(filename, { readOnly: true });
+      reader.exec("PRAGMA busy_timeout=0");
+      enableNodeSqliteKyselyStatementCache(reader);
+      expect(schemaIssues(reader, recordsSchema)).toEqual([]);
+      if (failureAt === "inspection callback") {
+        const failure = new Error("inspection failed");
+        expect(() =>
+          schemaIssues(reader, recordsSchema, {}, () => {
+            // DELETE mode proves a real read lock exists, not just an autocommit flag.
+            expect(() => writer.exec("INSERT INTO records VALUES (1)")).toThrow(/locked/iu);
+            throw failure;
+          }),
+        ).toThrow(failure);
+        writer.exec("ALTER TABLE records ADD COLUMN later TEXT");
+        expect(schemaIssues(reader, recordsSchema)).toMatchObject([
+          { code: "unexpected-column", objectName: "records.later" },
+        ]);
+        expect(reader.isTransaction).toBe(false);
+      } else {
+        writer.exec("BEGIN EXCLUSIVE");
+        expect(() => schemaIssues(reader, recordsSchema)).toThrow(/locked/iu);
+        writer.exec("ROLLBACK");
+        expect(schemaIssues(reader, recordsSchema)).toEqual([]);
+      }
+    },
+  );
+});
+
+it("uses fingerprints in a cold worker and loads diagnostics only after schema drift, without comparison DDL", async () => {
+  const pathname = path.join(tempDirs.make("schema-contract-worker-"), "agent.sqlite");
+  const database = new DatabaseSync(pathname);
+  database.exec(`PRAGMA journal_mode=WAL; ${OPENCLAW_AGENT_SCHEMA_SQL}`);
+  const worker = new Worker(
+    `
+    const { parentPort, workerData } = require("node:worker_threads");
+    const { DatabaseSync } = require("node:sqlite");
+    const fs = require("node:fs");
+    const { syncBuiltinESMExports } = require("node:module");
+    let diagnosticCatalogReads = 0;
+    const readFileSync = fs.readFileSync;
+    fs.readFileSync = function(path, ...args) {
+      if (/sqlite-(?:agent|state)-catalogs\\.json$/.test(String(path))) diagnosticCatalogReads++;
+      return Reflect.apply(readFileSync, this, [path, ...args]);
+    };
+    syncBuiltinESMExports();
+    let comparisonDdl = 0;
+    for (const method of ["exec", "prepare"]) {
+      const original = DatabaseSync.prototype[method];
+      DatabaseSync.prototype[method] = function(sql) {
+        if (this.location() === null && /\\b(?:CREATE|ALTER|DROP)\\b/i.test(sql)) comparisonDdl++;
+        return Reflect.apply(original, this, [sql]);
+      };
+    }
+    let database, contracts;
+    parentPort.on("message", async () => {
+      try {
+        if (!contracts) {
+          const { register } = await import(workerData.loader);
+          register();
+          contracts = await import(workerData.contracts);
+          database = new DatabaseSync(workerData.pathname, { readOnly: true });
+        }
+        const issues = contracts.collectSqliteSchemaIssues(database, workerData.schemaSql, workerData.compatibility);
+        parentPort.postMessage({ issues, comparisonDdl, diagnosticCatalogReads });
+      } catch (error) {
+        parentPort.postMessage({ error: error.message, comparisonDdl, diagnosticCatalogReads });
+      }
+    });
+    `,
+    {
+      eval: true,
+      execArgv: [],
+      workerData: {
+        pathname,
+        schemaSql: OPENCLAW_AGENT_SCHEMA_SQL,
+        compatibility: AGENT_SCHEMA_COMPATIBILITY,
+        loader: import.meta.resolve("tsx/esm/api"),
+        contracts: new URL("./sqlite-schema-contract.ts", import.meta.url).href,
+      },
+    },
+  );
+  let pending: ReturnType<typeof createDeferredCore<unknown>>;
+  worker.on("message", (value) => pending.resolve(value));
+  worker.on("error", (error) => pending.reject(error));
+  const inspect = () => {
+    pending = createDeferredCore<unknown>();
+    worker.postMessage(undefined, []);
+    return pending.promise;
+  };
+  const expectInspection = (diagnosticCatalogReads: number, issues: unknown[] = []) =>
+    expect(inspect()).resolves.toEqual({ issues, comparisonDdl: 0, diagnosticCatalogReads });
+  try {
+    await expectInspection(0);
+    database.exec("ALTER TABLE session_nodes ADD COLUMN foreign_column TEXT DEFAULT ''");
+    await expectInspection(1, [
+      {
+        code: "unexpected-column",
+        objectName: "session_nodes.foreign_column",
+        message: "column definitions differ for session_nodes",
+      },
+    ]);
+    database.exec("ALTER TABLE session_nodes DROP COLUMN foreign_column");
+    await expectInspection(1);
+  } finally {
+    await worker.terminate();
     database.close();
   }
 });

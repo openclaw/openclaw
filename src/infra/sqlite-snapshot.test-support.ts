@@ -34,8 +34,8 @@ export function useSnapshotFixture(defaults: Partial<SnapshotOptions> = {}) {
     paths.targetPath = path.join(paths.tempDir, "snapshot.sqlite");
     execSource("VACUUM;");
   });
-  const execSource = (sql: string) => {
-    using database = new (requireNodeSqlite().DatabaseSync)(paths.sourcePath);
+  const execSource = (sql: string, file = paths.sourcePath) => {
+    using database = new (requireNodeSqlite().DatabaseSync)(file);
     database.exec(sql);
   };
   const snapshot = (options: Partial<SnapshotOptions> = {}) =>
