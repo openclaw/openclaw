@@ -314,26 +314,31 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
           request,
           sessionTarget: source.sessionTarget,
           assertCurrent,
+          onCommitted: async (committed) => {
+            assertCurrent();
+            // Stale base consumes a sequence just like success, including on replay.
+            if (committed.ok || committed.reason === "stale-base-leaf") {
+              const placement = placementClaim(identity);
+              const processTurn = processTurnBinding(identity);
+              if (!placement || !processTurn) {
+                throw new WorkerTranscriptAuthorityError({
+                  ok: false,
+                  closeReason: "placement-mismatch",
+                });
+              }
+              await options.placementStore?.updateAckCursors({
+                claim: placement,
+                transcriptSeq: request.seq,
+                // The ACK worker owns durable placement validation under its transaction.
+                assertCurrent: () => assertCurrent("durable"),
+              });
+              assertCurrent();
+              recordAckCursor(processTurn, { transcriptSeq: request.seq });
+            }
+          },
         });
-        // Persistence checks this owner after its queues and before commit; ACKs
-        // also require the claim to remain live after post-commit publication.
+        // Committed progress survives publication; a revoked claim still receives no ACK.
         assertCurrent();
-        // Stale base consumes a sequence just like success, including on replay.
-        if (result.ok || result.reason === "stale-base-leaf") {
-          const placement = placementClaim(identity);
-          const processTurn = processTurnBinding(identity);
-          if (!placement || !processTurn) {
-            return { ok: false, closeReason: "placement-mismatch" };
-          }
-          await options.placementStore?.updateAckCursors({
-            claim: placement,
-            transcriptSeq: request.seq,
-            // The ACK worker owns durable placement validation under its transaction.
-            assertCurrent: () => assertCurrent("durable"),
-          });
-          assertCurrent();
-          recordAckCursor(processTurn, { transcriptSeq: request.seq });
-        }
         return result;
       } catch (error) {
         if (error instanceof WorkerTranscriptAuthorityError) {

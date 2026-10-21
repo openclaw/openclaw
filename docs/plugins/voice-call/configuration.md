@@ -18,7 +18,9 @@ starting the runtime. Commands, RPC calls, and agent tools still return the
 exact missing configuration when used.
 
 <Note>
-Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twilio.authToken`, `plugins.entries.voice-call.config.realtime.providers.*.apiKey`, `plugins.entries.voice-call.config.streaming.providers.*.apiKey`, and `plugins.entries.voice-call.config.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
+Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twilio.authToken`, `plugins.entries.voice-call.config.realtime.providers.*.apiKey`, `plugins.entries.voice-call.config.streaming.providers.*.apiKey`, `plugins.entries.voice-call.config.tts.providers.*.apiKey`, and `plugins.entries.voice-call.config.numbers.*.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
+
+For an enabled plugin, an unavailable per-number SecretRef blocks startup or rejects a config reload, even if that number has not received a call. A rejected reload preserves the active config. Disabled plugins skip credential resolution.
 </Note>
 
 ```json5

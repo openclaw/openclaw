@@ -365,7 +365,7 @@ describe("Claw detail route paths", () => {
     "round trips the public package identity %s",
     (packageName) => {
       const pathname = pathForClawCatalogEntry(packageName, "/ui");
-      expect(pathname).toBe(`/ui/agents/claws/packages/${encodeURIComponent(packageName)}`);
+      expect(pathname).toBe(`/ui/claws/packages/${encodeURIComponent(packageName)}`);
       expect(clawCatalogPackageNameFromPath(pathname, "/ui")).toBe(packageName);
       expect(routeIdFromPath(pathname, "/ui")).toBe("claws");
       expect(dynamicRouteFromPath(pathname, "/ui")).toEqual([
@@ -377,7 +377,7 @@ describe("Claw detail route paths", () => {
   );
 
   it("preserves existing official detail links", () => {
-    expect(clawCatalogPackageNameFromPath("/agents/claws/workflow-operator")).toBe(
+    expect(clawCatalogPackageNameFromPath("/claws/workflow-operator")).toBe(
       "@openclaw/workflow-operator",
     );
   });
@@ -387,17 +387,19 @@ describe("Claw detail route paths", () => {
     (packageName) => {
       expect(() => pathForClawCatalogEntry(packageName)).toThrow("Invalid Claw package name");
       expect(
-        clawCatalogPackageNameFromPath(`/agents/claws/packages/${encodeURIComponent(packageName)}`),
+        clawCatalogPackageNameFromPath(`/claws/packages/${encodeURIComponent(packageName)}`),
       ).toBeNull();
     },
   );
 
   it("rejects malformed or unencoded package routes", () => {
-    expect(clawCatalogPackageNameFromPath("/agents/claws/@openclaw/workflow-operator")).toBeNull();
-    expect(
-      clawCatalogPackageNameFromPath("/agents/claws/packages/@maker/travel-planner"),
-    ).toBeNull();
-    expect(clawCatalogPackageNameFromPath("/agents/claws/packages/%ZZ")).toBeNull();
+    expect(clawCatalogPackageNameFromPath("/claws/@openclaw/workflow-operator/extra")).toBeNull();
+    expect(clawCatalogPackageNameFromPath("/claws/packages/@maker/travel-planner")).toBeNull();
+    expect(clawCatalogPackageNameFromPath("/claws/packages/%ZZ")).toBeNull();
+  });
+
+  it("does not expose the retired Agents overview route", () => {
+    expect(routeIdFromPath("/agents")).toBeNull();
   });
 });
 

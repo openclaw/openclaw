@@ -2327,6 +2327,7 @@ packages/gateway-protocol/src/schema/agent-database-admission.ts
 packages/gateway-protocol/src/schema/agent-summary-enums.ts
 packages/gateway-protocol/src/schema/agents-avatar-generate.ts
 packages/gateway-protocol/src/schema/agents-list-session-placement.ts
+packages/gateway-protocol/src/schema/agents-create.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/gateway-protocol/src/schema/background-preferences.ts
 packages/gateway-protocol/src/schema/board.ts

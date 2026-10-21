@@ -130,6 +130,7 @@ it("renders customization inline and recovers reload controls after failure or s
       ),
     );
     expect(button(t("pluginUi.reload")).disabled).toBe(false);
+    expect(manager.querySelector("select")).toBe(select);
 
     plugins.reload.mockReturnValueOnce(retryReload.promise);
     button(t("pluginUi.reload")).click();

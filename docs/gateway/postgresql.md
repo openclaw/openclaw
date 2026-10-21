@@ -451,6 +451,7 @@ memory-index sidecars. Upgrade older shared state with a compatible binary and
 Doctor before retrying. Agent schema upgrades can run in the port's private copy.
 A scoped port checks only migrations declared for that family. Fresh Matrix
 roots without legacy inbound-dedupe rows do not require a completion receipt.
+Port also refuses reserved-incognito session keys: run `openclaw doctor --fix` on the SQLite installation before retrying; PostgreSQL Doctor leaves such stores unchanged and requires re-adoption from a repaired SQLite source.
 
 Provision PostgreSQL and add `database.postgres.connection`, but leave the source
 engine selections unchanged. Stop the Gateway through its service owner and stop

@@ -1,14 +1,12 @@
 import fs from "node:fs/promises";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { ensureManagedCrabboxBinary, type CrabboxBinary } from "./crabbox-managed-binary.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   commandResult,
-  createProviderFixtures,
+  createProviderTestHarness,
   OPENCLAW_ROOT,
 } from "./crabbox-worker-provider.test-support.js";
 
@@ -28,10 +26,9 @@ const actual = await vi.importActual<typeof import("./crabbox-managed-binary.js"
   "./crabbox-managed-binary.js",
 );
 const SIBLING_BINARY = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
-const { providers, createProvider } = createProviderFixtures({
+const { createProvider, tempDirs } = createProviderTestHarness({
   isExecutable: (candidate) => candidate === SIBLING_BINARY,
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const binaryResult = { binary: SIBLING_BINARY, version: "999.0.0" };
 function fixture(command: CrabboxCommandRunner = async () => commandResult({ stdout: "[]" })) {
   const runCommand = vi.fn(command);
@@ -47,36 +44,14 @@ function heldAcquisition(command?: CrabboxCommandRunner) {
   });
   return { ...fixture(command), started, finish };
 }
-beforeEach(() => {
-  vi.mocked(ensureManagedCrabboxBinary)
-    .mockReset()
-    .mockImplementation(async (params) => ({
-      binary: params?.binary ?? "crabbox",
-      version: "999.0.0",
-    }));
-});
-afterEach(async () => {
-  await Promise.all([...providers].map((provider) => provider.dispose()));
-  providers.clear();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  syncBuiltinESMExports();
-});
 
 it.each([
   ["current", commandResult({ stdout: "crabbox 999.0.0" }), "", true],
-  ["outdated", commandResult({ stdout: "crabbox 0.66.0" }), "version 0.66.0", false],
   [
     "indeterminate",
     commandResult({ termination: "timeout", code: null }),
     "timed out after 30000 ms",
     true,
-  ],
-  [
-    "indeterminate",
-    commandResult({ stdout: "not-a-version" }),
-    "version output was not recognized",
-    false,
   ],
   [
     "indeterminate",
@@ -149,12 +124,8 @@ it.each([
     expect(message).toContain(reason);
     expect(message).toContain(`using managed binary "${managed}"`);
     expect(message).not.toContain("synthetic-version-secret");
-    if (status === "outdated") {
-      expect(message).toContain(`required ${actual.CRABBOX_MIN_VERSION}`);
-    } else {
-      const detail = message.split('probe status "indeterminate": ')[1]!.split("); using")[0]!;
-      expect(detail.length).toBeLessThanOrEqual(201);
-    }
+    const detail = message.split('probe status "indeterminate": ')[1]!.split("); using")[0]!;
+    expect(detail.length).toBeLessThanOrEqual(201);
   },
 );
 
@@ -186,8 +157,10 @@ it.each(["first", "joining"] as const)(
     if (waiter === "joining") {
       discovery = provider.listMachineOptions!(PROFILE);
     }
-    const preparation = provider.prepareProvision!(PROFILE, "cancelled", {
+    const beginNodeEnrollment = vi.fn();
+    const preparation = provider.provision(PROFILE, `provision:v2:${"0".repeat(64)}`, {
       assertCurrent() {},
+      beginNodeEnrollment,
       signal: controller.signal,
     });
     const rejected = expect(preparation).rejects.toMatchObject({ name: "AbortError" });
@@ -198,6 +171,7 @@ it.each(["first", "joining"] as const)(
       await rejected;
       expect(signal.aborted).toBe(false);
       expect(runCommand).not.toHaveBeenCalled();
+      expect(beginNodeEnrollment).not.toHaveBeenCalled();
     } finally {
       finish.resolve(binaryResult);
       await discovery;

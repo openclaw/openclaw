@@ -100,7 +100,10 @@ export function createSettingsStatus<T>(
       const current = connectionKey();
       return (
         currentClient !== null &&
-        client() === currentClient &&
+        !disposed &&
+        current[0] === currentClient &&
+        current[1] === "connected" &&
+        options.access(current[3] ?? null) &&
         context.gateway === owner &&
         captured.every((value, index) => value === current[index])
       );

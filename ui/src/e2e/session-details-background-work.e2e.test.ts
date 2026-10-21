@@ -213,8 +213,9 @@ suite.define(() => {
             const details = await openChatDetails(pane);
             if (width === 1728) {
               const loading = details.locator('[data-details-group="processes"]');
-              await loading.locator("openclaw-panel-loading-skeleton").waitFor();
-              await capture(`processes-loading-${colorScheme}`, details, [loading]);
+              await gateway.waitForRequest("sessions.processes.list");
+              expect(await loading.count()).toBe(0);
+              await capture(`processes-loading-${colorScheme}`, details, [details]);
               await gateway.resolveDeferred("sessions.processes.list", {
                 sessionId: "details-background",
                 processes,
@@ -233,7 +234,7 @@ suite.define(() => {
             }
             const subagents = details.locator('[data-details-group="subagents"]');
             const summary = subagents.getByRole("button", {
-              name: "All subagents. 2 Working, 3 Done, 1 Failed",
+              name: "All subagents. 2 Working, 4 Done",
               exact: true,
             });
             await summary.waitFor();
@@ -400,6 +401,31 @@ suite.define(() => {
                 await capture(`processes-stopped-${colorScheme}`, details, [first]);
                 await gateway.setMethodResponse("sessions.processes.list", {
                   sessionId: "details-background",
+                  processes: processes.map((row) =>
+                    row.status === "running"
+                      ? { ...row, status: "killed", canStop: false, endedAt: now }
+                      : row,
+                  ),
+                  truncated: false,
+                });
+                await gateway.emitGatewayEvent("sessions.processes.changed", {
+                  sessionKey: parentKey,
+                  agentId: "main",
+                });
+                await processGroup.waitFor({ state: "detached" });
+                await capture(`processes-terminal-${colorScheme}`, details, [subagents]);
+                await gateway.setMethodResponse("sessions.processes.list", {
+                  sessionId: "details-background",
+                  processes,
+                  truncated: false,
+                });
+                await gateway.emitGatewayEvent("sessions.processes.changed", {
+                  sessionKey: parentKey,
+                  agentId: "main",
+                });
+                await expect.poll(() => processGroup.locator("[data-process-id]").count()).toBe(4);
+                await gateway.setMethodResponse("sessions.processes.list", {
+                  sessionId: "details-background",
                   processes: [],
                   truncated: false,
                 });
@@ -407,10 +433,26 @@ suite.define(() => {
                   sessionKey: parentKey,
                   agentId: "main",
                 });
-                await processGroup
-                  .getByText("No background processes in this conversation.", { exact: true })
-                  .waitFor();
-                await capture(`processes-empty-${colorScheme}`, details, [processGroup]);
+                await processGroup.waitFor({ state: "detached" });
+                await capture(`processes-empty-${colorScheme}`, details, [subagents]);
+                await gateway.deferNext("sessions.processes.list");
+                await gateway.emitGatewayEvent("sessions.processes.changed", {
+                  sessionKey: parentKey,
+                  agentId: "main",
+                });
+                await gateway.rejectDeferred("sessions.processes.list", {
+                  code: "UNAVAILABLE",
+                  message: "Process list temporarily unavailable",
+                });
+                const listError = details.getByRole("alert").filter({
+                  hasText: "Process list temporarily unavailable",
+                });
+                await listError.waitFor();
+                expect(await processGroup.count()).toBe(0);
+                await capture(`processes-list-error-${colorScheme}`, details, [listError]);
+                await listError.getByRole("button", { name: "Retry", exact: true }).click();
+                await listError.waitFor({ state: "detached" });
+                expect(await processGroup.count()).toBe(0);
                 await gateway.setMethodResponse("sessions.processes.list", {
                   sessionId: "details-background",
                   processes,

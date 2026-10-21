@@ -116,8 +116,8 @@ suite.define(() => {
       await page.locator(".new-session-page__message").waitFor();
       expect(await page.locator(".topbar .header-new-session").count()).toBe(1);
       await capture("topbar");
-      await page.goto(suite.server.baseUrl + "agents");
-      await waitForControlUiRoute(page, { routeId: "agents-home" });
+      await page.goto(suite.server.baseUrl + "sessions");
+      await waitForControlUiRoute(page, { routeId: "sessions" });
       expect(await page.locator(".topbar .header-new-session").isVisible()).toBe(true);
       expect(await create.count()).toBe(1);
       expect(await create.getAttribute("href")).toBe("/new?agent=research");

@@ -14,11 +14,12 @@ const mocks = vi.hoisted(() => ({
   reconcile: vi.fn(async () => "unowned"),
   resolveCompletionOrigin: vi.fn(async () => undefined),
   custodyCurrent: true,
+  custodyError: new Error("Completion custody retired"),
   isCustodyCurrent: vi.fn((custody: CompletionCustody) => custody.isCurrent()),
   runWithCustody: vi.fn(
     <T>(custody: CompletionCustody, _scope: CompletionScope, run: () => T): T => {
       if (!custody.isCurrent()) {
-        throw new Error("Completion custody retired");
+        throw mocks.custodyError;
       }
       return run();
     },
@@ -201,7 +202,10 @@ it("enters retained custody without exposing its internal execution callback", a
   const custody = custodyFixture();
   const input = params();
   mocks.deliver.mockImplementation(async () => {
-    expect(mocks.runWithCustody.mock.calls).toEqual([[custody, input.scope, expect.any(Function)]]);
+    expect(mocks.runWithCustody).toHaveBeenCalled();
+    for (const call of mocks.runWithCustody.mock.calls) {
+      expect(call).toEqual([custody, input.scope, expect.any(Function)]);
+    }
     assertAdmission(source);
     return { delivered: true, path: "direct" };
   });
@@ -217,7 +221,10 @@ it("rejects custody retired during awaited origin resolution", async () => {
   retireDuringOriginResolution(() => {
     mocks.custodyCurrent = false;
   });
-  await rejects({ completionCustody: custody }, "custody retired");
+  await expect(deliver({ completionCustody: custody })).rejects.toMatchObject({
+    message: "Harness completion custody retired",
+    cause: mocks.custodyError,
+  });
   expect(mocks.deliver).not.toHaveBeenCalled();
 });
 

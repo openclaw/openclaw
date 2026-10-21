@@ -50,6 +50,12 @@ export function requestCalls<Call extends ReadonlyArray<unknown>>(
   return Array.from(source.mock.calls).filter(([calledMethod]) => calledMethod === method);
 }
 
+export function expectRequestCounts(request: MockCallSource, counts: Record<string, number>) {
+  for (const [method, count] of Object.entries(counts)) {
+    expect(requestCalls(request, method)).toHaveLength(count);
+  }
+}
+
 export function expectRpc(
   request: unknown,
   method: string,

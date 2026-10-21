@@ -644,4 +644,25 @@ describe("gateway settings and layout persistence", () => {
     );
     expect(loadSettings().pinnedAgentIds).toEqual(["main", "research"]);
   });
+
+  it("keeps the latest created agent scoped to its Gateway", () => {
+    const firstGateway = "wss://first.example";
+    const secondGateway = "wss://second.example";
+    patchSettings(
+      { gatewayUrl: firstGateway, sidebarRecentlyCreatedAgentId: "bot-first" },
+      {
+        selectGateway: false,
+      },
+    );
+    patchSettings(
+      { gatewayUrl: secondGateway, sidebarRecentlyCreatedAgentId: "bot-second" },
+      {
+        selectGateway: false,
+      },
+    );
+    expect(loadSettings(firstGateway).sidebarRecentlyCreatedAgentId).toBe("bot-first");
+    expect(loadSettings(secondGateway).sidebarRecentlyCreatedAgentId).toBe("bot-second");
+    writeStored({ sidebarRecentlyCreatedAgentId: 7 }, firstGateway);
+    expect(loadSettings(firstGateway).sidebarRecentlyCreatedAgentId).toBeUndefined();
+  });
 });

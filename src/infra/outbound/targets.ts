@@ -74,7 +74,7 @@ type HeartbeatDeliveryParams = {
 };
 
 /** Explicit per-send policy; ordinary automations never inherit heartbeat configuration. */
-export type ProactiveDeliveryPolicy = {
+type ProactiveDeliveryPolicy = {
   target?: string;
   channel?: string;
   to?: string;

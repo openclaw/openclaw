@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeCronJobScratchForMaintenance } from "../../test/helpers/cron/scratch-store.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
 import { readCronScratchSnapshot } from "../cron/scratch-read.js";
-import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";

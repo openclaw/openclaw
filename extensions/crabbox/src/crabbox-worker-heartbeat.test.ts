@@ -1,11 +1,10 @@
-import { syncBuiltinESMExports } from "node:module";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
-import { commandResult, createProviderFixtures } from "./crabbox-worker-provider.test-support.js";
+import {
+  commandResult,
+  createProviderTestHarness,
+} from "./crabbox-worker-provider.test-support.js";
 
 vi.mock("./crabbox-managed-binary.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./crabbox-managed-binary.js")>()),
@@ -13,26 +12,12 @@ vi.mock("./crabbox-managed-binary.js", async (importOriginal) => ({
 }));
 const LEASE_ID = "cbx_6071fc2062a6";
 const PROFILE = { provider: "aws", ttl: "4h", idleTimeout: "60m", warmImage: false };
-const { providers, createProvider } = createProviderFixtures();
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await Promise.all([...providers].map((provider) => provider.dispose()));
-    providers.clear();
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    vi.unstubAllEnvs();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    syncBuiltinESMExports();
-    cleanup();
-  }),
-);
+const { createProvider } = createProviderTestHarness({}, "openclaw-crabbox-heartbeat-");
 beforeEach(() => {
   vi.mocked(ensureManagedCrabboxBinary).mockImplementation(async () => ({
     binary: "/fixture/crabbox",
     version: "999.0.0",
   }));
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-heartbeat-"));
 });
 function inspectJson(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({ id: LEASE_ID, state: "active", ready: true, ...overrides });

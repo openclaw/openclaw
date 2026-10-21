@@ -77,3 +77,12 @@ export function createAuthOwnerTestFixtures() {
   }
   return { tempDirs, saveOptions, apiKey, store, snapshotAt, unreadableOuter, seedRoot };
 }
+
+export function persistOwnerProfile(
+  { stateDir }: { stateDir: string },
+  profileId: string,
+  credential: Credential,
+  agentDir?: string,
+) {
+  return persistAuthProfileBatch({ stateDir, agentDir, profiles: [{ profileId, credential }] });
+}

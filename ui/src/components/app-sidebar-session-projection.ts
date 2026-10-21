@@ -117,7 +117,6 @@ type SidebarPresentationHost = Pick<
   isSessionChildrenFullyShown(key: string): boolean;
 };
 type SidebarPresentationReaders = {
-  snapshot: boolean;
   sections(): SidebarVisibleSections["sections"];
   tree(): SidebarRecentSession[];
   catalogs(): SidebarSessionCatalog[];
@@ -160,9 +159,6 @@ export class SidebarSessionProjection {
     host: SidebarPresentationHost,
     readers: SidebarPresentationReaders,
   ): boolean {
-    if (readers.snapshot) {
-      return true;
-    }
     const data = host.sessionData;
     const context = host.sessionDataContext;
     const sessionsVisible = host.navigationView === "sessions" && !host.contextualSidebar;

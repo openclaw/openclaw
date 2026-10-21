@@ -1,6 +1,6 @@
 import type { SessionsStorageStatusResult } from "@openclaw/gateway-protocol";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
@@ -55,8 +55,12 @@ async function mount() {
           raw: JSON.stringify(config),
         };
   const request = vi.fn(respond);
-  const reply = (method: string, read: () => Promise<unknown>) => (called: string) =>
-    called === method ? read() : respond(called);
+  const reply =
+    (method: string, read: () => Promise<unknown>) =>
+    (called: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
+      const response = called === method ? read() : respond(called);
+      return options?.signal ? withinTest(response, options.signal) : response;
+    };
   const client = { request } as unknown as GatewayBrowserClient;
   const { gateway, publish } = createGatewayHarness(client);
   const runtimeConfig = createRuntimeConfigCapability(gateway);
@@ -107,6 +111,7 @@ it.each([
   ["status", "reconnect"],
   ["run", "client"],
 ])("rejects a delayed %s response after the Gateway %s changes", async (kind, change) => {
+  const warnings = vi.spyOn(console, "warn");
   const { page, context, request, client, reply, publish } = await mount();
   const method = `sessions.storage.${kind}`;
   const previous = createDeferred<SessionsStorageStatusResult>();
@@ -141,6 +146,55 @@ it.each([
     expect(page.textContent).not.toContain("Batch completed");
     expect(button(page, "Run now").disabled).toBe(false);
   }
+  expect(
+    warnings.mock.calls.filter(([message]) =>
+      String(message).includes("UNTRACKED_READ_AFTER_AWAIT"),
+    ),
+  ).toEqual([]);
+});
+
+it("shows submission progress and clears a rejected run before retrying", async () => {
+  const { page, request, reply } = await mount();
+  const failed = createDeferred<SessionsStorageStatusResult>();
+  request.mockImplementation(reply("sessions.storage.run", () => failed.promise));
+  click(page, "Run now");
+  await waitForSolid(() => expect(button(page, "Running").disabled).toBe(true));
+  expect(page.querySelector<HTMLInputElement>('input[type="number"]')!.disabled).toBe(true);
+
+  failed.reject(new Error("Maintenance unavailable"));
+  await waitText(page, "Maintenance unavailable", '[role="alert"]');
+  expect(button(page, "Run now").disabled).toBe(false);
+
+  const retry = createDeferred<SessionsStorageStatusResult>();
+  request.mockImplementation(reply("sessions.storage.run", () => retry.promise));
+  click(page, "Run now");
+  await waitForSolid(() => expect(button(page, "Running").disabled).toBe(true));
+  expect(page.textContent).not.toContain("Maintenance unavailable");
+  retry.resolve(inventory(7));
+  await waitText(page, "Batch completed. 0 transcripts archived.");
+  expect(button(page, "Run now").disabled).toBe(false);
+});
+
+it("does not hold a replacement submission behind a retired request", async () => {
+  const { page, request, reply, publish } = await mount();
+  const retired = createDeferred<SessionsStorageStatusResult>();
+  request.mockImplementation(reply("sessions.storage.run", () => retired.promise));
+  click(page, "Run now");
+  const current = createDeferred<SessionsStorageStatusResult>();
+  const currentRequest = vi.fn(reply("sessions.storage.run", () => current.promise));
+  publish(true, { request: currentRequest } as unknown as GatewayBrowserClient);
+  await waitForSolid(() => expect(button(page, "Run now").disabled).toBe(false));
+  click(page, "Run now");
+  await waitForSolid(() => expect(button(page, "Running").disabled).toBe(true));
+  current.resolve(inventory(7));
+  await waitText(page, "Batch completed. 0 transcripts archived.");
+  expect(button(page, "Run now").disabled).toBe(false);
+
+  retired.resolve(inventory(7, { archivedTranscripts: 693 }));
+  await retired.promise;
+  flush();
+  expect(button(page, "Run now").disabled).toBe(false);
+  expect(page.textContent).not.toContain("693");
 });
 
 it("keeps a days draft and inventory through reconnect and retires them on client replacement", async () => {

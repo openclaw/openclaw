@@ -35,6 +35,7 @@ import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import type { SelectPicker } from "./select-picker.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
+import { snapshotSessions } from "./sidebar-snapshot-model.ts";
 
 type Sidebar = AppSidebarSessionNavigationElement & HTMLElement;
 
@@ -128,6 +129,103 @@ async function expectRowRefresh(sidebar: Sidebar, change: () => void) {
 }
 
 describe("sidebar projection memo", () => {
+  it.each([10, 30])("keeps newer pagination at %s rows through cached handoff", async (limit) => {
+    const sessionsToShow = Array.from({ length: 40 }, (_, index) => session(`row-${index}`));
+    const { sidebar, sessions } = await mount(sessionsToShow);
+    const owner = getAppSidebarOwner(sidebar.hostElement)!;
+    const sectionId = "ungrouped";
+    expect(
+      sidebar.querySelector("[data-session-section]")?.getAttribute("data-session-section"),
+    ).toBe(sectionId);
+    vi.spyOn(owner, "sidebarSnapshotSettled").mockReturnValue(false);
+    const rows = snapshotSessions(
+      sessionsToShow.map((row) => sidebar.getSessionNavigationState().toSidebarSession(row)),
+    );
+    owner.restoreSidebarSnapshot({
+      ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
+      mode: "chip",
+      sessions: rows,
+      entries: [],
+      sections: [
+        {
+          id: sectionId,
+          rows: rows.slice(0, 20),
+          totalRowCount: rows.length,
+          visibleRowCount: 20,
+          visibleLimit: 20,
+          collapsedVisibleRowCount: 10,
+          renderHeader: false,
+        },
+      ],
+    });
+    owner.invalidate();
+    await settleLitElement(sidebar);
+    owner.setVisibleSessionLimit(sectionId, limit);
+    owner.releaseSidebarSnapshot();
+    owner.invalidate();
+    await settleLitElement(sidebar);
+    expect(
+      sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
+    ).toHaveLength(limit);
+  });
+
+  it("keeps the cached roster until live changes can replace it", async () => {
+    const initial = session("cached");
+    const deleted = session("deleted-during-load");
+    const { sidebar, row, publish, sessions } = await mount([initial, deleted]);
+    const owner = getAppSidebarOwner(sidebar.hostElement)!;
+    vi.spyOn(owner, "sidebarSnapshotSettled").mockReturnValue(false);
+    const rows = snapshotSessions(
+      [initial, deleted].map((entry) =>
+        sidebar.getSessionNavigationState().toSidebarSession(entry),
+      ),
+    );
+    owner.restoreSidebarSnapshot({
+      ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
+      mode: "chip",
+      sessions: rows,
+      entries: [`session:${initial.key}`],
+      sections: [
+        {
+          id: "ungrouped",
+          rows,
+          totalRowCount: 2,
+          visibleRowCount: 2,
+          visibleLimit: 10,
+          collapsedVisibleRowCount: 2,
+          renderHeader: false,
+        },
+      ],
+    });
+    owner.invalidate();
+    await settleLitElement(sidebar);
+    const cachedRow = row(initial.key);
+    const zone = owner.reconciledSidebarZone();
+    publish([
+      {
+        ...initial,
+        label: "Renamed while loading",
+        hasActiveRun: true,
+        activeRunIds: ["live-run"],
+        status: "running",
+      },
+      session("new-live-row", { owner: { actor: bob } }),
+    ]);
+    await settleLitElement(sidebar);
+    expect(owner.reconciledSidebarZone()).toBe(zone);
+    expect(row(initial.key)).toBe(cachedRow);
+    expect(row(key("new-live-row"))).toBeNull();
+    expect(row(deleted.key)).not.toBeNull();
+    expect(row(initial.key)?.textContent).not.toContain("Renamed while loading");
+    owner.releaseSidebarSnapshot();
+    owner.invalidate();
+    await settleLitElement(sidebar);
+    expect(row(key("new-live-row"))).not.toBeNull();
+    expect(row(deleted.key)).toBeNull();
+    expect(row(initial.key)).toBe(cachedRow);
+    expect(row(initial.key)?.textContent).toContain("Renamed while loading");
+    expect(row(initial.key)?.querySelector('[aria-label="Active run"]')).not.toBeNull();
+  });
   it("prepares initially hidden session rows from shell inputs while keeping later owner updates parked", async () => {
     const target = session("question-proof");
     const sessions = createSessionsHarness("main", []);

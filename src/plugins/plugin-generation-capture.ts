@@ -7,6 +7,7 @@ import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
 import {
   createPluginGenerationFileCapture,
   createPluginSourceLinkCapture,
+  linkPluginGenerationDependency,
 } from "./plugin-generation-file-capture.js";
 import { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import {
@@ -17,6 +18,7 @@ import {
   type PluginSourceCustodyFork,
   createPluginGenerationModuleLookup,
 } from "./plugin-generation-source-lookup.js";
+import { PluginDependencyLinkError } from "./plugin-instance-error.js";
 import {
   createPluginNativeAdmission,
   type PluginNativeRecovery,
@@ -247,11 +249,20 @@ function createPluginGenerationArtifact(
           ? path.dirname(moduleRoot)
           : destination;
       const link = path.join(lookupDirectory, "node_modules", name);
-      packages.get(dependency.root)!.links.add(link);
-      if (!fs.existsSync(link)) {
-        fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
-        fs.symlinkSync(path.relative(path.dirname(link), captured), link, "junction");
+      const dependencyPackage = packages.get(dependency.root)!;
+      dependencyPackage.links.add(link);
+      try {
+        if (linkPluginGenerationDependency(link, captured)) {
+          additions.add(link);
+        }
+      } catch (cause) {
+        const error = new PluginDependencyLinkError(
+          `Cannot prepare dependency ${name} for plugin ${rootDir}; check filesystem permissions and retry.`,
+          { cause },
+        );
+        dependencyPackage.state = { error };
         additions.add(link);
+        throw error;
       }
     };
     const scopes = metadataCapture.createScope({

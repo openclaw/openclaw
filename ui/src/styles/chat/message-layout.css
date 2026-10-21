@@ -910,6 +910,7 @@
   color: var(--text);
   background: transparent;
   font: inherit;
+  text-decoration: none;
   cursor: var(--cursor-action);
   transition:
     color 120ms ease,

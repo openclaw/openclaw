@@ -5,6 +5,7 @@ import { buildBaseHints } from "../../src/config/schema.hints.js";
 import { PUBLIC_SESSION_COPY } from "../../src/shared/public-session-copy.ts";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
 import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
+import { registerAgentCreationEnglish } from "../../ui/src/i18n/locales/en-agent-creation.ts";
 import { registerAgentsHomeEnglish } from "../../ui/src/i18n/locales/en-agents-home.ts";
 import { registerApprovalsEnglish } from "../../ui/src/i18n/locales/en-approvals.ts";
 import { registerAppsEnglish } from "../../ui/src/i18n/locales/en-apps.ts";
@@ -19,6 +20,7 @@ import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goal
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
 import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-chat-provider-review.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
+import { registerClawsEnglish } from "../../ui/src/i18n/locales/en-claws.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
 import { registerCronEnglish } from "../../ui/src/i18n/locales/en-cron.ts";
@@ -79,6 +81,7 @@ const localesDir = path.resolve(
 const sourceFiles = [
   "en.ts",
   "en-agents.ts",
+  "en-agent-creation.ts",
   "en-activity.ts",
   "en-agents-home.ts",
   "en-apps.ts",
@@ -97,6 +100,7 @@ const sourceFiles = [
   "en-chat-message-metadata.ts",
   "en-chat-provider-review.ts",
   "en-chat-session.ts",
+  "en-claws.ts",
   "en-code-blocks.ts",
   "en-command-palette.ts",
   "en-cron.ts",
@@ -146,6 +150,13 @@ export function loadControlUiStartupCatalog(): TranslationMap {
 }
 
 export function loadControlUiSourceCatalog(): TranslationMap {
+  const agentChip: TranslationMap = {};
+  for (const [key, value] of Object.entries(en.agentChip)) {
+    agentChip[key] = value;
+    if (key === "creatingAgent") {
+      Object.assign(agentChip, registerAgentCreationEnglish.catalog.agentChip);
+    }
+  }
   const newSession: TranslationMap = {};
   for (const [key, value] of Object.entries(registerNewSessionSetupEnglish.catalog.newSession)) {
     newSession[key] = value;
@@ -188,6 +199,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     // Preserve partial-fragment key order while keeping shared labels eager.
     {
       ...en,
+      agentChip,
       secretsStore: registerSecretsStoreEnglish.catalog.secretsStore,
       custodian: {
         ...registerPluginManagementEnglish.catalog.custodian,
@@ -227,6 +239,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     },
     registerActivityEnglish.catalog,
     registerAgentsHomeEnglish.catalog,
+    registerClawsEnglish.catalog,
     registerAppsEnglish.catalog,
     registerLogbookEnglish.catalog,
     registerLogsEnglish.catalog,
