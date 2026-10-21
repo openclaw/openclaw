@@ -568,8 +568,9 @@ export function createGatewayBroadcaster(params: {
           ? (frames.toolNarration ??= frameBaseFor(toolNarrationPayload()))
           : event === "health" && c.connect.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)
             ? (frames.healthSummary ??= frameBaseFor(
+                // SAFETY: Only internal health producers can publish this reserved event.
                 projectHealthSummary(payload as HealthSummary),
-              )) // SAFETY: Only internal health producers can publish this reserved event.
+              ))
             : useDelta && projection
               ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
               : (frames.snapshot ??= frameBaseFor(payload));

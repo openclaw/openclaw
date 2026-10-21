@@ -82,13 +82,14 @@ for (let index = 0; index < clientCount; index += 1) {
   const accepted = once(server, "connection");
   const peer = new WebSocket(`ws://127.0.0.1:${port}`, { perMessageDeflate: false });
   peers.push(peer);
+  let receivedCount = 0;
   peer.on("message", (raw) => {
     try {
       const text = rawDataToString(raw);
       const frame = JSON.parse(text) as { event: string; seq: number; payload: Payload };
       assert.equal(frame.event, values.event);
-      received[index] += 1;
-      assert.equal(frame.seq, received[index]);
+      received[index] = ++receivedCount;
+      assert.equal(frame.seq, receivedCount);
       const source = expected.get(frame.payload.seq);
       assert(source, "unexpected or late frame");
       const full = index < fullClients;
@@ -159,7 +160,7 @@ function toolCategory(tool: number) {
 function fixture(tool: number, step: number): Payload {
   const category = toolCategory(tool);
   const name = category === "read" ? "read" : "exec";
-  const args =
+  const args: Record<string, string> =
     category === "shell_exec"
       ? { command: `printf synthetic ${"x".repeat(256)}` }
       : category === "code_mode_exec"
