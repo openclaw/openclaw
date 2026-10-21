@@ -13,6 +13,40 @@ import { createPluginToolFactoryContext } from "./tool-factory-context.js";
 import { bindPluginToolCallbacks } from "./tool-factory-runtime.js";
 import type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "./tool-types.js";
 
+function probe(effect: () => void, assertCurrent?: () => void) {
+  return {
+    name: "probe",
+    label: "Probe",
+    description: "Synthetic probe",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      assertCurrent?.();
+      effect();
+      return { content: [], details: {} };
+    },
+  };
+}
+
+function singleTool(
+  entry: ReturnType<typeof register>["entry"],
+  context: OpenClawPluginToolContext,
+) {
+  const tool = entry.factory(context);
+  if (!tool || Array.isArray(tool)) {
+    throw new Error("expected one probe");
+  }
+  return tool;
+}
+
+function bindTool(registration: ReturnType<typeof register>, context: OpenClawPluginToolContext) {
+  return bindPluginToolCallbacks(
+    registration.entry,
+    registration.registry,
+    singleTool(registration.entry, context),
+    context.assertInvocationCurrent,
+  );
+}
+
 function register(factory: OpenClawPluginToolFactory | OpenClawPluginToolFactory<2>) {
   const builder = createTestPluginRegistry(createPluginRuntimeMock());
   const record = createPluginRecord({ id: "probe", contracts: { tools: ["probe"] } });
@@ -24,7 +58,15 @@ function register(factory: OpenClawPluginToolFactory | OpenClawPluginToolFactory
   if (!entry) {
     throw new Error("expected registered probe");
   }
-  return { registry: builder.registry, entry };
+  return {
+    registry: builder.registry,
+    entry,
+    createContext(
+      params: Omit<Parameters<typeof createPluginToolFactoryContext>[0], "entry" | "registry">,
+    ) {
+      return createPluginToolFactoryContext({ entry, registry: builder.registry, ...params });
+    },
+  };
 }
 
 function declarations(readNames: () => string[] | undefined) {
@@ -78,11 +120,9 @@ describe("plugin tool declaration membership", () => {
       ["alpha"],
     ]);
     expect(record.toolNames).toEqual(["beta", "Alpha", "alpha"]);
-    expect(builder.registry.tools.map((entry) => Array.from(entry.declaredNames ?? []))).toEqual([
-      ["beta", "Alpha", "alpha"],
-      ["beta", "Alpha", "alpha"],
-      ["beta", "Alpha", "alpha"],
-    ]);
+    expect(builder.registry.tools.map((entry) => Array.from(entry.declaredNames ?? []))).toEqual(
+      Array.from({ length: 3 }, () => ["beta", "Alpha", "alpha"]),
+    );
     expect(builder.registry.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
       "plugin must declare contracts.tools for: new_tool, BETA",
     ]);
@@ -125,19 +165,9 @@ describe("plugin tool declaration membership", () => {
 describe("versioned plugin tool authority", () => {
   it("omits a V1 host assertion when absent while ordinary callbacks keep working", async () => {
     const effect = vi.fn();
-    const { entry, registry } = register(() => ({
-      name: "probe",
-      label: "Probe",
-      description: "Legacy tool",
-      parameters: { type: "object", properties: {} },
-      async execute() {
-        effect();
-        return { content: [], details: {} };
-      },
-    }));
-    const context = createPluginToolFactoryContext({
-      entry,
-      registry,
+    const registration = register(() => probe(effect));
+    const { registry, createContext } = registration;
+    const context = createContext({
       context: {
         // Input context fields cannot manufacture a host assertion.
         assertInvocationCurrent: () => {
@@ -146,11 +176,7 @@ describe("versioned plugin tool authority", () => {
       },
     });
     expect(context.assertInvocationCurrent).toBeUndefined();
-    const raw = entry.factory(context);
-    if (!raw || Array.isArray(raw)) {
-      throw new Error("expected one legacy tool");
-    }
-    const tool = bindPluginToolCallbacks(entry, registry, raw, context.assertInvocationCurrent);
+    const tool = bindTool(registration, context);
 
     await expect(tool.execute("ordinary", {})).resolves.toMatchObject({ details: {} });
     expect(effect).toHaveBeenCalledOnce();
@@ -167,29 +193,13 @@ describe("versioned plugin tool authority", () => {
         throw new Error("host invocation retired");
       }
     });
-    const { entry, registry } = register((context) => ({
-      name: "probe",
-      label: "Probe",
-      description: "Host-bound legacy tool",
-      parameters: { type: "object", properties: {} },
-      async execute() {
-        context.assertInvocationCurrent?.();
-        effect();
-        return { content: [], details: {} };
-      },
-    }));
-    const context = createPluginToolFactoryContext({
-      entry,
-      registry,
+    const registration = register((context) => probe(effect, context.assertInvocationCurrent));
+    const context = registration.createContext({
       context: {},
       assertInvocationCurrent: assertHostCurrent,
     });
     expect(context.assertInvocationCurrent).toBeTypeOf("function");
-    const raw = entry.factory(context);
-    if (!raw || Array.isArray(raw)) {
-      throw new Error("expected one legacy tool");
-    }
-    const tool = bindPluginToolCallbacks(entry, registry, raw, context.assertInvocationCurrent);
+    const tool = bindTool(registration, context);
 
     await expect(tool.execute("ordinary", {})).resolves.toMatchObject({ details: {} });
     expect(assertHostCurrent).toHaveBeenCalled();
@@ -199,25 +209,12 @@ describe("versioned plugin tool authority", () => {
     expect(effect).toHaveBeenCalledOnce();
   });
 
-  it("requires a final-effect assertion in the versioned context type", () => {
-    expectTypeOf<OpenClawPluginToolContext<2>["assertInvocationCurrent"]>().toEqualTypeOf<
-      () => void
-    >();
-    const { entry } = register({ contextVersion: 2, create: () => null });
-    expect(entry.contextVersion).toBe(2);
-    expect(() => entry.factory({ senderIsOwner: true })).toThrow(
-      "require host invocation authority",
-    );
-  });
-
   it.each([false, true])(
     "does not promote legacy continuation factories, preserving direct owner=%s",
     (directOwner) => {
       const create = vi.fn(() => null);
-      const { entry, registry } = register(create);
-      const context = createPluginToolFactoryContext({
-        entry,
-        registry,
+      const { entry, createContext } = register(create);
+      const context = createContext({
         context: { senderIsOwner: directOwner, requesterSenderId: "direct-sender" },
         ownerContinuation: continuation(() => true),
       });
@@ -231,7 +228,7 @@ describe("versioned plugin tool authority", () => {
   );
 
   it("rejects an operational caller that has no live receipt authority", async () => {
-    const { entry, registry } = register({ contextVersion: 2, create: () => null });
+    const { createContext } = register({ contextVersion: 2, create: () => null });
     await withGatewayToolCallerIdentity(
       {
         agentId: "main",
@@ -239,9 +236,7 @@ describe("versioned plugin tool authority", () => {
         operationalRunInstance: createOperationalRunInstanceRef("missing-receipt"),
       },
       async () => {
-        const context = createPluginToolFactoryContext({
-          entry,
-          registry,
+        const context = createContext({
           context: {},
           assertInvocationCurrent: captureGatewayToolCallerAssertion(),
         });
@@ -256,7 +251,7 @@ describe("versioned plugin tool authority", () => {
     ["the memory slot owner's tools", "probe", true],
     ["another plugin's tools", "records", false],
   ])("checks memory audience currency only for %s", (_label, slotOwner, guarded) => {
-    const { entry, registry } = register(() => null);
+    const { registry, createContext } = register(() => null);
     registry.memoryCapabilities.push({
       pluginId: slotOwner,
       capability: {},
@@ -265,9 +260,7 @@ describe("versioned plugin tool authority", () => {
     const assertMemoryAudienceCurrent = vi.fn(() => {
       throw new Error("memory audience is no longer current");
     });
-    const context = createPluginToolFactoryContext({
-      entry,
-      registry,
+    const context = createContext({
       context: { assertMemoryAudienceCurrent },
       assertInvocationCurrent: () => {},
     });
@@ -286,34 +279,19 @@ describe("versioned plugin tool authority", () => {
       () => void
     >();
     const effect = vi.fn();
-    const { entry, registry } = register({
+    const { entry, createContext } = register({
       contextVersion: 2,
-      create: (ctx) => ({
-        name: "probe",
-        label: "Probe",
-        description: "Metadata-only probe",
-        parameters: { type: "object", properties: {} },
-        async execute() {
-          ctx.assertInvocationCurrent();
-          effect();
-          return { content: [], details: {} };
-        },
-      }),
+      create: (ctx) => probe(effect, ctx.assertInvocationCurrent),
     });
     expect(entry.contextVersion).toBe(2);
     expect(() => entry.factory({ senderIsOwner: true })).toThrow(
       "require host invocation authority",
     );
-    const context = createPluginToolFactoryContext({
-      entry,
-      registry,
+    const context = createContext({
       context: { senderIsOwner: false },
     });
     expect(context.senderIsOwner).toBe(false);
-    const raw = entry.factory(context);
-    if (!raw || Array.isArray(raw)) {
-      throw new Error("expected metadata probe");
-    }
+    const raw = singleTool(entry, context);
     expect(raw.name).toBe("probe");
     await expect(raw.execute("missing-run", {})).rejects.toThrow("outside an admitted run");
     expect(effect).not.toHaveBeenCalled();
@@ -327,14 +305,10 @@ describe("versioned plugin tool authority", () => {
       const effect = vi.fn();
       let ownerCurrent = true;
       let runCurrent = true;
-      const { entry, registry } = register({
+      const registration = register({
         contextVersion: 2,
         create: (context) => ({
-          name: "probe",
-          label: "Probe",
-          description: "Synthetic final-effect probe",
-          parameters: { type: "object", properties: {} },
-          prepareArguments: (args: unknown) => args,
+          ...probe(effect),
           async execute() {
             entered.resolve();
             await release.promise;
@@ -342,11 +316,10 @@ describe("versioned plugin tool authority", () => {
             effect();
             return { content: [{ type: "text", text: "done" }], details: {} };
           },
+          prepareArguments: (args: unknown) => args,
         }),
       });
-      const context = createPluginToolFactoryContext({
-        entry,
-        registry,
+      const context = registration.createContext({
         context: { senderIsOwner: false },
         assertInvocationCurrent() {
           if (!runCurrent) {
@@ -361,22 +334,14 @@ describe("versioned plugin tool authority", () => {
         messageChannel: "discord",
         agentAccountId: "original-account",
       });
-      const raw = entry.factory(context);
-      if (!raw || Array.isArray(raw)) {
-        throw new Error("expected one probe");
-      }
-      const tool = bindPluginToolCallbacks(entry, registry, raw, context.assertInvocationCurrent);
+      const tool = bindTool(registration, context);
       const work = tool.execute("probe", {});
       void work.catch(() => {});
       await entered.promise;
-      if (mode === "owner-close") {
-        ownerCurrent = false;
-      }
-      if (mode === "run-close") {
-        runCurrent = false;
-      }
+      ownerCurrent = mode !== "owner-close";
+      runCurrent = mode !== "run-close";
       if (mode === "plugin-close") {
-        markPluginRegistryRetired(registry);
+        markPluginRegistryRetired(registration.registry);
       }
       release.resolve();
       if (mode === "allowed") {
