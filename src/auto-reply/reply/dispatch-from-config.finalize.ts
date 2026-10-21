@@ -8,6 +8,7 @@ import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
+import { extractTtsDirectiveFacts } from "../../tts/directive-facts.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
@@ -191,6 +192,14 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             }
           : {}),
       });
+      // A canonical speech final owns synthesis, including a channel veto or failed attempt.
+      if (
+        isReplyPayloadTerminalContent(reply) &&
+        !getReplyPayloadMetadata(reply)?.precedingInputAnswer &&
+        (getReplyPayloadMetadata(reply)?.tts ?? extractTtsDirectiveFacts(reply.text ?? "").facts)
+      ) {
+        deferredTtsTextPending = "";
+      }
       if (finalReply.dispatcherOutcome) {
         const operation = state.getDispatchReplyOperation();
         void finalReply.dispatcherOutcome.then(
@@ -346,12 +355,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       channelId: deliveryChannel,
       accountId: replyRoute.accountId,
     });
-    // Final payloads in separate lanes must not strand the deferred answer.
+    const taggedBlockSpeech = extractTtsDirectiveFacts(deferredTtsTextPending).facts;
+    // Cleaned block text cannot carry tagged speech, even in all mode.
     if (
-      ttsMode === "final" &&
-      state.progressState.blockCount > 0 &&
       deferredTtsTextPending.trim() &&
-      (replies.length === 0 || deferFinalTtsText)
+      (taggedBlockSpeech || (ttsMode === "final" && (replies.length === 0 || deferFinalTtsText)))
     ) {
       const sendTtsFinal = async (payload: ReplyPayload) => {
         const finalReply = await state.sendFinalPayload(payload, {
