@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { PreparedModelRuntimePublicationSupersededError as SupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -14,6 +18,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import * as userModelAccounts from "../../state/user-model-accounts.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -35,10 +40,101 @@ import {
   chatMetadataCommandFields,
   connectChatMetadataAccount,
   createChatMetadataHarness,
+  createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
+import * as modelLists from "./models-list-result.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 type MetadataFixture = ReturnType<typeof createPersonalMetadataFixture>;
+
+it("serves commands independently of another agent's remembered model list", async ({ signal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const config = {
+      agents: {
+        entries: { main: {}, other: {} },
+        defaults: { model: "test/main-model", modelPolicy: { allow: ["test/*"] } },
+      },
+    };
+    const pluginRegistry = createEmptyPluginRegistry();
+    const owner = (id: string) => ({
+      ...createChatMetadataOwner(config, id, {}, "test", "openai-completions"),
+      pluginRegistry,
+    });
+    const mainOwner = owner("main-model");
+    let otherOwner = owner("other-model");
+    const harness = createChatMetadataHarness(config);
+    harness.setOwner(mainOwner);
+    harness.getPreparedOwner.mockImplementation((params) =>
+      params?.agentId === "other" ? otherOwner : mainOwner,
+    );
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => config,
+      readChatMetadata: harness.runtime.read,
+    });
+    const readCommands = async () => {
+      const respond = vi.fn<RespondFn>();
+      await callMetadata({
+        params: { agentId: "main", includeModels: false },
+        context,
+        respond,
+        signal,
+      });
+      expect(respond).toHaveBeenCalledWith(true, {
+        commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
+        swarmEnabled: true,
+        revision: expect.any(String),
+      });
+    };
+    const request = {
+      agentId: "other",
+      params: { agentId: "other", view: "all" as const },
+      includeManualSelection: true,
+    };
+    const entered = createDeferred();
+    const release = createDeferred();
+    const abort = () => release.resolve();
+    signal.addEventListener("abort", abort, { once: true });
+    let blockOther = false;
+    const prepare = modelLists.prepareModelsListResult;
+    const preparation = vi
+      .spyOn(modelLists, "prepareModelsListResult")
+      .mockImplementation(async (params) => {
+        if (blockOther && params.agentId === "other") {
+          entered.resolve();
+          await release.promise;
+        }
+        return prepare(params);
+      });
+    const pending: Promise<unknown>[] = [];
+    try {
+      await harness.runtime.refresh();
+      await expect(harness.runtime.readModelsList(request)).resolves.toMatchObject({
+        models: expect.arrayContaining([expect.objectContaining({ id: "other-model" })]),
+      });
+      await readCommands();
+      otherOwner = owner("replacement-model");
+      blockOther = true;
+      await harness.runtime.refresh();
+      const models = harness.runtime.readModelsList(request);
+      pending.push(models);
+      await withinTest(entered.promise, signal);
+      const reading = readCommands();
+      pending.push(reading);
+      await withinTest(reading, signal);
+      release.resolve();
+      await Promise.all(pending);
+      await expect(harness.runtime.readModelsList(request)).resolves.toMatchObject({
+        models: expect.arrayContaining([expect.objectContaining({ id: "replacement-model" })]),
+      });
+    } finally {
+      release.resolve();
+      await Promise.allSettled(pending);
+      preparation.mockRestore();
+      signal.removeEventListener("abort", abort);
+      await harness.runtime.stop();
+    }
+  });
+});
 
 function metadataConnect(scopes: GatewayOperatorRoleDefinition["scopes"]) {
   return {

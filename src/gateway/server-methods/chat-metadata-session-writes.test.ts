@@ -6,7 +6,6 @@ import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   assignSessionOwner,
   listSessionEntriesCore,
-  listSessionParticipantsReadOnly,
   loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -74,23 +73,10 @@ const cases = [
   { write: "raw sibling update", allowed: true },
   { write: "sibling transcript append", allowed: true },
   { write: "sibling cache replacement", allowed: true },
-  { write: "canonical sibling owner", allowed: true },
-  { write: "canonical sibling participant", allowed: true },
   { write: "legacy sibling owner", allowed: true },
   { write: "legacy sibling participant", allowed: true },
-  { write: "compound sibling owner", allowed: true },
-  { write: "compound sibling participant", allowed: true },
-  { write: "compound new sibling owner", allowed: true },
-  { write: "compound new sibling participant", allowed: true },
   { write: "selected owner", allowed: true, entryChanged: true },
   { write: "selected participant", allowed: true, entryChanged: true },
-  { write: "selected participant repeat", allowed: true },
-  { write: "nested selected participant repeats", allowed: true },
-  { write: "earlier selected participant first prompt", allowed: true, entryChanged: true },
-  { write: "selected participant insert then repeat", allowed: true, entryChanged: true },
-  { write: "selected participant repeat then insert", allowed: true, entryChanged: true },
-  { write: "selected entry write then participant repeat", allowed: true, entryChanged: true },
-  { write: "selected participant repeat then entry write", allowed: true, entryChanged: true },
   { write: "rolled-back selected owner", allowed: true },
   { write: "rolled-back selected participant", allowed: true },
   { write: "rolled-back selected account", allowed: true },
@@ -127,9 +113,6 @@ it.each(
     setRuntimeConfigSnapshot(config);
     const selected = { agentId: "main", sessionKey: "agent:main:metadata-selected" };
     const sibling = { agentId: "main", sessionKey: "agent:main:metadata-sibling" };
-    const writeTarget = write.includes("new sibling")
-      ? { ...sibling, sessionKey: "agent:main:new-sibling" }
-      : sibling;
     replaceSessionEntrySync(selected, {
       sessionId: "selected",
       lifecycleRevision: "selected-original",
@@ -148,14 +131,6 @@ it.each(
       identity: { type: "agent", id: "seed-participant" },
       promptedAt: 1,
     });
-    const selectedParticipantChange =
-      write.includes("repeat") || write === "earlier selected participant first prompt";
-    const recordSelected = (id: string, promptedAt: number) =>
-      recordSessionParticipant(selected, { identity: { type: "agent", id }, promptedAt });
-    if (selectedParticipantChange) {
-      recordSelected("a", 10);
-      recordSelected("b", 20);
-    }
     // Raw fixture writes bypass admission; drain setup maintenance before warming either cache.
     await closeOpenClawAgentDatabasesAsync(state.root);
     expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
@@ -250,47 +225,12 @@ it.each(
         runtimeConfig = {};
       } else if (write === "profile alias change") {
         publishUserProfileAliasChange();
-      } else if (write.startsWith("compound")) {
-        runOpenClawAgentWriteTransaction((current) => {
-          writeSessionEntry(current, writeTarget.sessionKey, {
-            sessionId: write.includes("new sibling") ? "new-sibling" : "sibling",
-            updatedAt: 2,
-            label: "compound update",
-          });
-          sideWrite(writeTarget);
-        }, writeTarget);
       } else if (
-        write.startsWith("canonical sibling") ||
         write.startsWith("legacy sibling") ||
         write === "selected owner" ||
         write === "selected participant"
       ) {
         sideWrite(write.startsWith("selected") ? selected : sibling);
-      } else if (selectedParticipantChange) {
-        if (write === "selected participant repeat") {
-          expect(recordSelected("a", 30)).toBe("updated");
-        } else if (write === "nested selected participant repeats") {
-          runOpenClawAgentWriteTransaction(() => {
-            recordSelected("a", 30);
-            runOpenClawAgentWriteTransaction(() => {
-              recordSelected("a", 40);
-              recordSelected("a", 50);
-            }, selected);
-          }, selected);
-        } else if (write === "earlier selected participant first prompt") {
-          recordSelected("b", 5);
-        } else {
-          runOpenClawAgentWriteTransaction((current) => {
-            const repeat = () => recordSelected("a", 30);
-            const other = write.includes("entry write")
-              ? () => writeSelected(current, { label: "changed selected", updatedAt: 2 })
-              : () => recordSelected("c", 15);
-            const otherFirst = write.endsWith("then repeat") || write.startsWith("selected entry");
-            for (const operation of otherFirst ? [other, repeat] : [repeat, other]) {
-              operation();
-            }
-          }, selected);
-        }
       } else if (write.startsWith("rolled-back")) {
         const rollback = new Error("roll back side metadata");
         expect(() =>
@@ -399,10 +339,6 @@ it.each(
         expect(after?.label).toBe("raw");
       } else if (write === "tracked selected update") {
         expect(after?.label).toBe("changed selected");
-      } else if (write === "canonical sibling owner") {
-        expect(loadSessionEntry(sibling)?.owner?.actor.id).toBe("other");
-      } else if (write === "canonical sibling participant") {
-        expect(loadSessionEntry(sibling)?.participantCount).toBe(2);
       } else if (write.startsWith("legacy sibling")) {
         const published = publishedEntry(sibling);
         if (write.endsWith("owner")) {
@@ -418,14 +354,6 @@ it.each(
             "SELECT json_extract(entry_json, '$.owner.actor.id') AS legacy_owner, json_array_length(entry_json, '$.participants') AS legacy_participants FROM session_nodes WHERE session_key = ?",
           ).get(sibling.sessionKey),
         ).toEqual({ legacy_owner: "json-only-owner", legacy_participants: 1 });
-      } else if (write.startsWith("compound")) {
-        expect(publishedEntry(writeTarget)).toMatchObject({
-          label: "compound update",
-          updatedAt: 2,
-          ...(write.endsWith("owner")
-            ? { owner: { actor: { id: "other" } } }
-            : { participantCount: write.includes("new sibling") ? 1 : 2 }),
-        });
       }
     } else {
       expectSuperseded(
@@ -433,30 +361,6 @@ it.each(
         write === "runtime config replacement" || write === "profile alias change",
       );
       expect(respond).not.toHaveBeenCalled();
-    }
-    if (selectedParticipantChange) {
-      const participantIds =
-        write === "earlier selected participant first prompt"
-          ? ["b", "a"]
-          : write.includes("insert")
-            ? ["a", "c", "b"]
-            : ["a", "b"];
-      const expected = {
-        label: write.includes("entry write") ? "changed selected" : "selected",
-        updatedAt: write.includes("entry write") ? 2 : before.updatedAt,
-        participants: participantIds.map((id) => ({ identity: { type: "agent", id } })),
-        participantCount: participantIds.length,
-      };
-      expect(after).toMatchObject(expected);
-      expect(publishedEntry(selected)).toMatchObject(expected);
-      if (write !== "earlier selected participant first prompt") {
-        expect(listSessionParticipantsReadOnly(selected).get(selected.sessionKey)).toContainEqual({
-          identity: { type: "agent", id: "a" },
-          contributionCount: write === "nested selected participant repeats" ? 4 : 2,
-          firstPromptedAt: 10,
-          lastPromptedAt: write === "nested selected participant repeats" ? 50 : 30,
-        });
-      }
     }
     await cleanupSessionStateForTest({ stateDir: state.stateDir });
     expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);

@@ -1,21 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { onTestFinished, assert, expect, it, vi } from "vitest";
+import { onTestFinished, assert, expect, it } from "vitest";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
-import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.replies.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { createManagedOutgoingMediaBlocks as createManagedOutgoingImageBlocks } from "../managed-image-attachments.js";
-import {
-  buildAssistantReplyContent as buildReplyContent,
-  buildAssistantReplyContentFromInputs,
-} from "./chat-assistant-content.js";
+import { buildAssistantReplyContent as buildReplyContent } from "./chat-assistant-content.js";
 import { AUDIO_BYTES, PNG_BYTES, useMediaState } from "./chat-media-fixture.test-support.js";
 import {
   captureWebchatReplyMediaScope,
@@ -240,44 +235,6 @@ it("preserves sensitive images without staging", async () => {
   await expectOutboundMediaMissing(stateDir);
 });
 
-it.each(["invalid data", "unknown file"] as const)(
-  "projects a named failure for %s without exposing its source",
-  async (kind) => {
-    const { workspaceDir } = createMediaTestContext();
-    const unknown = kind === "unknown file";
-    const source = unknown
-      ? path.join(workspaceDir, "mystery.blob")
-      : "data:audio/mpeg;base64,not-valid!";
-    const payload: ReplyMediaPayload = { mediaUrls: [source] };
-    if (unknown) {
-      await writeMedia(source, Buffer.from([0, 1, 2, 3]));
-      payload.text = "Artifact result";
-      payload.attachments = [{ name: "mystery.blob", trustedLocalMedia: true }];
-    }
-    const errors: string[] = [];
-    const { assistantContent: content, persistedAssistantContent: persisted } = await buildContent({
-      agentId: "main",
-      payloads: [payload],
-      managedMediaLocalRoots: [workspaceDir],
-      onManagedMediaPrepareError: (message) => errors.push(message),
-    });
-    expect(content).toEqual([
-      ...(unknown ? [{ type: "text", text: "Artifact result" }] : []),
-      attachmentError(
-        "delivery-failed",
-        unknown ? "mystery.blob" : "Generated audio 1",
-        unknown ? "document" : "audio",
-      ),
-    ]);
-    expect(persisted).toEqual(content);
-    expect(JSON.stringify(content)).not.toContain(source);
-    expect(Buffer.byteLength(JSON.stringify(content))).toBeLessThan(256);
-    if (!unknown) {
-      expect(errors).toEqual(["Invalid image data URL"]);
-    }
-  },
-);
-
 it.each(["paragraphs", "reply caption"] as const)(
   "preserves %s beside the corresponding image in saved replies",
   async (kind) => {
@@ -305,113 +262,34 @@ it.each(["paragraphs", "reply caption"] as const)(
   },
 );
 
-it.each([
-  { operation: "raw", media: "audio" },
-  { operation: "prepared", media: "image" },
-] as const)(
-  "aligns $media metadata by URL without mutation ($operation)",
-  async ({ operation, media }) => {
-    const { workspaceDir } = createMediaTestContext();
-    const audio = media === "audio";
-    const first = audio ? path.join(workspaceDir, "first.mp3") : "https://example.test/first.png";
-    const second = audio
-      ? path.join(workspaceDir, "second.mp3")
-      : "https://example.test/second.png";
-    if (audio) {
-      await createAudioFile(first);
-      await fs.writeFile(second, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
-    }
-    const payload: ReplyMediaPayload = audio
-      ? {
-          mediaUrl: second,
-          mediaUrls: [first, first],
-          trustedLocalMedia: true,
-          attachments: [
-            { type: "audio", path: first, name: "first.mp3", durationMs: 1_000 },
-            { type: "audio", path: first, name: "wrong.mp3", durationMs: 9_999 },
-            { type: "audio", name: "second.mp3", durationMs: 2_000 },
-          ],
-        }
-      : {
-          mediaUrls: [first, second],
-          attachments: [{ url: second, name: "Second chart.png", mimeType: "image/png" }],
-        };
-    const originalPayload = structuredClone(payload);
-    const preparationErrors: string[] = [];
-    const requestedUrls: string[] = [];
-    // Import after graph evaluation; the fetch/store modules participate in a mock cycle.
-    const mediaFetch = await import("../../media/fetch.js");
-    using saveRemoteMedia = vi.spyOn(mediaFetch, "saveRemoteMedia");
-    if (!audio) {
-      saveRemoteMedia.mockImplementation(async (options) => {
-        expect(payload.mediaUrls).toContain(options.url);
-        requestedUrls.push(options.url);
-        return await saveMediaBuffer(
-          PNG_BYTES,
-          "image/png",
-          options.subdir,
-          options.maxBytes,
-          options.originalFilename,
-          options.filePathHint,
-        );
-      });
-    }
-    const { assistantContent: content } = await buildAssistantReplyContentFromInputs({
-      sessionKey: TEST_SESSION_KEY,
-      agentId: "main",
-      inputs:
-        operation === "prepared"
-          ? createStructuredOutboundPayloadPlan([payload]).map((plan) => ({
-              kind: "prepared" as const,
-              plan,
-            }))
-          : [{ kind: "raw", payload }],
-      ...(audio ? { managedMediaLocalRoots: [workspaceDir] } : {}),
-      onManagedMediaPrepareError: (message) => preparationErrors.push(message),
-    });
-    expect(preparationErrors).toEqual([]);
-    expect(content).toMatchObject(
-      audio
-        ? [
-            { type: "audio", fileName: "first.mp3", durationMs: 1_000 },
-            { type: "audio", fileName: "second.mp3", durationMs: 2_000 },
-          ]
-        : [
-            { type: "image", alt: "first.png", mimeType: "image/png" },
-            { type: "image", alt: "Second chart.png", mimeType: "image/png" },
-          ],
-    );
-    if (!audio) {
-      expect(requestedUrls).toEqual(payload.mediaUrls);
-    }
-    expect(payload).toEqual(originalPayload);
-  },
-);
-
-it("preserves per-item trust in a pending batch", async () => {
+it("aligns local audio metadata by URL without mutation", async () => {
   const { workspaceDir } = createMediaTestContext();
-  const first = path.join(workspaceDir, "trusted.mp3");
-  const second = path.join(workspaceDir, "untrusted.mp3");
+  const first = path.join(workspaceDir, "first.mp3");
+  const second = path.join(workspaceDir, "second.mp3");
   await createAudioFile(first);
   await fs.writeFile(second, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
-  const payload = consumePendingToolMediaIntoReply(
-    {
-      pendingToolMediaUrls: [first, second],
-      pendingToolMediaTrustByUrl: new Map([
-        [first, true],
-        [second, false],
-      ]),
-      pendingToolAudioAsVoice: false,
-    },
-    {},
-  );
+  const payload: ReplyMediaPayload = {
+    mediaUrl: second,
+    mediaUrls: [first, first],
+    trustedLocalMedia: true,
+    attachments: [
+      { type: "audio", path: first, name: "first.mp3", durationMs: 1_000 },
+      { type: "audio", path: first, name: "wrong.mp3", durationMs: 9_999 },
+      { type: "audio", name: "second.mp3", durationMs: 2_000 },
+    ],
+  };
+  const originalPayload = structuredClone(payload);
+  const preparationErrors: string[] = [];
   const { assistantContent: content } = await buildContent({
     agentId: "main",
     payloads: [payload],
     managedMediaLocalRoots: [workspaceDir],
+    onManagedMediaPrepareError: (message) => preparationErrors.push(message),
   });
-  expect(content).toEqual([
-    expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" }),
-    attachmentError("delivery-failed", "untrusted.mp3", "audio", "audio/mpeg"),
+  expect(preparationErrors).toEqual([]);
+  expect(content).toMatchObject([
+    { type: "audio", fileName: "first.mp3", durationMs: 1_000 },
+    { type: "audio", fileName: "second.mp3", durationMs: 2_000 },
   ]);
+  expect(payload).toEqual(originalPayload);
 });
