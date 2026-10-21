@@ -28,6 +28,9 @@ const swiftBuildArgs = [
   "-Xswiftc",
   "-gline-tables-only",
 ];
+const read = (file: string) => fs.readFileSync(file, "utf8");
+const rows = (file: string) => read(file).trim().split("\n");
+const readJson = (file: string) => JSON.parse(read(file));
 
 function eventStream(...kinds: string[]) {
   return (
@@ -271,18 +274,11 @@ if (tool === 'swift' && args[0] === 'test') {
         return undefined;
       }
       const prefix = `menu-${profileMode}-artifact-path=`;
-      return fs
-        .readFileSync(env.GITHUB_OUTPUT, "utf8")
-        .split("\n")
+      return rows(env.GITHUB_OUTPUT)
         .findLast((line) => line.startsWith(prefix))
         ?.slice(prefix.length);
     },
-    calls: () =>
-      fs
-        .readFileSync(log, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
+    calls: () => rows(log).map((line) => JSON.parse(line)),
     run: (script: string, cwd = workspace, overrides = {}) =>
       spawnSync(
         "/bin/bash",
@@ -359,8 +355,7 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
       const f = fixture(0, false, 0, "", "3", events);
       const contents = path.join(f.root, "Fixture.app/Contents");
       fs.mkdirSync(path.join(contents, "MacOS"), { recursive: true });
-      const helper = fs
-        .readFileSync(path.join(f.root, "bin/swift"), "utf8")
+      const helper = read(path.join(f.root, "bin/swift"))
         .replace(
           "if (tool === 'swift' && args[0] === 'test')",
           "if (tool === 'OpenClawRecoveryTestHost')",
@@ -424,18 +419,15 @@ if (process.argv[2] === 'print') {
         expect(invoked.map((call) => call.args[call.args.indexOf("--filter") + 1])).toEqual(
           filters.slice(0, hosts),
         );
-        const artifactLine = fs
-          .readFileSync(f.env.GITHUB_OUTPUT, "utf8")
-          .split("\n")
-          .find((line) => line.startsWith("recovery-artifact-path="));
+        const artifactLine = rows(f.env.GITHUB_OUTPUT).find((line) =>
+          line.startsWith("recovery-artifact-path="),
+        );
         expect(artifactLine).toBeDefined();
         const artifact = artifactLine!.slice("recovery-artifact-path=".length);
         expect(fs.readdirSync(artifact).toSorted()).toEqual(
           Array.from({ length: hosts }, (_, index) => `phase-${index}-events.jsonl`),
         );
-        expect(fs.readFileSync(path.join(artifact, "phase-0-events.jsonl"), "utf8")).toContain(
-          "runEnded",
-        );
+        expect(read(path.join(artifact, "phase-0-events.jsonl"))).toContain("runEnded");
         expect(fs.existsSync(home)).toBe(true);
         expect(fs.existsSync(state)).toBe(inspection === "unknown");
         expect(fs.existsSync(ownedRoot)).toBe(inspection === "unknown");
@@ -471,7 +463,7 @@ if (process.argv[2] === 'print') {
       const result = f.run(swiftBuildStep);
       expect(result.status, result.stderr).toBe(0);
       expect(f.calls().map((call) => [call.tool, call.args[0]])).toEqual([["swift", "build"]]);
-      expect(fs.readFileSync(f.env.GITHUB_OUTPUT, "utf8")).toContain("debug-tests-built=true");
+      expect(read(f.env.GITHUB_OUTPUT)).toContain("debug-tests-built=true");
     },
   );
 
@@ -491,9 +483,7 @@ if (process.argv[2] === 'print') {
       const calls = f.calls().filter((call) => call.tool === "swift");
       expect(calls).toHaveLength(4);
       const [build, ...tests] = calls;
-      const captures = fs
-        .readFileSync(f.env.GITHUB_OUTPUT, "utf8")
-        .split("\n")
+      const captures = rows(f.env.GITHUB_OUTPUT)
         .filter((line) => /^menu-(?:default|named)-artifact-path=/.test(line))
         .map((line) => line.slice(line.indexOf("=") + 1));
       expect(captures).toHaveLength(tests.length);
@@ -526,19 +516,16 @@ if (process.argv[2] === 'print') {
         }
         expect(test.env.OPENCLAW_PROFILE).not.toBe(f.env.OPENCLAW_PROFILE);
         expect(test.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-        expect(test.env.SWIFT_BACKTRACE).toBe(
-          "enable=yes,interactive=no,color=no,sanitize=yes,threads=crashed,registers=none,images=mentioned",
-        );
-        expect(test.env.NSUnbufferedIO).toBe("YES");
-        for (const key of [
-          "DEVELOPER_DIR",
-          "DYLD_FRAMEWORK_PATH",
-          "DYLD_LIBRARY_PATH",
-          "RUNNER_TRACKING_ID",
-        ] as const) {
-          expect(test.env[key]).toBe(f.env[key]);
-        }
-        expect(test.env.CFFIXED_USER_HOME).toBe(test.env.HOME);
+        expect(test.env).toMatchObject({
+          SWIFT_BACKTRACE:
+            "enable=yes,interactive=no,color=no,sanitize=yes,threads=crashed,registers=none,images=mentioned",
+          NSUnbufferedIO: "YES",
+          DEVELOPER_DIR: f.env.DEVELOPER_DIR,
+          DYLD_FRAMEWORK_PATH: f.env.DYLD_FRAMEWORK_PATH,
+          DYLD_LIBRARY_PATH: f.env.DYLD_LIBRARY_PATH,
+          RUNNER_TRACKING_ID: f.env.RUNNER_TRACKING_ID,
+          CFFIXED_USER_HOME: test.env.HOME,
+        });
         expect(test.keychain).toEqual({ locked: false, autoLock: false });
         const ownedKeychain = test.settings.default;
         expect(path.dirname(ownedKeychain)).toBe(path.join(test.env.HOME, "Library/Keychains"));
@@ -587,7 +574,7 @@ if (process.argv[2] === 'print') {
         }
         expect(exported.startsWith(`${f.env.RUNNER_TEMP}/`)).toBe(true);
         for (const captureName of captureNames) {
-          expect(fs.readFileSync(path.join(exported, `${captureName}-window.png`), "utf8")).toBe(
+          expect(read(path.join(exported, `${captureName}-window.png`))).toBe(
             "synthetic-png-bytes",
           );
         }
@@ -602,13 +589,11 @@ if (process.argv[2] === 'print') {
           ].toSorted(),
         );
         if (index === 2) {
-          expect(fs.readFileSync(path.join(exported, "model-initial-menu-42.png"), "utf8")).toBe(
+          expect(read(path.join(exported, "model-initial-menu-42.png"))).toBe(
             "synthetic-model-menu-bytes",
           );
         }
-        expect(
-          JSON.parse(fs.readFileSync(path.join(exported, "capture-export.json"), "utf8")),
-        ).toMatchObject({
+        expect(readJson(path.join(exported, "capture-export.json"))).toMatchObject({
           profileMode,
           source: "ordinary-swift-run",
           swiftExitCode: [defaultCode, renderedCode, namedCode][index],
@@ -637,18 +622,15 @@ if (process.argv[2] === 'print') {
       expect(logs).toHaveLength(tests.length);
       for (const name of logs) {
         expect(name).toMatch(/^(?:default(?:-rendered)?|named)-[a-f0-9-]+\.log$/);
-        expect(fs.readFileSync(path.join(logDirectory, name), "utf8")).toContain(
+        expect(read(path.join(logDirectory, name))).toContain(
           "[macos-native] Synthetic menu capture artifacts:",
         );
       }
       expect(fs.existsSync(f.env.HOME)).toBe(true);
-      expect(
-        fs.readFileSync(
-          path.join(f.env.HOME, "Library/Caches/org.swift.swiftpm/fixture-cache"),
-          "utf8",
-        ),
-      ).toBe("reusable build cache");
-      expect(fs.readFileSync(f.env.GITHUB_OUTPUT, "utf8")).toContain("debug-tests-built=true");
+      expect(read(path.join(f.env.HOME, "Library/Caches/org.swift.swiftpm/fixture-cache"))).toBe(
+        "reusable build cache",
+      );
+      expect(read(f.env.GITHUB_OUTPUT)).toContain("debug-tests-built=true");
     },
   );
 
@@ -779,14 +761,12 @@ child.once('message', () => process.exit(0));
           "thread-reasoning-capture-status.json",
           "thread-reasoning-window.png",
         ]);
-        expect(fs.readFileSync(path.join(exported, "thread-reasoning-window.png"), "utf8")).toBe(
+        expect(read(path.join(exported, "thread-reasoning-window.png"))).toBe(
           "synthetic-png-bytes",
         );
-        expect(
-          JSON.parse(
-            fs.readFileSync(path.join(exported, "thread-reasoning-capture-status.json"), "utf8"),
-          ),
-        ).toEqual({ blockers: ["synthetic fixture, not visual proof"] });
+        expect(readJson(path.join(exported, "thread-reasoning-capture-status.json"))).toEqual({
+          blockers: ["synthetic fixture, not visual proof"],
+        });
       } else {
         expect(f.capturePath("named")).toBeUndefined();
         expect(fs.existsSync(ownedKeychain)).toBe(true);

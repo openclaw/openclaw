@@ -7,14 +7,11 @@ import {
   isMaxLinesRule,
 } from "../../scripts/check-max-lines-ratchet.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
-import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
-import { listGitTrackedFiles, toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const parser = createNativeTypeScriptParser({ cwd: repoRoot });
 afterAll(() => parser.close());
 const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
-const IGNORED_DIRS = new Set([".cache", ".git", "build", "coverage", "dist", "node_modules"]);
 const ROOTS = ["src", "extensions", "scripts", "ui"] as const;
 // Match the generated-source exclusions in the oxlint handwritten-code ratchets.
 const GENERATED_SOURCE_PATH =
@@ -24,8 +21,6 @@ type SuppressionEntry = {
   file: string;
   rule: string;
 };
-
-let productionCodeFilesCache: string[] | null = null;
 
 function collectFileSuppressions(file: string, source: string): SuppressionEntry[] {
   return collectLintDisableDirectives(source, file, parser.parseSourceFile(file, source)).flatMap(
@@ -42,19 +37,6 @@ function isProductionCodeFile(relativePath: string): boolean {
   );
 }
 
-function walkCodeFiles(dir: string): string[] {
-  if (!fs.existsSync(dir)) {
-    return [];
-  }
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      return IGNORED_DIRS.has(entry.name) ? [] : walkCodeFiles(fullPath);
-    }
-    return [toRepoRelativePath(repoRoot, fullPath)];
-  });
-}
-
 function listSuppressionFiles(): string[] {
   const result = spawnSync(
     "git",
@@ -66,22 +48,9 @@ function listSuppressionFiles(): string[] {
       stdio: ["ignore", "pipe", "ignore"],
     },
   );
-  if (result.status === 1) {
-    return [];
-  }
-  if (result.status !== 0) {
-    return listProductionCodeFiles();
-  }
+  expect(result.error).toBeUndefined();
+  expect([0, 1], result.stderr).toContain(result.status);
   return result.stdout.split("\0").filter(isProductionCodeFile);
-}
-
-function listProductionCodeFiles(): string[] {
-  return (productionCodeFilesCache ??= (
-    listGitTrackedFiles({ repoRoot, pathspecs: ROOTS }) ??
-    ROOTS.flatMap((root) => walkCodeFiles(path.join(repoRoot, root)))
-  )
-    .filter(isProductionCodeFile)
-    .toSorted());
 }
 
 function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
@@ -119,15 +88,6 @@ describe("production lint suppressions", () => {
   ] as const)("keeps companion rules visible in %s", (source, rules) => {
     const file = "src/example.ts";
     expect(collectFileSuppressions(file, source)).toEqual(rules.map((rule) => ({ file, rule })));
-  });
-
-  it("lists production files from git without walking source roots", () => {
-    expectNoReaddirSyncDuring(() => {
-      const files = listProductionCodeFiles();
-
-      expect(files.length).toBeGreaterThan(0);
-      expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
-    });
   });
 
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
