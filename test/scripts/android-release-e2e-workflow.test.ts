@@ -1,22 +1,16 @@
 import { ok } from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
-import { parse } from "yaml";
-import { readCiWorkflow } from "./ci-workflow.test-support.js";
+import { readCiWorkflow, readWorkflow } from "./ci-workflow.test-support.js";
 
 type Job = {
-  if?: string;
   permissions?: Record<string, string>;
   with?: Record<string, string>;
   steps?: Array<{ name: string; uses?: string; with?: Record<string, string> }>;
 };
 type Workflow = { permissions: Record<string, string>; jobs: Record<string, Job> };
 
-function readWorkflow(filename: string): Workflow {
-  return parse(readFileSync(`.github/workflows/${filename}`, "utf8")) as Workflow;
-}
-const qualification = readWorkflow("android-release-e2e.yml");
+const qualification: Workflow = readWorkflow(".github/workflows/android-release-e2e.yml");
 const qualify = qualification.jobs.qualify;
 ok(qualify, "Android validation must have its qualification job");
 const selectionDir = "${{ env.GATEWAY_SELECTION_DIR }}";
@@ -58,7 +52,8 @@ it.each([
 });
 
 it("publishes only credential-free qualification evidence", () => {
-  const storeQualify = readWorkflow("android-store-release.yml").jobs.qualify;
+  const store: Workflow = readWorkflow(".github/workflows/android-store-release.yml");
+  const storeQualify = store.jobs.qualify;
   expect(storeQualify.with).toEqual({ target_sha: "${{ github.sha }}" });
   expect(storeQualify.permissions).toEqual({ actions: "read", contents: "read" });
   expect(qualification.permissions).toEqual({ actions: "read", contents: "read" });

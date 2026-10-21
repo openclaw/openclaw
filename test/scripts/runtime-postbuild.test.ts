@@ -72,6 +72,8 @@ async function runtimeFixture(files: Record<string, string>) {
   return { rootDir, distDir };
 }
 
+const sourceLines = (...lines: string[]) => `${lines.join("\n")}\n`;
+
 async function writeExportHtmlBuildFixture(rootDir: string): Promise<void> {
   const sourceDir = path.join(rootDir, "src", "auto-reply", "reply", "export-html");
   await fs.mkdir(sourceDir, { recursive: true });
@@ -265,11 +267,10 @@ describe("runtime postbuild static assets", () => {
     // Keep resolved working-tree metadata while the index still holds all merge stages.
     git(
       ["update-index", "--index-info"],
-      [
+      sourceLines(
         `0 ${"0".repeat(blob.length)}\t${packagePath}`,
         ...[1, 2, 3].map((stage) => `100644 ${blob} ${stage}\t${packagePath}`),
-        "",
-      ].join("\n"),
+      ),
     );
     expect(git(["ls-files", "--", packagePath]).trim().split("\n")).toHaveLength(3);
 
@@ -784,17 +785,16 @@ describe("runtime postbuild static assets", () => {
     const { rootDir, distDir } = await runtimeFixture({
       "runtime-plugins.runtime-NewHash.mjs": "export const ready = true;\n",
       "runtime-plugins.runtime-OldHash.js": 'export * from "./runtime-plugins.runtime.js";\n',
-      "dispatch-OldHash.js": [
+      "dispatch-OldHash.js": sourceLines(
         'const lazy = () => import("./runtime-plugins.runtime-NewHash.mjs");',
-        "",
-      ].join("\n"),
+      ),
     });
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
     writeStableRootRuntimeAliases({ rootDir });
 
     expect(await readText(distDir, "dispatch-OldHash.js")).toBe(
-      ['const lazy = () => import("./runtime-plugins.runtime.js");', ""].join("\n"),
+      sourceLines('const lazy = () => import("./runtime-plugins.runtime.js");'),
     );
     expect(await readText(distDir, "runtime-plugins.runtime.js")).toBe(
       'export * from "./runtime-plugins.runtime-NewHash.mjs";\n',
@@ -809,48 +809,44 @@ describe("runtime postbuild static assets", () => {
     const importerPath = path.join(distDir, `dispatch-OldHash.${extension}`);
     await fs.writeFile(
       importerPath,
-      [
+      sourceLines(
         'const lazy = () => import("./runtime-plugins.runtime-AbCd1234.mjs");',
         'export { dispatch } from "./dispatch.contract-AbCd1234.js";',
         'import "./missing.runtime-Nope.js";',
         'import "./missing.contract-Nope.mjs";',
-        "",
-      ].join("\n"),
+      ),
       "utf8",
     );
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
 
     expect(await fs.readFile(importerPath, "utf8")).toBe(
-      [
+      sourceLines(
         'const lazy = () => import("./runtime-plugins.runtime.js");',
         'export { dispatch } from "./dispatch.contract.js";',
         'import "./missing.runtime-Nope.js";',
         'import "./missing.contract-Nope.mjs";',
-        "",
-      ].join("\n"),
+      ),
     );
   });
 
   it("keeps text-transform runtime imports hashed after the stable alias export surface grew", async () => {
     const { rootDir, distDir } = await runtimeFixture({
       "text-transforms.runtime-NewHash.mjs": "export const n = true;\nexport const t = true;\n",
-      "provider-runtime-NewHash.mjs": [
+      "provider-runtime-NewHash.mjs": sourceLines(
         'import { n as applyPluginTextReplacements } from "./text-transforms.runtime-NewHash.mjs";',
         "export { applyPluginTextReplacements };",
-        "",
-      ].join("\n"),
+      ),
     });
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
     writeStableRootRuntimeAliases({ rootDir });
 
     expect(await readText(distDir, "provider-runtime-NewHash.mjs")).toBe(
-      [
+      sourceLines(
         'import { n as applyPluginTextReplacements } from "./text-transforms.runtime-NewHash.mjs";',
         "export { applyPluginTextReplacements };",
-        "",
-      ].join("\n"),
+      ),
     );
     expect(await readText(distDir, "text-transforms.runtime.js")).toBe(
       'export * from "./text-transforms.runtime-NewHash.mjs";\n',
@@ -860,21 +856,19 @@ describe("runtime postbuild static assets", () => {
   it("rewrites gateway shutdown imports to stable runtime aliases", async () => {
     const { rootDir, distDir } = await runtimeFixture({
       "server-close.runtime-AbCd1234.js": "export const close = true;\n",
-      "server.impl-OldHash.js": [
+      "server.impl-OldHash.js": sourceLines(
         'const closeModule = () => import("./server-close.runtime-AbCd1234.js");',
         'const ordinaryChunk = () => import("./server-close-OldHash.js");',
-        "",
-      ].join("\n"),
+      ),
     });
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
 
     expect(await readText(distDir, "server.impl-OldHash.js")).toBe(
-      [
+      sourceLines(
         'const closeModule = () => import("./server-close.runtime.js");',
         'const ordinaryChunk = () => import("./server-close-OldHash.js");',
-        "",
-      ].join("\n"),
+      ),
     );
   });
 
@@ -882,17 +876,16 @@ describe("runtime postbuild static assets", () => {
     const { rootDir, distDir } = await runtimeFixture({
       "provider-dispatcher.runtime-NewHash.js":
         'export * from "./provider-dispatcher-ImplHash.js";\n',
-      "reply-dispatch-runtime-OldHash.js": [
+      "reply-dispatch-runtime-OldHash.js": sourceLines(
         'const dispatcher = () => import("./provider-dispatcher.runtime-NewHash.js");',
-        "",
-      ].join("\n"),
+      ),
     });
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
     writeStableRootRuntimeAliases({ rootDir });
 
     expect(await readText(distDir, "reply-dispatch-runtime-OldHash.js")).toBe(
-      ['const dispatcher = () => import("./provider-dispatcher.runtime.js");', ""].join("\n"),
+      sourceLines('const dispatcher = () => import("./provider-dispatcher.runtime.js");'),
     );
     expect(await readText(distDir, "provider-dispatcher.runtime.js")).toBe(
       'export * from "./provider-dispatcher.runtime-NewHash.js";\n',
@@ -904,21 +897,19 @@ describe("runtime postbuild static assets", () => {
       "install.runtime-Aaa111.mjs": "export const pluginInstall = true;\n",
       "install.runtime-Bbb222.js": "export const daemonInstall = true;\n",
       "install.runtime.js": 'export * from "./install.runtime-Stale.js";\n',
-      "install-OldHash.js": [
+      "install-OldHash.js": sourceLines(
         'const pluginRuntime = () => import("./install.runtime-Aaa111.mjs");',
         'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
-        "",
-      ].join("\n"),
+      ),
     });
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
 
     expect(await readText(distDir, "install-OldHash.js")).toBe(
-      [
+      sourceLines(
         'const pluginRuntime = () => import("./install.runtime-Aaa111.mjs");',
         'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
-        "",
-      ].join("\n"),
+      ),
     );
     writeStableRootRuntimeAliases({ rootDir });
     await expectPathMissing(path.join(distDir, "install.runtime.js"));
@@ -926,28 +917,25 @@ describe("runtime postbuild static assets", () => {
 
   it("rewrites plugin install runtime imports to stable aliases when install runtimes collide", async () => {
     const { rootDir, distDir } = await runtimeFixture({
-      "install.runtime-Aaa111.mjs": [
+      "install.runtime-Aaa111.mjs": sourceLines(
         "export const scanPackageInstallSource = true;",
         "export const scanInstalledPackageDependencyTree = true;",
         "export const scanBundleInstallSource = true;",
-        "",
-      ].join("\n"),
+      ),
       "install.runtime-Bbb222.js": "export const daemonInstall = true;\n",
-      "install-OldHash.js": [
+      "install-OldHash.js": sourceLines(
         'const pluginRuntime = () => import("./install.runtime-Aaa111.mjs");',
         'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
-        "",
-      ].join("\n"),
+      ),
     });
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
 
     expect(await readText(distDir, "install-OldHash.js")).toBe(
-      [
+      sourceLines(
         'const pluginRuntime = () => import("./install.runtime.js");',
         'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
-        "",
-      ].join("\n"),
+      ),
     );
     writeStableRootRuntimeAliases({ rootDir });
     expect(await readText(distDir, "install.runtime.js")).toBe(
