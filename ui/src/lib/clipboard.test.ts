@@ -26,9 +26,7 @@ describe("copyToClipboard", () => {
   });
 
   it("falls back to execCommand when the Clipboard API rejects", async () => {
-    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    const exec = mockExecCommand(true);
+    writeText.mockRejectedValue(new Error("denied"));
 
     expect(await copyToClipboard("hello")).toBe(true);
     expect(exec).toHaveBeenCalledWith("copy");
@@ -51,7 +49,6 @@ describe("copyToClipboard", () => {
 
   it("falls back to execCommand over plain HTTP where navigator.clipboard is undefined", async () => {
     vi.stubGlobal("navigator", {});
-    const exec = mockExecCommand(true);
 
     expect(await copyToClipboard("hello")).toBe(true);
     expect(exec).toHaveBeenCalledWith("copy");
@@ -60,7 +57,7 @@ describe("copyToClipboard", () => {
 
   it("returns false when both clipboard paths fail", async () => {
     vi.stubGlobal("navigator", {});
-    const exec = mockExecCommand(false);
+    exec.mockReturnValue(false);
 
     expect(await copyToClipboard("hello")).toBe(false);
     expect(exec).toHaveBeenCalledWith("copy");
