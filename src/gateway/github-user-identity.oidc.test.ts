@@ -475,7 +475,7 @@ it("partitions signed assertions, principals, and OIDC configuration", async () 
     changed.authConfig!.trustedProxy!.cloudflareAccessOidc!.providerId = "other";
     await resolveCachedIdentity(changed);
     expect(
-      transport.mock.calls.filter(([url]) => String(url).startsWith(accessOrigin)),
+      transport.mock.calls.filter(([url]) => url === `${accessOrigin}/cdn-cgi/access/get-identity`),
     ).toHaveLength(4);
   });
 });

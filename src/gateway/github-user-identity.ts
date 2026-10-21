@@ -101,17 +101,17 @@ async function resolveCloudflareAccessIdentity(
 ): Promise<ResolvedCloudflareAccessIdentity> {
   const { issuer, expiresAt } = cloudflareAccessAssertionClaims(assertion);
   // Keep the cache key and verification on the same policy across the fetch.
-  oidcConfig = oidcConfig && { ...oidcConfig };
+  const oidcPolicy = oidcConfig && { ...oidcConfig };
   const fetchImpl = fetch;
   const load = () =>
-    fetchCloudflareAccessIdentity(fetchImpl, issuer, assertion, authenticatedPrincipal, oidcConfig);
+    fetchCloudflareAccessIdentity(fetchImpl, issuer, assertion, authenticatedPrincipal, oidcPolicy);
   // The assertion only bounds reuse; Access still verifies it, and each caller's
   // principal and OIDC trust configuration must match the verified result.
   if (expiresAt <= Date.now()) {
     return load();
   }
   const key = createHash("sha256")
-    .update(JSON.stringify([assertion, authenticatedPrincipal.trim().toLowerCase(), oidcConfig]))
+    .update(JSON.stringify([assertion, authenticatedPrincipal.trim().toLowerCase(), oidcPolicy]))
     .digest("hex");
   const cache: NonNullable<ReturnType<typeof accessIdentityCaches.get>> =
     accessIdentityCaches.get(fetchImpl) ?? new Map();
