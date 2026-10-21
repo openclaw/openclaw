@@ -32,7 +32,7 @@ const centralLintSelection = {
   groups: [],
   fullGroups: ["scripts"],
   central: true,
-};
+} satisfies NonNullable<Parameters<typeof createChangedCheckPlan>[1]>["lintSelection"];
 const controllerCommand = (file: string, base: string, staged = false) =>
   createChangedCheckPlan(detectChangedLanes([file]), {
     lintOnly: true,

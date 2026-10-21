@@ -1072,4 +1072,3 @@ describe("/acp command", () => {
     expectReplyText(result, "ACP install:", "run:", "then: /acp doctor");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

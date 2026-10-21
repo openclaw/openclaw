@@ -951,4 +951,3 @@ describe("Codex app-server config", () => {
     expect(first).not.toContain("sk-reload");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

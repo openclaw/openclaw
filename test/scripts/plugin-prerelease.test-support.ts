@@ -69,6 +69,7 @@ export function createPrereleaseFixtures() {
           "-c",
           expectDefined(
             findStep(readWorkflow().jobs.preflight, "Build plugin prerelease manifest").run,
+            "plugin prerelease manifest script",
           ),
         ],
         {
