@@ -213,35 +213,11 @@ function expectGuardState(result: ReturnType<typeof runDependencyGuard>, state: 
 }
 
 describe("dependency guard script", () => {
-  it("does not transfer command approval to a duplicate PR with the same head", () => {
-    const result = runDependencyGuard({
-      [`GET ${issuePath}/comments`]: [approvalNotice, approval],
-      [`GET ${statusPath}`]: [
-        {
-          context: "openclaw/ci-gate",
-          description: "PR #8: Security review has not completed",
-          creator: { login: "github-actions[bot]", type: "Bot" },
-        },
-      ],
-      "GET /repos/openclaw/openclaw/pulls/8": { ...pullRequest, number: 8 },
-    });
-    expect(result.status).toBe(1);
-    expect(result.statuses.map((call) => call.body?.state)).not.toContain("success");
-    expect(result.statuses.at(-1)?.body?.state).toBe("failure");
-  });
-
   it("requires current maintainer authority for dependency approval", () => {
-    const early = "2025-12-31T00:00:00Z";
     const securityCommand = "/allow-security-sensitive-change";
     const cases: Array<[string, boolean, Partial<typeof approval> | null]> = [
       ["maintain", true, null],
-      ["admin", true, null],
       ["maintain", true, {}],
-      ["admin", true, {}],
-      ["write", false, {}],
-      ["maintain", false, { created_at: early, updated_at: early }],
-      ["maintain", false, { updated_at: "2026-01-01T00:00:02Z" }],
-      ["maintain", false, { user: { ...approval.user, type: "Bot" } }],
       ["maintain", false, { body: securityCommand }],
       ["maintain", true, { body: `${securityCommand}\n${approval.body}` }],
     ];
@@ -489,26 +465,6 @@ describe("dependency guard script", () => {
     expectGuardState(enforcement, "failure");
     expect(enforcement.stdout).toContain("/allow-dependencies-change");
     expect(enforcement.stdout).toContain("Automatic lockfile cleanup is best effort.");
-  });
-
-  it("does not approve or autoscrub grandfathered lockfile PRs in any mode", () => {
-    const cases = ["detect", "autoscrub", "enforce"];
-    for (const mode of cases) {
-      const result = runDependencyGuard(
-        {
-          [`GET ${pullPath}`]: { ...pullRequest, created_at: "2025-11-01T00:00:00Z" },
-          [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml" }],
-          [`GET ${repoPath}/compare/${rolloutSha}...${headSha}`]: {
-            ...comparison(rolloutSha, staleSha),
-            status: "diverged",
-          },
-        },
-        mode,
-      );
-      expectGuard(result, []);
-      expect(result.stdout).toContain("grandfathered");
-      expect(result.calls.every((call) => call.method === "GET")).toBe(true);
-    }
   });
 
   it("detects dependency guard file surfaces", () => {

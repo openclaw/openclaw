@@ -3817,7 +3817,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/crabbox-staging.test.ts",
   "test/scripts/crabbox-untrusted-bootstrap.test.ts",
   "test/scripts/crabbox-wrapper.test.ts",
-  "test/scripts/desktop-readiness-proof.test.ts",
   "test/scripts/desktop-resize-proof.test.ts",
   "test/scripts/dev-tooling-safety.test.ts",
   "test/scripts/direct-run-entrypoints.test.ts",

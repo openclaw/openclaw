@@ -8,13 +8,11 @@ import { format } from "oxfmt";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
-  buildQaOccurrenceEvidenceSummary,
   createQaEvidenceInvocation,
   qaMaturityTaxonomyIdentity,
   qaProfileEvidencePlan,
   readQaMaturityTaxonomySource,
   validateQaEvidenceSummaryJson,
-  type QaEvidenceOccurrence,
 } from "../../extensions/qa-lab/test-api.js";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -55,6 +53,52 @@ function runCli(...args: string[]) {
       cwd: repoRoot,
       encoding: "utf8",
     },
+  );
+}
+
+function renderEvidence(outputDir: string, evidenceDir: string, ...args: string[]) {
+  return runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir, ...args);
+}
+
+function evidenceFixture(options: Partial<Parameters<typeof writeQaEvidence>[0]> = {}) {
+  const outputDir = tempDirs.make("openclaw-maturity-output-");
+  const evidenceDir = tempDirs.make("openclaw-maturity-evidence-");
+  writeQaEvidence({
+    dir: evidenceDir,
+    entries: [{ id: "same-label", status: "pass" }],
+    scorecard: allProfileScorecardFixture(),
+    ...options,
+  });
+  const evidencePath = path.join(evidenceDir, "qa-evidence.json");
+  return {
+    outputDir,
+    evidenceDir,
+    evidencePath,
+    get evidence() {
+      return validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
+    },
+  };
+}
+
+function readScorecard(outputDir: string) {
+  return fs.readFileSync(path.join(outputDir, "maturity/scorecard.md"), "utf8");
+}
+
+function expectHistoricalScorecard(scorecard: string, identity: string) {
+  for (const text of [
+    "Coverage Unscored",
+    `Historical evidence: taxonomy identity ${identity}`,
+    "1 passed",
+    "Historical category evidence",
+  ]) {
+    expect(scorecard).toContain(text);
+  }
+  expect(scorecard).not.toContain("Readiness by area");
+  const category = allProfileScorecardFixture().categoryReports[0]!;
+  expect(scorecard).toContain(category.name);
+  expect(scorecard).toContain(category.id);
+  expect(scorecard.replace(/ +\|/gu, " |")).toContain(
+    `| ${category.name} | ${category.id} | 0 of ${category.features.total} (0%) | 0 of ${category.coverageIds.total} (0%) |`,
   );
 }
 
@@ -372,7 +416,7 @@ describe("maturity docs renderer CLI", () => {
         }),
       );
       fs.writeFileSync(evidencePath, raw);
-      const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+      const result = renderEvidence(outputDir, evidenceDir);
       expect(result.status, result.stderr).toBe(status === "pass" ? 0 : 1);
       expect(result.stderr).not.toContain("(unresolved)");
       if (status === "pass") {
@@ -387,68 +431,24 @@ describe("maturity docs renderer CLI", () => {
   );
 
   it("renders the effective retry while retaining the original failed observation", () => {
-    const evidenceDir = tempDirs.make("openclaw-maturity-occurrences-");
-    const outputDir = tempDirs.make("openclaw-maturity-occurrence-docs-");
-    writeQaEvidence({
-      dir: evidenceDir,
-      entries: [{ id: "same-label", status: "pass" }],
-      scorecard: allProfileScorecardFixture(),
-    });
-    const evidencePath = path.join(evidenceDir, "qa-evidence.json");
-    const legacy = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
-    const anchor: QaEvidenceOccurrence = {
-      id: "scheduled-instance",
-      parentCell: { scenarioId: "same-label", executionKind: "script", channel: null },
-      scenario: { kind: "instance", resultOccurrenceId: "retry" },
-      retryOf: null,
-      terminalStatus: null,
-      assertions: null,
-      launch: {
-        source: { ref: null, integrity: null },
-        runtime: { id: null, version: null },
-        package: null,
-        protocol: null,
-        accountRef: null,
-        proofClass: null,
-      },
-      receipts: [],
-    };
-    const first: QaEvidenceOccurrence = {
-      ...anchor,
-      id: "first",
-      scenario: { kind: "observation", instanceOccurrenceId: anchor.id },
-      terminalStatus: "fail",
-    };
-    const retry: QaEvidenceOccurrence = {
-      ...first,
-      id: "retry",
-      retryOf: first.id,
-      terminalStatus: "pass",
-    };
-    const entry = legacy.entries[0]!;
-    const evidence = buildQaOccurrenceEvidenceSummary({
-      generatedAt: legacy.generatedAt,
-      profile: legacy.profile,
+    const { outputDir, evidenceDir, evidencePath, evidence: legacy } = evidenceFixture();
+    const invocation = createMaturityInvocation(1);
+    for (const status of ["fail", "pass"] as const) {
+      const attempt = invocation.begin(0);
+      invocation.complete(attempt, {
+        status,
+        entries: legacy.entries.map((entry) => ({ ...entry, result: { status } })),
+      });
+      invocation.select(0, attempt);
+    }
+    const evidence = {
+      ...invocation.snapshot({ generatedAt: legacy.generatedAt, profile: legacy.profile }),
       profilePlan: legacy.profilePlan,
       scorecard: legacy.scorecard,
-      occurrences: [anchor, first, retry],
-      entries: [
-        {
-          ...entry,
-          result: { status: "fail" },
-          effective: false,
-          binding: { occurrenceId: first.id, assertionId: null, receiptId: null },
-        },
-        {
-          ...entry,
-          effective: true,
-          binding: { occurrenceId: retry.id, assertionId: null, receiptId: null },
-        },
-      ],
-    });
+    };
     const raw = JSON.stringify(evidence);
     fs.writeFileSync(evidencePath, raw);
-    const rendered = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+    const rendered = renderEvidence(outputDir, evidenceDir);
     expect(rendered.status, rendered.stderr).toBe(0);
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity/scorecard.md"), "utf8");
     const evidenceCard = scorecard.match(
@@ -647,10 +647,8 @@ describe("maturity docs renderer CLI", () => {
     evidence.profilePlan.taxonomyIdentity.sha256 = "0".repeat(64);
     fs.writeFileSync(file, JSON.stringify(evidence));
 
-    const result = runCli(
-      "--output-dir",
+    const result = renderEvidence(
       outputDir,
-      "--evidence-dir",
       evidenceDir,
       "--static-assets-dir",
       staticAssetsDir,
@@ -690,14 +688,7 @@ describe("maturity docs renderer CLI", () => {
       }
     }
     fs.writeFileSync(scoresPath, stringifyYaml(scores));
-    const result = runCli(
-      "--output-dir",
-      outputDir,
-      "--evidence-dir",
-      evidenceDir,
-      "--scores",
-      scoresPath,
-    );
+    const result = renderEvidence(outputDir, evidenceDir, "--scores", scoresPath);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("semantic taxonomy identity is missing");
@@ -736,14 +727,7 @@ describe("maturity docs renderer CLI", () => {
       "A changed capability contract";
     const taxonomyPath = path.join(outputDir, "taxonomy.yaml");
     fs.writeFileSync(taxonomyPath, stringifyYaml(taxonomy));
-    const result = runCli(
-      "--output-dir",
-      outputDir,
-      "--evidence-dir",
-      evidenceDir,
-      "--taxonomy",
-      taxonomyPath,
-    );
+    const result = renderEvidence(outputDir, evidenceDir, "--taxonomy", taxonomyPath);
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("semantic taxonomy identity is mismatched");
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
@@ -782,7 +766,7 @@ describe("maturity docs renderer CLI", () => {
       category.coverageIds.fulfillmentPercent = 100;
     }
     fs.writeFileSync(file, JSON.stringify(stale));
-    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+    const result = renderEvidence(outputDir, evidenceDir);
     expect(result.status).toBe(0);
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
     expect(scorecard).toContain("Coverage Experimental - 0%");
@@ -806,7 +790,7 @@ describe("maturity docs renderer CLI", () => {
         scorecard: allProfileScorecardFixture(),
       });
     }
-    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+    const result = renderEvidence(outputDir, evidenceDir);
     expect(result.status).toBe(0);
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity/scorecard.md"), "utf8");
     expect(scorecard).toContain("Profile: all. Taxonomy: current.");
@@ -830,7 +814,7 @@ describe("maturity docs renderer CLI", () => {
       ],
     });
 
-    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+    const result = renderEvidence(outputDir, evidenceDir);
 
     expect(result.status).toBe(0);
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
