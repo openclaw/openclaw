@@ -1,11 +1,11 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   cancelExecRequestOwners,
   captureExecRequestOwners,
   withExecRequestTurn,
 } from "../infra/exec-request-context.js";
-import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
+import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { captureExecRequestCancellation } from "./bash-process-control.js";
 import { readBackgroundProcesses } from "./bash-process-observation.js";
@@ -19,6 +19,7 @@ import {
   waitForExecScope,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { runExecFixture } from "./bash-tools.exec-fixture.test-support.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { createRunExit, runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
@@ -70,25 +71,33 @@ function completedReceipt(cancel = vi.fn(() => true)) {
 }
 
 function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]>) {
-  return runExecProcess({
-    command: "sandbox-fixture",
-    workdir: "/tmp",
-    env: {},
-    usePty: false,
-    warnings: [],
-    maxOutput: 1000,
-    pendingMaxOutput: 1000,
-    notifyOnExit: false,
-    timeoutSec: null,
-    ...params,
-  });
+  return runExecFixture({ command: "sandbox-fixture", ...params });
 }
 
-function queueRun(wait: () => Promise<RunExit>, output = "") {
+function queueRun(
+  wait: (() => Promise<RunExit>) | undefined,
+  output = "",
+  overrides: Partial<ManagedRun> = {},
+) {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
     ...runtimeManagedRun(input, output),
-    wait,
+    ...(wait ? { wait } : {}),
+    ...overrides,
   }));
+}
+
+function createExecOperatorSource(profileId = "exec-guest") {
+  const controller = new AbortController();
+  const release = vi.fn();
+  const retain = vi.fn(() => release);
+  const authority = createAdmittedRunOperatorAuthority({
+    profileId,
+    scopes: ["operator.write"],
+    signal: controller.signal,
+    assertCurrent: () => controller.signal.throwIfAborted(),
+    retain,
+  });
+  return { controller, authority, retain, release };
 }
 
 const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
@@ -128,7 +137,11 @@ it.each([
     const artifactsEntered = createDeferred();
     const guestExit = createDeferred<ReturnType<typeof createRunExit>>();
     const otherExit = createDeferred<ReturnType<typeof createRunExit>>();
-    const releaseSource = vi.fn();
+    const {
+      controller: originalSource,
+      release: releaseSource,
+      authority,
+    } = createExecOperatorSource("guest");
     const cleanupError = new Error("targeted process cleanup failed");
     const makeSandbox = (marker: string) => {
       const terminate = vi.fn(async () => {
@@ -181,7 +194,6 @@ it.each([
         cancel: cancelOther,
         wait: () => otherExit.promise,
       }));
-    const originalSource = new AbortController();
     const requestIdentity = {
       runId: "sandbox-request-stop",
       sessionKey: "agent:main:targeted-cleanup",
@@ -196,13 +208,6 @@ it.each([
             return { owner, cancellation: captureExecRequestCancellation(requestIdentity) };
           })
         : undefined;
-    const authority = createAdmittedRunOperatorAuthority({
-      profileId: "guest",
-      scopes: ["operator.write"],
-      signal: originalSource.signal,
-      assertCurrent: () => originalSource.signal.throwIfAborted(),
-      retain: () => releaseSource,
-    });
     const guest = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:targeted-cleanup", operatorAuthority: authority },
       () =>
@@ -527,3 +532,109 @@ it.each(["task", "persistent task", "stdin"])(
     }
   },
 );
+
+describe("operator source lifetime", () => {
+  afterEach(() => {
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventWithReceiptMock).not.toHaveBeenCalled();
+  });
+  const caller = (source: ReturnType<typeof createExecOperatorSource>, sessionKey: string) => ({
+    agentId: "main",
+    sessionKey,
+    operatorAuthority: source.authority,
+  });
+
+  it("retains the original operator source through background cancellation and finalization", async () => {
+    const source = createExecOperatorSource();
+    const turn = new AbortController();
+    const guestExit = createDeferred<RunExit>();
+    const staffExit = createDeferred<RunExit>();
+    const cleanupStarted = createDeferred();
+    const cleanup = createDeferred();
+    const cancelGuest = vi.fn(() => {
+      guestExit.resolve(createRunExit({ reason: "manual-cancel", exitCode: null }));
+    });
+    const cancelStaff = vi.fn();
+    queueRun(undefined, "saved guest output\n", {
+      cancel: cancelGuest,
+      wait: () => guestExit.promise,
+      waitForExtinction: () => {
+        cleanupStarted.resolve();
+        return cleanup.promise;
+      },
+    });
+    queueRun(undefined, "independent output\n", {
+      cancel: cancelStaff,
+      wait: () => staffExit.promise,
+    });
+    const guest = await withGatewayToolCallerIdentity(
+      {
+        ...caller(source, "agent:main:retained-exec"),
+        receiptAuthority: () => !turn.signal.aborted,
+      },
+      () => runTestExecProcess({ command: "retained-source-command", startupSignal: turn.signal }),
+    );
+    const staff = await runTestExecProcess({ command: "retained-source-command" });
+    markBackgrounded(guest.session);
+    markBackgrounded(staff.session);
+    try {
+      turn.abort();
+      guest.disableUpdates();
+      expect(cancelGuest).not.toHaveBeenCalled();
+      expect(guest.session.exited).toBe(false);
+
+      source.controller.abort(new Error("original invitation revoked"));
+      expect(cancelGuest).toHaveBeenCalledWith("manual-cancel");
+      expect(cancelStaff).not.toHaveBeenCalled();
+      await cleanupStarted.promise;
+      expect(guest.session).toMatchObject({ finalizing: true, exited: false });
+      expect(source.release).not.toHaveBeenCalled();
+
+      expect(() => source.authority.assertCurrent()).toThrow("original invitation revoked");
+      expect(staff.session.exited).toBe(false);
+      cleanup.resolve();
+      await expect(guest.promise).resolves.toMatchObject({
+        status: "failed",
+        exitReason: "manual-cancel",
+        aggregated: expect.stringContaining("saved guest output"),
+      });
+      expect(source.retain).toHaveBeenCalledOnce();
+      expect(source.release).toHaveBeenCalledOnce();
+      staffExit.resolve(createRunExit());
+      await expect(staff.promise).resolves.toMatchObject({ status: "completed" });
+      expect(cancelStaff).not.toHaveBeenCalled();
+    } finally {
+      cleanup.resolve();
+      guestExit.resolve(createRunExit());
+      staffExit.resolve(createRunExit());
+      await Promise.all([guest.promise, staff.promise]);
+    }
+  });
+
+  it.each([false, true])(
+    "releases the original operator source after startup failure=%s",
+    async (fails) => {
+      const source = createExecOperatorSource();
+      const cancel = vi.fn();
+      if (fails) {
+        supervisorMock.spawn.mockRejectedValueOnce(new Error("process startup failed"));
+      } else {
+        queueRun(undefined, "", { cancel });
+      }
+      const pending = withGatewayToolCallerIdentity(
+        caller(source, "agent:main:source-release"),
+        () => runTestExecProcess({ command: "source-release-command" }),
+      );
+      if (fails) {
+        await expect(pending).rejects.toThrow("process startup failed");
+      } else {
+        const run = await pending;
+        await expect(run.promise).resolves.toMatchObject({ status: "completed" });
+      }
+      expect(source.retain).toHaveBeenCalledOnce();
+      expect(source.release).toHaveBeenCalledOnce();
+      source.controller.abort();
+      expect(cancel).not.toHaveBeenCalled();
+    },
+  );
+});

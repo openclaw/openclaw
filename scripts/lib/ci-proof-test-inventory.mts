@@ -1007,7 +1007,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/bash-tools.exec-runtime.test.ts",
   "src/agents/bash-tools.exec.approval-id.test.ts",
   "src/agents/bash-tools.exec.egress-lifecycle.test.ts",
-  "src/agents/bash-tools.exec.path.test.ts",
   "src/agents/bash-tools.exec.script-preflight.test.ts",
   "src/agents/bash-tools.exec.store-env.test.ts",
   "src/agents/bash-tools.github-auth-selection.test.ts",

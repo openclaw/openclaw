@@ -551,7 +551,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/bash-tools.exec.approval-id.test.ts",
   "src/agents/bash-tools.exec.egress-closure.test.ts",
   "src/agents/bash-tools.exec.egress-lifecycle.test.ts",
-  "src/agents/bash-tools.exec.path.test.ts",
   "src/agents/bash-tools.exec.security-floor.test.ts",
   "src/agents/bash-tools.github-auth-selection.test.ts",
   "src/agents/bash-tools.github-identity.test.ts",

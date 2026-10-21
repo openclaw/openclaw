@@ -8,12 +8,12 @@ import {
   type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import {
   prepareGatewaySuspend,
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "../infra/gateway-suspend-coordinator.js";
+import { inspectors } from "../infra/gateway-suspend-coordinator.test-support.js";
 import { sanitizeHostExecEnv, setGatewayCredentialEnvKeys } from "../infra/host-env-security.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
@@ -25,7 +25,7 @@ import {
   markBackgrounded,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { runExecFixture as runTestExecProcess } from "./bash-tools.exec-fixture.test-support.js";
 import { createRunExit, runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -143,21 +143,6 @@ function captureCompletions(sessionKey?: string) {
   return { events, metadata };
 }
 
-function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]> = {}) {
-  return runExecProcess({
-    command: "test-command",
-    workdir: "/tmp",
-    env: {},
-    usePty: false,
-    warnings: [],
-    maxOutput: 1000,
-    pendingMaxOutput: 1000,
-    notifyOnExit: false,
-    timeoutSec: null,
-    ...params,
-  });
-}
-
 function queueExit(exit: RunExit, stdout: string[]) {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
     for (const chunk of stdout) {
@@ -170,23 +155,7 @@ function queueExit(exit: RunExit, stdout: string[]) {
 function prepareSuspension(requestId: string) {
   // This test owns only the background-exec registry. Other process-global
   // activity counters may legitimately stay busy in the non-isolated suite.
-  const inspect: GatewayActiveWorkInspectors = {
-    getQueueSize: () => 0,
-    getPendingReplies: () => 0,
-    getEmbeddedRuns: () => 0,
-    getBackgroundExecSessions: getActiveBackgroundExecSessionCount,
-    getCronRuns: () => 0,
-    getAgentRuns: () => 0,
-    getAcpRuns: () => 0,
-    getMediaRuns: () => 0,
-    getRootRequests: () => 0,
-    getSessionAdmissions: () => 0,
-    getSessionMutations: () => 0,
-    getChatRuns: () => 0,
-    getQueuedTurns: () => 0,
-    getTerminalPersistence: () => 0,
-    getTerminalSessions: () => 0,
-  };
+  const inspect = inspectors({ getBackgroundExecSessions: getActiveBackgroundExecSessionCount });
   return prepareGatewaySuspend({
     requestId,
     pauseScheduling: vi.fn(),
