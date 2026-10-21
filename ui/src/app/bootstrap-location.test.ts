@@ -1,4 +1,4 @@
-import { createRouter, definePage } from "@openclaw/uirouter";
+import { createRouter } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { RouteId } from "../app-route-paths.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
@@ -49,12 +49,12 @@ it("hydrates the roster when a literal route commits before its Gateway connects
   const connectionBootstrap = createConnectionBootstrapCoordinator();
   const router = createRouter<RouteId, unknown, { renderSolid: () => null }>({
     routes: [
-      definePage({
+      {
         id: "chat",
         path: "/chat/main/dashboard/12345678-aaaa-4000-8000-000000000001",
         component: () => ({ renderSolid: () => null }),
         loader: () => ({ kind: "session", sessionKey }),
-      }),
+      },
     ],
   });
   const stop = subscribeForegroundChatBootstrap({
