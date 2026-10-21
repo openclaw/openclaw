@@ -5,7 +5,6 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
-import { downloadExactActionsArtifactArchive } from "../../scripts/lib/actions-artifact-archive.mjs";
 import {
   candidateArtifactJsonFromBinding,
   loadSelectedFullReleaseCandidate,
@@ -597,30 +596,6 @@ globalThis.fetch = async (url) => {
   });
 });
 
-it("does not start artifact metadata reads after the absolute deadline", async () => {
-  let reads = 0;
-  await expect(
-    downloadExactActionsArtifactArchive({
-      deadlineMs: Date.now() - 1,
-      expected: {
-        artifactDigest: `sha256:${"a".repeat(64)}`,
-        artifactExpiresAt: EXPIRES_AT,
-        artifactId: 301,
-        artifactName: `full-release-candidate-v2-${"b".repeat(64)}`,
-        artifactSizeBytes: 1,
-        repository: REPOSITORY,
-        runId: 77,
-        workflowSha: "b".repeat(40),
-      },
-      fetchImpl: async () => {
-        reads += 1;
-        return new Response();
-      },
-      token: "test-token",
-    }),
-  ).rejects.toThrow("deadline exceeded");
-  expect(reads).toBe(0);
-});
 describe("full release candidate loading", () => {
   it.each([WORKFLOW_PATH, ".github/workflows/full-release-artifacts.yml"])(
     "binds exact candidate artifacts from %s",

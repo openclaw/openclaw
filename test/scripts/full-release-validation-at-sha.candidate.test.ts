@@ -9,6 +9,7 @@ import {
   ghApiMethod,
   isWorkflowDispatch,
   runGit,
+  expectDispatchFailure,
 } from "./full-release-validation-at-sha.test-support.js";
 import { publicationSelectionFixture } from "./full-release-validation-state.test-support.js";
 
@@ -24,10 +25,6 @@ function dispatches(fixture: ReturnType<typeof createDispatchFixture>) {
   return fixture.readCalls(fixture.ghCallsPath).filter(isWorkflowDispatch).map(ghApiEndpoint);
 }
 
-function readRequestRecord(fixture: ReturnType<typeof createDispatchFixture>) {
-  return JSON.parse(readFileSync(fixture.requestPath(), "utf8"));
-}
-
 describe("candidate-owned full release dispatch entry point", () => {
   it.each(["main", "protected"])("rejects fresh %s publication before remote mutation", (route) => {
     const f = createDispatchFixture();
@@ -41,8 +38,7 @@ describe("candidate-owned full release dispatch entry point", () => {
       "-f",
       `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
     ]);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Fresh publication qualification must use candidate-owned Q=C");
+    expectDispatchFailure(result, "Fresh publication qualification must use candidate-owned Q=C");
     expect(dispatches(f)).toEqual([]);
     expect(f.readCalls(f.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET")).toEqual([]);
   });
@@ -53,8 +49,7 @@ describe("candidate-owned full release dispatch entry point", () => {
       "-f",
       'extension_test_exclude_patterns_json=["extensions/example/src/example.test.ts"]',
     ]);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Qualification admission did not succeed");
+    expectDispatchFailure(result, "Qualification admission did not succeed");
     expect(readFileSync(f.admissionReceiptPath + ".failure", "utf8")).toContain(
       "cannot exclude extension tests",
     );
@@ -68,7 +63,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     const advancedP = runGit(f.origin, ["rev-parse", "refs/heads/main"]);
     expect(advancedP).not.toBe(f.workflowSha);
     expect(result.stdout.match(/Admission P advanced with main/gu)).toHaveLength(3);
-    const retained = readRequestRecord(f);
+    const retained = f.record();
     expect(retained.admission.workflowSha).toBe(advancedP);
     expect(retained.request.workflowSha).toBe(f.targetSha);
     const envelope = JSON.parse(
@@ -83,8 +78,7 @@ describe("candidate-owned full release dispatch entry point", () => {
   it("refuses main that keeps moving past the admission advance bound", () => {
     const f = createDispatchFixture({ candidateOwned: true, advanceMainBeforeAdmission: 4 });
     const result = f.run();
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("Admission tooling ref moved before dispatch");
+    expectDispatchFailure(result, "Admission tooling ref moved before dispatch");
     expect(dispatches(f)).toEqual([]);
   });
 
@@ -97,7 +91,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     const result = f.run();
     expect(result.status, result.stderr).toBe(0);
     expect(dispatches(f)).toEqual([P, Q]);
-    const retained = readRequestRecord(f);
+    const retained = f.record();
     const admitted = JSON.parse(readFileSync(f.admissionReceiptPath, "utf8"));
     const sent = f.readPayload().body;
     const envelope = JSON.parse(
@@ -175,7 +169,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(f.readWaits()).toEqual([30_000, 60_000, 120_000, 120_000, 120_000, 120_000]);
     expect(dispatches(f)).toEqual([P, Q]);
     expect(f.readCalls(f.npmCallsPath)).toEqual([npmVersionsArgs]);
-    expect(readRequestRecord(f)).toMatchObject({
+    expect(f.record()).toMatchObject({
       phase: "observed",
       request: { targetSha: f.targetSha, workflowSha: f.targetSha },
       run: { id: 123, attempt: 1 },
@@ -205,7 +199,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     const f = createDispatchFixture({ candidateOwned: true, stopAfterAccepted: "admission" });
     expect(f.run().status).toBe(78);
     expect(dispatches(f)).toEqual([P]);
-    const pending = readRequestRecord(f);
+    const pending = f.record();
     expect(f.readCalls(f.npmCallsPath)).toEqual([npmVersionsArgs]);
     writeFileSync(f.publishedVersionsPath, JSON.stringify(["2027.1.1"]));
     expect(pending).toMatchObject({
@@ -222,11 +216,11 @@ describe("candidate-owned full release dispatch entry point", () => {
     const resumed = f.run(["--resume-request", f.requestPath()], true);
     expect(resumed.status, resumed.stderr).toBe(0);
     expect(dispatches(f)).toEqual([P, Q]);
-    expect(readRequestRecord(f).request.id).toBe(pending.request.id);
-    expect(readRequestRecord(f).request.workflowRef).toBe(pending.request.workflowRef);
+    expect(f.record().request.id).toBe(pending.request.id);
+    expect(f.record().request.workflowRef).toBe(pending.request.workflowRef);
     expect(
       JSON.parse(
-        JSON.parse(readRequestRecord(f).request.inputs.trusted_workflow_json).laneInputs
+        JSON.parse(f.record().request.inputs.trusted_workflow_json).laneInputs
           .qualification_baselines_json,
       ),
     ).toEqual(frozenBaselines);
@@ -239,7 +233,7 @@ describe("candidate-owned full release dispatch entry point", () => {
   it("does not reinterpret an accepted uncertain Q as resumable pre-Q work", () => {
     const f = createDispatchFixture({ candidateOwned: true, stopAfterAccepted: "qualification" });
     expect(f.run().status).toBe(78);
-    expect(readRequestRecord(f).phase).toBe("attempted");
+    expect(f.record().phase).toBe("attempted");
     expect(dispatches(f)).toEqual([P, Q]);
     const before = readFileSync(f.requestPath(), "utf8");
     const resumed = f.run(["--resume-request", f.requestPath()], true);
@@ -285,12 +279,11 @@ describe("candidate-owned full release dispatch entry point", () => {
     ({ options, expected, error }) => {
       const f = createDispatchFixture({ candidateOwned: true, ...options });
       const result = f.run();
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain(error);
+      expectDispatchFailure(result, error);
       expect(result.stderr).not.toContain("unexpected gh call");
       expect(dispatches(f)).toEqual(expected);
-      expect(readRequestRecord(f).request.workflowSha).toBe(f.targetSha);
-      expect(readRequestRecord(f).request.targetSha).toBe(f.targetSha);
+      expect(f.record().request.workflowSha).toBe(f.targetSha);
+      expect(f.record().request.targetSha).toBe(f.targetSha);
     },
   );
   it("retains publication and lane inputs in the envelope and reopens the same request read-only", () => {
@@ -358,8 +351,7 @@ describe("candidate-owned full release dispatch entry point", () => {
       ],
       true,
     );
-    expect(changedExclusion.status).toBe(1);
-    expect(changedExclusion.stderr).toContain("conflict with the retained request");
+    expectDispatchFailure(changedExclusion, "conflict with the retained request");
     expect(readFileSync(fixture.requestPath())).toEqual(before);
     expect(
       fixture
@@ -371,8 +363,7 @@ describe("candidate-owned full release dispatch entry point", () => {
       ["--request-file", fixture.requestPath(), "-f", "validation_purpose=diagnostic"],
       true,
     );
-    expect(mismatch.status).toBe(1);
-    expect(mismatch.stderr).toContain("conflict with the retained request");
+    expectDispatchFailure(mismatch, "conflict with the retained request");
     expect(readFileSync(fixture.requestPath())).toEqual(before);
   });
 

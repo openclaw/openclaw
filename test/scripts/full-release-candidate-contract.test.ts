@@ -58,6 +58,24 @@ function runJsonContract(command: string, value: unknown) {
 }
 
 type CandidateBindingFixture = ReturnType<typeof fullReleaseCandidateBindingFixture>;
+const COUNTERFEIT_WORKFLOW = ".github/workflows/candidate-evidence-test.yml";
+const LATER_EXPIRY = "2026-09-05T12:00:00Z";
+
+function setBindingAttempt(
+  binding: CandidateBindingFixture,
+  attempt: Partial<Pick<CandidateBindingFixture["producer"], "runId" | "runAttempt">>,
+) {
+  for (const participant of [
+    binding.producer,
+    binding.publisher,
+    binding.package.artifact,
+    binding.prepublishPluginRegistry.artifact,
+    binding.sharedImage.artifact,
+    binding.evidenceArtifact,
+  ]) {
+    Object.assign(participant, attempt);
+  }
+}
 
 function replaceBindingRequest(
   binding: CandidateBindingFixture,
@@ -174,39 +192,25 @@ describe("full release candidate contract", () => {
     }
   });
 
-  it("validates retained v1 request and manifest digests without rewriting them", () => {
-    const currentManifest = fullReleaseCandidateManifestFixture();
-    const {
-      packagePublished: _packagePublished,
-      upgradeBaseline: _upgradeBaseline,
-      ...requestFields
-    } = currentManifest.request;
+  it.each([1, 2])("validates retained v%s digests without rewriting them", (version) => {
     const request = {
-      ...requestFields,
-      schema: "openclaw.full-release-candidate-request/v1" as const,
+      ...Object.fromEntries(
+        Object.entries(fullReleaseCandidateManifestFixture().request).filter(
+          ([key]) => key !== "upgradeBaseline" && (version !== 1 || key !== "packagePublished"),
+        ),
+      ),
+      schema: `openclaw.full-release-candidate-request/v${version}`,
     };
     const binding = retainedBinding(request);
 
     expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
     expect(candidateRequestSha256(request)).toBe(binding.requestSha256);
     expect(() => validateFullReleaseCandidateRequest(request)).toThrow("schema is invalid");
-    expect(() => candidateArtifactJsonFromBinding(binding)).toThrow(
-      "retained v1 candidate evidence cannot supply package provenance",
-    );
-  });
-
-  it("validates retained v2 request and manifest digests without rewriting them", () => {
-    const currentManifest = fullReleaseCandidateManifestFixture();
-    const { upgradeBaseline: _upgradeBaseline, ...requestFields } = currentManifest.request;
-    const request = {
-      ...requestFields,
-      schema: "openclaw.full-release-candidate-request/v2" as const,
-    };
-    const binding = retainedBinding(request);
-
-    expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
-    expect(candidateRequestSha256(request)).toBe(binding.requestSha256);
-    expect(() => validateFullReleaseCandidateRequest(request)).toThrow("schema is invalid");
+    if (version === 1) {
+      expect(() => candidateArtifactJsonFromBinding(binding)).toThrow(
+        "retained v1 candidate evidence cannot supply package provenance",
+      );
+    }
   });
 
   it("rejects malformed or noncanonical request policy", () => {
@@ -332,25 +336,11 @@ describe("full release candidate contract", () => {
       "publisher job name": (binding) =>
         void (binding.publisher.jobName = "different publisher job"),
       "publisher workflow path": (binding) =>
-        void (binding.publisher.workflowPath = ".github/workflows/candidate-evidence-test.yml"),
+        void (binding.publisher.workflowPath = COUNTERFEIT_WORKFLOW),
       "producer workflow path": (binding) =>
-        void (binding.producer.workflowPath = ".github/workflows/candidate-evidence-test.yml"),
-      "producer run id tuple": (binding) => {
-        binding.producer.runId = "78";
-        binding.publisher.runId = "78";
-        binding.package.artifact.runId = "78";
-        binding.prepublishPluginRegistry.artifact.runId = "78";
-        binding.sharedImage.artifact.runId = "78";
-        binding.evidenceArtifact.runId = "78";
-      },
-      "producer run attempt tuple": (binding) => {
-        binding.producer.runAttempt = "2";
-        binding.publisher.runAttempt = "2";
-        binding.package.artifact.runAttempt = "2";
-        binding.prepublishPluginRegistry.artifact.runAttempt = "2";
-        binding.sharedImage.artifact.runAttempt = "2";
-        binding.evidenceArtifact.runAttempt = "2";
-      },
+        void (binding.producer.workflowPath = COUNTERFEIT_WORKFLOW),
+      "producer run id tuple": (binding) => setBindingAttempt(binding, { runId: "78" }),
+      "producer run attempt tuple": (binding) => setBindingAttempt(binding, { runAttempt: "2" }),
       "repository identity tuple": (binding) => {
         replaceBindingRequest(binding, { repository: "openclaw/other" });
         binding.producer.repository = binding.request.repository;
@@ -379,7 +369,7 @@ describe("full release candidate contract", () => {
       "package artifact digest": (binding) =>
         void (binding.package.artifact.digest = "5".repeat(64)),
       "package artifact expiry": (binding) =>
-        void (binding.package.artifact.expiresAt = "2026-09-05T12:00:00Z"),
+        void (binding.package.artifact.expiresAt = LATER_EXPIRY),
       "package artifact name": (binding) => void (binding.package.artifact.name = "other-package"),
       "package file name": (binding) => void (binding.package.fileName = "other.tgz"),
       "package and shared image digest tuple": (binding) => {
@@ -392,7 +382,7 @@ describe("full release candidate contract", () => {
       "registry artifact digest": (binding) =>
         void (binding.prepublishPluginRegistry.artifact.digest = "6".repeat(64)),
       "registry artifact expiry": (binding) =>
-        void (binding.prepublishPluginRegistry.artifact.expiresAt = "2026-09-05T12:00:00Z"),
+        void (binding.prepublishPluginRegistry.artifact.expiresAt = LATER_EXPIRY),
       "registry artifact name": (binding) =>
         void (binding.prepublishPluginRegistry.artifact.name = "other-registry"),
       "registry manifest": (binding) =>
@@ -401,7 +391,7 @@ describe("full release candidate contract", () => {
       "shared image artifact digest": (binding) =>
         void (binding.sharedImage.artifact.digest = "7".repeat(64)),
       "shared image artifact expiry": (binding) =>
-        void (binding.sharedImage.artifact.expiresAt = "2026-09-05T12:00:00Z"),
+        void (binding.sharedImage.artifact.expiresAt = LATER_EXPIRY),
       "shared image artifact name": (binding) =>
         void (binding.sharedImage.artifact.name = "other-shared-image"),
       "shared image archive": (binding) =>

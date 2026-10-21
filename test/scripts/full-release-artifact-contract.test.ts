@@ -11,7 +11,6 @@ import { parse } from "yaml";
 import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   createPublicationAdmission as createAdmission,
-  createPublicationObservations as createObservations,
   createPublicationSourceFact as createSource,
   normalizePublicationIntent,
   publicationAdmissionContract,
@@ -38,7 +37,10 @@ import { describeNpmBundle } from "../../scripts/npm-prepared-bundle.mjs";
 import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import { tryReadReleaseDecisionArtifact } from "../../scripts/release-ci-summary.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { publicationSourceEnv } from "./full-release-validation-state.test-support.js";
+import {
+  publicationSourceEnv,
+  registryRecord,
+} from "./full-release-validation-state.test-support.js";
 
 it.each([
   { route: "alpha", npmDistTag: "alpha" },
@@ -368,37 +370,17 @@ function registryEvidence(
     sourceProjection(),
   );
   const at = (seconds: number) => new Date(Date.parse(started) + seconds * 1000).toISOString();
-  const observations = createObservations(source, {
-    sourceDigest: source.digest,
+  const observations = registryRecord(source).publicationAdmission.observations;
+  Object.assign(observations, {
     prerequisitesCompletedAt: started,
     collectionStartedAt: started,
     collectionCompletedAt: at(1),
-    npm: [
-      {
-        name: "openclaw",
-        version: "2026.9.9",
-        required: true,
-        observedAt: started,
-        outcome: "observed",
-        state: {
-          packageExists: true,
-          hasVersionHistory: true,
-          selectedVersionExists: false,
-          latestVersion: "2026.9.8",
-        },
-      },
-    ],
-    clawhub: [],
-    pendingAuthority: [],
-    plans: {
-      npm: registryPlan({ warnings: Array.from({ length: warningCount }, () => "w".repeat(4000)) }),
-      clawhub: {
-        ...registryPlan(),
-        bootstrapCandidates: [],
-        missingTrustedPublisher: [],
-      },
-    },
   });
+  const npm = observations.npm[0]!;
+  assert(npm.outcome === "observed");
+  npm.observedAt = started;
+  npm.state.latestVersion = "2026.9.8";
+  observations.plans.npm.warnings = Array.from({ length: warningCount }, () => "w".repeat(4000));
   const descriptor = {
     id: "456",
     name: `full-release-publication-observations-${runId}-1`,

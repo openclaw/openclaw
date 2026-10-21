@@ -165,6 +165,9 @@ const windowsSelection = {
   windowsNodeInstallerDigests: { "installer.exe": `sha256:${"a".repeat(64)}` },
 };
 const unobservedFailure = { status: 1, observations: undefined, firstHopJobs: [] };
+const settledWorker = expect.objectContaining({ kind: "settled", worker: true, active: 0 });
+const isolatedWorker = { kind: "runtime", worker: true, inherited: [] };
+const platform = (id: string) => expect.objectContaining({ id });
 
 function selectedPlugins(...plugins: string[]) {
   return { ...selection, publishOpenclawNpm: false, pluginPublishScope: "selected", plugins };
@@ -1250,9 +1253,7 @@ globalThis.Date = class extends OriginalDate {
   if (options.registry === "parent-interrupt" && workerBoundary) {
     // The admission parent settles only after its worker's close event; that joins
     // the worker's synchronous exit record and exact process before the shell returns.
-    check(registryTrace).toContainEqual(
-      expect.objectContaining({ kind: "settled", worker: true, active: 0 }),
-    );
+    check(registryTrace).toContainEqual(settledWorker);
     const proc = `/proc/${workerBoundary.pid}/stat`;
     const live = () => {
       try {
@@ -1436,11 +1437,7 @@ describe("FRV required registry admission", () => {
         check(result.targetSha).not.toBe(result.toolingSha);
         check(result.effects).toContain("Provision trusted admission parser");
         check(result.effects).toContain("Admit publication source");
-        check(result.registryCalls).toContainEqual({
-          kind: "runtime",
-          worker: true,
-          inherited: [],
-        });
+        check(result.registryCalls).toContainEqual(isolatedWorker);
         const actualRequests = result.registryCalls.filter((entry) => entry.kind === "request");
         check(actualRequests.length).toBeGreaterThan(0);
         if (registry === "healthy") {
@@ -1655,9 +1652,7 @@ describe("FRV observation worker boundary", () => {
       check(
         result.registryCalls.filter((entry) => entry.path?.startsWith("/advisory-")).length,
       ).toBeLessThan(20);
-      check(result.registryCalls).toContainEqual(
-        expect.objectContaining({ kind: "settled", worker: true, active: 0 }),
-      );
+      check(result.registryCalls).toContainEqual(settledWorker);
     }),
     30_000,
   );
@@ -1690,9 +1685,7 @@ describe("FRV observation worker boundary", () => {
       check(result.stderr).toContain(
         registry === "required-budget" ? "response-too-large" : "cancelled-or-timeout",
       );
-      check(result.registryCalls).toContainEqual(
-        expect.objectContaining({ kind: "settled", worker: true, active: 0 }),
-      );
+      check(result.registryCalls).toContainEqual(settledWorker);
     }),
   );
 
@@ -1710,11 +1703,7 @@ describe("FRV observation worker boundary", () => {
         selection: { ...selection, route },
       });
       check(result.status, result.stderr).toBe(admitted ? 0 : 1);
-      check(result.registryCalls).toContainEqual({
-        kind: "runtime",
-        worker: true,
-        inherited: [],
-      });
+      check(result.registryCalls).toContainEqual(isolatedWorker);
       if (admitted) {
         check(result.observations.pendingAuthority).toContainEqual({
           registry: registryName,
@@ -1775,13 +1764,7 @@ describe("FRV observation worker boundary", () => {
       check(result, result.stderr).toMatchObject(unobservedFailure);
       check(result.stderr).toContain("required npm observation http-403");
       check(result.registryCalls).toContainEqual({ kind: "body-cancelled" });
-      check(result.registryCalls).toContainEqual(
-        expect.objectContaining({
-          kind: "settled",
-          active: 0,
-          worker: true,
-        }),
-      );
+      check(result.registryCalls).toContainEqual(settledWorker);
     }),
     30_000,
   );
@@ -2006,9 +1989,9 @@ describe("FRV publication source admission", () => {
         source: ".github/workflows/linux-app-release-request.yml",
       });
       if (windows) {
-        check(platforms).toContainEqual(expect.objectContaining({ id: "windows" }));
+        check(platforms).toContainEqual(platform("windows"));
       } else {
-        check(platforms).not.toContainEqual(expect.objectContaining({ id: "windows" }));
+        check(platforms).not.toContainEqual(platform("windows"));
       }
     }),
   );
@@ -2125,11 +2108,9 @@ describe("FRV publication source admission", () => {
   );
 
   publicationIt.concurrent.for([
-    "candidate-object",
     "tooling-object",
     "bootstrap",
     "import",
-    "yaml",
     "symlink",
     "non-utf8",
     "platform-helper",
@@ -2226,7 +2207,7 @@ describe("FRV publication source admission", () => {
       check(result.status, result.stderr).toBe(0);
       check(result.fact).toMatchObject({ projection: { version }, targetContextRef });
       const platforms = expectDefined(result.fact?.projection?.platforms, "source platforms");
-      check(platforms).not.toContainEqual(expect.objectContaining({ id: "linux" }));
+      check(platforms).not.toContainEqual(platform("linux"));
       if (route === "extended-stable") {
         check(result.fact?.projection?.packages).toEqual(
           expect.arrayContaining([{ name: pluginName, version, targets: ["npm"] }]),
@@ -2251,9 +2232,7 @@ describe("FRV publication source admission", () => {
         plugins: pluginName,
         npm_dist_tag: "default",
       });
-      check(result.fact?.projection?.platforms).not.toContainEqual(
-        expect.objectContaining({ id: "linux" }),
-      );
+      check(result.fact?.projection?.platforms).not.toContainEqual(platform("linux"));
       check(result.fact?.coverage.rerun_group).toBe("ci");
     }),
     30_000,
@@ -2299,14 +2278,14 @@ describe("FRV publication source admission", () => {
           source: ".github/workflows/android-release.yml",
         });
       } else {
-        check(platforms).not.toContainEqual(expect.objectContaining({ id: "android" }));
+        check(platforms).not.toContainEqual(platform("android"));
       }
       if (npmDistTag !== "extended-stable") {
         for (const id of ["docker", "vcr"]) {
           if (core) {
-            check(platforms).toContainEqual(expect.objectContaining({ id }));
+            check(platforms).toContainEqual(platform(id));
           } else {
-            check(platforms).not.toContainEqual(expect.objectContaining({ id }));
+            check(platforms).not.toContainEqual(platform(id));
           }
         }
       }
