@@ -86,6 +86,19 @@ function mockMountCommand(output: string): void {
   vi.spyOn(childProcess, "execFileSync").mockReturnValue(Buffer.from(output));
 }
 
+function volumeFixture(platform?: NodeJS.Platform, type?: number) {
+  const tempDir = tempDirs.make("openclaw-sqlite-volume-");
+  const db = createMockDb();
+  if (platform) {
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  }
+  const statfs =
+    type === undefined
+      ? undefined
+      : vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(type));
+  return { tempDir, db, statfs };
+}
+
 describe("sqlite WAL maintenance", () => {
   it.each([
     ["NFS", 0x6969],
@@ -94,10 +107,7 @@ describe("sqlite WAL maintenance", () => {
     ["SMB2", 0xfe534d42],
     ["9p (V9FS)", 0x01021997],
   ])("uses rollback journaling for databases on Linux %s volumes", (label, fsType) => {
-    const tempDir = tempDirs.make("openclaw-sqlite-network-");
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const statfs = vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(fsType));
+    const { tempDir, db, statfs } = volumeFixture("linux", fsType);
 
     const maintenance = configure(db, {
       databasePath: path.join(
@@ -158,10 +168,8 @@ describe("sqlite WAL maintenance", () => {
   );
 
   it("refuses network-backed databases when SQLite keeps WAL active", () => {
-    const tempDir = tempDirs.make("openclaw-sqlite-nfs-");
-    const db = createMockDb();
+    const { tempDir, db } = volumeFixture(undefined, 0x6969);
     mockQuery(db, () => ({ journal_mode: "wal" }));
-    vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0x6969));
 
     expect(() =>
       configure(db, {
@@ -212,10 +220,7 @@ describe("sqlite WAL maintenance", () => {
 
   it("uses rollback journaling for cross-VM mounts", () => {
     const fsType = "fuse.virtiofs";
-    const tempDir = tempDirs.make("openclaw-sqlite-virtiofs-");
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+    const { tempDir, db } = volumeFixture("linux", 0);
     vi.spyOn(fs, "readFileSync").mockReturnValue(
       `42 12 0:41 / ${tempDir} rw,relatime - ${fsType} host0 rw\n`,
     );
@@ -250,10 +255,7 @@ describe("sqlite WAL maintenance", () => {
   );
 
   it("preserves WAL policy when mount classification fails without timing out", () => {
-    const tempDir = tempDirs.make("openclaw-sqlite-mount-error-");
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+    const { tempDir, db } = volumeFixture("darwin", 0);
     vi.spyOn(fs, "readFileSync").mockImplementation(() => {
       throw new Error("no proc mountinfo");
     });
@@ -276,9 +278,7 @@ describe("sqlite WAL maintenance", () => {
   ] as const)(
     "classifies %s mount output for %s source %s",
     (platform, fsType, source, journal) => {
-      const tempDir = tempDirs.make("openclaw-sqlite-mount-");
-      const db = createMockDb();
-      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const { tempDir, db } = volumeFixture(platform);
       mockMountCommand(
         platform === "linux"
           ? `${source} on ${tempDir} type ${fsType} (rw,relatime)\n`
