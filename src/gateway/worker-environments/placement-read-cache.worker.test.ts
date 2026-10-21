@@ -45,8 +45,8 @@ beforeEach(() => {
 describe("worker placement read cache", () => {
   it("keeps the syncing owner when a read captured during commit returns its older snapshot", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-pending-replica-"));
-    const database = openOpenClawStateDatabase();
-    const store = createWorkerSessionPlacementStore({ database });
+    const snapshotDatabase = openOpenClawStateDatabase();
+    const store = createWorkerSessionPlacementStore({ database: snapshotDatabase });
     const identity = { sessionId: "dispatch", agentId: "main", sessionKey: "agent:main:dispatch" };
     const requested = await store.startDispatch(identity);
     const provisioning = await store.transition({
@@ -57,7 +57,7 @@ describe("worker placement read cache", () => {
       patch: { environmentId: "dispatch-environment" },
     });
     const snapshot = await store.readProjection([identity.sessionId], { current: true });
-    const databaseIdentity = requireOpenClawStateDatabaseIdentity({ db: database.db });
+    const databaseIdentity = requireOpenClawStateDatabaseIdentity({ db: snapshotDatabase.db });
     let publishRead: ReturnType<typeof capturePlacementReplicaRead> | undefined;
     const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
