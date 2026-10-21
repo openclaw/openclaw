@@ -579,6 +579,9 @@ function* openOpenClawAgentDatabaseSteps(
     releaseCreationAdmission?.();
     return database;
   } catch (error) {
+    // The host releases a refused prepared worker's lease after native exit.
+    const deferLeaseRelease =
+      preparedLease !== undefined && !isMainThread && error instanceof SqliteWorkerOpenRefusedError;
     let closeError: unknown;
     if (openedDatabase) {
       try {
@@ -628,12 +631,13 @@ function* openOpenClawAgentDatabaseSteps(
         closeMaintenanceAgentDatabase(retainedDatabase),
       );
       cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
-    } else {
+    } else if (!deferLeaseRelease) {
+      const closeOutcome = error instanceof SqliteWorkerOpenRefusedError ? "read-only" : undefined;
       try {
-        releaseOpenClawAgentDatabaseLease(leaseId, releaseOptions);
+        releaseOpenClawAgentDatabaseLease(leaseId, releaseOptions, closeOutcome);
       } catch (releaseError) {
         retainFailedAgentDatabaseClose(agentId, pathname, () =>
-          releaseOpenClawAgentDatabaseLease(leaseId, releaseOptions),
+          releaseOpenClawAgentDatabaseLease(leaseId, releaseOptions, closeOutcome),
         );
         throw releaseError;
       }

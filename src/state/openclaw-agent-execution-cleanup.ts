@@ -19,11 +19,13 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   stopped: Promise<void>;
   assertOwned(): void;
   lease: OpenClawAgentDatabaseWorkerLeaseReceipt;
+  readOpenRefused?: () => boolean;
   closed?: () => ReturnType<typeof readAgentDatabaseClosedReceipt>;
 }): Promise<void> {
   params.assertOwned();
   await params.stopped;
   params.assertOwned();
+  const refusedBeforeAgentOpen = params.readOpenRefused?.() === true;
   // A confirmed native close already released its lease; exit alone still needs recovery.
   if (params.closed?.()) {
     assertExistingDatabaseIdentity(params.lease.sharedStatePath, params.lease.sharedStateIdentity);
@@ -35,7 +37,9 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   }
   params.assertOwned();
   // Uncertified retirement cannot lend proof while shared-state cleanup admission waits.
-  invalidateOpenClawAgentDatabaseValidation(params.lease.path);
+  if (!refusedBeforeAgentOpen) {
+    invalidateOpenClawAgentDatabaseValidation(params.lease.path);
+  }
   const context = {
     environment: params.context.environment,
     existingSchemaPath: params.context.existingSchemaPath,
@@ -61,7 +65,14 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   try {
     await runSqliteWorkerStoreOperation(
       store,
-      (scope) => scope.execute({ type: "agentDatabases.releaseExitedLease", input: params.lease }),
+      (scope) =>
+        scope.execute({
+          type: "agentDatabases.releaseExitedLease",
+          input: {
+            ...params.lease,
+            outcome: refusedBeforeAgentOpen ? "refused-before-open" : "unknown",
+          },
+        }),
       context,
       () => params.assertOwned(),
       () => ({
