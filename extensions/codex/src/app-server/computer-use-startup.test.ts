@@ -341,6 +341,23 @@ function cacheFixture() {
   return { root, codexHome, reconcile };
 }
 
+it("selects the first installed desktop marketplace", async () => {
+  const { root, codexHome, reconcile } = cacheFixture();
+  const marketplacePath = (app: string) =>
+    path.join(root, "Applications", app, "Contents", "Resources", "plugins", "openai-bundled");
+  const chatGptMarketplacePath = marketplacePath("ChatGPT.app");
+  const legacyCodexMarketplacePath = marketplacePath("Codex.app");
+  await writeBundledComputerUsePlugin(chatGptMarketplacePath, "2.0.0");
+  await writeBundledComputerUsePlugin(legacyCodexMarketplacePath, "1.0.0");
+
+  expect(
+    await reconcile({
+      bundledMarketplacePathCandidates: [chatGptMarketplacePath, legacyCodexMarketplacePath],
+    }),
+  ).toBe(true);
+  expect(await fs.readdir(computerUseCachePath(codexHome))).toEqual(["2.0.0"]);
+});
+
 it("copies a bundled plugin symlink without replacing current copies or removing live versions", async () => {
   const { root, codexHome, reconcile } = cacheFixture();
   const bundledMarketplacePath = path.join(root, "Codex.app", "plugins", "openai-bundled");
