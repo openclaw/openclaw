@@ -96,6 +96,8 @@ const repositoryScriptEntries = [
   "scripts/perf/operator-authority-measure.ts!",
   // #179149 invokes this synthetic event-dispatch allocation probe by path.
   "scripts/perf/agent-event-dispatch-measure.ts!",
+  // scripts/perf/README.md invokes this database-path allocation probe by path.
+  "scripts/perf/state-path-resolution-measure.ts!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.

@@ -1643,6 +1643,23 @@ counter hooks, and is not isolated bytes allocated by one assertion. Use matched
 instrumentation and the same paired host procedure for comparisons. The tiny
 fixture proves the path, not deployment capacity or production recheck rates.
 
+## State and agent database path resolution
+
+Measure the real path owners without opening a database:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/state-path-resolution-measure.ts \
+  --iterations 100000 --rounds 5
+```
+
+The JSON-lines output separates warm roots, alternating roots, explicit agent
+paths, and cold unique roots. Timing and allocation are separate passes; V8
+sampling includes objects collected by major and minor GC. A third, untimed pass
+counts exported `path.resolve` and `path.join` calls. These are owner-level
+operation counts, not Gateway calls per turn. Run both revisions with identical
+arguments, interleave samples, and compare with the `chat.send` allocation
+workload below before drawing an end-to-end conclusion.
+
 ## Allocated bytes per RPC or turn
 
 Use the same owned Gateway driver with `--allocations` and a named `--scenario`:

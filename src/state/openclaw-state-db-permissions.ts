@@ -5,10 +5,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  resolveOpenClawStateSqliteDir,
-  resolveOpenClawStateSqlitePath,
-} from "./openclaw-state-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
@@ -53,9 +50,9 @@ export function ensureOpenClawStatePermissions(
   options: { createDirectory?: boolean } = {},
 ): void {
   const dir = path.dirname(pathname);
-  const defaultDir = resolveOpenClawStateSqliteDir(env);
-  const isDefaultStateDatabase =
-    path.resolve(pathname) === path.resolve(resolveOpenClawStateSqlitePath(env));
+  const defaultPath = resolveOpenClawStateSqlitePath(env);
+  const defaultDir = path.dirname(defaultPath);
+  const isDefaultStateDatabase = path.resolve(pathname) === path.resolve(defaultPath);
   if (isDefaultStateDatabase && dir !== defaultDir) {
     throw new Error(`OpenClaw state database path resolved outside its state dir: ${pathname}`);
   }
