@@ -15,6 +15,7 @@ const { toolResultHandler } = vi.hoisted(() => ({
       }) => Promise<Partial<OpenClawAgentToolResult> | void>
     >(),
 }));
+// mock-isolation: Exercise the real middleware without loading external TokenJuice reducers.
 vi.mock("./runtime-api.js", () => ({
   createTokenjuiceOpenClawEmbeddedExtension:
     () => (api: { on: (event: string, handler: unknown) => void }) =>
@@ -50,7 +51,7 @@ async function applyBashResult(details: unknown) {
 
 describe("tokenjuice plugin", () => {
   beforeEach(() => toolResultHandler.mockReset().mockResolvedValue(undefined));
-  it("registers tokenjuice tool result middleware for OpenClaw, Codex, and Agents API runtimes", () => {
+  it("registers tokenjuice tool result middleware for OpenClaw, Codex, and Agents API runtimes", async () => {
     const captured = capturePluginRegistration({
       id: "tokenjuice",
       contracts: manifest.contracts,
@@ -59,6 +60,12 @@ describe("tokenjuice plugin", () => {
     const registration = captured.agentToolResultMiddlewares[0];
     expect(typeof registration?.handler).toBe("function");
     expect(registration?.runtimes).toEqual(["openclaw", "codex", "agentsapi"]);
+    toolResultHandler.mockResolvedValueOnce({ content: compacted() });
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      registration!.handler,
+    ]);
+    const result = await runner.applyToolResultMiddleware(toolEvent("exec", completed));
+    expect(result.content).toEqual(compacted());
   });
 
   it("passes through status metadata without duplicate aggregated output", async () => {

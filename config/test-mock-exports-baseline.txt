@@ -1142,7 +1142,6 @@
 ["extensions/tlon/src/urbit/sse-client.test.ts","./fetch.js","5d4eb22d0ed4041932f0ea1afd3a809159c385b6621dc8efd2dd24a728144828",1]
 ["extensions/tlon/src/urbit/upload.test.ts","../tlon-api.js","5cba415ba807e7ef1e5a98697074b2c80d3829c249c93de553ffe79776488a81",1]
 ["extensions/tlon/src/urbit/upload.test.ts","openclaw/plugin-sdk/media-runtime","e9f06b2cdd76e993e5cbfaa5e08b9c654c0f64bc879d5fc6ae7cfb0fd3212e2d",1]
-["extensions/tokenjuice/index.test.ts","./runtime-api.js","8b189046981e5f89f97b7c027ea1631b57d8b5a76d2274758ac75cec2dac60ce",1]
 ["extensions/tts-local-cli/speech-provider-stream-error.test.ts","openclaw/plugin-sdk/process-runtime","2d8e5d7a2fea5b49cfab1b7f7ec30f377adae0a0be3b0138a81c2a9eab5774ab",1]
 ["extensions/tts-local-cli/speech-provider.test.ts","openclaw/plugin-sdk/media-runtime","66e3647d30b80559fac02332e276729fa1c174fbedd6397508816525691213bf",1]
 ["extensions/tts-local-cli/speech-provider.test.ts","openclaw/plugin-sdk/runtime-env","f0c9576a03056f05b1dab416f0733347f9dd1420cae75e3bce3e77c522b463ca",1]
