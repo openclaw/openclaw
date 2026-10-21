@@ -9,9 +9,19 @@ import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import * as commandStatus from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createPluginCommandRuntime,
+  type PluginCommandNativeCandidate,
+} from "openclaw/plugin-sdk/plugin-command-runtime";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
+import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   attachRestMock,
   createInternalInteractionPayload,
@@ -24,11 +34,13 @@ import { clearDiscordChannelInfoCacheForTest } from "./message-channel-info.test
 import * as pickerPreferences from "./model-picker-preferences.js";
 import * as pickerState from "./model-picker.state.js";
 import { createModelsProviderData } from "./model-picker.test-utils.js";
+import * as interactionContext from "./native-command-context.js";
 import { nativeCommandContext } from "./native-command.dispatch.test-support.js";
 import {
   createDiscordModelPickerFallbackButton,
   createDiscordNativeCommand,
 } from "./native-command.js";
+import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 // Keep transcript persistence outside this interaction boundary fixture.
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
@@ -40,6 +52,7 @@ const GUILD = "100000000000000001";
 const CHANNEL = "100000000000000002";
 const THREAD = "100000000000000003";
 const USER = "100000000000000004";
+const DISABLED_CHANNEL = "100000000000000005";
 
 function createConfig(): OpenClawConfig {
   return {
@@ -48,14 +61,21 @@ function createConfig(): OpenClawConfig {
     channels: {
       discord: {
         groupPolicy: "allowlist",
-        guilds: { [GUILD]: { channels: { [CHANNEL]: { enabled: true } } } },
+        guilds: {
+          [GUILD]: {
+            channels: { [CHANNEL]: { enabled: true }, [DISABLED_CHANNEL]: { enabled: false } },
+          },
+        },
       },
     },
   };
 }
 
-function createHarness() {
-  const cfg = createConfig();
+function createHarness(
+  threadBinding?: ThreadBindingRecord,
+  pluginCommands: readonly PluginCommandNativeCandidate[] = [],
+  cfg: OpenClawConfig = createConfig(),
+) {
   let currentConfig = cfg;
   const readPolicy = createDiscordLivePolicyReader({
     cfg,
@@ -64,16 +84,29 @@ function createHarness() {
     readConfig: () => currentConfig,
     resolvedAllowlist: { guildEntries: cfg.channels?.discord?.guilds, allowFrom: [] },
   });
+  const baseContext = nativeCommandContext(cfg);
   const commandContext = {
-    ...nativeCommandContext(cfg),
+    ...baseContext,
+    threadBindings: {
+      ...baseContext.threadBindings,
+      getByThreadId: (threadId: string) => (threadId === THREAD ? threadBinding : undefined),
+    },
     readPolicy,
     postApplySettleMs: 0,
   };
   const client = createInternalTestClient([
+    ...pluginCommands.map((command) =>
+      createDiscordNativeCommand({ ...commandContext, ephemeralDefault: true, command }),
+    ),
     createDiscordNativeCommand({
       ...commandContext,
       ephemeralDefault: true,
       command: { name: "status", description: "Status", acceptsArgs: false },
+    }),
+    createDiscordNativeCommand({
+      ...commandContext,
+      ephemeralDefault: true,
+      command: { name: "new", description: "New", acceptsArgs: false },
     }),
     createDiscordNativeCommand({
       ...commandContext,
@@ -120,11 +153,13 @@ function createHarness() {
   const status = vi
     .spyOn(commandStatus, "resolveDirectStatusReplyForSession")
     .mockImplementation(async ({ sessionKey }) => ({ text: `Status for ${sessionKey}` }));
+  const context = vi.spyOn(interactionContext, "buildDiscordNativeInteractionContext");
   return {
     client,
     post,
     get,
     status,
+    context,
     dispatch,
     session,
     patch,
@@ -158,11 +193,11 @@ function expectEmptyAutocomplete(harness: ReturnType<typeof createHarness>) {
   expect(harness.session).not.toHaveBeenCalled();
 }
 
-function denyThreadParent(harness: ReturnType<typeof createHarness>) {
+function denyThreadParent(harness: ReturnType<typeof createHarness>, parentId = "denied") {
   harness.get.mockResolvedValue({
     id: THREAD,
     type: ChannelType.PublicThread,
-    parent_id: "denied",
+    parent_id: parentId,
     name: "topic",
   });
 }
@@ -347,5 +382,182 @@ it.each<Surface>(["status", "autocomplete", "picker"])(
     }
   },
 );
+
+// The record a `/codex bind` plus Allow once writes for a thread: an opaque plugin
+// session key, with the plugin named as the owner in metadata.
+function createPluginOwnedThreadBinding(): ThreadBindingRecord {
+  return {
+    accountId: "default",
+    channelId: CHANNEL,
+    threadId: THREAD,
+    targetKind: "acp",
+    targetSessionKey: "plugin-binding:codex:d9d55822716ec2ce6dd262cd",
+    agentId: "main",
+    boundBy: USER,
+    boundAt: 1,
+    lastActivityAt: 1,
+    metadata: {
+      pluginBindingOwner: "plugin",
+      pluginId: "codex",
+      pluginName: "Codex",
+      pluginRoot: "/plugins/codex",
+    },
+  };
+}
+
+describe("plugin-bound thread", () => {
+  // The session an unbound thread resolves to; the raw thread cases above pin it.
+  const sessionKey = `agent:main:discord:channel:${THREAD}`;
+  const codexHandler = vi.fn(async (ctx: { sessionKey?: string }) => ({
+    text: `codex:${ctx.sessionKey ?? ""}`,
+  }));
+
+  // The plugin command registry is global: register `codex` per case and reset it after.
+  beforeEach(() => {
+    clearPluginCommands();
+    setActivePluginRegistry(createTestRegistry());
+    codexHandler.mockClear();
+    expect(
+      registerPluginCommand(
+        "codex",
+        {
+          name: "codex",
+          description: "Codex",
+          acceptsArgs: true,
+          requireAuth: true,
+          handler: async (ctx) => await codexHandler(ctx),
+        },
+        { allowReservedCommandNames: true },
+      ),
+    ).toEqual({ ok: true });
+    harness = createHarness(
+      createPluginOwnedThreadBinding(),
+      createPluginCommandRuntime().listNativeCandidates("discord"),
+    );
+  });
+  afterEach(() => {
+    clearPluginCommands();
+    setActivePluginRegistry(createTestRegistry());
+  });
+
+  function codexBindingInteraction() {
+    return createInternalInteractionPayload({
+      ...interactionFor("status", THREAD),
+      type: InteractionType.ApplicationCommand,
+      data: {
+        id: "command1",
+        name: "codex",
+        type: 1,
+        options: [{ name: "input", type: ApplicationCommandOptionType.String, value: "binding" }],
+      },
+    });
+  }
+
+  it("uses the non-default channel route for status and the plugin command agent", async () => {
+    const cfg = createConfig();
+    cfg.agents = { ...cfg.agents, ownership: "explicit", entries: { main: {}, work: {} } };
+    cfg.bindings = [
+      { agentId: "work", match: { channel: "discord", peer: { kind: "channel", id: CHANNEL } } },
+    ];
+    harness = createHarness(
+      createPluginOwnedThreadBinding(),
+      createPluginCommandRuntime().listNativeCandidates("discord"),
+      cfg,
+    );
+    const routedSessionKey = `agent:work:discord:channel:${THREAD}`;
+    await harness.client.handleInteraction(interactionFor("status", THREAD));
+    expect(harness.status).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionKey: routedSessionKey }),
+    );
+    expectFollowUp(harness, `Status for ${routedSessionKey}`);
+
+    await harness.client.handleInteraction(codexBindingInteraction());
+    expect(codexHandler).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ agentId: "work", sessionKey: routedSessionKey, args: "binding" }),
+    );
+    expect(harness.session).toHaveBeenCalledWith({
+      agentId: "work",
+      sessionKey: routedSessionKey,
+    });
+    expectFollowUp(harness, `codex:${routedSessionKey}`);
+    expect(recordDeliveredCommandExchange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "work",
+        sessionKey: routedSessionKey,
+        replyId: "plugin-reply",
+      }),
+    );
+  });
+
+  it("keeps the refusal when an agent-owned record and its session agent disagree", async () => {
+    // Do not turn an existing ownership mismatch into an admitted plugin command.
+    const boundSessionKey = "agent:work:subagent:bound";
+    harness = createHarness(
+      {
+        ...createPluginOwnedThreadBinding(),
+        targetKind: "subagent",
+        targetSessionKey: boundSessionKey,
+        agentId: "main",
+        metadata: {},
+      },
+      createPluginCommandRuntime().listNativeCandidates("discord"),
+    );
+    await expect(harness.client.handleInteraction(codexBindingInteraction())).rejects.toThrow(
+      'The agent-scoped session key belongs to "work", not "main".',
+    );
+    expect(codexHandler).not.toHaveBeenCalled();
+    expect(harness.session).toHaveBeenCalledWith({ agentId: "main", sessionKey: boundSessionKey });
+  });
+
+  it("routes native /status to the thread session", async () => {
+    await harness.client.handleInteraction(interactionFor("status", THREAD));
+    expect(harness.status).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionKey, channel: "discord", senderId: USER }),
+    );
+    expectFollowUp(harness, `Status for ${sessionKey}`);
+  });
+
+  it("hands native /codex binding to the plugin command", async () => {
+    await harness.client.handleInteraction(
+      createInternalInteractionPayload({
+        ...interactionFor("status", THREAD),
+        type: InteractionType.ApplicationCommand,
+        data: {
+          id: "command1",
+          name: "codex",
+          type: 1,
+          options: [{ name: "input", type: ApplicationCommandOptionType.String, value: "binding" }],
+        },
+      }),
+    );
+    expect(codexHandler).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        args: "binding",
+        agentId: "main",
+        sessionKey,
+        channel: "discord",
+        from: `discord:channel:${THREAD}`,
+        messageThreadId: THREAD,
+        threadParentId: CHANNEL,
+      }),
+    );
+    expect(harness.status).not.toHaveBeenCalled();
+    expectFollowUp(harness, `codex:${sessionKey}`);
+  });
+
+  it("keeps the disabled-parent denial for native /new", async () => {
+    denyThreadParent(harness, DISABLED_CHANNEL);
+    await harness.client.handleInteraction(
+      createInternalInteractionPayload({
+        ...interactionFor("status", THREAD),
+        type: InteractionType.ApplicationCommand,
+        data: { id: "command1", name: "new", type: 1 },
+      }),
+    );
+    expect(harness.context).not.toHaveBeenCalled();
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    expectFollowUp(harness, "This channel is disabled.");
+  });
+});
 
 installDiscordIngressTestRuntime();

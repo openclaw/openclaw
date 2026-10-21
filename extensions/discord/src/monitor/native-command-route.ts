@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveConfiguredBindingRoute } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import {
+  isPluginOwnedSessionBindingRecord,
+  resolveConfiguredBindingRoute,
+} from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
@@ -59,8 +62,11 @@ export function resolveDiscordNativeInteractionRouteState(params: {
       : null;
   const configuredBinding = configuredRoute?.bindingResolution ?? null;
   const configuredBoundSessionKey = normalizeOptionalString(configuredRoute?.boundSessionKey);
-  const boundSessionKey =
-    normalizeOptionalString(threadBinding?.targetSessionKey) ?? configuredBoundSessionKey;
+  // A plugin-owned binding has an opaque session key; like the message path, route the
+  // interaction as an unbound thread and let the plugin command resolve its own binding.
+  const boundSessionKey = isPluginOwnedSessionBindingRecord(threadBinding)
+    ? undefined
+    : (normalizeOptionalString(threadBinding?.targetSessionKey) ?? configuredBoundSessionKey);
   const effectiveRoute = resolveDiscordEffectiveRoute({
     route,
     boundSessionKey,

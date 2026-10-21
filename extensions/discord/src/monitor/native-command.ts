@@ -1,7 +1,10 @@
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { loadPreparedModelCatalog, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
-import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import {
+  ensureConfiguredBindingRouteReady,
+  isPluginOwnedSessionBindingRecord,
+} from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -497,8 +500,11 @@ async function dispatchDiscordCommandInteraction(
     }
     const messageThreadId = !isDirectMessage && isThreadChannel ? channelId : undefined;
     const pluginThreadParentId = !isDirectMessage && isThreadChannel ? threadParentId : undefined;
+    const threadBinding = isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined;
     const pluginCommandAgentId =
-      (isThreadChannel ? threadBindings.getByThreadId(rawChannelId)?.agentId : undefined) ||
+      (routeState.boundSessionKey == null && isPluginOwnedSessionBindingRecord(threadBinding)
+        ? effectiveRoute.agentId
+        : threadBinding?.agentId) ||
       routeState.configuredBinding?.statefulTarget.agentId ||
       effectiveRoute.agentId;
     const targetSessionEntry = await getSessionEntryAsync({
