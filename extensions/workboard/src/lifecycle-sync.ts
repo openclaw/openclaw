@@ -279,69 +279,6 @@ function lifecycleFromSession(
   return { state: "idle", sourceUpdatedAt };
 }
 
-async function syncWorkboardLifecycleSessions(params: {
-  store: WorkboardStore;
-  cards: readonly WorkboardCard[];
-  sessions: readonly WorkboardLifecycleSession[];
-  now: number;
-  onMatched?: WorkboardLifecycleMatchHandler;
-}): Promise<void> {
-  const now = params.now;
-  for (const card of params.cards) {
-    const lookupKey = workboardCardSessionLookupKey(card);
-    const candidates = lookupKey.startsWith("subagent:workboard-")
-      ? params.sessions.filter((entry) => entry.key.endsWith(`:${lookupKey}`))
-      : [];
-    // Persisted links win; an unlinked dispatcher claim needs one configured owner.
-    const session =
-      params.sessions.find((entry) => entry.key === lookupKey) ??
-      (candidates.length === 1 ? candidates[0] : undefined);
-    if (!session && candidates.length > 1) {
-      continue;
-    }
-    const launch = card.metadata?.automation?.launch;
-    const preparedAcceptanceAt =
-      launch?.phase === "prepared" && session && sessionProvesPreparedAcceptance(session)
-        ? session.hasActiveRun === true
-          ? Math.max(now, launch.preparedAt)
-          : session.updatedAt
-        : undefined;
-    if (
-      launch?.phase === "prepared" &&
-      (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt)
-    ) {
-      await params.store.failPreparedLaunch(card.id, {
-        expectedLaunch: launch,
-        reason: "Gateway did not accept the prepared Workboard session before restart.",
-        failedAt: now,
-      });
-      continue;
-    }
-    if (!session) {
-      continue;
-    }
-    const observation = lifecycleFromSession(session, now);
-    if (
-      await params.store.syncLifecycle(card.id, {
-        ...LIFECYCLE_TARGETS[observation.state],
-        sourceUpdatedAt: observation.sourceUpdatedAt,
-        stale: observation.stale,
-        now,
-        association: {
-          ...(cardSessionKey(card) ? { expectedSessionKey: cardSessionKey(card) } : {}),
-          ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
-          sessionKey: session.key,
-          ...(preparedAcceptanceAt === undefined ? {} : { acceptedAt: preparedAcceptanceAt }),
-        },
-      })
-    ) {
-      if (observation.state === "succeeded" || observation.state === "failed") {
-        await params.onMatched?.({ cards: [card], sessionKey: session.key });
-      }
-    }
-  }
-}
-
 function normalizeSession(value: unknown): WorkboardLifecycleSession | undefined {
   if (!isRecord(value) || typeof value.key !== "string" || !value.key) {
     return undefined;
@@ -574,13 +511,68 @@ export function createWorkboardLifecycleService(params: {
                 if (!snapshot.complete) {
                   continue;
                 }
-                await syncWorkboardLifecycleSessions({
-                  store: params.store,
-                  cards: linkedCards,
-                  sessions: snapshot.sessions,
-                  now,
-                  onMatched,
-                });
+                const store = params.store;
+                const sessions = snapshot.sessions;
+                for (const card of linkedCards) {
+                  const lookupKey = workboardCardSessionLookupKey(card);
+                  const candidates = lookupKey.startsWith("subagent:workboard-")
+                    ? sessions.filter((entry) => entry.key.endsWith(`:${lookupKey}`))
+                    : [];
+                  // Persisted links win; an unlinked dispatcher claim needs one configured owner.
+                  const session =
+                    sessions.find((entry) => entry.key === lookupKey) ??
+                    (candidates.length === 1 ? candidates[0] : undefined);
+                  if (!session && candidates.length > 1) {
+                    continue;
+                  }
+                  const launch = card.metadata?.automation?.launch;
+                  const preparedAcceptanceAt =
+                    launch?.phase === "prepared" &&
+                    session &&
+                    sessionProvesPreparedAcceptance(session)
+                      ? session.hasActiveRun === true
+                        ? Math.max(now, launch.preparedAt)
+                        : session.updatedAt
+                      : undefined;
+                  if (
+                    launch?.phase === "prepared" &&
+                    (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt)
+                  ) {
+                    await store.failPreparedLaunch(card.id, {
+                      expectedLaunch: launch,
+                      reason:
+                        "Gateway did not accept the prepared Workboard session before restart.",
+                      failedAt: now,
+                    });
+                    continue;
+                  }
+                  if (!session) {
+                    continue;
+                  }
+                  const observation = lifecycleFromSession(session, now);
+                  if (
+                    await store.syncLifecycle(card.id, {
+                      ...LIFECYCLE_TARGETS[observation.state],
+                      sourceUpdatedAt: observation.sourceUpdatedAt,
+                      stale: observation.stale,
+                      now,
+                      association: {
+                        ...(cardSessionKey(card)
+                          ? { expectedSessionKey: cardSessionKey(card) }
+                          : {}),
+                        ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
+                        sessionKey: session.key,
+                        ...(preparedAcceptanceAt === undefined
+                          ? {}
+                          : { acceptedAt: preparedAcceptanceAt }),
+                      },
+                    })
+                  ) {
+                    if (observation.state === "succeeded" || observation.state === "failed") {
+                      await onMatched({ cards: [card], sessionKey: session.key });
+                    }
+                  }
+                }
               } catch (error) {
                 if (generation === owner) {
                   ctx.logger.warn(`workboard lifecycle sync failed: ${String(error)}`);

@@ -1,6 +1,8 @@
 import {
   asMeetingBrowserTabs,
+  callMeetingBrowserProxyOnNode,
   readMeetingBrowserTab,
+  resolveMeetingBrowserNode,
   type MeetingBrowserCandidateTab,
   type MeetingBrowserRequestParams,
 } from "openclaw/plugin-sdk/meeting-runtime";
@@ -15,7 +17,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { GoogleMeetBrowserManualActionError } from "../browser-manual-action-error.js";
 import type { GoogleMeetConfig } from "../config.js";
-import { callBrowserProxyOnNode, resolveChromeNode } from "./chrome-browser-proxy.js";
+import { GOOGLE_MEET_BROWSER_NODE_ADAPTER } from "./google-meet-platform-constants.js";
 import { forceMeetEnglishUi } from "./google-meet-urls.js";
 import type { GoogleMeetChromeHealth } from "./types.js";
 
@@ -163,9 +165,10 @@ export async function createMeetWithBrowserProxyOnNode(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
 }): Promise<GoogleMeetBrowserCreateResult> {
-  const nodeId = await resolveChromeNode({
+  const nodeId = await resolveMeetingBrowserNode({
     runtime: params.runtime,
     requestedNode: params.config.chromeNode.node,
+    adapter: GOOGLE_MEET_BROWSER_NODE_ADAPTER,
   });
   const timeoutMs = Math.max(
     GOOGLE_MEET_BROWSER_CREATE_TIMEOUT_MS,
@@ -173,11 +176,12 @@ export async function createMeetWithBrowserProxyOnNode(params: {
   );
   const stepTimeoutMs = Math.min(timeoutMs, GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS);
   const callBrowser = (request: Omit<MeetingBrowserRequestParams, "timeoutMs">) =>
-    callBrowserProxyOnNode({
+    callMeetingBrowserProxyOnNode({
       ...request,
       runtime: params.runtime,
       nodeId,
       timeoutMs: stepTimeoutMs,
+      adapter: GOOGLE_MEET_BROWSER_NODE_ADAPTER,
     });
   let openedByPlugin = false;
   let tab = asMeetingBrowserTabs(

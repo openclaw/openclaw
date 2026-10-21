@@ -292,6 +292,7 @@ describe("DraftPlaceBrowser", () => {
       });
     }
     const pending = browser.registerBrowserProject("/workspace");
+    expect(browser.browser.readCompletion).toBeNull();
     const initiallyBusy = browser.browserRegistering;
     const failedDirectory = change === "typed directory fails";
     if (failedDirectory) {

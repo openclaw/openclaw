@@ -119,14 +119,13 @@ async function azureSpeechTTS(req: SpeechSynthesisRequest, outputFormatOverride?
   const { resolveGeneratedMediaMaxBytes } =
     await import("openclaw/plugin-sdk/media-generation-runtime");
   const text = req.text;
-  const requestedOutputFormat =
+  const outputFormat =
     outputFormatOverride ??
     formatOverride ??
     (req.target === "voice-note" ? config.voiceNoteOutputFormat : config.outputFormat);
   const timeoutMs = config.timeoutMs ?? req.timeoutMs;
   const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "audio");
   const voice = voiceOverride ?? config.voice;
-  const outputFormat = requestedOutputFormat;
   const url = azureSpeechUrl({ ...config, path: "/cognitiveservices/v1" });
   const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
     await import("openclaw/plugin-sdk/provider-http");
@@ -166,7 +165,7 @@ async function azureSpeechTTS(req: SpeechSynthesisRequest, outputFormatOverride?
             new Error(`Azure Speech TTS audio response exceeds ${limit} bytes`),
         },
       ),
-      outputFormat: requestedOutputFormat,
+      outputFormat,
     };
   } finally {
     await release();

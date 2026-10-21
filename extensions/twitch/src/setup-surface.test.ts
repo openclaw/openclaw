@@ -3,14 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../api.js";
 import { getAccountConfig } from "./config.js";
 import { checkTwitchMessageThroughMonitor } from "./monitor-access.test-support.js";
-import {
-  configureWithEnvToken,
-  promptRefreshTokenSetup,
-  promptToken,
-  setTwitchAccount,
-  twitchSetupPlugin,
-  twitchSetupWizard,
-} from "./setup-surface.js";
+import { setTwitchAccount, twitchSetupPlugin, twitchSetupWizard } from "./setup-surface.js";
 import type { TwitchAccountConfig } from "./types.js";
 
 const mockPromptText = vi.fn<WizardPrompter["text"]>();
@@ -67,23 +60,31 @@ describe("setup surface helpers", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it("should return existing token when user confirms to keep it", async () => {
-    mockPromptConfirm.mockResolvedValue(true);
-    const result = await promptToken(mockPrompter, mockAccount);
-    expect(result).toBe("oauth:test123");
+    mockPromptConfirm.mockReset().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    answerText("testbot", "test-client-id", "#testchannel");
+    const result = await finalizeTwitchSetup(
+      configWithAccounts({ default: mockAccount }),
+      "default",
+    );
+    expect(result?.cfg?.channels?.twitch?.accounts?.default?.accessToken).toBe("oauth:test123");
     expect(mockPromptConfirm).toHaveBeenCalledWith({
       message: "Access token already configured. Keep it?",
       initialValue: true,
     });
-    expect(mockPromptText).not.toHaveBeenCalled();
+    expect(mockPromptText).toHaveBeenCalledTimes(3);
+    expect(mockPromptText.mock.calls.some(([prompt]) => prompt.sensitive)).toBe(false);
   });
 
   it("should use a sensitive prompt when replacing a configured token", async () => {
-    mockPromptConfirm.mockResolvedValueOnce(false);
-    mockPromptText.mockResolvedValueOnce("oauth:test123");
-    const result = await promptToken(mockPrompter, mockAccount);
-    const prompt = expectDefined(mockPromptText.mock.calls[0]?.[0], "token prompt");
-    expect(mockPromptText).toHaveBeenCalledOnce();
-    expect(result).toBe("oauth:test123");
+    mockPromptConfirm.mockReset().mockResolvedValue(false);
+    answerText("testbot", "oauth:test123", "test-client-id", "#testchannel");
+    const result = await finalizeTwitchSetup(
+      configWithAccounts({ default: mockAccount }),
+      "default",
+    );
+    const prompt = expectDefined(mockPromptText.mock.calls[1]?.[0], "token prompt");
+    expect(mockPromptText).toHaveBeenCalledTimes(4);
+    expect(result?.cfg?.channels?.twitch?.accounts?.default?.accessToken).toBe("oauth:test123");
     expect(prompt).toMatchObject({ sensitive: true });
     expect(prompt).not.toHaveProperty("initialValue");
     const capturedValidate = expectDefined(prompt.validate, "token validator");
@@ -94,45 +95,39 @@ describe("setup surface helpers", () => {
 
   it("should prompt for credentials when user accepts", async () => {
     mockPromptConfirm
+      .mockReset()
+      .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(false);
-    mockPromptText.mockResolvedValueOnce("secret123").mockResolvedValueOnce("refresh123");
-    const result = await promptRefreshTokenSetup(mockPrompter, mockRefreshAccount);
-    expect(result).toEqual({ clientSecret: "secret123", refreshToken: "refresh123" });
-    for (const index of [0, 1]) {
+    answerText("testbot", "test-client-id", "#testchannel", "secret123", "refresh123");
+    const result = await finalizeTwitchSetup(
+      configWithAccounts({ default: mockRefreshAccount }),
+      "default",
+    );
+    expect(result?.cfg?.channels?.twitch?.accounts?.default).toMatchObject({
+      clientSecret: "secret123",
+      refreshToken: "refresh123",
+    });
+    for (const index of [3, 4]) {
       expect(mockPromptText.mock.calls[index]?.[0]).toMatchObject({ sensitive: true });
       expect(mockPromptText.mock.calls[index]?.[0]).not.toHaveProperty("initialValue");
     }
   });
 
   it("should keep existing credentials without opening masked replacement prompts", async () => {
-    mockPromptConfirm.mockResolvedValue(true);
-    await expect(promptRefreshTokenSetup(mockPrompter, mockRefreshAccount)).resolves.toEqual({
+    mockPromptConfirm.mockReset().mockResolvedValue(true);
+    answerText("testbot", "test-client-id", "#testchannel");
+    const result = await finalizeTwitchSetup(
+      configWithAccounts({ default: mockRefreshAccount }),
+      "default",
+    );
+    expect(result?.cfg?.channels?.twitch?.accounts?.default).toMatchObject({
       clientSecret: "existing-secret",
       refreshToken: "existing-refresh",
     });
-    expect(mockPromptText).not.toHaveBeenCalled();
-  });
-
-  it("skips env-token shortcut for non-default accounts", async () => {
-    mockPromptConfirm.mockReset().mockResolvedValue(true);
-    answerText("secondary-bot", "secondary-client");
-    const result = await configureWithEnvToken(
-      {
-        channels: {
-          twitch: { defaultAccount: "secondary" },
-        },
-      } as Parameters<typeof configureWithEnvToken>[0],
-      mockPrompter,
-      null,
-      "oauth:fromenv",
-      false,
-      {} as Parameters<typeof configureWithEnvToken>[5],
-    );
-    expect(result).toBeNull();
-    expect(mockPromptConfirm).not.toHaveBeenCalled();
-    expect(mockPromptText).not.toHaveBeenCalled();
+    expect(mockPromptText).toHaveBeenCalledTimes(3);
+    expect(mockPromptText.mock.calls.some(([prompt]) => prompt.sensitive)).toBe(false);
   });
 
   it("reports status for the requested account override", () => {

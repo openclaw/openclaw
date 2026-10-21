@@ -4,6 +4,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
@@ -251,7 +252,9 @@ function WorkspaceGroup(props: {
             props.onToggle();
           }}
         >
-          <span>{props.label}</span>
+          <span ref={createTextOverflow(() => props.label)} title={props.label}>
+            {props.label}
+          </span>
           <Icon name={props.expanded ? "chevronDown" : "chevronRight"} />
         </button>
       </Show>

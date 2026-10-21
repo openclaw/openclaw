@@ -100,6 +100,18 @@ describe("async login-shell PATH preparation", () => {
     };
   }
 
+  async function expectProbeRetry(
+    probe: Awaited<ReturnType<typeof holdProbe>>,
+    options: Parameters<typeof prepareShellPathFromLoginShell>[0],
+  ) {
+    const retry = prepareShellPathFromLoginShell(options);
+    expect(probe.exec).toHaveBeenCalledTimes(2);
+    probe.finish(null);
+    await expect(retry).resolves.toBe("/shell/bin");
+    expect(getShellPathFromLoginShell(options)).toBe("/shell/bin");
+    expect(probe.sync).not.toHaveBeenCalled();
+  }
+
   it("shares an in-flight probe and makes later synchronous resolution immediate", async () => {
     const probe = await holdProbe();
     const options = {
@@ -158,12 +170,7 @@ describe("async login-shell PATH preparation", () => {
       expect(probe.child.stdout?.destroyed).toBe(true);
       expect(probe.child.stderr?.destroyed).toBe(true);
       await expect(pending).resolves.toBeNull();
-      const retry = prepareShellPathFromLoginShell(options);
-      expect(probe.exec).toHaveBeenCalledTimes(2);
-      probe.finish(null);
-      await expect(retry).resolves.toBe("/shell/bin");
-      expect(getShellPathFromLoginShell(options)).toBe("/shell/bin");
-      expect(probe.sync).not.toHaveBeenCalled();
+      await expectProbeRetry(probe, options);
     },
   );
 
@@ -195,49 +202,37 @@ describe("async login-shell PATH preparation", () => {
     }
   });
 
-  it("settles a live shell at its deadline and releases the probe for retry", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const killProcessTree = vi.fn();
-    vi.doMock("../process/kill-tree.js", async (importOriginal) => ({
-      ...(await importOriginal<typeof KillTreeModule>()),
-      killProcessTree,
-    }));
-    const probe = await holdProbe();
-    const options = { env: {}, timeoutMs: 10 };
-    const settled = vi.fn();
-    const pending = prepareShellPathFromLoginShell(options).then(settled);
-    Object.defineProperty(probe.child, "pid", { value: 12345 });
-    await vi.advanceTimersByTimeAsync(10);
-    expect(settled).toHaveBeenCalledWith(null);
-    expect(killProcessTree).toHaveBeenCalledWith(12345, { detached: true, force: true });
-    expect(probe.child.stdout?.destroyed).toBe(true);
-    expect(probe.child.stderr?.destroyed).toBe(true);
-    await pending;
-    const retry = prepareShellPathFromLoginShell(options);
-    expect(probe.exec).toHaveBeenCalledTimes(2);
-    probe.finish(null);
-    await expect(retry).resolves.toBe("/shell/bin");
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("keeps the deadline through descendant-held output pipes after shell exit", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const probe = await holdProbe();
-    const options = { env: {}, timeoutMs: 10 };
-    const pending = prepareShellPathFromLoginShell(options);
-    await vi.advanceTimersByTimeAsync(4);
-    probe.child.stdout?.emit("data", Buffer.from("\0PATH=/expired/bin\0"));
-    probe.child.emit("exit", 0, null);
-    await vi.advanceTimersByTimeAsync(6);
-    expect(probe.child.stdout?.destroyed).toBe(true);
-    expect(probe.child.stderr?.destroyed).toBe(true);
-    await expect(pending).resolves.toBeNull();
-    const retry = prepareShellPathFromLoginShell(options);
-    expect(probe.exec).toHaveBeenCalledTimes(2);
-    probe.finish(null);
-    await expect(retry).resolves.toBe("/shell/bin");
-    expect(vi.getTimerCount()).toBe(0);
-  });
+  it.each([false, true])(
+    "keeps the deadline until output closes (shell exited: %s)",
+    async (exited) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const killProcessTree = vi.fn();
+      vi.doMock("../process/kill-tree.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof KillTreeModule>()),
+        killProcessTree,
+      }));
+      const probe = await holdProbe();
+      const options = { env: {}, timeoutMs: 10 };
+      const pending = prepareShellPathFromLoginShell(options);
+      Object.defineProperty(probe.child, "pid", { value: 12345 });
+      if (exited) {
+        await vi.advanceTimersByTimeAsync(4);
+        probe.child.stdout?.emit("data", Buffer.from("\0PATH=/expired/bin\0"));
+        probe.child.emit("exit", 0, null);
+      }
+      await vi.advanceTimersByTimeAsync(exited ? 6 : 10);
+      await expect(pending).resolves.toBeNull();
+      if (exited) {
+        expect(killProcessTree).not.toHaveBeenCalled();
+      } else {
+        expect(killProcessTree).toHaveBeenCalledWith(12345, { detached: true, force: true });
+      }
+      expect(probe.child.stdout?.destroyed).toBe(true);
+      expect(probe.child.stderr?.destroyed).toBe(true);
+      await expectProbeRetry(probe, options);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("keeps timeout and startup environment semantics and separates in-flight keys", async () => {
     const probe = await holdProbe();
@@ -291,19 +286,12 @@ describe("shell env fallback", () => {
     return Buffer.from(`\0${output}`);
   }
 
-  function runShellEnvFallback(params: {
-    enabled?: boolean;
-    env?: NodeJS.ProcessEnv;
-    expectedKeys?: string[];
-    logger?: Pick<typeof console, "warn">;
-    timeoutMs?: number;
-  }) {
+  function runShellEnvFallback(params: Partial<Parameters<typeof loadShellEnvFallback>[0]>) {
     return loadShellEnvFallback({
-      enabled: params.enabled ?? true,
-      env: params.env ?? {},
-      expectedKeys: params.expectedKeys ?? ["OPENAI_API_KEY"],
-      logger: params.logger,
-      timeoutMs: params.timeoutMs,
+      enabled: true,
+      env: {},
+      expectedKeys: ["OPENAI_API_KEY"],
+      ...params,
     });
   }
 
@@ -409,9 +397,7 @@ describe("shell env fallback", () => {
 
     const res = runShellEnvFallback({ env });
 
-    expect(res.ok).toBe(true);
-    expect(res.applied).toStrictEqual([]);
-    expect(res.ok && res.skippedReason).toBe("already-has-keys");
+    expect(res).toEqual({ ok: true, applied: [], skippedReason: "already-has-keys" });
     expect(env.OPENAI_API_KEY).toBe("");
     expect(exec).not.toHaveBeenCalled();
   });

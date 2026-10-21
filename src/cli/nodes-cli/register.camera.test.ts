@@ -1,13 +1,15 @@
 // Node camera command tests cover help text and RPC handling for optional values.
 import fs from "node:fs/promises";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { defaultRuntime } from "../../runtime.js";
 import { writeCameraPayloadToFile } from "../nodes-camera.js";
 import { registerNodesCli } from "./register.js";
 import * as rpc from "./rpc.js";
 
 const capturedInvokeParams: Record<string, unknown>[] = [];
+const cameraOutput = vi.hoisted(() => ({ root: "" }));
 
 vi.mock("./cli-utils.js", async () => {
   const actual = await vi.importActual<typeof import("./cli-utils.js")>("./cli-utils.js");
@@ -21,6 +23,9 @@ vi.mock("../nodes-camera.js", async () => {
   const actual = await vi.importActual<typeof import("../nodes-camera.js")>("../nodes-camera.js");
   return {
     ...actual,
+    // Successful snaps create batch output directories; keep them out of the shared temp root.
+    cameraTempPath: (opts: Parameters<typeof actual.cameraTempPath>[0]) =>
+      actual.cameraTempPath({ ...opts, tmpDir: cameraOutput.root }),
     writeCameraPayloadToFile: vi.fn(async () => {}),
     writeCameraClipPayloadToFile: vi.fn(async () => {}),
   };
@@ -76,7 +81,10 @@ function cameraSnapArgs(extra: string[]): string[] {
 }
 
 describe("nodes camera snap CLI option forwarding", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeEach(() => {
+    cameraOutput.root = tempDirs.make("nodes-camera-cli-");
     capturedInvokeParams.length = 0;
     vi.clearAllMocks();
   });

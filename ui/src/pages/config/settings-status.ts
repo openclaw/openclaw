@@ -12,7 +12,7 @@ export function createSettingsStatus<T>(
     access: typeof hasOperatorReadAccess;
     configHash: "hash" | "appliedConfigHash";
     onConnectionChange?: (identityChanged: boolean) => void;
-    onStatus?: (status: T) => void;
+    onStatus?: (status: T, isCurrent: () => boolean) => void;
     onError?: () => void;
   },
 ) {
@@ -151,7 +151,7 @@ export function createSettingsStatus<T>(
       .then(
         (status) => {
           if (isCurrent()) {
-            options.onStatus?.(status);
+            options.onStatus?.(status, isCurrent);
             return { result: { status, isCurrent: isConnectionCurrent } };
           }
           return undefined;

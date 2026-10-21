@@ -153,19 +153,10 @@ describePosix("operator-qualified pre-dispatch evidence", () => {
     if (fault === "0.7.1-altered-stderr") {
       contents += diagnostic.replace("child_started=false", "child_started=true");
     }
-    const args = [
-      "pr",
-      "merge",
-      "123",
-      "--repo",
-      record.repo.url,
-      "--squash",
-      "--auto",
-      "--match-head-commit",
-      record.head,
-      "--body-file",
-      ".local/merge-body.fixture",
-    ];
+    const args =
+      `pr merge 123 --repo ${record.repo.url} --squash --auto --match-head-commit ${record.head} --body-file .local/merge-body.fixture`.split(
+        " ",
+      );
     if (fault === "0.7.1-subject-equals") {
       args.push("--subject=Fixture subject");
     }

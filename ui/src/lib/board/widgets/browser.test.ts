@@ -158,17 +158,92 @@ describe("Browser dashboard presentation", () => {
   );
 
   it("shows a session admission rejection without falling back to global browser access", async () => {
-    const { request, panel, waitForText } = mount(
+    const retrying = createDeferred<ReturnType<typeof response>>();
+    let attempts = 0;
+    const h = mount(
       async () => {
-        throw new Error("Session browser requires a supported sandbox backend");
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error("Session browser requires a supported sandbox backend");
+        }
+        return retrying.promise;
       },
       true,
       ["operator.write"],
     );
-    await waitForText("supported sandbox backend");
-    expect(panel()).toBeNull();
-    expect(request).toHaveBeenCalledOnce();
-    expect(request.mock.calls[0]?.[0]).toBe("browser.dashboard.request");
+    await h.waitForText("supported sandbox backend");
+    expect(h.panel()).toBeNull();
+    expect(h.request).toHaveBeenCalledOnce();
+    expect(h.request.mock.calls[0]?.[0]).toBe("browser.dashboard.request");
+    h.button("Retry")!.click();
+    await vi.waitFor(() => expect(attempts).toBe(2));
+    await vi.waitFor(() =>
+      expect(h.element.textContent).not.toContain("supported sandbox backend"),
+    );
+    expect(h.panel()).toBeNull();
+    expect(h.request.mock.calls.map(([method]) => method)).toEqual([
+      "browser.dashboard.request",
+      "browser.dashboard.request",
+    ]);
+    retrying.resolve(response("first"));
+    await h.waitForPanel();
+  });
+
+  it("keeps the live panel during a pending command and shows a failed command before retry", async () => {
+    const stopping = createDeferred<ReturnType<typeof response>>();
+    const retrying = createDeferred<ReturnType<typeof response>>();
+    let stops = 0;
+    const h = mount(
+      dashboard(async (envelope) => {
+        if (envelope.method === "DELETE") {
+          stops += 1;
+          return stops === 1 ? stopping.promise : retrying.promise;
+        }
+        return response("first");
+      }),
+    );
+    await h.waitForPanel();
+    const panel = h.panel();
+    h.button("Stop browser")!.click();
+    await vi.waitFor(() => expect(h.button("Stop browser")?.disabled).toBe(true));
+    expect(h.panel()).toBe(panel);
+
+    stopping.reject(new Error("Browser stop failed"));
+    await h.waitForText("Browser stop failed");
+    expect(h.panel()).toBe(panel);
+    await vi.waitFor(() => expect(h.button("Stop browser")?.disabled).toBe(false));
+    h.button("Stop browser")!.click();
+    await vi.waitFor(() => expect(stops).toBe(2));
+    await vi.waitFor(() => expect(h.element.textContent).not.toContain("Browser stop failed"));
+    expect(h.button("Stop browser")?.disabled).toBe(true);
+    retrying.resolve(response("first", true));
+    await h.waitForText("browser is stopped");
+    expect(h.element.textContent).not.toContain("Browser stop failed");
+  });
+
+  it("admits the replacement widget while a retired widget command is pending", async () => {
+    const stopping = createDeferred<ReturnType<typeof response>>();
+    const h = mount(
+      dashboard(async (envelope) => {
+        if (envelope.method === "DELETE") {
+          return stopping.promise;
+        }
+        const instanceId = envelope.body?.instanceId;
+        return response(typeof instanceId === "string" ? instanceId : "first");
+      }),
+    );
+    await h.waitForTarget("first");
+    h.button("Stop browser")!.click();
+    await vi.waitFor(() =>
+      expect(h.actions().filter((entry) => entry.method === "DELETE")).toHaveLength(1),
+    );
+    h.element.widget = widget("current");
+    await h.waitForTarget("current");
+    stopping.resolve(response("first", true));
+    await stopping.promise;
+    await vi.dynamicImportSettled();
+    await h.element.updateComplete;
+    expect(h.panel()?.fixedTab?.targetId).toBe("current");
   });
 
   it("keeps an unfinished Stop visible until closure is confirmed", async () => {
@@ -215,6 +290,10 @@ describe("Browser dashboard presentation", () => {
       }),
     );
     await vi.waitFor(() => expect(h.requests).toHaveLength(1));
+    await h.waitForText("Loading page…");
+    expect(h.element.querySelector(".board-browser__content")).not.toBeNull();
+    expect(h.element.querySelector(".board-browser__footer")).not.toBeNull();
+    expect(h.button("Reconnect")?.disabled).toBe(true);
     paused = true;
     h.changed();
     opening.resolve(response("first"));

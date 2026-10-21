@@ -6,10 +6,11 @@ import {
   type PanelHostedTab,
 } from "../../../components/panel-hosted-tabs.ts";
 import { PanelTabStrip } from "../../../components/panel-tab-strip-solid.tsx";
-import "../../../components/resizable-divider.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import "../../../components/resizable-divider.ts";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { projectI18n, t } from "../../../lib/reactive/i18n.ts";
@@ -320,7 +321,13 @@ defineSolidBridge<Props, Methods>(
                       class="chat-files-panel__fallback-rail sidebar-file-view__path-bar session-panel-rail"
                       data-presentation="desktop"
                     >
-                      <span class="sidebar-file-view__path">{entry().label}</span>
+                      <span
+                        ref={createTextOverflow(() => entry().label)}
+                        class="sidebar-file-view__path"
+                        title={entry().label}
+                      >
+                        {entry().label}
+                      </span>
                     </div>
                   </Show>
                   <Show when={rendered().presentation === "mobile"}>
@@ -352,7 +359,13 @@ defineSolidBridge<Props, Methods>(
                             class="sidebar-file-view__path-bar session-panel-rail"
                             data-presentation="desktop"
                           >
-                            <span class="sidebar-file-view__path">{entry().label}</span>
+                            <span
+                              ref={createTextOverflow(() => entry().label)}
+                              class="sidebar-file-view__path"
+                              title={entry().label}
+                            >
+                              {entry().label}
+                            </span>
                           </div>
                           <div class="sidebar-file-view__workspace-body">
                             <PanelEmptyState

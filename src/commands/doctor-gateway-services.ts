@@ -203,14 +203,13 @@ async function cleanupLegacyDarwinServices(
   const failed: string[] = [];
 
   for (const svc of services) {
-    const plistPath = svc.sourcePath;
-    if (!plistPath) {
+    if (!svc.sourcePath) {
       failed.push(`${svc.label} (missing plist path)`);
       continue;
     }
     const result = await cleanupLegacyLaunchdService({
       label: svc.label,
-      plistPath,
+      plistPath: svc.sourcePath,
     });
     if (result.status === "removed") {
       removed.push(result.destination ? `${svc.label} -> ${result.destination}` : svc.label);
@@ -461,6 +460,7 @@ export async function maybeRepairGatewayServiceConfig(
     serviceLayout,
     definitionRepair,
   );
+  audit.issues = audit.issues.filter((issue) => issue.repair !== "host");
   if (audit.issues.length === 0 && !definitionRepair) {
     return cfg;
   }

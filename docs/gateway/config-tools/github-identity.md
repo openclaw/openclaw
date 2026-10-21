@@ -120,20 +120,37 @@ and does not bind or prepare the PR in the conversation. Its result is data,
 not authority for another action. The separate `inspect` action below keeps its
 existing full-operator and session-publication requirements.
 
-To continue that PR in a local managed sandbox, use `github_publish` with
-`action: "prepare_pr"` and `pullRequestUrl`. A separate inspection call is
+To continue that PR in the same local conversation, use `github_publish` with
+`action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in
+sessions with a writable managed sandbox or an ordinary local Docker or Podman
+sandbox; sessions that run directly on the host do not see it. A separate
+inspection call is
 optional: preparation verifies the current linked author, repository access,
 original head and publisher write eligibility again. The request can be made in
 one message or established earlier in the conversation before the URL arrives.
 An explicitly empty managed workspace can receive the PR without selecting a
 project first. Existing managed projects must match the PR's head or base
-repository. Ordinary unbound workspaces are not adopted by this action.
+repository.
 
-Initial preparation requires a clean workspace without dirty, untracked, or
+An ordinary conversation without a project ends its active turn, prepares a new
+session-owned workspace, and resumes in the same conversation. Existing files
+stay in their original source; earlier message links open them read-only,
+including downloads and relative HTML assets. The Files panel shows the current
+PR workspace. Sibling conversations keep their original source. Open editors
+from before the transition cannot overwrite a same-named PR file; reopen the
+current file before saving.
+
+Queued input, background commands or unread results, pending children, terminals,
+and remote workspace work prevent adoption. Preparation preserves that work and
+asks you to finish or observe it before retrying; it does not cancel or drain it.
+Input already being prepared retains its original source. New input after
+adoption uses the PR workspace.
+
+Initial preparation of an already managed workspace requires a clean workspace without dirty, untracked, or
 unpublished work. Otherwise it preserves that work and asks you to keep or finish
 it separately before continuing. A clean workspace receives exactly the verified
 PR head's files, even when the selected project's base is newer. Preparation
-keeps the current directory and sandbox scope and records the original PR
+keeps an already managed directory and sandbox scope, and records the original PR
 association. The sandbox's current branch and HEAD remain intact; the source
 files are staged for work on the PR.
 

@@ -9,7 +9,6 @@ export const page = definePage({
   loader: (_context, { location }) => location.search,
   component: () =>
     import("./apps-page.tsx").then((module) => ({
-      header: true,
       renderSolid: (props: SolidRouteProps<string>) =>
         createComponent(module.AppsPage, {
           get appSearch() {

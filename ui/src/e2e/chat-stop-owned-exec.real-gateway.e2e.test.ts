@@ -19,6 +19,7 @@ import {
   chatControls,
   pairFixture,
 } from "./chat-lifecycle.test-support.ts";
+import { callGateway } from "./chat-real-gateway.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import {
   createControlUiE2eContextOptions,
@@ -57,12 +58,6 @@ for (const stopMethod of ["button", "slash"] as const) {
     },
   });
 
-  async function runCli(args: string[]) {
-    const result = await instance.cli(args);
-    expect(result.code, result.stderr).toBe(0);
-    return result.stdout;
-  }
-
   async function verifyStop(signal: AbortSignal) {
     const context = await suite.newBrowserContext({
       ...createControlUiE2eContextOptions(),
@@ -78,14 +73,11 @@ for (const stopMethod of ["button", "slash"] as const) {
     });
     const wire = observeBackgroundWorkRpc(page, signal);
     try {
-      await runCli([
-        "gateway",
-        "call",
-        "sessions.create",
-        "--json",
-        "--params",
-        JSON.stringify({ key: fixture.key, agentId: "main", label: "Stop request proof" }),
-      ]);
+      await callGateway(instance, "sessions.create", {
+        key: fixture.key,
+        agentId: "main",
+        label: "Stop request proof",
+      });
       await pairFixture(page, instance);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, fixture.key));
       await waitForControlUiGatewayReady(page);
