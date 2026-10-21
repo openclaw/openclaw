@@ -194,10 +194,7 @@ export async function runCodexNodeExecServer(params: {
     }
   };
   let close = releaseResources;
-  let rejectDisconnected!: (error: Error) => void;
-  const disconnected = new Promise<never>((_resolve, reject) => {
-    rejectDisconnected = reject;
-  });
+  const { promise: disconnected, reject: rejectDisconnected } = createDeferred<never>();
   void disconnected.catch(() => {});
   const onAbort = () => {
     const error = nodeExecServerAbortError(io.signal);
@@ -220,14 +217,17 @@ export async function runCodexNodeExecServer(params: {
     const codexHome = path.join(dir, ".codex");
     // Codex canonicalizes CODEX_HOME during startup and rejects missing directories.
     await mkdir(codexHome, { recursive: true, mode: 0o700 });
-    const resolved = await resolveManagedCodexAppServerStartOptions({
-      transport: "stdio",
-      command: "codex",
-      commandSource: "managed",
-      managedCommandOrder: "package-first",
-      args: ["exec-server", "--listen", "stdio"],
-      headers: {},
-    });
+    const resolved = await resolveManagedCodexAppServerStartOptions(
+      {
+        transport: "stdio",
+        command: "codex",
+        commandSource: "managed",
+        managedCommandOrder: "package-first",
+        args: ["exec-server", "--listen", "stdio"],
+        headers: {},
+      },
+      { preferInstalled: false },
+    );
     const native = resolveManagedCodexNativeCommand(resolved.command);
     if (!native || isManagedCodexDesktopCommand(resolved.command)) {
       throw new Error("Codex node exec-server requires the pinned managed package binary.");
@@ -246,8 +246,7 @@ export async function runCodexNodeExecServer(params: {
     const nativeReady = createDeferred<void>();
     const exit = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
     let stderr = Buffer.alloc(0);
-    let startupSettled = false;
-    let pendingLine = "";
+    let pendingLine: string | undefined = "";
     const decoder = new StringDecoder("utf8");
     const child = await createStdioTransport(
       {
@@ -295,15 +294,14 @@ export async function runCodexNodeExecServer(params: {
             stderr,
             next.subarray(-MAX_CODEX_EXEC_SERVER_STDERR_BYTES),
           ]).subarray(-MAX_CODEX_EXEC_SERVER_STDERR_BYTES);
-          if (startupSettled) {
+          if (pendingLine === undefined) {
             return;
           }
           const lines = (pendingLine + decoder.write(next)).split("\n");
           pendingLine = lines.pop()!;
           for (const line of [...lines, pendingLine]) {
             if (Buffer.byteLength(line, "utf8") > MAX_CODEX_EXEC_SERVER_STDERR_BYTES) {
-              startupSettled = true;
-              pendingLine = "";
+              pendingLine = undefined;
               rejectDisconnected(new Error("Codex node startup diagnostic line exceeded 4 KiB."));
               return;
             }
@@ -313,8 +311,7 @@ export async function runCodexNodeExecServer(params: {
               stripVTControlCharacters(line).trimEnd().endsWith(CODEX_EXEC_SERVER_READY_LINE),
             )
           ) {
-            startupSettled = true;
-            pendingLine = "";
+            pendingLine = undefined;
             nativeReady.resolve();
           }
         });

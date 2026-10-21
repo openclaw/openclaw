@@ -4,14 +4,10 @@ import {
 } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
-  resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
-  resolveChannelStreamingChunkMode,
   resolveChannelPreviewStreamMode,
   type StreamingMode,
-  type TextChunkMode,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { BlockStreamingCoalesceConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveSecretInputString,
   type SecretInputStringResolutionMode,
@@ -44,10 +40,8 @@ export type ResolvedMattermostAccount = {
   oncharPrefixes?: string[];
   requireMention?: boolean;
   textChunkLimit?: number;
-  chunkMode?: TextChunkMode;
   streamingMode: StreamingMode;
   blockStreaming?: boolean;
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
 };
 
 const {
@@ -68,14 +62,11 @@ const {
 export { listMattermostAccountIds, resolveDefaultMattermostAccountId };
 
 function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
-  if (config.chatmode === "oncall") {
+  if (config.chatmode === "oncall" || config.chatmode === "onchar") {
     return true;
   }
   if (config.chatmode === "onmessage") {
     return false;
-  }
-  if (config.chatmode === "onchar") {
-    return true;
   }
   return config.requireMention;
 }
@@ -131,10 +122,8 @@ function resolveMattermostAccountWithMode(params: {
     oncharPrefixes: merged.oncharPrefixes,
     requireMention,
     textChunkLimit: merged.textChunkLimit,
-    chunkMode: resolveChannelStreamingChunkMode(merged),
     streamingMode: resolveChannelPreviewStreamMode(merged, "partial"),
     blockStreaming: resolveChannelStreamingBlockEnabled(merged),
-    blockStreamingCoalesce: resolveChannelStreamingBlockCoalesce(merged),
   };
 }
 

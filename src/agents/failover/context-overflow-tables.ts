@@ -1,4 +1,4 @@
-import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
+import { matchesContextOverflowMessage } from "@openclaw/ai/internal/shared";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isProviderRequestSizeCeilingError, isRateLimitErrorMessage } from "./message-patterns.js";
 
@@ -39,11 +39,10 @@ export function isContextOverflowErrorFromTables(errorMessage?: string): boolean
   }
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context
   // overflow — unless the request alone exceeds the whole limit, which no wait can satisfy.
-  if (hasRateLimitTpmHint(errorMessage) && !isProviderRequestSizeCeilingError(errorMessage)) {
-    return false;
-  }
-
-  if (isReasoningConstraintErrorMessage(errorMessage)) {
+  if (
+    (hasRateLimitTpmHint(errorMessage) && !isProviderRequestSizeCeilingError(errorMessage)) ||
+    isReasoningConstraintErrorMessage(errorMessage)
+  ) {
     return false;
   }
 

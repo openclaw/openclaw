@@ -36,6 +36,46 @@ describe("tlon target classification", () => {
   });
 });
 
+describe("tlon outbound session routing", () => {
+  it.each([
+    {
+      name: "DM",
+      target: "tlon:dm/sampel-palnet",
+      expected: {
+        sessionKey: "agent:main:main",
+        baseSessionKey: "agent:main:main",
+        recipientSessionExact: true,
+        peer: { kind: "direct", id: "~sampel-palnet" },
+        chatType: "direct",
+        from: "tlon:~sampel-palnet",
+        to: "tlon:~sampel-palnet",
+      },
+    },
+    {
+      name: "group",
+      target: "tlon:group:sampel-palnet/operators",
+      expected: {
+        sessionKey: "agent:main:tlon:group:chat/~sampel-palnet/operators",
+        baseSessionKey: "agent:main:tlon:group:chat/~sampel-palnet/operators",
+        recipientSessionExact: true,
+        peer: { kind: "group", id: "chat/~sampel-palnet/operators" },
+        chatType: "group",
+        from: "tlon:group:chat/~sampel-palnet/operators",
+        to: "tlon:chat/~sampel-palnet/operators",
+      },
+    },
+    { name: "invalid", target: "not/a/target", expected: null },
+  ])("resolves $name targets through the plugin", ({ target, expected }) => {
+    const resolveOutboundSessionRoute = tlonPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveOutboundSessionRoute) {
+      throw new Error("expected Tlon outbound session routing");
+    }
+    expect(
+      resolveOutboundSessionRoute({ cfg, agentId: "main", accountId: "default", target }),
+    ).toStrictEqual(expected);
+  });
+});
+
 describe("tlon channel message adapter", () => {
   beforeEach(() => {
     mocks.sendText.mockReset();

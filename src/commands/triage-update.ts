@@ -139,6 +139,7 @@ export function sanitizeTriageUpdateFailure(
   input: unknown,
   redaction: SupportRedactionContext,
   format: "prompt" | "artifact" | "inventory" = "prompt",
+  errorDetail?: string,
 ): TriageUpdateFailure {
   const parsed = updateFailureArtifactSchema.safeParse(input);
   if (!parsed.success) {
@@ -207,9 +208,17 @@ export function sanitizeTriageUpdateFailure(
       result.steps.findLast((step) => step.doctorLintFindings && isFailedUpdateStep(step)) ??
       result.steps.findLast((step) => step.doctorLintFindings);
     if (lint) {
-      // Released 9.4 keeps only 160-byte step tails, but preserves this 768-byte field.
+      // Released 9.4 preserves this field. Reserve the complete link and receipt
+      // together so a second excerpt cannot cut into the inventory locator.
+      const detail = text(errorDetail, Number.MAX_SAFE_INTEGER);
       const receipt = ` Doctor lint receipt: ${lintReceipt(lint)}`;
-      error = `${text(error ?? result.reason ?? "Update failed", 768 - Buffer.byteLength(JSON.stringify(receipt)), "ends")}${receipt}`;
+      let suffix = `${detail ? `. ${detail}` : ""}${receipt}`;
+      // A valid filesystem path can exceed the diagnostic field's entire budget.
+      if (768 - Buffer.byteLength(JSON.stringify(suffix)) <= 5) {
+        suffix = `. Complete Doctor lint inventory unavailable: diagnostic link exceeds error limit.${receipt}`;
+      }
+      const errorBudget = 768 - Buffer.byteLength(JSON.stringify(suffix));
+      error = `${text(failure.error ?? result.reason ?? "Update failed", errorBudget, "ends")}${suffix}`;
     }
   }
   const preserveFindings =

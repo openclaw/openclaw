@@ -1,4 +1,7 @@
 export const WORKSPACE_FIELD_LABELS: Record<string, string> = {
+  worktreeRoot: "Worktree Root",
+  worktreeAcceleration: "Worktree Acceleration",
+  worktreeMaxCount: "Maximum Managed Worktrees",
   "agents.defaults.workspace": "Workspace",
   "agents.defaults.cwd": "Working Directory",
   "agents.defaults.repoRoot": "Repo Root",

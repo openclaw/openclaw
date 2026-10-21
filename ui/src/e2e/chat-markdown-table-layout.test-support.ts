@@ -92,11 +92,17 @@ export function expectResponsiveTableGeometry(
   geometry: ReturnType<typeof readResponsiveTableGeometry>,
   width: number,
 ) {
-  expect(geometry.withinPane).toBe(true);
+  expect(geometry).toMatchObject({
+    withinPane: true,
+    topAligned: true,
+    headerPainted: true,
+    actionBelowTable: true,
+    tableStartsShell: true,
+    controlHeight: width > 932 ? 32 : 40,
+    visibleExpandLabel: width <= 932,
+    controlsGap: width > 932 ? 0 : 4,
+  });
   expect(geometry.verticalOverflow).toBeLessThanOrEqual(1);
-  expect(geometry.topAligned).toBe(true);
-  expect(geometry.headerPainted).toBe(true);
-  expect(geometry.actionAboveTable).toBe(true);
   expect(geometry.columnWidths[0]).toBeGreaterThan(geometry.columnWidths[1]!);
   if (width > 932) {
     expect(geometry.width).toBeCloseTo(geometry.prose, 0);
@@ -105,18 +111,13 @@ export function expectResponsiveTableGeometry(
     );
     expect(geometry.denseWidth).toBeGreaterThan(geometry.prose);
     expect(geometry.denseOverflow).toBeLessThanOrEqual(1);
-    expect(geometry.controlHeight).toBe(32);
-    expect(geometry.visibleExpandLabel).toBe(false);
-    expect(geometry.controlsGap).toBe(0);
     expect(geometry.bottomGap).toBeGreaterThanOrEqual(20);
     expect(geometry.prose).toBeLessThanOrEqual(768);
   } else {
-    expect(geometry.controlHeight).toBe(40);
-    expect(geometry.visibleExpandLabel).toBe(true);
-    expect(geometry.controlsGap).toBe(4);
     expect(geometry.denseOverflow).toBeGreaterThan(0);
     if (width === 932) {
-      expect(geometry.width).toBeCloseTo(900, 0);
+      // Full-width mobile shell keeps the 16px reading gutter on each side.
+      expect(geometry.width).toBeCloseTo(width - 2 * 16, 0);
     } else {
       expect(geometry.width).toBeLessThanOrEqual(geometry.prose + 1);
     }
@@ -144,8 +145,8 @@ export function readResponsiveTableGeometry(element: HTMLElement) {
     visibleExpandLabel:
       element.querySelector(".markdown-table__expand > span")!.getClientRects().length > 0,
     controlsGap:
-      table.getBoundingClientRect().top -
-      element.querySelector(".markdown-table__actions")!.getBoundingClientRect().bottom,
+      element.querySelector(".markdown-table__actions")!.getBoundingClientRect().top -
+      viewport.getBoundingClientRect().bottom,
     bottomGap: element.nextElementSibling!.getBoundingClientRect().top - rect.bottom,
     width: rect.width,
     prose: paragraph.getBoundingClientRect().width,
@@ -154,6 +155,7 @@ export function readResponsiveTableGeometry(element: HTMLElement) {
     columnWidths: [...cells].map((cell) => cell.getBoundingClientRect().width),
     topAligned: [...cells].every((cell) => getComputedStyle(cell).verticalAlign === "top"),
     headerPainted: table.contains(document.elementFromPoint(header.left + 4, header.top + 4)),
-    actionAboveTable: action.getBoundingClientRect().bottom <= table.getBoundingClientRect().top,
+    actionBelowTable: action.getBoundingClientRect().top >= viewport.getBoundingClientRect().bottom,
+    tableStartsShell: Math.abs(table.getBoundingClientRect().top - rect.top) <= 1,
   };
 }

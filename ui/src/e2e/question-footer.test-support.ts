@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 
@@ -13,21 +14,19 @@ type QuestionFooterFixtures = {
   ) => Promise<{ gateway: MockGatewayControls; page: Page }>;
   questionRecord: (id: string, questions: Question[]) => QuestionRecord;
   questionSessionKey: string;
-  screenshot: (page: Page, name: string) => Promise<void>;
 };
 
 export function defineQuestionFooterTests({
   openQuestionPage,
   questionRecord,
   questionSessionKey,
-  screenshot,
 }: QuestionFooterFixtures) {
   it.each([
-    { height: 844, screenshotName: "portrait", width: 390 },
-    { height: 390, screenshotName: "landscape", width: 844 },
+    { height: 844, orientation: "portrait", width: 390 },
+    { height: 390, orientation: "landscape", width: 844 },
   ])(
-    "keeps a collapsed question separate from PRs, notices, and the input on $screenshotName",
-    async ({ height, screenshotName, width }) => {
+    "keeps a collapsed question separate from PRs, notices, and the input on $orientation",
+    async ({ height, width }) => {
       const { gateway, page } = await openQuestionPage({ height, width }, true);
       const composer = page.locator(".agent-chat__input");
       const draft = composer.locator(".agent-chat__composer-combobox > textarea");
@@ -62,8 +61,10 @@ export function defineQuestionFooterTests({
           },
         },
       });
-      const pullRequest = page.locator(".chat-pr__link");
+      const pullRequests = await openDetailsPullRequests(page);
+      const pullRequest = pullRequests.locator(".chat-pr-mobile__row");
       await pullRequest.waitFor();
+      await page.keyboard.press("Escape");
       await draft.fill("Keep this follow-up draft");
       const prompt = "Which progress note should I use?";
       const request = questionRecord("question-mobile-context", [
@@ -71,10 +72,7 @@ export function defineQuestionFooterTests({
           questionId: "progress_note",
           header: "Progress note",
           question: prompt,
-          options: [
-            { label: "Concise", description: "Keep the update short." },
-            { label: "Detailed", description: "Include the supporting evidence." },
-          ],
+          options: [{ label: "Concise" }, { label: "Detailed" }],
         },
       ]);
       await gateway.emitGatewayEvent("question.requested", request);
@@ -91,50 +89,37 @@ export function defineQuestionFooterTests({
           document.documentElement.dataset.themeMode = mode;
         }, theme);
         await draft.focus();
-        const layout = await shell.evaluate((element) => {
-          const question = element.querySelector<HTMLElement>(".chat-question-panel--collapsed")!;
-          const input = element.querySelector<HTMLElement>(".agent-chat__input")!;
-          const row = element.querySelector<HTMLElement>(".chat-pr")!;
-          const notice = element.querySelector<HTMLElement>(".chat-error")!;
-          const stack = element.querySelector<HTMLElement>(".chat-footer__context")!;
-          const questionStyle = getComputedStyle(question);
-          const inputStyle = getComputedStyle(input);
+        const layout = await shell.evaluate((element, viewportHeight) => {
+          const get = (selector: string) => element.querySelector<HTMLElement>(selector)!;
+          const question = get(".chat-question-panel--collapsed");
+          const input = get(".agent-chat__input");
+          const q = question.getBoundingClientRect();
+          const i = input.getBoundingClientRect();
+          const rounded = (node: Element, edge: string) =>
+            ["left", "right"].every(
+              (side) =>
+                Number.parseFloat(
+                  getComputedStyle(node).getPropertyValue(`border-${edge}-${side}-radius`),
+                ) > 0,
+            );
+          const shellStyle = getComputedStyle(element);
           return {
-            shellBorder: getComputedStyle(element).borderTopWidth,
-            shellShadow: getComputedStyle(element).boxShadow,
-            prBottom: row.getBoundingClientRect().bottom,
-            noticeTop: notice.getBoundingClientRect().top,
-            noticeBottom: notice.getBoundingClientRect().bottom,
-            questionTop: question.getBoundingClientRect().top,
-            contextBottom: stack.getBoundingClientRect().bottom,
-            inputTop: input.getBoundingClientRect().top,
-            inputBottom: input.getBoundingClientRect().bottom,
-            questionBottomCorners: [
-              questionStyle.borderBottomLeftRadius,
-              questionStyle.borderBottomRightRadius,
-            ],
-            inputTopCorners: [inputStyle.borderTopLeftRadius, inputStyle.borderTopRightRadius],
-            touchTargetHeight: question.querySelector("button")!.getBoundingClientRect().height,
+            borderless: shellStyle.borderTopWidth === "0px",
+            shadowless: shellStyle.boxShadow === "none",
+            noPullRequests: element.querySelector(".chat-pr") === null,
+            noticeBeforeQuestion: get(".chat-error").getBoundingClientRect().bottom <= q.top,
+            contextBeforeInput: get(".chat-footer__context").getBoundingClientRect().bottom < i.top,
+            inputInViewport: i.bottom <= viewportHeight,
             inputOutsideContext: !input.closest(".chat-footer__context"),
+            touchTarget: question.querySelector("button")!.getBoundingClientRect().height >= 48,
+            rounded: rounded(question, "bottom") && rounded(input, "top"),
           };
-        });
-        expect(layout.shellBorder).toBe("0px");
-        expect(layout.shellShadow).toBe("none");
-        expect(layout.prBottom).toBeLessThanOrEqual(layout.noticeTop);
-        expect(layout.noticeBottom).toBeLessThanOrEqual(layout.questionTop);
-        expect(layout.contextBottom).toBeLessThan(layout.inputTop);
-        expect(layout.inputBottom).toBeLessThanOrEqual(height);
-        expect(layout.inputOutsideContext).toBe(true);
-        expect(layout.touchTargetHeight).toBeGreaterThanOrEqual(48);
-        for (const radius of [...layout.questionBottomCorners, ...layout.inputTopCorners]) {
-          expect(Number.parseFloat(radius)).toBeGreaterThan(0);
-        }
-        await screenshot(
-          page,
-          "07-question-mobile-context-" + screenshotName + "-" + theme + ".png",
-        );
+        }, height);
+        expect(Object.entries(layout).filter(([, passed]) => !passed)).toEqual([]);
       }
+      await openDetailsPullRequests(page);
       await pullRequest.click({ trial: true });
+      await page.keyboard.press("Escape");
       await expand.tap();
       await expect.poll(() => composer.count()).toBe(0);
       await panel.getByRole("radio", { name: /Concise/ }).tap();
@@ -151,7 +136,9 @@ export function defineQuestionFooterTests({
       await expect.poll(() => panel.count()).toBe(0);
       await composer.waitFor();
       expect(await draft.inputValue()).toBe("Keep this follow-up draft");
+      await openDetailsPullRequests(page);
       await pullRequest.click({ trial: true });
+      await page.keyboard.press("Escape");
     },
   );
 }

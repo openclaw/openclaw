@@ -83,4 +83,15 @@ it.each([
   await import("../../scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs");
   expect(error).not.toHaveBeenCalled();
   expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toEqual({ type: "s", data: row.expected });
+
+  vi.resetModules();
+  process.exitCode = 0;
+  process.argv = ["node", "fixture", "check-stopped"];
+  await import("../../scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs");
+  expect(process.exitCode).toBe(row.pid || row.populated ? 1 : 0);
+  if (row.pid || row.populated) {
+    expect(error).toHaveBeenCalledWith("Survivor service processes have not settled.");
+  } else {
+    expect(error).not.toHaveBeenCalled();
+  }
 });

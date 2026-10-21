@@ -2,10 +2,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
 import { createWorkerLiveEventReceiver } from "./worker-environments/live-events.js";
 import { captureWorkerTranscriptSource } from "./worker-environments/live-events.test-support.js";
-import type { WorkerTranscriptCommitStore } from "./worker-environments/transcript-commit-store.js";
+import type { WorkerTranscriptCommitStore } from "./worker-environments/transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
 
-export function createWorkerFanoutFixture({
+export async function createWorkerFanoutFixture({
   storePath,
   sessionId,
   sessionKey,
@@ -15,13 +15,13 @@ export function createWorkerFanoutFixture({
   sessionKey: string;
 }) {
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: { mainKey: "main", store: storePath },
   };
   const ledger: WorkerTranscriptCommitStore = {
-    begin: () => ({ kind: "claimed" }),
-    complete: ({ outcome }) => outcome,
-    discardUncommitted: () => {},
+    begin: async () => ({ kind: "claimed" }),
+    complete: async ({ outcome }) => outcome,
+    discardUncommitted: async () => {},
   };
   const committer = createWorkerTranscriptCommitter({ getConfig: () => config, store: ledger });
   const identity: WorkerConnectionIdentity = {
@@ -42,7 +42,7 @@ export function createWorkerFanoutFixture({
     protocolFeatures: ["worker-live-event-v1", "worker-transcript-commit-v1"],
     credentialExpiresAtMs: Date.now() + 10_000,
   };
-  const source = captureWorkerTranscriptSource({
+  const source = await captureWorkerTranscriptSource({
     agentId: "main",
     sessionId,
     sessionKey,

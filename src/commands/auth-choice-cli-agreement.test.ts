@@ -3,6 +3,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { applyNonInteractiveAuthChoice } from "./onboard-non-interactive/local/auth-choice.js";
 
 const PROVIDER_SETUP_CONTRIBUTIONS = [
   { providerId: "demo", option: { value: "demo-api-key", label: "Demo API key" } },
@@ -66,8 +67,6 @@ async function readHelpAuthChoices(): Promise<string[]> {
 }
 
 async function readAcceptedAuthChoices(rejectedChoice: string): Promise<string[]> {
-  const { applyNonInteractiveAuthChoice } =
-    await import("./onboard-non-interactive/local/auth-choice.js");
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const result = await applyNonInteractiveAuthChoice({
     nextConfig: {} as OpenClawConfig,
@@ -101,20 +100,7 @@ describe("onboard --auth-choice help and validation agreement", () => {
     expect(help).toContain("demo-api-key");
     expect(help).toContain("custom-api-key");
     expect(help).toContain("skip");
-  });
-
-  it("advertises the generic token-provider choices the dispatcher accepts", async () => {
-    const help = await readHelpAuthChoices();
-
-    // `--auth-choice token --token-provider anthropic` is a working, documented
-    // combination; help must not hide it behind provider-specific choice ids.
     expect(help).toEqual(expect.arrayContaining(["setup-token", "token", "apiKey"]));
-  });
-
-  it("keeps deprecated aliases out of help and out of the accepted set", async () => {
-    const help = await readHelpAuthChoices();
-    const accepted = await readAcceptedAuthChoices("definitely-not-an-auth-choice");
-
     expect(help).not.toContain(DEPRECATED_ALIAS);
     expect(accepted).not.toContain(DEPRECATED_ALIAS);
   });

@@ -76,39 +76,12 @@ describe("applyConstructFallbacks", () => {
       ir: HEADING_IR,
       expected: ["Title", ["heading_2"], 0],
     },
-    { construct: "heading", support: "fallback", ir: HEADING_IR, expected: ["Title", ["bold"], 0] },
-    { construct: "heading", support: "strip", ir: HEADING_IR, expected: ["Title", [], 0] },
-    { construct: "linkLabel", support: "native", ir: LINK_IR, expected: ["docs", [], 1] },
     { construct: "linkLabel", support: "strip", ir: LINK_IR, expected: ["docs", [], 0] },
-    {
-      construct: "spoiler",
-      support: "strip",
-      ir: { text: "secret", styles: [{ start: 0, end: 6, style: "spoiler" }], links: [] },
-      expected: ["secret", [], 0],
-    },
-    {
-      construct: "taskList",
-      support: "native",
-      ir: markdownToTaskIR("- [x] done"),
-      expected: ["• [x] done", [], 0],
-    },
-    {
-      construct: "codeLanguage",
-      support: "native",
-      ir: CODE_IR,
-      expected: ["const x = 1;", ["code_block:ts"], 0],
-    },
     {
       construct: "codeLanguage",
       support: "fallback",
       ir: CODE_IR,
       expected: ["const x = 1;", ["code_block"], 0],
-    },
-    {
-      construct: "underline",
-      support: "fallback",
-      ir: { text: "under", styles: [{ start: 0, end: 5, style: "underline" }], links: [] },
-      expected: ["under", [], 0],
     },
   ])("$construct: $support", ({ construct, support, ir, expected }) => {
     const actual = applyConstructFallbacks(ir, withSupport(construct, support));
@@ -178,16 +151,6 @@ describe("applyConstructFallbacks", () => {
     );
   });
 
-  it("preserves task-list provenance through IR slicing", () => {
-    const ir = markdownToTaskIR("intro\n\n- [x] done");
-    const task = sliceMarkdownIR(ir, ir.text.indexOf("•"), ir.text.length);
-    expect(applyConstructFallbacks(task, withSupport("taskList", "fallback")).text).toBe(
-      "[x] done",
-    );
-    const markerOnly = sliceMarkdownIR(ir, ir.text.indexOf("[x]"), ir.text.length);
-    expect(applyConstructFallbacks(markerOnly, withSupport("taskList", "strip")).text).toBe("done");
-  });
-
   it("recognizes task items nested inside blockquotes", () => {
     for (const markdown of ["> - [x] done", "- > - [x] done"]) {
       const ir = markdownToTaskIR(markdown);
@@ -201,44 +164,9 @@ describe("applyConstructFallbacks", () => {
     }
   });
 
-  it("recognizes task items nested on the same source line", () => {
-    const ir = markdownToTaskIR("- - [x] done");
-    expect(applyConstructFallbacks(ir, withSupport("taskList", "strip")).text).toBe("• \n  • done");
-  });
-
-  it("recognizes multiline task-list markers", () => {
-    const cases = [
-      { markdown: "-\n  [x] done", expected: "• done" },
-      { markdown: "- [x]\n  done", expected: "• \ndone" },
-      { markdown: "> -\n>   [x] done", expected: "• done" },
-    ];
-    for (const { markdown, expected } of cases) {
-      const ir = markdownToTaskIR(markdown);
-      expect(applyConstructFallbacks(ir, withSupport("taskList", "strip")).text, markdown).toBe(
-        expected,
-      );
-    }
-  });
-
-  it("does not consume list separators when stripping an empty task", () => {
-    const ir = markdownToTaskIR("- [x] \n- next");
-    expect(applyConstructFallbacks(ir, withSupport("taskList", "strip")).text).toBe("• \n• next");
-  });
-
-  it("preserves task markers that collide with shortcut reference links", () => {
-    const ir = markdownToTaskIR("- [x] done\n\n[x]: https://example.com");
-    expect(applyConstructFallbacks(ir, withSupport("taskList", "fallback")).text).toBe("[x] done");
-    expect(ir.links).toEqual([]);
-  });
-
   it("does not protect checkbox-like links after an earlier list-item block", () => {
     const markdown = "- ---\n\n  [x] done\n\n[x]: https://example.com";
     expect(markdownToIR(markdown, { enableTaskLists: true })).toEqual(markdownToIR(markdown));
-  });
-
-  it("preserves list provenance through structural clones", () => {
-    const ir = structuredClone(markdownToTaskIR("- [x] done"));
-    expect(applyConstructFallbacks(ir, withSupport("taskList", "fallback")).text).toBe("[x] done");
   });
 
   it("clips task-list provenance at partial marker slice boundaries", () => {

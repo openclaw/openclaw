@@ -3,6 +3,7 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+import type { OllamaTagModel } from "./src/provider-models.js";
 
 const selected = "setup-tools:latest";
 const configuredModel: ModelDefinitionConfig = {
@@ -18,7 +19,7 @@ const configuredModel: ModelDefinitionConfig = {
 
 async function withOllamaServer(
   options: {
-    models?: string[];
+    models?: Array<string | OllamaTagModel>;
     loaded?: string[];
     show?: Record<string, unknown>;
     showStatus?: number;
@@ -42,7 +43,11 @@ async function withOllamaServer(
           );
         } else if (request.url === "/api/tags") {
           response.end(
-            JSON.stringify({ models: (options.models ?? [selected]).map((name) => ({ name })) }),
+            JSON.stringify({
+              models: (options.models ?? [selected]).map((model) =>
+                typeof model === "string" ? { name: model } : model,
+              ),
+            }),
           );
         } else if (request.url === "/api/show") {
           inspected.push((JSON.parse(body) as { model: string }).model);
@@ -77,6 +82,35 @@ function guidedSetup() {
 }
 
 describe("Ollama app-guided setup HTTP discovery", () => {
+  it.each([
+    { tag: { remote_host: "https://ollama.com" }, expected: 262_144 },
+    { tag: { remote_model: "upstream-model" }, expected: 262_144 },
+    { tag: {}, expected: 8192 },
+  ])("preserves alias output budgets for $tag", async ({ tag, expected }) => {
+    const name = "private-alias";
+    await withOllamaServer(
+      {
+        models: [{ name, ...tag }],
+        loaded: [name],
+        show: {
+          model_info: { "model.context_length": 262_144 },
+          capabilities: ["completion", "tools"],
+        },
+      },
+      async (baseUrl) => {
+        const prepared = await guidedSetup().prepare({
+          config: { models: { providers: { ollama: { baseUrl, models: [] } } } },
+          env: {},
+          modelRef: `ollama/${name}`,
+        });
+        expect(prepared?.configPatch?.models?.providers?.ollama?.models?.[0]).toMatchObject({
+          id: name,
+          maxTokens: expected,
+        });
+      },
+    );
+  });
+
   it.each(["detect", "prepare"] as const)(
     "%s finds a loaded model beyond the general catalog cap without inspecting idle models",
     async (operation) => {

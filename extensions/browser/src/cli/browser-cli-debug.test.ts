@@ -38,7 +38,7 @@ describe("browser debug command timeouts", () => {
 
       expect(gatewayMock).toHaveBeenLastCalledWith(
         "browser.request",
-        expect.objectContaining({ timeout: String(Number(timeout) + 10_000) }),
+        expect.objectContaining({ timeout: String(Number(timeout) + 130_000) }),
         expect.objectContaining({ path, timeoutMs: Number(timeout) }),
         expect.objectContaining({ scopes: ["operator.admin"] }),
       );

@@ -6,14 +6,25 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   readSessionTranscriptFailureRunId,
   readSessionTranscriptRunId,
 } from "../../sessions/transcript-events.js";
-import { isVisibleTranscriptRecord } from "../../sessions/transcript-visible-record.js";
+import {
+  isAssistantResultEventForRun,
+  isVisibleAssistantResultEventForRun,
+  isVisibleTranscriptRecord,
+} from "../../sessions/transcript-visible-record.js";
+import {
+  isSilentAssistantTranscriptMessage,
+  readTerminalSourceReplyDeliveryMirror,
+} from "../../shared/chat-message-content.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -30,6 +41,7 @@ import type {
   TranscriptArchivePageBinding,
   TranscriptArchivePagePlan,
   TranscriptArchivePageResult,
+  TranscriptArchivePresenceRead,
   TranscriptArchiveReadPlan,
   TranscriptArchiveReadResult,
 } from "./session-accessor.sqlite-archive-types.js";
@@ -49,7 +61,8 @@ export function listTranscriptArchivesFromDatabase(
   if (!tableExists(db, "session_transcript_archives")) {
     return [];
   }
-  let query = getNodeSqliteKysely<ArchiveDatabase>(db)
+  const selected = sqliteStringSet(selectors);
+  const query = getNodeSqliteKysely<ArchiveDatabase>(db)
     .selectFrom("session_transcript_archives")
     .select([
       "archive_name as archiveName",
@@ -58,21 +71,59 @@ export function listTranscriptArchivesFromDatabase(
       "created_at as createdAt",
     ])
     .orderBy("created_at")
-    .orderBy("session_id");
-  query = query.where((expression) =>
-    expression.or([
-      ...(selectors.length > 0
-        ? [expression("session_id", "in", selectors), expression("session_key", "in", selectors)]
-        : []),
-      ...(archiveNames.length > 0 ? [expression("archive_name", "in", archiveNames)] : []),
-    ]),
-  );
+    .orderBy("session_id")
+    .where((expression) =>
+      expression.or([
+        ...(selectors.length > 0
+          ? [expression("session_id", "in", selected), expression("session_key", "in", selected)]
+          : []),
+        ...(archiveNames.length > 0
+          ? [expression("archive_name", "in", sqliteStringSet(archiveNames))]
+          : []),
+      ]),
+    );
   const rows = executeSqliteQuerySync(db, query).rows;
   return rows
     .map((row) =>
       Object.assign(row, { agentId: resolveAgentIdFromSessionKey(row.sessionKey, agentId) }),
     )
     .filter((row) => logicalAgentId === undefined || row.agentId === logicalAgentId);
+}
+
+function hasTranscriptArchiveInDatabase(
+  database: Pick<OpenClawAgentDatabase, "db" | "agentId">,
+  target: Pick<TranscriptArchiveReadPlan, "logicalAgentId" | "sessionId" | "sessionKey">,
+): boolean {
+  return listTranscriptArchivesFromDatabase(
+    database,
+    target.logicalAgentId,
+    [target.sessionId ?? target.sessionKey],
+    [],
+  ).some((archive) =>
+    target.sessionId
+      ? archive.sessionId === target.sessionId
+      : archive.sessionKey === target.sessionKey,
+  );
+}
+
+export function readTranscriptArchivePresenceInWorker(
+  request: TranscriptArchivePresenceRead,
+): boolean {
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => {
+      const actual = readOpenClawAgentDatabaseIdentity(database);
+      if (
+        typeof actual.identity !== "string" ||
+        `file:${actual.identity}` !== request.expectedIdentity.key ||
+        actual.birthtime !== request.expectedIdentity.birthtime
+      ) {
+        throw new Error("SQLite archive metadata changed its captured database owner");
+      }
+      return hasTranscriptArchiveInDatabase(database, request);
+    },
+    { ...request.database, env: request.env },
+  );
+  return result.found && result.value;
 }
 
 /** Scan one canonical read snapshot without constructing the decoded history. */
@@ -91,6 +142,16 @@ export async function readTranscriptArchiveFinalInWorker(
   const database = opened.database;
   let transactionOpen = false;
   try {
+    if (plan.expectedIdentity) {
+      const actual = readOpenClawAgentDatabaseIdentity(database);
+      if (
+        typeof actual.identity !== "string" ||
+        `file:${actual.identity}` !== plan.expectedIdentity.key ||
+        actual.birthtime !== plan.expectedIdentity.birthtime
+      ) {
+        throw new Error("SQLite archive read changed its captured database owner");
+      }
+    }
     database.db.exec("BEGIN"); // sqlite-allow-raw: keep archive identities and bytes in one read snapshot.
     transactionOpen = true;
     const archives = listTranscriptArchivesFromDatabase(
@@ -99,7 +160,7 @@ export async function readTranscriptArchiveFinalInWorker(
       [plan.sessionId ?? plan.sessionKey],
       [],
     ).toReversed();
-    let result: TranscriptArchiveReadResult = {};
+    const result: TranscriptArchiveReadResult = {};
     for (const archive of archives) {
       if (
         plan.sessionId
@@ -123,13 +184,30 @@ export async function readTranscriptArchiveFinalInWorker(
       if (hashSessionArchiveBytes(row.archive_blob) !== row.archive_sha256) {
         throw new Error("Archived transcript bytes do not match their registered hash.");
       }
-      result = await findArchivedFinal(
+      let hasTerminalResult = false;
+      await scanArchivedTranscript(
         row.archive_blob,
         row.encoding === "zstd",
         archive.sessionId,
-        plan.runId,
+        (event) => {
+          if (!isAssistantResultEventForRun(event, plan.runId)) {
+            return;
+          }
+          hasTerminalResult = true;
+          if (isVisibleAssistantResultEventForRun(event, plan.runId)) {
+            result.event = event;
+          } else if (isRecord(event) && isSilentAssistantTranscriptMessage(event.message)) {
+            const previousMessage = isRecord(result.event) ? result.event.message : undefined;
+            if (
+              !(isRecord(previousMessage) && previousMessage.display === true) &&
+              !readTerminalSourceReplyDeliveryMirror(previousMessage)
+            ) {
+              result.event = undefined;
+            }
+          }
+        },
       );
-      if (result.event !== undefined) {
+      if (hasTerminalResult) {
         break;
       }
     }
@@ -145,23 +223,6 @@ export async function readTranscriptArchiveFinalInWorker(
       database.close();
     }
   }
-}
-
-async function findArchivedFinal(
-  bytes: Uint8Array,
-  compressed: boolean,
-  sessionId: string,
-  runId: string,
-): Promise<TranscriptArchiveReadResult> {
-  const { isVisibleAssistantResultEventForRun } =
-    await import("../../sessions/transcript-visible-record.js");
-  const result: TranscriptArchiveReadResult = {};
-  await scanArchivedTranscript(bytes, compressed, sessionId, (event) => {
-    if (isVisibleAssistantResultEventForRun(event, runId)) {
-      result.event = event;
-    }
-  });
-  return result;
 }
 
 async function scanArchivedTranscript(
@@ -215,17 +276,12 @@ async function scanArchivedTranscript(
       );
     },
   });
-  if (compressed && createZstdDecompress) {
-    if (decodedBudget === undefined) {
-      await pipeline(input, createZstdDecompress.call(zlib), scan);
-    } else {
-      await pipeline(input, createZstdDecompress.call(zlib), bound, scan);
-    }
-  } else if (decodedBudget === undefined) {
-    await pipeline(input, scan);
-  } else {
-    await pipeline(input, bound, scan);
-  }
+  await pipeline([
+    input,
+    ...(compressed && createZstdDecompress ? [createZstdDecompress.call(zlib)] : []),
+    ...(decodedBudget === undefined ? [] : [bound]),
+    scan,
+  ]);
   if (!headerRead) {
     throw new Error("Archived transcript header does not match its registered session.");
   }
@@ -276,17 +332,6 @@ function readArchivePageCursor(plan: TranscriptArchivePagePlan): ArchivePageCurs
     sha256: cursor.sha256,
     beforeSeq: cursor.beforeSeq,
   };
-}
-
-function sameArchiveBinding(
-  left: TranscriptArchivePageBinding,
-  right: TranscriptArchivePageBinding,
-): boolean {
-  return (
-    left.sessionId === right.sessionId &&
-    left.generation === right.generation &&
-    left.sha256 === right.sha256
-  );
 }
 
 /** Select a unique run-owned archive, never the newest archive for a reused key. */
@@ -411,7 +456,12 @@ export async function readTranscriptArchivePageInWorker(
           if (result) {
             throw new Error("Multiple archived transcript generations contain this run.");
           }
-          if (expectedBinding && !sameArchiveBinding(expectedBinding, binding)) {
+          if (
+            expectedBinding &&
+            (expectedBinding.sessionId !== binding.sessionId ||
+              expectedBinding.generation !== binding.generation ||
+              expectedBinding.sha256 !== binding.sha256)
+          ) {
             throw new Error("Archived transcript identity changed.");
           }
           if (plan.verifyBinding) {

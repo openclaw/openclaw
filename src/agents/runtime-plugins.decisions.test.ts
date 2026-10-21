@@ -100,7 +100,7 @@ it("lets a separate credential-free plugin invoke the prepared Gateway decision 
   const runtime: OpenClawConfig = structuredClone(activated.config);
   runtime.plugins!.entries!.fixture!.config!.apiKey = "synthetic-prepared";
   setRuntimeConfigSnapshot(runtime, source);
-  const root = loadAndActivateRootPluginRegistry({
+  const root = await loadAndActivateRootPluginRegistry({
     config: runtime,
     activationSourceConfig: source,
     autoEnabledReasons: activated.autoEnabledReasons,

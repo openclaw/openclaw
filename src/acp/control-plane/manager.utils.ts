@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
-/** Shared ACP manager normalization, resolution, and error helpers. */
 import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
 import { buildAcpDatabaseSessionKey } from "../runtime/session-meta-keys.js";
 import {
@@ -13,13 +12,11 @@ import {
 } from "../runtime/session-meta-store.js";
 import type { AcpSessionResolution, AcpSessionTarget } from "./manager.types.js";
 
-/** Resolves the agent id encoded in an ACP session key. */
 export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "main"): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? fallback);
 }
 
-/** Builds the stale-session error shown when ACP metadata is missing. */
 function resolveMissingMetaError(sessionKey: string): AcpRuntimeError {
   return new AcpRuntimeError(
     "ACP_SESSION_INIT_FAILED",
@@ -40,7 +37,6 @@ export function resolveStoredAcpSession(
     : { kind: "none", ...target };
 }
 
-/** Converts a session resolution union into the runtime error callers should throw. */
 export function resolveAcpSessionResolutionError(
   resolution: AcpSessionResolution,
 ): AcpRuntimeError | null {
@@ -56,7 +52,6 @@ export function resolveAcpSessionResolutionError(
   );
 }
 
-/** Returns ready ACP metadata or throws the matching resolution error. */
 export function requireReadySessionMeta(resolution: AcpSessionResolution): SessionAcpMeta {
   if (resolution.kind === "ready") {
     return resolution.meta;
@@ -89,7 +84,6 @@ export function acpSessionActorKey(target: AcpSessionTarget): string {
   );
 }
 
-/** Restricts runtime-provided error codes to the ACP error-code enum. */
 export function normalizeAcpErrorCode(code: string | undefined): AcpRuntimeError["code"] {
   if (!code) {
     return "ACP_TURN_FAILED";
@@ -115,4 +109,26 @@ export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {
     Object.hasOwn(raw, "agentSessionId") ||
     Object.hasOwn(raw, "sessionIdsProvisional")
   );
+}
+
+const SESSION_ACTOR_SUPERSEDED_DETAIL_CODE = "SESSION_ACTOR_SUPERSEDED";
+
+export function createSupersededActorError(sessionKey: string): AcpRuntimeError {
+  return new AcpRuntimeError(
+    "ACP_SESSION_INIT_FAILED",
+    `ACP session actor was superseded during runtime initialization for ${sessionKey}.`,
+    { detailCode: SESSION_ACTOR_SUPERSEDED_DETAIL_CODE },
+  );
+}
+
+export function isSupersededActorError(error: unknown): boolean {
+  return (
+    error instanceof AcpRuntimeError && error.detailCode === SESSION_ACTOR_SUPERSEDED_DETAIL_CODE
+  );
+}
+
+export function assertCurrentAcpActor(current: boolean, sessionKey: string): void {
+  if (!current) {
+    throw createSupersededActorError(sessionKey);
+  }
 }

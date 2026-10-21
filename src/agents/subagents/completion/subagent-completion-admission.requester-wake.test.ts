@@ -1,77 +1,135 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import { describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
+import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { loadPendingFinalDeliveryPayload } from "../registry/subagent-delivery-state.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
+import { restoreSubagentRunsFromDisk } from "../registry/subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite as loadRegistry } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { useCompletionDatabase } from "./completion-database.test-support.js";
+import { registerRequesterWakeOwnershipTests } from "./subagent-completion-admission.requester-wake-ownership.test-support.js";
 import {
   blockSubagentCompletionDelivery,
-  settleRequesterCompletionBatch,
+  mutateRequesterCompletionBatch,
 } from "./subagent-completion-admission.store.js";
 import {
-  advanceRequesterWakeTime,
+  currentCompletionRun as currentRun,
+  readCompletionSystemEvents as systemEvents,
+  advanceRequesterWakeTime as advanceWake,
   armRequesterWake,
+  reopenCompletionFixtureOwners as reopenOwners,
   failedRecords,
   records,
   requesterWakeDriver,
-  admitCompletionFixtureDatabase,
-  seedSubagentCompletionDelivery,
+  observeRequesterOutcomePublication,
+  seedSubagentCompletionOwner,
+  settleRequesterCompletionBatch,
+  updateCompletionOwner,
 } from "./subagent-completion-admission.test-helpers.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+import { mutateSubagentCompletionInDatabase } from "./subagent-completion-mutation.kernel.js";
+import type { RequesterWakeCommittedWrite } from "./subagent-completion-mutation.types.js";
 
 vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun: vi.fn() }));
 
 describe("persisted subagent requester wakes", () => {
-  let database: OpenClawStateDatabase;
+  const db = useCompletionDatabase("openclaw-subagent-wake-");
 
-  beforeEach(async () => {
-    const tempDir = tempDirs.make("openclaw-subagent-wake-", resolvePreferredOpenClawTmpDir());
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    database = openOpenClawStateDatabase();
-    await admitCompletionFixtureDatabase();
-  });
-
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    subagentRuns.clear();
-    closeOpenClawStateDatabaseForTest();
-    vi.unstubAllEnvs();
-  });
-
-  function persistOwner(input: ReturnType<typeof records>) {
-    seedSubagentCompletionDelivery({
+  const persistOwner = (input: ReturnType<typeof records>) =>
+    seedSubagentCompletionOwner({
       subagent: input.subagent,
-
-      databaseOptions: { database },
+      databaseOptions: { database: db.value },
     });
-    subagentRuns.set(input.subagent.runId, input.subagent);
+
+  const stored = (input: ReturnType<typeof records>) => loadRegistry().get(input.subagent.runId);
+  const settleOne = (
+    input: ReturnType<typeof records>,
+    outcome: NonNullable<Parameters<typeof settleRequesterCompletionBatch>[0]["outcome"]>,
+  ) =>
+    settleRequesterCompletionBatch({
+      entries: [input.subagent],
+      outcome,
+      databaseOptions: { database: db.value },
+    });
+  const expectNoRejection = (driver: ReturnType<typeof requesterWakeDriver>) =>
+    expect(driver.warn).not.toHaveBeenCalledWith(
+      "failed to persist requester settle wake rejection",
+      expect.any(Object),
+    );
+  function wakeBatch(...names: string[]) {
+    const inputs = names.map((name) => {
+      const input = records();
+      input.subagent.runId = `completion-${name}`;
+      if (name !== "run") {
+        input.subagent.childSessionKey = `agent:main:subagent:${name}`;
+      }
+      return input;
+    });
+    const ids = inputs.map(({ subagent }) => subagent.runId);
+    return inputs.map((input) => armRequesterWake(input, ids));
   }
 
-  function systemEvents() {
-    return database.db
-      .prepare("SELECT id FROM delivery_queue_entries WHERE entry_kind = 'systemEvent'")
-      .all();
-  }
-
-  async function reopenOwners() {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    subagentRuns.clear();
-    database = openOpenClawStateDatabase();
-    for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
-      subagentRuns.set(runId, entry);
+  registerRequesterWakeOwnershipTests({ database: () => db.value, persistOwner });
+  it("reconciles an acknowledged retirement without even a no-op data write", async () => {
+    const input = armRequesterWake(records());
+    input.subagent.expectsCompletionMessage = false;
+    input.subagent.delivery = { status: "not_required" };
+    input.subagent.requesterSettleWake!.retireAfterSettle = true;
+    persistOwner(input);
+    let committed: RequesterWakeCommittedWrite | undefined;
+    await expect(
+      mutateRequesterCompletionBatch({
+        entries: [input.subagent],
+        operation: { kind: "complete" },
+        context: captureOpenClawStateWorkerContext(),
+        assertCurrent() {
+          if (subagentRuns.get(input.subagent.runId) !== input.subagent) {
+            throw new Error("Retirement lost its exact registered owner");
+          }
+        },
+        onCommitted: (receipt) => {
+          committed = receipt;
+        },
+        onPublished: () => {},
+      }),
+    ).resolves.toEqual({ applied: true, publication: "published" });
+    if (!committed) {
+      throw new Error("Retirement did not return its native receipt");
     }
-  }
+    const receipt = committed;
+    expect(loadRegistry().has(input.subagent.runId)).toBe(false);
+    runOpenClawStateWriteTransaction(
+      () => {
+        const sql = observeHostDataSql();
+        try {
+          const result = mutateSubagentCompletionInDatabase(db.value, {
+            kind: "requesterWake",
+            entries: receipt.entries,
+            operation: { kind: "complete" },
+            committed: receipt,
+          });
+          expect(result).toMatchObject({ applied: true, retiredRunIds: [input.subagent.runId] });
+          const isSelectedRead = (query: string) =>
+            /^\s*select\b/i.test(query) && query.includes("subagent_runs");
+          const selectedPreparations = sql.calls[0]!.mock.calls.filter(
+            ([query]) => typeof query === "string" && isSelectedRead(query),
+          ).length;
+          // Count actual executions beyond prepares of these same SELECTs, including cached reads.
+          expect(sql.queries.filter(isSelectedRead).length).toBeGreaterThan(selectedPreparations);
+          expect(
+            sql.queries.filter((query) => /^\s*(?:insert|update|delete)\b/i.test(query)),
+          ).toEqual([]);
+        } finally {
+          sql.restore();
+        }
+      },
+      { database: db.value, path: db.value.path },
+    );
+    expect(loadRegistry().has(input.subagent.runId)).toBe(false);
+  });
 
   it.each([true, false])(
     "keeps active cleanup unless requester delivery is blocked (delivered=%s)",
@@ -82,80 +140,126 @@ describe("persisted subagent requester wakes", () => {
       const driver = requesterWakeDriver([input]);
       const generation = driver.controller.bumpCleanupGeneration(input.subagent);
 
-      await settleRequesterCompletionBatch({
-        entries: [{ subagent: input.subagent }],
-        outcome: {
-          delivered,
-          path: "direct",
-          error: delivered ? undefined : "requester unavailable",
-        },
-        isCurrent: () => true,
-        databaseOptions: { database },
+      await settleOne(input, {
+        delivered,
+        path: "direct",
+        error: delivered ? undefined : "requester unavailable",
       });
 
-      expect(
-        driver.controller.isCleanupAttemptCurrent(input.subagent.runId, input.subagent, generation),
-      ).toBe(delivered);
-      expect(input.subagent.requesterSettleWake).toBeUndefined();
-      expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.cleanupHandled).toBe(
-        false,
-      );
+      expect(driver.controller.isCleanupAttemptCurrent(input.subagent, generation)).toBe(delivered);
+      expect(currentRun(input).requesterSettleWake).toBeUndefined();
+      expect(stored(input)?.cleanupHandled).toBe(false);
     },
   );
+
+  it("settles lost operator authority without discarding child results or queuing a notice", async () => {
+    const input = armRequesterWake(records());
+    input.subagent.cleanupCompletedAt = undefined;
+    persistOwner(input);
+    const before = structuredClone(input.subagent);
+
+    await settleOne(input, {
+      delivered: false,
+      path: "none",
+      disposition: "permanent_failure",
+      reason: "operator_authority_unavailable",
+      error: "The original operator no longer has access",
+    });
+
+    db.value = await reopenOwners();
+    const restored = subagentRuns.get(input.subagent.runId)!;
+    expect(restored.execution).toEqual(before.execution);
+    expect(restored.completion).toEqual(before.completion);
+    expect(restored).toMatchObject({
+      delivery: {
+        status: "failed",
+        disposition: "permanent_failure",
+        lastError: "The original operator no longer has access",
+      },
+      suppressCompletionDelivery: true,
+    });
+    expect(restored.requesterSettleWake).toBeUndefined();
+    expect(restored.delivery?.queueId).toBeUndefined();
+    expect(systemEvents(db.value)).toEqual([]);
+  });
 
   it("settles a rejected dispatch transition after rollback without another wake", async () => {
     const input = armRequesterWake(records());
     persistOwner(input);
-    const driver = requesterWakeDriver([input]);
-    vi.spyOn(driver.controller.options, "persistOrThrow").mockImplementationOnce(() => {
-      throw new Error("dispatch write failed");
-    });
+    using driver = requesterWakeDriver([input]);
+    db.value.db.exec(
+      "CREATE TRIGGER reject_dispatch BEFORE UPDATE ON subagent_runs WHEN json_extract(NEW.payload_json, '$.requesterSettleWake.status') = 'dispatching' BEGIN SELECT RAISE(ABORT, 'dispatch write failed'); END",
+    );
     driver.wake.mockImplementation(async (params) => {
-      await params.transitionBatch([input.subagent], {
-        status: "dispatching",
-        attemptCount: 1,
-        rearmGeneration: 1,
-      });
+      await params.transitionBatch(
+        [input.subagent],
+        { status: "dispatching", attemptCount: 1, rearmGeneration: 1 },
+        () => {},
+      );
       throw new Error("transport must not start");
+    });
+    await driver.run();
+    expect(currentRun(input).requesterSettleWake).toBeUndefined();
+    expect(currentRun(input).delivery).toMatchObject({
+      status: "failed",
+      lastError: expect.stringContaining("dispatch write failed"),
+    });
+    db.value.db.exec("DROP TRIGGER reject_dispatch");
+    db.value = await reopenOwners();
+    expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeUndefined();
+    expect(driver.wake).toHaveBeenCalledOnce();
+  });
+
+  it("preserves newer same-generation progress before initial wake transition admission", async () => {
+    vi.useFakeTimers({ toNotFake: ["hrtime", "performance"] });
+    const input = armRequesterWake(records());
+    persistOwner(input);
+    const driver = requesterWakeDriver([input]);
+    const advancedWake = {
+      ...input.subagent.requesterSettleWake!,
+      status: "dispatching" as const,
+      attemptCount: 2,
+      replayCount: 1,
+      nextAttemptAt: Date.now() + 30_000,
+    };
+    const published = vi.fn();
+    driver.wake.mockImplementation(async (params) => {
+      await updateCompletionOwner(input.subagent.runId, (current) => ({
+        ...current,
+        requesterSettleWake: advancedWake,
+      }));
+      await params.transitionBatch(
+        [params.settledEntry],
+        { ...input.subagent.requesterSettleWake!, status: "dispatching", attemptCount: 1 },
+        published,
+      );
+      return false;
     });
     try {
       await driver.run();
-      expect(input.subagent.requesterSettleWake).toBeUndefined();
-      expect(input.subagent.delivery).toMatchObject({
-        status: "failed",
-        lastError: "dispatch write failed",
-      });
-      await reopenOwners();
-      expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeUndefined();
+      expect(published).not.toHaveBeenCalled();
+      expect(currentRun(input).requesterSettleWake).toEqual(advancedWake);
+      expect(stored(input)?.requesterSettleWake).toEqual(advancedWake);
       expect(driver.wake).toHaveBeenCalledOnce();
     } finally {
-      driver.controller.clearScheduledResumeTimers();
+      driver.controller.clearRuntimeState();
+      vi.useRealTimers();
     }
   });
 
-  it.each(["second owner", "second run write", "retirement"] as const)(
+  it.each(["omitted sibling", "second run write", "retirement"] as const)(
     "commits the entire requester batch or nothing when %s refuses settlement",
     async (cut) => {
-      const first = records();
-      const second = records();
-      second.subagent.runId = "completion-second";
-      second.subagent.childSessionKey = "agent:main:subagent:second";
-      const inputs = [first, second];
-      const ids = inputs.map(({ subagent }) => subagent.runId);
+      const inputs = wakeBatch("run", "second");
       for (const input of inputs) {
-        armRequesterWake(input, ids);
         if (cut === "retirement") {
           input.subagent.requesterSettleWake!.retireAfterSettle = true;
         }
         persistOwner(input);
       }
       const liveBefore = inputs.map(({ subagent }) => structuredClone(subagent));
-      if (cut === "second owner") {
-        const changed = structuredClone(second);
-        changed.subagent.generation = (changed.subagent.generation ?? 0) + 1;
-        seedSubagentCompletionDelivery({ ...changed, databaseOptions: { database } });
-      } else {
-        database.db.exec(
+      if (cut !== "omitted sibling") {
+        db.value.db.exec(
           cut === "second run write"
             ? "CREATE TRIGGER reject_batch AFTER UPDATE ON subagent_runs WHEN NEW.run_id = 'completion-second' BEGIN SELECT RAISE(ABORT, 'cut:second'); END"
             : "CREATE TRIGGER reject_batch AFTER DELETE ON subagent_runs WHEN OLD.run_id = 'completion-second' BEGIN SELECT RAISE(ABORT, 'cut:retirement'); END",
@@ -163,7 +267,7 @@ describe("persisted subagent requester wakes", () => {
       }
       const snapshot = () =>
         ["subagent_runs", "delivery_queue_entries"].map((table) =>
-          database.db.prepare("SELECT * FROM " + table + " ORDER BY rowid").all(),
+          db.value.db.prepare("SELECT * FROM " + table + " ORDER BY rowid").all(),
         );
       const before = snapshot();
       const driver = requesterWakeDriver(inputs);
@@ -179,12 +283,14 @@ describe("persisted subagent requester wakes", () => {
           structuredClone(subagentRuns.get(subagent.runId)?.requesterSettleWake),
         ),
       );
-      const unsubscribe = onSubagentRegistryPersisted(observed);
+      const unsubscribe = subscribeSubagentRunChanges("persistence", observed);
       try {
         await driver.run();
         await expect(
           settle!.completeBatch(
-            inputs.map(({ subagent }) => subagent),
+            (cut === "omitted sibling" ? inputs.slice(0, 1) : inputs).map(
+              ({ subagent }) => subagent,
+            ),
             1,
             {
               delivered: false,
@@ -196,81 +302,98 @@ describe("persisted subagent requester wakes", () => {
         expect(inputs.map(({ subagent }) => subagent)).toEqual(liveBefore);
         expect(snapshot()).toEqual(before);
         expect(observed).not.toHaveBeenCalled();
-        if (cut !== "second owner") {
-          database.db.exec("DROP TRIGGER reject_batch");
+        if (cut === "second run write" || cut === "retirement") {
+          db.value.db.exec("DROP TRIGGER reject_batch");
         }
-        await reopenOwners();
+        db.value = await reopenOwners();
         expect(snapshot()).toEqual(before);
-        for (const [index, input] of inputs.entries()) {
+        for (const input of inputs) {
           input.subagent = subagentRuns.get(input.subagent.runId)!;
-          if (cut === "second owner" && index === 1) {
-            persistOwner(input);
-          }
         }
-        const retry = requesterWakeDriver(inputs);
-        try {
-          await retry.run();
-          expect(observed).toHaveBeenCalledOnce();
-          expect(observed.mock.results[0]?.value).toEqual([undefined, undefined]);
-          expect(systemEvents()).toHaveLength(2);
-          await reopenOwners();
-          for (const input of inputs) {
-            expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeUndefined();
-            expect(subagentRuns.has(input.subagent.runId)).toBe(cut !== "retirement");
-          }
-        } finally {
-          retry.controller.clearScheduledResumeTimers();
+        using retry = requesterWakeDriver(inputs);
+        await retry.run();
+        expect(observed).toHaveBeenCalledOnce();
+        expect(observed.mock.results[0]?.value).toEqual([undefined, undefined]);
+        expect(systemEvents(db.value)).toHaveLength(2);
+        db.value = await reopenOwners();
+        for (const input of inputs) {
+          expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeUndefined();
+          expect(subagentRuns.has(input.subagent.runId)).toBe(cut !== "retirement");
         }
       } finally {
         unsubscribe();
-        driver.controller.clearScheduledResumeTimers();
+        driver.controller.clearRuntimeState();
       }
     },
   );
 
-  it.each([false, true])(
-    "reconciles failed replay persistence before transport (sibling rearmed: %s)",
-    async (rearmSibling) => {
-      vi.useFakeTimers();
-      const input = armRequesterWake(records());
-      const sibling = armRequesterWake(records());
-      sibling.subagent.runId = "replay-sibling";
-      sibling.subagent.childSessionKey = sibling.subagent.childSessionKey =
-        "agent:main:subagent:replay-sibling";
-      const inputs = rearmSibling ? [input, sibling] : [input];
-      const batch = inputs.map(({ subagent }) => subagent);
-      const batchRunIds = batch.map(({ runId }) => runId);
-      for (const record of inputs) {
-        armRequesterWake(record, batchRunIds);
-        persistOwner(record);
+  it("reconciles failed replay persistence before transport with a rearmed sibling", async () => {
+    vi.useFakeTimers();
+    const input = armRequesterWake(records());
+    const sibling = armRequesterWake(records());
+    sibling.subagent.runId = "replay-sibling";
+    sibling.subagent.childSessionKey = "agent:main:subagent:replay-sibling";
+    const inputs = [input, sibling];
+    const batch = inputs.map(({ subagent }) => subagent);
+    const batchRunIds = batch.map(({ runId }) => runId);
+    for (const record of inputs) {
+      armRequesterWake(record, batchRunIds);
+      persistOwner(record);
+    }
+    const driver = requesterWakeDriver(inputs);
+    const completionStore = await import("./subagent-completion-admission.store.js");
+    const mutate = completionStore.mutateRequesterCompletionBatch;
+    let replayAttempts = 0;
+    const observed = vi
+      .spyOn(completionStore, "mutateRequesterCompletionBatch")
+      .mockImplementation((params) => {
+        if (
+          params.operation.kind === "transition" &&
+          params.operation.state.replayCount &&
+          !params.committed
+        ) {
+          replayAttempts += 1;
+        }
+        return mutate(params);
+      });
+    db.value.db.exec(
+      "CREATE TRIGGER reject_replay BEFORE UPDATE ON subagent_runs WHEN json_extract(NEW.payload_json, '$.requesterSettleWake.replayCount') = 1 BEGIN SELECT RAISE(ABORT, 'replay persistence unavailable'); END",
+    );
+    const transport = vi.fn();
+    const newerWakes: SubagentRunRecord[] = [];
+    const acknowledgedBatches: string[][] = [];
+    driver.wake.mockImplementation(async (params) => {
+      const state = currentRun({ subagent: params.settledEntry }).requesterSettleWake!;
+      if (state.rearmGeneration === 2) {
+        newerWakes.push(params.settledEntry);
+        return false;
       }
-      const driver = requesterWakeDriver(inputs);
-      const persist = driver.controller.options.persistOrThrow.bind(driver.controller.options);
-      let unavailable = true;
-      let writes = 0;
-      driver.controller.options.persistOrThrow = (...ids) => {
-        if (input.subagent.requesterSettleWake?.replayCount) {
-          writes++;
-          if (unavailable) {
-            throw new Error("replay persistence unavailable");
-          }
-        }
-        persist(...ids);
+      let observedBatch = batch
+        .map((entry) => subagentRuns.get(entry.runId)!)
+        .filter((entry) => entry.requesterSettleWake?.rearmGeneration === state.rearmGeneration);
+      const adoptPublished = (published: readonly SubagentRunRecord[]) => {
+        observedBatch = [...published];
+        acknowledgedBatches.push(published.map((entry) => entry.runId));
       };
-      const transport = vi.fn();
-      driver.wake.mockImplementation(async (params) => {
-        const state = input.subagent.requesterSettleWake!;
-        if (state.status !== "dispatching") {
-          await params.transitionBatch(batch, {
-            status: "dispatching",
-            attemptCount: 1,
-            rearmGeneration: 1,
-            batchRunIds,
-          });
-        }
-        transport();
-        if (transport.mock.calls.length === 1) {
-          await params.transitionBatch(batch, {
+      if (state.status !== "dispatching") {
+        await params.transitionBatch(
+          observedBatch,
+          { status: "dispatching", attemptCount: 1, rearmGeneration: 1, batchRunIds },
+          adoptPublished,
+        );
+      }
+      if (transport.mock.calls.length > 0) {
+        expect(loadRegistry().get(input.subagent.runId)?.requesterSettleWake).toMatchObject({
+          status: "dispatching",
+          attemptCount: 1,
+          replayCount: 1,
+        });
+      }
+      transport();
+      if (transport.mock.calls.length === 1) {
+        await params.transitionBatch(
+          observedBatch,
+          {
             status: "dispatching",
             attemptCount: 1,
             replayCount: 1,
@@ -278,193 +401,114 @@ describe("persisted subagent requester wakes", () => {
             rearmGeneration: 1,
             batchRunIds,
             lastError: "ambiguous transport",
-          });
-        } else {
-          expect(state).toMatchObject({ status: "dispatching", attemptCount: 1, replayCount: 1 });
-          await params.completeBatch([input.subagent], 1, { delivered: true, path: "direct" });
-        }
-        return false;
-      });
-      try {
-        await driver.run();
-        if (rearmSibling) {
-          sibling.subagent.requesterSettleWake = {
-            status: "pending",
-            attemptCount: 0,
-            rearmGeneration: 2,
-            nextAttemptAt: Date.now() + 600_000,
-          };
-          persist(sibling.subagent.runId);
-        }
-        for (let sweep = 0; sweep < 6; sweep++) {
-          await advanceRequesterWakeTime(5_000, () =>
-            driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent),
-          );
-        }
-        expect(transport).toHaveBeenCalledOnce();
-        expect(writes).toBe(2);
-        for (let sweep = 0; sweep < 6; sweep++) {
-          await advanceRequesterWakeTime(5_000, () =>
-            driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent),
-          );
-        }
-        expect(transport).toHaveBeenCalledOnce();
-        expect(writes).toBe(2);
-        unavailable = false;
-        await advanceRequesterWakeTime(30_000);
-        expect(writes).toBe(3);
-        expect(transport).toHaveBeenCalledOnce();
-        await advanceRequesterWakeTime(0, () =>
-          driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent),
-        );
-        expect(transport).toHaveBeenCalledTimes(2);
-        expect(input.subagent.requesterSettleWake).toBeUndefined();
-        expect(input.subagent.delivery?.status).toBe("delivered");
-        if (rearmSibling) {
-          expect(sibling.subagent.requesterSettleWake).toMatchObject({
-            attemptCount: 0,
-            rearmGeneration: 2,
-          });
-        }
-      } finally {
-        driver.controller.clearScheduledResumeTimers();
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  it.each(["current", "replacement", "rearm"] as const)(
-    "retains a known delivered outcome without redelivery or overwriting a %s owner",
-    async (owner) => {
-      vi.useFakeTimers();
-      const input = armRequesterWake(records());
-      input.subagent.requesterSettleWake!.status = "dispatching";
-      input.subagent.requesterSettleWake!.attemptCount = 1;
-      persistOwner(input);
-      const driver = requesterWakeDriver([input]);
-      const finalized = vi.fn();
-      database.db.exec(
-        "CREATE TRIGGER reject_delivered AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'cut:delivered'); END",
-      );
-      driver.wake.mockImplementation(async (params) => {
-        await params.completeBatch(
-          [input.subagent],
-          1,
-          {
-            delivered: true,
-            path: "direct",
-            requesterVisibleFinalDelivered: true,
           },
-          finalized,
+          adoptPublished,
         );
-        return true;
-      });
-      try {
-        await driver.run();
-        expect(input.subagent.delivery?.status).toBe("in_progress");
-        expect(finalized).not.toHaveBeenCalled();
-        for (let sweep = 0; sweep < 6; sweep++) {
-          await advanceRequesterWakeTime(5_000, () =>
-            driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent),
-          );
-        }
-        expect(driver.wake).toHaveBeenCalledOnce();
-        database.db.exec("DROP TRIGGER reject_delivered");
-        if (owner === "replacement") {
-          const replacement = structuredClone(input.subagent);
-          subagentRuns.set(replacement.runId, replacement);
-        } else if (owner === "rearm") {
-          input.subagent.requesterSettleWake = {
-            status: "pending",
-            attemptCount: 0,
-            rearmGeneration: 2,
-          };
-          driver.controller.options.persistOrThrow(input.subagent.runId);
-        }
-        // The next persistence deadline is independent of the failed durable write.
-        await advanceRequesterWakeTime(60_000);
-        if (owner === "current") {
-          expect(driver.wake).toHaveBeenCalledOnce();
-          expect(finalized).toHaveBeenCalledOnce();
-          expect(input.subagent.requesterSettleWake).toBeUndefined();
-          await reopenOwners();
-        } else {
-          expect(finalized).not.toHaveBeenCalled();
-          expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("in_progress");
-          if (owner === "rearm") {
-            expect(input.subagent.requesterSettleWake?.rearmGeneration).toBe(2);
-          }
-        }
-      } finally {
-        driver.controller.clearScheduledResumeTimers();
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  it.each(["in_progress", "delivered"] as const)(
-    "replaces a %s completion receipt on requester settlement and clears pending payloads",
-    async (status) => {
-      const input = armRequesterWake(records());
-      const receipt = input.subagent.delivery!;
-      receipt.status = status;
-      if (status === "in_progress") {
-        receipt.payload = loadPendingFinalDeliveryPayload(input.subagent);
-        receipt.attemptCount = 2;
       } else {
-        receipt.deliveredAt = receipt.announcedAt = Date.now();
-      }
-      const before = structuredClone(receipt);
-      persistOwner(input);
-      const driver = requesterWakeDriver([input]);
-      driver.wake.mockImplementation(async (params) => {
-        await params.completeBatch([input.subagent], 1, { delivered: true, path: "direct" });
-        return true;
-      });
-      try {
-        await driver.run();
-        expect(input.subagent.delivery).not.toBe(receipt);
-        expect(input.subagent.delivery?.status).toBe("delivered");
-        expect(input.subagent.delivery?.payload).toBeUndefined();
-        expect(input.subagent.delivery?.attemptCount).toBeUndefined();
-        expect(receipt).toEqual(before);
-        expect(input.subagent.requesterSettleWake).toBeUndefined();
-        await reopenOwners();
-        expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
-          status: "delivered",
+        expect(state).toMatchObject({ status: "dispatching", attemptCount: 1, replayCount: 1 });
+        await params.completeBatch([currentRun(input)], 1, {
+          delivered: true,
+          path: "direct",
         });
-        expect(subagentRuns.get(input.subagent.runId)?.delivery?.payload).toBeUndefined();
-      } finally {
-        driver.controller.clearScheduledResumeTimers();
       }
-    },
-  );
+      return false;
+    });
+    try {
+      await driver.run();
+      await updateCompletionOwner(sibling.subagent.runId, (current) => {
+        const next = structuredClone(current);
+        next.requesterSettleWake = {
+          status: "pending",
+          attemptCount: 0,
+          rearmGeneration: 2,
+          nextAttemptAt: Date.now() + 600_000,
+        };
+        return next;
+      });
+      await advanceWake(30_000, () =>
+        driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent),
+      );
+      expect(transport).toHaveBeenCalledOnce();
+      expect(replayAttempts).toBe(2);
+      expect(
+        loadRegistry().get(input.subagent.runId)?.requesterSettleWake?.replayCount,
+      ).toBeUndefined();
+      db.value.db.exec("DROP TRIGGER reject_replay");
+      await advanceWake(30_000, () =>
+        driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent),
+      );
+      expect(replayAttempts).toBe(3);
+      expect(transport).toHaveBeenCalledTimes(2);
+      expect(acknowledgedBatches).toEqual([batchRunIds, [input.subagent.runId]]);
+      await driver.wake.mock.results.at(-1)?.value;
+      // A later sweep must not duplicate the continuation resumed after publication.
+      await advanceWake(0, () =>
+        driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent),
+      );
+      expect(transport).toHaveBeenCalledTimes(2);
+      expect(newerWakes).toEqual([
+        expect.objectContaining({
+          runId: sibling.subagent.runId,
+          requesterSettleWake: expect.objectContaining({ rearmGeneration: 2 }),
+        }),
+      ]);
+      expect(currentRun(input).requesterSettleWake).toBeUndefined();
+      expect(currentRun(input).delivery?.status).toBe("delivered");
+      expect(currentRun(sibling).requesterSettleWake).toMatchObject({
+        attemptCount: 0,
+        rearmGeneration: 2,
+      });
+    } finally {
+      observed.mockRestore();
+      db.value.db.exec("DROP TRIGGER IF EXISTS reject_replay");
+      driver.controller.clearRuntimeState();
+      vi.useRealTimers();
+    }
+  });
+
+  it("replaces an in-progress completion receipt on requester settlement and clears pending payloads", async () => {
+    const input = armRequesterWake(records());
+    const receipt = input.subagent.delivery!;
+    receipt.payload = loadPendingFinalDeliveryPayload(input.subagent);
+    receipt.attemptCount = 2;
+    const before = structuredClone(receipt);
+    persistOwner(input);
+    using driver = requesterWakeDriver([input]);
+    driver.wake.mockImplementation(async (params) => {
+      await params.completeBatch([input.subagent], 1, { delivered: true, path: "direct" });
+      return true;
+    });
+    await driver.run();
+    expect(currentRun(input).delivery).not.toBe(receipt);
+    expect(currentRun(input).delivery?.status).toBe("delivered");
+    expect(currentRun(input).delivery?.payload).toBeUndefined();
+    expect(currentRun(input).delivery?.attemptCount).toBeUndefined();
+    expect(receipt).toEqual(before);
+    expect(currentRun(input).requesterSettleWake).toBeUndefined();
+    db.value = await reopenOwners();
+    expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("delivered");
+    expect(subagentRuns.get(input.subagent.runId)?.delivery?.payload).toBeUndefined();
+  });
 
   it.each([
-    { change: "rearmed", delivered: true },
-    { change: "retired", delivered: true },
-    { change: "replaced", delivered: true },
-    { change: "not yet durable", delivered: true },
-    { change: "blocked", delivered: true },
-    { change: "blocked retirement", delivered: true },
-    { change: "blocked newer wave", delivered: true },
-    { change: "rearmed", delivered: false },
-    { change: "retired", delivered: false },
+    { change: "rearmed", delivered: true, cut: "rejected" },
+    { change: "retired", delivered: true, cut: "rejected" },
+    { change: "replaced", delivered: true, cut: "rejected" },
+    { change: "blocked", delivered: true, cut: "rejected" },
+    { change: "blocked retirement", delivered: true, cut: "rejected" },
+    { change: "blocked newer wave", delivered: true, cut: "rejected" },
+    { change: "rearmed", delivered: false, cut: "rejected" },
+    { change: "retired", delivered: false, cut: "rejected" },
+    { change: "rearmed", delivered: true, cut: "committed" },
+    { change: "retired", delivered: true, cut: "committed" },
   ] as const)(
-    "retains the known outcome for unchanged siblings when one member is $change (delivered=$delivered)",
-    async ({ change, delivered }) => {
+    "retains the known outcome for unchanged siblings when one member is $change (delivered=$delivered, cut=$cut)",
+    async ({ change, delivered, cut }) => {
       vi.useFakeTimers();
-      const first = records();
-      const second = records();
-      second.subagent.runId = "completion-second";
-      second.subagent.childSessionKey = "agent:main:subagent:second";
-      const third = records();
-      third.subagent.runId = "completion-third";
-      third.subagent.childSessionKey = "agent:main:subagent:third";
-      const inputs = [first, second, third];
-      const ids = inputs.map(({ subagent }) => subagent.runId);
+      const originalStateDir = process.env.OPENCLAW_STATE_DIR!;
+      const inputs = wakeBatch("run", "second", "third");
+      const [first, second, third] = [inputs[0]!, inputs[1]!, inputs[2]!];
       for (const input of inputs) {
-        armRequesterWake(input, ids);
         if (input === second && change === "blocked retirement") {
           input.subagent.requesterSettleWake!.retireAfterSettle = true;
         }
@@ -474,7 +518,15 @@ describe("persisted subagent requester wakes", () => {
       }
       const driver = requesterWakeDriver(inputs);
       const finalized = vi.fn();
+      const transport = vi.fn();
+      const newerWakes: SubagentRunRecord[] = [];
+      const publication = await observeRequesterOutcomePublication(cut, originalStateDir);
       driver.wake.mockImplementation(async (params) => {
+        if (params.settledEntry.requesterSettleWake?.rearmGeneration === 2) {
+          newerWakes.push(params.settledEntry);
+          return false;
+        }
+        transport();
         await params.completeBatch(
           inputs.map(({ subagent }) => subagent),
           1,
@@ -488,14 +540,24 @@ describe("persisted subagent requester wakes", () => {
         );
         return true;
       });
-      database.db.exec(
-        "CREATE TRIGGER reject_outcome AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'cut:outcome'); END",
-      );
+      if (cut === "rejected") {
+        db.value.db.exec(
+          "CREATE TRIGGER reject_outcome AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'cut:outcome'); END",
+        );
+      }
       try {
         await driver.run();
         expect(driver.wake).toHaveBeenCalledOnce();
         expect(finalized).not.toHaveBeenCalled();
-        database.db.exec("DROP TRIGGER reject_outcome");
+        if (cut === "committed") {
+          expect(publication.retainedBeforePublication).toBe(true);
+          process.env.OPENCLAW_STATE_DIR = originalStateDir;
+          expect(stored(first)?.delivery?.status).toBe("delivered");
+          expect(currentRun(first).requesterSettleWake).toBeDefined();
+          await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+        } else {
+          db.value.db.exec("DROP TRIGGER reject_outcome");
+        }
         const blocked = change.startsWith("blocked");
         if (blocked) {
           expect(
@@ -503,20 +565,17 @@ describe("persisted subagent requester wakes", () => {
               subagent: second.subagent,
 
               reason: "B was independently closed",
-              databaseOptions: { database },
+              databaseOptions: { database: db.value },
             }),
           ).toBe(true);
-          expect(second.subagent.requesterSettleWake?.rearmGeneration).toBe(1);
+          expect(currentRun(second).requesterSettleWake?.rearmGeneration).toBe(1);
         }
-        let successor = second.subagent;
+        const successor = structuredClone(currentRun(second));
         if (change === "retired") {
-          subagentRuns.delete(second.subagent.runId);
-          driver.controller.options.persistOrThrow(second.subagent.runId);
+          await updateCompletionOwner(second.subagent.runId, () => null);
         } else if (!blocked || change === "blocked newer wave") {
           if (change === "replaced") {
-            successor = structuredClone(second.subagent);
             successor.generation = (successor.generation ?? 0) + 1;
-            subagentRuns.set(successor.runId, successor);
           }
           successor.requesterSettleWake = {
             status: "pending",
@@ -525,85 +584,123 @@ describe("persisted subagent requester wakes", () => {
             batchRunIds: [successor.runId],
             nextAttemptAt: Date.now() + 600_000,
           };
-          if (change !== "not yet durable") {
-            driver.controller.options.persistOrThrow(successor.runId);
-          }
+          await updateCompletionOwner(successor.runId, (current) => ({
+            ...current,
+            generation: successor.generation,
+            requesterSettleWake: successor.requesterSettleWake,
+          }));
         }
         const newerWake = structuredClone(successor.requesterSettleWake);
-        await advanceRequesterWakeTime(30_000, () =>
+        if (cut === "committed") {
+          db.value.db.exec(
+            "CREATE TRIGGER reject_outcome AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'committed outcome must not replay'); END",
+          );
+        }
+        await advanceWake(30_000, () =>
           driver.controller.resumeRequesterSettleWake(first.subagent.runId, first.subagent),
         );
-        expect(driver.wake).toHaveBeenCalledOnce();
-        if (change === "not yet durable") {
-          // The store still sees B as an old-cohort owner: retain A's fence rather
-          // than omitting B or treating refusal as permission for another send.
-          expect(first.subagent.requesterSettleWake).toBeDefined();
-          expect(first.subagent.delivery?.status).toBe("in_progress");
-          expect(finalized).not.toHaveBeenCalled();
-          driver.controller.options.persistOrThrow(successor.runId);
-          await advanceRequesterWakeTime(60_000);
-        }
-        expect(driver.wake).toHaveBeenCalledOnce();
+        expect(transport).toHaveBeenCalledOnce();
+        expect(newerWakes).toEqual(
+          ["rearmed", "replaced", "blocked newer wave"].includes(change)
+            ? [
+                expect.objectContaining({
+                  runId: second.subagent.runId,
+                  requesterSettleWake: expect.objectContaining({ rearmGeneration: 2 }),
+                }),
+              ]
+            : [],
+        );
         for (const input of [first, third]) {
-          expect(input.subagent.requesterSettleWake).toBeUndefined();
-          expect(input.subagent.delivery?.status).toBe(delivered ? "delivered" : "failed");
+          expect(currentRun(input).requesterSettleWake).toBeUndefined();
+          expect(currentRun(input).delivery?.status).toBe(delivered ? "delivered" : "failed");
         }
         expect(finalized).toHaveBeenCalledOnce();
         if (change !== "retired" && change !== "blocked retirement") {
-          expect(subagentRuns.get(successor.runId)).toBe(successor);
-          expect(successor.requesterSettleWake).toEqual(
+          expect(currentRun({ subagent: successor }).requesterSettleWake).toEqual(
             change === "blocked" ? undefined : newerWake,
           );
-          expect(successor.delivery?.status).toBe(blocked ? "failed" : "in_progress");
+          expect(currentRun({ subagent: successor }).delivery?.status).toBe(
+            blocked ? "failed" : cut === "committed" ? "delivered" : "in_progress",
+          );
         } else {
           expect(subagentRuns.has(second.subagent.runId)).toBe(false);
         }
-        await reopenOwners();
+        if (cut === "committed") {
+          await advanceWake(0, () =>
+            driver.controller.resumeRequesterSettleWake(first.subagent.runId, first.subagent),
+          );
+          expect(transport).toHaveBeenCalledOnce();
+          expect(finalized).toHaveBeenCalledOnce();
+          expect(publication.reconciledBatches).toEqual([
+            [first.subagent.runId, third.subagent.runId],
+          ]);
+          expectNoRejection(driver);
+          db.value.db.exec("DROP TRIGGER reject_outcome");
+        }
+        db.value = await reopenOwners();
         for (const input of [first, third]) {
           expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeUndefined();
         }
         expect(subagentRuns.get(second.subagent.runId)?.requesterSettleWake).toEqual(
           ["retired", "blocked", "blocked retirement"].includes(change) ? undefined : newerWake,
         );
-        expect(systemEvents()).toHaveLength((blocked ? 1 : 0) + (delivered ? 0 : 2));
+        expect(systemEvents(db.value)).toHaveLength((blocked ? 1 : 0) + (delivered ? 0 : 2));
       } finally {
-        driver.controller.clearScheduledResumeTimers();
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+        publication.restore();
+        db.value.db.exec("DROP TRIGGER IF EXISTS reject_outcome");
+        driver.controller.clearRuntimeState();
         vi.useRealTimers();
       }
     },
   );
 
-  it.each([
-    { status: "failed", outcome: { status: "error" } },
-    { status: "timed_out", outcome: { status: "timeout" } },
-  ] as const)(
-    "settles an uncaptured $status wake without inventing reply capture",
-    async ({ status, outcome }) => {
-      const input = failedRecords(status, outcome);
+  it.each(["failed", "timed_out", "yielded"] as const)(
+    "settles an uncaptured %s wake without changing the child result",
+    async (status) => {
+      const input =
+        status === "yielded"
+          ? armRequesterWake(records())
+          : failedRecords(status, { status: status === "timed_out" ? "timeout" : "error" });
       input.subagent.completion = { required: true };
-      persistOwner(input);
-      const before = structuredClone(input);
-      const driver = requesterWakeDriver([input]);
-      try {
-        await driver.run();
-        expect(driver.warn).not.toHaveBeenCalledWith(
-          "failed to persist requester settle wake rejection",
-          expect.any(Object),
-        );
-        await reopenOwners();
-        const restored = subagentRuns.get(input.subagent.runId)!;
-        expect(restored.requesterSettleWake).toBeUndefined();
-        expect(restored.execution).toEqual(before.subagent.execution);
-        expect(restored.completion).toEqual(before.subagent.completion);
-        expect(systemEvents()).toEqual([]);
-        expect(driver.wake).toHaveBeenCalledOnce();
-      } finally {
-        driver.controller.clearScheduledResumeTimers();
+      if (status === "yielded") {
+        Object.assign(input.subagent, {
+          pauseReason: "sessions_yield",
+          delivery: { status: "pending" },
+          cleanupHandled: false,
+          cleanupCompletedAt: undefined,
+        });
+        input.subagent.execution.outcome = undefined;
+        input.subagent.requesterSettleWake!.retireAfterSettle = true;
       }
+      persistOwner(input);
+      const before = structuredClone(input.subagent);
+      using driver = requesterWakeDriver([input]);
+      if (status === "yielded") {
+        driver.wake.mockImplementation(async (params) => {
+          await params.completeBatch([params.settledEntry], 1, { delivered: true, path: "direct" });
+          return true;
+        });
+      }
+      await driver.run();
+      expectNoRejection(driver);
+      db.value = await reopenOwners();
+      const restored = subagentRuns.get(input.subagent.runId)!;
+      expect(restored.requesterSettleWake).toBeUndefined();
+      if (status === "yielded") {
+        expect(restored).toEqual({ ...before, requesterSettleWake: undefined });
+      } else {
+        expect([restored.execution, restored.completion]).toEqual([
+          before.execution,
+          before.completion,
+        ]);
+      }
+      expect(systemEvents(db.value)).toEqual([]);
+      expect(driver.wake).toHaveBeenCalledOnce();
     },
   );
 
-  it.each(["missing outcome", "paused", "superseded generation"] as const)(
+  it.each(["missing outcome", "paused"] as const)(
     "does not settle uncaptured completion with %s evidence",
     async (change) => {
       const input = failedRecords("failed", { status: "error" });
@@ -615,69 +712,71 @@ describe("persisted subagent requester wakes", () => {
       }
       persistOwner(input);
       const before = structuredClone(input);
-      if (change === "superseded generation") {
-        before.subagent.delivery!.generation = 2;
-        upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(before.subagent));
-      }
-      expect(
-        await blockSubagentCompletionDelivery({
+      await expect(
+        blockSubagentCompletionDelivery({
           subagent: input.subagent,
-
           reason: "requester unavailable",
         }),
-      ).toBe(false);
-      await reopenOwners();
+      ).resolves.toBe(false);
+      db.value = await reopenOwners();
       expect(subagentRuns.get(input.subagent.runId)).toEqual(before.subagent);
-      expect(systemEvents()).toEqual([]);
+      expect(systemEvents(db.value)).toEqual([]);
     },
   );
 
-  it.each([
-    { delivered: false, retireAfterSettle: false },
-    { delivered: false, retireAfterSettle: true },
-    { delivered: true, retireAfterSettle: false },
-    { delivered: true, retireAfterSettle: true },
-  ])(
-    "settles a yielded requester wake without completing the paused task (delivered=$delivered, retire=$retireAfterSettle)",
-    async ({ delivered, retireAfterSettle }) => {
-      const input = armRequesterWake(records());
-      input.subagent.pauseReason = "sessions_yield";
-      input.subagent.execution.outcome = undefined;
-      input.subagent.completion = { required: true };
-      input.subagent.delivery = { status: "pending" };
-      input.subagent.cleanupCompletedAt = undefined;
-      input.subagent.cleanupHandled = false;
-      input.subagent.requesterSettleWake!.retireAfterSettle = retireAfterSettle;
-      persistOwner(input);
-      const before = structuredClone(input);
-      const driver = requesterWakeDriver([input]);
-      driver.wake.mockImplementation(async (params) => {
-        await params.completeBatch([params.settledEntry], 1, {
-          delivered,
-          path: "direct",
-          error: delivered ? undefined : "requester unavailable",
-        });
-        return delivered;
-      });
-      try {
-        await driver.run();
-        expect(driver.warn).not.toHaveBeenCalledWith(
-          "failed to persist requester settle wake rejection",
-          expect.any(Object),
-        );
-        await reopenOwners();
-        expect(subagentRuns.get(input.subagent.runId)).toEqual({
-          ...before.subagent,
-          requesterSettleWake: undefined,
-        });
-        expect(systemEvents()).toEqual([]);
-      } finally {
-        driver.controller.clearScheduledResumeTimers();
+  it.each(["delivered", "store replaced", "operator authority lost"] as const)(
+    "settles a pause notice across reopen (%s)",
+    async (settlement) => {
+      const storeReplaced = settlement === "store replaced";
+      const paused = records();
+      const sibling = records();
+      sibling.subagent.runId = "running-sibling";
+      sibling.subagent.childSessionKey = "agent:main:subagent:sibling";
+      sibling.subagent.execution = { status: "running", startedAt: Date.now() };
+      const batchRunIds = [paused.subagent.runId, sibling.subagent.runId];
+      for (const input of [paused, sibling]) {
+        armRequesterWake(input, batchRunIds);
       }
+      paused.subagent.pauseReason = "sessions_yield";
+      paused.subagent.execution.outcome = undefined;
+      paused.subagent.completion = { required: true };
+      paused.subagent.delivery = { status: "pending" };
+      paused.subagent.cleanupHandled = false;
+      paused.subagent.cleanupCompletedAt = undefined;
+      const completionWake = structuredClone(paused.subagent.requesterSettleWake);
+      paused.subagent.requesterSettleWake!.pauseNotice = { acknowledgment: "Need a continuation." };
+      for (const input of [paused, sibling]) {
+        persistOwner(input);
+      }
+      const siblingBefore = structuredClone(sibling.subagent);
+
+      await settleOne(paused, {
+        delivered: settlement === "delivered",
+        path: "direct",
+        ...(storeReplaced
+          ? { storeReplaced: true, disposition: "intentional_non_delivery" as const }
+          : {}),
+        ...(settlement === "operator authority lost"
+          ? {
+              disposition: "permanent_failure" as const,
+              reason: "operator_authority_unavailable" as const,
+            }
+          : {}),
+      });
+      db.value = await reopenOwners();
+      const restored = subagentRuns.get(paused.subagent.runId)!;
+      expect(restored.requesterSettleWake).toEqual(
+        settlement === "delivered" ? completionWake : undefined,
+      );
+      expect(restored.pauseReason).toBe("sessions_yield");
+      expect(restored.execution.outcome).toBeUndefined();
+      expect(restored.delivery).toEqual({ status: "pending" });
+      expect(subagentRuns.get(sibling.subagent.runId)).toEqual(siblingBefore);
+      expect(systemEvents(db.value)).toEqual([]);
     },
   );
 
-  it.each(["unchanged", "newer sibling", "run generation", "wake generation"])(
+  it.each(["unchanged", "newer sibling", "run generation"])(
     "reconciles a retired cancellation wake only with its current owner: %s",
     async (change) => {
       const input = failedRecords("cancelled", { status: "error", error: "stopped" });
@@ -687,105 +786,90 @@ describe("persisted subagent requester wakes", () => {
       input.subagent.completion = { required: true };
       input.subagent.delivery = { status: "pending" };
       persistOwner(input);
-      await reopenOwners();
+      db.value = await reopenOwners();
       input.subagent = subagentRuns.get(input.subagent.runId)!;
       const before = structuredClone(input.subagent);
-      const driver = requesterWakeDriver([input]);
+      using driver = requesterWakeDriver([input]);
       driver.wake.mockImplementation(async () => {
         if (change !== "unchanged") {
           const updated = structuredClone(input.subagent);
           if (change === "newer sibling") {
             updated.runId = "newer-child-run";
-            updated.generation = (updated.generation ?? 0) + 1;
-          } else if (change === "run generation") {
-            updated.generation = (updated.generation ?? 0) + 1;
-          } else {
-            updated.requesterSettleWake!.rearmGeneration = 2;
           }
-          upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(updated));
+          updated.generation = (updated.generation ?? 0) + 1;
+          writeSubagentRunValuesInDatabase(db.value, [bindSubagentRunRecord(updated)], []);
         }
         throw new Error("requester unavailable");
       });
-      try {
-        await driver.run();
-        if (change === "unchanged") {
-          expect(driver.warn).not.toHaveBeenCalledWith(
-            "failed to persist requester settle wake rejection",
-            expect.any(Object),
-          );
-        } else {
-          expect(driver.warn).toHaveBeenCalledWith(
-            "failed to persist requester settle wake rejection",
-            expect.any(Object),
-          );
-        }
-        await reopenOwners();
-        const restored = subagentRuns.get(input.subagent.runId)!;
-        expect(restored.execution).toEqual(before.execution);
-        expect(restored.cleanupCompletedAt).toBe(endedAt);
-        if (change === "unchanged") {
-          expect(restored.requesterSettleWake).toBeUndefined();
-          expect(restored.completion).toEqual({
-            required: true,
-            resultText: null,
-            capturedAt: endedAt,
-          });
-          expect(restored.delivery).toMatchObject({
-            status: "failed",
-            lastError: "requester unavailable",
-          });
-          expect(restored.suppressCompletionDelivery).toBe(true);
-        } else {
-          expect(restored.requesterSettleWake).toBeDefined();
-          expect(restored.completion).toEqual(before.completion);
-          expect(restored.delivery).toEqual(before.delivery);
-        }
-        expect(database.db.prepare("SELECT COUNT(*) AS count FROM task_runs").get()?.count).toBe(0);
-        expect(systemEvents()).toEqual([]);
-      } finally {
-        driver.controller.clearScheduledResumeTimers();
+      await driver.run();
+      if (change === "unchanged") {
+        expectNoRejection(driver);
+      } else {
+        expect(driver.warn).toHaveBeenCalledWith(
+          "failed to persist requester settle wake rejection",
+          expect.any(Object),
+        );
       }
+      db.value = await reopenOwners();
+      const restored = subagentRuns.get(input.subagent.runId)!;
+      expect(restored.execution).toEqual(before.execution);
+      expect(restored.cleanupCompletedAt).toBe(endedAt);
+      if (change === "unchanged") {
+        expect(restored.requesterSettleWake).toBeUndefined();
+        expect(restored.completion).toEqual({
+          required: true,
+          resultText: null,
+          capturedAt: endedAt,
+        });
+        expect(restored.delivery).toMatchObject({
+          status: "failed",
+          lastError: "requester unavailable",
+        });
+        expect(restored.suppressCompletionDelivery).toBe(true);
+      } else {
+        expect(restored.requesterSettleWake).toBeDefined();
+        expect(restored.completion).toEqual(before.completion);
+        expect(restored.delivery).toEqual(before.delivery);
+      }
+      expect(db.value.db.prepare("SELECT COUNT(*) AS count FROM task_runs").get()?.count).toBe(0);
+      expect(systemEvents(db.value)).toEqual([]);
     },
   );
 
-  it.each(["not_required", "discarded"] as const)(
-    "retains a frozen wake and source-owned %s disposition across rejected commits",
-    async (status) => {
-      const input = armRequesterWake(records());
-      input.subagent.suppressCompletionDelivery = true;
-      input.subagent.delivery = { status, disposition: "intentional_non_delivery", generation: 1 };
-      input.subagent.requesterSettleWake!.requesterYieldBatch = true;
-      persistOwner(input);
-      const before = structuredClone(input.subagent);
-      const settle = () =>
-        settleRequesterCompletionBatch({
-          entries: [{ subagent: input.subagent }],
-          outcome: { delivered: true, path: "direct" },
-          isCurrent: () => true,
-          databaseOptions: { database },
+  it("retains a frozen wake and source-owned not_required disposition across rejected commits", async () => {
+    const input = armRequesterWake(records());
+    input.subagent.suppressCompletionDelivery = true;
+    input.subagent.delivery = {
+      status: "not_required",
+      disposition: "intentional_non_delivery",
+      generation: 1,
+    };
+    input.subagent.requesterSettleWake!.requesterYieldBatch = true;
+    persistOwner(input);
+    const before = structuredClone(input.subagent);
+    const settleFrozen = () => settleOne(input, { delivered: true, path: "direct" });
+    db.value.db.exec(
+      "CREATE TRIGGER reject_closed_wake AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'temporary closed-wake write failure'); END",
+    );
+    try {
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        await expect(settleFrozen()).rejects.toThrow("temporary closed-wake write failure");
+        expect(input.subagent).toEqual(before);
+        expect(stored(input)).toMatchObject({
+          delivery: before.delivery,
+          requesterSettleWake: before.requesterSettleWake,
+          suppressCompletionDelivery: true,
         });
-      database.db.exec(
-        "CREATE TRIGGER reject_closed_wake AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'temporary closed-wake write failure'); END",
-      );
-      try {
-        for (let attempt = 0; attempt < 6; attempt += 1) {
-          await expect(settle()).rejects.toThrow("temporary closed-wake write failure");
-          expect(input.subagent).toEqual(before);
-          expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)).toMatchObject({
-            delivery: before.delivery,
-            requesterSettleWake: before.requesterSettleWake,
-            suppressCompletionDelivery: true,
-          });
-        }
-      } finally {
-        database.db.exec("DROP TRIGGER reject_closed_wake");
       }
-      await settle();
-      expect(input.subagent.delivery).toEqual(before.delivery);
-      expect(input.subagent.completion).toEqual(before.completion);
-      expect(input.subagent.suppressCompletionDelivery).toBe(true);
-      expect(input.subagent.requesterSettleWake).toBeUndefined();
-      expect(systemEvents()).toEqual([]);
-    },
-  );
+    } finally {
+      db.value.db.exec("DROP TRIGGER reject_closed_wake");
+    }
+    await settleFrozen();
+    expect(currentRun(input).delivery).toEqual(before.delivery);
+    expect(currentRun(input).completion?.resultText).toBeUndefined();
+    expect(stored(input)?.completion).toEqual(before.completion);
+    expect(currentRun(input).suppressCompletionDelivery).toBe(true);
+    expect(currentRun(input).requesterSettleWake).toBeUndefined();
+    expect(systemEvents(db.value)).toEqual([]);
+  });
 });

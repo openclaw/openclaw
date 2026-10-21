@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../packages/markdown-core/src/image-spans.js", () => {
@@ -47,6 +48,7 @@ describe("display media without Markdown image scanning", () => {
       truncated: false,
       latestUrl: "/share/session?token=synthetic",
       cardUrl: "https://example.test/share/card.png",
+      assetBasePath: "",
     });
     expect(html).toContain("Visible reply");
     expect(html).toContain("[Image omitted]");

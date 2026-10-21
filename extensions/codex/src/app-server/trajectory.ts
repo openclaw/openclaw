@@ -2,27 +2,16 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
-export type CodexTrajectoryRecorder = {
-  recordEvent: (type: string, data?: Record<string, unknown>) => void;
-  flush: () => Promise<void>;
-};
-
-type CodexTrajectoryInit = {
-  attempt: EmbeddedRunAttemptParams;
-  cwd: string;
-  developerInstructions?: string;
-  prompt?: string;
-  trajectory?: NonNullable<EmbeddedRunAttemptParams["hostCapabilities"]["trajectory"]> | null;
-  tools?: CodexDynamicToolSpec[];
-};
+export type CodexTrajectoryRecorder = NonNullable<
+  EmbeddedRunAttemptParams["hostCapabilities"]["trajectory"]
+>;
 
 export function createCodexTrajectoryRecorder(
-  params: CodexTrajectoryInit,
+  trajectory: CodexTrajectoryRecorder | null | undefined,
 ): CodexTrajectoryRecorder | null {
-  if (!params.trajectory) {
+  if (!trajectory) {
     return null;
   }
-  const trajectory = params.trajectory;
 
   return {
     recordEvent: (type, data) => {
@@ -39,12 +28,14 @@ export function createCodexTrajectoryRecorder(
 
 export function recordCodexTrajectoryContext(
   recorder: CodexTrajectoryRecorder | null,
-  params: CodexTrajectoryInit,
+  params: {
+    attempt: EmbeddedRunAttemptParams;
+    developerInstructions?: string;
+    prompt?: string;
+    tools?: CodexDynamicToolSpec[];
+  },
 ): void {
-  if (!recorder) {
-    return;
-  }
-  recorder.recordEvent("context.compiled", {
+  recorder?.recordEvent("context.compiled", {
     systemPrompt: params.developerInstructions,
     prompt: params.prompt ?? params.attempt.prompt,
     imagesCount: params.attempt.images?.length ?? 0,
@@ -55,7 +46,6 @@ export function recordCodexTrajectoryContext(
 export function recordCodexTrajectoryCompletion(
   recorder: CodexTrajectoryRecorder | null,
   params: {
-    attempt: EmbeddedRunAttemptParams;
     result: EmbeddedRunAttemptResult;
     threadId: string;
     turnId: string;
@@ -90,16 +80,7 @@ function toTrajectoryToolDefinitions(
   return flattenCodexDynamicToolFunctions(tools)
     .flatMap((tool) => {
       const name = tool.name?.trim();
-      if (!name) {
-        return [];
-      }
-      return [
-        {
-          name,
-          description: tool.description,
-          parameters: tool.inputSchema,
-        },
-      ];
+      return name ? [{ name, description: tool.description, parameters: tool.inputSchema }] : [];
     })
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }

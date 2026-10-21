@@ -1,4 +1,3 @@
-// Copilot tests cover auth bridge plugin behavior.
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveCopilotAuth, tokenFingerprint } from "./auth-bridge.js";
@@ -19,9 +18,9 @@ function resolveAgentId(agentId: string | undefined): string {
 
 describe("sanitizeAgentId", () => {
   it("returns default for null/undefined/empty", () => {
-    expect(resolveAgentId(undefined)).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(resolveAgentId("")).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(resolveAgentId("   ")).toBe(COPILOT_DEFAULT_AGENT_ID);
+    expect([undefined, "", "   "].map(resolveAgentId)).toEqual(
+      Array(3).fill(COPILOT_DEFAULT_AGENT_ID),
+    );
   });
 
   it("lowercases and accepts alnum + dash + underscore", () => {
@@ -31,11 +30,9 @@ describe("sanitizeAgentId", () => {
   });
 
   it("rejects path-traversal segments and falls back to default", () => {
-    expect(resolveAgentId("../etc/passwd")).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(resolveAgentId("../..")).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(resolveAgentId("a/b")).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(resolveAgentId("a\\b")).toBe(COPILOT_DEFAULT_AGENT_ID);
-    expect(resolveAgentId("a\u0000b")).toBe(COPILOT_DEFAULT_AGENT_ID);
+    expect(["../etc/passwd", "../..", "a/b", "a\\b", "a\u0000b"].map(resolveAgentId)).toEqual(
+      Array(5).fill(COPILOT_DEFAULT_AGENT_ID),
+    );
   });
 
   it("rejects ids that do not start with alnum", () => {
@@ -60,17 +57,15 @@ describe("tokenFingerprint", () => {
 
 describe("resolveCopilotAuth - copilotHome resolution", () => {
   it("uses explicit copilotHome when provided", () => {
-    const result = resolveAuth({
-      copilotHome: "/explicit/home",
-    });
-    expect(result.copilotHome).toBe(resolve("/explicit/home"));
+    expect(resolveAuth({ copilotHome: "/explicit/home" }).copilotHome).toBe(
+      resolve("/explicit/home"),
+    );
   });
 
   it("falls back to <agentDir>/copilot when copilotHome is absent", () => {
-    const result = resolveAuth({
-      agentDir: "/agent/dir",
-    });
-    expect(result.copilotHome).toBe(resolve(join("/agent/dir", "copilot")));
+    expect(resolveAuth({ agentDir: "/agent/dir" }).copilotHome).toBe(
+      resolve(join("/agent/dir", "copilot")),
+    );
   });
 
   it("synthesises per-agent default from homeDir when no path is given", () => {
@@ -100,12 +95,8 @@ describe("resolveCopilotAuth - copilotHome resolution", () => {
   });
 
   it("isolates per-agent copilotHome between agents", () => {
-    const a = resolveAuth({
-      agentId: "agent-a",
-    });
-    const b = resolveAuth({
-      agentId: "agent-b",
-    });
+    const a = resolveAuth({ agentId: "agent-a" });
+    const b = resolveAuth({ agentId: "agent-b" });
     expect(a.copilotHome).not.toBe(b.copilotHome);
     expect(a.copilotHome.endsWith(join("agent-a", "copilot"))).toBe(true);
     expect(b.copilotHome.endsWith(join("agent-b", "copilot"))).toBe(true);
@@ -130,29 +121,21 @@ describe("resolveCopilotAuth - auth mode resolution", () => {
       authProfileId: "legacy-p",
       profileVersion: "legacy-v1",
     });
-    expect(result.authMode).toBe("gitHubToken");
-    expect(result.authProfileId).toBe("legacy-p");
-    expect(result.authProfileVersion).toBe("legacy-v1");
+    expect(result).toMatchObject({
+      authMode: "gitHubToken",
+      authProfileId: "legacy-p",
+      authProfileVersion: "legacy-v1",
+    });
   });
 
   it("throws when explicit gitHubToken is given without both profileId + profileVersion", () => {
-    expect(() =>
-      resolveAuth({
-        auth: { gitHubToken: "tok" },
-      }),
-    ).toThrow(COPILOT_TOKEN_PROFILE_ERROR);
-
-    expect(() =>
-      resolveAuth({
-        auth: { gitHubToken: "tok", profileId: "p" },
-      }),
-    ).toThrow(COPILOT_TOKEN_PROFILE_ERROR);
-
-    expect(() =>
-      resolveAuth({
-        auth: { gitHubToken: "tok", profileVersion: "v" },
-      }),
-    ).toThrow(COPILOT_TOKEN_PROFILE_ERROR);
+    for (const auth of [
+      { gitHubToken: "tok" },
+      { gitHubToken: "tok", profileId: "p" },
+      { gitHubToken: "tok", profileVersion: "v" },
+    ]) {
+      expect(() => resolveAuth({ auth })).toThrow(COPILOT_TOKEN_PROFILE_ERROR);
+    }
   });
 
   it("defaults to useLoggedInUser when no auth signal at all", () => {
@@ -175,13 +158,12 @@ describe("resolveCopilotAuth - contract-resolved auth (resolvedApiKey + authProf
   });
 
   it("synthesises authProfileId when contract-resolved token has no profile id", () => {
-    const result = resolveAuth({
-      resolvedApiKey: "contract-token-xyz",
+    expect(resolveAuth({ resolvedApiKey: "contract-token-xyz" })).toMatchObject({
+      authMode: "gitHubToken",
+      gitHubToken: "contract-token-xyz",
+      authProfileId: "pi:resolved",
+      authProfileVersion: tokenFingerprint("contract-token-xyz"),
     });
-    expect(result.authMode).toBe("gitHubToken");
-    expect(result.gitHubToken).toBe("contract-token-xyz");
-    expect(result.authProfileId).toBe("pi:resolved");
-    expect(result.authProfileVersion).toBe(tokenFingerprint("contract-token-xyz"));
   });
 
   it("auth.useLoggedInUser=true takes precedence over contract resolvedApiKey", () => {
@@ -251,9 +233,11 @@ describe("resolveCopilotAuth - env var fallbacks", () => {
         GITHUB_TOKEN: "github-tok",
       },
     });
-    expect(result.gitHubToken).toBe("openclaw-tok");
-    expect(result.authProfileId).toBe("env:OPENCLAW_GITHUB_TOKEN");
-    expect(result.authProfileVersion).toBe(tokenFingerprint("openclaw-tok"));
+    expect(result).toMatchObject({
+      gitHubToken: "openclaw-tok",
+      authProfileId: "env:OPENCLAW_GITHUB_TOKEN",
+      authProfileVersion: tokenFingerprint("openclaw-tok"),
+    });
   });
 
   it("COPILOT_GITHUB_TOKEN takes precedence over GH_TOKEN and GITHUB_TOKEN", () => {
@@ -280,12 +264,8 @@ describe("resolveCopilotAuth - env var fallbacks", () => {
   });
 
   it("token rotation in env changes the pool fingerprint (cache-busting)", () => {
-    const a = resolveAuth({
-      env: { GITHUB_TOKEN: "v1" },
-    });
-    const b = resolveAuth({
-      env: { GITHUB_TOKEN: "v2" },
-    });
+    const a = resolveAuth({ env: { GITHUB_TOKEN: "v1" } });
+    const b = resolveAuth({ env: { GITHUB_TOKEN: "v2" } });
     expect(a.authProfileVersion).not.toBe(b.authProfileVersion);
   });
 
@@ -337,11 +317,7 @@ describe("resolveCopilotAuth - defaults wiring", () => {
   });
 
   it("uses os.homedir() when homeDir is not injected", () => {
-    const result = resolveCopilotAuth({
-      agentId: "agent-1",
-    });
-    // We don't know the actual home, just that the resolver did not throw and
-    // produced an absolute path containing the per-agent suffix.
+    const result = resolveCopilotAuth({ agentId: "agent-1" });
     expect(result.copilotHome.endsWith(join(".openclaw", "agents", "agent-1", "copilot"))).toBe(
       true,
     );
@@ -355,7 +331,6 @@ describe("resolveCopilotAuth - defaults wiring", () => {
         throw new Error("no home");
       },
     });
-    // Should not throw; should produce a path under cwd.
     expect(result.copilotHome.includes(join(".openclaw", "agents", "agent-1", "copilot"))).toBe(
       true,
     );

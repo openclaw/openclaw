@@ -7,18 +7,19 @@ import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { CLI_STREAM_JSON_OUTPUT_LIMITS } from "../cli-output-stream-limits.js";
+import { buildContext } from "./execute-events.tool-result-args.test-support.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
   createManagedRun,
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
-import { captureCliRunStartTime, type PreparedCliRunContext } from "./types.js";
+import type { PreparedCliRunContext } from "./types.js";
 
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
+// mock-isolation: The supervisor fixture owns execution; never spawn host CLI processes.
 vi.mock("../../process/supervisor/adapters/child.js", () => ({
   createChildAdapter: vi.fn(),
 }));
@@ -28,43 +29,13 @@ type SupervisorSpawnInput = Parameters<ReturnType<typeof getProcessSupervisor>["
 const { maxPendingLineChars, maxTurnRawChars } = CLI_STREAM_JSON_OUTPUT_LIMITS;
 
 function buildClaudeStreamJsonRunContext(runId: string): PreparedCliRunContext {
-  const backend = {
-    command: "claude",
-    args: [],
-    output: "jsonl" as const,
-    input: "stdin" as const,
+  const context = buildContext(runId);
+  Object.assign(context.preparedBackend.backend, {
     serialize: false,
-    jsonlDialect: "claude-stream-json" as const,
-  };
-  return {
-    params: {
-      admittedRunContext: createTestAdmittedRunContext(runId),
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:main",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      provider: "claude-cli",
-      model: "model",
-      timeoutMs: 60_000,
-      runId,
-    },
-    ...captureCliRunStartTime(),
-    workspaceDir: "/tmp",
-    backendResolved: { id: "claude-cli", config: backend, bundleMcp: false },
-    executionTarget: { kind: "process" },
-    preparedBackend: { backend, env: {} },
-    reusableCliSession: { mode: "none" },
-    hadSessionFile: false,
-    contextEngineConfig: {},
-    modelId: "model",
-    normalizedModel: "model",
-    systemPrompt: "system",
-    systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    claudeSkillsPluginArgs: [],
-    authEpochVersion: 2,
-  };
+    jsonlDialect: "claude-stream-json",
+  });
+  context.params.timeoutMs = 60_000;
+  return context;
 }
 
 beforeEach(() => {
@@ -124,13 +95,19 @@ describe("CLI stream-json output limit", () => {
         spawnInput?.onStdout?.(oversizedLine);
       }
 
-      // The CLI would otherwise keep running until it exits by itself.
-      await expect(run).rejects.toMatchObject({
+      const failure = expect(run).rejects.toMatchObject({
         name: "FailoverError",
         reason: "format",
         message: `CLI JSONL line exceeded ${maxPendingLineChars} characters; refusing to parse output.`,
       });
-      expect(managedRun.cancel).toHaveBeenCalledWith("manual-cancel");
+      await waiting.promise;
+      try {
+        expect(managedRun.cancel).toHaveBeenCalledWith("manual-cancel");
+      } finally {
+        // Let the baseline finish too; a missing cancel must fail without hanging.
+        exited.resolve();
+        await failure;
+      }
     },
   );
 
@@ -150,14 +127,12 @@ describe("CLI stream-json output limit", () => {
           aborted = true;
         });
         try {
-          // A CLI that keeps working past the budget and never ends the turn by itself.
+          // The baseline keeps pulling these records after the turn is already lost.
           while (yielded < 12) {
             yielded += 1;
             yield record;
           }
-          await new Promise((resolve) => {
-            execution.abortSignal?.addEventListener("abort", resolve);
-          });
+          yield { type: "result", subtype: "success", is_error: false, result: "done" };
         } finally {
           closed = true;
         }

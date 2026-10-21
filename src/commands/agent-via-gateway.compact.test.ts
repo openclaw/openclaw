@@ -41,23 +41,26 @@ afterEach(() => {
 });
 
 describe("agent CLI compact rejection", () => {
-  it.each(["  /CoMpAcT  ", "/compact Keep recent decisions."])(
-    "rejects %j before any gateway or embedded turn",
-    async (message) => {
+  it.each([
+    { source: "message", message: "  /CoMpAcT  " },
+    { source: "message", message: "/compact Keep recent decisions." },
+    { source: "file", message: "/compact:Keep recent decisions." },
+  ])(
+    "rejects $message from $source before any gateway or embedded turn",
+    async ({ source, message }) => {
+      const messageFile =
+        source === "file" ? path.join(tempDirs.make("openclaw-compact-"), "compact.md") : undefined;
+      if (messageFile) {
+        fs.writeFileSync(messageFile, message, "utf8");
+      }
       await expect(
-        agentCliCommand({ message, sessionKey: "agent:main:main" }, runtime),
+        agentCliCommand(
+          { ...(messageFile ? { messageFile } : { message }), sessionKey: "agent:main:main" },
+          runtime,
+        ),
       ).rejects.toThrow(compactGuidance);
     },
   );
-
-  it("rejects /compact from --message-file before any gateway or embedded turn", async () => {
-    const messageFile = path.join(tempDirs.make("openclaw-compact-"), "compact.md");
-    fs.writeFileSync(messageFile, "/compact:Keep recent decisions.", "utf8");
-
-    await expect(
-      agentCliCommand({ messageFile, sessionKey: "agent:main:main" }, runtime),
-    ).rejects.toThrow(compactGuidance);
-  });
 
   it("preserves the canonical JSON failure for a rejected /compact message", async () => {
     await withConsoleLogsRoutedToStderrForJson(["--json"], async () => {

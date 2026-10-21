@@ -1,6 +1,7 @@
 import {
   ErrorCodes,
   errorShape,
+  type ProtocolValidator,
   validateUsersAuthConnectCancelParams,
   validateUsersAuthConnectAnswerParams,
   validateUsersAuthConnectStartParams,
@@ -17,39 +18,43 @@ import type { ModelAccountConnectAction } from "../model-account-authority.js";
 import {
   ModelAccountConnectAuthorityError,
   ModelAccountConnectInputError,
-} from "../model-account-connect.js";
+} from "../model-account-connect-errors.js";
 import type {
   GatewayRequestContext,
-  GatewayRequestHandlerOptions,
+  GatewayRequestHandler,
   GatewayRequestHandlers,
 } from "./types.js";
 import { prepareUserModelAccountAction } from "./users-model-account-access.js";
-import { defineValidatedGatewayMethod } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
-type ConnectRequest = Pick<
-  GatewayRequestHandlerOptions,
-  "client" | "context" | "signal" | "respond"
->;
-
-async function runConnectRequest(
-  options: ConnectRequest,
-  profileId: string | undefined,
+function connectHandler<P extends { profileId?: string }>(
+  method: string,
+  validate: ProtocolValidator<P>,
   run: (
     service: NonNullable<GatewayRequestContext["modelAccountConnectService"]>,
     action: ModelAccountConnectAction,
+    params: P,
   ) => unknown,
   requiredScope: "operator.read" | "operator.write" | "operator.admin" = "operator.write",
-): Promise<void> {
-  try {
-    const action = await prepareUserModelAccountAction(options, profileId, requiredScope);
-    const service = options.context.modelAccountConnectService;
-    if (!service) {
-      throw new Error("Model-account service is not running.");
-    }
-    const result = await run(service, action);
-    options.respond(true, result);
-  } catch (error) {
-    const responseError =
+): GatewayRequestHandler {
+  return defineValidatedGatewayHandler(
+    method,
+    validate,
+    async (options) => {
+      const action = await prepareUserModelAccountAction(
+        options,
+        options.params.profileId,
+        requiredScope,
+      );
+      const service = options.context.modelAccountConnectService;
+      if (!service) {
+        throw new Error("Model-account service is not running.");
+      }
+      const result = await run(service, action, options.params);
+      action.assertCurrent();
+      options.respond(true, result);
+    },
+    (error) =>
       error instanceof ModelAccountConnectAuthorityError
         ? errorShape(ErrorCodes.FORBIDDEN, error.message)
         : error instanceof ModelAccountConnectInputError ||
@@ -58,105 +63,64 @@ async function runConnectRequest(
           : errorShape(
               ErrorCodes.UNAVAILABLE,
               "Model account connect is unavailable right now; try again shortly.",
-            );
-    options.respond(false, undefined, responseError);
-  }
+            ),
+  );
 }
 
 export const usersAuthConnectHandlers: GatewayRequestHandlers = {
-  "users.listAuthLinks": defineValidatedGatewayMethod(
+  "users.listAuthLinks": connectHandler(
     "users.listAuthLinks",
     validateUsersListAuthLinksParams,
-    (options) =>
-      runConnectRequest(
-        options,
-        options.params.profileId,
-        (service, action) => service.listLinks(action),
-        "operator.read",
-      ),
+    (service, action) => service.listLinksAsync(action),
+    "operator.read",
   ),
-  "users.linkAuthProfile": defineValidatedGatewayMethod(
+  "users.linkAuthProfile": connectHandler(
     "users.linkAuthProfile",
     validateUsersLinkAuthProfileParams,
-    (options) =>
-      runConnectRequest(
-        options,
-        options.params.profileId,
-        (service, action) => service.link(action, options.params.authProfileId),
-        // Choosing an existing shared credential remains an explicit admin decision.
-        "operator.admin",
-      ),
+    (service, action, params) => service.linkAsync(action, params.authProfileId),
+    // Choosing an existing shared credential remains an explicit admin decision.
+    "operator.admin",
   ),
-  "users.unlinkAuthProfile": defineValidatedGatewayMethod(
+  "users.unlinkAuthProfile": connectHandler(
     "users.unlinkAuthProfile",
     validateUsersUnlinkAuthProfileParams,
-    (options) =>
-      runConnectRequest(options, options.params.profileId, (service, action) =>
-        service.unlink(action, options.params.provider),
-      ),
+    (service, action, params) => service.unlinkAsync(action, params.provider),
   ),
-  "users.listModelAccounts": defineValidatedGatewayMethod(
+  "users.listModelAccounts": connectHandler(
     "users.listModelAccounts",
     validateUsersListModelAccountsParams,
-    (options) =>
-      runConnectRequest(
-        options,
-        options.params.profileId,
-        (service, action) => service.list(action, options.params.cursor),
-        "operator.read",
-      ),
+    (service, action, params) => service.listAsync(action, params.cursor),
+    "operator.read",
   ),
-  "users.selectModelAccount": defineValidatedGatewayMethod(
+  "users.selectModelAccount": connectHandler(
     "users.selectModelAccount",
     validateUsersSelectModelAccountParams,
-    (options) =>
-      runConnectRequest(options, options.params.profileId, (service, action) =>
-        service.select(action, options.params.authProfileId),
-      ),
+    (service, action, params) => service.selectAsync(action, params.authProfileId),
   ),
-  "users.authConnect.start": defineValidatedGatewayMethod(
+  "users.authConnect.start": connectHandler(
     "users.authConnect.start",
     validateUsersAuthConnectStartParams,
-    (options) =>
-      runConnectRequest(options, options.params.profileId, (service, action) =>
-        service.start(action, options.params.provider, options.params.method),
-      ),
+    (service, action, params) => service.start(action, params.provider, params.method),
   ),
-  "users.authConnect.answer": defineValidatedGatewayMethod(
+  "users.authConnect.answer": connectHandler(
     "users.authConnect.answer",
     validateUsersAuthConnectAnswerParams,
-    (options) =>
-      runConnectRequest(options, options.params.profileId, (service, action) =>
-        service.answer(
-          action,
-          options.params.connectId,
-          options.params.stepId,
-          options.params.value,
-        ),
-      ),
+    (service, action, params) =>
+      service.answer(action, params.connectId, params.stepId, params.value),
   ),
-  "users.authConnect.status": defineValidatedGatewayMethod(
+  "users.authConnect.status": connectHandler(
     "users.authConnect.status",
     validateUsersAuthConnectStatusParams,
-    (options) =>
-      runConnectRequest(options, options.params.profileId, (service, action) =>
-        service.status(action, options.params.connectId),
-      ),
+    (service, action, params) => service.statusAsync(action, params.connectId),
   ),
-  "users.authConnect.cancel": defineValidatedGatewayMethod(
+  "users.authConnect.cancel": connectHandler(
     "users.authConnect.cancel",
     validateUsersAuthConnectCancelParams,
-    (options) =>
-      runConnectRequest(options, options.params.profileId, (service, action) =>
-        service.cancel(action, options.params.connectId),
-      ),
+    (service, action, params) => service.cancelAsync(action, params.connectId),
   ),
-  "users.authConnect.catalog": defineValidatedGatewayMethod(
+  "users.authConnect.catalog": connectHandler(
     "users.authConnect.catalog",
     validateUsersAuthConnectCatalogParams,
-    (options) =>
-      runConnectRequest(options, options.params.profileId, (service, action) =>
-        service.catalog(action),
-      ),
+    (service, action) => service.catalog(action),
   ),
 };

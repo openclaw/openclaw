@@ -43,6 +43,10 @@ enum ChatContextUsageCalculator {
     private static func latestRunTokens(in messages: [OpenClawChatMessage]) -> Int? {
         for message in messages.reversed() {
             guard let usage = message.usage else { continue }
+            // Counters can cover a whole multi-call turn; the marker is the latest call alone.
+            if let total = usage.contextUsage?.totalTokens, total > 0 {
+                return total
+            }
             if let total = usage.total, total > 0 {
                 return total
             }
@@ -62,7 +66,7 @@ enum ChatContextUsageCalculator {
         return costs.reduce(0, +)
     }
 
-    private static func positive(_ value: Int?) -> Int? {
+    fileprivate static func positive(_ value: Int?) -> Int? {
         guard let value, value > 0 else { return nil }
         return value
     }
@@ -70,10 +74,7 @@ enum ChatContextUsageCalculator {
 
 extension OpenClawChatViewModel {
     public var contextUsage: OpenClawChatContextUsage? {
-        let entry = self.sessions.first { $0.key == self.sessionKey } ??
-            self.sessions.first {
-                self.matchesCurrentSessionKey(incoming: $0.key, current: self.sessionKey)
-            }
+        let entry = self.currentSessionEntry()
         return ChatContextUsageCalculator.usage(
             messages: self.messages,
             sessionEntry: entry,
@@ -111,10 +112,10 @@ struct ChatMessageUsagePresentation: Equatable {
 
         var visualParts: [String] = []
         var accessibilityParts: [String] = []
-        let input = self.positive(usage.input)
-        let output = self.positive(usage.output)
-        let cacheRead = self.positive(usage.cacheRead)
-        let cacheWrite = self.positive(usage.cacheWrite)
+        let input = ChatContextUsageCalculator.positive(usage.input)
+        let output = ChatContextUsageCalculator.positive(usage.output)
+        let cacheRead = ChatContextUsageCalculator.positive(usage.cacheRead)
+        let cacheWrite = ChatContextUsageCalculator.positive(usage.cacheWrite)
 
         let tokenParts: [(Int?, String, String)] = [
             (input, "↑", String(localized: "Input tokens: %@")),
@@ -137,7 +138,9 @@ struct ChatMessageUsagePresentation: Equatable {
 
         // Context pressure mirrors the Control UI prompt size. Output is response data;
         // input plus cache reads/writes is the context the model received for this run.
-        let promptTokens = Double(input ?? 0) + Double(cacheRead ?? 0) + Double(cacheWrite ?? 0)
+        // Whole-turn counters sum several calls, so the latest call's marker wins when present.
+        let promptTokens = usage.contextUsage.map { Double($0.promptTokens) }
+            ?? Double(input ?? 0) + Double(cacheRead ?? 0) + Double(cacheWrite ?? 0)
         let contextPercent: Int?
         if let contextWindowTokens, contextWindowTokens > 0, promptTokens > 0 {
             let roundedPercent = (promptTokens / Double(contextWindowTokens) * 100).rounded()
@@ -149,20 +152,15 @@ struct ChatMessageUsagePresentation: Equatable {
         if let contextPercent {
             let warningPrefix = pressure == .normal ? "" : "⚠︎ "
             visualParts.append("\(warningPrefix)\(contextPercent)% \(String(localized: "ctx"))")
-            switch pressure {
+            let format = switch pressure {
             case .normal:
-                accessibilityParts.append(String(
-                    format: String(localized: "%@ percent of context used"),
-                    contextPercent.formatted()))
+                String(localized: "%@ percent of context used")
             case .warning:
-                accessibilityParts.append(String(
-                    format: String(localized: "Warning: %@ percent of context used"),
-                    contextPercent.formatted()))
+                String(localized: "Warning: %@ percent of context used")
             case .danger:
-                accessibilityParts.append(String(
-                    format: String(localized: "Critical: %@ percent of context used"),
-                    contextPercent.formatted()))
+                String(localized: "Critical: %@ percent of context used")
             }
+            accessibilityParts.append(String(format: format, contextPercent.formatted()))
         }
 
         guard !visualParts.isEmpty else { return nil }
@@ -177,11 +175,6 @@ struct ChatMessageUsagePresentation: Equatable {
         if percent >= 90 { return .danger }
         if percent >= 75 { return .warning }
         return .normal
-    }
-
-    private static func positive(_ value: Int?) -> Int? {
-        guard let value, value > 0 else { return nil }
-        return value
     }
 }
 

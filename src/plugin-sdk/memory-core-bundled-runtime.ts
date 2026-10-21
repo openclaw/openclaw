@@ -1,4 +1,5 @@
 // Manual facade. Keep loader boundary explicit.
+import path from "node:path";
 import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type {
@@ -9,8 +10,15 @@ import type {
   ShortTermDreamingStats,
 } from "../memory-host-sdk/dreaming.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
+import type { PluginStateOperationModuleSource } from "../plugin-state/plugin-state-store.native-binding.js";
+import { isTypeScriptPackageEntry } from "../plugins/package-entrypoints.js";
+import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
+import { capturePluginStateOperationModuleSource } from "../plugins/plugin-state-operation-source.js";
 // Memory core bundled runtime helpers load the internal memory plugin through SDK facades.
-import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
+import {
+  loadBundledPluginPublicSurfaceModuleSyncCore,
+  resolveBundledPublicSurfaceLocation,
+} from "./facade-loader.js";
 import type {
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderCreateOptions,
@@ -114,27 +122,57 @@ type ApiFacadeModule = {
   }) => Promise<{ dreamsPath: string; removed: number }>;
 };
 
-function loadApiFacadeModule(): ApiFacadeModule {
-  const module = loadBundledPluginPublicSurfaceModuleSyncCore<ApiFacadeModule>({
+type FacadeModules = {
+  "api.js": ApiFacadeModule;
+  "runtime-api.js": RuntimeFacadeModule;
+};
+
+function loadFacadeModule<Artifact extends keyof FacadeModules>(
+  artifactBasename: Artifact,
+): FacadeModules[Artifact] {
+  const module = loadBundledPluginPublicSurfaceModuleSyncCore<FacadeModules[Artifact]>({
     dirName: "memory-core",
-    artifactBasename: "api.js",
+    artifactBasename,
   });
-  module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStore<T>("memory-core", options),
+  const instance = getPluginValueInstance(module);
+  const assertCurrent = instance ? () => instance.run(() => {}) : undefined;
+  let moduleSource: PluginStateOperationModuleSource | undefined;
+  if (instance && assertCurrent) {
+    moduleSource = capturePluginStateOperationModuleSource(instance, assertCurrent);
+  } else {
+    // CLI facades have process-stable code; capture their selected family before yielding.
+    const facade = resolveBundledPublicSurfaceLocation({
+      dirName: "memory-core",
+      artifactBasename,
+    });
+    const operation = resolveBundledPublicSurfaceLocation({
+      dirName: "memory-core",
+      artifactBasename: "recall-operation-api.js",
+    });
+    const operationModule =
+      facade?.origin === "bundled" &&
+      operation?.origin === "bundled" &&
+      path.dirname(facade.modulePath) === path.dirname(operation.modulePath) &&
+      isTypeScriptPackageEntry(facade.modulePath) === isTypeScriptPackageEntry(operation.modulePath)
+        ? { ...operation, pluginId: "memory-core", origin: "bundled" as const }
+        : undefined;
+    moduleSource = {
+      resolve(moduleName) {
+        if (moduleName !== "recall-operation-api.js" || !operationModule) {
+          throw new Error("Memory recall operation is absent from its selected facade family");
+        }
+        return operationModule;
+      },
+    };
+  }
+  module.configureMemoryCoreDreamingState(<Value>(options: OpenKeyedStoreOptions) =>
+    createPluginStateKeyedStore<Value>("memory-core", options, assertCurrent, moduleSource),
   );
   return module;
 }
 
-function loadRuntimeFacadeModule(): RuntimeFacadeModule {
-  const module = loadBundledPluginPublicSurfaceModuleSyncCore<RuntimeFacadeModule>({
-    dirName: "memory-core",
-    artifactBasename: "runtime-api.js",
-  });
-  module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStore<T>("memory-core", options),
-  );
-  return module;
-}
+const loadApiFacadeModule = () => loadFacadeModule("api.js");
+const loadRuntimeFacadeModule = () => loadFacadeModule("runtime-api.js");
 
 /** Returns the memory-core-owned recovery message for an absent local provider plugin. */
 export function getMissingLocalMemoryEmbeddingProviderMessage(): string {

@@ -2,7 +2,6 @@
 import { normalizeLowercaseStringOrEmpty as normalizeMcpString } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../utils.js";
 
-type ConfigMcpServers = Record<string, Record<string, unknown>>;
 type OpenClawMcpHttpTransport = "sse" | "streamable-http";
 
 const CLI_MCP_TYPE_TO_OPENCLAW_TRANSPORT: Record<string, OpenClawMcpHttpTransport | "stdio"> = {
@@ -11,6 +10,14 @@ const CLI_MCP_TYPE_TO_OPENCLAW_TRANSPORT: Record<string, OpenClawMcpHttpTranspor
   sse: "sse",
   stdio: "stdio",
 };
+
+/** Reads the canonical transport prepared by config migration or bundle ingestion. */
+export function resolveConfiguredMcpTransport(server: unknown): string | undefined {
+  if (!isRecord(server)) {
+    return undefined;
+  }
+  return normalizeMcpString(server.transport) || undefined;
+}
 
 /** Maps CLI-native MCP type aliases to OpenClaw HTTP transport names. */
 export function resolveOpenClawMcpTransportAlias(
@@ -67,16 +74,4 @@ export function canonicalizeConfiguredMcpServer(
     next.codex = codex;
   }
   return next;
-}
-
-/** Returns a cloned map of object-shaped MCP server configs, dropping invalid entries. */
-export function normalizeConfiguredMcpServers(value: unknown): ConfigMcpServers {
-  if (!isRecord(value)) {
-    return {};
-  }
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, server]) => isRecord(server))
-      .map(([name, server]) => [name, { ...(server as Record<string, unknown>) }]),
-  );
 }

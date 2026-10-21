@@ -8,16 +8,6 @@ function normalizeComparableSlackText(text: string): string {
   return text.trim().replace(/\s+/g, " ");
 }
 
-function isSlackAuthoredTextRepresentedInInteractive(
-  text: string,
-  interactive?: LegacyInteractiveReply,
-): boolean {
-  return isSlackAuthoredTextRepresentedInFragments(
-    text,
-    interactive?.blocks.flatMap((block) => (block.type === "text" ? [block.text] : [])) ?? [],
-  );
-}
-
 function isSlackAuthoredTextRepresentedInFragments(
   text: string,
   rawFragments: readonly string[],
@@ -54,7 +44,6 @@ function isSlackAuthoredTextRepresentedInFragments(
 export function resolveSlackAuthoredTextPlacement(params: {
   text?: string;
   interactive?: LegacyInteractiveReply;
-  renderedInBlocks?: boolean;
   renderedTextFragments?: readonly string[];
 }): SlackAuthoredTextPlacement {
   const text = normalizeOptionalString(params.text);
@@ -62,8 +51,11 @@ export function resolveSlackAuthoredTextPlacement(params: {
     return "none";
   }
   const isRepresentedInBlocks =
-    params.renderedInBlocks ||
     isSlackAuthoredTextRepresentedInFragments(text, params.renderedTextFragments ?? []) ||
-    isSlackAuthoredTextRepresentedInInteractive(text, params.interactive);
+    isSlackAuthoredTextRepresentedInFragments(
+      text,
+      params.interactive?.blocks.flatMap((block) => (block.type === "text" ? [block.text] : [])) ??
+        [],
+    );
   return isRepresentedInBlocks ? "blocks" : "outside-blocks";
 }

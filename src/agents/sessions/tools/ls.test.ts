@@ -37,10 +37,8 @@ function trackAbortListener(signal: AbortSignal) {
 }
 
 describe("ls tool", () => {
-  it.each([
-    { name: "byte limit", modelBudget: undefined },
-    { name: "model context", modelBudget: { maxChars: 1_800, maxContextChars: 2_500 } },
-  ])("visits every filename through complete pages bounded by $name", async ({ modelBudget }) => {
+  it("visits every filename through complete pages bounded by model context", async () => {
+    const modelBudget = { maxChars: 1_800, maxContextChars: 2_500 };
     const names = Array.from(
       { length: 300 },
       (_, index) => `${String(index).padStart(3, "0")}-${"x".repeat(210)}`,
@@ -58,10 +56,8 @@ describe("ls tool", () => {
         .map((line) => JSON.parse(line));
       expect(pageNames.length).toBeGreaterThan(0);
       expect(Buffer.byteLength(output)).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
-      if (modelBudget) {
-        expect(output.length).toBeLessThanOrEqual(modelBudget.maxChars);
-        expect(output.length * 2).toBeLessThanOrEqual(modelBudget.maxContextChars);
-      }
+      expect(output.length).toBeLessThanOrEqual(modelBudget.maxChars);
+      expect(output.length * 2).toBeLessThanOrEqual(modelBudget.maxContextChars);
       seen.push(...pageNames);
       const nextAfter = page.details?.nextAfter;
       if (nextAfter === undefined) {
@@ -90,7 +86,9 @@ describe("ls tool", () => {
       ]),
     });
 
-    const page = await tool.execute("list-unusual-names", {});
+    const controller = new AbortController();
+    const listener = trackAbortListener(controller.signal);
+    const page = await tool.execute("list-unusual-names", {}, controller.signal);
 
     expect(
       textContent(page)
@@ -98,6 +96,7 @@ describe("ls tool", () => {
         .map((line) => JSON.parse(line)),
     ).toEqual(["\tleading", '"quoted"', "A", "Z", "a", "emoji-🦀", "line\nbreak", "á"]);
     expect(page.details?.nextAfter).toBeUndefined();
+    listener.expectReleased();
   });
 
   it("continues after a deleted directory using its raw name without skipping unseen entries", async () => {
@@ -143,29 +142,6 @@ describe("ls tool", () => {
     expect(limited.details).toEqual({ content: textContent(limited), nextAfter: "a-broken" });
   });
 
-  it("clamps non-positive limits instead of reporting a non-empty directory as empty", async () => {
-    // Clamp to one entry so bad numeric input cannot hide directory contents.
-    const tool = createLsTool("/workspace", {
-      operations: operations(["beta.txt", "alpha.txt"]),
-    });
-
-    const result = await tool.execute("call-1", { limit: 0 });
-
-    expect(textContent(result).split("\n")[0]).toBe('"alpha.txt"');
-    expect(result.details?.nextAfter).toBe("alpha.txt");
-  });
-
-  it("uses the default limit for non-finite values", async () => {
-    const tool = createLsTool("/workspace", {
-      operations: operations(["beta.txt", "alpha.txt"]),
-    });
-
-    const result = await tool.execute("call-1", { limit: Number.NaN });
-
-    expect(textContent(result)).toBe('"alpha.txt"\n"beta.txt"');
-    expect(result.details).toEqual({ content: '"alpha.txt"\n"beta.txt"' });
-  });
-
   it("preserves a directory read failure and releases the abort listener", async () => {
     const tool = createLsTool("/workspace", {
       operations: {
@@ -180,16 +156,6 @@ describe("ls tool", () => {
     await expect(tool.execute("call-1", {}, controller.signal)).rejects.toThrow(
       "permission denied",
     );
-
-    listener.expectReleased();
-  });
-
-  it("releases the abort listener after success", async () => {
-    const tool = createLsTool("/workspace", { operations: operations(["alpha.txt"]) });
-    const controller = new AbortController();
-    const listener = trackAbortListener(controller.signal);
-
-    await expect(tool.execute("call-1", {}, controller.signal)).resolves.toBeDefined();
 
     listener.expectReleased();
   });

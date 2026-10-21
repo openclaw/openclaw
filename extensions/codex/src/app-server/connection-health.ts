@@ -3,7 +3,7 @@ import type {
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { CodexAppServerClient } from "./client.js";
-import type { CodexAppServerRuntimeOptions } from "./config-contracts.js";
+import type { CodexAppServerRuntimeOptions, CodexPluginConfig } from "./config-contracts.js";
 
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
@@ -20,13 +20,14 @@ export function createCodexAppServerConnectionHealthService(
   let monitor: Promise<void> | undefined;
   const run = async (ctx: OpenClawPluginServiceContext, signal: AbortSignal) => {
     const { resolveCodexAppServerRuntimeOptions } = await import("./config-runtime.js");
+    const { readCodexPluginConfig } = await import("./config-parsing.js");
     let consecutiveFailures = 0;
 
     while (!signal.aborted) {
-      let pluginConfig: unknown;
+      let pluginConfig: CodexPluginConfig;
       let runtime: CodexAppServerRuntimeOptions;
       try {
-        pluginConfig = options.getPluginConfig();
+        pluginConfig = readCodexPluginConfig(options.getPluginConfig());
         runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig });
       } catch (error) {
         if (!signal.aborted) {
@@ -43,6 +44,7 @@ export function createCodexAppServerConnectionHealthService(
 
       const { getLeasedSharedCodexAppServerClient, releaseLeasedSharedCodexAppServerClient } =
         await import("./shared-client.js");
+      const { sleepWithAbort } = await import("openclaw/plugin-sdk/runtime-env");
       const { isUnsupportedCodexAppServerVersionError } = await import("./client.js");
       if (signal.aborted) {
         return;
@@ -97,7 +99,7 @@ export function createCodexAppServerConnectionHealthService(
           Math.round(exponentialDelayMs * (0.75 + Math.random() * 0.5)),
           MAX_RECONNECT_DELAY_MS,
         );
-        await waitForReconnect(reconnectDelayMs, signal);
+        await sleepWithAbort(reconnectDelayMs, signal, { ref: false }).catch(() => undefined);
       }
     }
   };
@@ -164,7 +166,7 @@ function waitForCodexAppServerClose(
   signal: AbortSignal,
 ): Promise<void> {
   return new Promise((resolve) => {
-    if (signal.aborted) {
+    if (signal.aborted || client.getCloseError()) {
       resolve();
       return;
     }
@@ -175,24 +177,6 @@ function waitForCodexAppServerClose(
       resolve();
     };
     const removeCloseHandler = client.addCloseHandler(finish);
-    signal.addEventListener("abort", finish, { once: true });
-  });
-}
-
-function waitForReconnect(delayMs: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-
-    const finish = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", finish);
-      resolve();
-    };
-    const timer = setTimeout(finish, delayMs);
-    timer.unref();
     signal.addEventListener("abort", finish, { once: true });
   });
 }

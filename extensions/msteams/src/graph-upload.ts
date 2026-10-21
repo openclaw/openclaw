@@ -28,12 +28,6 @@ export function requireMSTeamsSharePointSiteId(siteId?: string): string {
   return normalized;
 }
 
-interface DriveUploadResult {
-  id: string;
-  webUrl: string;
-  name: string;
-}
-
 const SHAREPOINT_REQUEST_TIMEOUT_LABEL = "MS Teams SharePoint request";
 const SHAREPOINT_UPLOAD_TIMEOUT_LABEL = "MS Teams SharePoint upload";
 const GRAPH_TOKEN_TIMEOUT_LABEL = "MS Teams Graph token acquisition";
@@ -41,7 +35,6 @@ const GRAPH_TOKEN_TIMEOUT_LABEL = "MS Teams Graph token acquisition";
 async function requestSharePointJson<T>(
   params: {
     tokenProvider: MSTeamsAccessTokenProvider;
-    fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
   request: {
     url: string;
@@ -76,7 +69,6 @@ async function requestSharePointJson<T>(
           },
           signal,
         },
-        fetchImpl: params.fetchFn,
         mode: "trusted_env_proxy",
         beforeRequest: () => assertMSTeamsSendHandoff(params),
         // Preserve fetch's redirect limit, method/body replay, and cross-origin
@@ -106,9 +98,8 @@ async function uploadToSharePoint(
     contentType?: string;
     tokenProvider: MSTeamsAccessTokenProvider;
     siteId: string;
-    fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
-): Promise<DriveUploadResult> {
+): Promise<string> {
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
   // Graph's default conflictBehavior=replace overwrites a same-named file in place. Bot assets
   // reuse names (image-1.png each generation) and Teams caches file cards by driveItem URL, so
@@ -116,7 +107,7 @@ async function uploadToSharePoint(
   const uploadUrl = `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content?@microsoft.graph.conflictBehavior=rename`;
   const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length);
 
-  const data = await requestSharePointJson<Partial<DriveUploadResult>>(params, {
+  const data = await requestSharePointJson<{ id?: string }>(params, {
     url: uploadUrl,
     timeoutMs,
     init: () => ({
@@ -128,15 +119,11 @@ async function uploadToSharePoint(
     label: "msteams.graph-upload.uploadSharePointFile",
   });
 
-  if (!data.id || !data.webUrl || !data.name) {
+  if (!data.id) {
     throw new Error("SharePoint upload response missing required fields");
   }
 
-  return {
-    id: data.id,
-    webUrl: data.webUrl,
-    name: data.name,
-  };
+  return data.id;
 }
 
 /**
@@ -154,7 +141,6 @@ export async function getDriveItemProperties(
     siteId: string;
     itemId: string;
     tokenProvider: MSTeamsAccessTokenProvider;
-    fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
 ): Promise<DriveItemProperties> {
   const data = await requestSharePointJson<Partial<DriveItemProperties>>(params, {
@@ -178,7 +164,6 @@ async function getChatMemberIds(
   params: {
     chatId: string;
     tokenProvider: MSTeamsAccessTokenProvider;
-    fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
 ): Promise<string[]> {
   const data = await requestSharePointJson<{ value?: Array<{ userId?: string }> }>(params, {
@@ -204,27 +189,22 @@ async function createSharePointSharingLink(
     siteId: string;
     itemId: string;
     tokenProvider: MSTeamsAccessTokenProvider;
-    /** Sharing scope: "organization" (default) or "users" (per-user with recipients) */
-    scope?: "organization" | "users";
-    /** Required when scope is "users": AAD object IDs of recipients */
+    /** AAD object IDs for a per-user link; omitted for an organization link. */
     recipientObjectIds?: string[];
-    fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
-): Promise<string> {
-  const scope = params.scope ?? "organization";
-
-  const apiRoot = scope === "users" ? GRAPH_BETA : GRAPH_ROOT;
+): Promise<void> {
+  const apiRoot = params.recipientObjectIds ? GRAPH_BETA : GRAPH_ROOT;
 
   const body: Record<string, unknown> = {
     type: "view",
-    scope: scope === "users" ? "users" : "organization",
+    scope: params.recipientObjectIds ? "users" : "organization",
   };
 
-  if (scope === "users" && params.recipientObjectIds?.length) {
+  if (params.recipientObjectIds) {
     body.recipients = params.recipientObjectIds.map((id) => ({ objectId: id }));
   }
 
-  const data = await requestSharePointJson<{ link?: { webUrl?: string } }>(params, {
+  await requestSharePointJson<unknown>(params, {
     url: `${apiRoot}/sites/${params.siteId}/drive/items/${params.itemId}/createLink`,
     init: () => ({
       method: "POST",
@@ -234,12 +214,6 @@ async function createSharePointSharingLink(
     error: "Create SharePoint sharing link failed",
     label: "msteams.graph-upload.createSharePointSharingLink",
   });
-
-  if (!data.link?.webUrl) {
-    throw new Error("Create SharePoint sharing link response missing webUrl");
-  }
-
-  return data.link.webUrl;
 }
 
 /**
@@ -257,46 +231,30 @@ export async function uploadAndShareSharePoint(
     siteId: string;
     chatId?: string;
     usePerUserSharing?: boolean;
-    fetchFn?: typeof fetch;
   } & MSTeamsSendHandoff,
-): Promise<{
-  itemId: string;
-  webUrl: string;
-  shareUrl: string;
-  name: string;
-}> {
-  const uploaded = await uploadToSharePoint(params);
+) {
+  const itemId = await uploadToSharePoint(params);
 
-  let scope: "organization" | "users" = "organization";
   let recipientObjectIds: string[] | undefined;
 
   if (params.usePerUserSharing && params.chatId) {
     recipientObjectIds = await getChatMemberIds({
       chatId: params.chatId,
       tokenProvider: params.tokenProvider,
-      fetchFn: params.fetchFn,
       assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     });
     if (recipientObjectIds.length === 0) {
       throw new Error("MS Teams chat member lookup returned no recipients");
     }
-    scope = "users";
   }
 
-  const shareUrl = await createSharePointSharingLink({
+  await createSharePointSharingLink({
     siteId: params.siteId,
-    itemId: uploaded.id,
+    itemId,
     tokenProvider: params.tokenProvider,
-    scope,
     recipientObjectIds,
-    fetchFn: params.fetchFn,
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
 
-  return {
-    itemId: uploaded.id,
-    webUrl: uploaded.webUrl,
-    shareUrl,
-    name: uploaded.name,
-  };
+  return { itemId };
 }

@@ -10,6 +10,7 @@ import type {
   PluginRegistryDifference,
   PluginRegistryDifferenceFacet,
 } from "./plugin-registry-snapshot.types.js";
+import { groupPluginRecords } from "./record-groups.js";
 
 export function isContainedPluginPath(
   rootPath: string,
@@ -60,13 +61,9 @@ function resolvePluginRegistryRecordContent(
   if (!packageJson || !comparePackageJsonPath) {
     return stableRecord;
   }
-  const {
-    fileSignature: _fileSignature,
-    path: packageJsonPath,
-    ...stablePackageJson
-  } = packageJson;
+  const { fileSignature: _fileSignature, ...stablePackageJson } = packageJson;
   return Object.assign(stableRecord, {
-    packageJson: Object.assign(stablePackageJson, { path: packageJsonPath }),
+    packageJson: stablePackageJson,
   });
 }
 
@@ -120,30 +117,15 @@ export function diffPluginRegistryRecords(
   // whole registry stale. Reporting a narrower comparison would hide the owning plugin.
   const persistedPlugins = new Map(persisted.plugins.map((plugin) => [plugin.pluginId, plugin]));
   const derivedPlugins = new Map(derived.plugins.map((plugin) => [plugin.pluginId, plugin]));
-  const groupDiagnostics = (index: InstalledPluginIndex) => {
-    const groups = new Map<
-      string | undefined,
-      Array<InstalledPluginIndex["diagnostics"][number]>
-    >();
-    for (const diagnostic of index.diagnostics) {
-      const group = groups.get(diagnostic.pluginId) ?? [];
-      group.push(diagnostic);
-      groups.set(diagnostic.pluginId, group);
-    }
-    return groups;
-  };
-  const persistedDiagnostics = groupDiagnostics(persisted);
-  const derivedDiagnostics = groupDiagnostics(derived);
+  const persistedDiagnostics = groupPluginRecords(persisted.diagnostics, (entry) => entry.pluginId);
+  const derivedDiagnostics = groupPluginRecords(derived.diagnostics, (entry) => entry.pluginId);
   const pluginIds = new Set([
     ...persistedPlugins.keys(),
     ...derivedPlugins.keys(),
     ...Object.keys(persisted.installRecords),
     ...Object.keys(derived.installRecords),
-    ...persisted.diagnostics.flatMap((diagnostic) =>
-      diagnostic.pluginId ? [diagnostic.pluginId] : [],
-    ),
-    ...derived.diagnostics.flatMap((diagnostic) =>
-      diagnostic.pluginId ? [diagnostic.pluginId] : [],
+    ...[...persistedDiagnostics.keys(), ...derivedDiagnostics.keys()].filter(
+      (pluginId): pluginId is string => Boolean(pluginId),
     ),
   ]);
   return [...pluginIds]

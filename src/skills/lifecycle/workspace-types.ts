@@ -5,6 +5,7 @@ import type {
   ClawHubSkillVerificationResponse,
   ClawHubSkillsShTrustState,
 } from "../../infra/clawhub-skills.js";
+import type { PackageDirInstallTransaction } from "../../infra/install-package-dir.js";
 import type {
   PluginHookSkillArtifact,
   PluginHookSkillChangedEvent,
@@ -15,12 +16,13 @@ import type { ClawHubSkillFileState } from "./skill-tree-digest.js";
 
 /** Result shape for installing a skill archive into a workspace skills dir. */
 export type SkillArchiveInstallResult =
-  | { ok: true; targetDir: string }
+  | { ok: true; targetDir: string; transaction?: PackageDirInstallTransaction }
   | {
       ok: false;
       error: string;
       failureKind: SkillArchiveInstallFailureKind;
       replacementBlocked?: string;
+      recoveryIncomplete?: boolean;
     };
 
 export type SkillArchiveInstallFailureKind = "invalid-request" | "unavailable";
@@ -33,8 +35,14 @@ export type SkillRootInstallFiles = {
   timeoutMs?: number;
   logger?: ArchiveLogger;
   rootMarkers?: readonly string[];
+  /** Revalidate the caller at the workspace host's final filesystem publication. */
+  beforePersistentApply?: () => void;
+  /** Keep a deferred replacement bound to its current package lifecycle owner. */
+  assertOwned?: () => void;
   /** Undefined skips the native update guard; null means the install was absent. */
   expectedClawHubState?: ClawHubSkillFileState | null;
+  /** Retain the previous directory until the package install settles. */
+  deferCommit?: boolean;
 };
 
 export type SkillRootApplyResult =
@@ -44,6 +52,7 @@ export type SkillRootApplyResult =
       mode: "install" | "update";
       before?: PluginHookSkillArtifact;
       after?: PluginHookSkillArtifact;
+      transaction?: PackageDirInstallTransaction;
     }
   | Extract<SkillArchiveInstallResult, { ok: false }>;
 
@@ -70,7 +79,7 @@ export type ClawHubSkillVerificationLock = {
   signature?: unknown;
 };
 
-type ClawHubSkillLockEntry = Omit<
+export type ClawHubSkillLockEntry = Omit<
   ClawHubSkillOrigin,
   "version" | "slug" | "installedVersion" | "registry"
 > & {
@@ -122,7 +131,7 @@ export type ClawHubSkillVerificationTargetResult =
 
 export type ClawHubSkillInstallPreflightResult =
   | { ok: true; action: "install" | "reuse"; integrity: string; warning?: string }
-  | { ok: false; code: string; error: string };
+  | { ok: false; code: string; error: string; integrity?: string; warning?: string };
 
 export type TrackedUpdateTarget =
   | (ClawHubSkillRef & {
@@ -169,7 +178,6 @@ export type CommittedSkillChange = {
   workspaceDir: string;
   before?: PluginHookSkillArtifact;
   after?: PluginHookSkillArtifact;
-  proposal?: PluginHookSkillChangedEvent["proposal"];
   logger?: { warn?: (message: string) => void };
 };
 
@@ -227,6 +235,7 @@ export type WorkspaceSkillLifecycle = {
     skillDir: string;
     origin: ClawHubSkillOrigin;
     verification?: ClawHubSkillVerificationLock;
+    beforePersistentApply?: () => void;
   }) => Promise<void>;
   assertClawHubSkillInstallState: (params: {
     workspaceDir: string;

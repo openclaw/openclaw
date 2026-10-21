@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
 import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
@@ -12,29 +12,19 @@ import {
 } from "./model-definitions.js";
 import { MINIMAX_DEFAULT_MODEL_ID } from "./provider-models.js";
 
-type MinimaxApiProviderConfigParams = {
-  providerId: string;
-  modelId: string;
-  baseUrl: string;
-};
-
 function applyMinimaxApiProviderConfigWithBaseUrl(
   cfg: OpenClawConfig,
-  params: MinimaxApiProviderConfigParams,
+  modelId: string,
+  baseUrl: string,
 ): OpenClawConfig {
   const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
-  const normalizedProviderId = normalizeProviderId(params.providerId);
-  const existingProvider =
-    providers[params.providerId] ??
-    Object.entries(providers).find(
-      ([providerId]) => normalizeProviderId(providerId) === normalizedProviderId,
-    )?.[1];
+  const existingProvider = providers.minimax ?? findNormalizedProviderValue(providers, "minimax");
   const existingModels = existingProvider?.models ?? [];
-  const apiModel = buildMinimaxApiModelDefinition(params.modelId);
-  const hasApiModel = existingModels.some((model) => model.id === params.modelId);
+  const apiModel = buildMinimaxApiModelDefinition(modelId);
+  const hasApiModel = existingModels.some((model) => model.id === modelId);
   const mergedModels = hasApiModel ? existingModels : [...existingModels, apiModel];
   const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {
-    baseUrl: params.baseUrl,
+    baseUrl,
     models: [],
   };
   const preservedApiKey =
@@ -43,9 +33,9 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
         ? undefined
         : existingApiKey
       : existingApiKey;
-  providers[params.providerId] = {
+  providers.minimax = {
     ...existingProviderRest,
-    baseUrl: params.baseUrl,
+    baseUrl,
     api: "anthropic-messages",
     authHeader: true,
     ...(preservedApiKey ? { apiKey: preservedApiKey } : {}),
@@ -53,7 +43,7 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
   };
 
   const models = { ...cfg.agents?.defaults?.models };
-  const modelRef = `${params.providerId}/${params.modelId}`;
+  const modelRef = `minimax/${modelId}`;
   models[modelRef] = {
     ...models[modelRef],
     alias: "Minimax",
@@ -62,54 +52,36 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
   return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
 }
 
-function applyMinimaxApiConfigWithBaseUrl(
-  cfg: OpenClawConfig,
-  params: MinimaxApiProviderConfigParams,
-): OpenClawConfig {
-  const next = applyMinimaxApiProviderConfigWithBaseUrl(cfg, params);
-  return applyAgentDefaultModelPrimary(next, `${params.providerId}/${params.modelId}`);
-}
-
 export function applyMinimaxApiProviderConfig(
   cfg: OpenClawConfig,
   modelId = MINIMAX_DEFAULT_MODEL_ID,
 ): OpenClawConfig {
-  return applyMinimaxApiProviderConfigWithBaseUrl(cfg, {
-    providerId: "minimax",
-    modelId,
-    baseUrl: MINIMAX_API_BASE_URL,
-  });
+  return applyMinimaxApiProviderConfigWithBaseUrl(cfg, modelId, MINIMAX_API_BASE_URL);
 }
 
 export function applyMinimaxApiConfig(
   cfg: OpenClawConfig,
   modelId = MINIMAX_DEFAULT_MODEL_ID,
 ): OpenClawConfig {
-  return applyMinimaxApiConfigWithBaseUrl(cfg, {
-    providerId: "minimax",
-    modelId,
-    baseUrl: MINIMAX_API_BASE_URL,
-  });
+  return applyAgentDefaultModelPrimary(
+    applyMinimaxApiProviderConfig(cfg, modelId),
+    `minimax/${modelId}`,
+  );
 }
 
 export function applyMinimaxApiProviderConfigCn(
   cfg: OpenClawConfig,
   modelId = MINIMAX_DEFAULT_MODEL_ID,
 ): OpenClawConfig {
-  return applyMinimaxApiProviderConfigWithBaseUrl(cfg, {
-    providerId: "minimax",
-    modelId,
-    baseUrl: MINIMAX_CN_API_BASE_URL,
-  });
+  return applyMinimaxApiProviderConfigWithBaseUrl(cfg, modelId, MINIMAX_CN_API_BASE_URL);
 }
 
 export function applyMinimaxApiConfigCn(
   cfg: OpenClawConfig,
   modelId = MINIMAX_DEFAULT_MODEL_ID,
 ): OpenClawConfig {
-  return applyMinimaxApiConfigWithBaseUrl(cfg, {
-    providerId: "minimax",
-    modelId,
-    baseUrl: MINIMAX_CN_API_BASE_URL,
-  });
+  return applyAgentDefaultModelPrimary(
+    applyMinimaxApiProviderConfigCn(cfg, modelId),
+    `minimax/${modelId}`,
+  );
 }

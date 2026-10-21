@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import type { FaceTimeCallStatusEvent } from "../src/call-events.js";
 import {
   doesFaceTimeCallMatchPendingDial,
   normalizeFaceTimeOutboundIdentityEvent,
@@ -7,213 +8,110 @@ import {
   retainFaceTimeDialCallUUID,
   type PendingFaceTimeDial,
 } from "../src/outbound-call.js";
+import { incomingCall, pendingDial } from "./fixtures.test-support.js";
 
-describe("resolveFaceTimeDialRequest", () => {
-  const ownerHandles = ["Owner@example.com", "+1 (206) 555-0100"];
-
-  it("defaults an authorized owner email handle to audio", () => {
-    expect(resolveFaceTimeDialRequest({ handle: "owner@example.com", ownerHandles })).toEqual({
-      handle: "owner@example.com",
-      mode: "audio",
-    });
-  });
-
-  it("accepts an explicit video call and canonical phone match", () => {
-    expect(
-      resolveFaceTimeDialRequest({
-        handle: "+12065550100",
-        mode: "video",
-        ownerHandles,
-      }),
-    ).toEqual({ handle: "+12065550100", mode: "video" });
-  });
-
-  it("rejects a target outside the allowlist", () => {
-    expect(() =>
-      resolveFaceTimeDialRequest({ handle: "stranger@example.com", ownerHandles }),
-    ).toThrow("not an authorized owner handle");
-  });
-
-  it.each([
-    "facetime:owner@example.com",
-    "owner@example.com?ignored=true",
-    "owner@example.com\nsecond@example.com",
-  ])("rejects unsafe handle %j", (handle) => {
-    expect(() => resolveFaceTimeDialRequest({ handle, ownerHandles })).toThrow();
-  });
-
-  it("rejects unknown call modes", () => {
-    expect(() =>
-      resolveFaceTimeDialRequest({
-        handle: "owner@example.com",
-        mode: "screen-share",
-        ownerHandles,
-      }),
-    ).toThrow("mode must be audio or video");
+const ownerHandles = ["Owner@example.com", "+1 (206) 555-0100"];
+it.each([
+  { handle: "owner@example.com", mode: undefined, expected: "audio" },
+  { handle: "+12065550100", mode: "video", expected: "video" },
+])("authorizes $handle with mode $expected", ({ handle, mode, expected }) => {
+  expect(resolveFaceTimeDialRequest({ handle, mode, ownerHandles })).toEqual({
+    handle,
+    mode: expected,
   });
 });
 
-describe("resolveFaceTimeDialResult", () => {
-  const request = { handle: "owner@example.com", mode: "video" as const };
-  const safeCarrier = {
-    muted: true,
-    is_uplink_muted: true,
-    transport: {
-      kind: "facetime",
-      classifier_version: "tu-provider-v1",
-      service: 2,
-      facetime_transport_type: 1,
-      provider_classified: true,
-      provider_is_facetime: true,
-      provider_is_telephony: false,
-      is_using_baseband: false,
-      is_wifi_call: false,
-      is_voip: true,
-      is_emergency: false,
-    },
-  };
-
-  it("accepts a native dial that has not received its call UUID yet", () => {
-    expect(
-      resolveFaceTimeDialResult({
-        dialID: "dial-1",
-        request,
-        helper: {
-          ...safeCarrier,
-          call_uuid: null,
-          proxy_identifier: " proxy-1 ",
-          handle: request.handle,
-          mode: request.mode,
-        },
-      }),
-    ).toMatchObject({
-      handle: request.handle,
-      mode: request.mode,
+it.each([
+  ["stranger@example.com", undefined, "not an authorized owner handle"],
+  ["facetime:owner@example.com", undefined, "must not include a URL scheme"],
+  ["owner@example.com?ignored=true", undefined, "unsupported characters"],
+  ["owner@example.com\nsecond@example.com", undefined, "unsupported characters"],
+  ["owner@example.com", "screen-share", "mode must be audio or video"],
+])("rejects handle %j with mode %j", (handle, mode, error) => {
+  expect(() => resolveFaceTimeDialRequest({ handle, mode, ownerHandles })).toThrow(error);
+});
+const request = { handle: "owner@example.com", mode: "video" as const };
+const safeCarrier = {
+  muted: true,
+  is_uplink_muted: true,
+  transport: incomingCall().data.transport,
+};
+it.each([
+  {
+    helper: { call_uuid: null, proxy_identifier: " proxy-1 " },
+    expected: { state: "pending", proxyIdentifier: "proxy-1" },
+  },
+  { helper: { call_uuid: " call-3 " }, expected: { state: "ringing", callUUID: "call-3" } },
+])("reports $expected.state from native identity", ({ helper, expected }) => {
+  expect(
+    resolveFaceTimeDialResult({
       dialID: "dial-1",
-      state: "pending",
-      proxyIdentifier: "proxy-1",
-    });
-  });
-
-  it("reports ringing when the helper returns a call UUID immediately", () => {
-    expect(
-      resolveFaceTimeDialResult({
-        dialID: "dial-2",
-        request,
-        helper: { ...safeCarrier, call_uuid: " call-3 " },
-      }),
-    ).toMatchObject({
-      state: "ringing",
-      callUUID: "call-3",
-    });
-  });
+      request,
+      helper: { ...safeCarrier, ...helper },
+    }),
+  ).toMatchObject({ ...request, dialID: "dial-1", ...expected });
 });
-
-describe("normalizeFaceTimeOutboundIdentityEvent", () => {
-  it("retains Apple's exact proxy identity before delayed dial acceptance", () => {
-    expect(
-      normalizeFaceTimeOutboundIdentityEvent({
-        event: "ft-outbound-call-identified",
-        data: {
-          dial_id: " dial-1 ",
-          call_uuid: null,
-          proxy_identifier: " proxy-1 ",
-        },
-      }),
-    ).toEqual({
+const identify = (data: Record<string, unknown>) =>
+  normalizeFaceTimeOutboundIdentityEvent({ event: "ft-outbound-call-identified", data });
+it("retains Apple's exact proxy identity before delayed dial acceptance", () => {
+  expect(identify({ dial_id: " dial-1 ", call_uuid: null, proxy_identifier: " proxy-1 " })).toEqual(
+    {
       event: "ft-outbound-call-identified",
       data: { dial_id: "dial-1", proxy_identifier: "proxy-1" },
-    });
-  });
-
-  it("rejects identity events without an exact carrier identity", () => {
-    expect(
-      normalizeFaceTimeOutboundIdentityEvent({
-        event: "ft-outbound-call-identified",
-        data: { dial_id: "dial-1" },
-      }),
-    ).toBeUndefined();
-  });
+    },
+  );
 });
 
-describe("doesFaceTimeCallMatchPendingDial", () => {
-  const event = {
-    event: "ft-call-status-changed" as const,
-    data: {
-      call_uuid: "call-3",
-      call_status: 3,
-      is_outgoing: true,
-      handle: "reformatted@example.com",
-    },
-  };
-
-  const pending: PendingFaceTimeDial = {
-    version: 1,
-    ownerEpoch: 1,
-    dialID: "dial-1",
-    delivery: "accepted",
-    handle: "owner@example.com",
-    mode: "video",
-    requestedAt: "2026-07-20T17:52:00.000Z",
-  };
-
-  it.each([
-    {
-      name: "uses UUID as the authoritative identity once assigned",
-      data: {},
-      pending: { callUUID: "call-3" },
-      matches: true,
-    },
-    {
-      name: "does not match a stale same-handle event to a different known UUID",
-      data: { handle: "owner@example.com" },
-      pending: { callUUID: "call-new" },
-      matches: false,
-    },
-    {
-      name: "prefers an exact dial ID while Apple's provisional identity changes",
-      data: { dial_id: "dial-1", call_uuid: "carrier-call", proxy_identifier: "carrier-proxy" },
-      pending: { callUUID: "provisional-call", proxyIdentifier: "provisional-proxy" },
-      matches: true,
-    },
-    {
-      name: "rejects a mismatched supplied dial ID even when native identity matches",
-      data: { dial_id: "other-dial" },
-      pending: { callUUID: "call-3" },
-      matches: false,
-    },
-    {
-      name: "uses Apple's proxy identity after helper reinjection and before UUID assignment",
-      data: { proxy_identifier: "proxy-1" },
-      pending: { proxyIdentifier: "proxy-1" },
-      matches: true,
-    },
-    {
-      name: "never adopts a same-handle event without exact dial identity",
-      data: { handle: "owner@example.com" },
-      pending: { delivery: "ambiguous" as const },
-      matches: false,
-    },
-  ])("$name", ({ data, pending: overrides, matches }) => {
-    expect(
-      doesFaceTimeCallMatchPendingDial({
-        event: { ...event, data: { ...event.data, ...data } },
-        pending: { ...pending, ...overrides },
-      }),
-    ).toBe(matches);
+it("rejects identity events without an exact carrier identity", () => {
+  expect(identify({ dial_id: "dial-1" })).toBeUndefined();
+});
+const event = {
+  event: "ft-call-status-changed" as const,
+  data: {
+    call_uuid: "call-3",
+    call_status: 3,
+    is_outgoing: true,
+    handle: "reformatted@example.com",
+  },
+};
+const pending = pendingDial({
+  dialID: "dial-1",
+  mode: "video",
+  requestedAt: "2026-07-20T17:52:00.000Z",
+});
+const matches = (data: Partial<FaceTimeCallStatusEvent["data"]>, dial: PendingFaceTimeDial) =>
+  doesFaceTimeCallMatchPendingDial({
+    event: { ...event, data: { ...event.data, ...data } },
+    pending: dial,
   });
 
-  it("matches an earlier retained UUID when an event omits the dial ID", () => {
-    const aliased = { ...pending };
-    retainFaceTimeDialCallUUID(aliased, "provisional-call");
-    retainFaceTimeDialCallUUID(aliased, "carrier-call");
-    expect(aliased.callUUID).toBe("carrier-call");
+it.each([
+  ["stale same-handle UUID", { handle: pending.handle }, { callUUID: "call-new" }, false],
+  [
+    "dial ID beats provisional identity",
+    { dial_id: "dial-1", call_uuid: "carrier-call", proxy_identifier: "carrier-proxy" },
+    { callUUID: "provisional-call", proxyIdentifier: "provisional-proxy" },
+    true,
+  ],
+  ["wrong dial ID beats matching UUID", { dial_id: "other-dial" }, { callUUID: "call-3" }, false],
+  [
+    "proxy before UUID assignment",
+    { proxy_identifier: "proxy-1" },
+    { proxyIdentifier: "proxy-1" },
+    true,
+  ],
+  ["same handle without identity", { handle: pending.handle }, { delivery: "ambiguous" }, false],
+] satisfies Array<
+  [string, Partial<FaceTimeCallStatusEvent["data"]>, Partial<PendingFaceTimeDial>, boolean]
+>)("%s", (_name, data, overrides, expected) => {
+  expect(matches(data, { ...pending, ...overrides })).toBe(expected);
+});
 
-    expect(
-      doesFaceTimeCallMatchPendingDial({
-        event: { ...event, data: { ...event.data, call_uuid: "provisional-call" } },
-        pending: aliased,
-      }),
-    ).toBe(true);
-  });
+it("matches current and retained UUIDs when an event omits the dial ID", () => {
+  const aliased = { ...pending };
+  retainFaceTimeDialCallUUID(aliased, "call-3");
+  expect(matches({}, aliased)).toBe(true);
+  retainFaceTimeDialCallUUID(aliased, "carrier-call");
+  expect(aliased.callUUID).toBe("carrier-call");
+  expect(matches({}, aliased)).toBe(true);
 });

@@ -60,7 +60,7 @@ export function transformProviderMessages<TApi extends Api>(
           model.api === "openai-completions" && model.input.includes("video"),
         ),
       }) as Extract<Message, { role: "user" }>;
-    }) as Message[],
+    }),
     target,
     normalizeToolCallId,
   );

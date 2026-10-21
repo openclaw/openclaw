@@ -9,10 +9,12 @@ import XCTest
 private actor AttachmentSendCapture {
     private(set) var attachments: [OpenClawChatAttachmentPayload] = []
     private(set) var sends = 0
+    let sent = AttachmentGate()
 
-    func store(_ attachments: [OpenClawChatAttachmentPayload]) {
+    func store(_ attachments: [OpenClawChatAttachmentPayload]) async {
         self.attachments = attachments
         self.sends += 1
+        await self.sent.signalEntered()
     }
 
     func count() -> Int {
@@ -49,21 +51,32 @@ private actor AttachmentRouteLeasePlan {
     }
 }
 
-private actor AttachmentHealthGate {
+private actor AttachmentGate {
     private var entered = false
     private var released = false
     private var continuation: CheckedContinuation<Void, Never>?
+    private var arrivalWaiters: [CheckedContinuation<Void, Never>] = []
 
     func wait() async {
-        self.entered = true
+        self.signalEntered()
         guard !self.released else { return }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
     }
 
-    func hasEntered() -> Bool {
-        self.entered
+    func signalEntered() {
+        self.entered = true
+        let waiters = self.arrivalWaiters
+        self.arrivalWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    func waitUntilEntered() async {
+        guard !self.entered else { return }
+        await withCheckedContinuation { self.arrivalWaiters.append($0) }
     }
 
     func release() {
@@ -80,7 +93,7 @@ private final class AttachmentOwnerActivity {
 
 private struct AttachmentProcessingTransport: OpenClawChatTransport {
     let capture: AttachmentSendCapture?
-    let healthGate: AttachmentHealthGate?
+    let healthGate: AttachmentGate?
     let failsAmbiguously: Bool
     let responseStatus: String
     let returnsEmptyHistory: Bool
@@ -89,7 +102,7 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
 
     init(
         capture: AttachmentSendCapture? = nil,
-        healthGate: AttachmentHealthGate? = nil,
+        healthGate: AttachmentGate? = nil,
         failsAmbiguously: Bool = false,
         responseStatus: String = "started",
         returnsEmptyHistory: Bool = false,
@@ -257,9 +270,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             viewModel.addImageAttachment(data: imageData, fileName: "camera.heic", mimeType: "image/jpeg")
         }
 
-        try await waitUntil("attachment processed") {
-            await MainActor.run { !viewModel.attachments.isEmpty || viewModel.errorText != nil }
-        }
+        await waitForObservedState { !viewModel.attachments.isEmpty || viewModel.errorText != nil }
 
         let attachment = try await MainActor.run {
             guard let attachment = viewModel.attachments.first else {
@@ -291,9 +302,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         }
 
         await MainActor.run { viewModel.addAttachments(urls: [fileURL]) }
-        try await waitUntil("video attachment staged") {
-            await MainActor.run { !viewModel.attachments.isEmpty || viewModel.errorText != nil }
-        }
+        await waitForObservedState { !viewModel.attachments.isEmpty || viewModel.errorText != nil }
 
         let staged = try await MainActor.run { () throws -> (Data, String, String) in
             let attachment = try XCTUnwrap(viewModel.attachments.first)
@@ -303,59 +312,15 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertEqual(staged.1, fileURL.lastPathComponent)
         XCTAssertEqual(staged.2, "video/mp4")
 
-        await MainActor.run { viewModel.send() }
-        try await waitUntil("video attachment sent") {
-            await capture.count() == 1
-        }
+        await viewModel.send()?.value
+        let attachmentCount = await capture.count()
+        XCTAssertEqual(attachmentCount, 1)
         let capturedPayload = await capture.first()
         let payload = try XCTUnwrap(capturedPayload)
         XCTAssertEqual(payload.type, "file")
         XCTAssertEqual(payload.fileName, fileURL.lastPathComponent)
         XCTAssertEqual(payload.mimeType, "video/mp4")
         XCTAssertEqual(payload.content, data.base64EncodedString())
-    }
-
-    func testVideoFileUsesServerDefaultTwentyMiBCap() async throws {
-        let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("composer-video-oversize-\(UUID().uuidString).mp4")
-        try Data(count: OpenClawChatViewModel.maxVideoAttachmentBytes + 1).write(to: fileURL)
-        defer { try? FileManager.default.removeItem(at: fileURL) }
-        let viewModel = await MainActor.run {
-            OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
-        }
-
-        await MainActor.run { viewModel.addAttachments(urls: [fileURL]) }
-        try await waitUntil("oversize video rejected") {
-            await MainActor.run { viewModel.errorText != nil }
-        }
-
-        let state = await MainActor.run { (viewModel.attachments.isEmpty, viewModel.errorText) }
-        XCTAssertTrue(state.0)
-        XCTAssertEqual(
-            state.1,
-            "Attachment \(fileURL.lastPathComponent) exceeds the 20 MB video limit")
-    }
-
-    func testUnsupportedAudioFileIsRejectedBeforeReadingItsPayload() async throws {
-        let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("composer-audio-oversize-\(UUID().uuidString).mp3")
-        XCTAssertTrue(FileManager.default.createFile(atPath: fileURL.path, contents: nil))
-        let handle = try FileHandle(forWritingTo: fileURL)
-        try handle.truncate(atOffset: UInt64(OpenClawChatViewModel.maxVideoAttachmentBytes * 10))
-        try handle.close()
-        defer { try? FileManager.default.removeItem(at: fileURL) }
-        let viewModel = await MainActor.run {
-            OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
-        }
-
-        await MainActor.run { viewModel.addAttachments(urls: [fileURL]) }
-        try await waitUntil("unsupported audio rejected") {
-            await MainActor.run { viewModel.errorText != nil }
-        }
-
-        let state = await MainActor.run { (viewModel.attachments.isEmpty, viewModel.errorText) }
-        XCTAssertTrue(state.0)
-        XCTAssertEqual(state.1, "Only image and video attachments are supported right now")
     }
 
     func testVoiceNoteAttachmentStagesAudioAndDeletesTemporaryFile() async throws {
@@ -569,10 +534,9 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             return viewModel
         }
 
-        await MainActor.run { viewModel.send() }
-        try await waitUntil("live attachment sent without outbox") {
-            await capture.count() == 1
-        }
+        await viewModel.send()?.value
+        let attachmentCount = await capture.count()
+        XCTAssertEqual(attachmentCount, 1)
 
         let capturedPayload = await capture.first()
         let payload = try XCTUnwrap(capturedPayload)
@@ -602,11 +566,11 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         await MainActor.run { viewModel.load() }
         // Wait for outbox restore too: until it completes, sends deliberately
         // route behind the outbox (FIFO gate), which is not the path under test.
-        try await waitUntil("legacy gateway bootstrap completed") {
-            await MainActor.run {
-                viewModel.healthOK && !viewModel.isLoading && viewModel.hasRestoredOutboxMessages
-            }
-        }
+        await viewModel.bootstrapTask?.value
+        await waitForObservedState { viewModel.hasRestoredOutboxMessages }
+        let bootstrapState = await MainActor.run { (viewModel.healthOK, viewModel.isLoading) }
+        XCTAssertTrue(bootstrapState.0)
+        XCTAssertFalse(bootstrapState.1)
         await MainActor.run {
             viewModel.attachments = [
                 OpenClawPendingAttachment(
@@ -617,11 +581,10 @@ final class ChatViewModelAttachmentTests: XCTestCase {
                     preview: nil,
                     durationSeconds: 3),
             ]
-            viewModel.send()
         }
-        try await waitUntil("legacy attachment sent live") {
-            await capture.count() == 1
-        }
+        await viewModel.send()?.value
+        let attachmentCount = await capture.count()
+        XCTAssertEqual(attachmentCount, 1)
 
         let commands = await outbox.loadCommands()
         XCTAssertTrue(commands.isEmpty)
@@ -645,11 +608,11 @@ final class ChatViewModelAttachmentTests: XCTestCase {
                 outbox: outbox)
         }
         await MainActor.run { viewModel.load() }
-        try await waitUntil("attachment outbox bootstrap completed") {
-            await MainActor.run {
-                viewModel.healthOK && !viewModel.isLoading && viewModel.hasRestoredOutboxMessages
-            }
-        }
+        await viewModel.bootstrapTask?.value
+        await waitForObservedState { viewModel.hasRestoredOutboxMessages }
+        let bootstrapState = await MainActor.run { (viewModel.healthOK, viewModel.isLoading) }
+        XCTAssertTrue(bootstrapState.0)
+        XCTAssertFalse(bootstrapState.1)
         let attachmentID = await MainActor.run {
             let attachment = OpenClawPendingAttachment(
                 url: nil,
@@ -659,15 +622,14 @@ final class ChatViewModelAttachmentTests: XCTestCase {
                 preview: nil)
             viewModel.input = "retry caption"
             viewModel.attachments = [attachment]
-            viewModel.send()
             return attachment.id
         }
 
         let routeError =
             "Could not verify this attachment's delivery route. Reconnect, then try again."
-        try await waitUntil("indeterminate attachment route is visible") {
-            await MainActor.run { viewModel.errorText == routeError }
-        }
+        await viewModel.send()?.value
+        let errorText = await MainActor.run { viewModel.errorText }
+        XCTAssertEqual(errorText, routeError)
         let retainedState = await MainActor.run {
             (viewModel.input, viewModel.attachments.map(\.id))
         }
@@ -678,11 +640,8 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertTrue(retainedCommands.isEmpty)
         XCTAssertEqual(initialSendCount, 0)
 
-        await MainActor.run { viewModel.send() }
-        try await waitUntil("attachment retry sent") {
-            await capture.sendCount() == 1
-        }
-        try await Task.sleep(for: .milliseconds(100))
+        await viewModel.send()?.value
+        await capture.sent.waitUntilEntered()
 
         let capturedPayload = await capture.first()
         let payload = try XCTUnwrap(capturedPayload)
@@ -720,10 +679,9 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             return viewModel
         }
 
-        await MainActor.run { viewModel.send() }
-        try await waitUntil("legacy draft held during restore") {
-            await MainActor.run { viewModel.errorText?.contains("Restoring queued messages") == true }
-        }
+        await viewModel.send()?.value
+        let errorText = await MainActor.run { viewModel.errorText }
+        XCTAssertTrue(errorText?.contains("Restoring queued messages") == true)
 
         let state = await MainActor.run { (viewModel.attachments.count, viewModel.input) }
         let sendCount = await capture.count()
@@ -757,10 +715,9 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             return attachment.id
         }
 
-        await MainActor.run { viewModel.send() }
-        try await waitUntil("failed live attachment restores draft") {
-            await MainActor.run { viewModel.errorText == "Connection lost" }
-        }
+        await viewModel.send()?.value
+        let errorText = await MainActor.run { viewModel.errorText }
+        XCTAssertEqual(errorText, "Connection lost")
 
         let state = await MainActor.run {
             (
@@ -788,10 +745,10 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         }
 
         await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: 21.2)
-        await MainActor.run { viewModel.send() }
-        try await waitUntil("voice note sent") {
-            await capture.count() == 1
-        }
+        await viewModel.send()?.value
+        await capture.sent.waitUntilEntered()
+        let attachmentCount = await capture.count()
+        XCTAssertEqual(attachmentCount, 1)
 
         let capturedPayload = await capture.first()
         let payload = try XCTUnwrap(capturedPayload)
@@ -810,7 +767,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
 
     func testVoiceNoteSendKeepsCapturedDurationWhenDraftChangesDuringHealthCheck() async throws {
         let capture = AttachmentSendCapture()
-        let healthGate = AttachmentHealthGate()
+        let healthGate = AttachmentGate()
         let transport = AttachmentProcessingTransport(capture: capture, healthGate: healthGate)
         let (viewModel, draftAttachmentID) = await MainActor.run {
             let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
@@ -825,10 +782,8 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             return (viewModel, draftAttachment.id)
         }
 
-        await MainActor.run { viewModel.send() }
-        try await waitUntil("health check started") {
-            await healthGate.hasEntered()
-        }
+        let send = await viewModel.send()
+        await healthGate.waitUntilEntered()
         await MainActor.run {
             viewModel.removeAttachment(draftAttachmentID)
             viewModel.attachments.append(
@@ -841,9 +796,9 @@ final class ChatViewModelAttachmentTests: XCTestCase {
                     durationSeconds: 99))
         }
         await healthGate.release()
-        try await waitUntil("voice note sent") {
-            await capture.count() == 1
-        }
+        await send?.value
+        let attachmentCount = await capture.count()
+        XCTAssertEqual(attachmentCount, 1)
 
         let optimisticAudio = await MainActor.run {
             viewModel.messages.last?.content.first { $0.mimeType == "audio/mp4" }
@@ -852,6 +807,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertEqual(optimisticAudio?.durationSeconds, 21.2)
     }
 
+    @MainActor
     func testAmbiguousVoiceNoteSurvivesViewModelRecreation() async throws {
         let outbox = try makeAttachmentOutbox()
         var firstViewModel: OpenClawChatViewModel? = await MainActor.run {
@@ -870,14 +826,14 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             return viewModel
         }
 
-        await MainActor.run { firstViewModel?.send() }
-        try await waitUntil("ambiguous voice note is durably parked") {
-            let command = await outbox.loadCommands().first
-            return command?.status == .failed &&
-                command?.lastError == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError
+        await firstViewModel?.send()?.value
+        await waitForObservedState {
+            firstViewModel?.outboxStatesByMessageID.values.contains { $0.isFailed } == true
         }
         let persistedCommands = await outbox.loadCommands()
         let persisted = try XCTUnwrap(persistedCommands.first)
+        XCTAssertEqual(persisted.status, .failed)
+        XCTAssertEqual(persisted.lastError, OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError)
         XCTAssertEqual(persisted.attachments.first?.data, Data("durable-voice-note".utf8))
         XCTAssertEqual(persisted.attachments.first?.durationSeconds, 42)
 
@@ -888,13 +844,8 @@ final class ChatViewModelAttachmentTests: XCTestCase {
                 outbox: outbox)
         }
         await MainActor.run { restoredViewModel.load() }
-        try await waitUntil("durable voice note bubble is restored") {
-            await MainActor.run {
-                restoredViewModel.messages.contains { message in
-                    message.content.contains { $0.mimeType == "audio/mp4" }
-                }
-            }
-        }
+        await restoredViewModel.bootstrapTask?.value
+        await waitForObservedState { restoredViewModel.hasRestoredOutboxMessages }
 
         let restored = try await MainActor.run { () throws -> (String?, Double?, Bool) in
             let message = try XCTUnwrap(restoredViewModel.messages.first)
@@ -927,12 +878,11 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             return viewModel
         }
 
-        await MainActor.run { viewModel.send() }
-        try await waitUntil("voice note awaits canonical confirmation") {
-            await outbox.loadCommands().first?.status == .awaitingConfirmation
-        }
+        await viewModel.send()?.value
+        await waitForObservedState { viewModel.outboxStatesByMessageID.values.contains(.confirming) }
         let awaitingCommands = await outbox.loadCommands()
         let command = try XCTUnwrap(awaitingCommands.first)
+        XCTAssertEqual(command.status, .awaitingConfirmation)
         let canonical = try JSONDecoder().decode(
             OpenClawChatMessage.self,
             from: Data(

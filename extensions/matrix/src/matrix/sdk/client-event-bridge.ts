@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import {
   ClientEvent,
+  SyncState,
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
 } from "matrix-js-sdk/lib/matrix.js";
@@ -16,7 +17,7 @@ export function registerMatrixClientBridge(params: {
   emitter: EventEmitter;
   emitMembershipForRoom: (room: Room) => void;
   getSelfUserId: () => string;
-  setCurrentSyncState: (state: MatrixSyncState, error?: unknown) => void;
+  setCurrentSyncState: (state: MatrixSyncState, error: unknown, fromCache: boolean) => void;
 }): void {
   let initialSyncComplete = false;
   const joinTransitions = new WeakSet<MatrixEvent>();
@@ -74,26 +75,20 @@ export function registerMatrixClientBridge(params: {
 
   // Some SDK invite transitions are surfaced as room lifecycle events instead of raw timeline events.
   params.client.on(ClientEvent.Room, params.emitMembershipForRoom);
-  params.client.on(
-    ClientEvent.Sync,
-    (state: MatrixSyncState, prevState: string | null, data?: unknown) => {
-      // CATCHUP can precede the first successful sync after startup connection errors.
-      initialSyncComplete ||= state === "PREPARED" || state === "SYNCING";
-      const error =
-        data && typeof data === "object" && "error" in data
-          ? (data as { error?: unknown }).error
-          : undefined;
-      params.setCurrentSyncState(state, error);
-      params.emitter.emit("sync.state", state, prevState, error);
-    },
-  );
+  params.client.on(ClientEvent.Sync, (state, prevState, data) => {
+    // CATCHUP can precede the first successful sync after startup connection errors.
+    initialSyncComplete ||= state === SyncState.Prepared || state === SyncState.Syncing;
+    const error = data?.error;
+    const fromCache = data?.fromCache === true;
+    params.setCurrentSyncState(state, error, fromCache);
+    params.emitter.emit("sync.state", state, prevState, error);
+  });
   params.client.on(ClientEvent.SyncUnexpectedError, (error: Error) => {
     params.emitter.emit("sync.unexpected_error", error);
   });
 }
 
 export function emitMatrixMembershipForRoom(params: {
-  client: MatrixJsClient;
   emitter: EventEmitter;
   room: Room;
   selfUserId: string;

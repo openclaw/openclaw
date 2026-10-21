@@ -2,12 +2,13 @@ import fs from "node:fs";
 import fsAsync from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { transformConfigFileWithRetry } from "../config/mutate.js";
 import { registerManagedRuntimeConfigWriteOwner } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withConfigWriteLock } from "../config/write-lock.js";
 import { acquireFileLock, FILE_LOCK_TIMEOUT_ERROR_CODE } from "../infra/file-lock.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolvePluginInstallDir } from "./install-paths.js";
@@ -34,20 +35,15 @@ afterEach(() => {
 });
 
 async function expectConfigSourceLocked(pathname: string) {
-  const contended = await acquireFileLock(pathname, {
+  const lock = await acquireFileLock(pathname, {
     retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
     stale: 30_000,
-  }).then(
-    async (lock) => {
-      await lock.release();
-      return false;
-    },
-    (error: unknown) => {
-      expect(error).toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
-      return true;
-    },
-  );
-  expect.soft(contended).toBe(true);
+  }).catch((error: unknown) => {
+    expect(error).toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
+    return undefined;
+  });
+  await lock?.release();
+  expect.soft(lock).toBeUndefined();
 }
 
 async function createUninstallSourceFixture(
@@ -71,7 +67,9 @@ async function createUninstallSourceFixture(
   fs.writeFileSync(retainedFile, "owned plugin bytes");
   const config: OpenClawConfig = {
     plugins: {
-      entries: { [fixture.pluginId]: { enabled: true } },
+      entries: {
+        [fixture.pluginId]: { enabled: true, config: { retainedUntilRemoval: true } },
+      },
       load: { paths: [pluginRoot, ...(keepParentLoadPath ? [parentLoadPath] : [])] },
     },
   };
@@ -101,14 +99,13 @@ async function createUninstallSourceFixture(
       installRecords: { [fixture.pluginId]: installRecord },
     }),
   );
-  const addLoadPath = (loadPath: string, beforeCommit?: () => void) =>
+  const addLoadPath = (loadPath: string) =>
     transformConfigFileWithRetry({
       base: "source",
       writeOptions: {
         ownedConfigPathForWrite: writerConfigPath,
         expectedConfigPath: writerConfigPath,
         afterWrite: { mode: "none", reason: "synthetic concurrent config writer" },
-        beforeCommit,
       },
       transform: (current) => ({
         nextConfig: {
@@ -158,12 +155,7 @@ it.each(["root", "shared include"] as const)(
     });
     void pending.catch(() => {});
     try {
-      await Promise.race([
-        entered.promise,
-        pending.then(() => {
-          throw new Error("uninstall finished before drain");
-        }),
-      ]);
+      await awaitGateBeforeSettlement(entered.promise, pending, "uninstall finished before drain");
       await fixture.addLoadPath(alias);
     } finally {
       release.resolve();
@@ -217,14 +209,13 @@ it.each(["root", "shared include"] as const)(
       }),
     });
     void pending.catch(() => {});
-    let writer: ReturnType<typeof fixture.addLoadPath> | undefined;
+    let writer: Promise<void> | undefined;
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        pending.then(() => {
-          throw new Error("uninstall finished before deletion");
-        }),
-      ]);
+        pending,
+        "uninstall finished before deletion",
+      );
       const sources = [
         fixture.configPath,
         ...(source === "shared include" ? [fixture.includePath] : []),
@@ -232,7 +223,18 @@ it.each(["root", "shared include"] as const)(
       for (const pathname of sources) {
         await expectConfigSourceLocked(pathname);
       }
-      writer = fixture.addLoadPath(otherPath, () => expect(removed).toBe(true));
+      expect((await readConfigFileSnapshot()).config.plugins?.entries?.[fixture.pluginId]).toEqual({
+        enabled: false,
+        config: { retainedUntilRemoval: true },
+      });
+      // Cleanup owns source exclusion through deletion, not final config publication.
+      // Probe real writer admission without racing the later optimistic reread.
+      writer = withConfigWriteLock(
+        source === "root" ? fixture.configPath : fixture.includePath,
+        async () => {
+          expect(removed).toBe(true);
+        },
+      );
     } finally {
       release.resolve();
       await Promise.allSettled([pending, ...(writer ? [writer] : [])]);
@@ -241,11 +243,11 @@ it.each(["root", "shared include"] as const)(
     }
     await pending;
     await writer;
+    await fixture.addLoadPath(otherPath);
     expect(fs.existsSync(fixture.pluginRoot)).toBe(false);
-    expect((await readConfigFileSnapshot()).config.plugins?.load?.paths).toEqual([
-      fixture.parentLoadPath,
-      otherPath,
-    ]);
+    const config = (await readConfigFileSnapshot()).config;
+    expect(config.plugins?.load?.paths).toEqual([fixture.parentLoadPath, otherPath]);
+    expect(config.plugins?.entries?.[fixture.pluginId]).toEqual({ enabled: false });
   },
 );
 
@@ -278,12 +280,11 @@ it("locks an aliased root config's target while deleting a retired plugin source
   );
   void pending.catch(() => {});
   try {
-    await Promise.race([
+    await awaitGateBeforeSettlement(
       entered.promise,
-      pending.then(() => {
-        throw new Error("source cleanup finished before deletion");
-      }),
-    ]);
+      pending,
+      "source cleanup finished before deletion",
+    );
     await expectConfigSourceLocked(canonicalConfigPath);
   } finally {
     release.resolve();

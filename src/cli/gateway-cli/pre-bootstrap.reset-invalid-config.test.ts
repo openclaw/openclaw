@@ -21,11 +21,12 @@ const configReads = vi.hoisted(() => ({
   prepareRecovery: vi.fn(async () => null),
 }));
 
-vi.mock("../../config/config.js", () => ({
-  readConfigFileSnapshot: configReads.readSnapshot,
-}));
+// mock-isolation: Reset admission consumes authored invalid snapshots without filesystem recovery.
 vi.mock("../../config/io.factory.js", () => ({
-  createConfigIO: () => ({ prepareConfigRecovery: configReads.prepareRecovery }),
+  createConfigIO: () => ({
+    readConfigFileSnapshot: configReads.readSnapshot,
+    prepareConfigRecovery: configReads.prepareRecovery,
+  }),
 }));
 
 let state: OpenClawTestState;

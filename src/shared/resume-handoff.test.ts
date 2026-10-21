@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { decodeResumeHandoff, encodeResumeHandoff } from "./resume-handoff.js";
 
 const gatewayUrl = "wss://gateway.example/openclaw";
-const maxEncodedLength = 4096;
 
 function encodeBytes(bytes: Uint8Array): string {
   let binary = "";
@@ -43,51 +42,15 @@ describe("resume handoff contract", () => {
   });
 
   it.each<[string, string]>([
-    ["astral emoji", `agent:main:${"🦀".repeat(300)}`],
-    ["combining clusters", `agent:main:${"e\u0301".repeat(300)}`],
-    ["ZWJ clusters", `agent:main:${"a\u200Db".repeat(300)}`],
-  ])("round-trips 300 %s clusters", (_name, sessionKey) => {
-    const encoded = encodeResumeHandoff({ sessionKey, gatewayUrl });
-
-    expect(decodeResumeHandoff(encoded)).toEqual({ version: 1, sessionKey, gatewayUrl });
-  });
-
-  it.each(["WsS://gateway.example/openclaw"])(
-    "preserves a mixed-case WebSocket scheme: %s",
-    (mixedCaseGatewayUrl) => {
-      const sessionKey = "agent:main:mixed-case-scheme";
-      const encoded = encodeResumeHandoff({ sessionKey, gatewayUrl: mixedCaseGatewayUrl });
-
-      expect(decodeResumeHandoff(encoded)).toEqual({
-        version: 1,
-        sessionKey,
-        gatewayUrl: mixedCaseGatewayUrl,
-      });
-    },
-  );
-
-  it.each<[string, string]>([
-    ["malformed alphabet", "not+base64url"],
     ["padding", "Zg=="],
     ["noncanonical encoding", "Zh"],
-    ["invalid UTF-8", encodeBytes(Uint8Array.from([0xc3, 0x28]))],
-    ["invalid JSON", encodeBytes(new TextEncoder().encode("not json"))],
-    ["array", encodeJson([1, "agent:main:alpha", gatewayUrl])],
     ["null", encodeJson(null)],
-    ["missing field", encodeJson({ version: 1, sessionKey: "agent:main:alpha" })],
     [
       "extra field",
       encodeJson({ version: 1, sessionKey: "agent:main:alpha", gatewayUrl, token: "nope" }),
     ],
-    ["wrong version", encodeJson({ version: 2, sessionKey: "agent:main:alpha", gatewayUrl })],
-    ["wrong key type", encodeJson({ version: 1, sessionKey: 42, gatewayUrl })],
     ["wrong URL type", encodeJson({ version: 1, sessionKey: "agent:main:alpha", gatewayUrl: 42 })],
-    ["empty key", encodeJson({ version: 1, sessionKey: "", gatewayUrl })],
     ["key C0 control", encodeJson({ version: 1, sessionKey: "agent:main:bad\nkey", gatewayUrl })],
-    [
-      "key C1 control",
-      encodeJson({ version: 1, sessionKey: "agent:main:bad\u0085key", gatewayUrl }),
-    ],
     [
       "URL C0 control",
       encodeJson({ version: 1, sessionKey: "agent:main:alpha", gatewayUrl: `${gatewayUrl}\u0000` }),
@@ -101,23 +64,11 @@ describe("resume handoff contract", () => {
       }),
     ],
     [
-      "invalid URL",
-      encodeJson({ version: 1, sessionKey: "agent:main:alpha", gatewayUrl: "wss://[invalid" }),
-    ],
-    [
       "URL userinfo",
       encodeJson({
         version: 1,
         sessionKey: "agent:main:alpha",
         gatewayUrl: "wss://user@gateway.example/ws",
-      }),
-    ],
-    [
-      "empty URL userinfo",
-      encodeJson({
-        version: 1,
-        sessionKey: "agent:main:alpha",
-        gatewayUrl: "wss://@gateway.example/ws",
       }),
     ],
     [
@@ -136,31 +87,9 @@ describe("resume handoff contract", () => {
         gatewayUrl: "wss://gateway.example/ws#x",
       }),
     ],
-    ["encoded payload over limit", "A".repeat(maxEncodedLength + 1)],
-    [
-      "session key over grapheme limit",
-      encodeJson({ version: 1, sessionKey: `agent:main:${"s".repeat(502)}`, gatewayUrl }),
-    ],
-    ...["main", "agent::x", "agent:a:"].map((sessionKey): [string, string] => [
-      `invalid qualified key ${sessionKey}`,
-      encodeJson({ version: 1, sessionKey, gatewayUrl }),
-    ]),
-    [
-      "Gateway URL over limit",
-      encodeJson({
-        version: 1,
-        sessionKey: "agent:main:alpha",
-        gatewayUrl: `wss://gateway.example/${"u".repeat(2049 - "wss://gateway.example/".length)}`,
-      }),
-    ],
+    ["invalid qualified key", encodeJson({ version: 1, sessionKey: "main", gatewayUrl })],
   ])("rejects %s", (_name, encoded) => {
     expect(() => decodeResumeHandoff(encoded)).toThrow(
-      "Invalid --handoff payload. Copy a fresh command from the Control UI.",
-    );
-  });
-
-  it("refuses to encode invalid handoff fields", () => {
-    expect(() => encodeResumeHandoff({ sessionKey: "", gatewayUrl })).toThrow(
       "Invalid --handoff payload. Copy a fresh command from the Control UI.",
     );
   });

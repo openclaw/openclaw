@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveConfigPath, resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import type { NativeHostRegistrationStatus } from "./extension-install-context.js";
 import type { ChromeStoreInstallRequest } from "./extension-install-external.js";
-import type { ChromeProduct, ExtensionInstallDeps } from "./extension-install-layout.js";
+import type { ChromeProduct } from "./extension-install-layout.js";
 import {
   admitWindowsNativeRuntime,
   readWindowsNativeGeneration,
@@ -11,7 +12,6 @@ import {
 import {
   nativeWindowsContextSchema,
   managementRequestSchema,
-  originsSchema,
   WINDOWS_NATIVE_EXE,
   WINDOWS_OFFICIAL_ORIGIN,
   type NativeWindowsContext,
@@ -22,15 +22,13 @@ import {
   runWindowsManagement,
   WindowsManagementTransportError,
 } from "./extension-windows-management.js";
-import { createWindowsNativePlatform } from "./extension-windows-platform.js";
+import { windowsNativePlatform as ops } from "./extension-windows-platform.js";
 
 const products: Array<[ChromeProduct, string]> = [
   ["chrome", "Google Chrome"],
   ["chromium", "Chromium"],
   ["chrome-for-testing", "Google Chrome for Testing"],
 ];
-const operations = (deps: ExtensionInstallDeps) =>
-  deps.windowsNative?.platform ?? createWindowsNativePlatform(deps.env);
 async function resolveCliPath(pluginRoot?: string): Promise<string> {
   if (!pluginRoot) {
     return await fs.realpath(process.argv[1]!);
@@ -52,23 +50,15 @@ async function resolveCliPath(pluginRoot?: string): Promise<string> {
   }
 }
 async function selectedContext(
-  deps: ExtensionInstallDeps,
   profile: string,
   pluginRoot?: string,
+  stateDirOverride?: string,
 ): Promise<NativeWindowsContext> {
-  if (deps.windowsNative?.context) {
-    return nativeWindowsContextSchema.parse({
-      ...deps.windowsNative.context,
-      browserProfile: profile,
-    });
-  }
-  const env = deps.env ?? process.env;
-  const stateDir = deps.stateDir ?? resolveStateDir(env);
+  const env = process.env;
+  const stateDir = stateDirOverride ?? resolveStateDir(env);
   return nativeWindowsContextSchema.parse({
-    nodePath: await operations(deps).realpath(deps.nodePath ?? process.execPath),
-    cliPath: await operations(deps).realpath(
-      deps.windowsNative?.cliPath ?? (await resolveCliPath(pluginRoot)),
-    ),
+    nodePath: await ops.realpath(process.execPath),
+    cliPath: await ops.realpath(await resolveCliPath(pluginRoot)),
     stateDir,
     configPath: resolveConfigPath(env, stateDir),
     browserProfile: profile,
@@ -77,9 +67,7 @@ async function selectedContext(
 async function executableFor(
   pluginRoot: string | undefined,
   explicit: string | undefined,
-  deps: ExtensionInstallDeps,
 ): Promise<string> {
-  const ops = operations(deps);
   const identity = await ops.identity();
   const candidates = explicit
     ? [explicit]
@@ -117,15 +105,7 @@ async function executableFor(
   throw new WindowsManagementTransportError(false);
 }
 export type WindowsHostProjection = {
-  registrations: Array<{
-    product: ChromeProduct;
-    browser: string;
-    manifestPath: string;
-    extensionIds: string[];
-    state: WindowsManagementResponse["registration"];
-    issue?: string;
-    browserProfile?: string;
-  }>;
+  registrations: NativeHostRegistrationStatus[];
   storeInstallRequests: ChromeStoreInstallRequest[];
   issues: string[];
 };
@@ -147,6 +127,8 @@ function projection(
   issue?: string,
   browserProfile?: string,
 ): WindowsHostProjection {
+  const managementIssue =
+    issue ?? "Windows management reported " + (response?.code ?? "an unknown outcome");
   const nativeIssue =
     issue ??
     (!response?.ok &&
@@ -156,7 +138,7 @@ function projection(
       response.code === "foreign_registration" &&
       response.store === "foreign"
     )
-      ? "Windows management reported " + (response?.code ?? "an unknown outcome")
+      ? managementIssue
       : undefined);
   const result: WindowsHostProjection = {
     registrations: products.map(([product, browser]) => ({
@@ -173,12 +155,7 @@ function projection(
         browser: "Google Chrome",
         path: "Windows current-user Chrome Store request",
         state: response?.store ?? null,
-        ...(!response?.ok
-          ? {
-              issue:
-                issue ?? "Windows management reported " + (response?.code ?? "an unknown outcome"),
-            }
-          : {}),
+        ...(!response?.ok ? { issue: managementIssue } : {}),
       },
     ],
     issues: issue
@@ -197,26 +174,18 @@ async function operate(params: {
   executable?: string;
   extensionIds?: string[];
   browserProfile?: string;
-  deps: ExtensionInstallDeps;
   signal?: AbortSignal;
 }): Promise<{ response: WindowsManagementResponse; origins: string[]; browserProfile?: string }> {
   let started = false;
   try {
     params.signal?.throwIfAborted();
-    const deps = params.deps;
-    const context = await selectedContext(
-      deps,
-      params.browserProfile ?? "chrome",
-      params.pluginRoot,
-    );
-    const origins = originsSchema.parse(
-      [
-        ...new Set([
-          WINDOWS_OFFICIAL_ORIGIN,
-          ...(params.extensionIds ?? []).map((id) => "chrome-extension://" + id + "/"),
-        ]),
-      ].toSorted(),
-    );
+    const context = await selectedContext(params.browserProfile ?? "chrome", params.pluginRoot);
+    const origins = [
+      ...new Set([
+        WINDOWS_OFFICIAL_ORIGIN,
+        ...(params.extensionIds ?? []).map((id) => "chrome-extension://" + id + "/"),
+      ]),
+    ].toSorted();
     const request = managementRequestSchema.parse({
       v: 1,
       mode: "native-windows-cli",
@@ -225,28 +194,16 @@ async function operate(params: {
       store: params.store,
       expectedOrigins: origins,
     });
-    const executable = await executableFor(
-      params.pluginRoot,
-      params.executable ?? deps.windowsNative?.executable,
-      deps,
-    );
+    const executable = await executableFor(params.pluginRoot, params.executable);
     params.signal?.throwIfAborted();
     started = true;
-    const response = await (deps.windowsNative?.manage ?? runWindowsManagement)(
-      executable,
-      request,
-      {
-        env: deps.env,
-        signal: params.signal,
-      },
-    );
+    const response = await runWindowsManagement(executable, request, {
+      signal: params.signal,
+    });
     params.signal?.throwIfAborted();
     let browserProfile: string | undefined;
     if (response.installation) {
-      const owned = await readWindowsNativeGeneration(
-        response.installation.manifestPath,
-        operations(deps),
-      );
+      const owned = await readWindowsNativeGeneration(response.installation.manifestPath);
       if (
         JSON.stringify(owned.installation) !== JSON.stringify(response.installation) ||
         owned.binding.mode !== "native-windows-cli" ||
@@ -273,7 +230,6 @@ export async function installWindowsNativeHost(params: {
   extensionIds: string[];
   browserProfile?: string;
   requestStoreInstall?: boolean;
-  deps: ExtensionInstallDeps;
   signal?: AbortSignal;
 }): Promise<WindowsHostProjection> {
   // No discovery retry or mode fallback after a started mutation, even for an older helper.
@@ -286,7 +242,6 @@ export async function installWindowsNativeHost(params: {
 }
 export async function inspectWindowsNativeHosts(
   params: {
-    deps?: ExtensionInstallDeps;
     pluginRoot?: string;
     executable?: string;
     extensionIds?: string[];
@@ -297,7 +252,6 @@ export async function inspectWindowsNativeHosts(
   try {
     const { response, origins, browserProfile } = await operate({
       ...params,
-      deps: params.deps ?? {},
       action: "inspect",
       store: "preserve",
     });
@@ -312,7 +266,6 @@ export async function inspectWindowsNativeHosts(
 }
 export async function uninstallWindowsNativeHosts(
   params: {
-    deps?: ExtensionInstallDeps;
     pluginRoot?: string;
     executable?: string;
     browserProfile?: string;
@@ -322,7 +275,6 @@ export async function uninstallWindowsNativeHosts(
 ) {
   const { response } = await operate({
     ...params,
-    deps: params.deps ?? {},
     action: "uninstall",
     store: params.removeStore ? "remove" : "preserve",
   });
@@ -333,25 +285,17 @@ export async function uninstallWindowsNativeHosts(
   };
 }
 /** Used only by the native CLI, behind frame validation and before config or keys. */
-export async function validateWindowsNativeContext(
-  params: {
-    manifestPath: string;
-    launcherPath: string;
-    expectedOrigins: string[];
-    stateDir?: string;
-  },
-  deps: ExtensionInstallDeps = {},
-): Promise<string> {
+export async function validateWindowsNativeContext(params: {
+  manifestPath: string;
+  launcherPath: string;
+  expectedOrigins: string[];
+  stateDir?: string;
+}): Promise<string> {
   const profileIndex = process.argv.indexOf("--browser-profile");
-  const profile =
-    deps.windowsNative?.context?.browserProfile ??
-    (profileIndex < 0 ? "chrome" : process.argv[profileIndex + 1]);
+  const profile = profileIndex < 0 ? "chrome" : process.argv[profileIndex + 1];
   if (!profile) {
     throw new Error("Missing bound browser profile");
   }
-  const context = await selectedContext(
-    { ...deps, stateDir: params.stateDir ?? deps.stateDir },
-    profile,
-  );
-  return await admitWindowsNativeRuntime(params, context, operations(deps));
+  const context = await selectedContext(profile, undefined, params.stateDir);
+  return await admitWindowsNativeRuntime(params, context);
 }

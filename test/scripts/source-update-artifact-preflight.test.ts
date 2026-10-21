@@ -1,10 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { runBuildAllSteps } from "../../scripts/build-all.mts";
+import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+beforeEach(() => {
+  // Keep host service discovery outside this installed-artifact ownership fixture.
+  const fence = vi
+    .spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence")
+    .mockResolvedValue({ refuse: false });
+  onTestFinished(() => fence.mockRestore());
+});
 
 function installedCheckout() {
   const root = tempDirs.make("openclaw-installed-artifact-preflight-");
@@ -39,104 +48,90 @@ function installedCheckout() {
 }
 
 describe("published source updater candidate-build preflight", () => {
-  it.each([
-    { name: "dead", pid: 2147483647 },
-    { name: "live", pid: process.pid },
-  ])(
-    "refuses a $name installed owner before candidate work without reclaiming it",
-    async ({ pid }) => {
+  it.each(["dead owner", "live owner", "symlink", "invalid writer"])(
+    "refuses %s before candidate work and preserves serving artifacts",
+    async (hazard) => {
       const fixture = installedCheckout();
-      const owner = JSON.stringify({ pid, startedAt: "2026-09-24T12:00:00.000Z" });
-      fixture.write(".artifacts/dist-artifacts.lock/owner.json", owner);
       const before = fs.statSync(fixture.serving);
-
-      await expect(fixture.run()).rejects.toThrow(`retained by PID ${pid}`);
-
+      const pid = hazard === "dead owner" ? 2147483647 : process.pid;
+      const owner = JSON.stringify({ pid, startedAt: "2026-09-24T12:00:00.000Z" });
+      let error: string;
+      if (hazard.endsWith("owner")) {
+        fixture.write(".artifacts/dist-artifacts.lock/owner.json", owner);
+        error = `retained by PID ${pid}`;
+      } else if (hazard === "symlink") {
+        const liveRoot = path.join(fixture.root, "serving-runtime");
+        fs.renameSync(path.join(fixture.root, "dist-runtime"), liveRoot);
+        fs.symlinkSync(liveRoot, path.join(fixture.root, "dist-runtime"), "junction");
+        error = "is a symbolic link";
+      } else {
+        fs.unlinkSync(path.join(fixture.root, "scripts"));
+        fixture.write(
+          "scripts/stage-bundled-plugin-runtime.mts",
+          "export const prepareBundledPluginRuntime = false; export function stageBundledPluginRuntime() {}\n",
+        );
+        error = "Installed runtime staging is unavailable";
+      }
+      await expect(fixture.run()).rejects.toThrow(error);
       expect(fixture.runStep).not.toHaveBeenCalled();
-      expect(fs.readFileSync(fixture.ownerPath, "utf8")).toBe(owner);
+      if (hazard.endsWith("owner")) {
+        expect(liveGatewayDistFence.resolveLiveManagedGatewayDistFence).not.toHaveBeenCalled();
+        expect(fs.readFileSync(fixture.ownerPath, "utf8")).toBe(owner);
+        expect(fs.existsSync(fixture.env.BUILD_ALL_CACHE_ROOT)).toBe(false);
+      } else {
+        expect(fs.existsSync(fixture.ownerPath)).toBe(false);
+      }
       expect(fs.readFileSync(fixture.serving, "utf8")).toBe("previous serving generation\n");
       expect(fs.statSync(fixture.serving)).toMatchObject({
         ino: before.ino,
         mtimeMs: before.mtimeMs,
       });
-      expect(fs.existsSync(fixture.env.BUILD_ALL_CACHE_ROOT)).toBe(false);
     },
   );
 
-  it("probes available installed completion and releases without publishing its staged output", async () => {
-    const fixture = installedCheckout();
-    const before = fs.statSync(fixture.serving);
-
-    expect((await fixture.run()).exitCode).toBe(0);
-
-    expect(fixture.runStep).toHaveBeenCalledOnce();
-    expect(fs.existsSync(fixture.ownerPath)).toBe(false);
-    expect(fs.readFileSync(fixture.serving, "utf8")).toBe("previous serving generation\n");
-    expect(fs.statSync(fixture.serving)).toMatchObject({
-      ino: before.ino,
-      mtimeMs: before.mtimeMs,
-    });
-    expect(
-      fs.readdirSync(fixture.root).filter((name) => name.startsWith(".openclaw-runtime-")),
-    ).toEqual([]);
-  });
-
-  it.each([true, false])(
-    "consumes the modern driver's prepared fact (%s) without another admission",
-    async (prepared) => {
+  it.each([
+    { version: "current" },
+    { version: "2026.4.27" },
+    { version: "2026.9.4" },
+    { version: "current", prepared: true },
+    { version: "current", prepared: false },
+  ])(
+    "preserves installed completion and consumes driver preparation: %j",
+    async ({ version, prepared }) => {
       const fixture = installedCheckout();
-      const record = JSON.stringify({ pid: process.pid, startedAt: "2026-09-24T12:00:00.000Z" });
-      fixture.write(".artifacts/dist-artifacts.lock/owner.json", record);
-      expect(
-        (await fixture.run({ ...fixture.env, sourceRuntimePrepared: String(prepared) })).exitCode,
-      ).toBe(0);
-      expect(fixture.runStep).toHaveBeenCalledOnce();
-      expect(fs.readFileSync(fixture.ownerPath, "utf8")).toBe(record);
-    },
-  );
-
-  it("rejects installed completion output-root hazards before candidate work", async () => {
-    const fixture = installedCheckout();
-    const liveRoot = path.join(fixture.root, "serving-runtime");
-    fs.renameSync(path.join(fixture.root, "dist-runtime"), liveRoot);
-    fs.symlinkSync(liveRoot, path.join(fixture.root, "dist-runtime"), "junction");
-
-    await expect(fixture.run()).rejects.toThrow("is a symbolic link");
-
-    expect(fixture.runStep).not.toHaveBeenCalled();
-    expect(fs.existsSync(fixture.ownerPath)).toBe(false);
-    expect(fs.readFileSync(fixture.serving, "utf8")).toBe("previous serving generation\n");
-  });
-
-  it("refuses an invalid prepared writer instead of treating it as a legacy stager", async () => {
-    const fixture = installedCheckout();
-    fs.unlinkSync(path.join(fixture.root, "scripts"));
-    fixture.write(
-      "scripts/stage-bundled-plugin-runtime.mts",
-      "export const prepareBundledPluginRuntime = false; export function stageBundledPluginRuntime() {}\n",
-    );
-    await expect(fixture.run()).rejects.toThrow("Installed runtime staging is unavailable");
-    expect(fixture.runStep).not.toHaveBeenCalled();
-    expect(fs.existsSync(fixture.ownerPath)).toBe(false);
-  });
-
-  it.each(["2026.4.27", "2026.9.4"])(
-    "preserves the %s source completion contract",
-    async (version) => {
-      const fixture = installedCheckout();
-      fs.unlinkSync(path.join(fixture.root, "scripts"));
-      if (version === "2026.9.4") {
-        fixture.write(
-          "scripts/stage-bundled-plugin-runtime.mts",
-          "export function stageBundledPluginRuntime() { throw new Error('destructive legacy stager called'); }\n",
-        );
+      const before = fs.statSync(fixture.serving);
+      if (version !== "current") {
+        fs.unlinkSync(path.join(fixture.root, "scripts"));
+        if (version === "2026.9.4") {
+          fixture.write(
+            "scripts/stage-bundled-plugin-runtime.mts",
+            "export function stageBundledPluginRuntime() { throw new Error('destructive legacy stager called'); }\n",
+          );
+        }
       }
-
-      expect((await fixture.run()).exitCode).toBe(0);
-
+      const record = JSON.stringify({ pid: process.pid, startedAt: "2026-09-24T12:00:00.000Z" });
+      if (prepared !== undefined) {
+        fixture.write(".artifacts/dist-artifacts.lock/owner.json", record);
+      }
+      const env =
+        prepared === undefined
+          ? fixture.env
+          : { ...fixture.env, sourceRuntimePrepared: String(prepared) };
+      expect((await fixture.run(env)).exitCode).toBe(0);
       expect(fixture.runStep).toHaveBeenCalledOnce();
-      expect(fs.existsSync(fixture.ownerPath)).toBe(false);
+      if (prepared === undefined) {
+        expect(fs.existsSync(fixture.ownerPath)).toBe(false);
+      } else {
+        expect(fs.readFileSync(fixture.ownerPath, "utf8")).toBe(record);
+      }
       expect(fs.readFileSync(fixture.serving, "utf8")).toBe("previous serving generation\n");
+      expect(fs.statSync(fixture.serving)).toMatchObject({
+        ino: before.ino,
+        mtimeMs: before.mtimeMs,
+      });
+      expect(
+        fs.readdirSync(fixture.root).filter((name) => name.startsWith(".openclaw-runtime-")),
+      ).toEqual([]);
     },
   );
 });

@@ -1,11 +1,5 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
-/**
- * Interactive remote gateway onboarding.
- *
- * It can discover gateways, validate remote WebSocket security, and store
- * a remote Gateway secret as plaintext or a secret reference.
- */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { isSecureWebSocketUrl } from "../gateway/net.js";
@@ -39,7 +33,6 @@ export function validateGatewayWebSocketUrl(value: string): string | undefined {
   return undefined;
 }
 
-/** Prompts for remote gateway connection and auth settings. */
 export async function promptRemoteGatewayConfig(
   cfg: OpenClawConfig,
   prompter: WizardPrompter,

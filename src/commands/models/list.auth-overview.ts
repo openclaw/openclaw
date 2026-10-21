@@ -1,4 +1,3 @@
-/** Builds provider auth summaries for model-list/status output. */
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -17,7 +16,9 @@ import { resolveManagedSecretRefRuntimeProviderAuth } from "../../agents/model-a
 import {
   getCustomProviderApiKey,
   resolveEnvApiKey,
+  resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
+  shouldPreferExplicitConfigApiKeyAuth,
 } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
@@ -48,15 +49,12 @@ function formatProfileSecretLabel(params: {
   kind: "api-key" | "token";
 }): string {
   const value = normalizeOptionalString(params.value) ?? "";
-  if (value) {
-    const display = formatMarkerOrSecret(value);
-    return params.kind === "token" ? `token:${display}` : display;
-  }
-  if (params.ref) {
-    const refLabel = `ref(${params.ref.source}:${params.ref.id})`;
-    return params.kind === "token" ? `token:${refLabel}` : refLabel;
-  }
-  return params.kind === "token" ? "token:missing" : "missing";
+  const display = value
+    ? formatMarkerOrSecret(value)
+    : params.ref
+      ? `ref(${params.ref.source}:${params.ref.id})`
+      : "missing";
+  return params.kind === "token" ? `token:${display}` : display;
 }
 
 function resolveProfileSourceAgentDir(params: {
@@ -76,7 +74,6 @@ function resolveProfileSourceAgentDir(params: {
     : params.agentDir;
 }
 
-/** Resolves the effective auth source and profile counts for a provider. */
 export function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;
@@ -110,22 +107,12 @@ export function resolveProviderAuthOverview(params: {
     if (!profile) {
       return `${profileId}=missing`;
     }
-    if (profile.type === "api_key") {
+    if (profile.type === "api_key" || profile.type === "token") {
       return withUnusableSuffix(
         `${profileId}=${formatProfileSecretLabel({
-          value: profile.key,
-          ref: profile.keyRef,
-          kind: "api-key",
-        })}`,
-        profileId,
-      );
-    }
-    if (profile.type === "token") {
-      return withUnusableSuffix(
-        `${profileId}=${formatProfileSecretLabel({
-          value: profile.token,
-          ref: profile.tokenRef,
-          kind: "token",
+          value: profile.type === "api_key" ? profile.key : profile.token,
+          ref: profile.type === "api_key" ? profile.keyRef : profile.tokenRef,
+          kind: profile.type === "api_key" ? "api-key" : "token",
         })}`,
         profileId,
       );
@@ -188,6 +175,14 @@ export function resolveProviderAuthOverview(params: {
       return providerApiKeyRef.source === "env"
         ? { kind: "env", detail: maskApiKey(usableCustomKey.apiKey) }
         : { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+    }
+    // Inference sends an explicit api-key provider's own key before stored profiles.
+    const providerEntryKey = resolveProviderEntryApiKeyProfileReference({ cfg, provider, store });
+    if (
+      providerEntryKey.kind === "literal" &&
+      shouldPreferExplicitConfigApiKeyAuth(cfg, provider)
+    ) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(providerEntryKey.apiKey) };
     }
     if (profiles.length > 0) {
       return {

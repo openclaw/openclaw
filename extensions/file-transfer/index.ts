@@ -35,6 +35,7 @@ function createLazyTool(
 const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "file.stat",
+    hasActiveWork: () => false,
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
@@ -82,6 +83,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   },
   {
     command: "file.create",
+    hasActiveWork: () => false,
     cap: "file",
     dangerous: true,
     duplex: true,
@@ -114,21 +116,22 @@ export default definePluginEntry({
     for (const kind of ["memory", "skills"] as const) {
       api.registerNodeHostCommand({
         command: `workspace.${kind}`,
+        hasActiveWork: () => false,
         cap: "file",
         dangerous: true,
         duplex: true,
         handle: async (...args) => {
-          const { createWorkspaceCommand } = await import("./src/node-host/workspace-memory.js");
-          return await createWorkspaceCommand(api, kind).handle(...args);
+          const { handleWorkspaceCommand } = await import("./src/node-host/workspace-memory.js");
+          return await handleWorkspaceCommand(api, kind, ...args);
         },
       });
       api.registerNodeInvokePolicy({
         commands: [`workspace.${kind}`],
         dangerous: true,
         async handle(ctx) {
-          const { createWorkspaceWorkerPolicy } =
+          const { handleWorkspaceWorkerPolicy } =
             await import("./src/shared/workspace-memory-policy.js");
-          return await createWorkspaceWorkerPolicy(kind).handle(ctx);
+          return await handleWorkspaceWorkerPolicy(kind, ctx);
         },
       });
     }

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 371005,
-  "reason": "Native conversation validation and owner hooks measure 371581 B startup gzip with bridge and presentation implementation deferred. Raise the paired original 370756 B baseline and cap by the remaining measured 249 B overage (0.067%); unchanged 512 B growth and 64 B build variance give a 371581 B enforcement limit. All other budgets are unchanged.",
-  "updatedAt": "2026-09-27"
+  "startupJsGzipBytes": 324590,
+  "reason": "Page-owned English catalogs, with shared secret-request labels kept eager, measure 324590 B at startup; preserve one CSS request and cap startup at 325000 B.",
+  "updatedAt": "2026-10-20"
 }

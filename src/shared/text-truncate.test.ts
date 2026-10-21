@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { truncateUtf16WithEllipsis } from "./text-truncate.js";
+import { truncateOptionalText, truncateUtf16WithEllipsis } from "./text-truncate.js";
+
+describe("truncateOptionalText", () => {
+  it.each([
+    { value: undefined, maxLength: 4, expected: undefined },
+    { value: " \n ", maxLength: 4, expected: undefined },
+    { value: " abcd ", maxLength: 4, expected: "abcd" },
+    { value: " abcdef ", maxLength: 4, expected: "abcd" },
+    { value: " abc ", maxLength: 0, expected: "" },
+    { value: " a😀bc ", maxLength: 2, expected: "a" },
+    { value: " ab  cd ", maxLength: 4, expected: "ab  " },
+  ])("clips $value at $maxLength after trimming", ({ value, maxLength, expected }) => {
+    expect(truncateOptionalText(value, maxLength)).toBe(expected);
+  });
+});
 
 describe("truncateUtf16WithEllipsis", () => {
   it.each([

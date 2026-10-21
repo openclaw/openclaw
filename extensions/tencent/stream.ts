@@ -11,10 +11,10 @@ const TENCENT_PROVIDER_IDS: ReadonlySet<string> = new Set([
   TOKENPLAN_PROVIDER_ID,
 ]);
 
-type StreamOptions = Parameters<StreamFn>[2];
+type StreamOptions = NonNullable<Parameters<StreamFn>[2]> & { reasoningEffort?: unknown };
 
 // Only hy3 has a verified two-rung override. Other models retain shared effort handling.
-const TENCENT_TWO_RUNG_EFFORT_MAP: Readonly<Record<string, string>> = Object.freeze({
+const TENCENT_TWO_RUNG_EFFORT_MAP: Readonly<Record<string, string>> = {
   off: "none",
   none: "none",
   minimal: "high",
@@ -22,18 +22,16 @@ const TENCENT_TWO_RUNG_EFFORT_MAP: Readonly<Record<string, string>> = Object.fre
   medium: "high",
   high: "high",
   xhigh: "high",
-});
+};
 
 function resolveRequestedEffort(
   thinkingLevel: OpenAICompatibleThinkingLevel,
-  options: StreamOptions,
+  options: StreamOptions | undefined,
 ): string | undefined {
-  const withEffort = (options ?? {}) as { reasoningEffort?: unknown; reasoning?: unknown };
   const raw =
-    (typeof withEffort.reasoningEffort === "string" && withEffort.reasoningEffort) ||
-    (typeof withEffort.reasoning === "string" && withEffort.reasoning) ||
-    (typeof thinkingLevel === "string" && thinkingLevel) ||
-    undefined;
+    (typeof options?.reasoningEffort === "string" && options.reasoningEffort) ||
+    options?.reasoning ||
+    thinkingLevel;
   return raw ? raw.trim().toLowerCase() : undefined;
 }
 

@@ -206,7 +206,7 @@ enum RemoteGatewayProbe {
             timeoutMs: self.gatewayProbeTimeoutMs)
     }
 
-    private static func probeGateway(
+    static func probeGateway(
         connection: GatewayConnection,
         timeoutMs: Double) async -> RemoteGatewayProbeResult
     {
@@ -234,16 +234,7 @@ enum RemoteGatewayProbe {
         }
     }
 
-    #if SWIFT_PACKAGE
-    static func _testProbeGateway(
-        connection: GatewayConnection,
-        timeoutMs: Double) async -> RemoteGatewayProbeResult
-    {
-        await self.probeGateway(connection: connection, timeoutMs: timeoutMs)
-    }
-    #endif
-
-    private static func sshCheckCommand(
+    static func sshCheckCommand(
         target: String,
         identity: String,
         hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]?
@@ -260,15 +251,6 @@ enum RemoteGatewayProbe {
             remoteCommand: ["echo", "ok"])
         return ["/usr/bin/ssh"] + args
     }
-
-    #if SWIFT_PACKAGE
-    static func _testSSHCheckCommand(
-        target: String,
-        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]?
-    {
-        self.sshCheckCommand(target: target, identity: "", hostKeyPolicy: hostKeyPolicy)
-    }
-    #endif
 
     private static func formatSSHFailure(_ response: Response, target: String) -> String {
         let payload = response.payload.flatMap { String(data: $0, encoding: .utf8) }

@@ -1,17 +1,19 @@
 /** Tests configured MCP tools survive policy/splitting to the outbound request boundary. */
 import { GetPromptResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
 import type { McpCatalogTool, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "./embedded-agent-runner/effective-tool-policy.js";
-import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 // Regression #76063: configured MCP tools must survive materialization, policy, and SDK splitting.
 function makeConfiguredRuntime(
@@ -58,10 +60,19 @@ function makeConfiguredRuntime(
 async function buildConfiguredMcpToolNamesAtRequestBoundary(params: {
   cfg: OpenClawConfig;
 }): Promise<string[]> {
+  const runtimeModule = await import("./agent-bundle-mcp-runtime.js");
+  const createRuntime = vi
+    .spyOn(runtimeModule, "createSessionMcpRuntime")
+    .mockImplementationOnce(() => makeConfiguredRuntime());
   const runtime = await createBundleMcpToolRuntime({
     workspaceDir: "/workspace",
     cfg: params.cfg,
-    createRuntime: () => makeConfiguredRuntime(),
+  });
+  expect(createRuntime).toHaveBeenCalledOnce();
+  expect(createRuntime).toHaveBeenCalledWith({
+    sessionId: expect.stringMatching(/^bundle-mcp:/),
+    workspaceDir: "/workspace",
+    cfg: params.cfg,
   });
   const filtered = applyFinalEffectiveToolPolicy({
     bundledTools: runtime.tools,
@@ -69,7 +80,7 @@ async function buildConfiguredMcpToolNamesAtRequestBoundary(params: {
     conversationCapabilityProfile: resolveConversationCapabilityProfile({ config: params.cfg }),
     warn: () => {},
   });
-  const { customTools } = splitSdkTools({ tools: filtered, sandboxEnabled: false });
+  const customTools = toToolDefinitions(filtered, undefined, undefined);
   return customTools.map((tool) => tool.name);
 }
 
@@ -105,7 +116,7 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
       conversationCapabilityProfile: resolveConversationCapabilityProfile({ config: cfg }),
       warn: () => {},
     });
-    const { customTools } = splitSdkTools({ tools: filtered, sandboxEnabled: false });
+    const customTools = toToolDefinitions(filtered, undefined, undefined);
 
     expect(customTools.map((tool) => tool.name)).toEqual([
       "userMcp__alpha_tool",
@@ -115,6 +126,9 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
   });
   it("exposes MCP resource and prompt utility tools when advertised", async () => {
     const base = makeConfiguredRuntime({ toolNames: [], serverName: "knowledge" });
+    const catalog = await base.getCatalog();
+    catalog.servers.knowledge!.resources = { listChanged: true };
+    catalog.servers.knowledge!.prompts = { listChanged: true };
     const publicResults = {
       prompts_get: {
         description: "Brief the user",
@@ -158,21 +172,7 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: {
         ...base,
-        getCatalog: async () => ({
-          version: 1,
-          generatedAt: 0,
-          servers: {
-            knowledge: {
-              serverName: "knowledge",
-              safeServerName: "knowledge",
-              launchSummary: "knowledge",
-              toolCount: 0,
-              resources: { listChanged: true },
-              prompts: { listChanged: true },
-            },
-          },
-          tools: [],
-        }),
+        getCatalog: async () => catalog,
         listResources: async () => privateResults.resources_list,
         readResource: async () => privateResults.resources_read,
         listPrompts: async () => privateResults.prompts_list,

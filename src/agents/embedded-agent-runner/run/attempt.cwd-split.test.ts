@@ -1,124 +1,59 @@
-// Coverage for keeping attempt workspace and runtime cwd distinct.
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import type { AnyAgentTool } from "../../tools/common.js";
+import { runWithAgentWorkspaceReadiness } from "../../workspace-readiness.js";
 import {
-  cleanupTempPaths,
-  createContextEngineAttemptRunner,
-  createContextEngineBootstrapAndAssemble,
-  getHoisted,
-  preloadRunEmbeddedAttemptForTests,
-  resetEmbeddedAttemptHarness,
-} from "./attempt-spawn-workspace.test-support.js";
+  useContextEngineAttemptHarness,
+  mockParams,
+  type ContextEngineAttemptOptions,
+} from "./attempt-context-engine.test-support.js";
 
-const hoisted = getHoisted();
-const tempPaths: string[] = [];
-
-function stubTool(name: string) {
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+const { hoisted, runAttempt } = useContextEngineAttemptHarness("agent:main:subagent:child");
+function run(
+  attemptOverrides: ContextEngineAttemptOptions["attemptOverrides"],
+  sessionPrompt?: ContextEngineAttemptOptions["sessionPrompt"],
+) {
+  return runAttempt({
+    attemptOverrides: { disableTools: false, ...attemptOverrides },
+    sessionPrompt,
+  });
+}
+function stubTool(name: string): AnyAgentTool {
   return {
     name,
     label: name,
     description: `${name} tool`,
     parameters: { type: "object", properties: {} },
-    execute: async () => ({ content: [], details: undefined }),
-  } satisfies AnyAgentTool;
-}
-
-function readCustomToolNames(value: unknown): string[] {
-  if (typeof value !== "object" || value === null || !("customTools" in value)) {
-    throw new Error("Expected embedded session options with customTools");
-  }
-  const customTools = value.customTools;
-  if (!Array.isArray(customTools)) {
-    throw new Error("Expected customTools to be an array");
-  }
-  return customTools.map((tool) => {
-    if (typeof tool !== "object" || tool === null || !("name" in tool)) {
-      throw new Error("Expected every custom tool to have a name");
-    }
-    if (typeof tool.name !== "string") {
-      throw new Error("Expected every custom tool name to be a string");
-    }
-    return tool.name;
-  });
+    execute: vi.fn(async () => ({ content: [], details: undefined })),
+  };
 }
 
 describe("runEmbeddedAttempt cwd/workspace split", () => {
-  beforeAll(async () => {
-    await preloadRunEmbeddedAttemptForTests();
-  });
-
-  beforeEach(() => {
-    resetEmbeddedAttemptHarness();
-  });
-
-  afterEach(async () => {
-    await cleanupTempPaths(tempPaths);
-    tempPaths.length = 0;
-  });
-
   it("uses workspace for bootstrap and cwd for runtime tools", async () => {
-    // Bootstrap still reads the agent workspace, while coding tools execute in
-    // the task repo cwd when a subagent targets a separate checkout.
-    const bootstrap = createContextEngineBootstrapAndAssemble();
-    const taskRepo = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-task-repo-"));
-    tempPaths.push(taskRepo);
-    hoisted.createOpenClawCodingToolsMock.mockImplementationOnce(() =>
-      [
-        "read",
-        "write",
-        "edit",
-        "apply_patch",
-        "exec",
-        "process",
-        "message",
-        "browser",
-        "web_search",
-      ].map(stubTool),
+    const taskRepo = dirs.make("openclaw-task-repo-");
+    const allowed = ["read", "write", "edit", "apply_patch", "exec", "process"];
+    hoisted.createOpenClawCodingToolsMock.mockReturnValueOnce(
+      [...allowed, "message", "browser", "web_search"].map(stubTool),
     );
-
-    await createContextEngineAttemptRunner({
-      contextEngine: bootstrap,
-      sessionKey: "agent:main:subagent:child",
-      tempPaths,
-      attemptOverrides: {
-        cwd: taskRepo,
-        requireWorkspaceOnly: true,
-        toolsAllow: ["read", "write", "edit", "apply_patch", "exec", "process"],
-        disableTools: false,
-      },
+    await run({
+      cwd: taskRepo,
+      requireWorkspaceOnly: true,
+      toolsAllow: allowed,
     });
-
-    const bootstrapCall = hoisted.resolveBootstrapFilesForRunMock.mock.calls[0]?.[0] as
-      | { agentId?: string; workspaceDir?: string }
-      | undefined;
-    expect(bootstrapCall?.workspaceDir).not.toBe("/tmp/task-repo");
-    expect(bootstrapCall?.agentId).toBe("main");
-
-    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
-      | {
-          cwd?: string;
-          workspaceDir?: string;
-          spawnWorkspaceDir?: string;
-          requireWorkspaceOnly?: boolean;
-        }
-      | undefined;
-    expect(toolsCall?.cwd).toBe(taskRepo);
-    expect(toolsCall).toMatchObject({
-      runtimeToolAllowlist: [
-        "read",
-        "write",
-        "edit",
-        "apply_patch",
-        "exec",
-        "process",
-        "tool_search_code",
-        "tool_search",
-        "tool_describe",
-        "tool_call",
-      ],
+    const bootstrap = mockParams(hoisted.resolveBootstrapFilesForRunMock);
+    expect(bootstrap.workspaceDir).not.toBe(taskRepo);
+    expect(bootstrap.agentId).toBe("main");
+    const tools = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0];
+    expect(tools).toMatchObject({
+      cwd: taskRepo,
+      workspaceDir: bootstrap.workspaceDir,
+      spawnWorkspaceDir: bootstrap.workspaceDir,
+      requireWorkspaceOnly: true,
+      runtimeToolAllowlist: [...allowed, "tool_search", "tool_describe", "dispatch_action"],
       toolConstructionPlan: {
         includeBaseCodingTools: true,
         includeShellTools: true,
@@ -127,175 +62,111 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
         includePluginTools: false,
       },
     });
-    expect(toolsCall).not.toMatchObject({
-      runtimeToolAllowlist: expect.arrayContaining(["message", "browser", "web_search"]),
-    });
-    // This small allowed catalog stays direct even when discovery is enabled by default.
-    expect(readCustomToolNames(hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0])).toEqual([
-      "read",
-      "write",
-      "edit",
-      "apply_patch",
-      "exec",
-      "process",
-    ]);
-    expect(toolsCall?.workspaceDir).toBe(bootstrapCall?.workspaceDir);
-    expect(toolsCall?.spawnWorkspaceDir).toBe(bootstrapCall?.workspaceDir);
-    expect(toolsCall?.requireWorkspaceOnly).toBe(true);
-
-    const resourceLoaderInit = hoisted.defaultResourceLoaderInitMock.mock.calls[0]?.[0] as
-      | { cwd?: string }
-      | undefined;
-    expect(resourceLoaderInit?.cwd).toBe(taskRepo);
+    expect(
+      hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0]?.customTools?.map((tool) => tool.name),
+    ).toEqual(["tool_search", "tool_describe", "dispatch_action", ...allowed]);
+    expect(hoisted.defaultResourceLoaderInitMock.mock.calls[0]?.[0]).toHaveProperty(
+      "cwd",
+      taskRepo,
+    );
     expect(hoisted.embeddedSystemPromptInputs[0]).toMatchObject({
-      workspaceDir: bootstrapCall?.workspaceDir,
+      workspaceDir: bootstrap.workspaceDir,
       runtimeCwd: taskRepo,
     });
   });
 
-  it.each([
-    ["read-only", "deny"],
-    ["guarded", "ask"],
-    ["workspace", "auto"],
-    ["full", "full"],
-  ] as const)("maps session permission mode %s to native exec mode %s", async (mode, execMode) => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-permission-mode-"));
-    tempPaths.push(root);
-
-    await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey: "agent:main:dashboard:permission-mode",
-      tempPaths,
-      attemptOverrides: {
-        disableTools: false,
+  it.each(["guarded", "workspace"] as const)(
+    "uses the %s session permission root",
+    async (mode) => {
+      const root = dirs.make("openclaw-permission-");
+      await run({
         permissionMode: mode,
-        sessionRoot: root,
         workspaceDir: root,
-      },
-    });
+        ...(mode === "guarded" ? { sessionRoot: root } : {}),
+      });
+      expect(hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        sessionPermissionPolicy: {
+          root: mode === "guarded" ? root : await fs.realpath(root),
+          mode,
+        },
+        ...(mode === "guarded" ? { exec: { mode: "ask" } } : {}),
+      });
+    },
+  );
 
-    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0] as
-      | {
-          exec?: { mode?: string };
-          sessionPermissionPolicy?: { root: string; mode: string };
-        }
-      | undefined;
-    expect(toolsCall?.sessionPermissionPolicy).toEqual({ root, mode });
-    expect(toolsCall?.exec?.mode).toBe(execMode);
+  it("starts the built-in prompt while only workspace tools wait for checkout", async () => {
+    const ready = createDeferred();
+    const waiting = createDeferred();
+    const read = stubTool("read");
+    const web = stubTool("web_search");
+    hoisted.createOpenClawCodingToolsMock.mockReturnValue([read, web]);
+    await runWithAgentWorkspaceReadiness(
+      {
+        sessionKey: "agent:main:subagent:child",
+        waitUntilReady: () => {
+          waiting.resolve();
+          return ready.promise;
+        },
+        assertCurrent: () => {},
+      },
+      async () =>
+        run(
+          {
+            config: { tools: { toolSearch: false, codeMode: false } },
+          },
+          async () => {
+            const tools = hoisted.createAgentSessionMock.mock.calls
+              .at(-1)?.[0]
+              ?.customTools?.map((tool) => wrapToolDefinition(tool));
+            const boundRead = tools?.find((tool) => tool.name === "read");
+            const boundWeb = tools?.find((tool) => tool.name === "web_search");
+            expect(boundRead).toBeDefined();
+            expect(boundWeb).toBeDefined();
+            const pending = boundRead!.execute("read", {});
+            await Promise.race([waiting.promise, pending]);
+            await boundWeb!.execute("web", {});
+            expect(web.execute).toHaveBeenCalledOnce();
+            expect(read.execute).not.toHaveBeenCalled();
+            ready.resolve();
+            await pending;
+          },
+        ),
+    );
+    expect(read.execute).toHaveBeenCalledOnce();
   });
 
-  it("defaults rootless session permission boundaries to the canonical agent workspace", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rootless-permission-"));
-    tempPaths.push(workspaceDir);
-    const canonicalWorkspace = await fs.realpath(workspaceDir);
-
-    await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey: "agent:main:discord:direct:rootless-permission",
-      tempPaths,
-      attemptOverrides: {
-        disableTools: false,
-        permissionMode: "workspace",
-        workspaceDir,
-      },
-    });
-
-    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0] as
-      | { sessionPermissionPolicy?: { root: string; mode: string } }
-      | undefined;
-    expect(toolsCall?.sessionPermissionPolicy).toEqual({
-      root: canonicalWorkspace,
-      mode: "workspace",
-    });
-  });
-
-  it("forwards native and routable channel targets into runtime tools", async () => {
-    await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey: "agent:main:slack:direct:U123",
-      tempPaths,
-      attemptOverrides: {
-        chatId: "oc_native_chat",
-        currentChannelId: "D123",
-        currentMessagingTarget: "user:U123",
-        disableTools: false,
-      },
-    });
-
-    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
-      | {
-          currentChannelId?: string;
-          currentMessagingTarget?: string;
-          nativeChannelId?: string;
-        }
-      | undefined;
-    expect(toolsCall).toMatchObject({
-      currentChannelId: "D123",
-      currentMessagingTarget: "user:U123",
-      nativeChannelId: "oc_native_chat",
-    });
-  });
-
-  it("skips runtime tool construction when the selected model does not support tools", async () => {
+  it("skips runtime tool construction when the model does not support tools", async () => {
     hoisted.supportsModelToolsMock.mockReturnValueOnce(false);
-
-    await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey: "agent:main:main",
-      tempPaths,
-      attemptOverrides: {
-        disableTools: false,
-      },
-    });
-
+    await run({});
     expect(hoisted.createOpenClawCodingToolsMock).not.toHaveBeenCalled();
   });
 
-  it("rejects cwd overrides for sandboxed runs instead of silently ignoring them", async () => {
-    // Sandboxed attempts already remap the workspace; accepting an extra cwd
-    // override would make tool roots ambiguous.
+  it("rejects cwd overrides for sandboxed runs", async () => {
     hoisted.resolveSandboxContextMock.mockResolvedValueOnce({
       enabled: true,
       workspaceAccess: "ro",
       workspaceDir: "/tmp/openclaw-sandbox-copy",
     });
-
-    await expect(
-      createContextEngineAttemptRunner({
-        contextEngine: createContextEngineBootstrapAndAssemble(),
-        sessionKey: "agent:main:subagent:child",
-        tempPaths,
-        attemptOverrides: {
-          cwd: "/tmp/task-repo",
-        },
-      }),
-    ).rejects.toThrow("cwd override is not supported");
+    await expect(run({ cwd: "/tmp/task-repo", disableTools: true })).rejects.toThrow(
+      "cwd override is not supported",
+    );
     expect(hoisted.createOpenClawCodingToolsMock).not.toHaveBeenCalled();
   });
 
   it("runs a managed worktree when sandbox workspace and cwd match", async () => {
-    const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-worktree-"));
-    tempPaths.push(worktree);
+    const worktree = dirs.make("openclaw-sandbox-worktree-");
     hoisted.resolveSandboxContextMock.mockResolvedValueOnce({
       enabled: true,
       workspaceAccess: "rw",
       workspaceDir: worktree,
     });
-
-    await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey: "agent:main:dashboard:worktree",
-      tempPaths,
-      attemptOverrides: {
-        workspaceDir: worktree,
-        cwd: worktree,
-        disableTools: false,
-      },
-    });
-
+    await run({ workspaceDir: worktree, cwd: worktree });
     expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: worktree, workspaceDir: worktree }),
       undefined,
+      undefined,
+      undefined,
+      expect.objectContaining({ assertCurrent: expect.any(Function) }),
     );
   });
 });

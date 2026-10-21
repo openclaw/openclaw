@@ -3,7 +3,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import type { PrepareBundledPluginRuntime } from "./lib/runtime-artifact-contract.js";
@@ -192,7 +191,7 @@ function buildRuntimePluginSdkPackageExports(
   );
 }
 
-function ensureOpenClawExtensionAlias(params: {
+export function ensureOpenClawExtensionAlias(params: {
   distExtensionsRoot: string;
   repoRoot: string;
   aliasDir?: string;
@@ -208,6 +207,7 @@ function ensureOpenClawExtensionAlias(params: {
   });
   const finalAliasDir = path.join(params.distExtensionsRoot, "node_modules", "openclaw");
   const aliasDir = params.aliasDir ?? finalAliasDir;
+  assertRealOutputRoot(aliasDir);
   const pluginSdkAliasPath = path.join(aliasDir, "plugin-sdk");
   fs.mkdirSync(aliasDir, { recursive: true });
   writeJsonFile(path.join(aliasDir, "package.json"), {
@@ -587,5 +587,6 @@ export const prepareBundledPluginRuntime: PrepareBundledPluginRuntime = (params)
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const { withDistArtifactOwnership } = await import("./lib/dist-artifact-ownership.mts");
   await withDistArtifactOwnership(process.cwd(), async () => stageBundledPluginRuntime());
 }

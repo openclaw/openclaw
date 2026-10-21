@@ -1,4 +1,3 @@
-// Message channel constants define internal channel ids shared across routing.
 import { isStringOption } from "./string-readers.js";
 
 export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;

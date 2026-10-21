@@ -134,7 +134,13 @@ describe("Synthetic live catalog", () => {
           }
         : {
             provider: { ...buildSyntheticProvider(), apiKey: "SYNTHETIC_API_KEY", models: [] },
-            outcomes: [{ provider: "synthetic", status: "ready" }],
+            outcomes: [
+              {
+                provider: "synthetic",
+                status: "ready",
+                modelIdCatalog: { baseUrl: SYNTHETIC_BASE_URL, modelIds: ["missing-metadata"] },
+              },
+            ],
           },
     );
   });

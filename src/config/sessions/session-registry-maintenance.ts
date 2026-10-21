@@ -5,22 +5,21 @@ import {
   applySessionEntryLifecycleMutation,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
-import { withSessionRegistryEntriesInWorker } from "./session-entry-read-runtime.js";
+import { withSessionRegistryEntriesInWorker } from "./session-entry-read-maintenance.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
-import { pruneStaleEntries } from "./store-maintenance.js";
+import { pruneStaleEntries, shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionStoreTarget } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionRegistryMaintenanceStoreSummary = {
-  afterCount: number;
-  beforeCount: number;
   preservedRunning: number;
   pruned: number;
+  nextSweepAtMs: number | null;
 };
 
 type SessionRegistryMaintenanceStoreOptions = SessionStoreTarget & {
-  /** Apply pruning to the backing store; false previews against a clone. */
+  /** Whether to commit the selected removals to the backing store. */
   apply: boolean;
   /** Retention window for cron-run session entries. */
   retentionMs: number;
@@ -37,11 +36,13 @@ function parseCronRunSessionJobId(sessionKey: string): string | undefined {
   return /^cron:([^:]+):run:[^:]+(?:$|:)/u.exec(parsed.rest)?.[1];
 }
 
-function buildSessionRegistryPreserveKeys(params: {
+function pruneSessionRegistryStore(params: {
+  retentionMs: number;
+  removals?: SessionEntryLifecycleRemoval[];
   runningCronJobIds: ReadonlySet<string>;
   storePath: string;
   store: Record<string, SessionEntry>;
-}): { preserveKeys: Set<string>; preservedRunning: number } {
+}): SessionRegistryMaintenanceStoreSummary {
   const preserveKeys =
     collectActiveSessionWorkAdmissionKeys({
       storePath: params.storePath,
@@ -50,31 +51,11 @@ function buildSessionRegistryPreserveKeys(params: {
   let preservedRunning = 0;
   for (const key of Object.keys(params.store)) {
     const jobId = parseCronRunSessionJobId(key);
-    if (!jobId) {
-      // This sweep owns only cron-run rows; all ordinary sessions are preserved.
-      preserveKeys.add(key);
-      continue;
-    }
-    if (params.runningCronJobIds.has(jobId)) {
+    if (jobId && params.runningCronJobIds.has(jobId)) {
       preserveKeys.add(key);
       preservedRunning += 1;
     }
   }
-  return { preserveKeys, preservedRunning };
-}
-
-function pruneSessionRegistryStore(params: {
-  retentionMs: number;
-  removals?: SessionEntryLifecycleRemoval[];
-  runningCronJobIds: ReadonlySet<string>;
-  storePath: string;
-  store: Record<string, SessionEntry>;
-}): Omit<SessionRegistryMaintenanceStoreSummary, "beforeCount"> {
-  const { preserveKeys, preservedRunning } = buildSessionRegistryPreserveKeys({
-    runningCronJobIds: params.runningCronJobIds,
-    storePath: params.storePath,
-    store: params.store,
-  });
   const pruned = pruneStaleEntries(params.store, params.retentionMs, {
     log: false,
     onPruned: params.removals
@@ -88,17 +69,32 @@ function pruneSessionRegistryStore(params: {
       : undefined,
     preserveKeys,
   });
+  const now = Date.now();
+  let nextSweepAtMs: number | null = null;
+  for (const [key, entry] of Object.entries(params.store)) {
+    if (
+      shouldPreserveMaintenanceEntry({ key, entry }) ||
+      typeof entry.updatedAt !== "number" ||
+      !Number.isFinite(entry.updatedAt)
+    ) {
+      continue;
+    }
+    // Expired active rows retry after their running job or session admission settles.
+    const expiresAt = entry.updatedAt + params.retentionMs + 1;
+    const deadline = expiresAt <= now ? now + 60_000 : expiresAt;
+    nextSweepAtMs = Math.min(nextSweepAtMs ?? Infinity, deadline);
+  }
   return {
-    afterCount: Object.keys(params.store).length,
     preservedRunning,
     pruned,
+    nextSweepAtMs,
   };
 }
 
 /**
  * Runs session-registry maintenance for one resolved agent store.
- * Preview prunes a clone; apply uses one store-sized write transaction and
- * skips generic session maintenance so non-cron rows stay outside this sweep.
+ * Preview and apply consume bounded snapshots under one physical reader owner.
+ * The lifecycle owner commits removals without running generic session maintenance.
  */
 export async function runSessionRegistryMaintenanceForStore(
   params: SessionRegistryMaintenanceStoreOptions,
@@ -108,13 +104,17 @@ export async function runSessionRegistryMaintenanceForStore(
   const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
   if (sqliteTarget.path && !fs.existsSync(sqliteTarget.path)) {
     return {
-      beforeCount: 0,
-      afterCount: 0,
       preservedRunning: 0,
       pruned: 0,
+      nextSweepAtMs: null,
     };
   }
-  return await withSessionRegistryEntriesInWorker(
+  const summary: SessionRegistryMaintenanceStoreSummary = {
+    preservedRunning: 0,
+    pruned: 0,
+    nextSweepAtMs: null,
+  };
+  await withSessionRegistryEntriesInWorker(
     { agentId, storePath },
     async (entries, assertReaderCurrent) => {
       const assertCurrent = () => {
@@ -122,31 +122,14 @@ export async function runSessionRegistryMaintenanceForStore(
         assertReaderCurrent();
       };
       assertCurrent();
-      const beforeStore = Object.fromEntries(
-        entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-      );
-      const beforeCount = Object.keys(beforeStore).length;
-      if (!params.apply) {
-        const previewStore = structuredClone(beforeStore);
-        return {
-          beforeCount,
-          ...pruneSessionRegistryStore({
-            retentionMs: params.retentionMs,
-            runningCronJobIds: params.runningCronJobIds,
-            storePath,
-            store: previewStore,
-          }),
-        };
-      }
-
-      const applyStore = structuredClone(beforeStore);
+      const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
       const removals: SessionEntryLifecycleRemoval[] = [];
-      const applied = pruneSessionRegistryStore({
+      const planned = pruneSessionRegistryStore({
         retentionMs: params.retentionMs,
-        removals,
+        removals: params.apply ? removals : undefined,
         runningCronJobIds: params.runningCronJobIds,
         storePath,
-        store: applyStore,
+        store,
       });
       if (removals.length > 0) {
         const mutation = await applySessionEntryLifecycleMutation({
@@ -154,20 +137,20 @@ export async function runSessionRegistryMaintenanceForStore(
           storePath,
           removals,
           skipMaintenance: true,
-          beforeCommitInTransaction: assertCurrent,
+          commitGuard: assertCurrent,
         });
         assertCurrent();
-        return {
-          afterCount: mutation.afterCount,
-          beforeCount,
-          preservedRunning: applied.preservedRunning,
-          pruned: mutation.removedEntries,
-        };
+        if (mutation.removedEntries !== planned.pruned) {
+          planned.nextSweepAtMs = Date.now() + 60_000;
+        }
+        planned.pruned = mutation.removedEntries;
       }
-      return {
-        beforeCount,
-        ...applied,
-      };
+      summary.preservedRunning += planned.preservedRunning;
+      summary.pruned += planned.pruned;
+      if (planned.nextSweepAtMs !== null) {
+        summary.nextSweepAtMs = Math.min(summary.nextSweepAtMs ?? Infinity, planned.nextSweepAtMs);
+      }
     },
   );
+  return summary;
 }

@@ -8,25 +8,127 @@ import {
   responsesInputFingerprint,
   recordResponsesInputReplay,
 } from "./openai-responses-input-replay.js";
+import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import {
   convertProviderResponsesMessages,
   convertResponsesMessages,
   createOpenAIResponsesAssistantOutput,
   encodeTextSignatureV1,
 } from "./openai-responses-replay-messages-internal.js";
+import {
+  expectTypes,
+  userMessage as user,
+  wireMessage,
+  wireCall,
+  wireUser,
+} from "./openai-stream-cases.test-support.js";
 
-const model: Model = {
-  id: "async-model",
-  name: "Async Model",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1000,
-  maxTokens: 1000,
-};
+const model = createModel({ id: "async-model" });
+const imageModel: Model = { ...model, input: ["text", "image"] };
+
+function answer(
+  text: string,
+  responseId?: string,
+  signature?: string,
+  turnId?: string,
+): AssistantMessage {
+  return {
+    ...createOpenAIResponsesAssistantOutput(model),
+    responseId,
+    turnId,
+    content: [
+      {
+        type: "text",
+        text,
+        textSignature: signature ? encodeTextSignatureV1(signature) : undefined,
+      },
+    ],
+  };
+}
+function asyncPrefix(
+  responseId: string | undefined,
+  turnId?: string,
+  id = "async",
+): AssistantMessage {
+  return {
+    ...createOpenAIResponsesAssistantOutput(model),
+    responseId,
+    turnId,
+    stopReason: "toolUse",
+    content: [
+      { type: "toolCall", id: `call_${id}|fc_${id}`, name: "lookup", arguments: {}, async: true },
+    ],
+  };
+}
+
+it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
+] as const)("%s preserves tool-result caption positions and text bytes", (_name, convert) => {
+  const image = (data: string) => ({ type: "image" as const, mimeType: "image/png", data });
+  const text = (value: string) => ({ type: "text" as const, text: value });
+  const wireImage = (data: string) => ({
+    type: "input_image",
+    detail: "auto",
+    image_url: `data:image/png;base64,${data}`,
+  });
+  const wireText = (value: string) => ({ type: "input_text", text: value });
+  const [image1, image2, image3] = [image("aW1n"), image("aW1nMg=="), image("aW1nMw==")] as const;
+  const [wire1, wire2, wire3] = [
+    wireImage("aW1n"),
+    wireImage("aW1nMg=="),
+    wireImage("aW1nMw=="),
+  ] as const;
+  const before = text("Before:"),
+    after = text("After:");
+  const wireBefore = wireText("Before:"),
+    wireAfter = wireText("\nAfter:");
+  const cases: [ToolResultMessage["content"], unknown][] = [
+    [
+      [before, image1, image2, after, image3],
+      [wireBefore, wire1, wire2, wireAfter, wire3],
+    ],
+    [
+      [before, image1, after, image2, image3],
+      [wireBefore, wire1, wireAfter, wire2, wire3],
+    ],
+    [
+      [text("Captured screen"), image1],
+      [wireText("Captured screen"), wire1],
+    ],
+    [
+      [image1, text("Caption")],
+      [wire1, wireText("Caption")],
+    ],
+    [
+      [before, text("First screen"), image1, after, text("Second screen")],
+      [wireText("Before:\nFirst screen"), wire1, wireText("\nAfter:\nSecond screen")],
+    ],
+    [[image1], [wire1]],
+    [
+      [image1, image2],
+      [wire1, wire2],
+    ],
+    [[text("  first\n"), text(""), text("second  ")], "  first\n\nsecond  "],
+  ];
+  for (const [content, output] of cases) {
+    const result: ToolResultMessage = {
+      ...makeTextToolResult("call_compare|fc_compare", "compare", "", false, 2),
+      content,
+    };
+    const assistant: AssistantMessage = {
+      ...createOpenAIResponsesAssistantOutput(imageModel),
+      content: [{ type: "toolCall", id: result.toolCallId, name: "compare", arguments: {} }],
+      stopReason: "toolUse",
+    };
+    const replay = convert(imageModel, { messages: [assistant, result] }, new Set(["openai"]));
+    expect(replay.find((item) => item.type === "function_call_output")).toEqual({
+      type: "function_call_output",
+      call_id: "call_compare",
+      output,
+    });
+  }
+});
 
 it.each([
   ["provider", convertProviderResponsesMessages],
@@ -34,20 +136,16 @@ it.each([
 ] as const)(
   "%s keeps retained runtime carriers with their own users when steering is appended",
   (_name, convert) => {
-    const user = (content: string) => ({ role: "user" as const, content, timestamp: 1 });
-    const answer = (text: string): AssistantMessage => ({
-      ...createOpenAIResponsesAssistantOutput(model),
-      content: [{ type: "text", text }],
-    });
     const context: Context = {
-      messages: [
-        user("first"),
-        { ...user("first context"), runtimeContextCarrier: true },
-        answer("first answer"),
-        user("second"),
-        { ...user("second context"), runtimeContextCarrier: true },
-        answer("second answer"),
-      ],
+      messages: ["first", "second"].flatMap((turn) => [
+        user(turn),
+        {
+          ...user(`OpenClaw runtime context:\n${turn} context`),
+          timestamp: 0,
+          runtimeContext: {},
+        },
+        answer(`${turn} answer`),
+      ]),
     };
     const original = structuredClone(context);
     const prefix = convert(model, context, new Set(["openai"]));
@@ -60,10 +158,10 @@ it.each([
     expect(withSteering).toMatchObject(
       [
         "first",
-        "first context",
+        "OpenClaw runtime context:\nfirst context",
         "first answer",
         "second",
-        "second context",
+        "OpenClaw runtime context:\nsecond context",
         "second answer",
         "steering",
       ].map((text) => ({ content: [{ text }] })),
@@ -71,6 +169,45 @@ it.each([
     expect(context).toEqual(original);
   },
 );
+
+it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
+] as const)("%s anchors mixed-media shipped carriers before async replay", (_name, convert) => {
+  const prefix = asyncPrefix("resp_async");
+  const tail = answer("answer", "resp_async", "msg_tail");
+  const carrier = {
+    role: "user" as const,
+    content: [
+      { type: "text" as const, text: "runtime facts" },
+      { type: "image" as const, mimeType: "image/png", data: "aW1n" },
+    ],
+    timestamp: 2,
+    runtimeContextCarrier: true as const,
+  };
+  const result = makeTextToolResult("call_async|fc_async", "lookup", "found", false, 3);
+  const context: Context = {
+    messages: [user("question"), prefix, result, carrier, tail, user("steering", 4)],
+  };
+
+  const replay = convert(imageModel, context, new Set(["openai"]));
+
+  expectTypes(replay, [
+    "message",
+    "message",
+    "function_call",
+    "message",
+    "function_call_output",
+    "message",
+  ]);
+  expect(replay[1]).toMatchObject({
+    role: "user",
+    content: [
+      { type: "input_text", text: "runtime facts" },
+      { type: "input_image", image_url: "data:image/png;base64,aW1n" },
+    ],
+  });
+});
 
 it.each([
   ["provider early result", convertProviderResponsesMessages, true, false],
@@ -82,56 +219,23 @@ it.each([
 ] as const)(
   "%s replay preserves one async result and the incremental response prefix",
   (_name, convert, earlyResult, terminalIdentity) => {
-    const prefix: AssistantMessage = {
-      ...createOpenAIResponsesAssistantOutput(model),
-      responseId: terminalIdentity ? undefined : "resp_async",
-      turnId: terminalIdentity ? "streamed_turn" : undefined,
-      stopReason: "toolUse",
-      content: [
-        { type: "toolCall", id: "call_async|fc_async", name: "lookup", arguments: {}, async: true },
-      ],
-    };
-    const tail: AssistantMessage = {
-      ...createOpenAIResponsesAssistantOutput(model),
-      responseId: "resp_async",
-      turnId: terminalIdentity ? "streamed_turn" : undefined,
-      content: [
-        {
-          type: "text",
-          text: "independent answer",
-          textSignature: encodeTextSignatureV1("msg_tail"),
-        },
-      ],
-    };
-    const toolResult: ToolResultMessage = makeTextToolResult(
-      "call_async|fc_async",
-      "lookup",
-      "found",
-      false,
-      2,
-    );
+    const turnId = terminalIdentity ? "streamed_turn" : undefined;
+    const prefix = asyncPrefix(terminalIdentity ? undefined : "resp_async", turnId);
+    const tail = answer("independent answer", "resp_async", "msg_tail", turnId);
+    const toolResult = makeTextToolResult("call_async|fc_async", "lookup", "found", false, 2);
     const context: Context = {
       messages: [
-        { role: "user", content: "look up", timestamp: 1 },
+        user("look up"),
         prefix,
         ...(earlyResult ? [toolResult, tail] : [tail, toolResult]),
       ],
     };
     const original = structuredClone(context);
     const input = convert(model, context, new Set(["openai"]));
-    expect(input.map((item) => item.type)).toEqual([
-      "message",
-      "function_call",
-      "message",
-      "function_call_output",
-    ]);
+    expectTypes(input, ["message", "function_call", "message", "function_call_output"]);
     expect(input[1]).toMatchObject({ type: "function_call", async: true, call_id: "call_async" });
     const completedCall = {
-      type: "function_call",
-      id: "fc_async",
-      call_id: "call_async",
-      name: "lookup",
-      arguments: "{}",
+      ...wireCall("async", "lookup"),
       status: "completed",
       async: true,
     } satisfies Extract<ResponseOutputItem, { type: "function_call" }> & { async: true };
@@ -139,18 +243,7 @@ it.each([
       {
         lastRequest: { model: model.id, input: input.slice(0, 1) },
         lastResponseId: "resp_async",
-        lastResponseItems: [
-          completedCall,
-          {
-            type: "message",
-            id: "msg_tail",
-            role: "assistant",
-            status: "completed",
-            content: [
-              { type: "output_text", text: "independent answer", annotations: [], logprobs: [] },
-            ],
-          },
-        ],
+        lastResponseItems: [completedCall, wireMessage("msg_tail", "independent answer")],
       },
       { model: model.id, input },
     );
@@ -163,31 +256,25 @@ it.each([
 
     for (const target of [
       { ...model, id: "gpt-5.6-luna" },
-      { ...model, id: "claude-sonnet-4-6", provider: "anthropic", api: "anthropic-messages" },
+      createModel<"anthropic-messages">({
+        ...model,
+        id: "claude-sonnet-4-6",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        compat: undefined,
+      }),
     ]) {
       const switched = transformProviderMessages(context.messages, target);
-      expect(switched.map((message) => message.role)).toEqual([
-        "user",
-        "assistant",
-        "toolResult",
-        "assistant",
+      expect(switched).toMatchObject([
+        { role: "user" },
+        { role: "assistant", content: [{ type: "toolCall", id: "call_async|fc_async" }] },
+        { role: "toolResult", isError: false, content: [{ type: "text", text: "found" }] },
+        { role: "assistant" },
       ]);
-      expect(switched[1]).toMatchObject({
-        content: [{ type: "toolCall", id: "call_async|fc_async" }],
-      });
       expect(switched[1]?.content[0]).not.toHaveProperty("async");
-      expect(switched[2]).toMatchObject({
-        isError: false,
-        content: [{ type: "text", text: "found" }],
-      });
     }
     const switchedInput = convert({ ...model, id: "gpt-5.6-luna" }, context, new Set(["openai"]));
-    expect(switchedInput.map((item) => item.type)).toEqual([
-      "message",
-      "function_call",
-      "function_call_output",
-      "message",
-    ]);
+    expectTypes(switchedInput, ["message", "function_call", "function_call_output", "message"]);
     expect(switchedInput[1]).not.toHaveProperty("async");
 
     const brokenTail: AssistantMessage = {
@@ -204,11 +291,7 @@ it.each([
       },
       new Set(["openai"]),
     );
-    expect(interrupted.map((item) => item.type)).toEqual([
-      "message",
-      "function_call",
-      "function_call_output",
-    ]);
+    expectTypes(interrupted, ["message", "function_call", "function_call_output"]);
     expect(interrupted[2]).toMatchObject({ call_id: "call_async", output: "found" });
   },
 );
@@ -216,29 +299,10 @@ it.each([
 it.each(["before", "after"] as const)(
   "replays saved steering input %s its response after session recovery",
   (position) => {
-    const call: AssistantMessage = {
-      ...createOpenAIResponsesAssistantOutput(model),
-      responseId: "resp_parent",
-      stopReason: "toolUse",
-      content: [
-        { type: "toolCall", id: "call_1|fc_1", name: "lookup", arguments: {}, async: true },
-      ],
-    };
-    const result: ToolResultMessage = makeTextToolResult(
-      "call_1|fc_1",
-      "lookup",
-      "found",
-      false,
-      2,
-    );
+    const call = asyncPrefix("resp_parent", undefined, "1");
+    const result = makeTextToolResult("call_1|fc_1", "lookup", "found", false, 2);
     const input = { type: "function_call_output", call_id: "call_1", output: "found" };
-    const response: AssistantMessage = {
-      ...createOpenAIResponsesAssistantOutput(model),
-      responseId: "resp_steered",
-      content: [
-        { type: "text", text: "steered answer", textSignature: encodeTextSignatureV1("msg_2") },
-      ],
-    };
+    const response = answer("steered answer", "resp_steered", "msg_2");
     recordResponsesInputReplay(response, {
       afterResponseId: "resp_parent",
       before: [],
@@ -246,18 +310,12 @@ it.each(["before", "after"] as const)(
       [position]: [responsesInputFingerprint(input)],
     });
     const serialized = JSON.stringify({
-      messages: [
-        { role: "user", content: "original", timestamp: 0 },
-        call,
-        result,
-        { role: "user", content: "update", timestamp: 3 },
-        response,
-      ],
+      messages: [user("original", 0), call, result, user("update", 3), response],
     });
     const context: Context = JSON.parse(serialized);
     for (const convert of [convertProviderResponsesMessages, convertResponsesMessages]) {
       const replay = convert(model, context, new Set(["openai"]));
-      expect(replay.map((item) => item.type)).toEqual([
+      expectTypes(replay, [
         "message",
         "function_call",
         "message",
@@ -265,10 +323,7 @@ it.each(["before", "after"] as const)(
           ? ["function_call_output", "message"]
           : ["message", "function_call_output"]),
       ]);
-      expect(replay[2]).toMatchObject({
-        role: "user",
-        content: [{ type: "input_text", text: "update" }],
-      });
+      expect(replay[2]).toMatchObject(wireUser("update"));
       expect(replay.filter((item) => item.type === "function_call_output")).toEqual([input]);
     }
   },

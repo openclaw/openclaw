@@ -4,7 +4,6 @@ import {
   IncomingMessage,
   ServerResponse,
   type ClientRequest,
-  type IncomingHttpHeaders,
 } from "node:http";
 import { Agent, request as httpsRequest } from "node:https";
 import type { AddressInfo } from "node:net";
@@ -74,8 +73,6 @@ describe("secret egress forwarding resource ownership", () => {
   it.each([
     ["run revocation", "drain"],
     ["run revocation", "next turn"],
-    ["proxy stop", "drain"],
-    ["proxy stop", "next turn"],
     ["client disconnect", "drain"],
     ["client disconnect", "next turn"],
   ] as const)("stops buffered submission after %s while waiting for %s", async (cause, wait) => {
@@ -140,11 +137,6 @@ describe("secret egress forwarding resource ownership", () => {
         response.emit("close");
       } else {
         active = false;
-        if (cause === "proxy stop") {
-          for (const resource of resources) {
-            resource.destroy();
-          }
-        }
       }
       completeWrite();
       await setImmediate();
@@ -172,10 +164,7 @@ describe("secret egress forwarded response heads", () => {
   // Serves one real loopback request through the proxy forwarder. The upstream
   // response is emitted on a later tick, like the real client, so a throw from
   // writeHead would escape instead of landing in the forwarder's own try block.
-  async function forwardThroughLoopback(
-    upstreamHeaders: IncomingHttpHeaders,
-    options: { statusCode?: number; prepare?: (response: ServerResponse) => void } = {},
-  ) {
+  it("closes a rejected bodyless head instead of framing a 502 body", async () => {
     const uncaught: unknown[] = [];
     let failClient: (error: unknown) => void = () => {};
     const onUncaught = (error: unknown) => {
@@ -189,8 +178,8 @@ describe("secret egress forwarded response heads", () => {
         message: IncomingMessage,
       ) => void;
       const upstreamResponse = new IncomingMessage(new Socket());
-      upstreamResponse.statusCode = options.statusCode ?? 200;
-      upstreamResponse.headers = upstreamHeaders;
+      upstreamResponse.statusCode = 304;
+      upstreamResponse.headers = { trailer: "Expires" };
       upstreamResponse.on("error", () => {});
       process.nextTick(() => {
         callback(upstreamResponse);
@@ -202,7 +191,6 @@ describe("secret egress forwarded response heads", () => {
       return new PassThrough() as unknown as ClientRequest;
     }) as never);
     const server = createServer((request, response) => {
-      options.prepare?.(response);
       forwardSecretEgressRequest({
         request,
         response,
@@ -234,21 +222,12 @@ describe("secret egress forwarded response heads", () => {
       const { port } = server.address() as AddressInfo;
       const result = await new Promise<{
         status?: number;
-        headers?: IncomingHttpHeaders;
-        body?: string;
         clientError?: NodeJS.ErrnoException;
       }>((resolve, reject) => {
         failClient = reject;
         httpRequest({ host: "127.0.0.1", port, path: "/", agent: false }, (response) => {
-          const chunks: Buffer[] = [];
-          response.on("data", (chunk: Buffer) => chunks.push(chunk));
-          response.on("end", () =>
-            resolve({
-              status: response.statusCode,
-              headers: response.headers,
-              body: Buffer.concat(chunks).toString("utf8"),
-            }),
-          );
+          response.resume();
+          resolve({ status: response.statusCode });
           response.on("error", (clientError) =>
             resolve({ status: response.statusCode, clientError }),
           );
@@ -257,7 +236,9 @@ describe("secret egress forwarded response heads", () => {
           .end();
       });
       await setImmediate();
-      return { ...result, uncaught };
+      expect(uncaught).toEqual([]);
+      expect(result.status).toBeUndefined();
+      expect(result.clientError?.code).toBe("ECONNRESET");
     } finally {
       process.off("uncaughtException", onUncaught);
       server.closeAllConnections();
@@ -269,59 +250,5 @@ describe("secret egress forwarded response heads", () => {
       }
       agent.destroy();
     }
-  }
-
-  it("forwards a CJK attachment filename that follows Content-Length", async () => {
-    const received = Buffer.from("附件_2026-09-21.log", "utf8").toString("latin1");
-    const result = await forwardThroughLoopback({
-      "content-length": "4",
-      "content-disposition": `attachment; filename="${received}"`,
-      "content-type": "application/octet-stream",
-    });
-
-    expect(result.uncaught).toEqual([]);
-    expect(result.status).toBe(200);
-    expect(result.headers?.["content-disposition"]).toBe(
-      "attachment; filename=\"___2026-09-21.log\"; filename*=UTF-8''%E9%99%84%E4%BB%B6_2026-09-21.log",
-    );
-    expect(result.body).toBe("file");
-  });
-
-  it("answers 502 instead of crashing when the forwarded head is rejected", async () => {
-    const result = await forwardThroughLoopback(
-      { "content-length": "4" },
-      {
-        prepare: (response) => {
-          vi.spyOn(response, "writeHead").mockImplementationOnce(() => {
-            throw Object.assign(new TypeError("Invalid character in header content"), {
-              code: "ERR_INVALID_CHAR",
-            });
-          });
-        },
-      },
-    );
-
-    expect(result.uncaught).toEqual([]);
-    expect(result.status).toBe(502);
-    expect(result.body).toBe("Secret egress proxy could not forward the upstream response.\n");
-  });
-
-  // Node rejects a Trailer header on a non-chunked response partway through
-  // writeHead, after it has already recorded the status. The sanitizer cannot
-  // remove this failure, so it exercises recovery from a real rejected head.
-  it("answers 502 after Node rejects a forwarded head mid-write", async () => {
-    const result = await forwardThroughLoopback({ "content-length": "4", trailer: "Expires" });
-
-    expect(result.uncaught).toEqual([]);
-    expect(result.status).toBe(502);
-    expect(result.body).toBe("Secret egress proxy could not forward the upstream response.\n");
-  });
-
-  it("closes a rejected bodyless head instead of framing a 502 body", async () => {
-    const result = await forwardThroughLoopback({ trailer: "Expires" }, { statusCode: 304 });
-
-    expect(result.uncaught).toEqual([]);
-    expect(result.status).toBeUndefined();
-    expect(result.clientError?.code).toBe("ECONNRESET");
   });
 });

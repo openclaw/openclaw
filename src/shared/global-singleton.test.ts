@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   drainGlobalSingletonLifecycleState,
+  readGlobalSingleton,
   resolveGlobalMap,
   resolveGlobalSingleton,
 } from "./global-singleton.js";
@@ -18,49 +19,17 @@ describe("resolveGlobalSingleton", () => {
   it("reuses an initialized singleton", () => {
     const create = vi.fn(() => ({ value: 1 }));
 
+    expect(readGlobalSingleton(TEST_KEY)).toBeUndefined();
     const first = resolveGlobalSingleton(TEST_KEY, create);
     const second = resolveGlobalSingleton(TEST_KEY, create);
 
     expect(first).toBe(second);
+    expect(readGlobalSingleton(TEST_KEY)).toBe(first);
     expect(create).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not re-run the factory when undefined was already stored", () => {
-    const create = vi.fn(() => undefined);
-
-    expect(resolveGlobalSingleton(TEST_KEY, create)).toBeUndefined();
-    expect(resolveGlobalSingleton(TEST_KEY, create)).toBeUndefined();
-    expect(create).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("resolveGlobalMap", () => {
-  it("reuses the same map instance and preserves its contents", () => {
-    const first = resolveGlobalMap<string, number>(TEST_MAP_KEY);
-    first.set("a", 1);
-    const second = resolveGlobalMap<string, number>(TEST_MAP_KEY);
-
-    expect(first).toBe(second);
-    expect(second.get("a")).toBe(1);
   });
 });
 
 describe("global singleton lifecycle resets", () => {
-  it("registers an in-place reset for a prepopulated singleton", async () => {
-    const existing = { values: new Set(["stale"]) };
-    (globalThis as Record<PropertyKey, unknown>)[TEST_KEY] = existing;
-    const resolved = resolveGlobalSingleton(
-      TEST_KEY,
-      () => ({ values: new Set<string>() }),
-      (state) => state.values.clear(),
-    );
-
-    await drainGlobalSingletonLifecycleState();
-
-    expect(resolved).toBe(existing);
-    expect(existing.values.size).toBe(0);
-  });
-
   it("keeps map resets registered across repeated lifecycle drains", async () => {
     const map = resolveGlobalMap<string, number>(TEST_MAP_KEY, (state) => state.clear());
     map.set("first", 1);
@@ -136,6 +105,22 @@ describe("global singleton lifecycle resets", () => {
       delete (globalThis as Record<PropertyKey, unknown>)[failingKey];
       delete (globalThis as Record<PropertyKey, unknown>)[succeedingKey];
     }
+  });
+
+  it("retains shared state for terminal persistence after other owners close", async () => {
+    const sharedKey = Symbol("global-singleton:shared-state");
+    const shared = resolveGlobalMap<string, string>(sharedKey, "shared-state");
+    const runtime = resolveGlobalMap<string, string>(TEST_MAP_KEY, "close-and-restart");
+    runtime.set("server", "running");
+    shared.set("boot", "incomplete");
+
+    await drainGlobalSingletonLifecycleState("close", { retainSharedState: true });
+    expect(runtime.size).toBe(0);
+    expect(shared.get("boot")).toBe("incomplete");
+    shared.set("boot", "complete");
+    await drainGlobalSingletonLifecycleState("shared-state");
+    expect(shared.size).toBe(0);
+    delete (globalThis as Record<PropertyKey, unknown>)[sharedKey];
   });
 
   it("preserves close-only state across restart drains", async () => {

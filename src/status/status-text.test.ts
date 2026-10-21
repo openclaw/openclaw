@@ -1,11 +1,16 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { appendSessionCostLine } from "./status-runtime-lines.js";
 import { buildStatusText } from "./status-text.js";
 
 const mocks = vi.hoisted(() => ({
@@ -141,11 +146,25 @@ describe("buildStatusText channel features", () => {
 
 describe("buildStatusText global subagent scope", () => {
   beforeEach(() => resetSubagentRegistryForTests({ persist: false }));
-  afterEach(() => resetSubagentRegistryForTests({ persist: false }));
+  afterEach(async () => {
+    await resetSubagentRegistryForTests({ persist: false });
+    clearRuntimeConfigSnapshot();
+  });
 
   it("shows the selected global agent's children instead of the default agent's", async () => {
+    const cfg: StatusTextParams["cfg"] = {
+      agents: {
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: {
+          research: {},
+          ops: {},
+        },
+      },
+      session: { scope: "global" },
+    };
+    setRuntimeConfigSnapshot(cfg);
     for (const agentId of ["research", "ops"]) {
-      addSubagentRunForTests({
+      seedSubagentRunForReadTest({
         runId: `status-global-${agentId}`,
         childSessionKey: `agent:${agentId}:subagent:status-worker`,
         controllerSessionKey: "global",
@@ -160,15 +179,7 @@ describe("buildStatusText global subagent scope", () => {
     }
 
     const text = await renderTelegramStatus({
-      cfg: {
-        agents: {
-          entries: {
-            research: {},
-            ops: { default: true },
-          },
-        },
-        session: { scope: "global" },
-      },
+      cfg,
       sessionEntry: { sessionId: "global-status", updatedAt: 0 },
       sessionKey: "global",
       agentId: "research",
@@ -237,13 +248,15 @@ describe("Codex usage after runtime fallback", () => {
 });
 
 describe("session status cost line", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  let storePath: string;
   const sessionEntry = {
     sessionId: "cost-session",
     updatedAt: 0,
     sessionFile: formatSqliteSessionFileMarker({
       agentId: "main",
       sessionId: "cost-session",
-      storePath: "/tmp/openclaw-status-cost/sessions.json",
+      storePath: "/tmp/retired-status-cost/agents/main/agent/openclaw-agent.sqlite",
     }),
   };
 
@@ -261,8 +274,33 @@ describe("session status cost line", () => {
   };
 
   beforeEach(() => {
+    storePath = path.join(
+      tempDirs.make("status-cost-"),
+      "agents",
+      "main",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
     mocks.loadSessionCostSummariesFromCache.mockReset();
+    mocks.loadProviderUsageSummary.mockReset().mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        { provider: "openai", displayName: "OpenAI", windows: [{ label: "5h", usedPercent: 25 }] },
+      ],
+    });
   });
+
+  function renderCostStatus() {
+    return buildStatusText(
+      statusParams({
+        sessionEntry,
+        storePath,
+        modelAuthOverride: "oauth",
+        activeModelAuthOverride: "oauth",
+        pluginHealthLineOverride: "Plugins: test",
+      }),
+    );
+  }
 
   it("shows cached current-session cost and tokens", async () => {
     mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
@@ -280,9 +318,22 @@ describe("session status cost line", () => {
       ],
     });
 
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBe(
-      "💵 $1.23 · 456k tok (today)",
+    await expect(renderCostStatus()).resolves.toContain("💵 $1.23 · 456k tok (today)");
+    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessions: [
+          { sessionId: "cost-session", sessionFile: `sqlite:main:cost-session:${storePath}` },
+        ],
+      }),
     );
+  });
+
+  it("preserves existing usage when the session cost cache fails", async () => {
+    mocks.loadSessionCostSummariesFromCache.mockRejectedValue(new Error("cache unavailable"));
+
+    const text = await renderCostStatus();
+    expect(text).toContain("📊 Usage: 5h 75% left");
+    expect(text).not.toContain("💵");
   });
 
   it("omits a stale cached summary", async () => {
@@ -306,7 +357,7 @@ describe("session status cost line", () => {
       ],
     });
 
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBeNull();
+    await expect(renderCostStatus()).resolves.not.toContain("💵");
   });
 
   it("marks incomplete pricing", async () => {
@@ -329,46 +380,51 @@ describe("session status cost line", () => {
       ],
     });
 
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBe(
+    await expect(renderCostStatus()).resolves.toContain(
       "💵 missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2) · 456k tok (today)",
     );
   });
 });
 
 describe("buildStatusText thinking facts", () => {
-  it("keeps the prepared thinking level for a discovered Ollama reasoning model", async () => {
-    const text = await buildStatusText(
-      statusParams({
-        sessionEntry: {
-          sessionId: "wa-ollama-think",
-          updatedAt: 0,
-          thinkingLevel: "high",
-          modelOverride: "glm-5.2:cloud",
-          providerOverride: "ollama",
-        },
-        statusChannel: "whatsapp",
-        provider: "ollama",
-        model: "glm-5.2:cloud",
-        thinkingCatalog: [
-          {
-            provider: "ollama",
-            id: "glm-5.2:cloud",
-            reasoning: true,
+  it.each([
+    { reasoning: true, expected: "think high" },
+    { reasoning: false, expected: "think off (requested high; clamped)" },
+  ])(
+    "shows requested and effective thinking for an Ollama model (reasoning=$reasoning)",
+    async ({ reasoning, expected }) => {
+      const text = await buildStatusText(
+        statusParams({
+          sessionEntry: {
+            sessionId: "wa-ollama-think",
+            updatedAt: 0,
+            thinkingLevel: "high",
+            modelOverride: "glm-5.2:cloud",
+            providerOverride: "ollama",
           },
-        ],
-        resolvedThinkLevel: "high",
-        resolvedReasoningLevel: "on",
-        resolveDefaultThinkingLevel: async () => "high",
-        pluginHealthLineOverride: "Plugins: test",
-        primaryModelLabelOverride: "ollama/glm-5.2:cloud",
-        modelAuthOverride: "local",
-        activeModelAuthOverride: "local",
-      }),
-    );
+          statusChannel: "whatsapp",
+          provider: "ollama",
+          model: "glm-5.2:cloud",
+          thinkingCatalog: [
+            {
+              provider: "ollama",
+              id: "glm-5.2:cloud",
+              reasoning,
+            },
+          ],
+          resolvedThinkLevel: "high",
+          resolvedReasoningLevel: "on",
+          resolveDefaultThinkingLevel: async () => "high",
+          pluginHealthLineOverride: "Plugins: test",
+          primaryModelLabelOverride: "ollama/glm-5.2:cloud",
+          modelAuthOverride: "local",
+          activeModelAuthOverride: "local",
+        }),
+      );
 
-    expect(text).toContain("think high");
-    expect(text).not.toMatch(/think\s+off\b/);
-  });
+      expect(text).toContain(expected);
+    },
+  );
 });
 
 describe("buildStatusText lazy loader retry", () => {

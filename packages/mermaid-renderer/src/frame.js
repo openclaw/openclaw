@@ -12,32 +12,6 @@
         : maxLength;
     return value.slice(0, boundary);
   };
-  const properties = [
-    "fill",
-    "fill-opacity",
-    "fill-rule",
-    "stroke",
-    "stroke-width",
-    "stroke-opacity",
-    "stroke-linecap",
-    "stroke-linejoin",
-    "stroke-dasharray",
-    "stroke-dashoffset",
-    "opacity",
-    "font-family",
-    "font-size",
-    "font-weight",
-    "font-style",
-    "text-anchor",
-    "dominant-baseline",
-    "alignment-baseline",
-    "baseline-shift",
-    "text-decoration",
-    "letter-spacing",
-    "word-spacing",
-    "visibility",
-    "display",
-  ];
   // Both application scripts are already loaded. Diagram input can now cause
   // no script, image, stylesheet, font, fetch, or nested-frame network requests.
   const policy = document.createElement("meta");
@@ -57,6 +31,7 @@
     }
     window.removeEventListener("message", initialize);
     const port = event.ports[0];
+    const properties = event.data.presentationAttributes;
     let busy = false;
     const render = async ({ data: { id, source, config, maxSvgLength, maxSvgElements } }) => {
       if (busy) {

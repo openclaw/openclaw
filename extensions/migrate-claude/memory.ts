@@ -6,30 +6,16 @@ import {
 } from "openclaw/plugin-sdk/file-access-runtime";
 import { createMigrationItem, MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
 import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CLAUDE_AUTO_MEMORY_MAX_FILES,
   CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES,
-  readMemoryDir,
+  listMarkdownFiles,
   type ClaudeSource,
 } from "./source.js";
 
 const MIGRATION_REASON_TARGET_NOT_REGULAR = "target is not a regular file";
-
-async function lstatIfExists(filePath: string) {
-  try {
-    return await fs.lstat(filePath);
-  } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : undefined;
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return undefined;
-    }
-    throw error;
-  }
-}
 
 async function addInstructionItem(params: {
   items: MigrationItem[];
@@ -56,45 +42,6 @@ async function addInstructionItem(params: {
       details: { sourceLabel: params.sourceLabel },
     }),
   );
-}
-
-type MarkdownFileScan = {
-  files: string[];
-  truncatedBy?: "files" | "entries";
-};
-
-async function listMarkdownFiles(root: string, maxFiles: number): Promise<MarkdownFileScan> {
-  const files: string[] = [];
-  const pending = [""];
-  let visited = 0;
-  let truncatedBy: MarkdownFileScan["truncatedBy"];
-  scan: while (pending.length > 0) {
-    const relativeDir = pending.pop();
-    if (relativeDir === undefined) {
-      break;
-    }
-    for (const entry of await readMemoryDir(path.join(root, relativeDir))) {
-      visited += 1;
-      if (visited > CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES) {
-        truncatedBy = "entries";
-        break scan;
-      }
-      const relativePath = path.join(relativeDir, entry.name);
-      if (entry.isDirectory()) {
-        pending.push(relativePath);
-      } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
-        files.push(relativePath);
-        if (files.length > maxFiles) {
-          truncatedBy = "files";
-          break scan;
-        }
-      }
-    }
-  }
-  return {
-    files: files.toSorted((left, right) => left.localeCompare(right)),
-    ...(truncatedBy ? { truncatedBy } : {}),
-  };
 }
 
 function collectionSlug(label: string, id: string): string {
@@ -217,27 +164,29 @@ export async function buildMemoryItems(params: {
 }): Promise<MigrationItem[]> {
   const items: MigrationItem[] = [];
   if (params.includeInstructions !== false) {
-    await addInstructionItem({
-      items,
-      id: "workspace:CLAUDE.md",
-      source: params.source.projectMemoryPath,
-      target: path.join(params.targets.workspaceDir, "AGENTS.md"),
-      sourceLabel: "project CLAUDE.md",
-    });
-    await addInstructionItem({
-      items,
-      id: "workspace:.claude/CLAUDE.md",
-      source: params.source.projectDotClaudeMemoryPath,
-      target: path.join(params.targets.workspaceDir, "AGENTS.md"),
-      sourceLabel: "project .claude/CLAUDE.md",
-    });
-    await addInstructionItem({
-      items,
-      id: "memory:user-CLAUDE.md",
-      source: params.source.userMemoryPath,
-      target: path.join(params.targets.workspaceDir, "USER.md"),
-      sourceLabel: "user ~/.claude/CLAUDE.md",
-    });
+    for (const [id, source, target, sourceLabel] of [
+      ["workspace:CLAUDE.md", params.source.projectMemoryPath, "AGENTS.md", "project CLAUDE.md"],
+      [
+        "workspace:.claude/CLAUDE.md",
+        params.source.projectDotClaudeMemoryPath,
+        "AGENTS.md",
+        "project .claude/CLAUDE.md",
+      ],
+      [
+        "memory:user-CLAUDE.md",
+        params.source.userMemoryPath,
+        "USER.md",
+        "user ~/.claude/CLAUDE.md",
+      ],
+    ] as const) {
+      await addInstructionItem({
+        items,
+        id,
+        source,
+        target: path.join(params.targets.workspaceDir, target),
+        sourceLabel,
+      });
+    }
   }
   items.push(...(await buildAutoMemoryItems(params)));
   return items;

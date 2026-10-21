@@ -10,12 +10,6 @@ import type {
   PluginInstallTargetType,
 } from "./types.js";
 
-/**
- * Centralized builder for the public before_install hook contract.
- *
- * Keep all payload shaping here so partner feedback lands in one place instead
- * of drifting across individual install codepaths.
- */
 type BeforeInstallHookPayloadParams = {
   targetType: PluginInstallTargetType;
   targetName: string;
@@ -28,17 +22,6 @@ type BeforeInstallHookPayloadParams = {
   plugin?: PluginHookBeforeInstallPlugin;
 };
 
-function emptyBuiltinScan(): PluginHookBeforeInstallBuiltinScan {
-  return {
-    status: "ok",
-    scannedFiles: 0,
-    critical: 0,
-    warn: 0,
-    info: 0,
-    findings: [],
-  };
-}
-
 export function createBeforeInstallHookPayload(params: BeforeInstallHookPayloadParams): {
   ctx: PluginHookBeforeInstallContext;
   event: PluginHookBeforeInstallEvent;
@@ -50,7 +33,14 @@ export function createBeforeInstallHookPayload(params: BeforeInstallHookPayloadP
     sourcePathKind: params.sourcePathKind,
     ...(params.origin ? { origin: params.origin } : {}),
     request: params.request,
-    builtinScan: params.builtinScan ?? emptyBuiltinScan(),
+    builtinScan: params.builtinScan ?? {
+      status: "ok",
+      scannedFiles: 0,
+      critical: 0,
+      warn: 0,
+      info: 0,
+      findings: [],
+    },
     ...(params.skill ? { skill: params.skill } : {}),
     ...(params.plugin ? { plugin: params.plugin } : {}),
   };

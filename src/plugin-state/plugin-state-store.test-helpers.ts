@@ -1,4 +1,5 @@
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { pluginStatePublication } from "./plugin-state-publication.js";
 import { runWriteTransaction } from "./plugin-state-store.database.js";
 import {
   bindPluginStateEntry,
@@ -18,7 +19,13 @@ type PluginStateSeedEntry = {
 
 export function clearPluginStateStoreForTests(): void {
   runWriteTransaction("clear", ({ db }) => {
-    executeSqliteQuerySync(db, getPluginStateKysely(db).deleteFrom("plugin_state_entries"));
+    const result = executeSqliteQuerySync(
+      db,
+      getPluginStateKysely(db)
+        .deleteFrom("plugin_state_entries")
+        .returning(["plugin_id", "namespace", "entry_key"]),
+    );
+    pluginStatePublication.stageDeletions(db, result.rows);
   });
   optionPolicy.clear();
 }

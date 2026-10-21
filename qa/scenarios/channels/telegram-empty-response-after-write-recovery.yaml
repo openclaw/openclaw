@@ -26,7 +26,7 @@ scenario:
     config:
       requiredProviderMode: mock-openai
       promptSnippet: Empty response after write recovery QA check
-      retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      retryNeedle: "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:"
       expectedMarker: TELEGRAM-EMPTY-WRITE-RECOVERED-OK
 
 flow:

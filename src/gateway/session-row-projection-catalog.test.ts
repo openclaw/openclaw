@@ -10,16 +10,19 @@ import { createSessionRowProjectionCatalog } from "./session-row-projection-cata
 it("retains completed catalog facts during runtime replacement and adopts completed or failed publications", async () => {
   const pluginRegistry = createEmptyPluginRegistry();
   const metadataSnapshot = createPluginMetadataSnapshotFixture();
+  const prepared = (
+    entries: PreparedGatewayModelCatalog["entries"],
+    overrides: Partial<Parameters<typeof createPreparedGatewayModelCatalog>[0]> = {},
+  ) =>
+    createPreparedGatewayModelCatalog({ entries, pluginRegistry, metadataSnapshot, ...overrides });
+  const other = prepared([
+    { provider: "unit-test", id: "other", name: "Other", contextTokens: 32_768 },
+  ]);
+  const onlyOther = (value = other) => new Map([["other", value]]);
   const view = (contextTokens: number) =>
     new Map([
-      [
-        "main",
-        createPreparedGatewayModelCatalog({
-          entries: [{ provider: "unit-test", id: "model", name: "Model", contextTokens }],
-          pluginRegistry,
-          metadataSnapshot,
-        }),
-      ],
+      ["main", prepared([{ provider: "unit-test", id: "model", name: "Model", contextTokens }])],
+      ["other", other],
     ]);
   let next: Map<string, PreparedGatewayModelCatalog | undefined> = view(8_192);
   const read = vi.fn(async () => next);
@@ -29,53 +32,120 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     onInvalidated: () => catalog.invalidate(),
     onRefreshed: refreshed,
   });
-  try {
-    await catalog.refresh();
-    const original = catalog.current;
-    refreshed.mockClear();
-    read.mockClear();
-    const first = createDeferredCore();
-    notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: first.promise });
-    next = new Map([["main", undefined]]);
-    await catalog.refresh();
+  const publish = (event: Parameters<typeof notifyPreparedModelRuntimePublication>[0]) => {
+    notifyPreparedModelRuntimePublication(event);
+    return catalog.refresh();
+  };
+  const retained = () => {
     expect(catalog.current).toBe(original);
     expect(refreshed).not.toHaveBeenCalled();
     expect(read).not.toHaveBeenCalled();
+  };
+  let original: typeof catalog.current;
+  const adopted = (changed: ReadonlySet<string> | undefined) => {
+    expect(refreshed).toHaveBeenLastCalledWith(changed);
+    expect(catalog.current).toBe(next);
+  };
+  try {
+    await catalog.refresh();
+    expect(refreshed).toHaveBeenLastCalledWith(undefined);
+    original = catalog.current;
+    refreshed.mockClear();
+    read.mockClear();
+    await publish({ phase: "catalog-status", modelFactsChanged: false });
+    retained();
+    const first = createDeferredCore();
+    const reading = createDeferredCore<typeof next>();
+    read.mockReturnValueOnce(reading.promise);
+    catalog.invalidate();
+    const inFlight = catalog.refresh();
+    notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: first.promise });
+    next = new Map([
+      ["main", undefined],
+      ["other", other],
+    ]);
+    reading.resolve(next);
+    await inFlight;
+    expect(catalog.current).toBe(original);
+    expect(refreshed).not.toHaveBeenCalled();
+    read.mockClear();
+    await catalog.refresh();
+    retained();
 
     // Provider publication does not finish the pending runtime replacement.
-    notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
-    await catalog.refresh();
+    await publish({ phase: "catalog-published" });
     expect(catalog.current).toBe(original);
-    const second = createDeferredCore();
-    notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: second.promise });
+    const successor = createDeferredCore();
+    notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: successor.promise });
     first.resolve();
     await first.promise;
     await catalog.refresh();
-    expect(catalog.current).toBe(original);
+    retained();
+
     next = view(8_192);
-    second.resolve();
-    await second.promise;
-    notifyPreparedModelRuntimePublication({ phase: "published" });
-    await catalog.refresh();
-    expect(refreshed).toHaveBeenLastCalledWith(false);
-    expect(catalog.current).toBe(next);
+    successor.resolve();
+    await successor.promise;
+    await publish({ phase: "published" });
+    adopted(new Set());
 
     // A scoped auth refresh can finish without a global publication.
     notifyPreparedModelRuntimePublication({ phase: "invalidated" });
     next = view(16_384);
     await catalog.refresh();
-    expect(refreshed).toHaveBeenLastCalledWith(true);
-    expect(catalog.current).toBe(next);
+    adopted(new Set(["main"]));
 
     const failed = createDeferredCore();
     notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: failed.promise });
-    next = new Map([["main", undefined]]);
+    next = new Map([
+      ["main", undefined],
+      ["other", other],
+    ]);
     notifyPreparedModelRuntimePublication({ phase: "failed", error: new Error("Refresh failed") });
     failed.reject(new Error("Refresh failed"));
     await failed.promise.catch(() => {});
     await catalog.refresh();
-    expect(refreshed).toHaveBeenLastCalledWith(true);
-    expect(catalog.current).toBe(next);
+    adopted(undefined);
+
+    next = onlyOther();
+    await publish({ phase: "catalog-published" });
+    adopted(undefined);
+
+    const replacementRegistry = createEmptyPluginRegistry();
+    // Registry and metadata identities alone do not change row policy.
+    for (const nextMetadata of [metadataSnapshot, createPluginMetadataSnapshotFixture()]) {
+      next = onlyOther(
+        prepared(other.entries, {
+          pluginRegistry: replacementRegistry,
+          metadataSnapshot: nextMetadata,
+        }),
+      );
+      await publish({ phase: "catalog-published" });
+      adopted(new Set());
+    }
+    const harnessMetadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "unregistered-harness",
+          origin: "global",
+          activation: { onAgentHarnesses: ["synthetic"] },
+        },
+      ],
+    });
+    for (const config of [
+      {},
+      { plugins: { entries: { "unregistered-harness": { enabled: false } } } },
+    ]) {
+      next = onlyOther(
+        prepared(other.entries, {
+          pluginRegistry: replacementRegistry,
+          metadataSnapshot: harnessMetadata,
+          config,
+        }),
+      );
+      await publish({ phase: "catalog-published" });
+      // Config still controls an unloaded harness even with identical index and registrations.
+      expect(refreshed).toHaveBeenLastCalledWith(new Set(["other"]));
+    }
   } finally {
     catalog.dispose();
   }

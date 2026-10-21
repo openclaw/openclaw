@@ -1,5 +1,6 @@
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -7,25 +8,25 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
-import {
-  cacheValidityTokensEqual,
-  readSessionEntryCacheValidityToken,
-} from "./session-accessor.sqlite-entry-revision.js";
+import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
+import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
-  partitionUnchangedPlannedLifecycleArtifactEntries,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
-  SessionEntryMaintenanceInput,
+  ReclamationDatabaseOptions,
+  SessionEntryMaintenancePlan,
+  SessionMaintenanceMetadataCommand,
+  SessionMaintenanceMetadataResult,
   SqliteSessionReclamationCallbacks,
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
-  invalidateSessionEntryMaintenanceAgeFact,
+  applySessionEntryMaintenanceAgeChange,
+  readSessionEntryMaintenanceNextAgeAt,
   readSessionEntryMaintenanceAgeFact,
-  stageSessionEntryMaintenanceAgeFact,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   applySessionEntryMaintenanceInDatabase,
@@ -37,24 +38,28 @@ import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-r
 type MaintenancePlan = Extract<
   SqliteSessionReclamationPlan,
   {
-    kind: "maintenance-plan" | "maintenance-finalize" | "maintenance-statistics";
+    kind:
+      | "maintenance-plan"
+      | "maintenance-finalize"
+      | "maintenance-statistics"
+      | "maintenance-age";
   }
 >;
 
-class MaintenancePreservationRequiredError extends Error {}
-
-function readPreservation(input: SessionEntryMaintenanceInput) {
-  if (input.preservation === null) {
-    throw new MaintenancePreservationRequiredError(
-      "SQLite maintenance requires session preservation",
-    );
+function prepareWorkerAgeFact(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  plan: Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>,
+) {
+  for (const change of plan.ageChanges ?? []) {
+    applySessionEntryMaintenanceAgeChange(database.db, change);
   }
-  return input.preservation;
 }
 
-/** Retain the snapshot connection; its revision fences age facts, not unrelated row writes. */
+/** Retain the planning connection until selected rows are checked by the writer. */
 export function prepareSessionMaintenanceInWorker(
-  plan: Extract<MaintenancePlan, { kind: "maintenance-plan" }>,
+  plan: Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }> & {
+    databaseOptions: ReclamationDatabaseOptions;
+  },
 ) {
   const reader = retainOpenClawAgentDatabaseReadOnly(plan.databaseOptions);
   if (!reader.found) {
@@ -63,39 +68,24 @@ export function prepareSessionMaintenanceInWorker(
   const { database, claim } = reader;
   try {
     claim.assertCurrent();
-    stageSessionEntryMaintenanceAgeFact(database.db, plan.input.ageFact);
-    const revision = readSessionEntryCacheValidityToken(database.db);
-    let apply: ReturnType<typeof prepareSessionEntryMaintenanceInDatabase>;
-    try {
-      apply = runSqliteDeferredTransactionSync(
-        database.db,
-        () =>
-          prepareSessionEntryMaintenanceInDatabase(database, plan.input, () =>
-            readPreservation(plan.input),
-          ),
-        { databaseLabel: database.path, operationLabel: "session.maintenance.plan.read" },
-      );
-    } catch (error) {
-      if (!(error instanceof MaintenancePreservationRequiredError)) {
-        throw error;
-      }
-      apply = () => {
-        throw error;
-      };
-    }
+    prepareWorkerAgeFact(database, plan);
+    const prepared = runSqliteReadSnapshotSync(
+      database.db,
+      () =>
+        prepareSessionEntryMaintenanceInDatabase(
+          database,
+          plan.input,
+          () => plan.input.preservation,
+        ),
+      { databaseLabel: database.path, operationLabel: "session.maintenance.plan.read" },
+    );
     return {
-      apply(current: OpenClawAgentDatabase) {
+      apply(
+        current: OpenClawAgentDatabase,
+        onArchived?: Parameters<typeof applySessionEntryMaintenanceInDatabase>[3],
+      ) {
         claim.assertCurrent();
-        const snapshotCurrent = cacheValidityTokensEqual(
-          revision,
-          readSessionEntryCacheValidityToken(database.db),
-        );
-        const maintenance = apply(current);
-        // Unrelated commits can change age/count hints without changing the selected victims.
-        if (!snapshotCurrent) {
-          invalidateSessionEntryMaintenanceAgeFact(current.db);
-        }
-        return maintenance;
+        return prepared(current, onArchived);
       },
       release: claim.release,
     };
@@ -110,76 +100,128 @@ export function reclaimSessionMaintenanceInTransaction(
   callbacks: SqliteSessionReclamationCallbacks,
   prepared?: ReturnType<typeof prepareSessionMaintenanceInWorker>,
 ): SqliteSessionReclamationResult {
+  if (plan.kind !== "maintenance-finalize") {
+    return runSessionMaintenanceMetadataInTransaction(plan, callbacks, prepared);
+  }
+  return runSqliteSessionDeletionTransaction(
+    (database) => {
+      callbacks.beforeMutation?.();
+      const result = finalizeSessionMaintenanceInDatabase(database, plan);
+      callbacks.onCommit?.(database, result);
+      return result;
+    },
+    plan.databaseOptions,
+    { operationLabel: "session.maintenance.finalize" },
+  );
+}
+
+/** The native adapter and canonical executor share the same optimistic removal partition. */
+export function finalizeSessionMaintenanceInDatabase(
+  database: OpenClawAgentDatabase,
+  plan: Extract<SqliteSessionReclamationPlan, { kind: "maintenance-finalize" }>,
+): Extract<SqliteSessionReclamationResult, { kind: "maintenance-finalize" }> {
+  const committedEntryIndices: number[] = [];
+  const unchanged = plan.entries.filter((planned, index) => {
+    const current = readExactSessionEntryRow(database, planned.sessionKey)?.entry;
+    if (!sqliteSessionEntriesEqual(current, planned.expectedEntry)) {
+      return false;
+    }
+    committedEntryIndices.push(index);
+    return true;
+  });
+  const archivedTranscripts = deleteMaterializedSessionStatePlans(
+    database,
+    plan.materializedPlans,
+    undefined,
+    new Set(unchanged.map((entry) => entry.sessionKey)),
+  );
+  deletePlannedLifecycleArtifactEntries(database, unchanged);
+  return {
+    kind: plan.kind,
+    value: {
+      archivedTranscripts,
+      committedEntryIndices,
+    },
+  };
+}
+
+export function runSessionMaintenanceMetadataInTransaction(
+  plan: SessionMaintenanceMetadataCommand & { databaseOptions: ReclamationDatabaseOptions },
+  callbacks: {
+    beforeMutation?: (database: OpenClawAgentDatabase) => void;
+    onCommit?: SqliteSessionReclamationCallbacks["onCommit"];
+    beforeCommit?: (
+      database: OpenClawAgentDatabase,
+      maintenance?: SessionEntryMaintenancePlan,
+    ) => void;
+    onArchived?: Parameters<typeof applySessionEntryMaintenanceInDatabase>[3];
+  },
+  prepared?: ReturnType<typeof prepareSessionMaintenanceInWorker>,
+): SessionMaintenanceMetadataResult {
   if (plan.kind === "maintenance-statistics") {
     const database = openOpenClawAgentDatabase(plan.databaseOptions);
-    runWithSqliteBusyTimeout(database.db, 0, () =>
+    const run = () =>
       runOpenClawAgentWriteTransaction(
         (current) => {
-          callbacks.beforeMutation?.();
+          callbacks.beforeMutation?.(current);
           refreshSessionPlannerStatisticsInDatabase(current);
           callbacks.onCommit?.(current);
+          callbacks.beforeCommit?.(current);
         },
         plan.databaseOptions,
-        { busyTimeoutMs: 0 },
-      ),
-    );
+        { busyTimeoutMs: 0, operationLabel: "session.maintenance.statistics" },
+      );
+    if (isPostgresSqlConnection(database.db)) {
+      run();
+    } else {
+      runWithSqliteBusyTimeout(database.db, 0, run);
+    }
     return { kind: plan.kind, value: true };
   }
-  if (plan.kind === "maintenance-plan") {
-    try {
-      return runOpenClawAgentWriteTransaction(
-        (database) => {
-          callbacks.beforeMutation?.();
-          // Retained Workers receive only the parent's current fact, including its absence.
-          stageSessionEntryMaintenanceAgeFact(database.db, plan.input.ageFact);
-          const maintenance = prepared
-            ? prepared.apply(database)
-            : applySessionEntryMaintenanceInDatabase(database, plan.input, () =>
-                readPreservation(plan.input),
-              );
-          if (maintenance.archived > 0 || maintenance.entryRemovals.length > 0) {
-            callbacks.onCommit?.(database);
+  try {
+    return runOpenClawAgentWriteTransaction(
+      (database) => {
+        callbacks.beforeMutation?.(database);
+        if (plan.kind === "maintenance-age") {
+          for (const change of plan.ageChanges ?? []) {
+            applySessionEntryMaintenanceAgeChange(database.db, change);
           }
+          callbacks.beforeCommit?.(database);
           return {
-            kind: plan.kind,
-            value: maintenance,
-            ageFact: readSessionEntryMaintenanceAgeFact(database.db, plan.input.maintenance),
+            kind: "maintenance-age",
+            nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.maintenance),
+            ageFact: readSessionEntryMaintenanceAgeFact(database.db, plan.maintenance),
           };
-        },
-        plan.databaseOptions,
-        { operationLabel: "session.maintenance.plan.write" },
-      );
-    } catch (error) {
-      if (error instanceof SqliteReclamationInputsChangedError) {
-        return { kind: "maintenance-plan-stale" };
-      }
-      if (error instanceof MaintenancePreservationRequiredError) {
-        // Candidate discovery requested protection before writes; the transaction has rolled back.
-        return { kind: "maintenance-preservation-required" };
-      }
-      throw error;
-    }
-  }
-
-  return runSqliteSessionDeletionTransaction((database) => {
-    callbacks.beforeMutation?.();
-    const partition = partitionUnchangedPlannedLifecycleArtifactEntries(database, plan.entries);
-    const archivedTranscripts = deleteMaterializedSessionStatePlans(
-      database,
-      plan.materializedPlans,
-      undefined,
-      new Set(partition.unchanged.map((entry) => entry.sessionKey)),
-    );
-    deletePlannedLifecycleArtifactEntries(database, partition.unchanged);
-    const result: Extract<SqliteSessionReclamationResult, { kind: "maintenance-finalize" }> = {
-      kind: plan.kind,
-      value: {
-        archivedTranscripts,
-        changedEntries: partition.changed,
-        committedEntries: partition.unchanged,
+        }
+        if (!prepared) {
+          prepareWorkerAgeFact(database, plan);
+        }
+        const maintenance = prepared
+          ? prepared.apply(database, callbacks.onArchived)
+          : applySessionEntryMaintenanceInDatabase(
+              database,
+              plan.input,
+              () => plan.input.preservation,
+              callbacks.onArchived,
+            );
+        if (maintenance.archived > 0 || maintenance.entryRemovals.length > 0) {
+          callbacks.onCommit?.(database);
+        }
+        callbacks.beforeCommit?.(database, maintenance);
+        return {
+          kind: plan.kind,
+          value: maintenance,
+          nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.input.maintenance),
+          ageFact: readSessionEntryMaintenanceAgeFact(database.db, plan.input.maintenance),
+        };
       },
-    };
-    callbacks.onCommit?.(database, result);
-    return result;
-  }, plan.databaseOptions);
+      plan.databaseOptions,
+      { operationLabel: "session.maintenance.plan.write" },
+    );
+  } catch (error) {
+    if (error instanceof SqliteReclamationInputsChangedError) {
+      return { kind: "maintenance-plan-stale" };
+    }
+    throw error;
+  }
 }

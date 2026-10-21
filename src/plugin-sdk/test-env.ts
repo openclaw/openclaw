@@ -14,6 +14,7 @@ export {
 export { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
 export { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 export { useIsolatedStateGuard } from "../test-utils/state-path-guard.js";
+export { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 export { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 export { captureEnv, withEnv, withEnvAsync } from "../test-utils/env.js";
 export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js";
@@ -25,6 +26,10 @@ export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 export { withTempDir } from "../test-utils/temp-dir.js";
 export { createStagedInputOwnershipFixture } from "../media/staged-inputs.test-support.js";
 export { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+export {
+  runQaGatewayFixture,
+  stopQaGatewayFixture,
+} from "../../test/helpers/qa-gateway-cleanup.js";
 export { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 export { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 export { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";

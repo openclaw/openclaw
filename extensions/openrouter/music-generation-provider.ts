@@ -7,15 +7,13 @@ import type {
   MusicGenerationSourceImage,
 } from "openclaw/plugin-sdk/music-generation";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
+import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
 import {
-  assertOkOrThrowHttpError,
-  createProviderOperationDeadline,
-  postJsonRequest,
-  resolveProviderOperationTimeoutMs,
-  type ProviderOperationDeadline,
-} from "openclaw/plugin-sdk/provider-http";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+  asOptionalRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
 
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview";
@@ -27,11 +25,6 @@ const OPENROUTER_MUSIC_MODELS = [
   OPENROUTER_CLIP_MUSIC_MODEL,
 ] as const;
 
-type OpenRouterAudioStreamResult = {
-  audioBuffer: Buffer;
-  transcript: string;
-};
-
 type OpenRouterAudioStreamAccumulator = {
   audioBuffers: Buffer[];
   audioBytes: number;
@@ -41,10 +34,7 @@ type OpenRouterAudioStreamAccumulator = {
   maxBytes: number;
 };
 
-function imageToContentPart(image: MusicGenerationSourceImage): {
-  type: "image_url";
-  image_url: { url: string };
-} {
+function imageToContentPart(image: MusicGenerationSourceImage) {
   const url =
     normalizeOptionalString(image.url) ??
     (image.buffer
@@ -74,11 +64,7 @@ function buildOpenRouterMusicPrompt(req: MusicGenerationRequest): string {
   return parts.join("\n\n");
 }
 
-function buildOpenRouterMessageContent(
-  req: MusicGenerationRequest,
-):
-  | string
-  | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> {
+function buildOpenRouterMessageContent(req: MusicGenerationRequest) {
   const prompt = buildOpenRouterMusicPrompt(req);
   const images = req.inputImages ?? [];
   if (images.length === 0) {
@@ -87,24 +73,11 @@ function buildOpenRouterMessageContent(
   return [{ type: "text", text: prompt }, ...images.map(imageToContentPart)];
 }
 
-function readDeltaAudio(part: unknown): { data?: string; transcript?: string } | undefined {
-  if (!isRecord(part)) {
-    return undefined;
-  }
-  const choices = part.choices;
-  if (!Array.isArray(choices)) {
-    return undefined;
-  }
-  const first = choices[0];
-  if (!isRecord(first)) {
-    return undefined;
-  }
-  const delta = first.delta;
-  if (!isRecord(delta)) {
-    return undefined;
-  }
-  const audio = delta.audio;
-  if (!isRecord(audio)) {
+function readDeltaAudio(part: unknown) {
+  const choices = asOptionalRecord(part)?.choices;
+  const first = Array.isArray(choices) ? asOptionalRecord(choices[0]) : undefined;
+  const audio = asOptionalRecord(asOptionalRecord(first?.delta)?.audio);
+  if (!audio) {
     return undefined;
   }
   return {
@@ -205,40 +178,7 @@ function processOpenRouterSseLine(line: string, result: OpenRouterAudioStreamAcc
   return false;
 }
 
-function resolveOpenRouterStreamRemainingMs(deadline: ProviderOperationDeadline): number {
-  return resolveProviderOperationTimeoutMs({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-}
-
-async function readOpenRouterStreamChunk(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  deadline: ProviderOperationDeadline,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  const timeoutMs = resolveOpenRouterStreamRemainingMs(deadline);
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      reader.read(),
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
-}
-
-async function readOpenRouterAudioStream(
-  response: Response,
-  deadline: ProviderOperationDeadline,
-  maxBytes: number,
-): Promise<OpenRouterAudioStreamResult> {
+async function readOpenRouterAudioStream(response: Response, maxBytes: number) {
   if (!response.body) {
     throw new Error("OpenRouter music generation response missing stream body");
   }
@@ -257,7 +197,7 @@ async function readOpenRouterAudioStream(
   let pendingBytes = 0;
   try {
     for (;;) {
-      const { value, done } = await readOpenRouterStreamChunk(reader, deadline);
+      const { value, done } = await reader.read();
       if (done) {
         break;
       }
@@ -292,7 +232,6 @@ async function readOpenRouterAudioStream(
         lineFragments.push(chunk.slice(start));
       }
     }
-    resolveOpenRouterStreamRemainingMs(deadline);
     lineFragments.push(decoder.decode());
     const buffer = lineFragments.join("");
     pendingBytes = Buffer.byteLength(buffer, "utf8");
@@ -315,7 +254,9 @@ async function readOpenRouterAudioStream(
     void reader.cancel().catch(() => {});
     try {
       reader.releaseLock();
-    } catch {}
+    } catch {
+      // A timed-out read can still be pending while transport cancellation settles.
+    }
   }
 }
 
@@ -325,7 +266,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_OPENROUTER_MUSIC_MODEL,
     models: [...OPENROUTER_MUSIC_MODELS],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "openrouter", ...ctx }),
     capabilities: {
       generate: {
         maxTracks: 1,
@@ -362,12 +303,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
         });
       const model = normalizeOptionalString(req.model) ?? DEFAULT_OPENROUTER_MUSIC_MODEL;
       const format = req.format ?? "wav";
-      const requestedTimeoutMs = resolvePositiveTimerTimeoutMs(req.timeoutMs, DEFAULT_TIMEOUT_MS);
-      const streamDeadline = createProviderOperationDeadline({
-        timeoutMs: requestedTimeoutMs,
-        label: "OpenRouter music generation",
-      });
-      const timeoutMs = resolveOpenRouterStreamRemainingMs(streamDeadline);
+      const timeoutMs = resolvePositiveTimerTimeoutMs(req.timeoutMs, DEFAULT_TIMEOUT_MS);
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/chat/completions`,
         headers,
@@ -388,7 +324,6 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
         await assertOkOrThrowHttpError(response, "OpenRouter music generation failed");
         const streamResult = await readOpenRouterAudioStream(
           response,
-          streamDeadline,
           resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
         );
         if (streamResult.audioBuffer.byteLength === 0) {
@@ -410,6 +345,13 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
             requestedFormat: format,
           },
         };
+      } catch (error) {
+        if (error instanceof Error && error.name === "TimeoutError") {
+          throw new Error(`OpenRouter music generation timed out after ${timeoutMs}ms`, {
+            cause: error,
+          });
+        }
+        throw error;
       } finally {
         await release();
       }

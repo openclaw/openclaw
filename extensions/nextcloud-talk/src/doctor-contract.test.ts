@@ -1,15 +1,13 @@
-// Nextcloud Talk tests cover doctor contract plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
-import type { CoreConfig } from "./types.js";
 
 function talkConfig(entry: Record<string, unknown>): OpenClawConfig {
   return { channels: { "nextcloud-talk": entry } } as never;
 }
 
-describe("nextcloud-talk streaming legacy config rules", () => {
+describe("nextcloud-talk Doctor", () => {
   const rootRule = legacyConfigRules.find(
     (rule) =>
       rule.path.join(".") === "channels.nextcloud-talk" && rule.message.includes("chunkMode"),
@@ -19,16 +17,11 @@ describe("nextcloud-talk streaming legacy config rules", () => {
     expect(rootRule?.match?.({ chunkMode: "newline" }, {})).toBe(true);
     expect(rootRule?.match?.({ streaming: { chunkMode: "newline" } }, {})).toBe(false);
   });
-});
-
-describe("nextcloud-talk normalizeCompatibilityConfig streaming aliases", () => {
   it("moves flat delivery aliases at root and account level with root seeding", () => {
     const result = normalizeCompatibilityConfig({
       cfg: talkConfig({
         chunkMode: "newline",
-        accounts: {
-          home: { blockStreaming: true },
-        },
+        accounts: { home: { blockStreaming: true } },
       }),
     });
 
@@ -41,34 +34,35 @@ describe("nextcloud-talk normalizeCompatibilityConfig streaming aliases", () => 
     expect(home?.streaming).toEqual({ chunkMode: "newline", block: { enabled: true } });
     expect(home?.blockStreaming).toBeUndefined();
   });
+  it.each([
+    ["absent", undefined, []],
+    ["unconfigured", { botSecret: "test-bot-secret" }, []],
+    [
+      "disabled",
+      { enabled: false, baseUrl: "https://cloud.example.com", botSecret: "test-bot-secret" },
+      [],
+    ],
+    [
+      "configured",
+      { baseUrl: "https://cloud.example.com", botSecret: "test-bot-secret" },
+      ["default"],
+    ],
+  ] as const)(
+    "preserves historical listeners only for %s channel state",
+    (_name, entry, accounts) => {
+      const cfg = entry ? talkConfig(entry) : {};
+      expect(normalizeCompatibilityConfig({ cfg }).historicalWebhookAccountIds).toEqual(accounts);
+    },
+  );
 
-  it("still runs the legacy private-network migration and stays idempotent", () => {
-    const first = normalizeCompatibilityConfig({
-      cfg: talkConfig({ allowPrivateNetwork: true, blockStreaming: false }),
-    });
-    const talk = first.config.channels?.["nextcloud-talk"] as unknown as Record<string, unknown>;
-    expect(talk.allowPrivateNetwork).toBeUndefined();
-    expect(talk.network).toEqual({ dangerouslyAllowPrivateNetwork: true });
-    expect(talk.streaming).toEqual({ block: { enabled: false } });
-
-    const second = normalizeCompatibilityConfig({ cfg: first.config });
-    expect(second.changes).toEqual([]);
-  });
-});
-
-describe("Nextcloud Talk webhook port migration", () => {
   it("preserves explicit listeners and host-only settings with the historical port", () => {
-    const cfg: CoreConfig = {
-      channels: {
-        "nextcloud-talk": {
-          webhookHost: "127.0.0.1",
-          accounts: {
-            existing: { webhookPort: 8788 },
-            fresh: { baseUrl: "https://cloud.example.com" },
-          },
-        },
+    const cfg = talkConfig({
+      webhookHost: "127.0.0.1",
+      accounts: {
+        existing: { webhookPort: 8788 },
+        fresh: { baseUrl: "https://cloud.example.com" },
       },
-    };
+    });
     const result = normalizeCompatibilityConfig({ cfg });
     expect(result.config.channels?.["nextcloud-talk"]).toEqual({
       legacyWebhook: { port: 8788, host: "127.0.0.1" },
@@ -94,15 +88,12 @@ describe("Nextcloud Talk webhook port migration", () => {
         },
       }),
     });
+    const listener = (accountId: string) =>
+      resolveNextcloudTalkAccount({ cfg: result.config, accountId }).config.legacyWebhook;
     for (const accountId of ["default", "disabled", "inherited"]) {
-      expect(
-        resolveNextcloudTalkAccount({ cfg: result.config, accountId }).config.legacyWebhook,
-      ).toBe(false);
+      expect(listener(accountId)).toBe(false);
     }
-    expect(
-      resolveNextcloudTalkAccount({ cfg: result.config, accountId: "explicit" }).config
-        .legacyWebhook,
-    ).toEqual({ port: 8791 });
+    expect(listener("explicit")).toEqual({ port: 8791 });
     expect(normalizeCompatibilityConfig({ cfg: result.config }).changes).toEqual([]);
   });
 });

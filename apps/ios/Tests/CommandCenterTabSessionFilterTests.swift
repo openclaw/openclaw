@@ -1,8 +1,39 @@
-import Testing
+import Foundation
 import OpenClawChatUI
+import Testing
 @testable import OpenClaw
 
 struct CommandCenterTabSessionFilterTests {
+    @Test func `cached browsing scopes remain available offline while archives require a connection`() {
+        #expect(SessionStatusScope.available(isConnected: false) == [.active, .snoozed])
+        #expect(SessionStatusScope.available(isConnected: true) == [.active, .snoozed, .archived])
+    }
+
+    @Test func `status scopes separate future snoozes and archives while expired snoozes return to active`() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let entries = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
+        [
+          {"key":"awake"},
+          {"key":"later","snoozedUntil":1800000060000},
+          {"key":"expired","snoozedUntil":1799999999999},
+          {"key":"boundary","snoozedUntil":1800000000000},
+          {"key":"archived","archived":true},
+          {"key":"archived-snooze","archived":true,"snoozedUntil":1800000060000}
+        ]
+        """.utf8))
+
+        let active = entries.filter { SessionStatusScope.active.includes($0, at: now) }
+        #expect(active.map(\.key) == ["awake", "expired", "boundary"])
+        #expect(entries.filter { SessionStatusScope.snoozed.includes($0, at: now) }.map(\.key) == ["later"])
+        #expect(entries.filter { SessionStatusScope.archived.includes($0, at: now) }.map(\.key) == [
+            "archived", "archived-snooze",
+        ])
+        let sections = CommandSessionGrouping.sections(from: active)
+        #expect(sections.flatMap(\.entries).map(\.key).sorted() == ["awake", "boundary", "expired"])
+        #expect(CommandCenterTab.sessionDetail(entries[1], now: now).hasPrefix("Wakes "))
+        #expect(!CommandCenterTab.sessionDetail(entries[2], now: now).hasPrefix("Wakes "))
+    }
+
     @Test func `hides direct agent device sessions`() {
         #expect(!CommandCenterTab.isRecentChatSession("main", defaultSessionKey: "main"))
         #expect(!CommandCenterTab.isRecentChatSession("agent:main:main", defaultSessionKey: "main"))

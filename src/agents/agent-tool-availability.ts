@@ -1,10 +1,20 @@
 import { createToolExecutionMatcher } from "./tool-policy-shared.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { textResult } from "./tools/tool-results.js";
 
 type ToolDefinition = Pick<AnyAgentTool, "name" | "parameters" | "description">;
 
 export type AgentToolAvailabilityBinding = {
-  prepare: (tool: ToolDefinition, callableTools: ReadonlyMap<string, ToolDefinition>) => void;
+  /**
+   * `offeredTools` shape the definition, so it stays stable across turns;
+   * `callableTools` decide what this turn may execute.
+   */
+  prepare: (
+    tool: ToolDefinition,
+    callableTools: ReadonlyMap<string, ToolDefinition>,
+    offeredTools: ReadonlyMap<string, ToolDefinition>,
+  ) => void;
+  prepareBeforeNormalization?: true;
   executionSchema?: (schema: unknown) => unknown;
 };
 
@@ -47,10 +57,33 @@ export function markAgentToolExecutionUnavailable<T extends object>(tool: T): T 
   return tool;
 }
 
+/**
+ * Keeps a tool's definition, so every turn of a session shares one prompt prefix,
+ * while this turn may not run it.
+ */
+export function gateAgentToolExecution<T extends AnyAgentTool>(tool: T, message: string): T {
+  return markAgentToolExecutionUnavailable(
+    copyAgentToolAvailability(tool, {
+      ...tool,
+      // Preparation can perform work too; a denied call must not enter the source path.
+      prepareArguments: undefined,
+      prepareBeforeToolCallParams: undefined,
+      finalizeBeforeToolCallParams: undefined,
+      // A denial is guidance for the model, not a tool failure that fails the run;
+      // a failure-like `status` detail would reclassify it as an error.
+      execute: async () => textResult(message, { gated: true }),
+    }),
+  );
+}
+
 /** Finalize owner-controlled affordances after filtering; never rebind or grant tools. */
 export function finalizeAgentToolAvailability<T extends ToolDefinition>(
   tools: readonly T[],
-  options?: { toolExecutionAllow?: readonly string[]; onPrepared?: (tool: T) => void },
+  options?: {
+    toolExecutionAllow?: readonly string[];
+    onPrepared?: (tool: T) => void;
+    beforeNormalization?: true;
+  },
 ): T[] {
   // The caller supplies its winning definitions, including non-native shadows.
   // A missing, quarantined, or execution-denied dependency cannot enable a mode.
@@ -58,18 +91,17 @@ export function finalizeAgentToolAvailability<T extends ToolDefinition>(
   const executionAllowed = options?.toolExecutionAllow
     ? createToolExecutionMatcher(options.toolExecutionAllow)
     : undefined;
-  const callableTools = new Map<string, T>();
-  for (const callableTool of [...winners.values()].filter(
-    (tool) =>
-      !availabilityBindings.get(tool)?.executionDenied &&
-      (!executionAllowed || executionAllowed(tool.name)),
-  )) {
-    callableTools.set(callableTool.name, callableTool);
-  }
+  const callableTools = new Map(
+    [...winners].filter(
+      ([, tool]) =>
+        !availabilityBindings.get(tool)?.executionDenied &&
+        (!executionAllowed || executionAllowed(tool.name)),
+    ),
+  );
   for (const tool of tools) {
     const binding = availabilityBindings.get(tool)?.binding;
-    if (binding) {
-      binding.prepare(tool, callableTools);
+    if (binding && (!options?.beforeNormalization || binding.prepareBeforeNormalization)) {
+      binding.prepare(tool, callableTools, winners);
       options?.onPrepared?.(tool);
     }
   }

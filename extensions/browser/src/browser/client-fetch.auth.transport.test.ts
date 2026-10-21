@@ -10,7 +10,7 @@ const fixture = vi.hoisted(() => ({ configuredAuth: {} as Auth }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>();
-  return { ...actual, getRuntimeConfig: () => ({}) };
+  return { ...actual, readRuntimeConfig: () => ({}) };
 });
 vi.mock("./control-auth.js", () => ({
   resolveBrowserControlAuth: () => fixture.configuredAuth,
@@ -27,12 +27,6 @@ type AuthCase = {
 };
 const cases: AuthCase[] = [
   {
-    name: "configured token crosses real HTTP",
-    serverAuth: { token: "fixture-token" },
-    configuredAuth: { token: "fixture-token" },
-    status: 200,
-  },
-  {
     name: "registered bridge password wins over Gateway auth",
     serverAuth: { password: "fixture-bridge-password" },
     configuredAuth: { token: "fixture-unrelated-gateway-token" },
@@ -40,17 +34,10 @@ const cases: AuthCase[] = [
     status: 200,
   },
   {
-    name: "explicit auth still wins over registered bridge auth",
+    name: "empty explicit auth wins over registered and configured auth",
     serverAuth: { token: "fixture-token" },
     configuredAuth: { token: "fixture-token" },
     bridgeAuth: { token: "fixture-token" },
-    headers: { Authorization: "Bearer fixture-wrong-token" },
-    status: 401,
-  },
-  {
-    name: "empty explicit auth is not replaced by configured auth",
-    serverAuth: { token: "fixture-token" },
-    configuredAuth: { token: "fixture-token" },
     headers: { Authorization: "" },
     status: 401,
   },

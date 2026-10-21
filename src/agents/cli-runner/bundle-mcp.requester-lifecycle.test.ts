@@ -1,20 +1,21 @@
-import http from "node:http";
+import { json } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { materializeRequesterScopedMcpToolsForHarnessRunCore } from "../agent-bundle-mcp-harness.js";
 import {
   getAdvertisedScopedMcpCatalog,
-  getSessionMcpRuntimeManagerForTesting,
   retireSessionMcpRuntime,
+  setSessionMcpRuntimeScheduler,
 } from "../agent-bundle-mcp-manager-api.js";
+import { getSessionMcpRuntimeTestManager } from "../agent-bundle-mcp-manager.test-support.js";
 import { createMcpProofPluginRegistry } from "../mcp-connection-resolver.test-fixtures.js";
-import { AuthStorage } from "../sessions/auth-storage.js";
-import { ModelRegistry } from "../sessions/model-registry.js";
-import { buildCodexUserMcpServersThreadConfigPatchForRun } from "./bundle-mcp-codex.js";
+import { startCompletionServer } from "../simple-completion.test-support.js";
+import { prepareNativeMcpTestConfig } from "./bundle-mcp.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -22,12 +23,12 @@ it("keeps requester tools callable across static native preflight until session 
   const workspaceDir = tempDirs.make("openclaw-mcp-requester-discovery-");
   const sessions = new Set<string>();
   const deleted: string[] = [];
-  const server = http.createServer((request, response) => {
+  const server = await startCompletionServer((request, response) => {
     void (async () => {
+      const sessionId = String(request.headers["mcp-session-id"]);
       if (request.method === "DELETE") {
-        const id = String(request.headers["mcp-session-id"]);
-        sessions.delete(id);
-        deleted.push(id);
+        sessions.delete(sessionId);
+        deleted.push(sessionId);
         response.writeHead(200).end();
         return;
       }
@@ -35,11 +36,7 @@ it("keeps requester tools callable across static native preflight until session 
         response.writeHead(405).end();
         return;
       }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const message = JSON.parse(Buffer.concat(chunks).toString()) as {
+      const message = (await json(request)) as {
         id?: number;
         method: string;
         params?: { protocolVersion?: string };
@@ -57,9 +54,7 @@ it("keeps requester tools callable across static native preflight until session 
       } else if (message.method === "tools/list") {
         result = { tools: [{ name: "read_note", inputSchema: { type: "object" } }] };
       } else if (message.method === "tools/call") {
-        result = {
-          content: [{ type: "text", text: String(request.headers["mcp-session-id"]) }],
-        };
+        result = { content: [{ type: "text", text: sessionId }] };
       }
       if (!result) {
         response.writeHead(202).end();
@@ -69,14 +64,7 @@ it("keeps requester tools callable across static native preflight until session 
       response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
     })().catch(() => response.writeHead(500).end());
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("MCP proof server did not acquire a loopback port");
-  }
-  const url = `http://127.0.0.1:${address.port}`;
+  const url = server.origin;
   const registry = createMcpProofPluginRegistry();
   registry.apiFor("test-plugin").registerMcpServerConnectionResolver({
     serverName: "requester",
@@ -84,10 +72,12 @@ it("keeps requester tools callable across static native preflight until session 
   });
   const sessionId = "mixed-native-discovery";
   const sessionKey = `agent:main:${sessionId}`;
+  const scheduler = createTestGatewayScheduler();
   try {
+    await setSessionMcpRuntimeScheduler(scheduler);
     await withEnvAsync({ OPENCLAW_STATE_DIR: workspaceDir }, async () => {
       await withPluginRuntimeRegistryScope(registry.registry, async () => {
-        const manager = getSessionMcpRuntimeManagerForTesting();
+        const manager = getSessionMcpRuntimeTestManager();
         expect(manager.listSessionIds()).not.toContain(sessionId);
         const config: OpenClawConfig = {
           plugins: { enabled: false },
@@ -107,39 +97,11 @@ it("keeps requester tools callable across static native preflight until session 
         });
         expect(tools?.tools.map((tool) => tool.name)).toEqual(["requester__read_note"]);
         try {
-          const authStorage = AuthStorage.inMemory();
-          const patch = await buildCodexUserMcpServersThreadConfigPatchForRun({
-            cwd: workspaceDir,
-            run: {
-              agentId: "main",
-              sessionId,
-              sessionKey,
-              sessionFile: sessionKey,
-              workspaceDir,
-              config,
-              senderId: "alice",
-              prompt: "hello",
-              timeoutMs: 5_000,
-              runId: sessionId,
-              provider: "openai",
-              modelId: "gpt-5.6-luna",
-              model: {
-                id: "gpt-5.6-luna",
-                name: "Test model",
-                api: "openai-responses",
-                provider: "openai",
-                baseUrl: "http://127.0.0.1:1",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 100_000,
-                maxTokens: 1_000,
-              },
-              authStorage,
-              authProfileStore: { version: 1, profiles: {} },
-              modelRegistry: ModelRegistry.inMemory(authStorage),
-              thinkLevel: "off",
-            },
+          const patch = await prepareNativeMcpTestConfig({
+            workspaceDir,
+            sessionId,
+            config,
+            senderId: "alice",
           });
           expect(Object.keys(patch?.mcp_servers ?? {})).toEqual(["static"]);
           const requesterTool = expectDefined(tools?.tools[0], "requester tool");
@@ -167,9 +129,7 @@ it("keeps requester tools callable across static native preflight until session 
     });
   } finally {
     await retireSessionMcpRuntime({ sessionId, reason: "mixed-discovery-test-cleanup" });
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await scheduler.stop();
+    await server[Symbol.asyncDispose]();
   }
 });

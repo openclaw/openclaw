@@ -6,6 +6,8 @@ import {
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import { isCronEventSchedule } from "./source-schedule.js";
+import { parseCronStreamSandboxTarget } from "./stream-sandbox-target.js";
 import { isSystemOwnedCronPayloadKind, type CronJobState } from "./types.js";
 
 const CRON_STATE_TIMESTAMP_FIELDS = [
@@ -90,8 +92,20 @@ export function getInvalidPersistedCronJobReason(
     scheduleKind !== "every" &&
     scheduleKind !== "cron" &&
     scheduleKind !== "on-exit" &&
-    scheduleKind !== "stream"
+    scheduleKind !== "stream" &&
+    scheduleKind !== "event" &&
+    scheduleKind !== "sandbox-stream"
   ) {
+    return "invalid-schedule";
+  }
+  if (
+    (scheduleKind === "sandbox-stream" || candidate.streamSandbox !== undefined) &&
+    ((scheduleKind !== "stream" && scheduleKind !== "sandbox-stream") ||
+      !parseCronStreamSandboxTarget(candidate.streamSandbox))
+  ) {
+    return "invalid-schedule";
+  }
+  if (scheduleKind === "event" && !isCronEventSchedule(schedule)) {
     return "invalid-schedule";
   }
   if (scheduleKind === "at") {
@@ -129,7 +143,7 @@ export function getInvalidPersistedCronJobReason(
       return "invalid-schedule";
     }
   }
-  if (scheduleKind === "stream") {
+  if (scheduleKind === "stream" || scheduleKind === "sandbox-stream") {
     const command = scheduleRecord.command;
     const mode = scheduleRecord.mode ?? "line";
     // Batching fields are optional but, when present, must be safe integers:
@@ -166,7 +180,8 @@ export function getInvalidPersistedCronJobReason(
       typeof script !== "string" ||
       script.trim().length === 0 ||
       scheduleKind === "at" ||
-      scheduleKind === "on-exit"
+      scheduleKind === "on-exit" ||
+      scheduleKind === "event"
     ) {
       return "invalid-trigger";
     }
@@ -200,6 +215,9 @@ export function getInvalidPersistedCronJobReason(
   ) {
     return "invalid-payload";
   }
+  if (scheduleKind === "event" && payloadKind !== "agentTurn") {
+    return "invalid-payload";
+  }
   if (payloadKind === "command") {
     const argv = payloadRecord.argv;
     if (
@@ -209,7 +227,7 @@ export function getInvalidPersistedCronJobReason(
     ) {
       return "invalid-payload";
     }
-    if (scheduleKind === "stream") {
+    if (scheduleKind === "stream" || scheduleKind === "sandbox-stream") {
       return "invalid-payload";
     }
   }

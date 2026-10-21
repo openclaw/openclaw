@@ -246,7 +246,9 @@ async function runPublishedUpgrade(options, signal) {
           }
           return runCommand(
             command === "uv" ? "python3" : command,
-            command === "uv" ? argv.slice(1) : argv,
+            // This lane prepares Python itself; retain the interpreter args
+            // after the maintained UV command's interpreter selector.
+            command === "uv" ? argv.slice(argv.indexOf("python") + 1) : argv,
             commandOptions,
           );
         },

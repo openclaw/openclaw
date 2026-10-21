@@ -45,7 +45,7 @@ private fun easeInOut(value: Double): Double {
   return t * t * (3.0 - 2.0 * t)
 }
 
-private fun bell(value: Double): Double {
+internal fun mascotBell(value: Double): Double {
   val t = clamp(value)
   return easeInOut(if (t < 0.5) t * 2.0 else (1.0 - t) * 2.0)
 }
@@ -66,14 +66,12 @@ private class SeededGenerator(
 ) {
   private var state = if (seed == 0uL) NONZERO_SEED else seed
 
-  fun next(): ULong {
+  fun unit(): Double {
     state = state xor (state shr 12)
     state = state xor (state shl 25)
     state = state xor (state shr 27)
-    return state * XORSHIFT_MULTIPLIER
+    return ((state * XORSHIFT_MULTIPLIER) shr 11).toDouble() / 9_007_199_254_740_992.0
   }
-
-  fun unit(): Double = (next() shr 11).toDouble() / 9_007_199_254_740_992.0
 }
 
 /** Pure deterministic mood loops plus randomized blink, gaze, claw-snap, and mood-beat schedules. */
@@ -82,7 +80,7 @@ class MascotAnimator(
 ) {
   private val rng = SeededGenerator(seed)
   private var currentMood = MascotMood.Idle
-  private var startTime: Double? = null
+  private var started = false
   private var lastPoseTime = 0.0
   private var activeGesture: Gesture? = null
   private var activeGestureStart = 0.0
@@ -112,13 +110,13 @@ class MascotAnimator(
   }
 
   fun poseAt(timeSeconds: Double): MascotPose {
-    if (startTime == null) begin(timeSeconds)
+    if (!started) begin(timeSeconds)
     val dt = clamp(timeSeconds - lastPoseTime, 0.0, 0.1)
     lastPoseTime = timeSeconds
     advanceSchedules(timeSeconds)
 
-    // TS and Swift phase ambient loops from their host clocks. startTime only
-    // gates first-run schedules; raw time here preserves cross-platform parity.
+    // TS and Swift phase ambient loops from their host clocks; raw time here
+    // preserves cross-platform parity.
     val pose = basePose(currentMood, timeSeconds)
     applyGaze(pose, currentMood, timeSeconds, dt)
     applyBlinks(pose, timeSeconds)
@@ -136,7 +134,7 @@ class MascotAnimator(
   }
 
   private fun begin(timeSeconds: Double) {
-    startTime = timeSeconds
+    started = true
     lastPoseTime = timeSeconds
     nextBlinkAt = timeSeconds + random(0.8, 2.4)
     nextGlanceAt = timeSeconds + random(1.5, 4.0)
@@ -236,7 +234,7 @@ class MascotAnimator(
             }
           }
         pose.leftClawDegrees = 4.0 + 2.0 * sin(TAU * phase)
-        val impact = bell(clamp((phase - 0.72) / 0.14))
+        val impact = mascotBell(clamp((phase - 0.72) / 0.14))
         pose.floatOffset = -2.0 * (1.0 - cos(TAU * cyclePhase(timeSeconds, 3.8))) + 0.8 * impact
         pose.bodyStretch = 1.0 - 0.03 * impact
         pose.bodyTilt = 2.2 + 0.6 * sin(TAU * cyclePhase(timeSeconds, 5.0))
@@ -361,7 +359,7 @@ class MascotAnimator(
     for (start in blinkStarts) {
       val progress = (timeSeconds - start) / BLINK_DURATION
       if (progress < 0.0 || progress > 1.0) continue
-      val closure = bell(progress)
+      val closure = mascotBell(progress)
       pose.leftEyeOpenness = min(pose.leftEyeOpenness, 1.0 - closure)
       pose.rightEyeOpenness = min(pose.rightEyeOpenness, 1.0 - closure)
       pose.eyeGlowAlpha *= max(0.3, 1.0 - closure)
@@ -383,12 +381,12 @@ class MascotAnimator(
       }
 
       Gesture.Hop -> {
-        val air = bell(clamp((p - 0.2) / 0.6))
+        val air = mascotBell(clamp((p - 0.2) / 0.6))
         pose.floatOffset += -9.0 * air
         pose.bodyStretch +=
           0.045 * air -
-          0.1 * bell(clamp(p / 0.2)) -
-          0.06 * bell(clamp((p - 0.82) / 0.18))
+          0.1 * mascotBell(clamp(p / 0.2)) -
+          0.06 * mascotBell(clamp((p - 0.82) / 0.18))
         pose.mouthCurve = max(pose.mouthCurve, 0.4 * air)
       }
 
@@ -401,7 +399,7 @@ class MascotAnimator(
         pose.rightClawDegrees += -38.0 * envelope
         pose.happyEyes = max(pose.happyEyes, envelope)
         pose.mouthCurve = max(pose.mouthCurve, envelope)
-        pose.mouthOpen = max(pose.mouthOpen, 0.6 * bell(p))
+        pose.mouthOpen = max(pose.mouthOpen, 0.6 * mascotBell(p))
         pose.antennaDroop = 0.0
         pose.glowScale = max(pose.glowScale, 1.0 + 0.2 * envelope)
         pose.effect = MascotEffect.Sparkles
@@ -426,16 +424,16 @@ class MascotAnimator(
       }
 
       Gesture.ClawSnap -> {
-        pose.leftClawDegrees += -8.0 * bell(clamp(p / 0.7))
-        pose.rightClawDegrees += -8.0 * bell(clamp((p - 0.25) / 0.7))
+        pose.leftClawDegrees += -8.0 * mascotBell(clamp(p / 0.7))
+        pose.rightClawDegrees += -8.0 * mascotBell(clamp((p - 0.25) / 0.7))
       }
 
       Gesture.DonHardHat -> {
         val drop = easeInOut(clamp(p / 0.55))
         pose.hardHat = min(pose.hardHat, drop)
         if (p < 0.55) pose.gaze = MascotGaze(x = 0.0, y = -0.9 * (1.0 - p))
-        pose.bodyStretch -= 0.04 * bell(clamp((p - 0.5) / 0.2))
-        val ready = bell(clamp((p - 0.7) / 0.3))
+        pose.bodyStretch -= 0.04 * mascotBell(clamp((p - 0.5) / 0.2))
+        val ready = mascotBell(clamp((p - 0.7) / 0.3))
         pose.leftClawDegrees += -8.0 * ready
         pose.rightClawDegrees += 8.0 * ready
       }

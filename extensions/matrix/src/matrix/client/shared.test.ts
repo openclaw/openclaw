@@ -1,40 +1,100 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { authFor, createMockClient } from "./shared.test-support.js";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMatrixMonitorTaskRunner } from "../monitor/task-runner.js";
+import { acquireSharedMatrixClient, stopSharedClientForAccount } from "./shared.js";
+import {
+  authFor,
+  createMockClient,
+  prepareMockMatrixClientStorage,
+} from "./shared.test-support.js";
 import type { MatrixAuth } from "./types.js";
 
 const resolveMatrixAuthMock = vi.hoisted(() => vi.fn());
-const resolveMatrixAuthContextMock = vi.hoisted(() => vi.fn());
 const createMatrixClientMock = vi.hoisted(() => vi.fn());
 
 const TEST_CFG = {};
 
+// mock-isolation: These shared-client fixtures supply resolved auth without loading disk config.
 vi.mock("./config.js", () => ({
   resolveMatrixAuth: resolveMatrixAuthMock,
-  resolveMatrixAuthContext: resolveMatrixAuthContextMock,
 }));
 
+// mock-isolation: Keep disk and SDK initialization outside these generation lifecycle fixtures.
 vi.mock("./create-client.js", () => ({
   createMatrixClient: createMatrixClientMock,
+  prepareMatrixClientStorage: prepareMockMatrixClientStorage,
 }));
-
-let acquireSharedMatrixClient: typeof import("./shared.js").acquireSharedMatrixClient;
-let stopSharedClientForAccount: typeof import("./shared.js").stopSharedClientForAccount;
 
 function acquireStoppedClient(auth: MatrixAuth, role?: "monitor" | "transient") {
   return acquireSharedMatrixClient({ auth, role, startClient: false });
+}
+
+function createTaskRunner() {
+  return createMatrixMonitorTaskRunner({
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    logVerboseMessage: vi.fn(),
+  });
+}
+
+function clients(callOrder: string[] = [], accountId = "main", replace = true) {
+  const client = createMockClient("first", callOrder);
+  const replacementClient = createMockClient("replacement");
+  if (replace) {
+    createMatrixClientMock.mockResolvedValueOnce(client).mockResolvedValueOnce(replacementClient);
+  } else {
+    createMatrixClientMock.mockResolvedValue(client);
+  }
+  return { auth: authFor(accountId), client, replacementClient };
+}
+
+type MockCall = { mock: { calls: unknown[][] } };
+function expectCalls(count: number, ...mocks: MockCall[]) {
+  for (const mock of mocks) {
+    expect(mock.mock.calls).toHaveLength(count);
+  }
+}
+const calledOnce = (mock: MockCall) => vi.waitFor(() => expectCalls(1, mock));
+const monitorCleanup = ["close-admission", "detach-listeners", "wait-tasks", "monitor-cleanup"];
+
+async function expectReplacement(
+  acquisition: ReturnType<typeof acquireStoppedClient>,
+  client: ReturnType<typeof createMockClient>,
+  calls?: number,
+) {
+  const lease = await acquisition;
+  expect(lease.client).toBe(client);
+  if (calls !== undefined) {
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(calls);
+  }
+  await lease.release({ mode: "discard" });
+}
+
+function registerTasks(
+  monitor: Awaited<ReturnType<typeof acquireStoppedClient>>,
+  tasks: ReturnType<typeof createTaskRunner>,
+  onClose = () => {},
+  waitForTasks = tasks.waitForIdle,
+) {
+  monitor.registerMonitorRetirement({
+    closeTaskAdmission: () => {
+      tasks.close();
+      onClose();
+    },
+    detachListeners: vi.fn(),
+    waitForTasks,
+    cleanup: vi.fn(),
+  });
 }
 
 function createMonitorRetirement(callOrder: string[]) {
   return {
     closeTaskAdmission: vi.fn(() => callOrder.push("close-admission")),
     detachListeners: vi.fn(() => callOrder.push("detach-listeners")),
-    waitForTasks: vi.fn(async () => {
+    waitForTasks: vi.fn<() => Promise<void>>(async () => {
       callOrder.push("wait-tasks");
     }),
-    cleanup: vi.fn(async () => {
-      callOrder.push("monitor-cleanup");
-    }),
+    cleanup: vi.fn(async () => void callOrder.push("monitor-cleanup")),
   };
 }
 
@@ -53,22 +113,9 @@ async function expectPending(promise: Promise<unknown>): Promise<void> {
 }
 
 describe("shared Matrix client generations", () => {
-  beforeAll(async () => {
-    ({ acquireSharedMatrixClient, stopSharedClientForAccount } = await import("./shared.js"));
-  });
-
   beforeEach(() => {
     resolveMatrixAuthMock.mockReset();
-    resolveMatrixAuthContextMock.mockReset();
     createMatrixClientMock.mockReset();
-    resolveMatrixAuthContextMock.mockImplementation(
-      ({ accountId }: { accountId?: string | null } = {}) => ({
-        cfg: TEST_CFG,
-        env: undefined,
-        accountId: accountId ?? "default",
-        resolved: {},
-      }),
-    );
   });
 
   afterEach(async () => {
@@ -89,12 +136,10 @@ describe("shared Matrix client generations", () => {
       encryption: true,
     } satisfies MatrixAuth;
     const secondAuth = {
-      ...authFor("main"),
+      ...firstAuth,
       homeserver: "https://matrix.example.org/base",
       // Historical Matrix user IDs may contain both characters in the localpart.
       userId: "@alice|@bob:example.org",
-      accessToken: "shared-token",
-      encryption: true,
     } satisfies MatrixAuth;
     const firstClient = createMockClient("first");
     const secondClient = createMockClient("second");
@@ -109,85 +154,106 @@ describe("shared Matrix client generations", () => {
     expect(repeatedFirstLease.client).toBe(firstClient);
     expect(secondLease.client).toBe(secondClient);
     expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
-    expect(firstClient.start).toHaveBeenCalledTimes(1);
-    expect(secondClient.start).toHaveBeenCalledTimes(1);
+    expect(firstClient.start).toHaveBeenCalledOnce();
+    expect(secondClient.start).toHaveBeenCalledOnce();
 
     await firstLease.release();
     expect(firstClient.stopAndPersist).not.toHaveBeenCalled();
     await repeatedFirstLease.release();
-    expect(firstClient.stopAndPersist).toHaveBeenCalledTimes(1);
+    expect(firstClient.stopAndPersist).toHaveBeenCalledOnce();
     expect(secondClient.stopAndPersist).not.toHaveBeenCalled();
 
     await secondLease.release();
-    expect(secondClient.stopAndPersist).toHaveBeenCalledTimes(1);
+    expect(secondClient.stopAndPersist).toHaveBeenCalledOnce();
   });
 
-  it("keeps account generations isolated", async () => {
-    const mainClient = createMockClient("main");
-    const opsClient = createMockClient("ops");
-    resolveMatrixAuthMock.mockImplementation(async ({ accountId }: { accountId?: string }) =>
-      accountId === "ops" ? authFor("ops") : authFor("main"),
-    );
-    createMatrixClientMock.mockImplementation(async ({ accountId }: { accountId?: string }) =>
-      accountId === "ops" ? opsClient : mainClient,
-    );
-
-    const main = await acquireSharedMatrixClient({
-      cfg: TEST_CFG,
-      accountId: "main",
-      startClient: false,
+  it("converges concurrent creation and rejects incompatible policy before another SDK client", async () => {
+    const auth = authFor("main");
+    const client = createMockClient("main");
+    const creation = createDeferred<typeof client>();
+    const creationEntered = createDeferred<void>();
+    createMatrixClientMock.mockImplementationOnce(() => {
+      creationEntered.resolve();
+      return creation.promise;
     });
-    const ops = await acquireSharedMatrixClient({
-      cfg: TEST_CFG,
-      accountId: "ops",
-      startClient: false,
+    const first = acquireStoppedClient(auth, "monitor");
+    const concurrent = acquireStoppedClient(auth);
+    await creationEntered.promise;
+    const incompatible = acquireStoppedClient({ ...auth, allowPrivateNetwork: true });
+    const refused = expect(incompatible).rejects.toMatchObject({
+      code: "MATRIX_ACCOUNT_RESTARTING",
+      retryable: true,
     });
-    const secondMain = await acquireSharedMatrixClient({
-      cfg: TEST_CFG,
-      accountId: "main",
-      startClient: false,
-    });
-
-    expect(main.client).toBe(mainClient);
-    expect(ops.client).toBe(opsClient);
-    expect(secondMain.client).toBe(mainClient);
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
-
-    await Promise.all([main.release(), secondMain.release(), ops.release()]);
+    creation.resolve(client);
+    const [monitor, action] = await Promise.all([first, concurrent]);
+    await refused;
+    expect(action.client).toBe(monitor.client);
+    expect(createMatrixClientMock).toHaveBeenCalledOnce();
+    await action.release();
+    await monitor.release();
   });
 
-  it("retires only the requested account through the owner", async () => {
-    const mainAuth = authFor("main");
-    const opsAuth = authFor("ops");
-    const mainClient = createMockClient("main");
-    const opsClient = createMockClient("ops");
-    createMatrixClientMock.mockResolvedValueOnce(mainClient).mockResolvedValueOnce(opsClient);
+  it("joins explicit retirement for a changed transport without creating a second client early", async () => {
+    const { auth, client: oldClient, replacementClient: nextClient } = clients();
+    const stopEntered = createDeferred<void>();
+    const stopFinished = createDeferred<void>();
+    oldClient.stopWithoutPersist.mockImplementation(async () => {
+      stopEntered.resolve();
+      await stopFinished.promise;
+    });
+    const monitor = await acquireStoppedClient(auth, "monitor");
+    const retirement = monitor.release({ mode: "discard" });
+    await stopEntered.promise;
+    const caller = new AbortController();
+    const cancelled = acquireSharedMatrixClient({
+      auth: { ...auth, allowPrivateNetwork: true },
+      startClient: false,
+      abortSignal: caller.signal,
+    });
+    caller.abort();
+    await expectMatrixStartupAbort(cancelled);
+    expect(createMatrixClientMock).toHaveBeenCalledOnce();
+    const successor = acquireStoppedClient({ ...auth, allowPrivateNetwork: true });
+    stopFinished.resolve();
+    await retirement;
+    const replacement = await successor;
+    expect(replacement.client).toBe(nextClient);
+    await replacement.release();
+  });
 
-    await acquireSharedMatrixClient({ auth: mainAuth, startClient: false });
-    const ops = await acquireSharedMatrixClient({ auth: opsAuth, startClient: false });
+  it("shares one client generation across duplicate module identities", async () => {
+    const moduleA = await importFreshModule<typeof import("./shared.js")>(
+      import.meta.url,
+      "./shared.js?scope=duplicate-a",
+    );
+    const moduleB = await importFreshModule<typeof import("./shared.js")>(
+      import.meta.url,
+      "./shared.js?scope=duplicate-b",
+    );
+    const auth = authFor("main");
+    const client = createMockClient("shared");
+    createMatrixClientMock.mockResolvedValue(client);
 
-    await stopSharedClientForAccount(mainAuth);
+    const first = await moduleA.acquireSharedMatrixClient({ auth, startClient: false });
+    const second = await moduleB.acquireSharedMatrixClient({ auth, startClient: false });
 
-    expect(mainClient.stopAndPersist).toHaveBeenCalledTimes(1);
-    expect(mainClient.stopWithoutPersist).not.toHaveBeenCalled();
-    expect(opsClient.stopWithoutPersist).not.toHaveBeenCalled();
-    await ops.release();
+    expect(first.client).toBe(client);
+    expect(second.client).toBe(client);
+    expect(createMatrixClientMock).toHaveBeenCalledOnce();
+    await Promise.all([first.release(), second.release()]);
+    expect(client.stopAndPersist).toHaveBeenCalledOnce();
   });
 
   it("runs registered monitor cleanup during forced account retirement", async () => {
-    const auth = authFor("main");
-    const client = createMockClient("main");
+    const { auth, client } = clients([], "main", false);
     const waitForTasks = createDeferred<void>();
-    createMatrixClientMock.mockResolvedValue(client);
     const monitor = await acquireStoppedClient(auth, "monitor");
     const retirement = createMonitorRetirement([]);
     retirement.waitForTasks.mockReturnValue(waitForTasks.promise);
     monitor.registerMonitorRetirement(retirement);
 
     const forcedRetirement = stopSharedClientForAccount(auth);
-    await vi.waitFor(() => {
-      expect(retirement.waitForTasks).toHaveBeenCalledTimes(1);
-    });
+    await calledOnce(retirement.waitForTasks);
     const lateRelease = monitor.release({ mode: "persist" });
     expect(monitor.release({ mode: "discard" })).toBe(lateRelease);
     await expectPending(lateRelease);
@@ -195,96 +261,12 @@ describe("shared Matrix client generations", () => {
     waitForTasks.resolve();
     await Promise.all([forcedRetirement, lateRelease]);
 
-    expect(retirement.closeTaskAdmission).toHaveBeenCalledTimes(1);
-    expect(retirement.detachListeners).toHaveBeenCalledTimes(1);
-    expect(retirement.waitForTasks).toHaveBeenCalledTimes(1);
-    expect(retirement.cleanup).toHaveBeenCalledTimes(1);
-    expect(client.quiesceSync).toHaveBeenCalledTimes(1);
-    expect(client.stopAndPersist).toHaveBeenCalledTimes(1);
-  });
-
-  it("runs every monitor cleanup once during forced account retirement", async () => {
-    const client = createMockClient("main");
-    createMatrixClientMock.mockResolvedValue(client);
-    const auth = authFor("main");
-    const first = await acquireStoppedClient(auth, "monitor");
-    const second = await acquireStoppedClient(auth, "monitor");
-    const firstRetirement = createMonitorRetirement([]);
-    const secondRetirement = createMonitorRetirement([]);
-    first.registerMonitorRetirement(firstRetirement);
-    second.registerMonitorRetirement(secondRetirement);
-
-    await stopSharedClientForAccount(auth);
-    await Promise.all([first.release(), second.release()]);
-
-    for (const retirement of [firstRetirement, secondRetirement]) {
-      expect(retirement.closeTaskAdmission).toHaveBeenCalledTimes(1);
-      expect(retirement.detachListeners).toHaveBeenCalledTimes(1);
-      expect(retirement.waitForTasks).toHaveBeenCalledTimes(1);
-      expect(retirement.cleanup).toHaveBeenCalledTimes(1);
-    }
-    expect(client.quiesceSync).toHaveBeenCalledTimes(1);
-    expect(client.stopAndPersist).toHaveBeenCalledTimes(1);
-    expect(client.stopWithoutPersist).not.toHaveBeenCalled();
-  });
-
-  it("reuses one generation for monitor and transient leases when transient releases first", async () => {
-    const callOrder: string[] = [];
-    const client = createMockClient("main", callOrder);
-    createMatrixClientMock.mockResolvedValue(client);
-    const auth = authFor("main");
-    const monitor = await acquireStoppedClient(auth, "monitor");
-    const transient = await acquireStoppedClient(auth, "transient");
-
-    expect(transient.abortSignal.aborted).toBe(false);
-    await transient.release({ mode: "stop" });
-    expect(transient.abortSignal.aborted).toBe(false);
-    expect(callOrder).toEqual([]);
-
-    monitor.registerMonitorRetirement(createMonitorRetirement(callOrder));
-    await monitor.release({ mode: "persist" });
-
-    expect(callOrder).toEqual([
-      "quiesce",
-      "drain-quiesce",
-      "close-admission",
-      "detach-listeners",
-      "wait-tasks",
-      "monitor-cleanup",
-      "drain-final",
-      "persist",
-    ]);
-  });
-
-  it("retries admission when retirement starts after state resolution", async () => {
-    const retiringClient = createMockClient("retiring");
-    const replacementClient = createMockClient("replacement");
-    createMatrixClientMock
-      .mockResolvedValueOnce(retiringClient)
-      .mockResolvedValueOnce(replacementClient);
-    const auth = authFor("main");
-    const monitor = await acquireStoppedClient(auth, "monitor");
-    monitor.registerMonitorRetirement(createMonitorRetirement([]));
-
-    const racingAcquire = acquireSharedMatrixClient({ auth, startClient: false });
-    let retirement: Promise<void> | undefined;
-    queueMicrotask(() => {
-      retirement = monitor.release({ mode: "discard" });
-    });
-
-    const racingLease = await racingAcquire;
-    await racingLease.release({ mode: "discard" });
-    await retirement;
-
-    expect(racingLease.client).toBe(replacementClient);
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
+    expectCalls(1, ...Object.values(retirement), client.quiesceSync, client.stopAndPersist);
   });
 
   it("signals cooperative transient work and persists after it drains", async () => {
     const callOrder: string[] = [];
-    const client = createMockClient("main", callOrder);
-    createMatrixClientMock.mockResolvedValue(client);
-    const auth = authFor("main");
+    const { auth, client } = clients(callOrder, "main", false);
     const monitor = await acquireStoppedClient(auth, "monitor");
     const transient = await acquireStoppedClient(auth, "transient");
     transient.abortSignal.addEventListener(
@@ -304,295 +286,48 @@ describe("shared Matrix client generations", () => {
       "transient-cancel",
       "quiesce",
       "drain-quiesce",
-      "close-admission",
-      "detach-listeners",
-      "wait-tasks",
-      "monitor-cleanup",
-      "drain-final",
+      ...monitorCleanup,
       "persist",
     ]);
     expect(client.stopWithoutPersist).not.toHaveBeenCalled();
-  });
-
-  it("bounds non-cooperative transient drain and replaces after every late release", async () => {
-    vi.useFakeTimers();
-    const callOrder: string[] = [];
-    const discard = createDeferred<void>();
-    const client = createMockClient("main", callOrder);
-    client.stopWithoutPersist.mockImplementation(async () => {
-      callOrder.push("discard");
-      await discard.promise;
-    });
-    const replacementClient = createMockClient("replacement");
-    createMatrixClientMock.mockResolvedValueOnce(client).mockResolvedValueOnce(replacementClient);
-    const auth = authFor("main");
-    const monitor = await acquireStoppedClient(auth, "monitor");
-    const firstTransient = await acquireStoppedClient(auth, "transient");
-    const finalTransient = await acquireStoppedClient(auth, "transient");
-
-    monitor.registerMonitorRetirement(createMonitorRetirement(callOrder));
-    const retirement = monitor.release({ mode: "persist" });
-    const retirementError = retirement.then(
-      () => null,
-      (error: unknown) => error,
-    );
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(client.stopWithoutPersist).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await vi.waitFor(() => {
-      expect(client.stopWithoutPersist).toHaveBeenCalledTimes(1);
-    });
-    await expect(stopSharedClientForAccount(auth)).rejects.toMatchObject({
-      message: "Matrix transient leases did not drain within 5000ms",
-    });
-
-    discard.resolve();
-    await expect(retirementError).resolves.toMatchObject({
-      message: "Matrix transient leases did not drain within 5000ms",
-    });
-    expect(finalTransient.abortSignal.aborted).toBe(true);
-    expect(client.stopWithoutPersist).toHaveBeenCalledTimes(1);
-    expect(client.stopAndPersist).not.toHaveBeenCalled();
-    await expect(acquireSharedMatrixClient({ auth })).rejects.toMatchObject({
-      message: "Matrix transient leases did not drain within 5000ms",
-    });
-
-    const firstLateRelease = firstTransient.release({ mode: "persist" });
-    const duplicateLateRelease = firstTransient.release({ mode: "persist" });
-    expect(duplicateLateRelease).toBe(firstLateRelease);
-    await firstLateRelease;
-    await expect(acquireSharedMatrixClient({ auth })).rejects.toMatchObject({
-      message: "Matrix transient leases did not drain within 5000ms",
-    });
-    await expect(stopSharedClientForAccount(auth)).rejects.toMatchObject({
-      message: "Matrix transient leases did not drain within 5000ms",
-    });
-
-    const finalLateRelease = finalTransient.release({ mode: "persist" });
-    const finalRepeatedForce = stopSharedClientForAccount(auth);
-    await finalLateRelease;
-    await expect(finalRepeatedForce).rejects.toMatchObject({
-      message: "Matrix transient leases did not drain within 5000ms",
-    });
-
-    const [firstReplacement, secondReplacement] = await Promise.all([
-      acquireSharedMatrixClient({ auth, startClient: false }),
-      acquireSharedMatrixClient({ auth, startClient: false }),
-    ]);
-    expect(firstReplacement.client).toBe(replacementClient);
-    expect(secondReplacement.client).toBe(replacementClient);
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
-    await firstReplacement.release({ mode: "discard" });
-    await secondReplacement.release({ mode: "discard" });
-  });
-
-  it("keeps monitor cleanup poison after every late transient releases", async () => {
-    vi.useFakeTimers();
-    const cause = new Error("monitor cleanup failed");
-    const client = createMockClient("main");
-    createMatrixClientMock.mockResolvedValue(client);
-    const auth = authFor("late-monitor-cleanup");
-    const monitor = await acquireStoppedClient(auth, "monitor");
-    const transient = await acquireStoppedClient(auth, "transient");
-    const monitorRetirement = createMonitorRetirement([]);
-    monitorRetirement.cleanup.mockRejectedValue(cause);
-    monitor.registerMonitorRetirement(monitorRetirement);
-
-    const retirementError = monitor.release({ mode: "persist" }).then(
-      () => null,
-      (error: unknown) => error,
-    );
-    await vi.advanceTimersByTimeAsync(5_000);
-    await expect(retirementError).resolves.toBe(cause);
-    await transient.release();
-
-    await expect(acquireSharedMatrixClient({ auth })).rejects.toBe(cause);
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps poison when the poisoned decryption drain fails before a late release", async () => {
-    vi.useFakeTimers();
-    const cause = new Error("poisoned decryption drain failed");
-    const client = createMockClient("main");
-    client.drainPendingDecryptions.mockImplementation(async (reason: string) => {
-      if (reason === "matrix poisoned client shutdown") {
-        throw cause;
-      }
-    });
-    createMatrixClientMock.mockResolvedValue(client);
-    const auth = authFor("poisoned-decryption-drain");
-    const monitor = await acquireStoppedClient(auth, "monitor");
-    const transient = await acquireStoppedClient(auth, "transient");
-    monitor.registerMonitorRetirement(createMonitorRetirement([]));
-
-    const retirementError = monitor.release({ mode: "persist" }).then(
-      () => null,
-      (error: unknown) => error,
-    );
-    await vi.advanceTimersByTimeAsync(5_000);
-    await expect(retirementError).resolves.toMatchObject({
-      message: "Matrix transient leases did not drain within 5000ms",
-    });
-    await transient.release();
-
-    await expect(acquireSharedMatrixClient({ auth })).rejects.toMatchObject({
-      message: "Matrix transient leases did not drain within 5000ms",
-    });
-    expect(client.stopWithoutPersist).toHaveBeenCalledTimes(1);
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("quiesces and cleans up the monitor before waiting for an existing transient lease", async () => {
-    const callOrder: string[] = [];
-    const client = createMockClient("main", callOrder);
-    createMatrixClientMock.mockResolvedValue(client);
-    const auth = authFor("main");
-    const monitor = await acquireStoppedClient(auth, "monitor");
-    const transient = await acquireStoppedClient(auth, "transient");
-
-    monitor.registerMonitorRetirement(createMonitorRetirement(callOrder));
-    const monitorRelease = monitor.release({ mode: "persist" });
-    await vi.waitFor(() => {
-      expect(callOrder).toContain("monitor-cleanup");
-    });
-    expect(callOrder).not.toContain("persist");
-
-    await transient.release({ mode: "stop" });
-    await monitorRelease;
-
-    expect(callOrder).toEqual([
-      "quiesce",
-      "drain-quiesce",
-      "close-admission",
-      "detach-listeners",
-      "wait-tasks",
-      "monitor-cleanup",
-      "drain-final",
-      "persist",
-    ]);
   });
 
   it("keeps shared sync open until the final monitor lease is released", async () => {
     const callOrder: string[] = [];
-    const client = createMockClient("main", callOrder);
-    createMatrixClientMock.mockResolvedValue(client);
-    const auth = authFor("main");
+    const { auth, client } = clients(callOrder, "main", false);
     const first = await acquireStoppedClient(auth, "monitor");
     const final = await acquireStoppedClient(auth, "monitor");
-    const firstRetirement = createMonitorRetirement(callOrder);
-    first.registerMonitorRetirement(firstRetirement);
+    first.registerMonitorRetirement(createMonitorRetirement(callOrder));
     final.registerMonitorRetirement(createMonitorRetirement(callOrder));
 
     const firstRelease = first.release({ mode: "persist" });
     expect(first.release({ mode: "discard" })).toBe(firstRelease);
     await firstRelease;
 
-    expect(callOrder).toEqual([
-      "close-admission",
-      "detach-listeners",
-      "wait-tasks",
-      "monitor-cleanup",
-    ]);
-    expect(client.quiesceSync).not.toHaveBeenCalled();
-    expect(client.stopAndPersist).not.toHaveBeenCalled();
-    expect(client.stopWithoutPersist).not.toHaveBeenCalled();
+    expect(callOrder).toEqual(monitorCleanup);
+    expectCalls(0, client.quiesceSync, client.stopAndPersist, client.stopWithoutPersist);
 
     await final.release({ mode: "persist" });
 
     expect(callOrder).toEqual([
-      "close-admission",
-      "detach-listeners",
-      "wait-tasks",
-      "monitor-cleanup",
+      ...monitorCleanup,
       "quiesce",
       "drain-quiesce",
-      "close-admission",
-      "detach-listeners",
-      "wait-tasks",
-      "monitor-cleanup",
-      "drain-final",
+      ...monitorCleanup,
       "persist",
     ]);
-    expect(client.quiesceSync).toHaveBeenCalledTimes(1);
-    expect(client.stopAndPersist).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses the same quiesce-before-persist path for a transient-only started generation", async () => {
-    const callOrder: string[] = [];
-    const client = createMockClient("main", callOrder);
-    createMatrixClientMock.mockResolvedValue(client);
-
-    const transient = await acquireSharedMatrixClient({
-      auth: authFor("main"),
-      role: "transient",
-    });
-    await transient.release({ mode: "persist" });
-
-    expect(callOrder).toEqual(["start", "quiesce", "drain-quiesce", "drain-final", "persist"]);
-  });
-
-  it("memoizes one release promise for duplicate release calls", async () => {
-    const client = createMockClient("main");
-    const persist = createDeferred<void>();
-    client.stopAndPersist.mockReturnValue(persist.promise);
-    createMatrixClientMock.mockResolvedValue(client);
-    const lease = await acquireStoppedClient(authFor("main"));
-
-    const first = lease.release({ mode: "persist" });
-    const second = lease.release({ mode: "persist" });
-
-    expect(second).toBe(first);
-    persist.resolve();
-    await first;
-    await lease.release({ mode: "persist" });
-    expect(client.stopAndPersist).toHaveBeenCalledTimes(1);
-  });
-
-  it("waits abortably instead of admitting a new lease while a generation retires", async () => {
-    const firstClient = createMockClient("first");
-    const replacementClient = createMockClient("replacement");
-    const persist = createDeferred<void>();
-    firstClient.stopAndPersist.mockReturnValue(persist.promise);
-    createMatrixClientMock
-      .mockResolvedValueOnce(firstClient)
-      .mockResolvedValueOnce(replacementClient);
-    const auth = authFor("main");
-    const lease = await acquireSharedMatrixClient({ auth, startClient: false });
-    const release = lease.release({ mode: "persist" });
-    await vi.waitFor(() => {
-      expect(firstClient.stopAndPersist).toHaveBeenCalledTimes(1);
-    });
-
-    const abortController = new AbortController();
-    const blockedAcquire = acquireSharedMatrixClient({
-      auth,
-      abortSignal: abortController.signal,
-    });
-    abortController.abort();
-    await expectMatrixStartupAbort(blockedAcquire);
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
-
-    persist.resolve();
-    await release;
-    const replacement = await acquireSharedMatrixClient({ auth, startClient: false });
-    expect(replacement.client).toBe(replacementClient);
-    await replacement.release();
+    expect(client.quiesceSync).toHaveBeenCalledOnce();
+    expect(client.stopAndPersist).toHaveBeenCalledOnce();
   });
 
   it("discards a timed-out generation and lets a later acquisition create a fresh client", async () => {
     const cause = new Error("Matrix classic sync did not reach STOPPED within 5000ms");
     const callOrder: string[] = [];
-    const timedOutClient = createMockClient("timed-out", callOrder);
-    const replacementClient = createMockClient("replacement");
+    const { auth, client: timedOutClient, replacementClient } = clients(callOrder);
     timedOutClient.quiesceSync.mockImplementation(async () => {
       callOrder.push("quiesce");
       throw cause;
     });
-    createMatrixClientMock
-      .mockResolvedValueOnce(timedOutClient)
-      .mockResolvedValueOnce(replacementClient);
-    const auth = authFor("main");
     const monitor = await acquireStoppedClient(auth, "monitor");
     const transient = await acquireStoppedClient(auth, "transient");
 
@@ -609,353 +344,341 @@ describe("shared Matrix client generations", () => {
 
     await expect(transient.release()).rejects.toBe(cause);
     expect(await releaseError).toBe(cause);
-    expect(timedOutClient.stopWithoutPersist).toHaveBeenCalledTimes(1);
+    expect(timedOutClient.stopWithoutPersist).toHaveBeenCalledOnce();
     expect(timedOutClient.stopAndPersist).not.toHaveBeenCalled();
 
-    const replacement = await acquireSharedMatrixClient({ auth, startClient: false });
-    expect(replacement.client).toBe(replacementClient);
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
-    await replacement.release({ mode: "discard" });
+    await expectReplacement(acquireStoppedClient(auth), replacementClient, 2);
   });
 
-  it("keeps monitor cleanup failures poisoned", async () => {
-    const cause = new Error("monitor cleanup failed");
-    const client = createMockClient("main");
-    createMatrixClientMock.mockResolvedValue(client);
-    const auth = authFor("monitor-cleanup-failure");
-    const monitor = await acquireStoppedClient(auth, "monitor");
-    const retirement = createMonitorRetirement([]);
-    retirement.cleanup.mockRejectedValue(cause);
-
-    monitor.registerMonitorRetirement(retirement);
-    await expect(monitor.release({ mode: "persist" })).rejects.toBe(cause);
-    expect(client.stopWithoutPersist).toHaveBeenCalledTimes(1);
-    await expect(acquireSharedMatrixClient({ auth })).rejects.toBe(cause);
-    await expect(stopSharedClientForAccount(auth)).rejects.toBe(cause);
-    await expect(acquireSharedMatrixClient({ auth })).rejects.toBe(cause);
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves an earlier stop requirement when the final lease requests discard", async () => {
-    const cause = new Error("best-effort persistence failed");
-    const persist = createDeferred<void>();
-    const firstClient = createMockClient("first");
-    const replacementClient = createMockClient("replacement");
-    firstClient.stopAndPersist.mockReturnValue(persist.promise);
-    createMatrixClientMock
-      .mockResolvedValueOnce(firstClient)
-      .mockResolvedValueOnce(replacementClient);
-    const auth = authFor("main");
-    const first = await acquireSharedMatrixClient({ auth, startClient: false });
-    const final = await acquireSharedMatrixClient({ auth, startClient: false });
-
-    await first.release({ mode: "stop" });
-    expect(firstClient.stopAndPersist).not.toHaveBeenCalled();
-    const release = final.release({ mode: "discard" });
-    await vi.waitFor(() => {
-      expect(firstClient.stopAndPersist).toHaveBeenCalledTimes(1);
-    });
-    const replacementPromise = acquireSharedMatrixClient({ auth, startClient: false });
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
-
-    persist.reject(cause);
-    await release;
-    expect(firstClient.stopWithoutPersist).toHaveBeenCalledTimes(1);
-
-    const replacement = await replacementPromise;
-    expect(replacement.client).toBe(replacementClient);
-    await replacement.release({ mode: "discard" });
-  });
-
-  it("keeps a discarded generation unavailable until async cleanup settles", async () => {
-    const discard = createDeferred<void>();
-    const client = createMockClient("main");
-    const replacementClient = createMockClient("replacement");
-    client.stopWithoutPersist.mockReturnValue(discard.promise);
-    createMatrixClientMock.mockResolvedValueOnce(client).mockResolvedValueOnce(replacementClient);
-    const auth = authFor("main");
-    const lease = await acquireSharedMatrixClient({ auth, startClient: false });
-
-    const release = lease.release({ mode: "discard" });
-    await vi.waitFor(() => {
-      expect(client.stopWithoutPersist).toHaveBeenCalledTimes(1);
-    });
-    const replacementPromise = acquireSharedMatrixClient({ auth, startClient: false });
-    await Promise.resolve();
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
-
-    expect(client.stopAndPersist).not.toHaveBeenCalled();
-    discard.resolve();
-    await release;
-    const replacement = await replacementPromise;
-    expect(replacement.client).toBe(replacementClient);
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
-    await replacement.release({ mode: "discard" });
-  });
-
-  it.each([
-    {
-      name: "normal discard",
-      mode: "discard" as const,
-      configure: (client: ReturnType<typeof createMockClient>, failure: Error) => {
-        client.stopWithoutPersist.mockRejectedValue(failure);
-      },
+  it.each(["earlier stop requirement", "discard"] as const)(
+    "keeps a generation unavailable until async shutdown settles: %s",
+    async (mode) => {
+      const stopping = createDeferred<void>();
+      const { auth, client, replacementClient } = clients();
+      const persist = mode === "earlier stop requirement";
+      const stop = persist ? client.stopAndPersist : client.stopWithoutPersist;
+      stop.mockReturnValue(stopping.promise);
+      const lease = await acquireStoppedClient(auth);
+      let final = lease;
+      if (persist) {
+        final = await acquireStoppedClient(auth);
+        await lease.release({ mode: "stop" });
+        expectCalls(0, client.stopAndPersist);
+      }
+      const release = final.release({ mode: "discard" });
+      await calledOnce(stop);
+      const replacement = acquireStoppedClient(auth);
+      if (!persist) {
+        await Promise.resolve();
+        expectCalls(0, client.stopAndPersist);
+      }
+      expectCalls(1, createMatrixClientMock);
+      if (persist) {
+        stopping.reject(new Error("best-effort persistence failed"));
+      } else {
+        stopping.resolve();
+      }
+      await release;
+      if (persist) {
+        expectCalls(1, client.stopWithoutPersist);
+      }
+      await expectReplacement(replacement, replacementClient, persist ? undefined : 2);
     },
-    {
-      name: "strict persistence fallback",
-      mode: "persist" as const,
-      configure: (client: ReturnType<typeof createMockClient>, failure: Error) => {
-        client.stopAndPersist.mockRejectedValue(new Error("crypto persist failed"));
-        client.stopWithoutPersist.mockRejectedValue(failure);
-      },
-    },
-    {
-      name: "final-drain discard",
-      mode: "persist" as const,
-      configure: (client: ReturnType<typeof createMockClient>, failure: Error) => {
-        client.drainPendingDecryptions
-          .mockResolvedValueOnce(undefined)
-          .mockRejectedValueOnce(new Error("final decryption drain timed out"));
-        client.stopWithoutPersist.mockRejectedValue(failure);
-      },
-    },
-  ])("retains a generation when $name shutdown fails", async ({ name, mode, configure }) => {
-    const failure = new Error(`${name} shutdown failed`);
-    const client = createMockClient("main");
-    configure(client, failure);
-    createMatrixClientMock.mockResolvedValue(client);
-    const auth = authFor(`${name}-failure`);
-    const lease = await acquireSharedMatrixClient({ auth, startClient: false });
+  );
 
-    await expect(lease.release({ mode })).rejects.toBe(failure);
-    await expect(acquireSharedMatrixClient({ auth, startClient: false })).rejects.toBe(failure);
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
+  it("retains a generation when strict persistence fallback shutdown fails", async () => {
+    const failure = new Error("strict persistence fallback shutdown failed");
+    const { auth, client } = clients([], "strict persistence fallback-failure", false);
+    client.stopAndPersist.mockRejectedValue(new Error("crypto persist failed"));
+    client.stopWithoutPersist.mockRejectedValue(failure);
+    const lease = await acquireStoppedClient(auth);
+
+    await expect(lease.release({ mode: "persist" })).rejects.toBe(failure);
+    await expect(acquireStoppedClient(auth)).rejects.toBe(failure);
+    expect(createMatrixClientMock).toHaveBeenCalledOnce();
   });
 
   it("awaits discard fallback before surfacing strict persistence failure", async () => {
     const persistFailure = new Error("crypto persist failed");
     const persist = createDeferred<void>();
     const discard = createDeferred<void>();
-    const firstClient = createMockClient("first");
-    const replacementClient = createMockClient("replacement");
+    const { auth, client: firstClient, replacementClient } = clients([], "strict-persist-failure");
     firstClient.stopAndPersist.mockReturnValue(persist.promise);
     firstClient.stopWithoutPersist.mockReturnValue(discard.promise);
-    createMatrixClientMock
-      .mockResolvedValueOnce(firstClient)
-      .mockResolvedValueOnce(replacementClient);
-    const auth = authFor("strict-persist-failure");
-    const lease = await acquireSharedMatrixClient({ auth, startClient: false });
+    const lease = await acquireStoppedClient(auth);
 
     const releaseError = expect(lease.release({ mode: "persist" })).rejects.toBe(persistFailure);
     persist.reject(persistFailure);
-    await vi.waitFor(() => {
-      expect(firstClient.stopWithoutPersist).toHaveBeenCalledTimes(1);
-    });
-    const blockedAcquire = acquireSharedMatrixClient({ auth, startClient: false });
+    await calledOnce(firstClient.stopWithoutPersist);
+    const blockedAcquire = acquireStoppedClient(auth);
     await expect(blockedAcquire).rejects.toBe(persistFailure);
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
+    expect(createMatrixClientMock).toHaveBeenCalledOnce();
     const forcedRetirement = stopSharedClientForAccount(auth);
     await expectPending(forcedRetirement);
 
     discard.resolve();
     await releaseError;
-    await expect(forcedRetirement).resolves.toBeUndefined();
-    const replacement = await acquireSharedMatrixClient({ auth, startClient: false });
-    expect(replacement.client).toBe(replacementClient);
-    await replacement.release({ mode: "discard" });
+    await expect(forcedRetirement).rejects.toBe(persistFailure);
+    await expectReplacement(acquireStoppedClient(auth), replacementClient);
   });
 
-  it("discards and replaces a generation when the final decryption drain fails", async () => {
+  it("discards and replaces a generation when the decryption drain fails", async () => {
     const cause = new Error("final decryption drain timed out");
-    const firstClient = createMockClient("first");
-    const replacementClient = createMockClient("replacement");
-    firstClient.drainPendingDecryptions
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(cause);
-    createMatrixClientMock
-      .mockResolvedValueOnce(firstClient)
-      .mockResolvedValueOnce(replacementClient);
-    const auth = authFor("main");
-    const lease = await acquireSharedMatrixClient({ auth, startClient: false });
+    const { auth, client: firstClient, replacementClient } = clients();
+    const draining = createDeferred<"draining">();
+    const drained = createDeferred<void>();
+    firstClient.drainPendingDecryptions.mockRejectedValueOnce(cause).mockImplementationOnce(() => {
+      draining.resolve("draining");
+      return drained.promise;
+    });
+    const lease = await acquireStoppedClient(auth);
 
-    await expect(lease.release({ mode: "persist" })).rejects.toBe(cause);
-    expect(firstClient.stopWithoutPersist).toHaveBeenCalledTimes(1);
+    const release = lease.release({ mode: "persist" });
+    const settled = release.then(
+      () => "settled",
+      () => "settled",
+    );
+    expect(await Promise.race([draining.promise, settled])).toBe("draining");
+    expect(firstClient.stopWithoutPersist).not.toHaveBeenCalled();
+    drained.resolve();
+    await expect(release).rejects.toBe(cause);
+    expect(firstClient.stopWithoutPersist).toHaveBeenCalledOnce();
     expect(firstClient.stopAndPersist).not.toHaveBeenCalled();
     await expect(stopSharedClientForAccount(auth)).resolves.toBeUndefined();
 
-    const replacement = await acquireSharedMatrixClient({ auth, startClient: false });
-    expect(replacement.client).toBe(replacementClient);
-    await replacement.release({ mode: "discard" });
+    await expectReplacement(acquireStoppedClient(auth), replacementClient);
   });
 
   it("joins an in-flight startup during forced retirement", async () => {
     const start = createDeferred<void>();
-    const firstClient = createMockClient("first");
-    const replacementClient = createMockClient("replacement");
+    const { auth, client: firstClient, replacementClient } = clients();
     let startupSignal: AbortSignal | undefined;
-    firstClient.start.mockImplementation(({ abortSignal } = {}) => {
+    firstClient.start.mockImplementation(({ abortSignal }: { abortSignal?: AbortSignal } = {}) => {
       startupSignal = abortSignal;
       return start.promise;
     });
-    createMatrixClientMock
-      .mockResolvedValueOnce(firstClient)
-      .mockResolvedValueOnce(replacementClient);
-    const auth = authFor("main");
-    const owner = await acquireSharedMatrixClient({ auth, startClient: false });
-    const waiter = await acquireSharedMatrixClient({ auth, startClient: false });
+    const owner = await acquireStoppedClient(auth);
+    const waiter = await acquireStoppedClient(auth);
     const callerAbort = new AbortController();
 
     const ownerStart = owner.start(callerAbort.signal);
-    await vi.waitFor(() => {
-      expect(firstClient.start).toHaveBeenCalledTimes(1);
-    });
+    await calledOnce(firstClient.start);
     const waiterStart = waiter.start();
     const ownerAbort = expectMatrixStartupAbort(ownerStart);
     const waiterAbort = expectMatrixStartupAbort(waiterStart);
 
     const retirement = stopSharedClientForAccount(auth);
     await Promise.all([ownerAbort, waiterAbort]);
-    expect(callerAbort.signal.aborted).toBe(false);
-    expect(startupSignal?.aborted).toBe(true);
-    expect(owner.abortSignal.aborted).toBe(true);
-    expect(waiter.abortSignal.aborted).toBe(true);
+    expect([
+      callerAbort.signal.aborted,
+      startupSignal?.aborted,
+      owner.abortSignal.aborted,
+      waiter.abortSignal.aborted,
+    ]).toEqual([false, true, true, true]);
     expect(firstClient.stopAndPersist).not.toHaveBeenCalled();
 
     await expectPending(retirement);
 
     start.resolve();
     await retirement;
-    expect(firstClient.stopAndPersist).toHaveBeenCalledTimes(1);
-    const replacement = await acquireSharedMatrixClient({ auth, startClient: false });
-    expect(replacement.client).toBe(replacementClient);
-    await replacement.release({ mode: "discard" });
+    expect(firstClient.stopAndPersist).toHaveBeenCalledOnce();
+    await expectReplacement(acquireStoppedClient(auth), replacementClient);
   });
 
-  it("bounds forced retirement while startup remains stuck and fences late cleanup", async () => {
-    vi.useFakeTimers();
-    const start = createDeferred<void>();
-    const discard = createDeferred<void>();
-    const firstClient = createMockClient("first");
-    const replacementClient = createMockClient("replacement");
-    firstClient.start.mockReturnValue(start.promise);
-    firstClient.stopWithoutPersist.mockReturnValue(discard.promise);
-    createMatrixClientMock
-      .mockResolvedValueOnce(firstClient)
-      .mockResolvedValueOnce(replacementClient);
-    const auth = authFor("main");
-    const lease = await acquireSharedMatrixClient({ auth, startClient: false });
-    const startup = lease.start();
-    await vi.waitFor(() => {
-      expect(firstClient.start).toHaveBeenCalledTimes(1);
-    });
+  it.each([
+    { retirementOwner: "monitor release", operation: "release" },
+    { retirementOwner: "account stop", operation: "release" },
+    { retirementOwner: "monitor release", operation: "late acquisition" },
+  ])(
+    "drains monitor tasks during $retirementOwner with a transient $operation",
+    async ({ retirementOwner, operation }) => {
+      const { auth, client } = clients([], "main", false);
+      const monitor = await acquireStoppedClient(auth, "monitor");
+      const transient =
+        operation === "release" ? await acquireStoppedClient(auth, "transient") : undefined;
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const tasks = createMatrixMonitorTaskRunner({ logger, logVerboseMessage: vi.fn() });
+      const sendFinished = createDeferred<void>();
+      const releaseTestDrain = createDeferred<void>();
+      const taskAdmissionClosed = createDeferred<void>();
+      const taskFinished = vi.fn();
+      let lateLease: Awaited<ReturnType<typeof acquireSharedMatrixClient>> | undefined;
+      let acquisitionError: unknown;
+      const task = tasks.runDetachedTask("join introduction", async () => {
+        await sendFinished.promise;
+        if (transient) {
+          await transient.release({ mode: "persist" });
+        } else {
+          try {
+            lateLease = await acquireStoppedClient(auth);
+          } catch (error) {
+            acquisitionError = error;
+          }
+        }
+        taskFinished();
+      });
+      // Finally releases the escape so a failed assertion still joins every task.
+      registerTasks(monitor, tasks, taskAdmissionClosed.resolve, () =>
+        Promise.race([tasks.waitForIdle(), releaseTestDrain.promise]),
+      );
 
-    const retirementError = stopSharedClientForAccount(auth).then(
-      () => null,
-      (error: unknown) => error,
-    );
-    await expectMatrixStartupAbort(startup);
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(firstClient.stopWithoutPersist).not.toHaveBeenCalled();
+      const retirement =
+        retirementOwner === "account stop"
+          ? stopSharedClientForAccount(auth)
+          : monitor.release({ mode: "persist" });
+      await taskAdmissionClosed.promise;
+      sendFinished.resolve();
+      try {
+        await calledOnce(taskFinished);
+        await retirement;
+        if (operation === "late acquisition") {
+          expect(acquisitionError).toMatchObject({ name: "AbortError" });
+          expect(lateLease).toBeUndefined();
+        }
+        expect(client.stopAndPersist).toHaveBeenCalledOnce();
+        expect(client.stopWithoutPersist).not.toHaveBeenCalled();
+        expect(logger.warn).not.toHaveBeenCalled();
+      } finally {
+        releaseTestDrain.resolve();
+        await Promise.all([task, retirement]);
+        await lateLease?.release();
+      }
+    },
+  );
 
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(retirementError).resolves.toMatchObject({
-      message: "Matrix client startup did not settle within 5000ms during retirement",
-    });
-    await expect(acquireSharedMatrixClient({ auth, startClient: false })).rejects.toMatchObject({
-      message: "Matrix client startup did not settle within 5000ms during retirement",
-    });
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
-
-    start.resolve();
-    await vi.waitFor(() => {
-      expect(firstClient.stopWithoutPersist).toHaveBeenCalledTimes(1);
-    });
-    expect(firstClient.stopAndPersist).not.toHaveBeenCalled();
-    await expect(acquireSharedMatrixClient({ auth, startClient: false })).rejects.toMatchObject({
-      message: "Matrix client startup did not settle within 5000ms during retirement",
-    });
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
-
-    discard.resolve();
-    await discard.promise;
-    let replacement: Awaited<ReturnType<typeof acquireSharedMatrixClient>> | undefined;
-    await vi.waitFor(async () => {
-      replacement = await acquireSharedMatrixClient({ auth, startClient: false });
-    });
-    if (!replacement) {
-      throw new Error("expected replacement Matrix client");
-    }
-    expect(replacement.client).toBe(replacementClient);
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
-    await replacement.release({ mode: "discard" });
-  });
-
-  it("retires monitor ownership when late startup discard fails", async () => {
-    vi.useFakeTimers();
-    const start = createDeferred<void>();
-    const monitorTasks = createDeferred<void>();
-    const discardFailure = new Error("late discard failed");
-    const client = createMockClient("first");
-    client.start.mockReturnValue(start.promise);
-    client.stopWithoutPersist.mockRejectedValue(discardFailure);
-    createMatrixClientMock.mockResolvedValue(client);
-    const auth = authFor("late-discard-failure");
+  it("keeps shutdown cancellation when retirement starts after the task settles", async () => {
+    const { auth, client } = clients([], "main", false);
     const monitor = await acquireStoppedClient(auth, "monitor");
-    const monitorRetirement = createMonitorRetirement([]);
-    monitorRetirement.waitForTasks.mockReturnValue(monitorTasks.promise);
-    monitor.registerMonitorRetirement(monitorRetirement);
-    const startup = monitor.start();
+    const tasks = createTaskRunner();
+    const resumeRetainedContinuation = createDeferred<void>();
+    let retained: Promise<unknown> | undefined;
+    await tasks.runDetachedTask("retained continuation", async () => {
+      retained = resumeRetainedContinuation.promise.then(() => acquireStoppedClient(auth));
+    });
+    registerTasks(monitor, tasks);
 
-    await vi.waitFor(() => {
-      expect(client.start).toHaveBeenCalledTimes(1);
-    });
-    const retirementError = stopSharedClientForAccount(auth).then(
-      () => null,
-      (error: unknown) => error,
-    );
-    await expectMatrixStartupAbort(startup);
-    await vi.advanceTimersByTimeAsync(5_000);
-    await expect(retirementError).resolves.toMatchObject({
-      message: "Matrix client startup did not settle within 5000ms during retirement",
-    });
-    expect(monitorRetirement.closeTaskAdmission).toHaveBeenCalledTimes(1);
-    expect(monitorRetirement.detachListeners).toHaveBeenCalledTimes(1);
-    expect(monitorRetirement.waitForTasks).toHaveBeenCalledTimes(1);
+    await stopSharedClientForAccount(auth);
 
-    start.resolve();
-    await vi.waitFor(() => {
-      expect(client.stopWithoutPersist).toHaveBeenCalledTimes(1);
-    });
-    monitorTasks.resolve();
-    await vi.waitFor(() => {
-      expect(monitorRetirement.cleanup).toHaveBeenCalledTimes(1);
-    });
-
-    await expect(acquireSharedMatrixClient({ auth, startClient: false })).rejects.toBe(
-      discardFailure,
-    );
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
+    const retainedExpectation = expect(retained).rejects.toMatchObject({ name: "AbortError" });
+    resumeRetainedContinuation.resolve();
+    await retainedExpectation;
+    expect(createMatrixClientMock).toHaveBeenCalledOnce();
+    expect(client.stopAndPersist).toHaveBeenCalledOnce();
   });
 
-  it("does not let one aborted startup waiter remove another lease", async () => {
-    const client = createMockClient("main");
-    const start = createDeferred<void>();
-    client.start.mockReturnValue(start.promise);
-    createMatrixClientMock.mockResolvedValue(client);
-    const auth = authFor("main");
-    const owner = await acquireStoppedClient(auth);
-    const ownerStart = owner.start();
-    const abortController = new AbortController();
-    const waiter = acquireSharedMatrixClient({
-      auth,
-      abortSignal: abortController.signal,
-    });
-    abortController.abort();
-    await expectMatrixStartupAbort(waiter);
+  it.each([
+    ["authentication", false],
+    ["client creation", false],
+    ["authentication", true],
+    ["client creation", true],
+  ] as const)(
+    "settles retained acquisition during %s after task settlement (retirement=%s)",
+    async (phase, retire) => {
+      const auth = authFor("main");
+      const client = createMockClient("main");
+      const replacementClient = createMockClient("main-replacement");
+      createMatrixClientMock.mockResolvedValueOnce(client);
+      const monitor = await acquireStoppedClient(auth, "monitor");
+      const tasks = createTaskRunner();
+      const allowOwnerSettlement = createDeferred<void>();
+      const authReady = createDeferred<MatrixAuth>();
+      const clientReady = createDeferred<typeof replacementClient>();
+      const created = phase === "client creation";
+      resolveMatrixAuthMock.mockReturnValue(
+        created
+          ? Promise.resolve({ ...auth, accessToken: `${auth.accessToken}-rotated` })
+          : authReady.promise,
+      );
+      if (created) {
+        createMatrixClientMock.mockReturnValueOnce(clientReady.promise);
+      }
+      let retained: ReturnType<typeof acquireSharedMatrixClient> | undefined;
+      const task = tasks.runDetachedTask("retained acquisition", async () => {
+        retained = acquireSharedMatrixClient({
+          cfg: TEST_CFG,
+          accountId: "main",
+          startClient: false,
+        });
+        await allowOwnerSettlement.promise;
+      });
+      const taskAdmissionClosed = createDeferred<void>();
+      if (retire) {
+        registerTasks(monitor, tasks, taskAdmissionClosed.resolve);
+      }
+      try {
+        await vi.waitFor(() => {
+          expectCalls(created ? 2 : 1, created ? createMatrixClientMock : resolveMatrixAuthMock);
+        });
+        allowOwnerSettlement.resolve();
+        await task;
+        if (!retained) {
+          throw new Error("Expected retained acquisition to start before owner settlement");
+        }
+        if (retire) {
+          const retirement = stopSharedClientForAccount(auth);
+          await taskAdmissionClosed.promise;
+          await retirement;
+        }
+        const aborted = retire && expect(retained).rejects.toMatchObject({ name: "AbortError" });
+        authReady.resolve(auth);
+        clientReady.resolve(replacementClient);
+        if (aborted) {
+          await aborted;
+          expectCalls(1, client.stopAndPersist);
+          expectCalls(0, replacementClient.start);
+          expectCalls(created ? 2 : 1, createMatrixClientMock);
+          expectCalls(created ? 1 : 0, replacementClient.stopWithoutPersist);
+        } else {
+          const lease = await retained;
+          expect(lease.client).toBe(phase === "authentication" ? client : replacementClient);
+          await lease.release();
+        }
+      } finally {
+        allowOwnerSettlement.resolve();
+        authReady.resolve(auth);
+        clientReady.resolve(replacementClient);
+        await task;
+        await retained?.catch(() => undefined);
+        await monitor.release();
+      }
+    },
+  );
 
-    start.resolve();
-    await ownerStart;
-    await owner.release();
-    expect(client.start).toHaveBeenCalledTimes(1);
+  it("rejects caller cancellation during client creation before admitting a lease", async () => {
+    const auth = authFor("main");
+    const client = createMockClient("main");
+    const clientReady = createDeferred<typeof client>();
+    resolveMatrixAuthMock.mockResolvedValue(auth);
+    createMatrixClientMock.mockReturnValue(clientReady.promise);
+    const tasks = createTaskRunner();
+    const caller = new AbortController();
+    let lease: Awaited<ReturnType<typeof acquireSharedMatrixClient>> | undefined;
+    let acquisitionError: unknown;
+    const task = tasks.runDetachedTask("pending acquisition", async () => {
+      try {
+        lease = await acquireSharedMatrixClient({
+          cfg: TEST_CFG,
+          accountId: "main",
+          startClient: false,
+          abortSignal: caller.signal,
+        });
+      } catch (error) {
+        acquisitionError = error;
+      }
+    });
+    try {
+      await calledOnce(createMatrixClientMock);
+      caller.abort();
+      clientReady.resolve(client);
+      await task;
+      expect(acquisitionError).toMatchObject({ name: "AbortError" });
+      expect(lease).toBeUndefined();
+      expect(client.start).not.toHaveBeenCalled();
+      expect(client.stopWithoutPersist).toHaveBeenCalledOnce();
+    } finally {
+      clientReady.resolve(client);
+      await task;
+      await lease?.release();
+    }
   });
 });

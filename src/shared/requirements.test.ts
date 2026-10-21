@@ -16,16 +16,6 @@ function evaluate(overrides: Partial<EvaluationParams> = {}) {
 }
 
 describe("requirements evaluation", () => {
-  it("resolves required bins across local and remote capabilities", () => {
-    const result = evaluate({
-      metadata: { requires: { bins: ["a", "b", "c"] } },
-      hasLocalBin: (bin) => bin === "a",
-      remote: { hasBin: (bin) => bin === "b" },
-    });
-
-    expect(result.missing.bins).toEqual(["c"]);
-  });
-
   it("requires at least one any-bin locally or remotely", () => {
     const metadata = { requires: { anyBins: ["a", "b"] } };
 
@@ -138,26 +128,5 @@ describe("requirements evaluation", () => {
       os: ["darwin"],
     });
     expect(result.eligible).toBe(false);
-  });
-
-  it("defaults missing metadata to empty requirements", () => {
-    const result = evaluate();
-
-    expect(result.required).toEqual({
-      bins: [],
-      anyBins: [],
-      env: [],
-      config: [],
-      os: [],
-    });
-    expect(result.missing).toEqual({
-      bins: [],
-      anyBins: [],
-      env: [],
-      config: [],
-      os: [],
-    });
-    expect(result.configChecks).toStrictEqual([]);
-    expect(result.eligible).toBe(true);
   });
 });

@@ -1,69 +1,88 @@
-// Covers plugin-dispatched message actions, target resolution, dry-run behavior,
-// and plugin tool-result extraction.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import {
   createGatewayActionPlugin,
-  createPollForwardingPlugin,
   messageActionRunnerMocks as mocks,
   resetMessageActionRunnerMocks,
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
-  useActionHubPluginFixture,
   readMockCallArg,
   readRecordField,
-  expectRecordFields,
   createEnabledMessageActionConfig,
 } from "./message-action-runner.test-helpers.js";
 
-describe("runMessageAction plugin dispatch", () => {
-  beforeEach(() => {
-    resetMessageActionRunnerMocks();
-  });
-  describe("alias-based plugin action dispatch", () => {
-    useActionHubPluginFixture();
-    it("routes gateway-executed plugin actions through gateway RPC instead of local dispatch", async () => {
-      const handleActionEntry = vi.fn(async () =>
-        jsonResult({
-          ok: true,
-          local: true,
-        }),
-      );
-      const looksLikeId = vi.fn(() => true);
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat reaction test plugin.",
-        actions: ["react"],
-        capabilities: { chatTypes: ["direct"], reactions: true },
-        messaging: {
-          targetResolver: {
-            looksLikeId,
-          },
-        },
-        handleAction: handleActionEntry,
-      });
-      setTestPlugin(gatewayPlugin, "gatewaychat");
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
-        ok: true,
-        added: "✅",
-      });
+function registerGatewayPlugin(
+  action: "send" | "react" | "poll" = "send",
+  pluginId = "gatewaychat",
+  options: Partial<
+    Pick<Parameters<typeof createGatewayActionPlugin>[0], "capabilities" | "messaging">
+  > = {},
+) {
+  const handleAction = vi.fn(async () => jsonResult({ ok: true, local: true }));
+  setTestPlugin(
+    createGatewayActionPlugin({
+      pluginId,
+      label: pluginId,
+      blurb: "Gateway dispatch test plugin.",
+      actions: [action],
+      messaging: { targetResolver: { looksLikeId: () => true } },
+      ...options,
+      handleAction,
+    }),
+    pluginId,
+  );
+  return handleAction;
+}
 
-      const resolveAgentRuntimeIdentityToken = vi.fn(async () => "agent-runtime-token");
-      const result = await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaychat"),
-        action: "react",
-        params: {
-          channel: "gatewaychat",
-          to: "+15551234567",
-          chatJid: "+15551234567",
-          messageId: "wamid.1",
-          emoji: "✅",
-        },
+type ActionInput = Parameters<typeof runMessageAction>[0];
+function runGatewayAction(
+  action: ActionInput["action"],
+  params: Record<string, unknown>,
+  input: Omit<Partial<ActionInput>, "gateway"> & {
+    gateway?: Partial<NonNullable<ActionInput["gateway"]>>;
+  } = {},
+) {
+  return runMessageAction({
+    cfg: createEnabledMessageActionConfig("gatewaychat"),
+    action,
+    params: { channel: "gatewaychat", ...params },
+    dryRun: false,
+    ...input,
+    gateway: { clientName: "cli", mode: "cli", ...input.gateway },
+  });
+}
+
+describe("runMessageAction plugin dispatch", () => {
+  beforeEach(resetMessageActionRunnerMocks);
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+  });
+  it("routes gateway-executed plugin actions through gateway RPC instead of local dispatch", async () => {
+    const looksLikeId = vi.fn(() => true);
+    const handleActionEntry = registerGatewayPlugin("react", "gatewaychat", {
+      capabilities: { chatTypes: ["direct"], reactions: true },
+      messaging: { targetResolver: { looksLikeId } },
+    });
+    mocks.callGatewayLeastPrivilege.mockResolvedValue({
+      ok: true,
+      added: "✅",
+    });
+
+    const resolveAgentRuntimeIdentityToken = vi.fn(async () => "agent-runtime-token");
+    const result = await runGatewayAction(
+      "react",
+      {
+        to: "+15551234567",
+        chatJid: "+15551234567",
+        messageId: "wamid.1",
+        emoji: "✅",
+      },
+      {
         requesterSenderId: "trusted-user",
         sessionKey: "agent:alpha:main",
         sessionId: "session-123",
@@ -73,503 +92,196 @@ describe("runMessageAction plugin dispatch", () => {
           currentChannelProvider: "gatewaychat",
           currentMessageId: "wamid.1",
         },
-        gateway: {
-          resolveAgentRuntimeIdentityToken,
-          clientName: "cli",
-          mode: "cli",
-        },
-        dryRun: false,
-      });
+        gateway: { resolveAgentRuntimeIdentityToken },
+      },
+    );
 
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
-      );
-      expectRecordFields(gatewayCall, { method: "message.action" }, "gateway call");
-      expect(gatewayCall.agentRuntimeIdentityToken).toBe("agent-runtime-token");
-      expect(resolveAgentRuntimeIdentityToken).toHaveBeenCalledTimes(1);
-      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
-      expect(gatewayParams).not.toHaveProperty("conversationReadOrigin");
-      expectRecordFields(
-        gatewayParams,
-        {
-          channel: "gatewaychat",
-          action: "react",
-          sessionKey: "agent:alpha:main",
-          sessionId: "session-123",
-          agentId: "alpha",
-          inboundTurnKind: "room_event",
-          idempotencyKey: "idem-gateway-action",
-        },
-        "gateway call params",
-      );
-      expect(gatewayParams).not.toHaveProperty("requesterAccountId");
-      expect(gatewayParams).not.toHaveProperty("requesterSenderId");
-      expect(gatewayParams).not.toHaveProperty("toolContext");
-      expect(looksLikeId).not.toHaveBeenCalled();
-      expect(handleActionEntry).not.toHaveBeenCalled();
-      expectRecordFields(
-        result,
-        {
-          kind: "action",
-          channel: "gatewaychat",
-          action: "react",
-          handledBy: "plugin",
-        },
-        "result",
-      );
-      expectRecordFields(
-        readRecordField(result, "payload", "result payload"),
-        {
-          ok: true,
-          added: "✅",
-        },
-        "result payload",
-      );
+    const gatewayCall = readMockCallArg(
+      mocks.callGatewayLeastPrivilege,
+      "gateway least privilege call",
+    );
+    expect(gatewayCall).toMatchObject({ method: "message.action" });
+    expect(gatewayCall.agentRuntimeIdentityToken).toBe("agent-runtime-token");
+    expect(resolveAgentRuntimeIdentityToken).toHaveBeenCalledTimes(1);
+    const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+    expect(gatewayParams).not.toHaveProperty("conversationReadOrigin");
+    expect(gatewayParams).toMatchObject({
+      channel: "gatewaychat",
+      action: "react",
+      sessionKey: "agent:alpha:main",
+      sessionId: "session-123",
+      agentId: "alpha",
+      inboundTurnKind: "room_event",
+      idempotencyKey: "idem-gateway-action",
     });
-
-    it("keeps blank backend requester provenance least-privileged", async () => {
-      const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat blank requester test plugin.",
-        actions: ["react"],
-        capabilities: { chatTypes: ["direct"], reactions: true },
-        handleAction: handleActionEntry,
-      });
-      setTestPlugin(gatewayPlugin, "gatewaychat");
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
-        ok: true,
-        added: "✅",
-      });
-
-      await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaychat"),
-        action: "react",
-        params: {
-          channel: "gatewaychat",
-          to: "+15551234567",
-          chatJid: "+15551234567",
-          messageId: "wamid.1",
-          emoji: "✅",
-        },
-        requesterSenderId: "   ",
-        gateway: {
-          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          mode: GATEWAY_CLIENT_MODES.BACKEND,
-        },
-        dryRun: false,
-      });
-
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
-      );
-      expectRecordFields(
-        gatewayCall,
-        {
-          method: "message.action",
-          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          mode: GATEWAY_CLIENT_MODES.BACKEND,
-        },
-        "gateway call",
-      );
-      expect(mocks.callGateway).not.toHaveBeenCalled();
-      expect(handleActionEntry).not.toHaveBeenCalled();
+    expect(gatewayParams).not.toHaveProperty("requesterAccountId");
+    expect(gatewayParams).not.toHaveProperty("requesterSenderId");
+    expect(gatewayParams).not.toHaveProperty("toolContext");
+    expect(looksLikeId).not.toHaveBeenCalled();
+    expect(handleActionEntry).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "action",
+      channel: "gatewaychat",
+      action: "react",
+      handledBy: "plugin",
     });
-
-    it("keeps CLI gateway-executed actions least-privileged when they carry sender ownership", async () => {
-      const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat CLI reaction test plugin.",
-        actions: ["react"],
-        capabilities: { chatTypes: ["direct"], reactions: true },
-        handleAction: handleActionEntry,
-      });
-      setTestPlugin(gatewayPlugin, "gatewaychat");
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
-        ok: true,
-        added: "✅",
-      });
-
-      const result = await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaychat"),
-        action: "react",
-        params: {
-          channel: "gatewaychat",
-          to: "+15551234567",
-          chatJid: "+15551234567",
-          messageId: "wamid.1",
-          emoji: "✅",
-        },
-        senderIsOwner: true,
-        gateway: {
-          clientName: GATEWAY_CLIENT_NAMES.CLI,
-          mode: GATEWAY_CLIENT_MODES.CLI,
-        },
-        dryRun: false,
-      });
-
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
-      );
-      expectRecordFields(
-        gatewayCall,
-        {
-          method: "message.action",
-          clientName: GATEWAY_CLIENT_NAMES.CLI,
-          mode: GATEWAY_CLIENT_MODES.CLI,
-        },
-        "gateway call",
-      );
-      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
-      expectRecordFields(
-        gatewayParams,
-        {
-          channel: "gatewaychat",
-          action: "react",
-          senderIsOwner: true,
-        },
-        "gateway call params",
-      );
-      expect(mocks.callGateway).not.toHaveBeenCalled();
-      expect(handleActionEntry).not.toHaveBeenCalled();
-      expectRecordFields(
-        result,
-        {
-          kind: "action",
-          channel: "gatewaychat",
-          action: "react",
-          handledBy: "plugin",
-        },
-        "result",
-      );
+    expect(readRecordField(result, "payload", "result payload")).toMatchObject({
+      ok: true,
+      added: "✅",
     });
+  });
 
-    it("ignores gateway url overrides for backend plugin actions", async () => {
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat backend action test plugin.",
-        actions: ["react"],
-        capabilities: { chatTypes: ["direct"], reactions: true },
-        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
-      });
-      setTestPlugin(gatewayPlugin, "gatewaychat");
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
-        ok: true,
-        added: "ok",
-      });
-
-      await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaychat"),
-        action: "react",
-        params: {
-          channel: "gatewaychat",
-          to: "+15551234567",
-          chatJid: "+15551234567",
-          messageId: "wamid.1",
-          emoji: "ok",
-        },
-        gateway: {
-          url: "ws://127.0.0.1:18789",
-          token: "configured-token",
-          timeoutMs: 5000,
-          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          mode: GATEWAY_CLIENT_MODES.BACKEND,
-        },
-        dryRun: false,
-      });
-
-      expectRecordFields(
-        readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway least privilege call"),
-        {
-          url: undefined,
-          token: "configured-token",
-          timeoutMs: 5000,
-          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          mode: GATEWAY_CLIENT_MODES.BACKEND,
-        },
-        "gateway call",
-      );
+  it("routes gateway-executed plugin sends through gateway RPC instead of local dispatch", async () => {
+    const handleActionResult = registerGatewayPlugin();
+    mocks.callGatewayLeastPrivilege.mockResolvedValue({
+      ok: true,
+      messageId: "gw-send-1",
     });
+    const resolveAgentRuntimeIdentityToken = vi.fn(async () => "test-token-placeholder");
 
-    it("routes gateway-executed plugin sends through gateway RPC instead of local dispatch", async () => {
-      const handleActionResult = vi.fn(async () => jsonResult({ ok: true, local: true }));
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat send test plugin.",
-        actions: ["send"],
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
-          },
-        },
-        handleAction: handleActionResult,
-      });
-      setTestPlugin(gatewayPlugin, "gatewaychat");
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
-        ok: true,
-        messageId: "gw-send-1",
-      });
-      const resolveAgentRuntimeIdentityToken = vi.fn(async () => "test-token-placeholder");
-
-      const result = await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaychat"),
-        action: "send",
+    const result = await runGatewayAction(
+      "send",
+      {
+        target: "user-123",
+        message: "hello from cli",
+      },
+      {
         conversationReadOrigin: "direct-operator",
         sourceReplyDeliveryMode: "message_tool_only",
         sourceReplyFinal: true,
-        params: {
-          channel: "gatewaychat",
-          target: "user-123",
-          message: "hello from cli",
-        },
+
         toolContext: {
           currentChannelProvider: "gatewaychat",
           currentMessagingTarget: "user-123",
           currentMessageId: "source-message-1",
           replyToMode: "first",
         },
-        gateway: {
-          resolveAgentRuntimeIdentityToken,
-          clientName: "cli",
-          mode: "cli",
-        },
-        dryRun: false,
-      });
+        gateway: { resolveAgentRuntimeIdentityToken },
+      },
+    );
 
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
-      );
-      expectRecordFields(gatewayCall, { method: "message.action" }, "gateway call");
-      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
-      expectRecordFields(
-        gatewayParams,
-        {
-          channel: "gatewaychat",
-          action: "send",
-          conversationReadOrigin: "direct-operator",
-          idempotencyKey: "idem-gateway-action",
-          reply: {
-            replyToId: "source-message-1",
-            source: "implicit",
-            mode: "first",
-          },
-        },
-        "gateway call params",
-      );
-      expect(gatewayParams).not.toHaveProperty("sourceReplyFinal");
-      expect(resolveAgentRuntimeIdentityToken).toHaveBeenCalledWith({
-        sourceReplyFinal: true,
-      });
-      expectRecordFields(
-        readRecordField(gatewayParams, "params", "gateway message params"),
-        {
-          to: "user-123",
-          message: "hello from cli",
-        },
-        "gateway message params",
-      );
-      expect(mocks.executeSendAction).not.toHaveBeenCalled();
-      expect(handleActionResult).not.toHaveBeenCalled();
-      expectRecordFields(
-        result,
-        {
-          kind: "send",
-          channel: "gatewaychat",
-          action: "send",
-          handledBy: "plugin",
-        },
-        "result",
-      );
-      expectRecordFields(
-        readRecordField(result, "payload", "result payload"),
-        {
-          ok: true,
-          messageId: "gw-send-1",
-        },
-        "result payload",
-      );
-    });
-
-    it("makes required queue persistence bypass gateway plugin dispatch", async () => {
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat durable send test plugin.",
-        actions: ["send"],
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
-          },
-        },
-        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
-      });
-      setTestPlugin(gatewayPlugin, "gatewaychat");
-      mocks.executeSendAction.mockResolvedValueOnce({
-        handledBy: "core",
-        payload: { ok: true, messageId: "core-send-1" },
-        sendResult: {
-          channel: "gatewaychat",
-          to: "user-123",
-          via: "direct",
-          mediaUrl: null,
-        },
-      });
-
-      const result = await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaychat"),
+    const gatewayCall = readMockCallArg(
+      mocks.callGatewayLeastPrivilege,
+      "gateway least privilege call",
+    );
+    expect(gatewayCall).toMatchObject({ method: "message.action" });
+    const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+    expect(gatewayParams).toEqual(
+      expect.objectContaining({
+        channel: "gatewaychat",
         action: "send",
-        params: {
-          channel: "gatewaychat",
-          target: "user-123",
-          message: "durable hello",
-        },
-        gateway: {
-          clientName: "cli",
-          mode: "cli",
-        },
-        requireQueuePersistence: true,
-        dryRun: false,
-      });
-
-      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
-      const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
-      const context = readRecordField(executeCall, "ctx", "execute send context");
-      expectRecordFields(
-        readRecordField(context, "input", "message action input"),
-        {
-          requireQueuePersistence: true,
-        },
-        "message action input",
-      );
-      expectRecordFields(result, { handledBy: "core" }, "result");
-    });
-  });
-  describe("poll plugin forwarding", () => {
-    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-      jsonResult({
-        ok: true,
-        forwarded: {
-          to: params.to ?? null,
-          pollQuestion: params.pollQuestion ?? null,
-          pollOption: params.pollOption ?? null,
-          pollDurationSeconds: params.pollDurationSeconds ?? null,
-          pollPublic: params.pollPublic ?? null,
-          threadId: params.threadId ?? null,
+        conversationReadOrigin: "direct-operator",
+        idempotencyKey: "idem-gateway-action",
+        reply: {
+          replyToId: "source-message-1",
+          source: "implicit",
+          mode: "first",
         },
       }),
     );
+    expect(gatewayParams).not.toHaveProperty("sourceReplyFinal");
+    expect(resolveAgentRuntimeIdentityToken).toHaveBeenCalledWith({
+      sourceReplyFinal: true,
+    });
+    expect(readRecordField(gatewayParams, "params", "gateway message params")).toMatchObject({
+      to: "user-123",
+      message: "hello from cli",
+    });
+    expect(mocks.executeSendAction).not.toHaveBeenCalled();
+    expect(handleActionResult).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "gatewaychat",
+      action: "send",
+      handledBy: "plugin",
+    });
+    expect(readRecordField(result, "payload", "result payload")).toMatchObject({
+      ok: true,
+      messageId: "gw-send-1",
+    });
+  });
 
-    const pollChatPlugin = createPollForwardingPlugin({
-      pluginId: "pollchat",
-      label: "Poll Chat",
-      blurb: "Poll chat forwarding test plugin.",
-      handleAction,
+  it("makes required queue persistence bypass gateway plugin dispatch", async () => {
+    registerGatewayPlugin();
+    mocks.executeSendAction.mockResolvedValueOnce({
+      handledBy: "core",
+      payload: { ok: true, messageId: "core-send-1" },
+      sendResult: {
+        channel: "gatewaychat",
+        to: "user-123",
+        via: "direct",
+        mediaUrl: null,
+      },
     });
 
-    beforeEach(() => {
-      setTestPlugin(pollChatPlugin, "pollchat");
-      handleAction.mockClear();
+    const result = await runGatewayAction(
+      "send",
+      {
+        target: "user-123",
+        message: "durable hello",
+      },
+      {
+        requireQueuePersistence: true,
+      },
+    );
+
+    expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+    const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
+    const context = readRecordField(executeCall, "ctx", "execute send context");
+    expect(readRecordField(context, "input", "message action input")).toMatchObject({
+      requireQueuePersistence: true,
+    });
+    expect(result).toMatchObject({ handledBy: "core" });
+  });
+  it("routes gateway-executed plugin polls through gateway RPC instead of local dispatch", async () => {
+    const handleActionLocal = registerGatewayPlugin("poll", "pollchat");
+    mocks.callGatewayLeastPrivilege.mockResolvedValue({
+      ok: true,
+      pollId: "gw-poll-1",
     });
 
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
+    const result = await runGatewayAction(
+      "poll",
+      {
+        channel: "pollchat",
+        target: "pollchat:123",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+      {
+        cfg: { channels: { pollchat: { botToken: "tok" } } } as OpenClawConfig,
+      },
+    );
+
+    const gatewayCall = readMockCallArg(
+      mocks.callGatewayLeastPrivilege,
+      "gateway least privilege call",
+    );
+    expect(gatewayCall).toMatchObject({ method: "message.action" });
+    const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+    expect(gatewayParams).toMatchObject({
+      channel: "pollchat",
+      action: "poll",
+      idempotencyKey: "idem-gateway-action",
     });
-    it("routes gateway-executed plugin polls through gateway RPC instead of local dispatch", async () => {
-      const handleActionLocal = vi.fn(async () => jsonResult({ ok: true, local: true }));
-      const pollGatewayPlugin = createGatewayActionPlugin({
-        pluginId: "pollchat",
-        label: "Poll Chat",
-        blurb: "Poll chat gateway forwarding test plugin.",
-        actions: ["poll"],
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
-          },
-        },
-        handleAction: handleActionLocal,
-      });
-      setTestPlugin(pollGatewayPlugin, "pollchat");
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
-        ok: true,
-        pollId: "gw-poll-1",
-      });
-
-      const result = await runMessageAction({
-        cfg: {
-          channels: {
-            pollchat: {
-              botToken: "tok",
-            },
-          },
-        } as OpenClawConfig,
-        action: "poll",
-        params: {
-          channel: "pollchat",
-          target: "pollchat:123",
-          pollQuestion: "Lunch?",
-          pollOption: ["Pizza", "Sushi"],
-        },
-        gateway: {
-          clientName: "cli",
-          mode: "cli",
-        },
-        dryRun: false,
-      });
-
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
-      );
-      expectRecordFields(gatewayCall, { method: "message.action" }, "gateway call");
-      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
-      expectRecordFields(
-        gatewayParams,
-        {
-          channel: "pollchat",
-          action: "poll",
-          idempotencyKey: "idem-gateway-action",
-        },
-        "gateway call params",
-      );
-      expectRecordFields(
-        readRecordField(gatewayParams, "params", "gateway poll params"),
-        {
-          to: "pollchat:123",
-          pollQuestion: "Lunch?",
-          pollOption: ["Pizza", "Sushi"],
-        },
-        "gateway poll params",
-      );
-      expect(mocks.executePollAction).not.toHaveBeenCalled();
-      expect(handleActionLocal).not.toHaveBeenCalled();
-      expectRecordFields(
-        result,
-        {
-          kind: "poll",
-          channel: "pollchat",
-          action: "poll",
-          handledBy: "plugin",
-        },
-        "result",
-      );
-      expectRecordFields(
-        readRecordField(result, "payload", "result payload"),
-        {
-          ok: true,
-          pollId: "gw-poll-1",
-        },
-        "result payload",
-      );
+    expect(readRecordField(gatewayParams, "params", "gateway poll params")).toEqual(
+      expect.objectContaining({
+        to: "pollchat:123",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      }),
+    );
+    expect(mocks.executePollAction).not.toHaveBeenCalled();
+    expect(handleActionLocal).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "poll",
+      channel: "pollchat",
+      action: "poll",
+      handledBy: "plugin",
+    });
+    expect(readRecordField(result, "payload", "result payload")).toMatchObject({
+      ok: true,
+      pollId: "gw-poll-1",
     });
   });
 });

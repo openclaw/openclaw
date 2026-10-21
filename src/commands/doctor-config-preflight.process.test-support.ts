@@ -105,7 +105,7 @@ export function runIsolatedModuleScript(
 export function createSourceRuntime(root: string): string {
   const runtimeRoot = path.join(root, "runtime");
   fs.mkdirSync(path.join(runtimeRoot, "dist"), { recursive: true });
-  for (const dirname of ["node_modules", "packages", "scripts", "src"]) {
+  for (const dirname of ["node_modules", "packages", "scripts", "src", "docs"]) {
     fs.symlinkSync(
       path.resolve(dirname),
       path.join(runtimeRoot, dirname),
@@ -119,9 +119,13 @@ export function createSourceRuntime(root: string): string {
     "node-sqlite.mjs",
     "node-runtime-update.mjs",
     "node-runtime-recovery.mjs",
+    "cli-parent-lifetime.mjs",
+    "node-runtime-env.mjs",
+    "cli-invocation.mjs",
     "cli-root-options.mjs",
     "gateway-run-argv.mjs",
     "gateway-shutdown-budget.mjs",
+    "worker-heap-flag.mjs",
     "package.json",
     "tsconfig.json",
   ]) {
@@ -140,7 +144,7 @@ export function createSourceRuntime(root: string): string {
 export function createBuiltRuntime(
   root: string,
   sourceDist = path.resolve("dist"),
-  options: { copyDirectories?: boolean } = {},
+  options: { copyDirectories?: boolean; emptyExtensions?: boolean } = {},
 ): string {
   const runtimeRoot = createSourceRuntime(root);
   // The pretest owner supplies immutable built modules once; mutable package
@@ -151,7 +155,9 @@ export function createBuiltRuntime(
     }
     const source = path.join(sourceDist, entry.name);
     const target = path.join(runtimeRoot, "dist", entry.name);
-    if (entry.isDirectory() && options.copyDirectories) {
+    if (entry.isDirectory() && entry.name === "extensions" && options.emptyExtensions) {
+      fs.mkdirSync(target);
+    } else if (entry.isDirectory() && options.copyDirectories) {
       // Direct package entry invocations do not pass --preserve-symlinks.
       fs.cpSync(source, target, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
     } else if (entry.isDirectory()) {

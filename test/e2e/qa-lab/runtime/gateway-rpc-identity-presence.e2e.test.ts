@@ -1,19 +1,26 @@
-import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  startGatewayWithClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
-import { installGatewayTestHooks } from "../../../../src/gateway/test-helpers.js";
-import { prepareDeviceAuthStore } from "../../../../src/infra/device-auth-store.js";
+import {
+  getGatewayTestPort,
+  installGatewayTestHooks,
+  startTestGatewayServer,
+} from "../../../../src/gateway/test-helpers.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../../../src/infra/device-identity-async.js";
 import { withTimeout } from "../../../../src/infra/fs-safe.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 const TOKEN = `rpc-identity-presence-${process.pid}`;
-let started: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+let started:
+  | {
+      port: number;
+      server: Awaited<ReturnType<typeof startTestGatewayServer>>;
+      client: Awaited<ReturnType<typeof connectGatewayClient>>;
+    }
+  | undefined;
 let observer: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
 let stateDir = "";
 type ObserverEvent = {
@@ -37,14 +44,24 @@ beforeAll(async () => {
   if (!stateDir) {
     throw new Error("OPENCLAW_STATE_DIR is required");
   }
-  await prepareDeviceAuthStore({});
   await loadOrCreateProcessDeviceIdentityAsync();
-  started = await startGatewayWithClient({
-    cfg: { gateway: { auth: { mode: "token", token: TOKEN } } },
-    configPath: path.join(stateDir, "openclaw.json"),
-    token: TOKEN,
-    clientDisplayName: "rpc-identity-presence-bootstrap",
+  // Suite hooks must retain this server's state through their per-test reset.
+  const port = await getGatewayTestPort();
+  const server = await startTestGatewayServer(port, {
+    bind: "loopback",
+    auth: { mode: "token", token: TOKEN },
   });
+  try {
+    const client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token: TOKEN,
+      clientDisplayName: "rpc-identity-presence-bootstrap",
+    });
+    started = { port, server, client };
+  } catch (error) {
+    await server.close();
+    throw error;
+  }
   observer = await connectGatewayClient({
     url: `ws://127.0.0.1:${started.port}`,
     token: TOKEN,

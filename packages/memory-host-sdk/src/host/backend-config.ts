@@ -1,7 +1,7 @@
 // Memory Host SDK resolves the sole builtin backend and citation mode.
 import type { MemoryCitationsMode, OpenClawConfig } from "./config-utils.js";
 
-export type ResolvedMemoryBackendConfig = {
+type ResolvedMemoryBackendConfig = {
   backend: "builtin";
   citations: MemoryCitationsMode;
 };

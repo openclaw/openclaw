@@ -1,0 +1,982 @@
+{
+  "minimumPostgresVersion": 16,
+  "fragments": [
+    {
+      "id": "user_profiles",
+      "tables": [
+        "user_profiles",
+        "user_profile_emails",
+        "user_profile_identities"
+      ],
+      "indexes": [
+        "idx_user_profile_emails_profile_id",
+        "idx_user_profile_identities_profile_id",
+        "idx_user_profile_identities_authorization"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-user_profiles.postgres.sql"
+    },
+    {
+      "id": "skill_library_entries",
+      "tables": [
+        "skill_library_entries",
+        "skill_library_revisions",
+        "skill_library_events",
+        "skill_library_uploads"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-skill_library_entries.postgres.sql"
+    },
+    {
+      "id": "operator_approval_standing_grants",
+      "tables": [
+        "operator_approval_standing_grants",
+        "operator_approval_standing_grant_generations"
+      ],
+      "indexes": [
+        "idx_operator_approval_standing_grants_binding"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-operator_approval_standing_grants.postgres.sql"
+    },
+    {
+      "id": "worker_environment_session_attachments",
+      "tables": [
+        "worker_environment_session_attachments"
+      ],
+      "indexes": [
+        "worker_environment_session_attachments_session_key"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-worker_environment_session_attachments.postgres.sql"
+    },
+    {
+      "id": "sandbox_persistent_execs",
+      "tables": [
+        "sandbox_persistent_execs"
+      ],
+      "indexes": [
+        "idx_sandbox_persistent_execs_container",
+        "idx_sandbox_persistent_execs_container_name",
+        "idx_sandbox_persistent_execs_source"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-sandbox_persistent_execs.postgres.sql"
+    },
+    {
+      "id": "user_background_images",
+      "tables": [
+        "user_background_images"
+      ],
+      "indexes": [],
+      "dependencies": [
+        "user_profiles"
+      ],
+      "activation": "first-use",
+      "file": "fragment-user_background_images.postgres.sql"
+    },
+    {
+      "id": "local_workspace_projections",
+      "tables": [
+        "local_workspace_projections"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-local_workspace_projections.postgres.sql"
+    },
+    {
+      "id": "update_runs",
+      "tables": [
+        "update_runs"
+      ],
+      "indexes": [
+        "idx_update_runs_created",
+        "idx_update_runs_active"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-update_runs.postgres.sql"
+    },
+    {
+      "id": "session_repository_workspaces",
+      "tables": [
+        "session_repository_workspaces"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-session_repository_workspaces.postgres.sql"
+    },
+    {
+      "id": "github_repository_publication_requests",
+      "tables": [
+        "github_repository_publication_requests"
+      ],
+      "indexes": [
+        "idx_github_repository_publication_shared_request",
+        "idx_github_repository_publication_personal_request"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-github_repository_publication_requests.postgres.sql"
+    },
+    {
+      "id": "github_publication_session_lifecycles",
+      "tables": [
+        "github_publication_session_lifecycles"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-github_publication_session_lifecycles.postgres.sql"
+    },
+    {
+      "id": "github_personal_publication_requests",
+      "tables": [
+        "github_personal_publication_requests"
+      ],
+      "indexes": [
+        "idx_github_personal_publication_owner_session",
+        "idx_github_personal_publication_pending"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-github_personal_publication_requests.postgres.sql"
+    },
+    {
+      "id": "cron_job_runtime_authorities",
+      "tables": [
+        "cron_job_runtime_authorities"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-cron_job_runtime_authorities.postgres.sql"
+    },
+    {
+      "id": "cron_run_trigger_state_retirements",
+      "tables": [
+        "cron_run_trigger_state_retirements"
+      ],
+      "indexes": [],
+      "dependencies": [
+        "cron_run_receipts"
+      ],
+      "activation": "first-use",
+      "file": "fragment-cron_run_trigger_state_retirements.postgres.sql"
+    },
+    {
+      "id": "execution_identity_contexts",
+      "tables": [
+        "execution_identity_contexts"
+      ],
+      "indexes": [
+        "execution_identity_contexts_run_created_idx"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-execution_identity_contexts.postgres.sql"
+    },
+    {
+      "id": "mcp_oauth_pending_authorizations",
+      "tables": [
+        "mcp_oauth_pending_authorizations"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-mcp_oauth_pending_authorizations.postgres.sql"
+    },
+    {
+      "id": "node_worker_launch_containers",
+      "tables": [
+        "node_worker_launch_containers"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-node_worker_launch_containers.postgres.sql"
+    },
+    {
+      "id": "node_worker_launch_boots",
+      "tables": [
+        "node_worker_launch_boots"
+      ],
+      "indexes": [],
+      "dependencies": [
+        "node_worker_launches"
+      ],
+      "activation": "first-use",
+      "file": "fragment-node_worker_launch_boots.postgres.sql"
+    },
+    {
+      "id": "node_worker_launch_cleanup",
+      "tables": [
+        "node_worker_launch_cleanup"
+      ],
+      "indexes": [],
+      "dependencies": [
+        "node_worker_launches"
+      ],
+      "activation": "first-use",
+      "file": "fragment-node_worker_launch_cleanup.postgres.sql"
+    },
+    {
+      "id": "node_worker_launch_process_scopes",
+      "tables": [
+        "node_worker_launch_process_scopes"
+      ],
+      "indexes": [],
+      "dependencies": [
+        "node_worker_launches"
+      ],
+      "activation": "first-use",
+      "file": "fragment-node_worker_launch_process_scopes.postgres.sql"
+    },
+    {
+      "id": "node_worker_launches",
+      "tables": [
+        "node_worker_launches"
+      ],
+      "indexes": [
+        "idx_node_worker_launches_terminal_completed"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-node_worker_launches.postgres.sql"
+    },
+    {
+      "id": "node_worker_prepared_workspaces",
+      "tables": [
+        "node_worker_prepared_workspaces"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-node_worker_prepared_workspaces.postgres.sql"
+    },
+    {
+      "id": "node_worker_turns",
+      "tables": [
+        "node_worker_turns"
+      ],
+      "indexes": [
+        "idx_node_worker_turns_terminal_completed",
+        "idx_node_worker_turns_active_owner"
+      ],
+      "dependencies": [
+        "node_worker_launches"
+      ],
+      "activation": "first-use",
+      "file": "fragment-node_worker_turns.postgres.sql"
+    },
+    {
+      "id": "operator_approval_execution_identities",
+      "tables": [
+        "operator_approval_execution_identities"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-operator_approval_execution_identities.postgres.sql"
+    },
+    {
+      "id": "web_push_approval_deliveries",
+      "tables": [
+        "web_push_approval_deliveries"
+      ],
+      "indexes": [
+        "idx_web_push_approval_deliveries_subscription"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-web_push_approval_deliveries.postgres.sql"
+    },
+    {
+      "id": "execution_decision_facts",
+      "tables": [
+        "execution_decision_facts"
+      ],
+      "indexes": [
+        "execution_decision_facts_cursor_id_idx",
+        "execution_decision_facts_context_occurred_idx",
+        "execution_decision_facts_run_occurred_idx"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-execution_decision_facts.postgres.sql"
+    },
+    {
+      "id": "execution_owner_lifecycle_bindings",
+      "tables": [
+        "execution_owner_lifecycle_bindings"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-execution_owner_lifecycle_bindings.postgres.sql"
+    },
+    {
+      "id": "outbound_message_execution_bindings",
+      "tables": [
+        "outbound_message_execution_bindings"
+      ],
+      "indexes": [
+        "outbound_message_execution_bindings_execution_event_idx"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-outbound_message_execution_bindings.postgres.sql"
+    },
+    {
+      "id": "outbound_message_progress",
+      "tables": [
+        "outbound_message_progress"
+      ],
+      "indexes": [
+        "outbound_message_progress_occurred_idx",
+        "outbound_message_progress_run_occurred_idx"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-outbound_message_progress.postgres.sql"
+    },
+    {
+      "id": "agent_provenance",
+      "tables": [
+        "agent_provenance"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-agent_provenance.postgres.sql"
+    },
+    {
+      "id": "cron_run_receipts",
+      "tables": [
+        "cron_run_receipts"
+      ],
+      "indexes": [
+        "cron_run_receipts_cursor_id_idx",
+        "idx_cron_run_receipts_active_job",
+        "idx_cron_run_receipts_job_history"
+      ],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-cron_run_receipts.postgres.sql"
+    },
+    {
+      "id": "config_revision_keys",
+      "tables": [
+        "config_revision_keys"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-config_revision_keys.postgres.sql"
+    },
+    {
+      "id": "secret_store_entries",
+      "tables": [
+        "secret_store_entries"
+      ],
+      "indexes": [
+        "secret_store_entries_live_idx"
+      ],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-secret_store_entries.postgres.sql"
+    },
+    {
+      "id": "projects",
+      "tables": [
+        "projects"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-projects.postgres.sql"
+    },
+    {
+      "id": "worktree_templates",
+      "tables": [
+        "worktree_templates"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-worktree_templates.postgres.sql"
+    },
+    {
+      "id": "user_preferences",
+      "tables": [
+        "user_preferences"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-user_preferences.postgres.sql"
+    },
+    {
+      "id": "device_pair_setup_completions",
+      "tables": [
+        "device_pair_setup_completions"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-device_pair_setup_completions.postgres.sql"
+    },
+    {
+      "id": "github_publication_requests",
+      "tables": [
+        "github_publication_requests"
+      ],
+      "indexes": [
+        "idx_github_publication_requests_pending"
+      ],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-github_publication_requests.postgres.sql"
+    },
+    {
+      "id": "device_pairing_join_codes",
+      "tables": [
+        "device_pairing_join_codes"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-device_pairing_join_codes.postgres.sql"
+    },
+    {
+      "id": "skill_workshop_changes",
+      "tables": [
+        "skill_workshop_changes"
+      ],
+      "indexes": [
+        "skill_workshop_changes_cursor_id_idx",
+        "idx_skill_workshop_changes_agent_time"
+      ],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-skill_workshop_changes.postgres.sql"
+    },
+    {
+      "id": "worker_environment_ssh_fallback_ports",
+      "tables": [
+        "worker_environment_ssh_fallback_ports"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-worker_environment_ssh_fallback_ports.postgres.sql"
+    },
+    {
+      "id": "worker_session_placement_moves",
+      "tables": [
+        "worker_session_placement_moves"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-worker_session_placement_moves.postgres.sql"
+    },
+    {
+      "id": "agent_deletion_journal",
+      "tables": [
+        "agent_deletion_journal"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-agent_deletion_journal.postgres.sql"
+    }
+  ],
+  "pendingPromotion": [],
+  "sqliteOnlyAllowList": [
+    {
+      "column": "node_worker_launches.launch_id",
+      "reason": "PostgreSQL text cannot hold NUL; the guard is enforced by the type."
+    },
+    {
+      "column": "node_worker_launches.environment_id",
+      "reason": "PostgreSQL text cannot hold NUL; the guard is enforced by the type."
+    },
+    {
+      "column": "node_worker_launches.session_id",
+      "reason": "PostgreSQL text cannot hold NUL; the guard is enforced by the type."
+    },
+    {
+      "column": "node_worker_launches.run_id",
+      "reason": "PostgreSQL text cannot hold NUL; the guard is enforced by the type."
+    },
+    {
+      "column": "node_worker_launches.result_json",
+      "reason": "PostgreSQL text cannot hold NUL; the guard is enforced by the type."
+    },
+    {
+      "column": "node_worker_launches.error_text",
+      "reason": "PostgreSQL text cannot hold NUL; the guard is enforced by the type."
+    },
+    {
+      "column": "node_worker_turns.turn_id",
+      "reason": "PostgreSQL text cannot hold NUL; the guard is enforced by the type."
+    },
+    {
+      "column": "node_worker_turns.run_id",
+      "reason": "PostgreSQL text cannot hold NUL; the guard is enforced by the type."
+    },
+    {
+      "column": "node_worker_turns.result_json",
+      "reason": "PostgreSQL text cannot hold NUL; the guard is enforced by the type."
+    },
+    {
+      "column": "node_worker_turns.error_text",
+      "reason": "PostgreSQL text cannot hold NUL; the guard is enforced by the type."
+    }
+  ],
+  "pendingCapabilities": [
+    {
+      "database": "agent",
+      "kind": "virtualTable",
+      "table": "session_transcript_fts",
+      "name": "session_transcript_fts",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "text",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "session_id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "message_id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "role",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "timestamp",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "session_transcript_fts",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "rank",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "session_transcript_fts_config",
+      "name": "session_transcript_fts_config",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_config",
+      "name": "k",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_config",
+      "name": "v",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "session_transcript_fts_config",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "index",
+      "table": "session_transcript_fts_config",
+      "name": "sqlite_autoindex_session_transcript_fts_config_1",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "session_transcript_fts_content",
+      "name": "session_transcript_fts_content",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_content",
+      "name": "id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_content",
+      "name": "c0",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_content",
+      "name": "c1",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_content",
+      "name": "c2",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_content",
+      "name": "c3",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_content",
+      "name": "c4",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "session_transcript_fts_content",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "session_transcript_fts_data",
+      "name": "session_transcript_fts_data",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_data",
+      "name": "id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_data",
+      "name": "block",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "session_transcript_fts_data",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "session_transcript_fts_docsize",
+      "name": "session_transcript_fts_docsize",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_docsize",
+      "name": "id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_docsize",
+      "name": "sz",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "session_transcript_fts_docsize",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "session_transcript_fts_idx",
+      "name": "session_transcript_fts_idx",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_idx",
+      "name": "segid",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_idx",
+      "name": "term",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_idx",
+      "name": "pgno",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "session_transcript_fts_idx",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "index",
+      "table": "session_transcript_fts_idx",
+      "name": "sqlite_autoindex_session_transcript_fts_idx_1",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "virtualTable",
+      "table": "standing_intents_fts",
+      "name": "standing_intents_fts",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts",
+      "name": "trigger_keywords",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts",
+      "name": "standing_intents_fts",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts",
+      "name": "rank",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "standing_intents_fts_config",
+      "name": "standing_intents_fts_config",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_config",
+      "name": "k",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_config",
+      "name": "v",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "standing_intents_fts_config",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "index",
+      "table": "standing_intents_fts_config",
+      "name": "sqlite_autoindex_standing_intents_fts_config_1",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "standing_intents_fts_data",
+      "name": "standing_intents_fts_data",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_data",
+      "name": "id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_data",
+      "name": "block",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "standing_intents_fts_data",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "standing_intents_fts_docsize",
+      "name": "standing_intents_fts_docsize",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_docsize",
+      "name": "id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_docsize",
+      "name": "sz",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "standing_intents_fts_docsize",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "standing_intents_fts_idx",
+      "name": "standing_intents_fts_idx",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_idx",
+      "name": "segid",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_idx",
+      "name": "term",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_idx",
+      "name": "pgno",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "standing_intents_fts_idx",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "index",
+      "table": "standing_intents_fts_idx",
+      "name": "sqlite_autoindex_standing_intents_fts_idx_1",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "trigger",
+      "table": "session_transcript_fts_rows",
+      "name": "session_transcript_fts_rows_after_delete",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "trigger",
+      "table": "standing_intents",
+      "name": "standing_intents_fts_after_delete",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "trigger",
+      "table": "standing_intents",
+      "name": "standing_intents_fts_after_insert",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "trigger",
+      "table": "standing_intents",
+      "name": "standing_intents_fts_after_update",
+      "pendingCapability": "search"
+    }
+  ]
+}

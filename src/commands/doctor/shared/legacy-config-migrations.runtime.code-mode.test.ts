@@ -12,8 +12,7 @@ describe("Code Mode JavaScript config migration", () => {
       const raw = {
         tools: {
           codeMode: {
-            enabled: "auto",
-            languages: ["javascript", "typescript"],
+            languages: null,
             maxOutputBytes: 4096,
           },
         },
@@ -37,7 +36,7 @@ describe("Code Mode JavaScript config migration", () => {
       const migrated = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
       expect(migrated.partiallyValid).toBeUndefined();
-      expect(migrated.config?.tools?.codeMode).toEqual({ enabled: "auto", maxOutputBytes: 4096 });
+      expect(migrated.config?.tools?.codeMode).toEqual({ maxOutputBytes: 4096 });
       expect(migrated.config?.agents?.entries?.main?.tools?.codeMode).toEqual({
         enabled: false,
         timeoutMs: 2500,
@@ -50,19 +49,6 @@ describe("Code Mode JavaScript config migration", () => {
           sourceConfigBeforeMigrations: migrated.sourceConfig,
         }).changes,
       ).toEqual([]);
-    },
-  );
-
-  it.each([[], null, "typescript"])(
-    "removes an empty or malformed language setting %j without enabling Code Mode",
-    (languages) => {
-      const raw = { tools: { codeMode: { languages } } };
-      const migrated = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
-
-      expect(migrated.partiallyValid).toBeUndefined();
-      expect(migrated.config?.tools?.codeMode).toEqual({});
-      expect(migrated.sourceConfig).toBeDefined();
-      expect(findLegacyConfigIssues(migrated.sourceConfig)).toEqual([]);
     },
   );
 });

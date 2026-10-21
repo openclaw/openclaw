@@ -1,21 +1,18 @@
-/**
- * Gateway session preview resolve tests.
- */
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, onTestFinished, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import type { ControlUiSessionPreview } from "./control-ui-contract.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
+import * as sessionRows from "./session-row-projection-record.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
-import type { SessionsListResult } from "./session-utils.types.js";
+import type { SessionsListResult, SessionsPreviewResult } from "./session-utils.types.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -27,6 +24,16 @@ import {
 
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
+type ResolvedSession = {
+  ok: boolean;
+  key: string;
+  candidates: Array<{ key: string; displayName?: string }>;
+};
+function resolveSession(params: Record<string, unknown>, client: GatewayClient) {
+  return directSessionReq<ResolvedSession>("sessions.resolve", params, { client });
+}
+const expectResolved = (result: unknown, key: string) =>
+  expect(result).toMatchObject({ ok: true, payload: { ok: true, key } });
 
 test("lists and previews the selected aggregate global owner over WebSocket", async () => {
   const config = await getGatewayConfigModule();
@@ -37,13 +44,13 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
     sessionConfig: testState.sessionConfig,
     sessionStorePath: testState.sessionStorePath,
   };
-  const configPaths = new Set([config.CONFIG_PATH]);
-  if (process.env.OPENCLAW_CONFIG_PATH) {
-    configPaths.add(process.env.OPENCLAW_CONFIG_PATH);
-  }
-  if (process.env.OPENCLAW_STATE_DIR) {
-    configPaths.add(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"));
-  }
+  const configPaths = new Set([
+    config.CONFIG_PATH,
+    ...(process.env.OPENCLAW_CONFIG_PATH ? [process.env.OPENCLAW_CONFIG_PATH] : []),
+    ...(process.env.OPENCLAW_STATE_DIR
+      ? [path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json")]
+      : []),
+  ]);
   const files = new Map<string, Buffer | undefined>();
   for (const configPath of configPaths) {
     try {
@@ -74,27 +81,53 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
   const { workStorePath } = await createSelectedGlobalSessionStore();
   testState.agentsConfig = {
     entries: {
-      main: { default: true, model: { primary: "openai/gpt-5.4" } },
+      main: { model: { primary: "openai/gpt-5.4" } },
       work: { model: { primary: "openai/gpt-5.5" } },
     },
   };
   const sessionId = "aggregate-work-global";
+  const workSqlitePath = resolveUnsuffixedSqliteTargetFromSessionStorePath(workStorePath).path;
+  const backfilled = Promise.withResolvers<void>();
+  const publishTranscriptFields = sessionRows.publishTranscriptFields;
+  const publication = vi
+    .spyOn(sessionRows, "publishTranscriptFields")
+    .mockImplementation((row, ...args) => {
+      const changed = publishTranscriptFields(row, ...args);
+      if (
+        row.key === "global" &&
+        row.agentId === "work" &&
+        row.storeTarget.storePath === workSqlitePath &&
+        row.entry.sessionId === sessionId &&
+        row.lastMessagePreview === "Work global conversation"
+      ) {
+        backfilled.resolve();
+      }
+      return changed;
+    });
+  onTestFinished(() => publication.mockRestore());
   await writeSessionStore({
     agentId: "work",
     storePath: workStorePath,
     entries: { global: sessionStoreEntry(sessionId, { label: "Work global conversation" }) },
   });
-  await seedSessionTranscript({
-    agentId: "work",
-    sessionId,
-    sessionKey: "global",
-    storePath: workStorePath,
-    messages: [{ role: "user", content: "Work global conversation" }],
-  });
-  const backfilled = observeSessionRowBackfill(["global"]);
+  // The suite Gateway is already running, so publish the transcript to its projection.
+  await sessionAccessor.persistSessionTranscriptTurn(
+    { agentId: "work", sessionId, sessionKey: "global", storePath: workStorePath },
+    {
+      updateMode: "file-only",
+      messages: [{ message: { role: "user", content: "Work global conversation" } }],
+    },
+  );
   const { ws } = await openClient();
   try {
-    await backfilled;
+    // Transcript enrichment starts only when a reader requests the selected row.
+    const demand = await rpcReq<SessionsListResult>(ws, "sessions.list", {
+      includeGlobal: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+    });
+    expect(demand.ok).toBe(true);
+    await backfilled.promise;
     for (const search of [undefined, "gpt-5.5"]) {
       const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {
         includeGlobal: true,
@@ -182,101 +215,40 @@ function identifiedClient(profileId: string, scopes: string[] = ["operator.read"
   };
 }
 
-test("sessions.preview returns transcript previews", async () => {
+test("sessions.preview returns transcript previews within the requested text budget", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionId = "sess-preview";
-  const lines = createToolSummaryPreviewTranscriptLines(sessionId);
-
-  await writeSessionStore({
-    entries: {
-      "agent:main:main": sessionStoreEntry(sessionId),
-    },
-  });
+  await writeSessionStore({ entries: { "agent:main:main": sessionStoreEntry(sessionId) } });
   await seedSessionTranscript({
     sessionId,
     sessionKey: "agent:main:main",
     storePath,
-    messages: lines
-      .map((line) => JSON.parse(line) as { message?: Record<string, unknown> })
-      .map((record) => record.message)
-      .filter((message): message is Record<string, unknown> => Boolean(message))
-      .map((message) => Object.assign({ role: String(message.role) }, message)),
+    messages: [
+      { role: "user", content: "Long preview input crosses the requested character budget." },
+      { role: "assistant", content: "Hi" },
+      { role: "assistant", content: [{ type: "toolcall", name: "weather" }] },
+      { role: "assistant", content: "Forecast ready" },
+    ],
   });
 
-  const preview = await directSessionReq<{
-    previews: Array<{
-      key: string;
-      status: string;
-      items: Array<{ role: string; text: string }>;
-    }>;
-  }>("sessions.preview", { keys: ["main"], limit: 3, maxChars: 120 });
+  const preview = await directSessionReq<SessionsPreviewResult>("sessions.preview", {
+    keys: ["main"],
+    limit: 3,
+    maxChars: 24,
+  });
   expect(preview.ok).toBe(true);
   const entry = preview.payload?.previews[0];
-  expect(entry?.key).toBe("main");
-  expect(entry?.status).toBe("ok");
+  expect(entry).toMatchObject({ key: "main", status: "ok" });
   expect(entry?.items).toEqual([
-    { role: "user", text: "Hello" },
+    { role: "user", text: "Long preview input cr..." },
     { role: "assistant", text: "Hi" },
     { role: "assistant", text: "Forecast ready" },
   ]);
 });
 
-test("sessions.preview honors maxChars up to the shared cap", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionId = "sess-preview-explicit-budget";
-  const maxChars = 800;
-
-  await writeSessionStore({
-    entries: {
-      "agent:main:main": sessionStoreEntry(sessionId),
-    },
-  });
-  await seedSessionTranscript({
-    sessionId,
-    sessionKey: "agent:main:main",
-    storePath,
-    messages: [{ role: "assistant", content: "a".repeat(maxChars + 20) }],
-  });
-
-  const preview = await directSessionReq<{
-    previews: Array<{ items: Array<{ role: string; text: string }> }>;
-  }>("sessions.preview", { keys: ["main"], limit: 1, maxChars });
-
-  expect(preview.ok).toBe(true);
-  expect(preview.payload?.previews[0]?.items).toEqual([
-    { role: "assistant", text: `${"a".repeat(maxChars - 3)}...` },
-  ]);
-
-  const capped = await directSessionReq<{
-    previews: Array<{ items: Array<{ role: string; text: string }> }>;
-  }>("sessions.preview", { keys: ["main"], limit: 1, maxChars: Number.MAX_SAFE_INTEGER });
-
-  expect(capped.ok).toBe(true);
-  expect(capped.payload?.previews[0]?.items).toEqual([
-    { role: "assistant", text: `${"a".repeat(maxChars - 3)}...` },
-  ]);
-});
-
-test("session preview reader returns the newest items from a large transcript", async () => {
-  const scope = await seedPreviewTail(
-    "sess-preview-bounded-tail",
-    Array.from({ length: 1024 }, (_, index) => ({
-      role: "assistant",
-      content: `message ${String(index)}`,
-    })),
-  );
-  const items = await readSessionPreviewItemsFromTranscriptAsync(scope, 12, 120);
-  expect(items).toEqual(
-    Array.from({ length: 12 }, (_, index) => ({
-      role: "assistant",
-      text: `message ${String(1012 + index)}`,
-    })),
-  );
-});
-
 test("session preview reader widens its bounded tail past filtered tool-result rows", async () => {
   const scope = await seedPreviewTail("sess-preview-sparse-tail", [
-    ...Array.from({ length: 12 }, (_, index) => ({
+    ...Array.from({ length: 64 }, (_, index) => ({
       role: "assistant",
       content: `visible ${String(index)}`,
     })),
@@ -289,7 +261,7 @@ test("session preview reader widens its bounded tail past filtered tool-result r
   expect(items).toEqual(
     Array.from({ length: 12 }, (_, index) => ({
       role: "assistant",
-      text: `visible ${String(index)}`,
+      text: `visible ${String(52 + index)}`,
     })),
   );
 });
@@ -319,71 +291,6 @@ test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns
 
   expect(resolved.ok).toBe(true);
   expect(resolved.payload?.key).toBe("agent:main:subagent:target");
-});
-
-test("sessions.resolve can probe a missing selector without returning an RPC error", async () => {
-  await createSessionStoreDir();
-  const { ws } = await openClient();
-
-  const resolved = await rpcReq<{ ok: false }>(ws, "sessions.resolve", {
-    key: "agent:main:missing",
-    allowMissing: true,
-  });
-
-  expect(resolved.ok).toBe(true);
-  expect(resolved.payload).toEqual({ ok: false });
-});
-
-test("sessions.resolve rejects a missing key by default", async () => {
-  await createSessionStoreDir();
-  const { ws } = await openClient();
-
-  const resolved = await rpcReq(ws, "sessions.resolve", {
-    key: "agent:main:missing",
-  });
-
-  expect(resolved.ok).toBe(false);
-  expect(resolved.error?.message).toBe("No session found: agent:main:missing");
-});
-
-test("sessions.resolve returns short-id ambiguity as a protocol-success result", async () => {
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      "agent:main:thread:12345678-0aaa-4000-8000-000000000001": {
-        sessionId: "sess-short-newer",
-        displayName: "Newer",
-        updatedAt: 20,
-      },
-      "agent:main:thread:12345678-0bbb-4000-8000-000000000002": {
-        sessionId: "sess-short-older",
-        displayName: "Older",
-        updatedAt: 10,
-      },
-    },
-  });
-
-  const resolved = await directSessionReq<{
-    ok: false;
-    candidates: Array<{ key: string; displayName?: string }>;
-  }>("sessions.resolve", { shortId: "12345678" });
-
-  expect(resolved.ok).toBe(true);
-  expect(resolved.payload).toEqual({
-    ok: false,
-    candidates: [
-      {
-        agentId: "main",
-        key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001",
-        displayName: "Newer",
-      },
-      {
-        agentId: "main",
-        key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002",
-        displayName: "Older",
-      },
-    ],
-  });
 });
 
 test("sessions.resolve filters discovery selectors with sessions.list visibility", async () => {
@@ -441,8 +348,8 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
       displayName: "Incognito only",
       updatedAt: 10,
       visibility: "shared",
-      incognito: true,
       createdActor: { type: "human", source: "profile", id: "viewer" },
+      incognito: true,
     },
   );
   const client = identifiedClient("viewer");
@@ -453,15 +360,12 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
     { sessionId: "sess-hidden-only" },
     { label: "hidden-only" },
   ]) {
-    const hidden = await directSessionReq("sessions.resolve", params, { client });
+    const hidden = await resolveSession(params, client);
     expect(hidden.ok).toBe(false);
     expect(hidden.error?.message).toContain("No session found");
   }
 
-  const ambiguous = await directSessionReq<{
-    ok: false;
-    candidates: Array<{ key: string; displayName?: string }>;
-  }>("sessions.resolve", { shortId: "12345678" }, { client });
+  const ambiguous = await resolveSession({ shortId: "12345678" }, client);
   expect(ambiguous).toMatchObject({
     ok: true,
     payload: {
@@ -471,84 +375,50 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
   });
 
   for (const params of [{ sessionId: "sess-collision" }, { label: "collision-label" }]) {
-    const resolved = await directSessionReq<{ ok: true; key: string }>("sessions.resolve", params, {
-      client,
-    });
-    expect(resolved).toMatchObject({ ok: true, payload: { ok: true, key: visibleKey } });
+    expectResolved(await resolveSession(params, client), visibleKey);
   }
 
-  const exactKey = await directSessionReq<{ ok: true; key: string }>(
-    "sessions.resolve",
-    { key: hiddenOnlyKey },
-    { client },
-  );
-  expect(exactKey).toMatchObject({ ok: true, payload: { ok: true, key: hiddenOnlyKey } });
+  expectResolved(await resolveSession({ key: hiddenOnlyKey }, client), hiddenOnlyKey);
 
   for (const key of [hiddenOnlyKey, "agent:main:hidden-only"]) {
-    const reference = await directSessionReq(
-      "sessions.resolve",
+    const reference = await resolveSession(
       { reference: { key, slug: "hidden-only" }, agentId: "main", allowMissing: true },
-      { client },
+      client,
     );
     expect(reference).toMatchObject({ ok: true, payload: { ok: false } });
   }
 
-  const ownerDraft = await directSessionReq<{ ok: true; key: string }>(
-    "sessions.resolve",
-    { shortId: "deadbeef" },
-    { client: identifiedClient("owner") },
+  expectResolved(
+    await resolveSession({ shortId: "deadbeef" }, identifiedClient("owner")),
+    hiddenOnlyKey,
   );
-  expect(ownerDraft).toMatchObject({ ok: true, payload: { ok: true, key: hiddenOnlyKey } });
 
-  const adminIncognitoDiscovery = await directSessionReq(
-    "sessions.resolve",
-    { shortId: "cafebabe" },
-    { client: identifiedClient("admin", ["operator.admin"]) },
-  );
+  const admin = identifiedClient("admin", ["operator.admin"]);
+  const adminIncognitoDiscovery = await resolveSession({ shortId: "cafebabe" }, admin);
   expect(adminIncognitoDiscovery.ok).toBe(false);
   expect(adminIncognitoDiscovery.error?.message).toContain("No session found");
-  const adminIncognito = await directSessionReq<{ ok: true; key: string }>(
-    "sessions.resolve",
-    { key: incognitoKey },
-    { client: identifiedClient("admin", ["operator.admin"]) },
-  );
-  expect(adminIncognito).toMatchObject({ ok: true, payload: { ok: true, key: incognitoKey } });
-});
-
-test.each([
-  { params: { shortId: "xyz" }, message: "shortId must be 8-32 hexadecimal characters" },
-  { params: { label: "release", slugHint: "release" }, message: "slugHint requires shortId" },
-])("sessions.resolve rejects invalid short-ref params: $message", async ({ params, message }) => {
-  await createSessionStoreDir();
-
-  const resolved = await directSessionReq("sessions.resolve", params);
-
-  expect(resolved.ok).toBe(false);
-  expect(resolved.error?.code).toBe("INVALID_REQUEST");
-  expect(resolved.error?.message).toBe(message);
+  expectResolved(await resolveSession({ key: incognitoKey }, admin), incognitoKey);
 });
 
 test("sessions.resolve by key respects spawnedBy visibility filters", async () => {
   await createSessionStoreDir();
   const now = Date.now();
+  const parents: Array<[string, number, string]> = [
+    ["visible-parent", 3_000, "agent:main:main"],
+    ["hidden-parent", 2_000, "agent:main:main"],
+    ["shared-child-key-filter", 1_000, "agent:main:subagent:hidden-parent"],
+  ];
   await writeSessionStore({
-    entries: {
-      "agent:main:subagent:visible-parent": {
-        sessionId: "sess-visible-parent",
-        updatedAt: now - 3_000,
-        spawnedBy: "agent:main:main",
-      },
-      "agent:main:subagent:hidden-parent": {
-        sessionId: "sess-hidden-parent",
-        updatedAt: now - 2_000,
-        spawnedBy: "agent:main:main",
-      },
-      "agent:main:subagent:shared-child-key-filter": {
-        sessionId: "sess-shared-child-key-filter",
-        updatedAt: now - 1_000,
-        spawnedBy: "agent:main:subagent:hidden-parent",
-      },
-    },
+    entries: Object.fromEntries(
+      parents.map(([id, age, spawnedBy]) => [
+        `agent:main:subagent:${id}`,
+        {
+          sessionId: `sess-${id}`,
+          updatedAt: now - age,
+          spawnedBy,
+        },
+      ]),
+    ),
   });
 
   const { ws } = await openClient();

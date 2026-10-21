@@ -58,7 +58,7 @@ describe("ports-format", () => {
     [{ commandLine: "python worker.py openclaw gateway" }, "unknown"],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
   ] as const)("classifies port listener %j", (listener, expected) => {
-    expect(classifyPortListener(listener, 18789)).toBe(expected);
+    expect(classifyPortListener(listener)).toBe(expected);
   });
 
   it.each([
@@ -70,7 +70,7 @@ describe("ports-format", () => {
     ({ entry, directory, args }) => {
       const script = writeScript(entry, directory);
       expect(
-        classifyPortListener({ command: "node", commandLine: `node "${script}" ${args}` }, 18789),
+        classifyPortListener({ command: "node", commandLine: `node "${script}" ${args}` }),
       ).toBe("gateway");
     },
   );
@@ -81,7 +81,7 @@ describe("ports-format", () => {
   ])("does not classify $packageName $args as a Gateway", ({ packageName, command, args }) => {
     const script = writeScript("dist/index.js", "openclaw data", packageName);
     const listener = { command, commandLine: `node "${script}" ${args}` };
-    expect(classifyPortListener(listener, 18789)).toBe("unknown");
+    expect(classifyPortListener(listener)).toBe("unknown");
     expect(buildPortHints([listener], 18789)).toEqual([
       "Another process is listening on this port.",
     ]);

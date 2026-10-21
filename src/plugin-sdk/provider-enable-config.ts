@@ -1,4 +1,3 @@
-// Provider enable config helpers update provider allowlists and config enablement state.
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 
 type ProviderPluginConfig = {

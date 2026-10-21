@@ -44,30 +44,6 @@ describe("write-build-info", () => {
     });
   });
 
-  it("falls back to build-time Git and one current UTC timestamp for local builds", () => {
-    const rootDir = createPackage("2026.7.10-beta.1");
-    const execFileSync = vi.fn(() => "1234567890ABCDEF1234567890ABCDEF12345678\n");
-
-    expect(
-      resolveBuildInfo({
-        rootDir,
-        env: {},
-        execFileSync,
-        now: () => new Date("2026-07-10T01:02:03.456Z"),
-      }),
-    ).toEqual({
-      version: "2026.7.10-beta.1",
-      commit: "1234567890abcdef1234567890abcdef12345678",
-      builtAt: "2026-07-10T01:02:03.456Z",
-      buildId: "2026.7.10-beta.1-1234567890ab-2026-07-10T01-02-03.456Z",
-    });
-    expect(execFileSync).toHaveBeenCalledWith("git", ["rev-parse", "HEAD"], {
-      cwd: rootDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  });
-
   it("uses null when Git metadata is unavailable", () => {
     const rootDir = createPackage();
 

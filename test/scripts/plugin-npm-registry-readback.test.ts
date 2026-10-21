@@ -106,26 +106,19 @@ globalThis.fetch = async (url, init) => {
 
 describe("plugin npm postpublish visibility", () => {
   it.each([
-    "missing-version",
-    "missing-package",
-    "missing-tarball",
-    "unavailable",
-    "selector",
-    "missing-selector",
-  ])("records %s as published with visibility pending for the parent verifier", (fault) => {
-    const result = readback(fault);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toContain("published, visibility pending");
-    expect(result.summary).toContain("published, visibility pending");
-    expect(result.summary).toContain("parent's final registry verification");
-  });
-
-  it.each([
-    ["missing-version", false, "npm-oidc"],
-    ["missing-tarball", false, "npm-token-bootstrap"],
-    ["missing-version", true, "npm-readback"],
-    ["selector", false, "npm-oidc"],
-    ["selector", true, "npm-readback"],
+    ...[
+      "missing-version",
+      "missing-package",
+      "missing-tarball",
+      "unavailable",
+      "selector",
+      "missing-selector",
+    ].map((fault) => [fault, true, "npm-oidc", "pending"] as const),
+    ["missing-version", false, "npm-oidc", "rejected"],
+    ["missing-tarball", false, "npm-token-bootstrap", "rejected"],
+    ["missing-version", true, "npm-readback", "rejected"],
+    ["selector", false, "npm-oidc", "rejected"],
+    ["selector", true, "npm-readback", "rejected"],
     ...[
       "integrity",
       "bytes",
@@ -136,18 +129,21 @@ describe("plugin npm postpublish visibility", () => {
       "oversized",
       "malformed",
       "forbidden",
-    ].map((fault) => [fault, true, "npm-oidc"] as const),
-  ] as const)("keeps %s strict (defer=%s, route=%s)", (fault, defer, route) => {
+    ].map((fault) => [fault, true, "npm-oidc", "rejected"] as const),
+    ["none", true, "npm-oidc", "verified"],
+  ] as const)("reports %s with defer=%s, route=%s as %s", (fault, defer, route, outcome) => {
     const result = readback(fault, defer, route);
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.summary).toBe("");
-    expect(result.stderr).not.toContain("published, visibility pending");
-  });
-
-  it("still reports verified bytes and selector when registry readback succeeds", () => {
-    const result = readback("none");
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("verified exact published bytes and selector");
-    expect(result.summary).toBe("");
+    expect(result.status, result.stderr).toBe(outcome === "rejected" ? 1 : 0);
+    if (outcome === "pending") {
+      expect(result.stderr).toContain("published, visibility pending");
+      expect(result.summary).toContain("published, visibility pending");
+      expect(result.summary).toContain("parent's final registry verification");
+    } else {
+      expect(result.summary).toBe("");
+      expect(result.stderr).not.toContain("published, visibility pending");
+      if (outcome === "verified") {
+        expect(result.stdout).toContain("verified exact published bytes and selector");
+      }
+    }
   });
 });

@@ -1,13 +1,25 @@
 import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import process from "node:process";
-import { setImmediate } from "node:timers/promises";
+import { setImmediate, setTimeout as waitForProcessTick } from "node:timers/promises";
 import { describe, expect, it, vi, type MockInstance } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import * as processIdentity from "../shared/pid-alive.js";
-import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import { spawnCommand, withCommandProcessScope } from "./exec-spawn.js";
+
+// A foreign descendant has no retained ChildProcess handle after its root exits.
+async function waitForGroupExit(child: ChildProcess, signal: AbortSignal): Promise<void> {
+  try {
+    while (isChildProcessTreeAlive(child)) {
+      await waitForProcessTick(25, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`Timed out waiting for process group ${child.pid} to exit`, { cause: error });
+  }
+}
 
 type ScopeCase = {
   name: string;
@@ -160,7 +172,7 @@ describe("command process scope cancellation", () => {
 });
 
 describe.skipIf(process.platform === "win32")("terminal command process ownership", () => {
-  it.each(endings)("$name", async ({ exitParent, completion, identity }) => {
+  it.for(endings)("$name", async ({ exitParent, completion, identity }, { signal: testSignal }) => {
     const unrelated = spawnCommand([process.execPath, "-e", "setInterval(()=>{},1000)"], {
       stdio: "ignore",
       reject: false,
@@ -193,9 +205,14 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
         );
         child = command.nodeChildProcess;
         childResult = command;
-        const [message] = await once(child, "message", {
-          signal: AbortSignal.timeout(3_000),
-        });
+        const [message] = await withinTest(
+          awaitGateBeforeSettlement(
+            once(child, "message", { signal: testSignal }),
+            command,
+            "Scope did not receive its descendant PID",
+          ),
+          testSignal,
+        );
         descendantPid = Number(message);
         expect(Number.isSafeInteger(descendantPid)).toBe(true);
         if (exitParent) {
@@ -208,18 +225,9 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
             // Real process-group extinction is required before simulating PID reuse.
             expect(isChildProcessTreeAlive(child)).toBe(true);
             process.kill(descendantPid, "SIGKILL");
-            expect(await waitForPidToExit(descendantPid)).toBe(true);
-            // A zombie descendant can be reported as "not running" (isPidAlive) before
-            // the parent actually reaps it and the process group truly disappears
-            // (isChildProcessTreeAlive). Wait for the group-absence condition itself,
-            // using the same 2000ms deadline / 25ms interval as waitForPidToExit,
-            // instead of assuming it follows immediately from PID liveness.
-            await expect
-              .poll(() => isChildProcessTreeAlive(command.nodeChildProcess), {
-                timeout: 2_000,
-                interval: 25,
-              })
-              .toBe(false);
+            // Group absence also joins adopted-child reaping, which PID liveness alone cannot prove.
+            await waitForGroupExit(child, testSignal);
+            expect(processIdentity.isPidAlive(descendantPid)).toBe(false);
             const kill = process.kill.bind(process);
             let groupReads = 0;
             retiredSignals = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
@@ -245,18 +253,19 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
         }
       });
       if (identity === "reused-after-exit") {
-        await expect(running).rejects.toMatchObject({
+        await expect(withinTest(running, testSignal)).rejects.toMatchObject({
           code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN",
         });
       } else if (completion === "reject") {
-        await expect(running).rejects.toBe(failure);
+        await expect(withinTest(running, testSignal)).rejects.toBe(failure);
       } else {
-        await running;
+        await withinTest(running, testSignal);
       }
       if (descendantPid === undefined) {
         throw new Error("Scope did not receive its descendant PID");
       }
-      expect(await waitForPidToExit(descendantPid)).toBe(identity !== "reused-after-exit");
+      // Scope settlement joins group extinction, or rejects without signaling the reused identity.
+      expect(processIdentity.isPidAlive(descendantPid)).toBe(identity === "reused-after-exit");
       await childResult;
       expect(processIdentity.isPidAlive(unrelated.pid!)).toBe(true);
       if (retiredSignals) {

@@ -1,11 +1,8 @@
-import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
+import type { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import type {
-  ButtonInteraction,
-  CommandInteraction,
-  StringSelectMenuInteraction,
-} from "../internal/discord.js";
+import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
+import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
 import type { DispatchDiscordCommandInteractionResult } from "./native-command-dispatch.js";
 import {
   deliverDiscordInteractionReply,
@@ -14,29 +11,26 @@ import {
 } from "./native-command-reply.js";
 import type { DiscordConfig } from "./native-command.types.js";
 
-type ResolveDirectStatusReplyForSession = typeof resolveDirectStatusReplyForSession;
-
 export async function maybeDeliverDiscordDirectStatus(params: {
   commandName: string;
   suppressReplies?: boolean;
-  resolveDirectStatusReplyForSession: ResolveDirectStatusReplyForSession;
+  resolveDirectStatusReplyForSession: typeof resolveDirectStatusReplyForSession;
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
   sessionKey: string;
   commandTargetSessionKey?: string | null;
-  channel: "discord";
   senderId: string;
   senderIsOwner: boolean;
   isAuthorizedSender: boolean;
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
-  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+  interaction: CommandInteraction | BaseComponentInteraction;
   mediaLocalRoots: readonly string[];
   preferFollowUp: boolean;
   responseEphemeral?: boolean;
   effectiveRoute: ResolvedAgentRoute;
-  respond: (content: string, options?: { ephemeral?: boolean }) => Promise<void>;
+  respond: (content: string, options?: { ephemeral?: boolean }) => Promise<boolean>;
 }): Promise<DispatchDiscordCommandInteractionResult | null> {
   if (params.suppressReplies || params.commandName !== "status") {
     return null;
@@ -44,13 +38,24 @@ export async function maybeDeliverDiscordDirectStatus(params: {
   const statusReply = await params.resolveDirectStatusReplyForSession({
     cfg: params.cfg,
     sessionKey: params.commandTargetSessionKey?.trim() || params.sessionKey,
-    channel: params.channel,
+    channel: "discord",
     senderId: params.senderId,
     senderIsOwner: params.senderIsOwner,
     isAuthorizedSender: params.isAuthorizedSender,
     isGroup: params.isGroup,
     defaultGroupActivation: params.defaultGroupActivation,
   });
+  const recordReply = async (replyText: string) => {
+    await recordDeliveredCommandExchange({
+      config: params.cfg,
+      agentId: params.effectiveRoute.agentId,
+      sessionKey: params.commandTargetSessionKey?.trim() || params.sessionKey,
+      commandText: "/status",
+      commandId: `discord:${params.accountId}:${params.commandTargetSessionKey?.trim() || params.sessionKey}:${params.interaction.id}`,
+      replyId: "status",
+      replyText,
+    });
+  };
   if (statusReply && hasRenderableReplyPayload(statusReply)) {
     await deliverDiscordInteractionReply({
       interaction: params.interaction,
@@ -59,9 +64,13 @@ export async function maybeDeliverDiscordDirectStatus(params: {
       ...resolveDiscordInteractionReplyOptions(params),
       preferFollowUp: params.preferFollowUp,
       responseEphemeral: params.responseEphemeral,
+      onDelivered: recordReply,
     });
-    return { accepted: true, effectiveRoute: params.effectiveRoute };
+  } else {
+    const delivered = await params.respond("Status unavailable.");
+    if (delivered) {
+      await recordReply("Status unavailable.");
+    }
   }
-  await params.respond("Status unavailable.");
   return { accepted: true, effectiveRoute: params.effectiveRoute };
 }

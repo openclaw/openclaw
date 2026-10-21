@@ -13,7 +13,7 @@ typed layout and navigation surface, not screenshot capture or browser
 automation.
 
 The tool is exposed only when the originating client advertises the
-`ui-commands` capability. The Control UI that requested the turn must still be
+`ui-commands` capability. The selected person's requesting Control UI must still be
 connected when the tool runs; otherwise the Gateway returns `UNAVAILABLE`.
 
 A client advertises `ui-commands` in the `caps` array it sends during the
@@ -38,6 +38,11 @@ absent rather than failing at call time.
 | `desktop_show` / `desktop_hide`   | Show or hide a remote desktop              | `environmentId`, `sessionKey`, `dock` (default `right`) |
 | `portal_show` / `portal_hide`     | Show or hide a web application portal      | `portalId`, `sessionKey`, `dock` (default `right`)      |
 
+Every action accepts optional `user`, the person's verified `requester_profile.id`
+from the Control UI message's conversation context. When several people have
+steered the turn, `user` is required; the agent chooses the person who asked or
+asks them if it is unclear.
+
 For a native application running on an attached environment, use `desktop_show`
 with its `environmentId`. For a web application, open a portal for the server's
 port, then use `portal_show` with the returned `portalId`. The selected view opens
@@ -58,7 +63,7 @@ the typed `ui.command` event to the requesting browser.
 
 ## Routing and security
 
-Commands change only the Control UI connection that requested the turn. Other
+Commands change only the selected person's requesting Control UI connection. Other
 people's dashboards and your other tabs keep their current view. `sessionKey`
 chooses which session to open; it does not choose the recipient.
 
@@ -67,10 +72,10 @@ it with queued turns and worker execution. If that browser disconnects or the
 turn has no Control UI target, the command fails with `UNAVAILABLE`. Ask again
 from the open Control UI; the command never falls back to a broadcast.
 
-Turns from different browsers stay separate while `screen` is available, so
-each keeps its own UI destination. When tools are disabled or policy excludes
-`screen`, otherwise-compatible cross-browser steering and collect batching
-remain available.
+People with matching permissions can steer the same turn. Each participant
+keeps their own captured browser target; `user` can select only the turn's owner
+or an accepted participant. A queued or rejected steer does not add a participant.
+If the selected person's access has changed, they must ask again.
 
 Standalone RPC and MCP callers that previously used `ui.command` to broadcast
 must invoke it from a requesting Control UI connection or an agent turn started

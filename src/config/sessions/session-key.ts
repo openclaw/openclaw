@@ -1,10 +1,5 @@
-// Session key resolution maps inbound message context to persisted store buckets.
 import type { MsgContext } from "../../auto-reply/templating.js";
-import {
-  buildAgentMainSessionKey,
-  normalizeAgentId,
-  normalizeMainKey,
-} from "../../routing/session-key.js";
+import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
 import { normalizeExplicitSessionKey } from "./explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "./group.js";
@@ -52,10 +47,9 @@ export function resolveSessionKey(
     throw new Error("Session key resolution requires an explicit configured agent id.");
   }
   const canonicalAgentId = normalizeAgentId(agentId);
-  const canonicalMainKey = normalizeMainKey(mainKey);
   const canonical = buildAgentMainSessionKey({
     agentId: canonicalAgentId,
-    mainKey: canonicalMainKey,
+    mainKey,
   });
   const isGroup = raw.includes(":group:") || raw.includes(":channel:");
   if (!isGroup) {

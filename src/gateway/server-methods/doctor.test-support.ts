@@ -1,10 +1,11 @@
-/**
- * Tests for doctor gateway methods and repair command dispatch.
- */
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, vi } from "vitest";
 import type { MemoryWorkspaceMaintenance } from "../../../packages/memory-host-sdk/src/host/workspace-files.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ShortTermDreamingStatsEntry } from "../../memory-host-sdk/dreaming.js";
+
+type Mock = ReturnType<typeof vi.fn>;
+type Maintenance = Pick<MemoryWorkspaceMaintenance, "stat" | "readFile" | "listDirectory">;
 
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({}) as OpenClawConfig));
 const listAgentIds = vi.hoisted(() => vi.fn(() => ["main", "research-analyst", "alpha"]));
@@ -18,16 +19,15 @@ const resolveMemorySearchConfig = vi.hoisted(() =>
   })),
 );
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
+const getActiveMemoryProviderCore = vi.hoisted(() => vi.fn());
+const resolveActiveMemoryBackendConfig = vi.hoisted(() =>
+  vi.fn<() => { backend: "builtin" } | { backend: "provider-runtime"; providerId: string }>(() => ({
+    backend: "builtin",
+  })),
+);
+const captureGatewayOperatorRunAuthority = vi.hoisted(() => vi.fn());
 const getAgentWorkspaceAccess = vi.hoisted(() =>
-  vi.fn<
-    (workspaceDir: string) =>
-      | {
-          memoryFiles?: {
-            maintenance?: Pick<MemoryWorkspaceMaintenance, "stat" | "readFile" | "listDirectory">;
-          };
-        }
-      | undefined
-  >(),
+  vi.fn<(workspaceDir: string) => { memoryFiles?: { maintenance?: Maintenance } } | undefined>(),
 );
 
 vi.mock("../../agents/workspace-access.js", async (importOriginal) => ({
@@ -37,6 +37,12 @@ vi.mock("../../agents/workspace-access.js", async (importOriginal) => ({
 
 beforeEach(() => {
   getAgentWorkspaceAccess.mockReset();
+  resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
+  getActiveMemoryProviderCore.mockReset();
+  captureGatewayOperatorRunAuthority.mockReset().mockResolvedValue({
+    authority: { scopes: ["operator.read"], assertCurrent: vi.fn() },
+    release: vi.fn(),
+  });
 });
 
 const previewGroundedRemMarkdown = vi.hoisted(() => vi.fn());
@@ -47,37 +53,55 @@ const removeGroundedShortTermCandidates = vi.hoisted(() => vi.fn());
 const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
 const loadShortTermPromotionDreamingStats = vi.hoisted(() => vi.fn());
 
-vi.mock("../../config/config.js", () => ({
+export {
   getRuntimeConfig,
-}));
+  listAgentIds,
+  resolveDefaultAgentId,
+  resolveAgentWorkspaceDir,
+  resolveMemorySearchConfig,
+  getMemorySearchManager,
+  getActiveMemoryProviderCore,
+  resolveActiveMemoryBackendConfig,
+  getAgentWorkspaceAccess,
+  previewGroundedRemMarkdown,
+  dedupeDreamDiaryEntries,
+  writeBackfillDiaryEntries,
+  removeBackfillDiaryEntries,
+  removeGroundedShortTermCandidates,
+  repairDreamingArtifacts,
+  loadShortTermPromotionDreamingStats,
+};
 
+// mock-isolation: Doctor fixtures use synthetic config, never the operator's config.
+vi.mock("../../config/config.js", () => ({ getRuntimeConfig }));
+
+// mock-isolation: Agent IDs and workspaces belong to this fixture's synthetic inventory.
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds,
   listAgentEntries: (cfg: OpenClawConfig) =>
     cfg.agents?.entries
-      ? Object.entries(cfg.agents.entries).map(([id, entry]) => {
-          const copy = structuredClone(entry) as Record<string, unknown>;
-          copy.id = id;
-          return copy;
-        })
-      : cfg.agents?.list
-        ? cfg.agents.list
-        : [{ id: "main", default: true }],
+      ? Object.entries(cfg.agents.entries).map(([id, entry]) =>
+          Object.assign(structuredClone(entry), { id }),
+        )
+      : [{ id: "main" }],
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
 }));
 
-vi.mock("../../agents/memory-search.js", () => ({
-  resolveMemorySearchConfig,
-}));
+// mock-isolation: Memory configuration is supplied by each fixture without live initialization.
+vi.mock("../../agents/memory-search.js", () => ({ resolveMemorySearchConfig }));
 
 vi.mock("../../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManagerCore: getMemorySearchManager,
+  getActiveMemoryProviderCore,
+  resolveActiveMemoryBackendConfig,
 }));
 
-import { createDoctorHandlers } from "./doctor.js";
+// mock-isolation: Exercise fixture-owned authority without a running Gateway session.
+vi.mock("../operator-run-authority.js", () => ({ captureGatewayOperatorRunAuthority }));
 
-const doctorHandlers = createDoctorHandlers({
+// mock-isolation: Exercise Doctor through the existing bundled-runtime module boundary.
+vi.mock("../../plugin-sdk/memory-core-bundled-runtime.js", () => ({
   dedupeDreamDiaryEntries,
   loadShortTermPromotionDreamingStats,
   previewGroundedRemMarkdown,
@@ -85,11 +109,13 @@ const doctorHandlers = createDoctorHandlers({
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
   repairDreamingArtifacts,
-});
+}));
 
-const makeRuntimeContext = () => ({ getRuntimeConfig: () => getRuntimeConfig() });
+import { createDoctorHandlers } from "./doctor.js";
 
-const DOCTOR_MEMORY_TARGET_METHODS = [
+const doctorHandlers = createDoctorHandlers();
+
+export const DOCTOR_MEMORY_TARGET_METHODS = [
   "doctor.memory.status",
   "doctor.memory.dreamDiary",
   "doctor.memory.backfillDreamDiary",
@@ -101,20 +127,21 @@ const DOCTOR_MEMORY_TARGET_METHODS = [
 
 type DoctorMemoryMethod = (typeof DOCTOR_MEMORY_TARGET_METHODS)[number];
 
-const invokeDoctorMemory = async (
+export const invokeDoctorMemory = async (
   method: DoctorMemoryMethod,
-  respond: ReturnType<typeof vi.fn>,
+  respond: Mock,
   options: {
     params?: Record<string, unknown>;
-    cronList?: ReturnType<typeof vi.fn>;
+    cronList?: Mock;
     includeCron?: boolean;
   } = {},
 ) => {
-  const cronList = options.cronList ?? vi.fn(async () => []);
-  const context =
-    method === "doctor.memory.status" || options.includeCron
-      ? { ...makeRuntimeContext(), cron: { list: cronList } }
-      : makeRuntimeContext();
+  const context = {
+    getRuntimeConfig: () => getRuntimeConfig(),
+    ...(method === "doctor.memory.status" || options.includeCron
+      ? { cron: { list: options.cronList ?? vi.fn(async () => []) } }
+      : {}),
+  };
   await expectDefined(
     doctorHandlers[method],
     `doctorHandlers["${method}"] test invariant`,
@@ -128,41 +155,16 @@ const invokeDoctorMemory = async (
   });
 };
 
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-function respondPayload(respond: ReturnType<typeof vi.fn>, callIndex = 0): Record<string, unknown> {
-  const call = respond.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected respond call ${callIndex}`);
-  }
+export function respondPayload(respond: Mock, callIndex = 0): Record<string, unknown> {
+  const call = expectDefined(respond.mock.calls[callIndex], `Expected respond call ${callIndex}`);
   expect(call[0]).toBe(true);
   expect(call[2]).toBeUndefined();
   return call[1] as Record<string, unknown>;
 }
 
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0): Record<string, unknown> {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[0] as Record<string, unknown>;
-}
-
-function findRecordByField(items: unknown, key: string, value: unknown) {
-  expect(Array.isArray(items)).toBe(true);
-  return (items as Array<Record<string, unknown>>).find((item) => item[key] === value);
-}
-
-function makeDreamingStats(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+export function makeDreamingStats(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     shortTermCount: 0,
     recallSignalCount: 0,
@@ -183,27 +185,10 @@ function makeDreamingStats(overrides: Record<string, unknown> = {}): Record<stri
   };
 }
 
-type DreamingEntryFixture = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  dailyCount: number;
-  groundedCount: number;
-  totalSignalCount: number;
-  lightHits: number;
-  remHits: number;
-  phaseHitCount: number;
-  promotedAt?: string;
-  lastRecalledAt?: string;
-};
-
-function makeDreamingEntry(
+export function makeDreamingEntry(
   entryPath: string,
-  overrides: Partial<DreamingEntryFixture> = {},
-): DreamingEntryFixture {
+  overrides: Partial<ShortTermDreamingStatsEntry> = {},
+): ShortTermDreamingStatsEntry {
   return {
     key: `memory:${entryPath}:1:2`,
     path: entryPath,
@@ -223,11 +208,11 @@ function makeDreamingEntry(
 
 type MemoryManagerFixtureOptions = {
   status: () => Record<string, unknown>;
-  probeEmbeddingAvailability?: ReturnType<typeof vi.fn>;
-  getCachedEmbeddingAvailability?: ReturnType<typeof vi.fn>;
+  probeEmbeddingAvailability?: Mock;
+  getCachedEmbeddingAvailability?: Mock;
 };
 
-function useMemoryManagerFixture(options: MemoryManagerFixtureOptions) {
+export function useMemoryManagerFixture(options: MemoryManagerFixtureOptions) {
   const close = vi.fn().mockResolvedValue(undefined);
   const probeEmbeddingAvailability =
     options.probeEmbeddingAvailability ?? vi.fn().mockResolvedValue({ ok: true });
@@ -243,41 +228,3 @@ function useMemoryManagerFixture(options: MemoryManagerFixtureOptions) {
   });
   return { close, probeEmbeddingAvailability };
 }
-
-const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
-  const payload = respondPayload(respond);
-  expectRecordFields(payload, {
-    agentId: "main",
-    embedding: {
-      ok: false,
-      error,
-    },
-  });
-};
-
-export {
-  getRuntimeConfig,
-  listAgentIds,
-  resolveDefaultAgentId,
-  resolveAgentWorkspaceDir,
-  resolveMemorySearchConfig,
-  getMemorySearchManager,
-  getAgentWorkspaceAccess,
-  previewGroundedRemMarkdown,
-  dedupeDreamDiaryEntries,
-  writeBackfillDiaryEntries,
-  removeBackfillDiaryEntries,
-  removeGroundedShortTermCandidates,
-  repairDreamingArtifacts,
-  loadShortTermPromotionDreamingStats,
-  DOCTOR_MEMORY_TARGET_METHODS,
-  invokeDoctorMemory,
-  expectRecordFields,
-  respondPayload,
-  mockCallArg,
-  findRecordByField,
-  makeDreamingStats,
-  makeDreamingEntry,
-  useMemoryManagerFixture,
-  expectEmbeddingErrorResponse,
-};

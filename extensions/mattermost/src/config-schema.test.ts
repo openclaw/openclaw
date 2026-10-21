@@ -86,6 +86,14 @@ describe("MattermostConfigSchema", () => {
     expect(MattermostConfigSchema.safeParse({ chunkMode: "newline" }).success).toBe(false);
   });
 
+  it.each([
+    { preview: { chunk: { minChars: 20 } } },
+    { progress: { commentary: true } },
+    { progress: { narration: true } },
+  ])("rejects unsupported streaming fields: %j", (streaming) => {
+    expect(MattermostConfigSchema.safeParse({ streaming }).success).toBe(false);
+  });
+
   it("preserves root, account, and group thread mention overrides without defaults", () => {
     const result = MattermostConfigSchema.safeParse({
       requireMentionInBotThreads: false,

@@ -1,4 +1,5 @@
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { escapeRegExp } from "../shared/regexp.js";
 
@@ -8,7 +9,6 @@ const MAX_SECRET_VALUES = 512;
 type SecretValueRedactor = (text: string, mask: (value: string, index: number) => string) => string;
 type SecretRedactionRegistryState = {
   registeredValues: Map<string, true>;
-  registryRevision: number;
   registeredValueRedactor: SecretValueRedactor | undefined;
 };
 
@@ -17,13 +17,12 @@ const state = resolveGlobalSingleton<SecretRedactionRegistryState>(
   Symbol.for("openclaw.secretRedactionRegistry"),
   () => ({
     registeredValues: new Map<string, true>(),
-    registryRevision: 0,
     registeredValueRedactor: undefined,
   }),
 );
 
+type SecretRedactionRegistrySnapshot = { values: readonly string[] };
 function invalidateMatcher(): void {
-  state.registryRevision += 1;
   state.registeredValueRedactor = undefined;
 }
 
@@ -47,8 +46,8 @@ export function registerSecretValueForRedaction(value: string): void {
   if (encoded !== value) {
     registerOneSecretValue(encoded);
   }
-  // Captured structured payloads are serialized before persistence, so retain
-  // the JSON string-content form for credentials with escaped characters.
+  // Structured logs serialize credentials, so retain the JSON string-content form
+  // for values with escaped characters.
   const jsonEscaped = JSON.stringify(value).slice(1, -1);
   if (jsonEscaped !== value) {
     registerOneSecretValue(jsonEscaped);
@@ -67,17 +66,9 @@ export function hasRegisteredSecretValuesForRedaction(): boolean {
   return state.registeredValues.size > 0;
 }
 
-/** Changes with registry membership, including bounded eviction and test resets. */
-export function getSecretRedactionRegistryRevision(): number {
-  return state.registryRevision;
-}
-
 /** Exact surface forms are already expanded; snapshots must not register them again. */
-export function captureSecretRedactionRegistrySnapshot(): {
-  revision: number;
-  values: readonly string[];
-} {
-  return { revision: state.registryRevision, values: [...state.registeredValues.keys()] };
+export function captureSecretRedactionRegistrySnapshot(): SecretRedactionRegistrySnapshot {
+  return { values: [...state.registeredValues.keys()] };
 }
 
 /** Replaces registered exact values while preserving the caller's mask convention. */
@@ -92,7 +83,7 @@ export function redactRegisteredSecretValues(
   return state.registeredValueRedactor(text, mask);
 }
 
-export function createSecretValueRedactor(values: readonly string[]): SecretValueRedactor {
+function createSecretValueRedactor(values: readonly string[]): SecretValueRedactor {
   let compiledMatcher: { prefixes: RegExp; buckets: Map<string, string[]> } | undefined;
   let firstChars: Set<string> | undefined;
   return (text, mask) => {
@@ -112,16 +103,10 @@ export function createSecretValueRedactor(values: readonly string[]): SecretValu
       return text;
     }
     if (!compiledMatcher) {
-      const buckets = new Map<string, string[]>();
-      for (const value of values.toSorted((left, right) => right.length - left.length)) {
-        const prefix = value.slice(0, MIN_SECRET_VALUE_LENGTH);
-        const bucket = buckets.get(prefix);
-        if (bucket) {
-          bucket.push(value);
-        } else {
-          buckets.set(prefix, [value]);
-        }
-      }
+      const buckets = groupRecords(
+        values.toSorted((left, right) => right.length - left.length),
+        (value) => value.slice(0, MIN_SECRET_VALUE_LENGTH),
+      );
       // Supported store values can exceed the regex engine's literal span limit.
       // Compile fixed-width prefixes; verify complete values against the text.
       compiledMatcher = {

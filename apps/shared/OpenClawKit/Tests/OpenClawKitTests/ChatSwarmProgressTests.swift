@@ -78,7 +78,7 @@ struct ChatSwarmProgressTests {
         #expect(groups.single?.phases.single?.dots.map(\.status) == [.queued, .running, .done, .failed])
     }
 
-    @Test func `child pager repeats from zero when rows move across offsets`() async throws {
+    @Test func `child pager deduplicates pages and reports a moving list incomplete`() async throws {
         let groupID = "swarm:agent:main:parent:paged"
         let pages = [
             [
@@ -89,17 +89,9 @@ struct ChatSwarmProgressTests {
                 session(key: "one", status: "running", groupID: groupID),
                 session(key: "two", status: "running", groupID: groupID),
             ],
-            [
-                session(key: "zero", status: "running", groupID: groupID),
-                session(key: "one", status: "done", groupID: groupID),
-            ],
-            [
-                session(key: "three", status: "running", groupID: groupID),
-                session(key: "two", status: "running", groupID: groupID),
-            ],
         ]
         var call = 0
-        let rows = try await OpenClawChatChildSessionPager.collect { offset in
+        let result = try await OpenClawChatChildSessionPager.collect { offset in
             let page = pages[call]
             call += 1
             return OpenClawChatSessionsListResponse(
@@ -114,20 +106,21 @@ struct ChatSwarmProgressTests {
                 sessions: page)
         }
 
-        #expect(Set(rows.map(\.key)) == ["zero", "one", "two", "three"])
-        #expect(rows.first { $0.key == "one" }?.status == "done")
-        #expect(call == 4)
+        #expect(Set(result.rows.map(\.key)) == ["zero", "one", "two"])
+        #expect(!result.isComplete)
+        #expect(call == 2)
     }
 
-    @Test func `child pager bounds advancing malformed pagination`() async throws {
+    @Test(arguments: [Int.max, nil] as [Int?])
+    func `child pager bounds advancing malformed pagination without claiming completeness`(total: Int?) async throws {
         var call = 0
-        let rows = try await OpenClawChatChildSessionPager.collect { offset in
+        let result = try await OpenClawChatChildSessionPager.collect { offset in
             call += 1
             return OpenClawChatSessionsListResponse(
                 ts: 1,
                 path: nil,
                 count: 1,
-                totalCount: .max,
+                totalCount: total,
                 offset: offset,
                 nextOffset: offset + 1,
                 hasMore: true,
@@ -138,8 +131,54 @@ struct ChatSwarmProgressTests {
                     groupID: "swarm:agent:main:parent:paged")])
         }
 
-        #expect(rows.map(\.key) == ["child"])
+        #expect(result.rows.map(\.key) == ["child"])
+        #expect(!result.isComplete)
         #expect(call == 100)
+    }
+
+    @Test(arguments: ["", ",\"totalCount\":2"])
+    func `child pager retains known totals when later pages omit or shrink them`(laterTotal: String) async throws {
+        let pages = [
+            #"{"totalCount":3,"hasMore":true,"nextOffset":2,"sessions":[{"key":"zero"},{"key":"one"}]}"#,
+            "{\"hasMore\":false\(laterTotal),\"sessions\":[{\"key\":\"one\"}]}",
+        ]
+        var call = 0
+        let result = try await OpenClawChatChildSessionPager.collect { _ in
+            let data = Data(pages[min(call, pages.count - 1)].utf8)
+            call += 1
+            return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        }
+
+        #expect(Set(result.rows.map(\.key)) == ["zero", "one"])
+        #expect(!result.isComplete)
+        #expect(call == 2)
+    }
+
+    @Test func `child pager reports a complete stable multipage list`() async throws {
+        var call = 0
+        let result = try await OpenClawChatChildSessionPager.collect { _ in
+            call += 1
+            return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(
+                #"{"totalCount":2,"hasMore":\#(call == 1),"sessions":[{"key":"child-\#(call)"}]}"#.utf8))
+        }
+
+        #expect(result.isComplete)
+        #expect(Set(result.rows.map(\.key)) == ["child-1", "child-2"])
+        #expect(call == 2)
+    }
+
+    @Test(arguments: [false, true])
+    func `child pager distinguishes an empty terminal page from stalled pagination`(hasMore: Bool) async throws {
+        var call = 0
+        let result = try await OpenClawChatChildSessionPager.collect { _ in
+            call += 1
+            return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(
+                #"{"hasMore":\#(hasMore),"nextOffset":0,"sessions":[]}"#.utf8))
+        }
+
+        #expect(result.rows.isEmpty)
+        #expect(result.isComplete == !hasMore)
+        #expect(call == 1)
     }
 
     @Test func `metadata capability defaults missing Swarm support to disabled`() throws {

@@ -7,7 +7,10 @@ import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-tran
 import { withNodeWorkerTransferHttpRequest } from "../../node-host/node-worker-transfer-http.js";
 import { nodeWorkspaceTransferManifestPath } from "../../worker/node-workspace-transfer-protocol.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
-import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
+import {
+  startNodeWorkspaceTransferTestServer,
+  transferOwner,
+} from "./node-workspace-transfer.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -20,15 +23,7 @@ describe("workspace manifest HTTP negotiation", () => {
     await fs.writeFile(path.join(localPath, "input.txt"), "transfer content\n");
     const service = createNodeWorkspaceTransferService({
       temporaryRoot: path.join(root, "transfers"),
-      getOwner: () => ({
-        credential: { ownerEpoch: 1, sessionId: "session" },
-        environment: {
-          ownerEpoch: 1,
-          attachedSessionIds: ["session"],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: () => transferOwner("session"),
     });
     const server = await startNodeWorkspaceTransferTestServer(service);
     try {
@@ -36,7 +31,6 @@ describe("workspace manifest HTTP negotiation", () => {
         environmentId: "environment",
         ownerEpoch: 1,
         sessionId: "session",
-        generation: 1,
         localPath,
         isAuthorized: () => true,
       });

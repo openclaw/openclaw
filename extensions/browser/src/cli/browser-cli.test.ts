@@ -1,6 +1,11 @@
 // Browser tests cover browser cli plugin behavior.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { registerBrowserExtensionCommands } from "./browser-cli-extension.js";
+import { registerBrowserInspectCommands } from "./browser-cli-inspect.js";
+import { registerBrowserManageCommands } from "./browser-cli-manage.js";
+import { registerBrowserStateCommands } from "./browser-cli-state.js";
+import { registerBrowserCli } from "./browser-cli.js";
 
 vi.mock("../control-service.js", () => {
   throw new Error("Browser CLI registration must not load browser control services");
@@ -16,8 +21,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => {
 });
 
 describe("Browser CLI import boundary", () => {
-  it("registers root help without loading browser services or agent/media runtime", async () => {
-    const { registerBrowserCli } = await import("./browser-cli.js");
+  it("registers root help without loading browser services or agent/media runtime", () => {
     const program = new Command();
     registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
     const browser = program.commands[0];
@@ -25,8 +29,7 @@ describe("Browser CLI import boundary", () => {
     expect(browser?.commands.map((command) => command.name())).toContain("extension");
   });
 
-  it("registers extension leaves without loading browser services or agent/media runtime", async () => {
-    const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
+  it("registers extension leaves without loading browser services or agent/media runtime", () => {
     const program = new Command();
     const browser = program.command("browser");
     registerBrowserExtensionCommands(browser, () => ({}));
@@ -44,10 +47,7 @@ describe("Browser CLI import boundary", () => {
     ]);
   });
 
-  it("registers Gateway-backed command siblings without loading local browser services", async () => {
-    const { registerBrowserManageCommands } = await import("./browser-cli-manage.js");
-    const { registerBrowserInspectCommands } = await import("./browser-cli-inspect.js");
-    const { registerBrowserStateCommands } = await import("./browser-cli-state.js");
+  it("registers Gateway-backed command siblings without loading local browser services", () => {
     const program = new Command();
     const browser = program.command("browser");
     for (const register of [

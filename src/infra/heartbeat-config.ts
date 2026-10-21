@@ -16,6 +16,14 @@ import type { HeartbeatWakeSource } from "./heartbeat-wake-contracts.js";
 
 export type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
+export function sanitizeCronHeartbeatOverride(
+  heartbeat: HeartbeatConfig | undefined,
+): HeartbeatConfig | undefined {
+  return heartbeat?.target === "last"
+    ? { ...heartbeat, to: undefined, accountId: undefined }
+    : heartbeat;
+}
+
 const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 10 * 60;
 
 type HeartbeatAgent = {
@@ -35,16 +43,6 @@ export function resolveHeartbeatConfig(
   return defaults || overrides ? { ...defaults, ...overrides } : undefined;
 }
 
-function omitExplicitHeartbeatDestination(heartbeat: HeartbeatConfig | undefined) {
-  if (!heartbeat) {
-    return undefined;
-  }
-  const next = { ...heartbeat };
-  delete next.to;
-  delete next.accountId;
-  return next;
-}
-
 export function resolveHeartbeatForWake(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -57,9 +55,11 @@ export function resolveHeartbeatForWake(params: {
   const heartbeat = params.requestedHeartbeat
     ? { ...configuredHeartbeat, ...params.requestedHeartbeat }
     : configuredHeartbeat;
-  return params.source === "cron" && params.requestedHeartbeat?.target === "last"
-    ? omitExplicitHeartbeatDestination(heartbeat)
-    : heartbeat;
+  if (heartbeat && params.source === "cron" && params.requestedHeartbeat?.target === "last") {
+    delete heartbeat.to;
+    delete heartbeat.accountId;
+  }
+  return heartbeat;
 }
 
 /** Resolve the cadence owned by the effective heartbeat configuration. */
@@ -93,14 +93,9 @@ export function resolveHeartbeatTimeoutOverrideSeconds(
     return heartbeat.timeoutSeconds;
   }
   const agentDefaultTimeoutSeconds = cfg.agents?.defaults?.timeoutSeconds;
-  if (
-    typeof agentDefaultTimeoutSeconds === "number" &&
-    Number.isFinite(agentDefaultTimeoutSeconds)
-  ) {
+  if (agentDefaultTimeoutSeconds !== undefined) {
     // Preserve the unlimited sentinel consumed by resolveAgentTimeoutMs.
-    return agentDefaultTimeoutSeconds === 0
-      ? 0
-      : Math.max(1, Math.floor(agentDefaultTimeoutSeconds));
+    return agentDefaultTimeoutSeconds;
   }
   // Monitor turns use their cadence budget instead of the 48h built-in agent default.
   const intervalMs = resolveHeartbeatIntervalMs(cfg, undefined, heartbeat);

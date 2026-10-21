@@ -284,7 +284,6 @@ struct QuickChatModelTests {
 
         #expect(model.isGrantingPermissions)
         #expect(!model.canCaptureWindow)
-        #expect(!model.canCaptureTextContext)
         latch.finish()
         while model.isGrantingPermissions {
             await Task.yield()
@@ -295,21 +294,21 @@ struct QuickChatModelTests {
         #expect(QuickChatModel.routingTarget(
             scope: "global",
             selectedAgentID: "research",
-            mainKey: "main") == QuickChatRoutingTarget(sessionKey: "global", agentID: "research"))
+            mainKey: "main") == OpenClawChatSessionTarget(sessionKey: "global", agentID: "research"))
         #expect(QuickChatModel.routingTarget(
             scope: "per-agent",
             selectedAgentID: "research",
-            mainKey: "daily") == QuickChatRoutingTarget(
+            mainKey: "daily") == OpenClawChatSessionTarget(
             sessionKey: "agent:research:daily",
             agentID: nil))
         #expect(QuickChatModel.routingTarget(
             override: QuickChatSessionTargetOverride(key: "agent:main:telegram:direct:42", displayName: "Chat"),
-            base: QuickChatRoutingTarget(sessionKey: "agent:research:daily", agentID: nil)) ==
-            QuickChatRoutingTarget(sessionKey: "agent:main:telegram:direct:42", agentID: nil))
+            base: OpenClawChatSessionTarget(sessionKey: "agent:research:daily", agentID: nil)) ==
+            OpenClawChatSessionTarget(sessionKey: "agent:main:telegram:direct:42", agentID: nil))
         #expect(QuickChatModel.routingTarget(
             override: QuickChatSessionTargetOverride(key: "global", displayName: "Global"),
-            base: QuickChatRoutingTarget(sessionKey: "global", agentID: "research")) ==
-            QuickChatRoutingTarget(sessionKey: "global", agentID: "research"))
+            base: OpenClawChatSessionTarget(sessionKey: "global", agentID: "research")) ==
+            OpenClawChatSessionTarget(sessionKey: "global", agentID: "research"))
     }
 
     @Test func `recent override wins over agent pin and clears back to the pin`() async {
@@ -361,9 +360,9 @@ struct QuickChatModelTests {
     }
 
     @Test func `override send uses canonical session key verbatim`() async {
-        var sentRoute: QuickChatRoutingTarget?
+        var sentRoute: OpenClawChatSessionTarget?
         let model = self.makeModel(sendHandler: { sessionKey, agentID, _, _, _, _ in
-            sentRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+            sentRoute = OpenClawChatSessionTarget(sessionKey: sessionKey, agentID: agentID)
             return "started"
         })
         await self.prepare(model)
@@ -372,11 +371,11 @@ struct QuickChatModelTests {
         model.text = "hello"
 
         #expect(await model.send())
-        #expect(sentRoute == QuickChatRoutingTarget(sessionKey: key, agentID: nil))
+        #expect(sentRoute == OpenClawChatSessionTarget(sessionKey: key, agentID: nil))
     }
 
     @Test func `global override preserves selected global agent`() async {
-        var sentRoute: QuickChatRoutingTarget?
+        var sentRoute: OpenClawChatSessionTarget?
         let model = self.makeModel(
             agentsProvider: {
                 Self.agentsResult(
@@ -385,7 +384,7 @@ struct QuickChatModelTests {
                     scope: "global")
             },
             sendHandler: { sessionKey, agentID, _, _, _, _ in
-                sentRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+                sentRoute = OpenClawChatSessionTarget(sessionKey: sessionKey, agentID: agentID)
                 return "started"
             })
         await self.prepare(model)
@@ -394,7 +393,7 @@ struct QuickChatModelTests {
         model.text = "hello"
 
         #expect(await model.send())
-        #expect(sentRoute == QuickChatRoutingTarget(sessionKey: "global", agentID: "work"))
+        #expect(sentRoute == OpenClawChatSessionTarget(sessionKey: "global", agentID: "work"))
     }
 
     @Test func `agent display parses avatar forms and monogram`() {
@@ -453,7 +452,7 @@ struct QuickChatModelTests {
         model.text = "hello"
 
         #expect(await model.send())
-        #expect(model.lastAcceptedRoute == QuickChatRoutingTarget(
+        #expect(model.lastAcceptedRoute == OpenClawChatSessionTarget(
             sessionKey: "agent:main:main",
             agentID: nil))
     }

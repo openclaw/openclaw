@@ -1,12 +1,12 @@
 import type { ToolDisplaySpec } from "./tool-display-common.js";
 
-function displayAction(label: string, detailKeys: string[]) {
-  return { label, detailKeys };
+export function displayAction(label: string, detailKeys?: string[]) {
+  return detailKeys === undefined ? { label } : { label, detailKeys };
 }
 
 /** Display metadata for the transport-neutral message action surface. */
 export const MESSAGE_TOOL_DISPLAY_SPEC = {
-  emoji: "✉️",
+  icon: "mail",
   title: "Message",
   actions: {
     send: displayAction("send", ["provider", "to", "media", "replyTo", "threadId"]),
@@ -41,4 +41,4 @@ export const MESSAGE_TOOL_DISPLAY_SPEC = {
     kick: displayAction("kick", ["provider", "guildId", "userId"]),
     ban: displayAction("ban", ["provider", "guildId", "userId"]),
   },
-} satisfies ToolDisplaySpec & { emoji: string };
+} satisfies ToolDisplaySpec & { icon: string };

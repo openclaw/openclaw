@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
@@ -19,144 +19,93 @@ import {
 const HARNESS_MODEL = "harness-only[context=272k,reasoning=medium]";
 const nativePrimary = "native/primary";
 const nativeFallback = "native/backup";
+const nativeRef = { provider: "native", model: "primary" };
+const defaultRef = { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
+const nativeDefaults = { model: { primary: nativePrimary, fallbacks: [nativeFallback] } };
+type PolicyCase = [string, typeof nativeRef, string[] | undefined, ("implicit" | "pinned")?];
 
-function buildConfig(agent: AgentEntryConfig): OpenClawConfig {
-  return {
+function selection(agent: AgentEntryConfig, defaults = true) {
+  const cfg: OpenClawConfig = {
     plugins: { enabled: false },
-    agents: {
-      defaults: { model: { primary: nativePrimary, fallbacks: [nativeFallback] } },
-      entries: { worker: agent },
-    },
+    agents: { ...(defaults ? { defaults: nativeDefaults } : {}), entries: { worker: agent } },
   };
+  return { cfg, agentId: "worker", manifestPlugins: [] };
 }
 
-describe("ACP native model policy", () => {
-  it("uses native defaults without changing a string harness primary", () => {
-    const cfg = buildConfig({ model: HARNESS_MODEL, runtime: { type: "acp" } });
-    const primary = resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] });
-    expect(primary).toEqual({ provider: "native", model: "primary" });
-    expect(resolveAgentEffectiveModelPrimary(cfg, "worker")).toBe(HARNESS_MODEL);
-    expect(resolveAgentExplicitModelPrimary(cfg, "worker")).toBe(HARNESS_MODEL);
-    expect(
-      resolveModelCandidateChain({
-        cfg,
-        agentId: "worker",
-        ...primary,
-        manifestPlugins: [],
-        fallbacksOverride: resolveEffectiveModelFallbacks({
-          cfg,
-          agentId: "worker",
-          hasSessionModelOverride: false,
-        }),
-      }).map((candidate) => candidate.provider + "/" + candidate.model),
-    ).toEqual([nativePrimary, nativeFallback]);
-  });
-
-  it("keeps native agent primaries strict when fallbacks are omitted", () => {
-    const cfg = buildConfig({ model: "other/primary" });
-    const primary = resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] });
-    expect(primary).toEqual({ provider: "other", model: "primary" });
-    expect(resolveAgentEffectiveModelPrimary(cfg, "worker")).toBe("other/primary");
-    expect(
-      resolveEffectiveModelFallbacks({ cfg, agentId: "worker", hasSessionModelOverride: false }),
-    ).toEqual([]);
-  });
-
-  it.each([
-    { fallbacks: undefined, expected: nativeFallback },
-    { fallbacks: ["other/backup"], expected: "other/backup" },
-    { fallbacks: [], expected: undefined },
-  ])(
-    "executes native failure recovery with fallbacks $fallbacks",
-    async ({ fallbacks, expected }) => {
-      const cfg = buildConfig({
-        model: { primary: HARNESS_MODEL, ...(fallbacks ? { fallbacks } : {}) },
-        runtime: { type: "acp" },
-      });
-      const primary = resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] });
-      const attempts: string[] = [];
-      const result = runWithModelFallback({
-        cfg,
-        agentId: "worker",
-        ...primary,
-        manifestPlugins: [],
-        fallbacksOverride: resolveEffectiveModelFallbacks({
-          cfg,
-          agentId: "worker",
-          hasSessionModelOverride: false,
-        }),
-        run: async (provider, model) => {
-          const ref = `${provider}/${model}`;
-          attempts.push(ref);
-          if (ref === nativePrimary) {
-            throw new FailoverError("Native primary unavailable", { reason: "model_not_found" });
-          }
-          return ref;
-        },
-      });
-      if (expected) {
-        await expect(result).resolves.toMatchObject({ result: expected });
-        expect(attempts).toEqual([nativePrimary, expected]);
-      } else {
-        await expect(result).rejects.toThrow("Native primary unavailable");
-        expect(attempts).toEqual([nativePrimary]);
-      }
-    },
+it.each<PolicyCase>([
+  ["other/primary", { provider: "other", model: "primary" }, []],
+  ["openai/gpt-5.4", defaultRef, undefined, "implicit"],
+  [HARNESS_MODEL, nativeRef, [], "pinned"],
+])("resolves %s without changing the authored model", (authored, primary, fallbacks, mode) => {
+  const params = selection(
+    { model: authored, ...(mode ? { runtime: { type: "acp" } } : {}) },
+    mode !== "implicit",
   );
-
-  it("uses the native implicit default even for a native-shaped ACP primary", () => {
-    const model = "openai/gpt-5.4";
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      agents: { entries: { worker: { model, runtime: { type: "acp" } } } },
-    };
-    expect(resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] })).toEqual({
-      provider: DEFAULT_PROVIDER,
-      model: DEFAULT_MODEL,
-    });
-    expect(resolveAgentEffectiveModelPrimary(cfg, "worker")).toBe(model);
+  const selected = mode === "pinned" ? { provider: "pinned", model: "selection" } : primary;
+  const fallbacksOverride = resolveEffectiveModelFallbacks({
+    ...params,
+    hasSessionModelOverride: mode === "pinned",
   });
+  expect([
+    resolveDefaultModelForAgent(params),
+    resolveAgentEffectiveModelPrimary(params.cfg, "worker"),
+    resolveAgentExplicitModelPrimary(params.cfg, "worker"),
+    fallbacksOverride,
+    resolveModelCandidateChain({
+      ...params,
+      ...selected,
+      fallbacksOverride,
+    }).map(({ provider, model }) => `${provider}/${model}`),
+  ]).toEqual([primary, authored, authored, fallbacks, [`${selected.provider}/${selected.model}`]]);
+});
 
-  it.each(["acp", "native"] as const)(
-    "reports native model advice only for native spawn selection (%s)",
-    async (modelRuntime) => {
-      const warnings = createWarnLogCapture("acp-model-selection");
-      try {
-        const cfg = buildConfig({
-          model: HARNESS_MODEL,
-          ...(modelRuntime === "acp" ? { runtime: { type: "acp" } } : {}),
-        });
-        expect(
-          resolveConfiguredSubagentSpawnModelSelection({ cfg, agentId: "worker", modelRuntime }),
-        ).toBe(HARNESS_MODEL);
-        const warning = await warnings.findText("specified without provider");
-        if (modelRuntime === "acp") {
-          expect(warning).toBeUndefined();
-        } else {
-          expect(warning).toContain("Please use");
+it.each([
+  { fallbacks: undefined, expected: nativeFallback },
+  { fallbacks: ["other/backup"], expected: "other/backup" },
+  { fallbacks: [], expected: undefined },
+])(
+  "executes native failure recovery with fallbacks $fallbacks",
+  async ({ fallbacks, expected }) => {
+    const params = selection({
+      model: { primary: HARNESS_MODEL, ...(fallbacks ? { fallbacks } : {}) },
+      runtime: { type: "acp" },
+    });
+    const attempts: string[] = [];
+    const result = runWithModelFallback({
+      ...params,
+      ...resolveDefaultModelForAgent(params),
+      skipAuthProfileRuntime: true,
+      fallbacksOverride: resolveEffectiveModelFallbacks({
+        ...params,
+        hasSessionModelOverride: false,
+      }),
+      run: async (provider, model) => {
+        const ref = `${provider}/${model}`;
+        attempts.push(ref);
+        if (ref === nativePrimary) {
+          throw new FailoverError("Native primary unavailable", { reason: "model_not_found" });
         }
-      } finally {
-        warnings.cleanup();
-      }
-    },
-  );
-
-  it("keeps persisted native model selections strict without a source marker", () => {
-    const cfg = buildConfig({ model: HARNESS_MODEL, runtime: { type: "acp" } });
-    const fallbacksOverride = resolveEffectiveModelFallbacks({
-      cfg,
-      agentId: "worker",
-      hasSessionModelOverride: true,
+        return ref;
+      },
     });
+    if (expected) {
+      await expect(result).resolves.toMatchObject({ result: expected });
+    } else {
+      await expect(result).rejects.toThrow("Native primary unavailable");
+    }
+    expect(attempts).toEqual(expected ? [nativePrimary, expected] : [nativePrimary]);
+  },
+);
+
+it("reports native model advice for native spawn selection", async () => {
+  const warnings = createWarnLogCapture("acp-model-selection");
+  try {
+    const params = selection({ model: HARNESS_MODEL });
     expect(
-      resolveModelCandidateChain({
-        cfg,
-        agentId: "worker",
-        provider: "pinned",
-        model: "selection",
-        fallbacksOverride,
-        manifestPlugins: [],
-      }).map(({ provider, model }) => provider + "/" + model),
-    ).toEqual(["pinned/selection"]);
-  });
+      resolveConfiguredSubagentSpawnModelSelection({ ...params, modelRuntime: "native" }),
+    ).toBe(HARNESS_MODEL);
+    expect(await warnings.findText("specified without provider")).toContain("Please use");
+  } finally {
+    warnings.cleanup();
+  }
 });

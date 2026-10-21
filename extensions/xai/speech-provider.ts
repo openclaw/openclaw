@@ -1,4 +1,3 @@
-// Xai provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import type {
   SpeechProviderPlugin,

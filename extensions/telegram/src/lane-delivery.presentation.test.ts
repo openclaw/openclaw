@@ -4,11 +4,7 @@ import {
   markTelegramDroppedControlFallback,
   resolveFinalTelegramPresentationText,
 } from "./interactive-fallback.js";
-import {
-  createHarness,
-  deliverFinalAnswer,
-  expectPreviewFinalized,
-} from "./lane-delivery.test-support.js";
+import { createHarness, expectPreviewFinalized } from "./lane-delivery.test-support.js";
 const statusPresentation = () => ({
   blocks: [
     {
@@ -25,17 +21,6 @@ const statusPayload = (text: string) => ({
   presentationTextMode: "fallback" as const,
   presentation: statusPresentation(),
 });
-const deliverFinal = (
-  harness: ReturnType<typeof createHarness>,
-  text: string,
-  payload: ReplyPayload,
-) => harness.deliverLaneText({ laneName: "answer", text, payload, infoKind: "final" });
-const deliverLane = (
-  harness: ReturnType<typeof createHarness>,
-  text: string,
-  payload: ReplyPayload,
-  infoKind: "block" | "final",
-) => harness.deliverLaneText({ laneName: "answer", text, payload, infoKind });
 const canonicalPayload = (presentationTextMode?: "fallback") => ({
   text: "Summary",
   presentationTextMode,
@@ -46,20 +31,6 @@ const canonicalPayload = (presentationTextMode?: "fallback") => ({
     ],
   },
 });
-async function runFinal(params: {
-  text: string;
-  payload: ReplyPayload;
-  resolveFinalPresentationText?: NonNullable<
-    Parameters<typeof createHarness>[0]
-  >["resolveFinalPresentationText"];
-}) {
-  const harness = createHarness({
-    answerMessageId: 999,
-    resolveFinalPresentationText: params.resolveFinalPresentationText,
-  });
-  const delivery = expectPreviewFinalized(await deliverFinal(harness, params.text, params.payload));
-  return { delivery, harness };
-}
 const renderFinal = (payload: ReplyPayload) =>
   resolveFinalTelegramPresentationText({
     richMessages: true,
@@ -67,67 +38,38 @@ const renderFinal = (payload: ReplyPayload) =>
     payload,
   });
 describe("createLaneTextDeliverer streamed presentation finals", () => {
-  const FALLBACK = "Status summary as plain text";
-  it.each([
-    {
-      name: "renders a structured presentation on the finalized stream message",
-      expected: "Status summary as native table",
-      resolveFinalPresentationText: ({
-        payload,
-        text,
-      }: {
-        payload: ReplyPayload;
-        text: string;
-      }) => {
-        expect(payload.presentationTextMode).toBe("fallback");
-        expect(text).toBe(FALLBACK);
-        return "Status summary as native table";
-      },
+  it.each(["rich", "fallback", "text-only"] as const)(
+    "keeps partial text plain and finalizes %s on the same preview",
+    async (kind) => {
+      const text = kind === "text-only" ? "Hello final" : "Status summary as plain text";
+      const expected = kind === "rich" ? "Final native table" : text;
+      const payload = kind === "text-only" ? { text } : statusPayload(text);
+      const resolveFinalPresentationText = vi.fn(
+        (input: { payload: ReplyPayload; text: string }) => {
+          expect(input.payload.presentationTextMode).toBe("fallback");
+          expect(input.text).toBe(text);
+          return kind === "rich"
+            ? expected
+            : resolveFinalTelegramPresentationText({ ...input, richMessages: false });
+        },
+      );
+      const harness = createHarness({ answerMessageId: 999, resolveFinalPresentationText });
+      const deliver = (infoKind: "block" | "final") =>
+        harness.deliverLaneText({ laneName: "answer", text, payload, infoKind });
+      const block = await deliver("block");
+      expect(block.kind).toBe("preview-updated");
+      expect(resolveFinalPresentationText).not.toHaveBeenCalled();
+      expect(harness.answer?.lastDeliveredText()).toBe(text);
+      const delivery = expectPreviewFinalized(await deliver("final"));
+      expect(delivery.content).toBe(expected);
+      expect(harness.answer?.lastDeliveredText()).toBe(expected);
+      expect(harness.sendPayload).not.toHaveBeenCalled();
+      expect(harness.lanes.answer.finalized).toBe(true);
+      if (kind === "text-only") {
+        expect(resolveFinalPresentationText).not.toHaveBeenCalled();
+      }
     },
-    {
-      name: "preserves the authored fallback when rich messages are disabled",
-      expected: FALLBACK,
-      resolveFinalPresentationText: ({ payload, text }: { payload: ReplyPayload; text: string }) =>
-        resolveFinalTelegramPresentationText({ payload, text, richMessages: false }),
-    },
-  ])("$name", async ({ expected, resolveFinalPresentationText }) => {
-    const { delivery, harness } = await runFinal({
-      text: FALLBACK,
-      payload: statusPayload(FALLBACK),
-      resolveFinalPresentationText,
-    });
-    expect(delivery.content).toBe(expected);
-    expect(harness.answer?.lastDeliveredText()).toBe(expected);
-    expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.lanes.answer.finalized).toBe(true);
-  });
-  it("keeps partial stream text plain and renders the presentation only at finalization", async () => {
-    const RENDERED = "Final native table";
-    const resolveFinalPresentationText = vi.fn(() => RENDERED);
-    const harness = createHarness({
-      answerMessageId: 999,
-      resolveFinalPresentationText,
-    });
-    const payload = statusPayload("partial");
-    const blockResult = await deliverLane(harness, "partial", payload, "block");
-    expect(blockResult.kind).toBe("preview-updated");
-    expect(resolveFinalPresentationText).not.toHaveBeenCalled();
-    expect(harness.answer?.lastDeliveredText()).toBe("partial");
-    const finalResult = await deliverLane(harness, "partial", payload, "final");
-    expectPreviewFinalized(finalResult);
-    expect(harness.answer?.lastDeliveredText()).toBe(RENDERED);
-  });
-  it("does not consult presentation rendering for text-only stream finals", async () => {
-    const resolveFinalPresentationText = vi.fn(() => "unexpected");
-    const harness = createHarness({
-      answerMessageId: 999,
-      resolveFinalPresentationText,
-    });
-    const result = await deliverFinalAnswer(harness, "Hello final");
-    expectPreviewFinalized(result);
-    expect(resolveFinalPresentationText).not.toHaveBeenCalled();
-    expect(harness.answer?.lastDeliveredText()).toBe("Hello final");
-  });
+  );
 });
 describe("streamed final canonical presentation text", () => {
   it.each<{

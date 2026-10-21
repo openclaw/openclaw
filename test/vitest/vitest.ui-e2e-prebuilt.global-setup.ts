@@ -23,6 +23,7 @@ import type {
 declare module "vitest" {
   export interface ProvidedContext {
     controlUiE2ePrebuiltAssets?: ControlUiE2ePrebuiltAssets;
+    controlUiE2eBuildRoot?: string;
     controlUiE2ePrebuiltGeneration: string;
   }
 }
@@ -30,7 +31,7 @@ declare module "vitest" {
 export function assertPrebuiltUiE2eRuntime(repoRoot: string): string {
   const fail = (reason: string): never => {
     throw new Error(
-      `Prebuilt UI E2E requires a completed OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build:ci-artifacts on a clean checkout (${reason}). Use vitest.ui-e2e.config.ts for ordinary local tests.`,
+      `Prebuilt UI E2E requires a completed OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 pnpm build on a clean checkout (${reason}). Use vitest.ui-e2e.config.ts for ordinary local tests.`,
     );
   };
   const env: NodeJS.ProcessEnv = { ...process.env, OPENCLAW_BUILD_PRIVATE_QA: "1" };
@@ -90,7 +91,7 @@ export function assertPrebuiltUiE2eRuntime(repoRoot: string): string {
     deps.runtimePostBuildStampPath,
     path.join(distRoot, "build-info.json"),
     path.join(uiRoot, "index.html"),
-    path.join(uiRoot, "asset-manifest.json"),
+    path.join(uiRoot, "sw.js"),
   ]) {
     digest.update(fs.readFileSync(file));
   }

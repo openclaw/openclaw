@@ -28,6 +28,17 @@ function admittedRealPath(root: string, file: string): string {
   return real;
 }
 
+/** The source snapshot excludes private state; reserve scratch before running any source. */
+export function prepareIsolatedVitestScratch(snapshot: string): void {
+  if (fs.realpathSync(snapshot) !== snapshot) {
+    throw new Error("Isolated scratch requires the admitted physical snapshot root.");
+  }
+  // No recursive mkdir: preexisting private state or a symlink is not ours to adopt.
+  const state = path.join(snapshot, ".openclaw");
+  fs.mkdirSync(state, { mode: 0o700 });
+  fs.mkdirSync(path.join(state, "tmp"), { mode: 0o700 });
+}
+
 /** Copy current working-tree bytes, not HEAD or the index's older blob contents. */
 export function copyIsolatedVitestSource(root: string, snapshot: string, tracked: string[]) {
   const admitted = new Set(tracked.filter(isIsolatedSourcePath));

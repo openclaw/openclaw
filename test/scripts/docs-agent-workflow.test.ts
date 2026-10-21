@@ -1,12 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  appendFileSync,
-  copyFileSync,
-  mkdirSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import fs from "node:fs";
 import { join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +8,31 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { evaluateWorkflowExpression, readCiWorkflow } from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const workflow = parse(fs.readFileSync(".github/workflows/docs-agent.yml", "utf8"));
+const writerJob = workflow.jobs["update-docs"];
+function workflowScript(key: "id" | "name", value: string): string {
+  return writerJob.steps.find((step: { id?: string; name?: string }) => step[key] === value).run;
+}
+function runShell(root: string, script: string, env: NodeJS.ProcessEnv = {}) {
+  return spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 10_000,
+    env: {
+      PATH: process.env.PATH,
+      HOME: root,
+      RUNNER_TEMP: root,
+      CI_GIT_OWNER: resolve(".github/actions/git-owner/owner.py"),
+      ...env,
+    },
+  });
+}
+const runNode = (script: string, options: Record<string, string>, ...args: string[]) =>
+  execFileSync(process.execPath, [
+    resolve(`scripts/${script}.mjs`),
+    ...args,
+    ...Object.entries(options).flatMap(([key, value]) => [`--${key}`, value]),
+  ]);
 const mainSha = "a".repeat(40);
 const parentSha = "b".repeat(40);
 const previousSha = "c".repeat(40);
@@ -32,21 +50,13 @@ type WorkflowRun = Omit<typeof currentRun, "conclusion"> & {
 };
 
 function runGate(runs: WorkflowRun[], options: { event?: string; workflowHeadSha?: string } = {}) {
-  const workflow = parse(readFileSync(".github/workflows/docs-agent.yml", "utf8")) as {
-    jobs: { "update-docs": { steps: Array<{ id?: string; run?: string }> } };
-  };
-  const gate = workflow.jobs["update-docs"].steps.find((step) => step.id === "gate");
-  if (!gate?.run) {
-    throw new Error("Docs Agent gate is missing");
-  }
-
   const root = tempDirs.make("docs-agent-gate-");
   const bin = join(root, "bin");
   const output = join(root, "output");
-  mkdirSync(bin);
-  writeFileSync(output, "");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(output, "");
   const owner = join(root, "owner.py");
-  copyFileSync(".github/actions/git-owner/owner.py", owner);
+  fs.copyFileSync(".github/actions/git-owner/owner.py", owner);
   // Only the gate runs. Git/network and the clock are fixtures; jq executes the real filters.
   const commands = {
     git: `if [ "$1" = "-C" ]; then shift 2; fi
@@ -66,53 +76,36 @@ esac`,
     date: `printf '%s\\n' '2026-08-28T22:30:00Z'`,
   };
   for (const [name, script] of Object.entries(commands)) {
-    writeFileSync(join(bin, name), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+    fs.writeFileSync(join(bin, name), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
   }
 
-  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", gate.run], {
-    cwd: root,
-    encoding: "utf8",
-    timeout: 10_000,
-    env: {
-      PATH: `${bin}:${process.env.PATH}`,
-      HOME: root,
-      RUNNER_TEMP: root,
-      CI_GIT_OWNER: owner,
-      GITHUB_OUTPUT: output,
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_RUN_ID: String(currentRun.id),
-      EVENT_NAME: options.event ?? "workflow_run",
-      WORKFLOW_HEAD_SHA: options.workflowHeadSha ?? mainSha,
-      DOCS_AGENT_RUNS_FIXTURE: JSON.stringify({ workflow_runs: runs }),
-      DOCS_AGENT_JOBS_FIXTURE: JSON.stringify(
-        Object.fromEntries(
-          runs.map((run) => [
-            `${run.id}:${run.run_attempt}`,
-            [
-              {
-                jobs: [
-                  {
-                    name: "update-docs",
-                    status: run.status,
-                    conclusion: run.writer === "denied" ? "skipped" : run.conclusion,
-                    steps: [
-                      {
-                        name: "Run Codex docs agent",
-                        status: run.status,
-                        conclusion: run.writer ? "skipped" : run.conclusion,
-                      },
-                    ],
-                  },
-                ],
-              },
-            ],
-          ]),
-        ),
-      ),
-    },
+  const jobs = runs.map((run) => {
+    const step = {
+      name: "Run Codex docs agent",
+      status: run.status,
+      conclusion: run.writer ? "skipped" : run.conclusion,
+    };
+    const job = {
+      ...step,
+      name: "update-docs",
+      conclusion: run.writer === "denied" ? "skipped" : run.conclusion,
+      steps: [step],
+    };
+    return [`${run.id}:${run.run_attempt}`, [{ jobs: [job] }]];
+  });
+  const result = runShell(root, workflowScript("id", "gate"), {
+    PATH: `${bin}:${process.env.PATH}`,
+    CI_GIT_OWNER: owner,
+    GITHUB_OUTPUT: output,
+    GITHUB_REPOSITORY: "openclaw/openclaw",
+    GITHUB_RUN_ID: String(currentRun.id),
+    EVENT_NAME: options.event ?? "workflow_run",
+    WORKFLOW_HEAD_SHA: options.workflowHeadSha ?? mainSha,
+    DOCS_AGENT_RUNS_FIXTURE: JSON.stringify({ workflow_runs: runs }),
+    DOCS_AGENT_JOBS_FIXTURE: JSON.stringify(Object.fromEntries(jobs)),
   });
   expect(result.status, result.stderr || result.error?.message).toBe(0);
-  return { stdout: result.stdout, output: readFileSync(output, "utf8") };
+  return { stdout: result.stdout, output: fs.readFileSync(output, "utf8") };
 }
 
 function admittedOutput(reviewBase: string) {
@@ -141,91 +134,54 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
         execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
       const mirrorPath = join(root, "CHANGELOG/2026.9.4.md");
       const docsPath = join(root, "docs/releases/2026.9.4.md");
-      mkdirSync(join(root, "docs/releases"), { recursive: true });
-      mkdirSync(join(root, "src"));
+      fs.mkdirSync(join(root, "docs/releases"), { recursive: true });
+      fs.mkdirSync(join(root, "src"));
       const sourcePath = join(root, "src/example.js");
       const originalSource = "export const value = 1;\n";
-      writeFileSync(sourcePath, originalSource);
-      symlinkSync(resolve("scripts"), join(root, "scripts"), "dir");
-      writeFileSync(
+      fs.writeFileSync(sourcePath, originalSource);
+      fs.symlinkSync(resolve("scripts"), join(root, "scripts"), "dir");
+      fs.writeFileSync(
         join(root, "CHANGELOG.md"),
         "# Changelog\n\n## 2026.9.4\n\nReleased notes.\n\n### Complete contribution record\n\n- Original accounting.\n\n## 2026.8.1\n\nHistorical notes.\n",
       );
-      execFileSync(process.execPath, [
-        resolve("scripts/release-changelog.mjs"),
-        "split",
-        "--root",
-        root,
-      ]);
-      writeFileSync(docsPath, "# Release notes\n\nApproved source prose.\n");
+      runNode("release-changelog", { root }, "split");
+      fs.writeFileSync(docsPath, "# Release notes\n\nApproved source prose.\n");
       const regenerate = () =>
-        execFileSync(process.execPath, [
-          resolve("scripts/render-release-changelog.mjs"),
-          "--root",
+        runNode("render-release-changelog", {
           root,
-          "--version",
-          "2026.9.4",
-          "--source",
-          "docs/releases/2026.9.4.md",
-          "--output",
-          mirrorPath,
-        ]);
+          version: "2026.9.4",
+          source: "docs/releases/2026.9.4.md",
+          output: mirrorPath,
+        });
       regenerate();
       const recordPath = join(root, "CHANGELOG/records/2026.9.4.md");
-      const originalRecord = readFileSync(recordPath, "utf8");
+      const originalRecord = fs.readFileSync(recordPath, "utf8");
       git("init", "-q");
       git("add", ".");
-      git(
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.invalid",
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "-qm",
-        "fixture",
-      );
+      git("config", "user.name", "Fixture");
+      git("config", "user.email", "fixture@example.invalid");
+      git("-c", "commit.gpgsign=false", "commit", "-qm", "fixture");
       if (change === "mirror") {
-        appendFileSync(docsPath, "\nCorrected source detail.\n");
+        fs.appendFileSync(docsPath, "\nCorrected source detail.\n");
         regenerate();
       } else if (change === "initial") {
-        appendFileSync(join(root, "CHANGELOG/2026.8.1.md"), "Changed history.\n");
+        fs.appendFileSync(join(root, "CHANGELOG/2026.8.1.md"), "Changed history.\n");
       } else if (change === "record" || change === "index-only record") {
-        appendFileSync(recordPath, "Changed accounting.\n");
+        fs.appendFileSync(recordPath, "Changed accounting.\n");
       } else if (change === "index-only source") {
-        writeFileSync(sourcePath, "export const value = 2;\n");
+        fs.writeFileSync(sourcePath, "export const value = 2;\n");
       } else {
-        appendFileSync(mirrorPath, "Unapproved independent prose.\n");
+        fs.appendFileSync(mirrorPath, "Unapproved independent prose.\n");
       }
       if (staged) {
         git("add", ".");
       }
       if (change === "index-only record") {
-        writeFileSync(recordPath, originalRecord);
+        fs.writeFileSync(recordPath, originalRecord);
       } else if (change === "index-only source") {
-        writeFileSync(sourcePath, originalSource);
+        fs.writeFileSync(sourcePath, originalSource);
       }
-      const workflow = parse(readFileSync(".github/workflows/docs-agent.yml", "utf8")) as {
-        jobs: { "update-docs": { steps: Array<{ name?: string; run?: string }> } };
-      };
-      const guard = workflow.jobs["update-docs"].steps.find(
-        (step) => step.name === "Enforce existing-docs-only patch",
-      );
-      if (!guard?.run) {
-        throw new Error("Docs Agent patch guard is missing");
-      }
-      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", guard.run], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          PATH: process.env.PATH,
-          HOME: root,
-          RUNNER_TEMP: root,
-          CI_GIT_OWNER: resolve(".github/actions/git-owner/owner.py"),
-        },
-      });
+      const result = runShell(root, workflowScript("name", "Enforce existing-docs-only patch"));
       expect(result.status, result.stdout + result.stderr).toBe(change === "mirror" ? 0 : 1);
     },
   );
@@ -252,99 +208,56 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
     expect(result.stdout).not.toContain("123\t");
   });
 
-  it("excludes the current id from the review base even with an older run snapshot", () => {
-    const result = runGate([
-      { ...currentRun, created_at: "2026-08-28T21:00:00Z", head_sha: parentSha },
-      {
-        ...currentRun,
-        id: 122,
-        created_at: "2026-08-28T20:00:00Z",
-        status: "completed",
-        conclusion: "success",
-        head_sha: previousSha,
-      },
-    ]);
-    expect(result.output).toBe(admittedOutput(previousSha));
+  const completedRun = (changes: Partial<WorkflowRun>): WorkflowRun => ({
+    ...currentRun,
+    id: 122,
+    status: "completed",
+    conclusion: "success",
+    head_sha: parentSha,
+    ...changes,
   });
-
+  const reviewedRun = completedRun({
+    id: 121,
+    created_at: "2026-08-28T21:00:00Z",
+    head_sha: previousSha,
+  });
+  const history = (changes: Partial<WorkflowRun>, reviewed = reviewedRun): WorkflowRun[] => [
+    currentRun,
+    completedRun(changes),
+    reviewed,
+  ];
+  const writers: NonNullable<WorkflowRun["writer"]>[] = ["denied", "gated"];
   it.each([
-    ["skipped", currentRun.created_at],
-    ["cancelled", currentRun.created_at],
-    ["cancelled", "2026-08-28T22:29:59Z"],
-  ])("ignores %s history from %s for cadence and review base", (conclusion, createdAt) => {
-    const result = runGate([
-      currentRun,
-      {
-        ...currentRun,
-        id: 122,
-        created_at: createdAt,
-        status: "completed",
-        conclusion,
-        head_sha: parentSha,
-      },
-      {
-        ...currentRun,
-        id: 121,
-        created_at: "2026-08-28T22:29:58Z",
-        status: "completed",
-        conclusion: "success",
-        head_sha: previousSha,
-      },
-    ]);
-    expect(result.output).toBe(admittedOutput(previousSha));
-  });
-
-  it.each(["denied", "gated"] as const)(
-    "ignores a %s hourly attempt before an eligible push, both within and after the cadence window",
-    (writer) => {
-      for (const createdAt of [currentRun.created_at, "2026-08-28T22:29:59Z"]) {
-        const result = runGate([
-          currentRun,
-          {
-            ...currentRun,
-            id: 122,
-            run_attempt: 2,
-            created_at: createdAt,
-            status: "completed",
-            conclusion: "success",
-            head_sha: parentSha,
-            writer,
-          },
-          {
-            ...currentRun,
-            id: 121,
-            created_at: "2026-08-28T21:00:00Z",
-            status: "completed",
-            conclusion: "success",
-            head_sha: previousSha,
-          },
-        ]);
-        expect(result.output).toBe(admittedOutput(previousSha));
-      }
+    {
+      name: "the current id with an older REST snapshot",
+      runs: [
+        { ...currentRun, created_at: "2026-08-28T21:00:00Z", head_sha: parentSha },
+        completedRun({ created_at: "2026-08-28T20:00:00Z", head_sha: previousSha }),
+      ],
     },
-  );
-
-  it("does not advance the review base after an unsuccessful agent attempt", () => {
-    const result = runGate([
-      currentRun,
-      {
-        ...currentRun,
-        id: 122,
-        created_at: "2026-08-28T22:29:59Z",
-        status: "completed",
-        conclusion: "failure",
-        head_sha: parentSha,
-      },
-      {
-        ...currentRun,
-        id: 121,
-        created_at: "2026-08-28T21:00:00Z",
-        status: "completed",
-        conclusion: "success",
-        head_sha: previousSha,
-      },
-    ]);
-    expect(result.output).toBe(admittedOutput(previousSha));
+    ...[
+      ["skipped", currentRun.created_at],
+      ["cancelled", currentRun.created_at],
+      ["cancelled", "2026-08-28T22:29:59Z"],
+    ].map(([conclusion, created_at]) => ({
+      name: `${conclusion} history from ${created_at}`,
+      runs: history(
+        { conclusion, created_at },
+        { ...reviewedRun, created_at: "2026-08-28T22:29:58Z" },
+      ),
+    })),
+    ...writers.flatMap((writer) =>
+      [currentRun.created_at, "2026-08-28T22:29:59Z"].map((created_at) => ({
+        name: `${writer} hourly attempt from ${created_at}`,
+        runs: history({ run_attempt: 2, created_at, writer }),
+      })),
+    ),
+    {
+      name: "an unsuccessful agent attempt",
+      runs: history({ created_at: "2026-08-28T22:29:59Z", conclusion: "failure" }),
+    },
+  ])("does not let $name throttle admission or advance the review base", ({ runs }) => {
+    expect(runGate(runs).output).toBe(admittedOutput(previousSha));
   });
 
   it("still rejects superseded CI", () => {
@@ -362,9 +275,9 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
 });
 
 describe("Docs Agent full-CI admission", () => {
-  const workflow = parse(readFileSync(".github/workflows/docs-agent.yml", "utf8"));
   const verify = workflow.jobs["verify-ci"];
-  const writer = workflow.jobs["update-docs"];
+  const repo = { owner: "openclaw", repo: "openclaw" };
+  const confirmedStep = "Confirm validated workflow revision";
   const source = {
     id: 456,
     run_attempt: 2,
@@ -383,24 +296,23 @@ describe("Docs Agent full-CI admission", () => {
     name: "openclaw/ci-gate",
     head_sha: mainSha,
     conclusion: "success",
-    steps: [{ name: "Confirm validated workflow revision", conclusion: "success" }],
+    steps: [{ name: confirmedStep, conclusion: "success" }],
   };
   const evaluate = (value: string, context: Parameters<typeof evaluateWorkflowExpression>[1]) =>
     evaluateWorkflowExpression(value.startsWith("${{") ? value : "${{ " + value + " }}", context);
 
-  async function admit(
-    options: {
-      event?: Partial<typeof source>;
-      observedRun?: Partial<typeof source>;
-      latestRun?: Partial<typeof source>;
-      currentMain?: string;
-      jobs?: (typeof confirmedGate)[];
-      ciOnPush?: string;
-      manual?: boolean;
-      actor?: string;
-      apiFails?: boolean;
-    } = {},
-  ) {
+  type AdmissionOptions = {
+    event?: Partial<typeof source>;
+    observedRun?: Partial<typeof source>;
+    latestRun?: Partial<typeof source>;
+    currentMain?: string;
+    jobs?: (typeof confirmedGate)[];
+    ciOnPush?: string;
+    manual?: boolean;
+    actor?: string;
+    apiFails?: boolean;
+  };
+  async function admit(options: AdmissionOptions = {}) {
     const event = { ...source, ...options.event };
     const run = { ...event, ...options.observedRun };
     const outputs: Record<string, string> = { allowed: "false" };
@@ -412,33 +324,22 @@ describe("Docs Agent full-CI admission", () => {
       githubEvent: { workflow_run: event },
       ciOnPush: options.ciOnPush ?? "",
     };
-    let runReads = 0;
-    const getWorkflowRun = vi.fn(async () => {
-      if (options.apiFails) {
-        throw new Error("GitHub unavailable");
-      }
-      runReads++;
-      return { data: runReads > 1 ? { ...run, ...options.latestRun } : run };
-    });
-    const getBranch = vi.fn(async () => ({
-      data: { commit: { sha: options.currentMain ?? mainSha } },
-    }));
+    const getWorkflowRun = vi
+      .fn<() => Promise<{ data: typeof run }>>()
+      .mockResolvedValueOnce({ data: run })
+      .mockResolvedValue({ data: { ...run, ...options.latestRun } });
+    if (options.apiFails) {
+      getWorkflowRun.mockReset().mockRejectedValue(new Error("GitHub unavailable"));
+    }
+    const getBranch = async () => ({ data: { commit: { sha: options.currentMain ?? mainSha } } });
     const listJobsForWorkflowRunAttempt = vi.fn();
     const paginate = vi.fn(async () => options.jobs ?? [confirmedGate]);
+    const actions = { getWorkflowRun, listJobsForWorkflowRunAttempt };
+    const rest = { actions, repos: { getBranch } };
     if (evaluate(verify.if, context)) {
       await runInNewContext("(async () => {" + verify.steps[0].with.script + "})()", {
-        context: {
-          eventName: context.eventName,
-          repo: { owner: "openclaw", repo: "openclaw" },
-          payload: { workflow_run: event },
-        },
-        github: {
-          rest: {
-            actions: { getWorkflowRun, listJobsForWorkflowRunAttempt },
-            repos: { getBranch },
-          },
-          paginate,
-        },
+        context: { eventName: context.eventName, repo, payload: { workflow_run: event } },
+        github: { rest, paginate },
         core: {
           setOutput: (key: string, value: string) => {
             outputs[key] = value;
@@ -447,29 +348,48 @@ describe("Docs Agent full-CI admission", () => {
         },
       });
     }
-    const allowed = evaluate(writer.if, {
+    const allowed = evaluate(writerJob.if, {
       ...context,
       additionalNeeds: { "verify-ci": { outputs } },
     });
-    return { allowed, getWorkflowRun, getBranch, paginate, listJobsForWorkflowRunAttempt };
+    return { allowed, getWorkflowRun, paginate, listJobsForWorkflowRunAttempt };
   }
 
-  it("admits a successful exact-attempt scheduled run", async () => {
-    const result = await admit();
-    expect(result.allowed).toBe(true);
-    expect(result.paginate).toHaveBeenCalledExactlyOnceWith(result.listJobsForWorkflowRunAttempt, {
-      owner: "openclaw",
-      repo: "openclaw",
-      run_id: 456,
-      attempt_number: 2,
-      per_page: 100,
-    });
+  const fullPush: AdmissionOptions = {
+    ciOnPush: "true",
+    event: { event: "push", actor: { login: "maintainer" } },
+  };
+  const admissionCases: [string, AdmissionOptions, boolean][] = [
+    ["a successful exact-attempt scheduled run", {}, true],
+    ["an opted-in full main push", fullPush, true],
+    ["explicit non-bot Docs Agent manual admission", { manual: true, actor: "maintainer" }, true],
+    ["bot Docs Agent manual admission", { manual: true }, false],
+  ];
+  it.each(admissionCases)("applies admission policy to %s", async (_name, options, allowed) => {
+    const result = await admit(options);
+    expect(result.allowed).toBe(allowed);
+    if (options.manual) {
+      expect(result.getWorkflowRun).not.toHaveBeenCalled();
+    } else {
+      expect(result.paginate).toHaveBeenCalledExactlyOnceWith(
+        result.listJobsForWorkflowRunAttempt,
+        {
+          owner: "openclaw",
+          repo: "openclaw",
+          run_id: 456,
+          attempt_number: 2,
+          per_page: 100,
+        },
+      );
+    }
   });
 
-  it("rejects manual runs with the retired hourly dispatch marker", async () => {
-    const result = await admit({
-      event: { event: "workflow_dispatch", display_title: "CI hourly-main-123-1" },
-    });
+  it.each([
+    { event: "workflow_dispatch", display_title: "CI hourly-main-123-1" },
+    { event: "workflow_dispatch", display_title: "CI release validation" },
+    { event: "pull_request" },
+  ])("rejects unrelated CI completion without reading evidence: %j", async (event) => {
+    const result = await admit({ event });
     expect(result.allowed).toBe(false);
     expect(result.getWorkflowRun).not.toHaveBeenCalled();
   });
@@ -480,93 +400,63 @@ describe("Docs Agent full-CI admission", () => {
     });
     expect(result.allowed).toBe(false);
     expect(result.getWorkflowRun).not.toHaveBeenCalled();
-    expect(workflow.concurrency).toBeUndefined();
-    expect(workflow.permissions).toEqual({ actions: "read", contents: "read" });
-    expect(writer.needs).toBe("verify-ci");
-    expect(writer.concurrency).toEqual({ group: "docs-agent-main", "cancel-in-progress": false });
+    expect({ concurrency: workflow.concurrency, permissions: workflow.permissions }).toEqual({
+      concurrency: undefined,
+      permissions: { actions: "read", contents: "read" },
+    });
+    expect({ needs: writerJob.needs, concurrency: writerJob.concurrency }).toEqual({
+      needs: "verify-ci",
+      concurrency: { group: "docs-agent-main", "cancel-in-progress": false },
+    });
   });
 
-  it.each(["skipped", "failure"])(
-    "rejects a %s aggregate even if the push opt-in changed before completion",
-    async (conclusion) => {
-      const result = await admit({
-        ciOnPush: "true",
-        event: { event: "push", actor: { login: "maintainer" } },
-        jobs: [{ ...confirmedGate, conclusion }],
-      });
-      expect(result.allowed).toBe(false);
+  const rejectedEvidence: AdmissionOptions[] = [
+    ...["skipped", "failure"].map((conclusion) => ({
+      ciOnPush: fullPush.ciOnPush,
+      event: fullPush.event,
+      jobs: [{ ...confirmedGate, conclusion }],
+    })),
+    ...[
+      { id: 999 },
+      { head_sha: previousSha },
+      { run_attempt: 3 },
+      { path: ".github/workflows/other.yml" },
+      { head_branch: "topic" },
+      { repository: { full_name: "fork/openclaw" } },
+      { head_repository: { full_name: "fork/openclaw" } },
+      { status: "in_progress" },
+      { conclusion: "failure" },
+      { conclusion: "cancelled" },
+    ].map((observedRun) => ({ observedRun })),
+    ...[
+      [],
+      [confirmedGate, confirmedGate],
+      [{ ...confirmedGate, head_sha: previousSha }],
+      [{ ...confirmedGate, steps: [] }],
+      [
+        {
+          ...confirmedGate,
+          steps: [{ name: confirmedStep, conclusion: "skipped" }],
+        },
+      ],
+    ].map((jobs) => ({ jobs })),
+    { latestRun: { run_attempt: 3, status: "in_progress" } },
+    { currentMain: previousSha },
+  ];
+  it.each(rejectedEvidence)(
+    "rejects incomplete, stale, or foreign full-CI evidence %j",
+    async (options) => {
+      expect((await admit(options)).allowed).toBe(false);
     },
   );
 
-  it("retains successful opted-in full main pushes", async () => {
-    expect(
-      (await admit({ ciOnPush: "true", event: { event: "push", actor: { login: "maintainer" } } }))
-        .allowed,
-    ).toBe(true);
-  });
-
-  it.each([
-    { id: 999 },
-    { head_sha: previousSha },
-    { run_attempt: 3 },
-    { path: ".github/workflows/other.yml" },
-    { head_branch: "topic" },
-    { repository: { full_name: "fork/openclaw" } },
-    { head_repository: { full_name: "fork/openclaw" } },
-    { status: "in_progress" },
-    { conclusion: "failure" },
-    { conclusion: "cancelled" },
-  ])("rejects stale or foreign observed run metadata %j", async (observedRun) => {
-    expect((await admit({ observedRun })).allowed).toBe(false);
-  });
-
-  it.each([
-    [],
-    [confirmedGate, confirmedGate],
-    [{ ...confirmedGate, head_sha: previousSha }],
-    [{ ...confirmedGate, steps: [] }],
-    [
-      {
-        ...confirmedGate,
-        steps: [{ name: "Confirm validated workflow revision", conclusion: "skipped" }],
-      },
-    ],
-  ])("rejects missing, duplicate, or unconfirmed full-CI evidence %j", async (...jobs) => {
-    expect((await admit({ jobs })).allowed).toBe(false);
-  });
-
-  it("rejects superseded main and propagates unavailable API evidence", async () => {
-    expect((await admit({ currentMain: previousSha })).allowed).toBe(false);
+  it("propagates unavailable API evidence", async () => {
     await expect(admit({ apiFails: true })).rejects.toThrow("GitHub unavailable");
-  });
-
-  it("rejects a new run attempt that starts during verification", async () => {
-    expect((await admit({ latestRun: { run_attempt: 3, status: "in_progress" } })).allowed).toBe(
-      false,
-    );
-  });
-
-  it("does not admit unrelated manual CI or PR completion", async () => {
-    for (const event of [
-      { event: "workflow_dispatch", display_title: "CI release validation" },
-      { event: "pull_request" },
-    ]) {
-      const result = await admit({ event });
-      expect(result.allowed).toBe(false);
-      expect(result.getWorkflowRun).not.toHaveBeenCalled();
-    }
-  });
-
-  it("preserves explicit non-bot Docs Agent manual admission", async () => {
-    const result = await admit({ manual: true, actor: "maintainer" });
-    expect(result.allowed).toBe(true);
-    expect(result.getWorkflowRun).not.toHaveBeenCalled();
-    expect((await admit({ manual: true })).allowed).toBe(false);
   });
 
   it("confirms only a successful CI aggregate for the validated workflow revision", () => {
     const producer = readCiWorkflow().jobs["ci-gate"].steps.find(
-      (step: { name?: string }) => step.name === "Confirm validated workflow revision",
+      (step: { name?: string }) => step.name === confirmedStep,
     );
     const context = {
       repository: "openclaw/openclaw",

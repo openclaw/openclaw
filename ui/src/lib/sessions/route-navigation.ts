@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { pathForSession } from "../../app-session-path-builder.ts";
+import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationNavigationOptions, ApplicationContext } from "../../app/context.ts";
 import type { BoardFace } from "../board/settings.ts";
@@ -23,8 +24,6 @@ export const SESSION_DASHBOARD_EXPANDED_PARAM = "dashboard";
 export function composerDraftSearch(draft: string): string {
   return `?${new URLSearchParams({ draft, [SESSION_COMPOSER_FOCUS_PARAM]: "1" }).toString()}`;
 }
-const SESSION_KEY_UUID_SUFFIX_RE =
-  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 type SessionNavigationContext<TRouteId extends string> = Pick<
   ApplicationContext<TRouteId>,
@@ -39,7 +38,6 @@ type SessionNavigationTargetOptions = {
   exactKey?: boolean;
   preferenceDerivedFace?: boolean;
   focusComposer?: boolean;
-  dashboardExpanded?: boolean;
   navigationKey?: string;
 };
 
@@ -199,11 +197,11 @@ export function sessionNavigationTarget<TRouteId extends string>(
   if (params.focusComposer) {
     navigationParams.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
-  if (params.dashboardExpanded) {
-    navigationParams.set(SESSION_DASHBOARD_EXPANDED_PARAM, "expanded");
-  }
   const navigationKey = params.navigationKey?.trim() || row?.key;
-  if (navigationKey && SESSION_KEY_UUID_SUFFIX_RE.test(navigationKey)) {
+  if (
+    navigationKey &&
+    sessionRefFromPath(pathname, basePath, mainKey ?? undefined)?.kind === "short"
+  ) {
     // Sidebar navigation already owns the full row. Carry its key only through the
     // in-app location so the short route never has to rediscover it from sessions.list.
     navigationParams.set(SESSION_NAVIGATION_KEY_PARAM, navigationKey);
@@ -212,10 +210,5 @@ export function sessionNavigationTarget<TRouteId extends string>(
   const options = serializedNavigation
     ? { pathname, search: `?${serializedNavigation}` }
     : { pathname };
-  const hrefParams = new URLSearchParams(search ?? "");
-  if (params.dashboardExpanded) {
-    hrefParams.set(SESSION_DASHBOARD_EXPANDED_PARAM, "expanded");
-  }
-  const hrefSearch = hrefParams.toString();
-  return { href: `${pathname}${hrefSearch ? `?${hrefSearch}` : ""}`, options };
+  return { href: `${pathname}${search ?? ""}`, options };
 }

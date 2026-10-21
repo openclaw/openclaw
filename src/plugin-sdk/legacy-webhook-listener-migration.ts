@@ -1,6 +1,7 @@
-import { asObjectRecord } from "../config/channel-compat-normalization.js";
-import { normalizeChannelConfigEntries } from "../config/channel-doctor-helpers.js";
+import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeChannelConfigEntries } from "../config/channel-config-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginDoctorHistoricalWebhookListener } from "../plugins/doctor-contract-module.js";
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -14,7 +15,9 @@ export function createLegacyWebhookListenerDoctorContract(params: {
   hostKey?: string | null;
   webhookKey?: string;
   defaultHost?: string;
+  preserveAuthoredActivation?: true;
 }): {
+  historicalWebhookListener: PluginDoctorHistoricalWebhookListener;
   legacyConfigRules: ChannelDoctorLegacyConfigRule[];
   normalizeCompatibilityConfig: (params: { cfg: OpenClawConfig }) => ChannelDoctorConfigMutation;
 } {
@@ -32,6 +35,12 @@ export function createLegacyWebhookListenerDoctorContract(params: {
   };
   const prefix = `channels.${params.channelKey}`;
   return {
+    historicalWebhookListener: {
+      channelId: params.channelKey,
+      port: params.defaultPort,
+      preserveAuthoredActivation: params.preserveAuthoredActivation,
+      ...(params.defaultHost === undefined ? {} : { host: params.defaultHost }),
+    },
     legacyConfigRules: [
       {
         path: ["channels", params.channelKey],

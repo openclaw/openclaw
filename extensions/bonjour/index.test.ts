@@ -3,10 +3,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   advertiserModuleLoaded: vi.fn(),
-  runtimeModuleLoaded: vi.fn(),
   startGatewayBonjourAdvertiser: vi.fn(async () => ({ stop: vi.fn() })),
-  registerUncaughtExceptionHandler: vi.fn(),
-  registerUnhandledRejectionHandler: vi.fn(),
 }));
 
 vi.mock("./src/advertiser.js", () => {
@@ -16,19 +13,10 @@ vi.mock("./src/advertiser.js", () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/runtime", () => {
-  mocks.runtimeModuleLoaded();
-  return {
-    registerUncaughtExceptionHandler: mocks.registerUncaughtExceptionHandler,
-    registerUnhandledRejectionHandler: mocks.registerUnhandledRejectionHandler,
-  };
-});
-
 const { default: bonjourPlugin } = await import("./index.js");
 
 afterAll(() => {
   vi.doUnmock("./src/advertiser.js");
-  vi.doUnmock("openclaw/plugin-sdk/runtime");
   vi.resetModules();
 });
 
@@ -44,13 +32,11 @@ describe("bonjour plugin entry", () => {
     });
 
     expect(mocks.advertiserModuleLoaded).not.toHaveBeenCalled();
-    expect(mocks.runtimeModuleLoaded).not.toHaveBeenCalled();
 
     bonjourPlugin.register(api);
 
     expect(discoveryService?.id).toBe("bonjour");
     expect(mocks.advertiserModuleLoaded).not.toHaveBeenCalled();
-    expect(mocks.runtimeModuleLoaded).not.toHaveBeenCalled();
 
     if (!discoveryService) {
       throw new Error("expected bonjour plugin to register a discovery service");
@@ -74,14 +60,9 @@ describe("bonjour plugin entry", () => {
     ).resolves.toEqual({ stop });
 
     expect(mocks.advertiserModuleLoaded).toHaveBeenCalledTimes(1);
-    expect(mocks.runtimeModuleLoaded).toHaveBeenCalledTimes(1);
     expect(mocks.startGatewayBonjourAdvertiser).toHaveBeenCalledWith(
       { ...advertisedOptions, instanceName: "Dev Box (OpenClaw)" },
-      {
-        logger: api.logger,
-        registerUncaughtExceptionHandler: mocks.registerUncaughtExceptionHandler,
-        registerUnhandledRejectionHandler: mocks.registerUnhandledRejectionHandler,
-      },
+      api.logger,
     );
   });
 });

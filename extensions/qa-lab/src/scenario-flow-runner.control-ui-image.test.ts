@@ -6,19 +6,10 @@ import { readQaScenarioById } from "./scenario-catalog.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
 const transcriptCases = [
-  {
-    kind: "text",
-    prompt: "Control UI bridge check. Marker exact marker: `ui bridge armed`",
-    reply: "ui bridge armed",
-    replyFlag: "hasReply",
-  },
-  {
-    kind: "image",
-    prompt: "Image understanding check: describe the top and bottom colors.",
-    reply: "The top is red and the bottom is blue.",
-    replyFlag: "hasColors",
-  },
+  ["text", "Control UI bridge check", "ui bridge armed", "hasReply"],
+  ["image", "Image understanding check", "red blue", "hasColors"],
 ] as const;
+const present = { panePresent: true, threadPresent: true, transcriptLoading: false };
 
 function message(role: "user" | "assistant", text: string) {
   return `<div class="chat-group ${role}"><div class="chat-text">${text}</div></div>`;
@@ -30,14 +21,10 @@ function pane(contents: string, hidden = false, active = true) {
 
 function runTranscriptStep(kind: "text" | "image", pages: string[]) {
   const scenarioId = "control-ui-qa-channel-image-roundtrip";
-  const scenario = readQaScenarioById(scenarioId);
-  const step = scenario.execution.flow?.steps.find(
+  const step = readQaScenarioById(scenarioId).execution.flow!.steps.find(
     (candidate) =>
       candidate.name === `${kind} injected through qa-channel renders in a fresh control ui load`,
-  );
-  if (!step) {
-    throw new Error(`missing ${kind} transcript step`);
-  }
+  )!;
   let readCount = 0;
   const observations: unknown[] = [];
   const snapshots: Array<{ maxChars: number; text: string }> = [];
@@ -55,16 +42,9 @@ function runTranscriptStep(kind: "text" | "image", pages: string[]) {
     return document;
   };
   const result = runLoadedScenarioFlow(scenarioId, {
-    flow: {
-      steps: [
-        {
-          name: "sets the selected session URL",
-          actions: [{ set: "controlUiChatUrl", value: "http://127.0.0.1:43124/?session=qa" }],
-        },
-        step,
-      ],
-    },
+    flow: { steps: [step] },
     api: {
+      controlUiChatUrl: "http://127.0.0.1:43124/?session=qa",
       normalizeLowercaseStringOrEmpty,
       webOpenPage: async () => ({ pageId: "fresh-transcript" }),
       webWait: async () => ({ ok: true }),
@@ -85,102 +65,65 @@ function runTranscriptStep(kind: "text" | "image", pages: string[]) {
   return { result, observations, snapshots, evaluationTimeouts };
 }
 
-describe.each(transcriptCases)("loaded Control UI $kind transcript assertion", (testCase) => {
-  const transcript = message("user", testCase.prompt) + message("assistant", testCase.reply);
+describe.each(transcriptCases)("%s transcript", (kind, prompt, reply, replyFlag) => {
+  const transcript = message("user", prompt) + message("assistant", reply);
+  const run = (...pages: string[]) => runTranscriptStep(kind, pages);
 
-  it("reads the active transcript beyond a 12K shell prefix without returning its text", async () => {
-    const proof = runTranscriptStep(testCase.kind, [
-      `<nav>${"x".repeat(12_001)}</nav>${pane("", false, false)}${pane(transcript)}`,
-    ]);
-
+  it.each([
+    {
+      name: "12K shell",
+      pages: [`<nav>${"x".repeat(12_001)}</nav>${pane("", false, false)}${pane(transcript)}`],
+      pending: [],
+    },
+    {
+      name: "absent pane/thread",
+      pages: [
+        pane(transcript, true),
+        '<openclaw-chat-pane class="chat-pane-cache__pane--active" aria-hidden="false"></openclaw-chat-pane>',
+        pane(transcript),
+      ],
+      pending: [
+        { panePresent: false, threadPresent: false },
+        { panePresent: true, threadPresent: false },
+      ],
+    },
+  ])("reads $name without exposing transcript text", async ({ pages, pending }) => {
+    const proof = run(...pages);
     const result = await proof.result;
-
     expect(result.status).toBe("pass");
-    expect(proof.snapshots).toEqual([]);
+    expect(proof).toMatchObject({
+      snapshots: [],
+      evaluationTimeouts: Array(pending.length + 1).fill(30_000),
+    });
     expect(proof.observations).toEqual([
+      ...pending.map((state) => expect.objectContaining(state)),
       {
-        panePresent: true,
-        threadPresent: true,
-        transcriptLoading: false,
+        ...present,
         userMessageCount: 1,
         assistantMessageCount: 1,
         hasPrompt: true,
-        [testCase.replyFlag]: true,
+        [replyFlag]: true,
       },
     ]);
-    expect(result.steps.at(-1)?.details).toBe(JSON.stringify(proof.observations[0]));
-    expect(result.steps.at(-1)?.details).not.toContain(testCase.prompt);
+    expect(result.steps.at(-1)?.details).toBe(JSON.stringify(proof.observations.at(-1)));
   });
 
-  it.each([
-    "missing prompt",
-    "hidden pane",
-    "menu decoy",
-    "reversed roles",
-    "prompt-only answer",
-  ] as const)("rejects %s and keeps bounded, pane-owned failure diagnostics", async (missing) => {
-    const pages = {
-      "missing prompt": pane(message("assistant", testCase.reply)),
-      "hidden pane": pane(transcript, true) + pane(""),
-      "menu decoy": `<nav>${transcript}</nav>${pane("")}`,
-      "reversed roles": pane(
-        message("assistant", testCase.prompt) + message("user", testCase.reply),
-      ),
-      "prompt-only answer": pane(message("user", `${testCase.prompt} ${testCase.reply}`)),
-    };
-    const proof = runTranscriptStep(testCase.kind, [pages[missing]]);
+  it.each(["menu decoy", "reversed roles"] as const)(
+    "rejects %s with bounded diagnostics",
+    async (missing) => {
+      const pages = {
+        "menu decoy": `<nav>${transcript}</nav>${pane(transcript, true)}${pane(transcript, false, false)}${pane("")}`,
+        "reversed roles": pane(message("assistant", prompt) + message("user", reply)),
+      };
+      const proof = run(pages[missing]);
 
-    await expect(proof.result).rejects.toThrow(
-      `control ui ${testCase.kind} transcript missing after fresh load. state=`,
-    );
-    expect(proof.snapshots).toHaveLength(1);
-    expect(proof.snapshots[0]?.maxChars).toBe(12_000);
-    expect(proof.snapshots[0]?.text.length).toBeLessThanOrEqual(12_000);
-    expect(proof.observations.at(-1)).toMatchObject({
-      panePresent: true,
-      threadPresent: true,
-      transcriptLoading: false,
-    });
-    expect(proof.evaluationTimeouts.at(-1)).toBe(15_000);
-  });
-
-  it("rejects a transcript found only in an earlier inactive pane", async () => {
-    const proof = runTranscriptStep(testCase.kind, [pane(transcript, false, false) + pane("")]);
-    await expect(proof.result).rejects.toThrow(
-      `control ui ${testCase.kind} transcript missing after fresh load. state=`,
-    );
-    expect(proof.observations.at(-1)).toMatchObject({
-      hasPrompt: false,
-      [testCase.replyFlag]: false,
-    });
-  });
-
-  it("keeps polling while the active pane or transcript is absent", async () => {
-    const proof = runTranscriptStep(testCase.kind, [
-      pane(transcript, true),
-      '<openclaw-chat-pane class="chat-pane-cache__pane--active" aria-hidden="false"></openclaw-chat-pane>',
-      pane(transcript),
-    ]);
-
-    await expect(proof.result).resolves.toMatchObject({ status: "pass" });
-    expect(proof.observations).toHaveLength(3);
-    expect(proof.observations[0]).toMatchObject({ panePresent: false, threadPresent: false });
-    expect(proof.observations[1]).toMatchObject({ panePresent: true, threadPresent: false });
-    expect(proof.observations[2]).toMatchObject({ hasPrompt: true, [testCase.replyFlag]: true });
-    expect(proof.evaluationTimeouts).toEqual([30_000, 30_000, 30_000]);
-    expect(proof.snapshots).toEqual([]);
-  });
-});
-
-it.each(["red", "blue"])("requires both image color groups, not only %s", async (color) => {
-  const proof = runTranscriptStep("image", [
-    pane(
-      message("user", transcriptCases[1].prompt) + message("assistant", `The image is ${color}.`),
-    ),
-  ]);
-
-  await expect(proof.result).rejects.toThrow(
-    "control ui image transcript missing after fresh load",
+      await expect(proof.result).rejects.toThrow(
+        `control ui ${kind} transcript missing after fresh load. state=`,
+      );
+      expect(proof.snapshots).toMatchObject([{ maxChars: 12_000 }]);
+      expect(proof.snapshots[0]?.text.length).toBeLessThanOrEqual(12_000);
+      expect(proof.observations.at(-1)).toMatchObject(present);
+      expect(proof.evaluationTimeouts.at(-1)).toBe(15_000);
+    },
   );
-  expect(proof.observations.at(-1)).toMatchObject({ hasPrompt: true, hasColors: false });
 });

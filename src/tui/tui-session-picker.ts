@@ -42,17 +42,14 @@ export async function loadRecentSessions(
   return result.sessions;
 }
 
-/** Build labels and matching text for recent-session pickers. */
 export function buildSessionChoices(sessions: readonly TuiSessionEntry[]): SessionPickerChoice[] {
   return sessions.map((session) => {
     const title = session.derivedTitle ?? session.displayName;
-    const formattedKey = formatSessionKey(session.key);
+    const formattedKey = parseAgentSessionKey(session.key)?.rest ?? session.key;
     const label = title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
-    const timePart = session.updatedAt
-      ? formatRelativeTimestamp(session.updatedAt, { dateFallback: true, fallback: "" })
-      : "";
+    const timePart = session.updatedAt ? formatRelativeTimestamp(session.updatedAt) : "";
     const preview = session.lastMessagePreview?.replace(/\s+/g, " ").trim();
-    const description = timePart && preview ? `${timePart} · ${preview}` : (preview ?? timePart);
+    const description = timePart && preview ? `${timePart} · ${preview}` : preview || timePart;
     const searchableNames = [
       session.derivedTitle,
       session.displayName,
@@ -99,8 +96,4 @@ export function resolveResumeSession(
     return { kind: "ambiguous", candidates: matches };
   }
   return { kind: "none" };
-}
-
-function formatSessionKey(key: string): string {
-  return parseAgentSessionKey(key)?.rest ?? key;
 }

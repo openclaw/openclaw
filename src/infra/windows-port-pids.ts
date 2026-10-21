@@ -1,12 +1,11 @@
 // Resolves Windows process identity and listening-port ownership.
 import { spawnSync } from "node:child_process";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { splitArgsPreservingQuotes } from "../daemon/arg-split.js";
+import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { parseWindowsNetstatListeners } from "./ports-netstat.js";
 import type { PortUsageStatus } from "./ports-types.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import { assertAppContainerSpawnSupported } from "./windows-appcontainer-spawn.js";
 import {
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
@@ -24,9 +23,7 @@ export type WindowsProcessArgsResult =
   | { ok: true; args: string[] | null }
   | { ok: false; permanent: boolean };
 
-// ---------------------------------------------------------------------------
 // Windows listening-PID discovery (PowerShell → netstat fallback)
-// ---------------------------------------------------------------------------
 
 function readListeningPidsViaPowerShell(port: number, timeoutMs: number): number[] | null {
   const ps = spawnSync(
@@ -65,6 +62,7 @@ export function readWindowsListeningPidsResultSync(
   port: number,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): WindowsListeningPidsResult {
+  assertAppContainerSpawnSupported();
   const powershellPids = readListeningPidsViaPowerShell(port, timeoutMs);
   if (powershellPids != null) {
     return { ok: true, pids: powershellPids };
@@ -97,6 +95,7 @@ export function readWindowsPortUsageSync(port: number, timeoutMs: number): PortU
   ) {
     return "unknown";
   }
+  assertAppContainerSpawnSupported();
   const result = spawnSync(
     getWindowsPowerShellExePath(),
     [
@@ -120,20 +119,14 @@ export function readWindowsPortUsageSync(port: number, timeoutMs: number): PortU
   return /^\d+$/.test(count) ? (Number(count) === 0 ? "free" : "busy") : "unknown";
 }
 
-// ---------------------------------------------------------------------------
 // Windows process identity reading (PowerShell → WMIC fallback)
-// ---------------------------------------------------------------------------
 
 function extractWindowsCommandLine(raw: Buffer | string): string | null {
-  const lines = normalizeStringEntries(decodeWindowsProcessOutput(raw).split(/\r?\n/));
-  for (const line of lines) {
-    if (!normalizeLowercaseStringOrEmpty(line).startsWith("commandline=")) {
-      continue;
-    }
-    const value = line.slice("commandline=".length).trim();
-    return value || null;
-  }
-  return lines.find((line) => normalizeLowercaseStringOrEmpty(line) !== "commandline") ?? null;
+  const output = decodeWindowsProcessOutput(raw).trim();
+  const command = (
+    /^CommandLine=(.*)$/is.exec(output)?.[1] ?? output.replace(/^CommandLine\r?\n/i, "")
+  ).trim();
+  return command && command.toLowerCase() !== "commandline" ? command : null;
 }
 
 export function readWindowsProcessArgsSync(
@@ -159,6 +152,7 @@ export function readWindowsProcessArgsResultSync(
   if (remainingTimeoutMs() <= 0) {
     return { ok: false, permanent: false };
   }
+  assertAppContainerSpawnSupported();
   const powershellPath = getWindowsPowerShellExePath(env, deadlineMs);
   const powershellTimeoutMs = remainingTimeoutMs();
   if (powershellTimeoutMs <= 0) {
@@ -169,7 +163,12 @@ export function readWindowsProcessArgsResultSync(
     [
       "-NoProfile",
       "-Command",
-      `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object -ExpandProperty CommandLine)`,
+      [
+        `$command = (Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object -ExpandProperty CommandLine)`,
+        "$bytes = [Text.Encoding]::UTF8.GetBytes([string]$command)",
+        // Write pipe bytes directly; changing OutputEncoding can require a console.
+        "[Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)",
+      ].join("; "),
     ],
     {
       env: resolveDiagnosticProcessEnv(env),
@@ -179,14 +178,10 @@ export function readWindowsProcessArgsResultSync(
     },
   );
   if (!powershell.error && powershell.status === 0) {
-    const command = powershell.stdout.trim();
+    const command = powershell.stdout;
     // Native process argv has already passed through any batch-script escaping.
-    return {
-      ok: true,
-      args: command
-        ? splitArgsPreservingQuotes(command, { escapeMode: "backslash-quote-only" })
-        : null,
-    };
+    const args = command ? parseWindowsNativeCommandLine(command) : null;
+    return command && args === null ? { ok: false, permanent: false } : { ok: true, args };
   }
   if (remainingTimeoutMs() <= 0) {
     return { ok: false, permanent: false };
@@ -208,12 +203,8 @@ export function readWindowsProcessArgsResultSync(
   );
   if (!wmic.error && wmic.status === 0) {
     const command = extractWindowsCommandLine(wmic.stdout);
-    return {
-      ok: true,
-      args: command
-        ? splitArgsPreservingQuotes(command, { escapeMode: "backslash-quote-only" })
-        : null,
-    };
+    const args = command ? parseWindowsNativeCommandLine(command) : null;
+    return command && args === null ? { ok: false, permanent: false } : { ok: true, args };
   }
   const code = ((wmic.error ?? powershell.error) as NodeJS.ErrnoException | undefined)?.code;
   return { ok: false, permanent: code === "ENOENT" || code === "EACCES" || code === "EPERM" };

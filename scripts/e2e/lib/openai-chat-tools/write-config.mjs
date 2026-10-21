@@ -77,6 +77,8 @@ const config = {
   },
   plugins: {
     enabled: true,
+    // Recall must restore its own cold history, not a background memory indexing pass.
+    slots: { memory: "none" },
     allow: ["openai"],
     entries: { openai: { enabled: true } },
   },

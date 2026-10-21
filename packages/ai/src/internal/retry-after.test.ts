@@ -20,14 +20,59 @@ describe("retry header floors", () => {
     { headers: { "retry-after": "9007199254740993", "retry-after-ms": "335" }, expected: Infinity },
     { headers: { "retry-after-ms": "9007199254740993" }, expected: Infinity },
     { headers: { "retry-after": "120 seconds", "retry-after-ms": "90000ms" }, expected: undefined },
+    {
+      headers: { "x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": "1m2.5s" },
+      expected: 62.5,
+    },
+    {
+      headers: { "x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "250ms" },
+      expected: 0.25,
+    },
+    {
+      headers: {
+        "x-ratelimit-remaining-project-tokens": "0",
+        "x-ratelimit-reset-project-tokens": "2s",
+      },
+      expected: 2,
+    },
+    {
+      headers: { "x-ratelimit-remaining-tokens": "1", "x-ratelimit-reset-tokens": "1m" },
+      expected: undefined,
+    },
+    { headers: { "x-ratelimit-reset-tokens": "1m" }, expected: undefined },
+    {
+      headers: { "x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": "tomorrow" },
+      expected: undefined,
+    },
+    {
+      headers: {
+        "retry-after": "7",
+        "x-ratelimit-remaining-tokens": "0",
+        "x-ratelimit-reset-tokens": "9s",
+      },
+      expected: 9,
+    },
   ])("keeps the greatest valid native and record floor: $headers", ({ headers, expected }) => {
     const native = new Headers();
     for (const [key, value] of Object.entries(headers)) {
       native.set(key, String(value));
     }
     for (const source of [headers, native]) {
-      expect(parseRetryAfterHeadersSeconds(source, EXAMPLE_TIMESTAMP - 7000)).toBe(expected);
+      expect(parseRetryAfterHeadersSeconds(source, EXAMPLE_TIMESTAMP - 7000, 429)).toBe(expected);
     }
+  });
+
+  it.each([undefined, 200, 503])("does not infer a quota wait from HTTP %s", (status) => {
+    expect(
+      parseRetryAfterHeadersSeconds(
+        {
+          "x-ratelimit-remaining-tokens": "0",
+          "x-ratelimit-reset-tokens": "1m",
+        },
+        EXAMPLE_TIMESTAMP,
+        status,
+      ),
+    ).toBeUndefined();
   });
 
   it("reads native Headers without calling an overridden get method", () => {

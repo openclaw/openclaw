@@ -9,6 +9,8 @@ export type ConfiguredModelRef = {
   path: string;
   value: string;
   kind: "selector" | "literal";
+  /** Capability-owned selectors do not select a conversational model runtime. */
+  capability?: "decision";
 };
 
 /** Agent config keys that can contain direct model references. */
@@ -58,13 +60,26 @@ export function collectConfiguredModelRefs(
   options: { includeChannelModelOverrides?: boolean } = {},
 ): ConfiguredModelRef[] {
   const refs: ConfiguredModelRef[] = [];
-  const pushModelRef = (path: string, value: unknown, kind: ConfiguredModelRef["kind"]) => {
+  const pushModelRef = (
+    path: string,
+    value: unknown,
+    kind: ConfiguredModelRef["kind"],
+    capability?: ConfiguredModelRef["capability"],
+  ) => {
     if (typeof value === "string" && value.trim()) {
-      refs.push({ path, value: value.trim(), kind });
+      refs.push({ path, value: value.trim(), kind, ...(capability ? { capability } : {}) });
     }
   };
   const collectModelConfig = (path: string, value: unknown, kind: ConfiguredModelRef["kind"]) =>
     visitModelSelectorRefs(value, path, (refPath, ref) => pushModelRef(refPath, ref, kind));
+  const collectReviewerModel = (path: string, tools: Record<string, unknown>) => {
+    const exec = asNonArrayRecord(tools.exec);
+    collectModelConfig(
+      `${path}.exec.reviewer.model`,
+      asOptionalRecord(exec.reviewer)?.model,
+      "selector",
+    );
+  };
   const collectFromAgent = (path: string, agent: unknown, includeEntrySelectors = false) => {
     if (!isRecord(agent)) {
       return;
@@ -76,6 +91,7 @@ export function collectConfiguredModelRefs(
         key === "voiceModel" ? "literal" : "selector",
       );
     }
+    pushModelRef(`${path}.decisionModel`, agent.decisionModel, "selector", "decision");
     const mediaModels = asNonArrayRecord(agent.mediaModels);
     for (const capability of ["image", "video", "music"] as const) {
       collectModelConfig(`${path}.mediaModels.${capability}`, mediaModels[capability], "literal");
@@ -101,12 +117,7 @@ export function collectConfiguredModelRefs(
     }
     if (includeEntrySelectors) {
       const tools = asNonArrayRecord(agent.tools);
-      const exec = asNonArrayRecord(tools.exec);
-      collectModelConfig(
-        `${path}.tools.exec.reviewer.model`,
-        asOptionalRecord(exec.reviewer)?.model,
-        "selector",
-      );
+      collectReviewerModel(`${path}.tools`, tools);
       pushModelRef(
         `${path}.tts.summaryModel`,
         asOptionalRecord(agent.tts)?.summaryModel,
@@ -117,12 +128,7 @@ export function collectConfiguredModelRefs(
 
   const root = asNonArrayRecord(config);
   const tools = asNonArrayRecord(root.tools);
-  const exec = asNonArrayRecord(tools.exec);
-  collectModelConfig(
-    "tools.exec.reviewer.model",
-    asOptionalRecord(exec.reviewer)?.model,
-    "selector",
-  );
+  collectReviewerModel("tools", tools);
   const media = asNonArrayRecord(tools.media);
   for (const capability of ["image", "audio", "video"] as const) {
     pushModelRef(

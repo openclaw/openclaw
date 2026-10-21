@@ -6,6 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { seedInstalledPluginIndex } from "../src/plugins/test-helpers/installed-plugin-index.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../src/state/openclaw-state-db-contract.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
 const DEGRADED_PLUGIN_ID = "status-degraded-plugin";
@@ -128,7 +129,10 @@ describe("status shared-state ownership", () => {
   }, 120_000);
 
   it("keeps healthy and unreachable Gateway degradation summaries empty", async () => {
-    const instance = await createOpenClawTestInstance({ name: "status-runtime-healthy" });
+    const instance = await createOpenClawTestInstance({
+      name: "status-runtime-healthy",
+      reserveIdlePort: false,
+    });
     try {
       await instance.startGateway();
       const healthy = await instance.cli(["status", "--json"]);
@@ -160,6 +164,7 @@ describe("status shared-state ownership", () => {
     async ({ name, args }) => {
       const instance = await createOpenClawTestInstance({
         name: `status-read-only-${name.replaceAll(" ", "-")}`,
+        reserveIdlePort: false,
       });
       const databasePath = path.join(instance.stateDir, "state", "openclaw.sqlite");
       try {
@@ -185,7 +190,8 @@ describe("status shared-state ownership", () => {
     let writer: DatabaseSync | undefined;
     try {
       await instance.startGateway();
-      writer = new DatabaseSync(databasePath);
+      // The Gateway still writes after readiness, so wait for its write lock like product writers do.
+      writer = new DatabaseSync(databasePath, { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS });
       // A read-only status path can overlap this writer. Writable schema/bootstrap work cannot.
       writer.exec("BEGIN IMMEDIATE");
 

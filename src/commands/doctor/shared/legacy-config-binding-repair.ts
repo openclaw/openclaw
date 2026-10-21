@@ -15,26 +15,25 @@ import {
 import type { DoctorConfigMutationResult } from "./config-mutation-state.js";
 import { resolveChannelAccountBindingRepairInput } from "./legacy-config-binding-repair-input.js";
 
-export function pruneBindingsForMissingAgents(
-  cfg: OpenClawConfig,
-  changes: string[],
-): OpenClawConfig {
-  const agents = cfg.agents?.list;
-  const bindings = cfg.bindings;
-  if (!Array.isArray(agents) || agents.length === 0 || !Array.isArray(bindings)) {
+export function pruneBindingsForMissingAgents<T extends object>(cfg: T, changes: string[]): T {
+  const root = asNullableRecord(cfg);
+  const roster = asNullableRecord(root?.agents)?.list;
+  if (!root || !Array.isArray(roster) || roster.length === 0 || !Array.isArray(root.bindings)) {
     return cfg;
   }
+  const agents: unknown[] = roster;
+  const bindings: unknown[] = root.bindings;
 
-  const validAgents = agents.filter((agent): agent is { id: string } => {
-    return agent !== null && typeof agent === "object" && typeof agent.id === "string";
-  });
+  const validAgents = agents.filter(
+    (agent): agent is { id: string } => isRecord(agent) && typeof agent.id === "string",
+  );
   if (validAgents.length !== agents.length) {
     return cfg;
   }
 
   const agentIds = new Set(validAgents.map((agent) => normalizeAgentId(agent.id)));
   const nextBindings = bindings.filter((binding) => {
-    const agentId = binding && typeof binding === "object" ? binding.agentId : undefined;
+    const agentId = asNullableRecord(binding)?.agentId;
     return (
       typeof agentId !== "string" ||
       agentId === DEFAULT_AGENT_ID ||
@@ -51,7 +50,7 @@ export function pruneBindingsForMissingAgents(
   );
   return {
     ...cfg,
-    ...(nextBindings.length > 0 ? { bindings: nextBindings } : { bindings: undefined }),
+    bindings: nextBindings.length > 0 ? nextBindings : undefined,
   };
 }
 
@@ -112,10 +111,9 @@ export function repairUnownedChannelAccountBindings({
       if (asNullableRecord(account)?.enabled === false) {
         continue;
       }
-      const routeInput = { cfg, channel: channelId, accountId };
       let missingOwner: AgentSelectionRequiredError | undefined;
       try {
-        const route = resolveAgentRoute(routeInput);
+        const route = resolveAgentRoute({ cfg, channel: channelId, accountId });
         if (!legacyDefaultAgentId || route.matchedBy !== "default") {
           continue;
         }

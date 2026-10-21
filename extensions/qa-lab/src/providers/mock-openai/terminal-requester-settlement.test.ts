@@ -37,7 +37,7 @@ describe("terminal requester settlement", () => {
     { name: "another key", session: { ...settledSession, key: "agent:qa:other" } },
     { name: "aborted owner", session: { ...settledSession, abortedLastRun: true } },
     { name: "failed run", session: { ...settledSession, status: "error" } },
-  ])("holds the child after HTTP completion for $name", async ({ session }) => {
+  ])("requires authoritative requester settlement: $name", async ({ session }) => {
     let released = false;
     const child = gate.waitUntilSettled(requester.caseName, requester.childSessionKey).then(() => {
       released = true;
@@ -65,16 +65,6 @@ describe("terminal requester settlement", () => {
     );
   });
 
-  it("accepts inactive requester rows from Gateways that omit lifecycle status", async () => {
-    gate.onResponseSent(requester);
-    await gate.settle({
-      call: async () => ({ sessions: [{ ...settledSession, status: undefined }] }),
-    });
-    await expect(
-      gate.waitUntilSettled(requester.caseName, requester.childSessionKey),
-    ).resolves.toBeUndefined();
-  });
-
   it("releases only the child correlated with the settled parent", async () => {
     const other = {
       ...requester,
@@ -87,37 +77,50 @@ describe("terminal requester settlement", () => {
       () => "released",
       (error: unknown) => error,
     );
+    const shared = gate
+      .waitUntilSettled(other.caseName, other.childSessionKey)
+      .catch((error: unknown) => error);
     await gate.settle({ call: async () => ({ sessions: [settledSession] }) });
     await expect(
       gate.waitUntilSettled(requester.caseName, requester.childSessionKey),
     ).resolves.toBeUndefined();
     gate.stop();
-    expect(await closed).toMatchObject({ message: expect.stringContaining("fixture stopped") });
+    const stopped = await closed;
+    expect(stopped).toMatchObject({ message: expect.stringContaining("fixture stopped") });
+    expect(await shared).toBe(stopped);
   });
 
-  it("keeps the child held until authoritative requester settlement", async () => {
-    vi.useFakeTimers();
-    gate.onResponseSent(requester);
-    const outcome = gate.waitUntilSettled(requester.caseName, requester.childSessionKey).then(
-      () => "released",
-      (error: unknown) => error,
-    );
-    let completed = false;
-    void outcome.then(() => {
-      completed = true;
-    });
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(completed).toBe(false);
-    await gate.settle({ call: async () => ({ sessions: [settledSession] }) });
-    await expect(outcome).resolves.toBe("released");
-  });
-
-  it("fails a terminal requester waiter that never settles", async () => {
-    vi.useFakeTimers();
-    gate.onResponseSent(requester);
-    const child = gate.waitUntilSettled(requester.caseName, requester.childSessionKey);
-    const timedOut = expect(child).rejects.toThrow("terminal requester did not settle");
-    await vi.advanceTimersByTimeAsync(120_000);
-    await timedOut;
-  });
+  it.each([false, true])(
+    "keeps the child held until settlement or timeout (settle=%s)",
+    async (settle) => {
+      vi.useFakeTimers();
+      gate.onResponseSent(requester);
+      const outcome = gate.waitUntilSettled(requester.caseName, requester.childSessionKey).then(
+        () => "released",
+        (error: unknown) => error,
+      );
+      let completed = false;
+      void outcome.then(() => {
+        completed = true;
+      });
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(completed).toBe(false);
+      if (settle) {
+        // Older Gateways omit lifecycle status; inactive ownership still settles.
+        await gate.settle({
+          call: async () => ({ sessions: [{ ...settledSession, status: undefined }] }),
+        });
+        await expect(outcome).resolves.toBe("released");
+        await expect(
+          gate.waitUntilSettled(requester.caseName, requester.childSessionKey),
+        ).resolves.toBeUndefined();
+      } else {
+        await vi.advanceTimersByTimeAsync(89_000);
+        expect(await outcome).toBeInstanceOf(Error);
+        expect(await outcome).toMatchObject({
+          message: expect.stringContaining("terminal requester did not settle"),
+        });
+      }
+    },
+  );
 });

@@ -1,11 +1,9 @@
 // Destructive lifecycle tests protect exact terminal ownership at the RPC boundary.
-import { afterEach, expect, onTestFinished, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import {
   agentTerminalOwner,
@@ -20,11 +18,6 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-
-afterEach(async () => {
-  await disposeSessionReadContexts();
-  closeOpenClawStateDatabaseForTest();
-});
 
 test.each(["archive", "incognito reset"] as const)(
   "%s drains only the exact terminal session incarnation",

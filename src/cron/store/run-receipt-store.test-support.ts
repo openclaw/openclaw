@@ -1,11 +1,17 @@
+import crypto from "node:crypto";
+import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronJob } from "../types.js";
+import { cronStoreKey } from "./key.js";
+import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import {
   claimCronRunReceiptInDatabase,
+  finishCronRunReceiptInDatabase,
   findActiveCronRunReceiptInDatabase,
-  prepareCronRunReceiptClaim,
 } from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
+import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 export function inspectActiveCronRunReceipt(params: { storePath: string; jobId: string }) {
   return runOpenClawStateWriteTransaction(({ db }) =>
@@ -53,11 +59,70 @@ export function claimCronRunReceiptForTest(storePath: string, job: CronJob, star
     startedAtMs,
   });
   return runOpenClawStateWriteTransaction(({ db }) =>
-    claimCronRunReceiptInDatabase({
+    claimCronRunReceiptInDatabaseForTest({
       database: db,
-      receiptSchema: prepareCronRunReceiptWriteSchema(db),
       prepared,
-      resolveAgentId: (current) => current.agentId!,
     }),
   );
+}
+
+export function claimCronRunReceiptInDatabaseForTest(params: {
+  database: Parameters<typeof claimCronRunReceiptInDatabase>[0]["database"];
+  prepared: ReturnType<typeof prepareCronRunReceiptClaim>;
+}) {
+  const { handle: preparedHandle } = params.prepared;
+  const handle = claimCronRunReceiptInDatabase({
+    database: params.database,
+    handle: preparedHandle,
+    requestRunId: params.prepared.requestRunId,
+  });
+  if (!handle) {
+    throw new Error("Fixture cron receipt is already claimed");
+  }
+  return handle;
+}
+
+export async function finishCronRunReceiptAsync(
+  params: Omit<
+    Parameters<typeof finishCronRunReceiptInDatabase>[0],
+    "database" | "receiptSchema" | "pendingReceiptId"
+  >,
+): Promise<void> {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const job = loadedCronStoreFromRows(
+      loadCronRows(db, params.handle.storeKey, new Set([params.handle.jobId])),
+    ).store.jobs[0];
+    finishCronRunReceiptInDatabase({
+      database: db,
+      receiptSchema: prepareCronRunReceiptWriteSchema(db),
+      pendingReceiptId:
+        job?.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId,
+      ...params,
+    });
+  });
+}
+
+export function prepareCronRunReceiptClaim(params: {
+  storePath: string;
+  job: CronJob;
+  agentId: string;
+  startedAtMs: number;
+  requestRunId?: string;
+}) {
+  const ownerStartTime = getFileLockProcessStartTime(process.pid);
+  const storeKey = cronStoreKey(params.storePath);
+  const handle: CronRunReceiptHandle = {
+    receiptId: crypto.randomUUID(),
+    storeKey,
+    jobId: params.job.id,
+    configRevision: resolveCronJobConfigRevision(params.job),
+    agentId: params.agentId,
+    ownerPid: process.pid,
+    ownerStartTime,
+    startedAtMs: params.startedAtMs,
+  };
+  return {
+    handle,
+    ...(params.requestRunId ? { requestRunId: params.requestRunId } : {}),
+  };
 }

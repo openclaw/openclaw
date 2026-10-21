@@ -3,6 +3,7 @@ package ai.openclaw.app
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.gateway.DeviceAuthPayload
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GATEWAY_CONNECT_TIMEOUT_MS
@@ -56,6 +57,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
@@ -476,7 +478,6 @@ class GatewayBootstrapAuthTest {
   @Test
   fun doesNotConnectOperatorSessionWhenOnlyBootstrapAuthExists() {
     assertFalse(operatorAuth(auth(token = "", bootstrapToken = "bootstrap-1", password = ""), "") != null)
-    assertFalse(operatorAuth(auth(bootstrapToken = "bootstrap-1")) != null)
   }
 
   @Test
@@ -523,36 +524,139 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun resolveGatewayControlPageAuthFallsBackToStoredOperatorToken() {
-    val resolved =
-      resolveGatewayControlPageAuth(
-        auth = auth(bootstrapToken = "bootstrap-1"),
-        storedOperatorToken = " stored-token ",
-      )
-
-    assertEquals(
-      auth(token = "stored-token"),
-      resolved,
-    )
-  }
+  fun controlPageUsesCurrentNativeOperatorGrantAndRetiresAfterDisconnect() =
+    runBlocking {
+      val (app, prefs, runtime) = gatewayFixture()
+      neutralizeColdStartAutoConnect(runtime)
+      prefs.setManualTls(false)
+      val endpoint = gatewayEndpoint()
+      installControlPageGateway(authMethod = "device-token")
+      assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "setup-shared-secret")))
+      val page =
+        withTimeout(5_000) {
+          runtime.gatewayControlPage.first { page ->
+            page?.connectAuth?.let { runCatching { it("browser-challenge", 1700000000123) }.isSuccess } == true
+          }
+        }!!
+      val identityStore = DeviceIdentityStore.withPrefs(app, prefs)
+      val identity = identityStore.loadOrCreate()
+      val tokens = DeviceAuthStore(prefs)
+      for (token in listOf("native-operator-token", "rotated-operator-token")) {
+        tokens.saveToken(endpoint.stableId, identity.deviceId, "operator", token, listOf("operator.read"))
+        val result = requireNotNull(page.connectAuth).invoke("browser-challenge", 1700000000123)
+        val client = result.getValue("client").jsonObject
+        val scopes = result.getValue("scopes").jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(listOf("operator.read"), scopes)
+        assertEquals("openclaw-android", client.getValue("id").jsonPrimitive.content)
+        assertEquals(
+          token,
+          result
+            .getValue("auth")
+            .jsonObject
+            .getValue("deviceToken")
+            .jsonPrimitive.content,
+        )
+        val payload = DeviceAuthPayload.buildV3(identity.deviceId, "openclaw-android", "ui", "operator", scopes, 1700000000123, token, "browser-challenge", "android", "Android")
+        assertTrue(
+          identityStore.verifySelfSignature(
+            payload,
+            result
+              .getValue("device")
+              .jsonObject
+              .getValue("signature")
+              .jsonPrimitive.content,
+            identity,
+          ),
+        )
+      }
+      tokens.clearToken(endpoint.stableId, identity.deviceId, "operator")
+      assertTrue("A node token or shared setup secret cannot replace revoked operator access", runCatching { requireNotNull(page.connectAuth).invoke("revoked-challenge", 1700000000123) }.isFailure)
+      runtime.disconnect()
+      assertTrue(runCatching { requireNotNull(page.connectAuth).invoke("late-challenge", 1700000000123) }.isFailure)
+      assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "setup-shared-secret")))
+      val replacement =
+        withTimeout(5_000) {
+          runtime.gatewayControlPage.first { candidate ->
+            candidate !== page && candidate?.connectAuth?.let { runCatching { it("fresh-challenge", 1700000000123) }.isSuccess } == true
+          }
+        }
+      assertNotNull(replacement)
+      assertTrue("Reconnecting the same route must not revive an old page", runCatching { requireNotNull(page.connectAuth).invoke("late-challenge", 1700000000123) }.isFailure)
+    }
 
   @Test
-  fun resolveGatewayControlPageAuthPrefersExplicitSharedAuth() {
-    assertEquals(
-      auth(token = "shared-token"),
-      resolveGatewayControlPageAuth(
-        auth = auth(token = " shared-token ", bootstrapToken = "bootstrap-1", password = "shared-password"),
-        storedOperatorToken = "stored-token",
-      ),
-    )
-    assertEquals(
-      auth(password = "shared-password"),
-      resolveGatewayControlPageAuth(
-        auth = auth(bootstrapToken = "bootstrap-1", password = " shared-password "),
-        storedOperatorToken = "stored-token",
-      ),
-    )
-  }
+  fun controlPagePreservesAcceptedSharedAuthenticationAndLegacyHello() =
+    runBlocking {
+      for ((field, configuredAuth) in listOf("token" to auth(token = "accepted-shared-token"), "password" to auth(password = "accepted-password"))) {
+        for (method in listOf(field, null)) {
+          val (app, prefs, runtime) = gatewayFixture()
+          neutralizeColdStartAutoConnect(runtime)
+          prefs.setManualTls(false)
+          val endpoint = gatewayEndpoint()
+          val operatorConnect = CompletableDeferred<JsonObject>()
+          installControlPageGateway(method) { operatorConnect.complete(it) }
+          assertTrue(runtime.connectSwitchingGateway(endpoint, configuredAuth))
+          val page =
+            withTimeout(5_000) {
+              runtime.gatewayControlPage.first { page ->
+                page?.connectAuth?.let { runCatching { it("browser-challenge", 1700000000123) }.isSuccess } == true
+              }
+            }!!
+          val expectedCredential = if (field == "token") "accepted-shared-token" else "accepted-password"
+          val nativeAuth = withTimeout(5_000) { operatorConnect.await() }.getValue("auth").jsonObject
+          assertEquals(expectedCredential, nativeAuth.getValue(field).jsonPrimitive.content)
+          val identityStore = DeviceIdentityStore.withPrefs(app, prefs)
+          val identity = identityStore.loadOrCreate()
+          // An issued device token is not a substitute for the accepted user-level method.
+          DeviceAuthStore(prefs).clearToken(endpoint.stableId, identity.deviceId, "operator")
+          val result = requireNotNull(page.connectAuth).invoke("browser-challenge", 1700000000123)
+          assertEquals(nativeAuth, result.getValue("auth").jsonObject)
+          assertEquals(setOf(field), result.getValue("auth").jsonObject.keys)
+          val scopes = result.getValue("scopes").jsonArray.map { it.jsonPrimitive.content }
+          assertEquals(listOf("operator.read"), scopes)
+          val payload = DeviceAuthPayload.buildV3(identity.deviceId, "openclaw-android", "ui", "operator", scopes, 1700000000123, if (field == "token") expectedCredential else null, "browser-challenge", "android", "Android")
+          assertTrue(
+            identityStore.verifySelfSignature(
+              payload,
+              result
+                .getValue("device")
+                .jsonObject
+                .getValue("signature")
+                .jsonPrimitive.content,
+              identity,
+            ),
+          )
+          runtime.disconnect()
+          assertTrue(runCatching { requireNotNull(page.connectAuth).invoke("late-challenge", 1700000000123) }.isFailure)
+        }
+      }
+    }
+
+  @Test
+  fun controlPageNeverReusesRejectedSharedTokenAfterLegacyDeviceRetry() =
+    runBlocking {
+      val (app, prefs, runtime) = gatewayFixture()
+      neutralizeColdStartAutoConnect(runtime)
+      prefs.setManualTls(false)
+      val endpoint = gatewayEndpoint()
+      val identity = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate()
+      DeviceAuthStore(prefs).saveToken(endpoint.stableId, identity.deviceId, "operator", "stored-operator-token", listOf("operator.read"))
+      val acceptedConnect = CompletableDeferred<JsonObject>()
+      installControlPageGateway(authMethod = null, rejectSharedToken = true) { acceptedConnect.complete(it) }
+      assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "rejected-shared-token")))
+      val page =
+        withTimeout(10_000) {
+          runtime.gatewayControlPage.first { page ->
+            page?.connectAuth?.let { runCatching { it("browser-challenge", 1700000000123) }.isSuccess } == true
+          }
+        }!!
+      val acceptedAuth = withTimeout(5_000) { acceptedConnect.await() }.getValue("auth").jsonObject
+      assertEquals("rejected-shared-token", acceptedAuth.getValue("token").jsonPrimitive.content)
+      assertEquals("stored-operator-token", acceptedAuth.getValue("deviceToken").jsonPrimitive.content)
+      val resultAuth = requireNotNull(page.connectAuth).invoke("browser-challenge", 1700000000123).getValue("auth").jsonObject
+      assertEquals(setOf("deviceToken"), resultAuth.keys)
+      assertEquals("native-operator-token", resultAuth.getValue("deviceToken").jsonPrimitive.content)
+    }
 
   @Test
   fun operatorConnectScopesForAuthUsesNativeScopesWhenNoStoredOperatorMetadata() {
@@ -808,7 +912,7 @@ class GatewayBootstrapAuthTest {
         assertNull(runtime.pendingGatewayTrust.value)
         assertNull(desiredConnection(runtime, "nodeSession"))
         assertNull(desiredConnection(runtime, "operatorSession"))
-        assertEquals("Offline", runtime.statusText.value)
+        assertEquals("Offline", runtime.gatewayConnectionDisplay.value.statusText)
         assertEquals(fingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
         assertEquals(0, gatewayServer.requestCount)
       } finally {
@@ -1220,7 +1324,6 @@ class GatewayBootstrapAuthTest {
         assertTrue(requireNotNull(replacement).isCurrent())
         assertSame(replacementPrompt, runtime.pendingGatewayTrust.value)
       } finally {
-        println("Readiness handoff: entered=${readyWaitEntered.isCompleted}, firstCurrent=${first.isCurrent()}, replacementCurrent=${replacement?.isCurrent()}, replacementPromptRetained=${replacementPrompt != null && runtime.pendingGatewayTrust.value === replacementPrompt}, switched=$switchedSession, sent=$sent")
         reply.cancelAndJoin()
       }
     }
@@ -1270,7 +1373,6 @@ class GatewayBootstrapAuthTest {
         assertEquals(nextSession, runtime.chat.sessionKey.value)
         releaseCommit.complete(Unit)
         val result = withTimeout(5_000) { route.await() }
-        println("Session commit handoff: firstCurrent=${first.isCurrent()}, nextCurrent=${next.isCurrent()}, gateway=${prefs.gatewayRegistry.activeStableId.value}, key=${runtime.chat.sessionKey.value}, agent=${runtime.chat.sessionOwnerAgentId.value}")
         assertEquals("Retired A must not replace B's selected chat session", nextSession, runtime.chat.sessionKey.value)
         assertEquals("bravo", runtime.chat.sessionOwnerAgentId.value)
         assertEquals(nextEndpoint.stableId, prefs.gatewayRegistry.activeStableId.value)
@@ -1567,7 +1669,7 @@ class GatewayBootstrapAuthTest {
     val prompt = waitForGatewayTrustPrompt(runtime)
     assertEquals(
       "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
-      runtime.statusText.value,
+      runtime.gatewayConnectionDisplay.value.statusText,
     )
     assertNull(prompt.fingerprintSha256)
     assertEquals(GatewayTlsProbeFailure.TLS_UNAVAILABLE, prompt.probeFailure)
@@ -1606,7 +1708,7 @@ class GatewayBootstrapAuthTest {
     val prompt = waitForGatewayTrustPrompt(runtime)
     assertEquals(
       "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
-      runtime.statusText.value,
+      runtime.gatewayConnectionDisplay.value.statusText,
     )
     assertNull(prompt.fingerprintSha256)
     assertEquals(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT, prompt.probeFailure)
@@ -1696,13 +1798,13 @@ class GatewayBootstrapAuthTest {
     )
     prefs.gatewayRegistry.setActive(current.stableId)
     writeField(runtime, "connectedEndpoint", current)
-    val currentStatus = runtime.statusText.value
+    val currentStatus = runtime.gatewayConnectionDisplay.value.statusText
 
     assertEquals(GatewayTargetSelection.Unavailable, runBlocking { runtime.switchToGateway(missingStableId) })
 
     assertEquals(current, readField<GatewayEndpoint?>(runtime, "connectedEndpoint"))
     assertEquals(current.stableId, prefs.gatewayRegistry.activeStableId.value)
-    assertEquals(currentStatus, runtime.statusText.value)
+    assertEquals(currentStatus, runtime.gatewayConnectionDisplay.value.statusText)
   }
 
   @Test
@@ -1887,7 +1989,7 @@ class GatewayBootstrapAuthTest {
           withTimeout(5_000) { probeStarted.await() }
           assertTrue(observed.any { it.statusText == "Connecting…" })
           assertFalse(observed.any { it.problem?.isNetworkFailure == true })
-          assertEquals("Verify gateway TLS fingerprint…", runtime.statusText.value)
+          assertEquals("Verify gateway TLS fingerprint…", runtime.gatewayConnectionDisplay.value.statusText)
         } finally {
           runtime.disconnect()
           collector.cancelAndJoin()
@@ -2670,6 +2772,56 @@ class GatewayBootstrapAuthTest {
     return stalled
   }
 
+  private fun installControlPageGateway(
+    authMethod: String?,
+    rejectSharedToken: Boolean = false,
+    onOperatorConnect: (JsonObject) -> Unit = {},
+  ) {
+    gatewayServer.dispatcher =
+      object : Dispatcher() {
+        override fun dispatch(request: RecordedRequest): MockResponse =
+          MockResponse().withWebSocketUpgrade(
+            object : WebSocketListener() {
+              override fun onOpen(
+                webSocket: WebSocket,
+                response: Response,
+              ) {
+                webSocket.send("""{"type":"event","event":"connect.challenge","payload":{"nonce":"native-challenge","ts":1700000000123}}""")
+              }
+
+              override fun onMessage(
+                webSocket: WebSocket,
+                text: String,
+              ) {
+                val frame = Json.parseToJsonElement(text).jsonObject
+                val id = frame["id"]?.jsonPrimitive?.content ?: return
+                val payload =
+                  if (frame["method"]?.jsonPrimitive?.content == "connect") {
+                    val role =
+                      frame
+                        .getValue("params")
+                        .jsonObject
+                        .getValue("role")
+                        .jsonPrimitive.content
+                    val params = frame.getValue("params").jsonObject
+                    if (role == "operator" && rejectSharedToken && params["auth"]?.jsonObject?.containsKey("deviceToken") != true) {
+                      webSocket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAUTHORIZED","message":"Shared token rejected","details":{"code":"AUTH_TOKEN_MISMATCH","canRetryWithDeviceToken":true}}}""")
+                      return
+                    }
+                    if (role == "operator") onOperatorConnect(params)
+                    val methodField = authMethod?.let { "\"method\":\"$it\"," }.orEmpty()
+                    val scopes = if (role == "operator") "[\"operator.read\"]" else "[]"
+                    """{"auth":{$methodField"deviceToken":"native-$role-token","role":"$role","scopes":$scopes},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}"""
+                  } else {
+                    "{}"
+                  }
+                webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":$payload}""")
+              }
+            },
+          )
+      }
+  }
+
   private fun gatewayFixture(
     tlsFingerprintProbe: (suspend (String, Int) -> GatewayTlsProbeResult)? = null,
   ): GatewayFixture {
@@ -2733,15 +2885,11 @@ class GatewayBootstrapAuthTest {
     runtime: NodeRuntime,
     sessionFieldName: String,
   ): String {
-    var lastObserved: String? = null
     repeat(50) {
-      desiredBootstrapToken(runtime, sessionFieldName)?.let { token ->
-        lastObserved = token
-        return token
-      }
+      desiredBootstrapToken(runtime, sessionFieldName)?.let { return it }
       Thread.sleep(10)
     }
-    error("Expected desired bootstrap token for $sessionFieldName; last observed=$lastObserved")
+    error("Expected desired bootstrap token for $sessionFieldName")
   }
 
   private fun <T> readField(

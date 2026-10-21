@@ -1,15 +1,8 @@
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import { ChannelType, DiscordError, getChannelMessage, type Client } from "../internal/discord.js";
-import {
-  resolveDiscordChannelIdSafe,
-  resolveDiscordChannelNameSafe,
-  resolveDiscordChannelParentIdSafe,
-  resolveDiscordChannelParentSafe,
-} from "./channel-access.js";
 import {
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
@@ -39,16 +32,6 @@ export function resolveDiscordThreadChannel(params: {
     return null;
   }
   const { message, channelInfo } = params;
-  const channel = "channel" in message ? (message as { channel?: unknown }).channel : undefined;
-  const isThreadChannel =
-    channel &&
-    typeof channel === "object" &&
-    "isThread" in channel &&
-    typeof (channel as { isThread?: unknown }).isThread === "function" &&
-    (channel as { isThread: () => boolean }).isThread();
-  if (isThreadChannel) {
-    return channel as unknown as DiscordThreadChannel;
-  }
   if (!isDiscordThreadChannelType(channelInfo?.type)) {
     return null;
   }
@@ -62,10 +45,9 @@ export function resolveDiscordThreadChannel(params: {
   }
   return {
     id: messageChannelId,
-    name: channelInfo?.name ?? undefined,
-    parentId: channelInfo?.parentId ?? undefined,
-    parent: undefined,
-    ownerId: channelInfo?.ownerId ?? undefined,
+    name: channelInfo?.name,
+    parentId: channelInfo?.parentId,
+    ownerId: channelInfo?.ownerId,
   };
 }
 
@@ -75,22 +57,16 @@ export async function resolveDiscordThreadParentInfo(params: {
   channelInfo: DiscordChannelInfo | null;
 }): Promise<DiscordThreadParentInfo> {
   const { threadChannel, channelInfo, client } = params;
-  const parent = resolveDiscordChannelParentSafe(threadChannel);
-  let parentId =
-    resolveDiscordChannelParentIdSafe(threadChannel) ??
-    resolveDiscordChannelIdSafe(parent) ??
-    channelInfo?.parentId ??
-    undefined;
+  let parentId = threadChannel.parentId ?? channelInfo?.parentId;
   if (!parentId && threadChannel.id) {
     const threadInfo = await resolveDiscordChannelInfo(client, threadChannel.id);
-    parentId = threadInfo?.parentId ?? undefined;
+    parentId = threadInfo?.parentId;
   }
   if (!parentId) {
     return {};
   }
-  let parentName = resolveDiscordChannelNameSafe(parent);
   const parentInfo = await resolveDiscordChannelInfo(client, parentId);
-  parentName = parentName ?? parentInfo?.name;
+  const parentName = parentInfo?.name;
   const parentType = parentInfo?.type;
   return { id: parentId, name: parentName, type: parentType };
 }
@@ -125,9 +101,7 @@ export async function resolveDiscordThreadStarter(params: {
   try {
     return await pending;
   } finally {
-    if (IN_FLIGHT_DISCORD_THREAD_STARTERS.get(cacheKey) === pending) {
-      IN_FLIGHT_DISCORD_THREAD_STARTERS.delete(cacheKey);
-    }
+    IN_FLIGHT_DISCORD_THREAD_STARTERS.delete(cacheKey);
   }
 }
 
@@ -145,14 +119,12 @@ async function resolveDiscordThreadStarterUncached(
       messageChannelId,
       params.channel.id,
     )) as DiscordThreadStarterRestMessage | null;
-    if (!starter) {
-      cacheMiss();
-      return null;
-    }
-    const payload = buildDiscordThreadStarterPayload({
-      starter,
-      resolveTimestampMs: params.resolveTimestampMs,
-    });
+    const payload = starter
+      ? buildDiscordThreadStarterPayload({
+          starter,
+          resolveTimestampMs: params.resolveTimestampMs,
+        })
+      : null;
     if (!payload) {
       cacheMiss();
       return null;
@@ -190,7 +162,7 @@ function buildDiscordThreadStarterPayload(params: {
     authorName: starter.author?.username ?? undefined,
     authorTag,
     memberRoleIds: Array.isArray(starter.member?.roles) ? starter.member.roles : undefined,
-    timestamp: params.resolveTimestampMs(starter.timestamp) ?? undefined,
+    timestamp: params.resolveTimestampMs(starter.timestamp),
   };
 }
 
@@ -211,17 +183,11 @@ export function resolveDiscordReplyTarget(opts: {
   replyToId?: string;
   hasReplied: boolean;
 }): string | undefined {
-  if (opts.replyToMode === "off") {
-    return undefined;
-  }
-  const replyToId = normalizeOptionalString(opts.replyToId);
-  if (!replyToId) {
-    return undefined;
-  }
-  if (opts.replyToMode === "all") {
-    return replyToId;
-  }
-  return opts.hasReplied ? undefined : replyToId;
+  return createReplyReferencePlanner({
+    replyToMode: opts.replyToMode,
+    startId: opts.replyToId,
+    hasReplied: opts.hasReplied,
+  }).peek();
 }
 
 export function sanitizeDiscordThreadName(rawName: string, fallbackId: string): string {
@@ -232,8 +198,7 @@ export function sanitizeDiscordThreadName(rawName: string, fallbackId: string): 
     .replace(/\s+/g, " ")
     .trim();
   const baseSource = cleanedName || `Thread ${fallbackId}`;
-  const base = truncateUtf16Safe(baseSource, 80);
-  return base || `Thread ${fallbackId}`;
+  return truncateUtf16Safe(baseSource, 80);
 }
 
 export function resolveDiscordReplyDeliveryPlan(params: {

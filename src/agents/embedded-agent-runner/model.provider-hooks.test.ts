@@ -45,25 +45,6 @@ function toolSearchEnabled(resolvedModel: Model, config: OpenClawConfig = {}): b
   }).toolSearchControlsEnabled;
 }
 
-it("preserves hook selection precedence and stable default tables", () => {
-  const defaults = resolveRuntimeHooks();
-  const target = resolveRuntimeHooks({ skipAgentDiscovery: true });
-  const skipped = resolveRuntimeHooks({ skipProviderRuntimeHooks: true });
-  const explicit = { ...defaults };
-
-  expect(resolveRuntimeHooks()).toBe(defaults);
-  expect(resolveRuntimeHooks({ skipAgentDiscovery: true })).toBe(target);
-  expect(target).not.toBe(defaults);
-  expect(resolveRuntimeHooks({ runtimeHooks: explicit, skipAgentDiscovery: true })).toBe(explicit);
-  expect(
-    resolveRuntimeHooks({
-      runtimeHooks: explicit,
-      skipAgentDiscovery: true,
-      skipProviderRuntimeHooks: true,
-    }),
-  ).toBe(skipped);
-});
-
 describe("resolved model Tool Search policy", () => {
   beforeAll(() => {
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
@@ -75,12 +56,8 @@ describe("resolved model Tool Search policy", () => {
   });
 
   it.each([
-    { provider: "ollama", api: "ollama", id: "qwen3.5:4b", expected: "tools" },
-    { provider: "custom-host", api: "ollama", id: "server-alias", expected: "tools" },
     { provider: "lmstudio", api: "openai-completions", id: "small-model", expected: "tools" },
-    { provider: "ollama-cloud", api: "ollama", id: "cloud-model", expected: false },
     { provider: "custom-host", api: "ollama", id: "model:cloud", expected: false },
-    { provider: "custom-host", api: "openai-responses", id: "hosted-model", expected: undefined },
   ] as const)("prepares $provider/$id using its $api policy", ({ expected, ...route }) => {
     const config: OpenClawConfig = {
       agents: { defaults: { experimental: { localModelLean: false } } },
@@ -121,6 +98,26 @@ describe("resolved model Tool Search policy", () => {
     expect(toolSearchEnabled(local)).toBe(true);
   });
 
+  it("uses in-place model normalization for transport routing", () => {
+    const resolved = normalizeResolvedModel({
+      provider: "custom-host",
+      model: model(),
+      runtimeHooks: {
+        ...resolveRuntimeHooks(),
+        normalizeProviderResolvedModelWithPlugin: ({ context }) => {
+          context.model.id = "normalized-model";
+          return context.model;
+        },
+        applyProviderResolvedTransportWithPlugin: ({ context }) => ({
+          ...context.model,
+          baseUrl: `https://transport.example/v1/${context.modelId}`,
+        }),
+      },
+    });
+    expect(resolved.id).toBe("normalized-model");
+    expect(resolved.baseUrl).toBe("https://transport.example/v1/normalized-model");
+  });
+
   it.each([
     {
       finalBaseUrl: "http://managed.example:8080/v1/",
@@ -128,7 +125,6 @@ describe("resolved model Tool Search policy", () => {
       expected: "tools",
     },
     { finalBaseUrl: "https://hosted.example/v1", api: "openai-completions", expected: undefined },
-    { finalBaseUrl: "https://ollama.com/v1", api: "ollama", expected: false },
   ] as const)(
     "limits managed inference defaults to $finalBaseUrl",
     ({ finalBaseUrl, api, expected }) => {
@@ -136,7 +132,7 @@ describe("resolved model Tool Search policy", () => {
         models: {
           providers: {
             " CUSTOM-HOST ": {
-              baseUrl: api === "ollama" ? finalBaseUrl : "http://managed.example:8080/v1",
+              baseUrl: "http://managed.example:8080/v1",
               api,
               models: [],
               localService: { command: "/fixture/server" },

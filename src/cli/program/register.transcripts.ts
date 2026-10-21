@@ -1,14 +1,9 @@
-// `openclaw transcripts`: SQLite-backed transcript inspector and artifact exporter.
 import path from "node:path";
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { normalizeExportText } from "../../transcripts/store-artifacts.js";
-import {
-  TranscriptsStore,
-  type TranscriptArtifactKind,
-  type TranscriptsSessionEntry,
-} from "../../transcripts/store.js";
+import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcripts/store.js";
 
 type TranscriptsCliOptions = {
   json?: boolean;
@@ -106,34 +101,21 @@ async function showCommand(sessionSelector: string, options: TranscriptsCliOptio
   process.stdout.write(sanitizeMarkdownForTerminal(materializedMarkdown));
 }
 
-function selectedArtifactKind(options: TranscriptsPathOptions): TranscriptArtifactKind {
-  if (options.dir) {
-    return "all";
-  }
-  if (options.metadata) {
-    return "metadata";
-  }
-  if (options.transcript) {
-    return "transcript";
-  }
-  return "summary";
-}
-
 async function pathCommand(selector: string, options: TranscriptsPathOptions): Promise<void> {
   const store = createStore();
   const entry = await store.readSessionEntry(selector);
   if (!entry) {
     throw new Error(`transcripts session not found: ${selector}`);
   }
-  const kind = selectedArtifactKind(options);
-  const artifacts = await store.materializeSessionArtifacts(entry.session, kind);
-  const selectedPath = options.dir
-    ? artifacts.sessionDir
+  const kind = options.dir
+    ? "all"
     : options.metadata
-      ? artifacts.metadataPath
+      ? "metadata"
       : options.transcript
-        ? artifacts.transcriptPath
-        : artifacts.summaryPath;
+        ? "transcript"
+        : "summary";
+  const artifacts = await store.materializeSessionArtifacts(entry.session, kind);
+  const selectedPath = kind === "all" ? artifacts.sessionDir : artifacts[`${kind}Path`];
   const exists = kind !== "summary" || artifacts.hasSummary;
   if (options.json) {
     writeJson({
@@ -150,7 +132,6 @@ async function pathCommand(selector: string, options: TranscriptsPathOptions): P
   writeLine(selectedPath);
 }
 
-/** Register transcript list/show/path inspection and export commands. */
 export function registerTranscriptsCli(program: Command): void {
   const transcripts = program.command("transcripts").description("Inspect stored transcripts");
 

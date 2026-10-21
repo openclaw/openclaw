@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import type { McpOAuthStore } from "./mcp-oauth-store.js";
 
 const { read, update, context, lease } = vi.hoisted(() => ({
@@ -31,12 +32,7 @@ import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
 const providerParams = {
   lease,
   storeContext: context,
-  identity: {
-    principal: "operator",
-    storeKey: "synthetic-provider",
-    serverName: "synthetic",
-    serverUrl: "https://mcp.example.test",
-  },
+  identity: operatorMcpOAuthIdentity("synthetic", "https://mcp.example.test"),
 } satisfies Parameters<typeof createMcpOAuthClientProvider>[0];
 
 function loginLifecycle(controller: AbortController) {
@@ -49,61 +45,48 @@ function loginLifecycle(controller: AbortController) {
   };
 }
 
+function expectRedirect(
+  provider: Awaited<ReturnType<typeof createMcpOAuthClientProvider>>,
+  redirectUrl: string,
+) {
+  expect(provider).toMatchObject({ redirectUrl, clientMetadata: { redirect_uris: [redirectUrl] } });
+}
+
+const original = { redirectUrl: "https://callback.example.test/original" };
+
 beforeEach(() => {
   read.mockReset();
   update.mockReset();
 });
 
-it("keeps acknowledged metadata when an earlier read completes later", async () => {
-  const original = {
-    clientInformation: { client_id: "original-client" },
-    redirectUrl: "https://callback.example.test/original",
-  } satisfies McpOAuthStore;
-  const committed = {
-    clientInformation: { client_id: "updated-client" },
-    redirectUrl: "https://callback.example.test/updated",
-  } satisfies McpOAuthStore;
-  read.mockResolvedValueOnce(original);
-  const provider = await createMcpOAuthClientProvider(providerParams);
-  const earlier = createDeferred<McpOAuthStore>();
-  read.mockReturnValueOnce(earlier.promise);
-  const clientInformation = provider.clientInformation();
-  update.mockResolvedValueOnce({ store: committed, applied: true });
-  await provider.saveClientInformation?.(committed.clientInformation);
-  expect(provider.redirectUrl).toBe(committed.redirectUrl);
-
-  earlier.resolve(original);
-  expect(await clientInformation).toEqual(original.clientInformation);
-  expect(provider.redirectUrl).toBe(committed.redirectUrl);
-  expect(provider.clientMetadata.redirect_uris).toEqual([committed.redirectUrl]);
-});
-
-it("requires an acknowledged read after a write reports an uncertain result", async () => {
-  const original = { redirectUrl: "https://callback.example.test/original" };
-  const committed = { redirectUrl: "https://callback.example.test/committed" };
-  read.mockResolvedValueOnce(original);
-  const provider = await createMcpOAuthClientProvider(providerParams);
-  const earlier = createDeferred<McpOAuthStore>();
-  read.mockReturnValueOnce(earlier.promise);
-  const information = provider.clientInformation();
-  const failure = new Error("The write committed, but coordinator release failed");
-  update.mockRejectedValueOnce(failure);
-  await expect(provider.saveClientInformation?.({ client_id: "committed-client" })).rejects.toBe(
-    failure,
-  );
-  earlier.resolve(original);
-  await information;
-  expect(() => provider.redirectUrl).toThrow(failure);
-  expect(() => provider.clientMetadata).toThrow(failure);
-
-  read.mockResolvedValueOnce(committed);
-  await provider.discoveryState?.();
-  expect(provider.redirectUrl).toBe(committed.redirectUrl);
-  expect(provider.clientMetadata.redirect_uris).toEqual([committed.redirectUrl]);
-});
+it.each(["acknowledged", "uncertain"] as const)(
+  "publishes metadata only after an %s write settles",
+  async (outcome) => {
+    const committed = {
+      clientInformation: { client_id: "updated-client" },
+      redirectUrl: "https://callback.example.test/updated",
+    } satisfies McpOAuthStore;
+    read.mockResolvedValueOnce(original);
+    const provider = await createMcpOAuthClientProvider(providerParams);
+    const failure = new Error("The write committed, but coordinator release failed");
+    if (outcome === "uncertain") {
+      update.mockRejectedValueOnce(failure);
+      await expect(provider.saveClientInformation?.(committed.clientInformation)).rejects.toBe(
+        failure,
+      );
+      expect(() => provider.redirectUrl).toThrow(failure);
+      expect(() => provider.clientMetadata).toThrow(failure);
+      read.mockResolvedValueOnce(committed);
+      await provider.discoveryState?.();
+    } else {
+      update.mockResolvedValueOnce({ store: committed, applied: true });
+      await provider.saveClientInformation?.(committed.clientInformation);
+    }
+    expectRedirect(provider, committed.redirectUrl);
+  },
+);
 
 it("rejects tokens when its login lifecycle ends during a credential read", async () => {
-  const original = { redirectUrl: "https://callback.example.test/original" };
   read.mockResolvedValueOnce(original);
   const controller = new AbortController();
   const provider = await createMcpOAuthClientProvider({
@@ -122,8 +105,7 @@ it("rejects tokens when its login lifecycle ends during a credential read", asyn
   });
 
   await expect(result).rejects.toBe(failure);
-  expect(provider.redirectUrl).toBe(original.redirectUrl);
-  expect(provider.clientMetadata.redirect_uris).toEqual([original.redirectUrl]);
+  expectRedirect(provider, original.redirectUrl);
 });
 
 it.each([
@@ -142,13 +124,12 @@ it.each([
       allowAuthorizationRedirect: true,
       suppressStoredTokens: operation === "tokens",
       lease: {
-        signal: new AbortController().signal,
+        ...lease,
         async assertOwned() {
           if (!leaseLive) {
             throw failure;
           }
         },
-        async renew() {},
       },
       login: owner === "login" ? loginLifecycle(login) : undefined,
     });

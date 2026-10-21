@@ -11,24 +11,6 @@ function formatMiB(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-function resolvePackResultLabel(entry: Record<string, unknown>, index: number): string {
-  return (
-    (typeof entry.filename === "string" && entry.filename.trim()) || `pack result #${index + 1}`
-  );
-}
-
-function formatPackUnpackedSizeBudgetError(params: {
-  budgetBytes?: number;
-  label: string;
-  unpackedSize: number;
-}): string {
-  const budgetBytes = params.budgetBytes ?? NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES;
-  return [
-    `${params.label} unpackedSize ${params.unpackedSize} bytes (${formatMiB(params.unpackedSize)}) exceeds budget ${budgetBytes} bytes (${formatMiB(budgetBytes)}).`,
-    "Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
-  ].join(" ");
-}
-
 export function collectPackUnpackedSizeFindings(
   results: unknown,
   options: { budgetBytes?: number; missingDataMessage?: string } = {},
@@ -43,22 +25,19 @@ export function collectPackUnpackedSizeFindings(
     if (!isRecord(entry)) {
       continue;
     }
-    const packResult = entry;
-    if (typeof packResult.unpackedSize !== "number" || !Number.isFinite(packResult.unpackedSize)) {
+    if (typeof entry.unpackedSize !== "number" || !Number.isFinite(entry.unpackedSize)) {
       continue;
     }
     checkedCount += 1;
-    if (packResult.unpackedSize <= budgetBytes) {
+    if (entry.unpackedSize <= budgetBytes) {
       continue;
     }
+    const label =
+      (typeof entry.filename === "string" && entry.filename.trim()) || `pack result #${index + 1}`;
     violations.push({
       file: "package.json",
       title: "npm package unpacked size budget",
-      message: formatPackUnpackedSizeBudgetError({
-        budgetBytes,
-        label: resolvePackResultLabel(packResult, index),
-        unpackedSize: packResult.unpackedSize,
-      }),
+      message: `${label} unpackedSize ${entry.unpackedSize} bytes (${formatMiB(entry.unpackedSize)}) exceeds budget ${budgetBytes} bytes (${formatMiB(budgetBytes)}). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.`,
     });
   }
 

@@ -1,9 +1,12 @@
 // @vitest-environment node
-// Control UI tests cover format behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
-import { formatDurationCompact, formatDurationHuman } from "./format-duration.ts";
+import {
+  formatDurationCompact,
+  formatDurationHuman,
+  formatDurationLong,
+} from "./format-duration.ts";
 import {
   clampText,
   createMsFormatter,
@@ -64,23 +67,20 @@ describe("localized durations", () => {
 
   it.each([null, Number.NaN, -1])("preserves invalid duration fallbacks for %s", (durationMs) => {
     expect(formatDurationCompact(durationMs)).toBeUndefined();
+    expect(formatDurationLong(durationMs)).toBeUndefined();
     expect(formatDurationHuman(durationMs, "unavailable")).toBe("unavailable");
   });
 
-  it("keeps zero distinct from a positive duration rounded to zero", () => {
-    expect(formatDurationCompact(0)).toBeUndefined();
-    expect(formatDurationCompact(0.1)).toBe("0ms");
-    expect(formatDurationHuman(0)).toBe("0ms");
-  });
-
   it.each([
-    { durationMs: 999.5, expected: "1s" },
-    { durationMs: 92_000, expected: "1m 32s" },
-    { durationMs: 3_630_000, expected: "1h 30s" },
-    { durationMs: 86_430_000, expected: "1d 30s" },
-    { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h" },
-  ])("formats $durationMs ms with separated compact units", ({ durationMs, expected }) => {
+    { durationMs: 999.5, expected: "1s", long: "1 second" },
+    { durationMs: 92_000, expected: "1m 32s", long: "1 minute, 32 seconds" },
+    { durationMs: 123_000, expected: "2m 3s", long: "2 minutes, 3 seconds" },
+    { durationMs: 3_630_000, expected: "1h 30s", long: "1 hour, 30 seconds" },
+    { durationMs: 86_430_000, expected: "1d 30s", long: "1 day, 30 seconds" },
+    { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h", long: "2 days, 1 hour" },
+  ])("formats $durationMs ms with separated duration units", ({ durationMs, expected, long }) => {
     expect(formatDurationCompact(durationMs)).toBe(expected);
+    expect(formatDurationLong(durationMs)).toBe(long);
   });
 
   it.each([
@@ -111,8 +111,13 @@ describe("localized durations", () => {
     expect(formatDurationCompact(3_630_000)).toBe(`${unit(1, "hour")} ${unit(30, "second")}`);
     expect(formatDurationCompact(86_460_000)).toBe(`${unit(1, "day")} ${unit(1, "minute")}`);
     expect(formatDurationCompact(0)).toBeUndefined();
+    expect(formatDurationLong(0)).toBeUndefined();
+    expect(formatDurationCompact(0.1)).toBe(unit(0, "millisecond"));
     expect(formatDurationHuman(0)).toBe(unit(0, "millisecond"));
     expect(formatDurationHuman(undefined, "missing")).toBe("missing");
+    expect(formatDurationLong(123_000)).toBe(
+      `دقيقتان و${new Intl.NumberFormat(locale).format(3)} ثوان`,
+    );
   });
 });
 

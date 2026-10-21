@@ -18,7 +18,8 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return { ...actual, default: { ...actual, watch: watchMocks.watch } };
 });
-vi.mock("../browser/system-chrome-cookies.js", () => ({
+vi.mock("../browser/system-chrome-cookies.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../browser/system-chrome-cookies.js")>()),
   cacheKeychainSecret: vi.fn(async () => watchMocks.readSecret),
 }));
 
@@ -43,10 +44,11 @@ const systemProfileMocks = vi.hoisted(() => ({
 
 vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(gatewayMocks.callGatewayFromCli);
 
-vi.mock("../system-profile-api.js", () => ({
+vi.mock("../browser/system-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../browser/system-profiles.js")>()),
   assertSystemCookiePlatform: vi.fn(),
   readSystemProfileCookies: systemProfileMocks.readSystemProfileCookies,
-  resolveSystemCookieSource: vi.fn(() => ({
+  resolveSystemCookieSource: vi.fn(async () => ({
     browser: "chrome",
     cookiesFile: "/synthetic/Cookies",
   })),
@@ -183,7 +185,7 @@ describe("browser cookie-sync CLI", () => {
         },
         timeoutMs: 30_000,
       },
-      { progress: undefined, scopes: ["operator.admin"] },
+      { scopes: ["operator.admin"] },
     );
     expect(runtime.log.mock.calls.at(-1)?.[0]).toContain(
       "chrome/Default -> work via wss://gateway.example",

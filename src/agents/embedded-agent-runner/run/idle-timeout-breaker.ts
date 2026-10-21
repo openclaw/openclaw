@@ -2,34 +2,16 @@
 // across every fallback profile (#76293). Partial billed tokens are not progress.
 export const MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT = 5;
 
-type IdleTimeoutBreakerState = {
+export type IdleTimeoutBreakerState = {
   consecutiveIdleTimeoutsBeforeOutput: number;
-};
-
-export function createIdleTimeoutBreakerState(): IdleTimeoutBreakerState {
-  return { consecutiveIdleTimeoutsBeforeOutput: 0 };
-}
-
-type IdleTimeoutBreakerInput = {
-  idleTimedOut: boolean;
-  completedModelProgress: boolean;
-  outputTokens?: number;
-};
-
-type IdleTimeoutBreakerStep = {
-  consecutive: number;
-  tripped: boolean;
 };
 
 // Non-timeout failures without completed progress neither reset nor increment
 // the counter: they prove neither recovery nor another idle timeout.
 export function stepIdleTimeoutBreaker(
   state: IdleTimeoutBreakerState,
-  input: IdleTimeoutBreakerInput,
-  options?: { cap?: number },
-): IdleTimeoutBreakerStep {
-  const cap = options?.cap ?? MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT;
-
+  input: { idleTimedOut: boolean; completedModelProgress: boolean },
+) {
   if (input.idleTimedOut && !input.completedModelProgress) {
     state.consecutiveIdleTimeoutsBeforeOutput += 1;
   } else if (input.completedModelProgress) {
@@ -38,6 +20,7 @@ export function stepIdleTimeoutBreaker(
 
   return {
     consecutive: state.consecutiveIdleTimeoutsBeforeOutput,
-    tripped: cap > 0 && state.consecutiveIdleTimeoutsBeforeOutput >= cap,
+    tripped:
+      state.consecutiveIdleTimeoutsBeforeOutput >= MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT,
   };
 }

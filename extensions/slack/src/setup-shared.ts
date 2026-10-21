@@ -1,4 +1,5 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createSetupTranslator,
   parseMentionOrPrefixedId,
@@ -7,7 +8,7 @@ import {
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { isSlackSetupAccountConfigured } from "./account-configured.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
-import type { OpenClawConfig } from "./channel-api.js";
+import { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "./channel-meta.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
@@ -56,20 +57,7 @@ export function buildSlackManifest(botName = "OpenClaw") {
       },
       agent_view: {
         agent_description: `${safeName} connects Slack Agent View conversations to OpenClaw agents.`,
-        suggested_prompts: [
-          {
-            title: "What can you do?",
-            message: "What can you help me with?",
-          },
-          {
-            title: "Summarize this channel",
-            message: "Summarize the recent activity in this channel.",
-          },
-          {
-            title: "Draft a reply",
-            message: "Help me draft a reply.",
-          },
-        ],
+        suggested_prompts: DEFAULT_SLACK_SUGGESTED_PROMPTS,
       },
       slash_commands: [
         {

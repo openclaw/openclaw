@@ -3,23 +3,6 @@ import { resolveProviderThinkingLevel, type ThinkLevel } from "../../auto-reply/
 import { findModelCatalogEntry } from "../model-catalog.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 
-function findCliCatalogEntry(params: {
-  catalog: ModelCatalogEntry[];
-  providers: string[];
-  models: string[];
-  requireContextWindows?: boolean;
-}): ModelCatalogEntry | undefined {
-  for (const provider of params.providers) {
-    for (const model of params.models) {
-      const entry = findModelCatalogEntry(params.catalog, { provider, modelId: model });
-      if (entry && (!params.requireContextWindows || entry.contextWindows?.length)) {
-        return entry;
-      }
-    }
-  }
-  return undefined;
-}
-
 /** Selects both CLI capabilities from the same logical/native catalog identity. */
 export function resolveCliCatalogCapabilities(params: {
   catalog: ModelCatalogEntry[];
@@ -30,18 +13,29 @@ export function resolveCliCatalogCapabilities(params: {
   agentRuntime: string;
   thinkLevel?: ThinkLevel;
 }) {
-  const query = {
-    catalog: params.catalog,
-    providers: uniqueStrings(
-      [params.provider, params.modelProvider].filter((provider): provider is string =>
-        Boolean(provider),
-      ),
+  const providers = uniqueStrings(
+    [params.provider, params.modelProvider].filter((provider): provider is string =>
+      Boolean(provider),
     ),
-    models: uniqueStrings([params.modelId, params.normalizedModel]),
-  };
-  const thinkingEntry = findCliCatalogEntry(query);
+  );
+  const models = uniqueStrings([params.modelId, params.normalizedModel]);
+  let thinkingEntry: ModelCatalogEntry | undefined;
+  let selectableContextEntry: ModelCatalogEntry | undefined;
+  for (const provider of providers) {
+    for (const modelId of models) {
+      const entry = findModelCatalogEntry(params.catalog, { provider, modelId });
+      thinkingEntry ??= entry;
+      if (entry?.contextWindows?.length) {
+        selectableContextEntry = entry;
+        break;
+      }
+    }
+    if (selectableContextEntry) {
+      break;
+    }
+  }
   return {
-    selectableContextEntry: findCliCatalogEntry({ ...query, requireContextWindows: true }),
+    selectableContextEntry,
     providerThinkingLevel: resolveProviderThinkingLevel({
       provider: thinkingEntry?.provider ?? params.modelProvider ?? params.provider,
       model: thinkingEntry?.id ?? params.normalizedModel,

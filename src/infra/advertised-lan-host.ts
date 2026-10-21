@@ -1,5 +1,5 @@
-// Resolves the LAN host OpenClaw should advertise to nearby devices.
 import { isRfc1918Ipv4Address } from "@openclaw/net-policy/ip";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { normalizeLowercaseStringOrEmpty as normalizeInterfaceName } from "@openclaw/normalization-core/string-coerce";
 import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../process/exec.js";
 import {
@@ -14,14 +14,9 @@ const WINDOWS_DEFAULT_ROUTE_COMMAND =
   "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | " +
   "Select-Object -Property InterfaceAlias,RouteMetric,InterfaceMetric | ConvertTo-Json -Compress";
 
-type AdvertisedLanRouteHint = {
-  interfaceName: string;
-};
-
 type AdvertisedLanHostCommandResult = {
   code: number | null;
   stdout: string;
-  stderr?: string;
 };
 
 type AdvertisedLanHostCommandRunner = (
@@ -32,8 +27,6 @@ type AdvertisedLanHostCommandRunner = (
 type ResolveAdvertisedLanHostOptions = {
   networkInterfaces?: () => NetworkInterfacesSnapshot;
   runCommandWithTimeout?: AdvertisedLanHostCommandRunner;
-  platform?: NodeJS.Platform;
-  timeoutMs?: number;
 };
 
 type WindowsRouteRow = {
@@ -61,19 +54,13 @@ function normalizeMetric(value: unknown): number {
   return 0;
 }
 
-function parseWindowsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
+function parseWindowsDefaultRouteHints(stdout: string): string[] {
   const trimmed = stdout.trim();
   if (!trimmed) {
     return [];
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return [];
-  }
-
+  const parsed = safeParseJson(trimmed);
   const rankedRows: RankedWindowsRouteRow[] = [];
   const rows = Array.isArray(parsed) ? parsed : [parsed];
   for (const [order, row] of rows.entries()) {
@@ -101,52 +88,34 @@ function parseWindowsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[]
       a.interfaceMetric - b.interfaceMetric ||
       a.order - b.order,
   );
-  return rankedRows.map((row) => ({ interfaceName: row.interfaceName }));
+  return rankedRows.map((row) => row.interfaceName);
 }
 
-function parseMacOsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
+function parseMacOsDefaultRouteHints(stdout: string): string[] {
   const match = /^\s*interface:\s*(\S+)/m.exec(stdout);
-  return match?.[1] ? [{ interfaceName: match[1] }] : [];
+  return match?.[1] ? [match[1]] : [];
 }
 
-function parseLinuxDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
-  const hints: AdvertisedLanRouteHint[] = [];
+function parseLinuxDefaultRouteHints(stdout: string): string[] {
+  const hints: string[] = [];
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.startsWith("default ")) {
       continue;
     }
     const match = /\bdev\s+(\S+)/.exec(line);
     if (match?.[1]) {
-      hints.push({ interfaceName: match[1] });
+      hints.push(match[1]);
     }
   }
   return hints;
 }
 
-async function runRouteHintCommand(
+async function resolveDefaultRouteHints(
   runCommandWithTimeout: AdvertisedLanHostCommandRunner,
-  argv: string[],
-  timeoutMs: number,
-): Promise<string | null> {
-  try {
-    const result = await runCommandWithTimeout(argv, {
-      timeoutMs,
-      maxOutputBytes: DEFAULT_ROUTE_HINT_OUTPUT_BYTES,
-    });
-    return result.code === 0 ? result.stdout : null;
-  } catch {
-    return null;
-  }
-}
-
-async function resolveDefaultRouteHints(params: {
-  platform: NodeJS.Platform;
-  runCommandWithTimeout: AdvertisedLanHostCommandRunner;
-  timeoutMs: number;
-}): Promise<AdvertisedLanRouteHint[]> {
+): Promise<string[]> {
   let argv: string[];
   let parse: typeof parseWindowsDefaultRouteHints;
-  if (params.platform === "win32") {
+  if (process.platform === "win32") {
     argv = [
       "powershell.exe",
       "-NoProfile",
@@ -156,17 +125,29 @@ async function resolveDefaultRouteHints(params: {
       WINDOWS_DEFAULT_ROUTE_COMMAND,
     ];
     parse = parseWindowsDefaultRouteHints;
-  } else if (params.platform === "darwin") {
+  } else if (process.platform === "darwin") {
     argv = ["route", "-n", "get", "default"];
     parse = parseMacOsDefaultRouteHints;
-  } else if (params.platform === "linux") {
+  } else if (process.platform === "linux") {
     argv = ["ip", "-4", "route", "show", "default"];
     parse = parseLinuxDefaultRouteHints;
   } else {
     return [];
   }
 
-  const stdout = await runRouteHintCommand(params.runCommandWithTimeout, argv, params.timeoutMs);
+  let stdout: string;
+  try {
+    const result = await runCommandWithTimeout(argv, {
+      timeoutMs: DEFAULT_ROUTE_HINT_TIMEOUT_MS,
+      maxOutputBytes: DEFAULT_ROUTE_HINT_OUTPUT_BYTES,
+    });
+    if (result.code !== 0) {
+      return [];
+    }
+    stdout = result.stdout;
+  } catch {
+    return [];
+  }
   return stdout ? parse(stdout) : [];
 }
 
@@ -181,13 +162,11 @@ export async function resolveAdvertisedLanHostCore(
     return candidates[0]?.address ?? null;
   }
 
-  const routeHints = await resolveDefaultRouteHints({
-    platform: options.platform ?? process.platform,
-    runCommandWithTimeout: options.runCommandWithTimeout ?? defaultRunCommandWithTimeout,
-    timeoutMs: options.timeoutMs ?? DEFAULT_ROUTE_HINT_TIMEOUT_MS,
-  });
+  const routeHints = await resolveDefaultRouteHints(
+    options.runCommandWithTimeout ?? defaultRunCommandWithTimeout,
+  );
   for (const hint of routeHints) {
-    const hintedName = normalizeInterfaceName(hint.interfaceName);
+    const hintedName = normalizeInterfaceName(hint);
     if (!hintedName) {
       continue;
     }

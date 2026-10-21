@@ -1,13 +1,68 @@
 /* @vitest-environment jsdom */
 import { resolveObjectURL } from "node:buffer";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { resolveTsxImport } from "../scripts/lib/tsx-cli-shim.mjs";
 
 // Exercise the environment installed by the native preload, including in VM tests.
 const require = process.getBuiltinModule("module").createRequire(import.meta.url);
 const { builtinEnvironments }: typeof import("vitest/runtime") = require("vitest/runtime");
 
 describe("jsdom native API boundary", () => {
-  it.each([0, 1, 2])("keeps window event identity across %i iframe levels", (depth) => {
+  it("defers DOM loading until use and adapts package-local windows and object URLs", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        ...(process.versions.bun ? [] : ["--import", resolveTsxImport(process.cwd())]),
+        "--import",
+        pathToFileURL(path.resolve("test/vitest/vitest.jsdom-preload.mts")).href,
+        "--input-type=module",
+        "--eval",
+        `
+          import assert from "node:assert/strict";
+          import { createRequire } from "node:module";
+          const require = createRequire(process.argv[1]);
+          const { builtinEnvironments } = require("vitest/runtime");
+          assert.ok(!require.cache[require.resolve("jsdom")], "preload must leave jsdom unloaded");
+          const { JSDOM } = require("jsdom");
+          const direct = new JSDOM("<iframe></iframe>");
+          try {
+            const received = [];
+            for (const target of [direct.window, direct.window.document.querySelector("iframe").contentWindow]) {
+              target.addEventListener("probe", () => received.push("probe"));
+              target.dispatchEvent(new target.Event("probe"));
+            }
+            assert.deepEqual(received, ["probe", "probe"]);
+          } finally {
+            direct.window.close();
+          }
+          const environment = await builtinEnvironments.jsdom.setup(globalThis, {});
+          try {
+            const url = URL.createObjectURL(new Blob(["complete asset"], { type: "image/png" }));
+            try {
+              process.stdout.write(await (await fetch(url)).text());
+            } finally {
+              URL.revokeObjectURL(url);
+            }
+          } finally {
+            await environment.teardown(globalThis);
+          }
+        `,
+        path.join(
+          path.dirname(require.resolve("vitest/package.json", { paths: [path.resolve("ui")] })),
+          "dist/workers/forks.js",
+        ),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("complete asset");
+  });
+
+  it.each([0, 2])("keeps window event identity across %i iframe levels", (depth) => {
     let target: Window = window;
     let outerFrame: HTMLIFrameElement | undefined;
     for (let level = 0; level < depth; level++) {
@@ -50,9 +105,7 @@ describe("jsdom native API boundary", () => {
   });
 
   it("preserves Blob and multipart file bytes, names, and types in Request", async () => {
-    const file = new File(["exact file bytes"], "report.bin", {
-      type: "application/octet-stream",
-    });
+    const file = new File(["exact file bytes"], "report.bin", { type: "application/octet-stream" });
     const request = new Request("https://example.test/", { method: "POST", body: file });
     expect(await request.text()).toBe("exact file bytes");
     const form = new FormData();
@@ -80,9 +133,7 @@ describe("jsdom native API boundary", () => {
       reader.addEventListener(
         "error",
         () => reject(reader.error ?? new Error("FileReader failed")),
-        {
-          once: true,
-        },
+        { once: true },
       );
     });
     reader.readAsDataURL(new File(["reader bytes"], "reader.txt", { type: "text/plain" }));

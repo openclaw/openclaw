@@ -8,9 +8,8 @@ import {
 import { validateRequestedSkillSlug } from "./install-paths.js";
 import { SkillUploadRequestError } from "./upload-store-error.js";
 import {
-  defaultSkillUploadStore,
+  defaultSkillUploadStore as skillUploadStore,
   normalizeSkillUploadSha256,
-  type SkillUploadStore,
 } from "./upload-store.js";
 
 export const UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE =
@@ -46,9 +45,8 @@ export async function installUploadedSkillArchive(params: {
   workspaceDir: string;
   config: OpenClawConfig;
   log?: ArchiveLogger;
-  store?: SkillUploadStore;
+  beforePersistentApply?: () => void;
 }): Promise<UploadedSkillInstallResult> {
-  const store = params.store ?? defaultSkillUploadStore;
   if (!areUploadedSkillArchivesEnabled(params.config)) {
     return {
       ok: false,
@@ -57,16 +55,14 @@ export async function installUploadedSkillArchive(params: {
     };
   }
   try {
+    params.beforePersistentApply?.();
     const requestedSlug = validateRequestedSkillSlug(params.slug);
     const requestedSha = normalizeSkillUploadSha256(params.sha256);
-    return await store.withCommittedUpload(params.uploadId, async (record, upload) => {
+    return await skillUploadStore.withCommittedUpload(params.uploadId, async (record, upload) => {
       const rejectInvalid = async (error: string): Promise<UploadedSkillInstallResult> => {
         await upload.remove().catch(() => undefined);
         return { ok: false, error, errorKind: "invalid-request" };
       };
-      if (record.kind !== "skill-archive") {
-        return await rejectInvalid("unsupported upload kind");
-      }
       if (record.slug !== requestedSlug) {
         return await rejectInvalid("install slug does not match upload slug");
       }
@@ -87,6 +83,7 @@ export async function installUploadedSkillArchive(params: {
         force: record.force,
         timeoutMs: params.timeoutMs,
         logger: params.log,
+        beforePersistentApply: params.beforePersistentApply,
         policy: {
           config: params.config,
           installId: "upload",

@@ -235,7 +235,6 @@ export async function readNodeWorkspaceUpload(params: {
         { cause: error },
       );
     }
-    assertCurrent();
     stagingRoot = await fsp.mkdtemp(path.join(params.temporaryRoot, "upload-"));
     for (const entry of transferEntries) {
       try {

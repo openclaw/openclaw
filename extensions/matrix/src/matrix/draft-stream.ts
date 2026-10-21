@@ -64,9 +64,6 @@ export function createMatrixDraftStream(params: {
       );
       return false;
     }
-    if (sendFailed) {
-      return false;
-    }
     if (preparedText.trimmedText === lastSentText) {
       return true;
     }
@@ -78,17 +75,15 @@ export function createMatrixDraftStream(params: {
           live: useLive,
         });
         currentEventId = result.messageId;
-        lastSentText = preparedText.trimmedText;
-        lastSentContent = preparedText.convertedText;
         log?.(`draft-stream: created message ${currentEventId}${useLive ? " (MSC4357 live)" : ""}`);
       } else {
         await editMessageMatrix(roomId, currentEventId, preparedText.trimmedText, {
           ...previewOptions,
           live: useLive,
         });
-        lastSentText = preparedText.trimmedText;
-        lastSentContent = preparedText.convertedText;
       }
+      lastSentText = preparedText.trimmedText;
+      lastSentContent = preparedText.convertedText;
       return true;
     } catch (err) {
       log?.(`draft-stream: send/edit failed: ${String(err)}`);
@@ -114,6 +109,7 @@ export function createMatrixDraftStream(params: {
     clear,
     retire,
     cleanupPending,
+    resetMessage,
   } = createFinalizableDraftLifecycle({
     throttleMs: DEFAULT_THROTTLE_MS,
     state: streamState,
@@ -166,14 +162,10 @@ export function createMatrixDraftStream(params: {
   };
 
   const resetCurrentMessage = (): void => {
-    currentEventId = undefined;
-    lastSentText = "";
-    lastSentContent = "";
+    resetMessage();
     sendFailed = false;
     finalizeInPlaceBlocked = false;
     liveFinalized = false;
-    loop.resetPending();
-    loop.resetThrottleWindow();
   };
   const reset = (): void => {
     // A new block consumes the first-only reply reference; retraction does not.

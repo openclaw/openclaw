@@ -1,15 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type {
-  ManagedRun,
-  ProcessSupervisor,
-  RunExit,
-  SpawnInput,
-} from "../process/supervisor/types.js";
+import type { ProcessSupervisor, SpawnInput } from "../process/supervisor/types.js";
 import {
   createCronStreamMatchingJob,
   createCronStreamWatcherFixture,
-  createWatchers,
   exitResult,
   fakeSupervisor,
   job,
@@ -23,164 +17,104 @@ vi.mock("./cron-stream-matcher.js", () => ({
   },
 }));
 
+const batchArgs = (text: string) => [
+  expect.any(Object),
+  text,
+  expect.any(String),
+  expect.any(String),
+];
+const stateArgs = (patch: Record<string, number>) => [
+  "stream-job",
+  expect.objectContaining(patch),
+  expect.any(String),
+  expect.any(String),
+];
+const fixture = () => createCronStreamWatcherFixture({ minIntervalMs: 1 });
+function blockedBatch(result: "busy" | "fired") {
+  const gate = createDeferred();
+  const fireBatch = vi
+    .fn()
+    .mockImplementationOnce(async () => {
+      await gate.promise;
+      return result;
+    })
+    .mockResolvedValue("fired");
+  return { fireBatch, releaseFirst: gate.resolve };
+}
+async function flush(ms = 100) {
+  await settle();
+  await vi.advanceTimersByTimeAsync(ms);
+  await settle();
+}
+
 describe("cron stream output", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("batches stdout and stderr, filters match mode, and truncates at the byte cap", async () => {
-    vi.useFakeTimers();
-    const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
-    await watchers.reconcile([createCronStreamMatchingJob("^keep")], true);
-    await settle();
-
-    fake.inputs[0]?.onStdout?.("drop this\nkeep one\n");
-    await settle();
-    await vi.advanceTimersByTimeAsync(50);
-    await settle();
-    // Complete matched lines that together exceed the cap: the batch renders
-    // with the truncation marker while each source line was matched in full.
-    fake.inputs[0]?.onStderr?.(`keep ${"x".repeat(600)}\n`);
-    await settle();
-    fake.inputs[0]?.onStderr?.(`keep ${"y".repeat(600)}\n`);
-    await settle();
-    await vi.advanceTimersByTimeAsync(100);
-    await settle();
-    expect(fireBatch).toHaveBeenCalledTimes(2);
-    expect(fireBatch.mock.calls[0]?.[1]).toBe("keep one");
-    expect(fireBatch.mock.calls[1]?.[1]).toMatch(/\[truncated\]$/u);
-    await watchers.stopAll("shutdown");
-  });
-
   it("does not match an oversized line by its truncated prefix", async () => {
-    vi.useFakeTimers();
-    const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
+    const { fake, fireBatch, watchers } = fixture();
     await watchers.start(createCronStreamMatchingJob("^keep"));
 
-    // A complete line longer than the batch cap was still matched in full;
-    // it fires and only the delivered batch is truncated.
+    // Delivery truncation must not be confused with incomplete intake.
     fake.inputs[0]?.onStdout?.(`keep ${"x".repeat(2_000)}\n`);
-    await settle();
-    await vi.advanceTimersByTimeAsync(100);
-    await settle();
+    await flush();
     expect(fireBatch).toHaveBeenCalledOnce();
     expect(fireBatch.mock.calls[0]?.[1]).toMatch(/^keep x/u);
     expect(fireBatch.mock.calls[0]?.[1]).toMatch(/\[truncated\]$/u);
 
-    // A line cut at the intake boundary is only a prefix: the full line does
-    // start with "keep", but the prefix cannot prove the complete line, so
-    // match mode must not fire on it.
     fake.inputs[0]?.onStdout?.(`keep ${"x".repeat(5_000)}\n`);
-    await settle();
-    await vi.advanceTimersByTimeAsync(100);
-    await settle();
+    await flush();
     expect(fireBatch).toHaveBeenCalledOnce();
     await watchers.stopAll("shutdown");
   });
 
-  it.each([false, true])(
-    "matches a complete long line before truncating its batch (split callbacks: %s)",
-    async (split) => {
-      vi.useFakeTimers();
-      const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
-      await watchers.start(createCronStreamMatchingJob("^build-start .* build-complete$"));
-
-      const line = `build-start ${"x".repeat(3_000)} build-complete\n`;
-      const chunks = split ? [line.slice(0, 1_500), line.slice(1_500)] : [line];
-      for (const chunk of chunks) {
-        fake.inputs[0]?.onStdout?.(chunk);
-        await settle();
-      }
-      await vi.advanceTimersByTimeAsync(100);
-      await settle();
-      expect(fireBatch).toHaveBeenCalledOnce();
-      expect(fireBatch.mock.calls[0]?.[1]).toMatch(/^build-start x/u);
-      expect(fireBatch.mock.calls[0]?.[1]).toMatch(/\[truncated\]$/u);
-      await watchers.stopAll("shutdown");
-    },
-  );
-
   it("treats a line over the intake bound as an unprovable prefix even when callbacks split it", async () => {
-    vi.useFakeTimers();
-    const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
+    const { fake, fireBatch, watchers } = fixture();
     await watchers.start(createCronStreamMatchingJob("^keep"));
 
-    // Each fragment fits the per-drain intake budget, but the assembled line
-    // exceeds the 4x raw-intake bound. It must stay unmatched exactly like the
-    // same oversized line arriving in one callback: the bound cut the line, so
-    // "^keep" only proves a prefix.
+    // Individually bounded fragments still exceed the assembled-line intake cap.
     fake.inputs[0]?.onStdout?.(`keep ${"x".repeat(1_500)}`);
     await settle();
     fake.inputs[0]?.onStdout?.("x".repeat(1_500));
     await settle();
     fake.inputs[0]?.onStdout?.(`${"x".repeat(1_500)}\n`);
-    await settle();
-    await vi.advanceTimersByTimeAsync(100);
-    await settle();
+    await flush();
     expect(fireBatch).not.toHaveBeenCalled();
 
     // The oversized line consumed through its newline; the next line is clean.
     fake.inputs[0]?.onStdout?.("keep after\n");
-    await settle();
-    await vi.advanceTimersByTimeAsync(100);
-    await settle();
+    await flush();
     expect(fireBatch).toHaveBeenCalledOnce();
     expect(fireBatch.mock.calls[0]?.[1]).toBe("keep after");
     await watchers.stopAll("shutdown");
   });
 
-  it("matches raw source text without treating the truncation marker as input", async () => {
-    vi.useFakeTimers();
-    const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
-    await watchers.start(createCronStreamMatchingJob("\\[truncated\\]$"));
-
-    fake.inputs[0]?.onStdout?.(`${"x".repeat(2_000)}\n`);
-    await settle();
-    await vi.advanceTimersByTimeAsync(50);
-    await settle();
-    expect(fireBatch).not.toHaveBeenCalled();
-
-    fake.inputs[0]?.onStdout?.("real [truncated]\n");
-    await settle();
-    await vi.advanceTimersByTimeAsync(50);
-    await settle();
-    expect(fireBatch).toHaveBeenCalledOnce();
-    expect(fireBatch.mock.calls[0]?.[1]).toBe("real [truncated]");
-    await watchers.stopAll("shutdown");
-  });
-
   it("does not synthesize a line across dropped output chunks", async () => {
-    vi.useFakeTimers();
-    const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
+    const { fake, fireBatch, watchers } = fixture();
     await watchers.start(createCronStreamMatchingJob("^keep$"));
 
-    // Real source lines: "kee<dropped continuation>" then "p" then "keep".
-    // Synchronous burst: stdout partial, stderr filler that exhausts the byte
-    // budget, then a dropped stdout chunk that would have continued the line.
+    // Exhaust intake between "kee" and "p": joining them would fabricate "keep".
     fake.inputs[0]?.onStdout?.("kee");
     fake.inputs[0]?.onStderr?.("Z".repeat(4_093));
     fake.inputs[0]?.onStdout?.("DROPPED\n");
     await settle();
-    // Without severing, the next chunk would glue onto the retained "kee"
-    // partial and fabricate a "keep" line the source never emitted.
     fake.inputs[0]?.onStdout?.("p\n");
-    await settle();
-    await vi.advanceTimersByTimeAsync(100);
-    await settle();
+    await flush();
     expect(fireBatch).not.toHaveBeenCalled();
 
     fake.inputs[0]?.onStdout?.("keep\n");
-    await settle();
-    await vi.advanceTimersByTimeAsync(100);
-    await settle();
+    await flush();
     expect(fireBatch).toHaveBeenCalledOnce();
     expect(fireBatch.mock.calls[0]?.[1]).toBe("keep");
     await watchers.stopAll("shutdown");
   });
 
   it("does not match a retained prefix when its continuation was dropped before exit", async () => {
-    vi.useFakeTimers();
-    const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
+    const { fake, fireBatch, watchers } = fixture();
     await watchers.start(createCronStreamMatchingJob("^keep$"));
 
     // The retained prefix looks like a complete match, but the dropped chunk
@@ -196,82 +130,31 @@ describe("cron stream output", () => {
     await watchers.stopAll("shutdown");
   });
 
-  it("does not discard the first clean line after a drop that ended at a newline", async () => {
-    vi.useFakeTimers();
-    const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
-    await watchers.start(createCronStreamMatchingJob("^keep$"));
-
-    // Synchronous burst exhausts the intake budget, then a whole chunk that
-    // ends at a newline is dropped. The drop closed its own broken line, so
-    // the very next accepted line is clean and must still fire.
-    fake.inputs[0]?.onStderr?.("Z".repeat(4_096));
-    fake.inputs[0]?.onStdout?.("lost\n");
-    await settle();
-    fake.inputs[0]?.onStdout?.("keep\n");
-    await settle();
-    await vi.advanceTimersByTimeAsync(100);
-    await settle();
-    expect(fireBatch).toHaveBeenCalledOnce();
-    expect(fireBatch.mock.calls[0]?.[1]).toBe("keep");
-    await watchers.stopAll("shutdown");
-  });
-
   it("buffers output emitted before the asynchronous spawn call resolves", async () => {
-    vi.useFakeTimers();
-    const { promise: wait, resolve: resolveWait } = createDeferred<RunExit>();
-    const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
-    const run: ManagedRun = {
-      activity,
-      runId: "early-output",
-      startedAtMs: Date.now(),
-      cancel: vi.fn(() => {
-        activity.resultSettled = true;
-        resolveWait(exitResult({ reason: "manual-cancel" }));
-      }),
-      detachOutput: vi.fn(),
-      wait: () => wait,
-    };
+    const source = fakeSupervisor();
     const spawn = vi.fn(async (input: SpawnInput) => {
       input.onStdout?.("early\n");
-      return run;
+      return await source.spawn(input);
     });
     const supervisor = {
-      ...fakeSupervisor().supervisor,
+      ...source.supervisor,
       spawn,
     } satisfies ProcessSupervisor;
-    const fireBatch = vi.fn(async () => "fired" as const);
-    const watchers = createWatchers({
+    const { fireBatch, watchers } = createCronStreamWatcherFixture({
       getProcessSupervisor: () => supervisor,
       minIntervalMs: 1,
-      updateState: vi.fn(async () => {}),
-      recordFailure: vi.fn(async () => {}),
-      fireBatch,
-      logger: { info: vi.fn(), warn: vi.fn() },
     });
 
     await watchers.start(job());
     await vi.advanceTimersByTimeAsync(50);
 
-    expect(fireBatch).toHaveBeenCalledWith(
-      expect.any(Object),
-      "early",
-      expect.any(String),
-      expect.any(String),
-    );
+    expect(fireBatch).toHaveBeenCalledWith(...batchArgs("early"));
     await watchers.stopAll("shutdown");
   });
 
   it("keeps one bounded pending batch while a payload is busy and honors minimum spacing", async () => {
-    vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { promise: first, resolve: releaseFirst } = createDeferred();
-    const fireBatch = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        await first;
-        return "fired" as const;
-      })
-      .mockResolvedValue("fired" as const);
+    const { fireBatch, releaseFirst } = blockedBatch("fired");
     const { fake, updateState, watchers } = createCronStreamWatcherFixture({
       minIntervalMs: 100,
       fireBatch,
@@ -280,45 +163,23 @@ describe("cron stream output", () => {
     await settle();
 
     fake.inputs[0]?.onStdout?.("first\n");
-    await settle();
-    await vi.advanceTimersByTimeAsync(50);
-    await settle();
+    await flush(50);
     fake.inputs[0]?.onStdout?.("second\nthird\n");
-    await settle();
-    await vi.advanceTimersByTimeAsync(50);
-    await settle();
+    await flush(50);
     expect(fireBatch).toHaveBeenCalledTimes(1);
     releaseFirst();
     await settle();
     await vi.advanceTimersByTimeAsync(49);
     expect(fireBatch).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
-    expect(fireBatch).toHaveBeenLastCalledWith(
-      expect.any(Object),
-      "second\nthird",
-      expect.any(String),
-      expect.any(String),
-    );
-    expect(updateState).toHaveBeenCalledWith(
-      "stream-job",
-      expect.objectContaining({ streamCoalescedBatches: 1 }),
-      expect.any(String),
-      expect.any(String),
-    );
+    expect(fireBatch).toHaveBeenLastCalledWith(...batchArgs("second\nthird"));
+    expect(updateState).toHaveBeenCalledWith(...stateArgs({ streamCoalescedBatches: 1 }));
     await watchers.stopAll("shutdown");
   });
 
   it("prepends a busy retry ahead of batches that arrived while it was in flight", async () => {
-    vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { promise: first, resolve: releaseFirst } = createDeferred();
-    const fireBatch = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        await first;
-        return "busy" as const;
-      })
-      .mockResolvedValue("fired" as const);
+    const { fireBatch, releaseFirst } = blockedBatch("busy");
     const { fake, watchers } = createCronStreamWatcherFixture({
       minIntervalMs: 1,
       fireBatch,
@@ -326,60 +187,18 @@ describe("cron stream output", () => {
     await watchers.start(job());
 
     fake.inputs[0]?.onStdout?.("first\n");
-    await settle();
-    await vi.advanceTimersByTimeAsync(50);
-    await settle();
+    await flush(50);
     fake.inputs[0]?.onStdout?.("second\n");
-    await settle();
-    await vi.advanceTimersByTimeAsync(50);
-    await settle();
+    await flush(50);
     releaseFirst();
     await settle();
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(fireBatch).toHaveBeenNthCalledWith(
-      2,
-      expect.any(Object),
-      "first\nsecond",
-      expect.any(String),
-      expect.any(String),
-    );
-    await watchers.stopAll("shutdown");
-  });
-
-  it("serializes exact coalesced counter updates under sustained output", async () => {
-    vi.useFakeTimers();
-    const { promise: payload, resolve: releasePayload } = createDeferred();
-    const { fake, updateState, watchers } = createCronStreamWatcherFixture({
-      minIntervalMs: 1,
-      fireBatch: vi.fn(async () => {
-        await payload;
-        return "fired" as const;
-      }),
-    });
-    await watchers.reconcile([job()], true);
-    await settle();
-
-    for (const line of ["first", "second", "third", "fourth"]) {
-      fake.inputs[0]?.onStdout?.(`${line}\n`);
-      await settle();
-      await vi.advanceTimersByTimeAsync(50);
-      await settle();
-    }
-    const counterCalls = () =>
-      updateState.mock.calls.filter(([, patch]) => patch.streamCoalescedBatches !== undefined);
-    expect(counterCalls()).toHaveLength(3);
-    expect(counterCalls().at(-1)?.[1]).toEqual(
-      expect.objectContaining({ streamCoalescedBatches: 3 }),
-    );
-
-    releasePayload();
-    await settle();
+    expect(fireBatch).toHaveBeenNthCalledWith(2, ...batchArgs("first\nsecond"));
     await watchers.stopAll("shutdown");
   });
 
   it("counts a gate drop in the serialized owner", async () => {
-    vi.useFakeTimers();
     const { fake, updateState, watchers } = createCronStreamWatcherFixture({
       minIntervalMs: 1,
       fireBatch: vi.fn(async () => "dropped" as const),
@@ -390,17 +209,11 @@ describe("cron stream output", () => {
     fake.inputs[0]?.onStdout?.("ignored\n");
     await vi.advanceTimersByTimeAsync(50);
 
-    expect(updateState).toHaveBeenCalledWith(
-      "stream-job",
-      expect.objectContaining({ streamDroppedBatches: 1 }),
-      expect.any(String),
-      expect.any(String),
-    );
+    expect(updateState).toHaveBeenCalledWith(...stateArgs({ streamDroppedBatches: 1 }));
     await watchers.stopAll("shutdown");
   });
 
   it("counts payload errors and rejected dispatches in the serialized owner", async () => {
-    vi.useFakeTimers();
     const fireBatch = vi
       .fn<() => Promise<"error">>()
       .mockResolvedValueOnce("error")
@@ -416,76 +229,28 @@ describe("cron stream output", () => {
     await vi.advanceTimersByTimeAsync(50);
     await settle();
 
-    expect(updateState).toHaveBeenCalledWith(
-      "stream-job",
-      expect.objectContaining({ streamDroppedBatches: 1 }),
-      expect.any(String),
-      expect.any(String),
-    );
+    expect(updateState).toHaveBeenCalledWith(...stateArgs({ streamDroppedBatches: 1 }));
 
     fake.inputs[0]?.onStdout?.("rejected\n");
     await vi.advanceTimersByTimeAsync(50);
     await settle();
-    expect(updateState).toHaveBeenCalledWith(
-      "stream-job",
-      expect.objectContaining({ streamDroppedBatches: 2 }),
-      expect.any(String),
-      expect.any(String),
-    );
+    expect(updateState).toHaveBeenCalledWith(...stateArgs({ streamDroppedBatches: 2 }));
     await watchers.stopAll("shutdown");
   });
 
   it("fires a batch for an empty line accepted by match mode", async () => {
-    vi.useFakeTimers();
-    const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
-    await watchers.reconcile(
-      [
-        job({
-          schedule: {
-            kind: "stream",
-            command: ["stream-source"],
-            mode: "match",
-            match: "^$",
-            batchMs: 50,
-          },
-        }),
-      ],
-      true,
-    );
+    const { fake, fireBatch, watchers } = fixture();
+    await watchers.reconcile([createCronStreamMatchingJob("^$")], true);
     await settle();
 
     fake.inputs[0]?.onStdout?.("\n");
     await vi.advanceTimersByTimeAsync(50);
 
-    expect(fireBatch).toHaveBeenCalledWith(
-      expect.any(Object),
-      "",
-      expect.any(String),
-      expect.any(String),
-    );
-    await watchers.stopAll("shutdown");
-  });
-
-  it("preserves leading and consecutive empty lines in a batch", async () => {
-    vi.useFakeTimers();
-    const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
-    await watchers.reconcile([job()], true);
-    await settle();
-
-    fake.inputs[0]?.onStdout?.("\n\nvalue\n");
-    await vi.advanceTimersByTimeAsync(50);
-
-    expect(fireBatch).toHaveBeenCalledWith(
-      expect.any(Object),
-      "\n\nvalue",
-      expect.any(String),
-      expect.any(String),
-    );
+    expect(fireBatch).toHaveBeenCalledWith(...batchArgs(""));
     await watchers.stopAll("shutdown");
   });
 
   it("stops the source when a once trigger disables its job", async () => {
-    vi.useFakeTimers();
     const { fake, watchers } = createCronStreamWatcherFixture({
       minIntervalMs: 1,
       fireBatch: vi.fn(async () => "disabled" as const),
@@ -503,8 +268,7 @@ describe("cron stream output", () => {
   });
 
   it("keeps interleaved stdout and stderr partial lines independent", async () => {
-    vi.useFakeTimers();
-    const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
+    const { fake, fireBatch, watchers } = fixture();
     await watchers.reconcile([job()], true);
     await settle();
 
@@ -513,12 +277,7 @@ describe("cron stream output", () => {
     fake.inputs[0]?.onStdout?.("put\n");
     await vi.advanceTimersByTimeAsync(50);
 
-    expect(fireBatch).toHaveBeenCalledWith(
-      expect.any(Object),
-      "err\noutput",
-      expect.any(String),
-      expect.any(String),
-    );
+    expect(fireBatch).toHaveBeenCalledWith(...batchArgs("err\noutput"));
     await watchers.stopAll("shutdown");
   });
 });

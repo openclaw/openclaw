@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AgentsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
@@ -35,7 +36,6 @@ export function cardAgentLabel(
 
 export function matchesAgentFilter(
   card: WorkboardCard,
-  agentsList: WorkboardAgentsList | null,
   filter: WorkboardUiState["agentFilter"],
 ): boolean {
   if (filter === "all") {
@@ -45,7 +45,6 @@ export function matchesAgentFilter(
   if (filter === "default") {
     return !explicitAgentId;
   }
-  void agentsList;
   return explicitAgentId === filter;
 }
 
@@ -61,18 +60,14 @@ export function matchesAgentScope(
   return explicitAgentId === agentId || (!explicitAgentId && defaultAgentId === agentId);
 }
 
-function normalizeAgentOptionId(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
 function buildConfiguredAgentOptions(
   agentsList: WorkboardAgentsList | null,
 ): WorkboardConfiguredAgentOption[] {
   const seen = new Set<string>();
-  const defaultAgentId = normalizeAgentOptionId(agentsList?.defaultId);
+  const defaultAgentId = normalizeOptionalString(agentsList?.defaultId) ?? "";
   const options: WorkboardConfiguredAgentOption[] = [];
   for (const agent of agentsList?.agents ?? []) {
-    const id = normalizeAgentOptionId(agent.id);
+    const id = normalizeOptionalString(agent.id) ?? "";
     if (!id || seen.has(id)) {
       continue;
     }
@@ -99,7 +94,7 @@ export function buildAgentFilterOptions(
   const cardAgentIds = [
     ...new Set(
       cards
-        .map((card) => normalizeAgentOptionId(card.agentId))
+        .map((card) => normalizeOptionalString(card.agentId) ?? "")
         .filter((id) => id && !configuredIds.has(id)),
     ),
   ].toSorted((left, right) => left.localeCompare(right));
@@ -128,15 +123,16 @@ export function buildAgentFilterOptions(
   return options;
 }
 
-function buildAssignableAgentOptions(
+export function buildAssignableAgentPickerOptions(
   agentsList: WorkboardAgentsList | null,
   currentAgentId: string,
+  defaultAgentId = agentsList?.defaultId ?? "",
 ) {
   const selectableList = agentsList
     ? { ...agentsList, agents: listSelectableAgents(agentsList.agents) }
     : null;
   const configuredAgents = buildConfiguredAgentOptions(selectableList);
-  const currentId = normalizeAgentOptionId(currentAgentId);
+  const currentId = normalizeOptionalString(currentAgentId) ?? "";
   const currentIsSystem = agentsList?.agents.some(
     (agent) => agent.id === currentId && agent.kind === "system",
   );
@@ -159,22 +155,7 @@ function buildAssignableAgentOptions(
     ...(hasCurrent
       ? []
       : [{ id: currentId, label: t("workboard.agentCurrentUnconfigured", { agent: currentId }) }]),
-  ];
-}
-
-export function normalizeActiveAgentFilter(
-  options: readonly WorkboardAgentFilterOption[],
-  filter: WorkboardUiState["agentFilter"],
-): WorkboardUiState["agentFilter"] {
-  return options.some((option) => option.id === filter) ? filter : "all";
-}
-
-export function buildAssignableAgentPickerOptions(
-  agentsList: WorkboardAgentsList | null,
-  currentAgentId: string,
-  defaultAgentId = agentsList?.defaultId ?? "",
-) {
-  return buildAssignableAgentOptions(agentsList, currentAgentId).map((option) => {
+  ].map((option) => {
     const effectiveId = option.id || defaultAgentId;
     const agent = agentsList?.agents.find((entry) => entry.id === effectiveId);
     return {
@@ -185,4 +166,11 @@ export function buildAssignableAgentPickerOptions(
       icon: effectiveId ? undefined : ("bot" as const),
     };
   });
+}
+
+export function normalizeActiveAgentFilter(
+  options: readonly WorkboardAgentFilterOption[],
+  filter: WorkboardUiState["agentFilter"],
+): WorkboardUiState["agentFilter"] {
+  return options.some((option) => option.id === filter) ? filter : "all";
 }

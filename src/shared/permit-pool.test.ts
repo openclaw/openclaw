@@ -60,6 +60,83 @@ describe("permit pool", () => {
     nextRelease?.();
   });
 
+  it("preserves FIFO and capacity when a queued waiter cancels after sustained turnover", async () => {
+    const pool = createPermitPool(1);
+    let release = pool.tryAcquire();
+    const cancelled: AbortController[] = [];
+    const admitted: number[] = [];
+    const waiting = Array.from({ length: 600 }, (_, index) => {
+      const cancellation = index >= 450 && index < 500 ? new AbortController() : undefined;
+      if (cancellation) {
+        cancelled.push(cancellation);
+      }
+      return pool
+        .acquire(cancellation ? { signal: cancellation.signal } : {})
+        .then((nextRelease) => {
+          if (nextRelease) {
+            admitted.push(index);
+          }
+          return nextRelease;
+        });
+    });
+    expect(pool.pendingCount).toBe(600);
+
+    for (const [index, pending] of waiting.entries()) {
+      if (index === 280) {
+        break;
+      }
+      release?.();
+      release = await pending;
+    }
+    expect(admitted).toEqual(Array.from({ length: 280 }, (_, index) => index));
+    expect(pool.pendingCount).toBe(320);
+    for (const cancellation of cancelled) {
+      cancellation.abort();
+    }
+    await expect(Promise.all(waiting.slice(450, 500))).resolves.toEqual(
+      Array.from({ length: 50 }, () => null),
+    );
+    expect(pool.pendingCount).toBe(270);
+    expect(pool.tryAcquire()).toBeNull();
+
+    for (const index of [600, 601]) {
+      waiting.push(
+        pool.acquire().then((nextRelease) => {
+          if (nextRelease) {
+            admitted.push(index);
+          }
+          return nextRelease;
+        }),
+      );
+    }
+    expect(pool.pendingCount).toBe(272);
+
+    for (const [index, pending] of waiting.entries()) {
+      if (index < 280 || (index >= 450 && index < 500)) {
+        continue;
+      }
+      release?.();
+      if (index === 280) {
+        release?.();
+      }
+      release = await pending;
+      if (index === 280) {
+        expect(pool.pendingCount).toBe(271);
+        expect(pool.tryAcquire()).toBeNull();
+      }
+    }
+    release?.();
+    expect(admitted).toEqual(
+      Array.from({ length: 602 }, (_, index) => index).filter(
+        (index) => index < 450 || index >= 500,
+      ),
+    );
+    expect(pool.pendingCount).toBe(0);
+    const fresh = pool.tryAcquire();
+    expect(fresh).toBeTypeOf("function");
+    fresh?.();
+  });
+
   it("rechecks deadlines on release even before an expiry timer runs", async () => {
     const pool = createPermitPool(1);
     const release = await pool.acquire();
@@ -76,5 +153,32 @@ describe("permit pool", () => {
     aborted.abort();
     await expect(pool.acquire({ signal: aborted.signal })).resolves.toBeNull();
     await expect(pool.acquire({ deadlineAtMs: Date.now() })).resolves.toBeNull();
+  });
+
+  it("does not expire a queued permit before its deadline after a wall-clock step", async () => {
+    vi.setSystemTime(1000);
+    const pool = createPermitPool(1);
+    const owner = pool.tryAcquire();
+    const waiting = pool.acquire({ deadlineAtMs: 1100 });
+    vi.setSystemTime(950);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(pool.pendingCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(50);
+    await expect(waiting).resolves.toBeNull();
+    expect(pool.pendingCount).toBe(0);
+    owner?.();
+  });
+
+  it("keeps a distant deadline from overflowing the native timer range", async () => {
+    vi.setSystemTime(1000);
+    const pool = createPermitPool(1);
+    const owner = pool.tryAcquire();
+    const waiting = pool.acquire({ deadlineAtMs: Date.now() + 2 ** 31 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pool.pendingCount).toBe(1);
+    owner?.();
+    const release = await waiting;
+    expect(release).toBeTypeOf("function");
+    release?.();
   });
 });

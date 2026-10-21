@@ -1,8 +1,3 @@
-/**
- * sessions_history built-in tool.
- *
- * Reads bounded, redacted session transcript history after session visibility filtering.
- */
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
@@ -16,13 +11,14 @@ import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { redactToolPayloadText } from "../../logging/redact.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
+import { requesterProfileSchema } from "../schema/typebox.js";
 import {
   describeSessionLinkRule,
   describeSessionsHistoryTool,
+  SESSION_LINK_RULE_DESCRIPTION,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import { stripToolMessages } from "./chat-history-text.js";
@@ -34,6 +30,7 @@ import {
   readToolStringParam,
   ToolInputError,
 } from "./common.js";
+import { wrapGatewayPersonalToolExecution } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
@@ -45,6 +42,7 @@ import {
 import {
   createSessionVisibilityRowChecker,
   formatSessionToolAccessDenial,
+  isSessionToolMainAlias,
   resolveSessionReference,
   resolveSessionToolAccess,
   resolveSessionToolContext,
@@ -53,6 +51,7 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsHistoryToolSchema = Type.Object({
+  user: requesterProfileSchema({ defaultToTurnOwner: true }),
   sessionKey: ChatHistoryParamsSchema.properties.sessionKey,
   limit: ChatHistoryParamsSchema.properties.limit,
   offset: Type.With(ChatHistoryParamsSchema.properties.offset, {
@@ -80,11 +79,7 @@ const SessionsHistoryOutputSchema = Type.Union([
       contentTruncated: Type.Boolean(),
       contentRedacted: Type.Boolean(),
       bytes: Type.Number(),
-      sessionLinkRule: Type.Optional(
-        Type.String({
-          description: "How to build Control UI URLs for sessionKey values in this result.",
-        }),
-      ),
+      sessionLinkRule: Type.Optional(Type.String({ description: SESSION_LINK_RULE_DESCRIPTION })),
       offset: Type.Optional(Type.Number()),
       nextOffset: Type.Optional(Type.Number()),
       hasMore: Type.Optional(Type.Boolean()),
@@ -113,67 +108,25 @@ type ChatHistoryPaginationMetadata = Partial<
   }
 >;
 
-function truncateHistoryText(
-  text: string,
-  maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS,
-): {
-  text: string;
-  truncated: boolean;
-  redacted: boolean;
-} {
-  // sessions_history is a tool surface, not a log sink. Keep it redacted even
-  // when operators disable general-purpose log redaction.
-  const sanitized = redactToolPayloadText(text);
-  const redacted = sanitized !== text;
-  if (sanitized.length <= maxChars) {
-    return { text: sanitized, truncated: false, redacted };
-  }
-  const cut = truncateUtf16Safe(sanitized, maxChars);
-  return { text: `${cut}\n…(truncated)…`, truncated: true, redacted };
-}
-
-function sanitizeHistoryContentBlock(
-  block: unknown,
-  maxChars: number,
-): {
-  block: unknown;
-  truncated: boolean;
-  redacted: boolean;
-} {
-  if (!block || typeof block !== "object") {
-    return { block, truncated: false, redacted: false };
-  }
-  const entry = { ...(block as Record<string, unknown>) };
-  let truncated = false;
-  let redacted = false;
-  const fields =
-    entry.type === "thinking" ? ["text", "thinking", "partialJson"] : ["text", "partialJson"];
-  for (const field of fields) {
-    const value = entry[field];
-    if (typeof value === "string") {
-      const res = truncateHistoryText(value, maxChars);
-      entry[field] = res.text;
-      truncated ||= res.truncated;
-      redacted ||= res.redacted;
-    }
-  }
-  return { block: entry, truncated, redacted };
-}
-
 function sanitizeHistoryMessage(
   message: unknown,
   maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS,
 ): {
   message: unknown;
   truncated: boolean;
-  redacted: boolean;
 } {
   if (!message || typeof message !== "object") {
-    return { message, truncated: false, redacted: false };
+    return { message, truncated: false };
   }
   const entry = { ...(message as Record<string, unknown>) };
   let truncated = false;
-  let redacted = false;
+  const sanitizeText = (text: string) => {
+    if (text.length <= maxChars) {
+      return text;
+    }
+    truncated = true;
+    return `${truncateUtf16Safe(text, maxChars)}\n…(truncated)…`;
+  };
   // Tool result details often contain very large nested payloads.
   for (const field of ["details", "usage", "cost"]) {
     if (field in entry) {
@@ -183,23 +136,27 @@ function sanitizeHistoryMessage(
   }
 
   if (typeof entry.content === "string") {
-    const res = truncateHistoryText(entry.content, maxChars);
-    entry.content = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
+    entry.content = sanitizeText(entry.content);
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) => sanitizeHistoryContentBlock(block, maxChars));
-    entry.content = updated.map((item) => item.block);
-    truncated ||= updated.some((item) => item.truncated);
-    redacted ||= updated.some((item) => item.redacted);
+    entry.content = entry.content.map((block: unknown) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+      const content = { ...(block as Record<string, unknown>) };
+      const fields =
+        content.type === "thinking" ? ["text", "thinking", "partialJson"] : ["text", "partialJson"];
+      for (const field of fields) {
+        if (typeof content[field] === "string") {
+          content[field] = sanitizeText(content[field]);
+        }
+      }
+      return content;
+    });
   }
   if (typeof entry.text === "string") {
-    const res = truncateHistoryText(entry.text, maxChars);
-    entry.text = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
+    entry.text = sanitizeText(entry.text);
   }
-  return { message: entry, truncated, redacted };
+  return { message: entry, truncated };
 }
 
 function boundPendingInputs(page: ChatPendingInputsPage) {
@@ -213,10 +170,8 @@ function boundPendingInputs(page: ChatPendingInputsPage) {
       Math.max(page.items.length, 1),
   );
   let truncated = false;
-  let redacted = false;
   const items = page.items.map((item, index) => {
     const result = sanitizeHistoryMessage(item.message, Math.max(1, Math.floor(messageBudget / 8)));
-    redacted ||= result.redacted;
     const record = asOptionalRecord(result.message);
     const media = asOptionalRecord(record?.["__openclaw"])?.media;
     const message = { role: "user", content: record?.content, ...(media ? { media } : {}) };
@@ -232,7 +187,7 @@ function boundPendingInputs(page: ChatPendingInputsPage) {
     total: page.total,
     ...(page.nextBefore !== undefined ? { nextBefore: page.nextBefore } : {}),
   };
-  return { pendingInputs, bytes: jsonUtf8Bytes(pendingInputs), truncated, redacted };
+  return { pendingInputs, bytes: jsonUtf8Bytes(pendingInputs), truncated };
 }
 
 function enforceSessionsHistoryHardCap(params: {
@@ -336,12 +291,7 @@ function resolveSessionsHistoryPaginationMetadata(params: {
   if (params.requestedMessageId) {
     return typeof result?.totalMessages === "number" ? { totalMessages: result.totalMessages } : {};
   }
-  const offset =
-    typeof result?.offset === "number"
-      ? result.offset
-      : params.requestedOffset !== undefined
-        ? params.requestedOffset
-        : undefined;
+  const offset = typeof result?.offset === "number" ? result.offset : params.requestedOffset;
   if (offset === undefined) {
     return {};
   }
@@ -395,7 +345,7 @@ export function createSessionsHistoryTool(opts?: {
     description: describeSessionsHistoryTool({ sessionLinkBase: opts?.sessionLinkBase }),
     parameters: SessionsHistoryToolSchema,
     outputSchema: SessionsHistoryOutputSchema,
-    execute: async (_toolCallId, args) => {
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const sessionKeyParam = readToolStringParam(params, "sessionKey", {
@@ -429,11 +379,7 @@ export function createSessionsHistoryTool(opts?: {
       }).sessionAgentId;
       const normalizedInputKey = sessionKeyParam.trim();
       const isCurrentSession = normalizedInputKey === "current";
-      const isConfiguredMainAlias =
-        normalizedInputKey === "main" ||
-        normalizedInputKey === "global" ||
-        normalizedInputKey === mainKey ||
-        normalizedInputKey === alias;
+      const isConfiguredMainAlias = isSessionToolMainAlias(normalizedInputKey, { mainKey, alias });
       const inputStoreOwner =
         shouldResolveSessionIdInput(sessionKeyParam) && !isConfiguredMainAlias
           ? { kind: "none" as const }
@@ -550,8 +496,6 @@ export function createSessionsHistoryTool(opts?: {
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
       const contentTruncated =
         sanitizedMessages.some((entry) => entry.truncated) || pending?.truncated === true;
-      const contentRedacted =
-        sanitizedMessages.some((entry) => entry.redacted) || pending?.redacted === true;
       const sanitizedItems = sanitizedMessages.map((entry) => entry.message);
       const cappedMessages = messageId
         ? capSessionsHistoryAroundMessage(sanitizedItems, messageId, transcriptBudget)
@@ -574,7 +518,7 @@ export function createSessionsHistoryTool(opts?: {
         truncated: droppedMessages || contentTruncated || hardened.hardCapped,
         droppedMessages: droppedMessages || hardened.hardCapped,
         contentTruncated,
-        contentRedacted,
+        contentRedacted: false,
         bytes: hardened.bytes + (pending?.bytes ?? 0),
         ...(result?.windowReset ? { windowReset: true } : {}),
         ...(pending ? { pendingInputs: pending.pendingInputs } : {}),
@@ -583,6 +527,6 @@ export function createSessionsHistoryTool(opts?: {
           : {}),
         ...pagination,
       });
-    },
+    }),
   };
 }

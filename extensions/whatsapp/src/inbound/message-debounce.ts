@@ -1,7 +1,6 @@
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { getPrimaryIdentityId } from "../identity.js";
-import { requireWhatsAppInboundAdmission } from "./admission.js";
 import type { WhatsAppIngressLifecycle, WhatsAppReadReceiptTarget } from "./durable-receive.js";
 import { attachWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
 import type { AdmittedWebInboundCallbackMessage } from "./types.js";
@@ -35,21 +34,19 @@ export function createWhatsAppInboundMessageDebouncer(options: {
     }
   };
   const buildKey = (msg: WhatsAppQueuedInboundMessage): string => {
-    const admission = requireWhatsAppInboundAdmission(msg);
+    const admission = msg.admission;
     return `${admission.accountId}:${admission.conversation.id}`;
   };
   const resolveSenderKey = (msg: WhatsAppQueuedInboundMessage): string => {
-    const admission = requireWhatsAppInboundAdmission(msg);
+    const admission = msg.admission;
     const sender = msg.platform.sender;
-    const senderKey =
-      admission.conversation.kind === "group"
-        ? (getPrimaryIdentityId(sender ?? null) ??
+    return admission.conversation.kind === "group"
+      ? (getPrimaryIdentityId(sender ?? null) ??
           msg.platform.senderJid ??
           msg.platform.senderE164 ??
           msg.platform.senderName ??
           admission.sender.id)
-        : admission.conversation.id;
-    return senderKey;
+      : admission.conversation.id;
   };
   const shouldDebounce = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
@@ -94,49 +91,40 @@ export function createWhatsAppInboundMessageDebouncer(options: {
             return;
           }
           try {
-            if (orderedEntries.length === 1) {
-              await options.onMessage(attachWhatsAppIngressLifecycle(last, admissionLifecycle));
-              await settle();
-              await Promise.all(orderedEntries.map((entry) => options.markRead(entry.readReceipt)));
-              return;
-            }
-            const mentioned = new Set<string>();
-            for (const entry of orderedEntries) {
-              for (const jid of entry.group?.mentions?.jids ?? []) {
-                mentioned.add(jid);
+            let message: WhatsAppQueuedInboundMessage = last;
+            if (orderedEntries.length > 1) {
+              const mentioned = new Set<string>();
+              for (const entry of orderedEntries) {
+                for (const jid of entry.group?.mentions?.jids ?? []) {
+                  mentioned.add(jid);
+                }
               }
-            }
-            const combinedBody = orderedEntries
-              .map((entry) => entry.payload.body)
-              .filter(Boolean)
-              .join("\n");
-            const combinedCommandBody = orderedEntries
-              .map((entry) => entry.payload.commandBody ?? entry.payload.body)
-              .filter(Boolean)
-              .join("\n");
-            const combinedMentions =
-              mentioned.size > 0
-                ? { ...last.group?.mentions, jids: Array.from(mentioned) }
-                : last.group?.mentions;
-            const combinedGroup =
-              last.group || combinedMentions
-                ? { ...last.group, mentions: combinedMentions }
-                : undefined;
-            const combinedMessage: WhatsAppQueuedInboundMessage = attachWhatsAppIngressLifecycle(
-              {
+              const combinedMentions =
+                mentioned.size > 0
+                  ? { ...last.group?.mentions, jids: Array.from(mentioned) }
+                  : last.group?.mentions;
+              message = {
                 ...last,
                 turnAdoptionLifecycle: admissionLifecycle,
                 payload: {
                   ...last.payload,
-                  body: combinedBody,
-                  commandBody: combinedCommandBody,
+                  body: orderedEntries
+                    .map((entry) => entry.payload.body)
+                    .filter(Boolean)
+                    .join("\n"),
+                  commandBody: orderedEntries
+                    .map((entry) => entry.payload.commandBody ?? entry.payload.body)
+                    .filter(Boolean)
+                    .join("\n"),
                 },
-                group: combinedGroup,
+                group:
+                  last.group || combinedMentions
+                    ? { ...last.group, mentions: combinedMentions }
+                    : undefined,
                 event: { ...last.event, isBatched: true },
-              },
-              admissionLifecycle,
-            );
-            await options.onMessage(combinedMessage);
+              };
+            }
+            await options.onMessage(attachWhatsAppIngressLifecycle(message, admissionLifecycle));
             await settle();
             await Promise.all(orderedEntries.map((entry) => options.markRead(entry.readReceipt)));
           } catch (error) {
@@ -162,21 +150,19 @@ export function createWhatsAppInboundMessageDebouncer(options: {
     // Use one timing fact for both queue admission and shutdown tracking.
     const message = { ...input, debounceMs: options.resolveDebounceMs() };
     const key = buildKey(message);
-    if (key) {
-      message.debounceKey = key;
-      const senderKey = resolveSenderKey(message);
-      const pending = pendingKeys.get(key);
-      // One conversation lane orders dispatch; sender changes end the current
-      // batch so payloads and attribution never combine across participants.
-      if (pending && pending.senderKey !== senderKey) {
-        await debouncer.flushKey(key);
-      }
-      if (message.debounceMs > 0 && shouldDebounce(message)) {
-        message.debounceKeyTracked = true;
-        trackKey(key, senderKey);
-        options.onPendingWorkChanged();
-        notifyWork();
-      }
+    message.debounceKey = key;
+    const senderKey = resolveSenderKey(message);
+    const pending = pendingKeys.get(key);
+    // One conversation lane orders dispatch; sender changes end the current
+    // batch so payloads and attribution never combine across participants.
+    if (pending && pending.senderKey !== senderKey) {
+      await debouncer.flushKey(key);
+    }
+    if (message.debounceMs > 0 && shouldDebounce(message)) {
+      message.debounceKeyTracked = true;
+      trackKey(key, senderKey);
+      options.onPendingWorkChanged();
+      notifyWork();
     }
     await debouncer.enqueue(message);
   };

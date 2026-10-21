@@ -8,8 +8,10 @@ import {
   PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
 } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import { sleep } from "../utils/sleep.js";
 import { asFsSafeFileLockRoot, createFileLockManager } from "./file-lock-manager.js";
 import { root } from "./fs-safe.js";
+import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 
 const PACKAGE_LIFECYCLE_LOCK_RELATIVE_PATH = ".openclaw-lifecycle-lock";
 const DEFAULT_PACKAGE_LIFECYCLE_SCRIPT_TIMEOUT_MS = 20 * 60_000;
@@ -20,7 +22,6 @@ const lifecycleLocks = createFileLockManager("openclaw.package-lifecycle");
 /** Ownership is uncertain: callers must preserve the package until its writers settle. */
 export class PackageLifecycleOwnershipError extends Error {
   readonly packageRoot: string;
-  readonly lockPath: string;
 
   constructor(packageRoot: string, reason: string, cause?: unknown) {
     const lockPath = path.join(packageRoot, PACKAGE_LIFECYCLE_LOCK_RELATIVE_PATH);
@@ -31,7 +32,6 @@ export class PackageLifecycleOwnershipError extends Error {
     );
     this.name = "PackageLifecycleOwnershipError";
     this.packageRoot = packageRoot;
-    this.lockPath = lockPath;
   }
 }
 
@@ -70,10 +70,6 @@ const PACKAGE_LIFECYCLE_SCRIPTS: readonly PackageLifecycleScript[] = [
     relativePath: path.join("scripts", "postinstall-bundled-plugins.mjs"),
   },
 ];
-function resolveLifecycleBudgetMs(scriptTimeoutMs: number): number {
-  return scriptTimeoutMs * PACKAGE_LIFECYCLE_SCRIPTS.length;
-}
-
 function hasErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && error.code === code;
 }
@@ -120,14 +116,8 @@ async function assertLifecycleRoot(packageRoot: string, packageDirectory: Lifecy
   }
 }
 
-async function isPackageLifecyclePending(
-  paths: ReturnType<typeof resolveLifecyclePaths>,
-  packageDirectory: LifecycleRoot,
-) {
-  await assertLifecycleRoot(paths.packageRoot, packageDirectory);
-  const pending = (await pathExists(paths.pending)) || (await pathExists(paths.legacyGuard));
-  await assertLifecycleRoot(paths.packageRoot, packageDirectory);
-  return pending;
+async function isPackageLifecyclePending(paths: ReturnType<typeof resolveLifecyclePaths>) {
+  return (await pathExists(paths.pending)) || (await pathExists(paths.legacyGuard));
 }
 
 async function assertLifecycleAuthority(
@@ -162,7 +152,7 @@ async function acquireLifecycleLock(
 ) {
   // Preserve the shipped admission envelope without timing or expiring healthy script work.
   const waitBudgetMs =
-    resolveLifecycleBudgetMs(scriptTimeoutMs) + PACKAGE_LIFECYCLE_LOCK_WAIT_GRACE_MS;
+    scriptTimeoutMs * PACKAGE_LIFECYCLE_SCRIPTS.length + PACKAGE_LIFECYCLE_LOCK_WAIT_GRACE_MS;
   if (!Number.isFinite(scriptTimeoutMs) || scriptTimeoutMs < 0 || !Number.isFinite(waitBudgetMs)) {
     throw new RangeError("Package lifecycle script timeout must be finite and non-negative");
   }
@@ -252,9 +242,7 @@ async function acquireLifecycleLock(
           error,
         );
       }
-      await new Promise((resolve) => {
-        setTimeout(resolve, Math.min(PACKAGE_LIFECYCLE_LOCK_POLL_MS, remainingMs));
-      });
+      await sleep(Math.min(PACKAGE_LIFECYCLE_LOCK_POLL_MS, remainingMs));
     }
   }
 }
@@ -265,7 +253,7 @@ function runPackageLifecycleScript(
   timeoutMs: number,
 ): void {
   const scriptPath = path.join(packageRoot, script.relativePath);
-  const result = spawnSync(process.execPath, [scriptPath], {
+  const result = spawnSync(process.execPath, [...resolveRuntimeArgs(), scriptPath], {
     cwd: packageRoot,
     env: process.env,
     stdio: "inherit",
@@ -390,7 +378,7 @@ export async function completePendingPackageLifecycle(params: {
   if (!packageDirectory) {
     return false;
   }
-  if (!(await isPackageLifecyclePending(paths, packageDirectory))) {
+  if (!(await isPackageLifecyclePending(paths))) {
     try {
       // Postinstall can clear its marker before its invocation settles. A lock
       // still requires admission before callers may verify or activate this package.
@@ -408,7 +396,7 @@ export async function completePendingPackageLifecycle(params: {
   const assertOwnership = () => assertLifecycleAuthority(paths, packageDirectory, lock);
   let observedPendingWork = false;
   const completeWhileHeld = async () => {
-    observedPendingWork = await isPackageLifecyclePending(paths, packageDirectory);
+    observedPendingWork = await isPackageLifecyclePending(paths);
     if (!observedPendingWork) {
       await assertOwnership();
       return false;
@@ -416,7 +404,6 @@ export async function completePendingPackageLifecycle(params: {
     const finalizeLegacyMarker = !(await pathExists(
       path.join(packageRoot, PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH),
     ));
-    await assertOwnership();
     // Promote the shipped 2026.8.1 dist guard before preinstall removes it.
     // Modern postinstall clears the canonical marker after all lifecycle work succeeds.
     await ensurePendingMarker(paths, packageDirectory, lock);
@@ -433,7 +420,7 @@ export async function completePendingPackageLifecycle(params: {
       // interrupted promotion, so successful retries can still finalize it.
       await fs.rm(paths.pending, { force: true });
     }
-    if (await isPackageLifecyclePending(paths, packageDirectory)) {
+    if (await isPackageLifecyclePending(paths)) {
       throw new Error("OpenClaw package postinstall did not complete its lifecycle marker");
     }
     return true;

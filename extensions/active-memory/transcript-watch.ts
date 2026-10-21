@@ -1,3 +1,6 @@
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
+import { rethrowIncognitoSessionError } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readMemoryResultFromSessionRecord,
@@ -11,7 +14,7 @@ import {
   type TerminalMemorySearchWatch,
 } from "./types.js";
 
-async function readMergedActiveMemoryTranscriptState(params: {
+export async function readMergedActiveMemoryTranscriptState(params: {
   sources: readonly ActiveMemoryTranscriptSource[];
   toolsAllow: readonly string[];
 }): Promise<{
@@ -94,66 +97,47 @@ async function readTerminalMemorySearchResultFromSources(
   return undefined;
 }
 
-function watchTerminalMemorySearchResult(params: {
+export function watchTerminalMemorySearchResult(params: {
   getTranscriptSources: () => readonly ActiveMemoryTranscriptSource[];
   abortSignal: AbortSignal;
   toolsAllow: readonly string[];
 }): TerminalMemorySearchWatch {
-  let stopped = false;
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let resolveWatch: (result: TerminalMemorySearchResult) => void = () => {};
-  const stop = () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      timeoutId = undefined;
-    }
-    params.abortSignal.removeEventListener("abort", stop);
-  };
-  const tick = async () => {
-    if (stopped) {
-      return;
-    }
-    if (params.abortSignal.aborted) {
-      stop();
-      return;
-    }
-    try {
-      const result = await readTerminalMemorySearchResultFromSources(
-        params.getTranscriptSources(),
-        params.toolsAllow,
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal, params.abortSignal]);
+  const {
+    promise,
+    resolve: resolveWatch,
+    reject: rejectWatch,
+  } = createDeferred<TerminalMemorySearchResult>();
+  const stop = () => controller.abort();
+  const poll = async () => {
+    while (!signal.aborted) {
+      try {
+        const result = await readTerminalMemorySearchResultFromSources(
+          params.getTranscriptSources(),
+          params.toolsAllow,
+        );
+        // Execution can settle while this transcript read is still in flight.
+        if (signal.aborted) {
+          return;
+        }
+        if (result) {
+          stop();
+          resolveWatch(result);
+          return;
+        }
+      } catch (error) {
+        rethrowIncognitoSessionError(error);
+        // Transcript polling is opportunistic; normal timeout handling remains authoritative.
+      }
+      await sleepWithAbort(TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS, signal, { ref: false }).catch(
+        () => undefined,
       );
-      // Execution can settle while this transcript read is still in flight.
-      if (stopped || params.abortSignal.aborted) {
-        return;
-      }
-      if (result) {
-        stop();
-        resolveWatch(result);
-        return;
-      }
-    } catch {
-      // Transcript polling is opportunistic; normal timeout handling remains authoritative.
-    }
-    if (!stopped) {
-      timeoutId = setTimeout(() => {
-        void tick();
-      }, TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS);
-      timeoutId.unref?.();
     }
   };
-  const promise = new Promise<TerminalMemorySearchResult>((resolve) => {
-    resolveWatch = resolve;
-    params.abortSignal.addEventListener("abort", stop, { once: true });
-    void tick();
-  });
+  void poll().catch(rejectWatch);
   return {
     promise,
     stop,
   };
 }
-
-export { readMergedActiveMemoryTranscriptState, watchTerminalMemorySearchResult };

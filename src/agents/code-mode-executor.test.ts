@@ -39,50 +39,39 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Code Mode executor admission", () => {
-  it("charges executor loading to the wall budget while preserving the separate CPU grant", async () => {
-    mocks.resolve.mockImplementation(() => {
-      now = 250;
-      return { id: "quickjs", execute: mocks.execute };
-    });
-    expect(
-      await runCodeModeExecutor(input, {
+  it.each([
+    { loadingMs: 250, failure: undefined },
+    { loadingMs: 1_000, failure: "timeout" },
+    { loadingMs: 0, failure: "aborted" },
+  ] as const)(
+    "rechecks admission after $loadingMs ms of loading: $failure",
+    async ({ loadingMs, failure }) => {
+      const abort = new AbortController();
+      mocks.resolve.mockImplementation(() => {
+        now = loadingMs;
+        if (failure === "aborted") {
+          abort.abort();
+        }
+        return { id: "quickjs", execute: mocks.execute };
+      });
+      const result = await runCodeModeExecutor(input, {
         executor: "quickjs",
         timeoutMs: 3_000,
-        runtimeConfig: { plugins: { enabled: false } },
-      }),
-    ).toEqual(completed);
-    expect(mocks.execute).toHaveBeenCalledWith(
-      { ...input, config: { ...config, timeoutMs: 750 } },
-      { timeoutMs: 2_750, signal: undefined, inlineHost: undefined },
-    );
-  });
-
-  it("does not admit guest execution when loading consumes the entire grant", async () => {
-    mocks.resolve.mockImplementation(() => {
-      now = 1_000;
-      return { id: "quickjs", execute: mocks.execute };
-    });
-    await expect(
-      runCodeModeExecutor(input, { executor: "quickjs", timeoutMs: 3_000 }),
-    ).resolves.toMatchObject({ status: "failed", code: "timeout" });
-    expect(mocks.execute).not.toHaveBeenCalled();
-  });
-
-  it("rechecks cancellation after loading the selected executor", async () => {
-    const abort = new AbortController();
-    mocks.resolve.mockImplementation(() => {
-      abort.abort();
-      return { id: "quickjs", execute: mocks.execute };
-    });
-    await expect(
-      runCodeModeExecutor(input, {
-        executor: "quickjs",
-        timeoutMs: 3_000,
-        signal: abort.signal,
-      }),
-    ).resolves.toMatchObject({ status: "failed", code: "aborted" });
-    expect(mocks.execute).not.toHaveBeenCalled();
-  });
+        signal: failure === "aborted" ? abort.signal : undefined,
+        runtimeConfig: failure ? undefined : { plugins: { enabled: false } },
+      });
+      if (failure) {
+        expect(result).toMatchObject({ status: "failed", code: failure });
+        expect(mocks.execute).not.toHaveBeenCalled();
+      } else {
+        expect(result).toEqual(completed);
+        expect(mocks.execute).toHaveBeenCalledWith(
+          { ...input, config: { ...config, timeoutMs: 750 } },
+          { timeoutMs: 2_750, signal: undefined, inlineHost: undefined },
+        );
+      }
+    },
+  );
 
   it("resumes the admitted continuation when the current executor selection differs", async () => {
     const continuation: CodeModeExecutorContinuation = {

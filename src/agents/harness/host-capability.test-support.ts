@@ -1,9 +1,20 @@
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
-import type { AdmittedRunContext, AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
-import type { createAgentHarnessCompletionScope } from "../agent-harness-completion-scope.js";
-import type { createAgentHarnessHostCapabilities } from "./host-capability.js";
+// Keep static: compiled-worker preparation belongs at collection, not in a hook or test deadline.
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
+} from "../admitted-run-context.js";
+import { createAgentHarnessCompletionScope } from "../agent-harness-completion-scope.js";
+import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 
 type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
+
+export const harnessHostAdmissionsForTest = new WeakMap<
+  ReturnType<typeof createAgentHarnessHostCapabilities>["capabilities"],
+  { admittedRunContext: AdmittedRunContext; close: () => void }
+>();
 
 type AdmittedHostCapabilityTestFixture = Readonly<{
   admittedRunContext: AdmittedRunContext;
@@ -20,15 +31,11 @@ export async function createAdmittedHostCapabilityTestFixture(
   attempt: Omit<HostAttempt, "admittedRunContext">,
   options: {
     nativeModelPolicySupport?: "exact";
+    toolCalls?: "deny";
     gatewayContext?: true;
     operatorAuthority?: AdmittedRunOperatorAuthority;
   } = {},
 ): Promise<AdmittedHostCapabilityTestFixture> {
-  const { createAgentHarnessCompletionScope } =
-    await import("../agent-harness-completion-scope.js");
-  const { createOperationalRunInstanceRef, prepareAgentRunAdmission } =
-    await import("../admitted-run-context.js");
-  const { createAgentHarnessHostCapabilities } = await import("./host-capability.js");
   let resolveGatewayContext: GatewayContextResolver | undefined;
   let runWithGatewayScope = <T>(run: () => T): T => run();
   let closeGateway = () => {};
@@ -73,8 +80,13 @@ export async function createAdmittedHostCapabilityTestFixture(
       attempt: { ...attempt, admittedRunContext },
       pluginId: "codex",
       nativeModelPolicySupport: options.nativeModelPolicySupport,
+      toolCalls: options.toolCalls,
     }),
   );
+  harnessHostAdmissionsForTest.set(host.capabilities, {
+    admittedRunContext,
+    close: admission.close,
+  });
   return {
     admittedRunContext,
     hostCapabilities: host.capabilities,

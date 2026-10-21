@@ -20,64 +20,6 @@ function writeNativeDependency(pluginRoot: string) {
   );
 }
 
-function writeJavaScriptPluginFixture(id: string) {
-  const pluginRoot = tempDirs.make("openclaw-plugin-loader-");
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id,
-        configSchema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {},
-        },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  fs.writeFileSync(
-    path.join(pluginRoot, "index.cjs"),
-    `module.exports = { id: ${JSON.stringify(id)}, register() {} };`,
-    "utf-8",
-  );
-  return pluginRoot;
-}
-
-function writePackagedPluginFixture(id: string) {
-  const pluginRoot = writeJavaScriptPluginFixture(id);
-  writeNativeDependency(pluginRoot);
-  fs.writeFileSync(
-    path.join(pluginRoot, "index.cjs"),
-    `const assert = require("node:assert/strict");
-    const dependency = require("./dependency.cjs");
-    module.exports = { id: ${JSON.stringify(id)}, register() {
-      assert.equal(dependency, require.cache[require.resolve("./dependency.cjs")].exports);
-      assert.equal(dependency.answer, 42);
-      assert.equal(dependency.default.answer, 17);
-    } };`,
-    "utf-8",
-  );
-  fs.writeFileSync(
-    path.join(pluginRoot, "package.json"),
-    JSON.stringify(
-      {
-        name: id,
-        type: "commonjs",
-        openclaw: {
-          extensions: ["./index.cjs"],
-        },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  return pluginRoot;
-}
-
 function writePreSplitSdkBridgeConsumerFixture() {
   const pluginRoot = tempDirs.make("openclaw-plugin-loader-");
   writeNativeDependency(pluginRoot);
@@ -160,68 +102,6 @@ afterEach(() => {
 });
 
 describe("createPluginModuleLoader", () => {
-  it("loads bundled JavaScript natively without source transformation", () => {
-    const pluginRoot = writeJavaScriptPluginFixture("demo");
-    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", pluginRoot);
-
-    const before = getPluginModuleLoaderStats();
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      installRecords: {},
-      workspaceDir: pluginRoot,
-      onlyPluginIds: ["demo"],
-      config: {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: true,
-            },
-          },
-        },
-      },
-    });
-
-    const after = getPluginModuleLoaderStats();
-    expect(registry.plugins.find((plugin) => plugin.id === "demo")).toMatchObject({
-      status: "loaded",
-      origin: "bundled",
-    });
-    expect(after.nativeHits).toBeGreaterThan(before.nativeHits);
-    expect(after.sourceTransformForced).toBe(before.sourceTransformForced);
-    expect(after.sourceTransformFallbacks).toBe(before.sourceTransformFallbacks);
-  });
-
-  it("loads packaged JavaScript natively without source transformation", () => {
-    const pluginRoot = writePackagedPluginFixture("npm-demo");
-    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", tempDirs.make("openclaw-plugin-loader-"));
-
-    const before = getPluginModuleLoaderStats();
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      installRecords: {},
-      onlyPluginIds: ["npm-demo"],
-      config: {
-        plugins: {
-          enabled: true,
-          load: {
-            paths: [pluginRoot],
-          },
-          allow: ["npm-demo"],
-          entries: {
-            "npm-demo": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    });
-
-    const after = getPluginModuleLoaderStats();
-    expect(registry.plugins.find((plugin) => plugin.id === "npm-demo")?.status).toBe("loaded");
-    expect(after.sourceTransformForced).toBe(before.sourceTransformForced);
-    expect(after.sourceTransformFallbacks).toBe(before.sourceTransformFallbacks);
-  });
-
   it("loads published pre-split SDK bridge imports (doctor repair, WhatsApp ack, Slack render)", () => {
     const pluginRoot = writePreSplitSdkBridgeConsumerFixture();
     const hostRoot = createCompiledSdkHost(

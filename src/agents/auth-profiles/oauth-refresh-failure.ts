@@ -2,15 +2,16 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
+  readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeBoundedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { formatProviderLoginCommand } from "../../shared/provider-login-command.js";
-import { formatRedactedOAuthRefreshError } from "./oauth-refresh-error-format.js";
 import type { AuthProfileFailureReason, AuthProfileStore, OAuthCredential } from "./types.js";
 
 export type OAuthRefreshFailureReason =
@@ -37,6 +38,50 @@ type OAuthRefreshFailurePresentation = {
   status?: number;
   summary?: string;
 };
+
+function formatRawErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    let formatted = error.message || error.name || "Error";
+    let cause: unknown = error.cause;
+    const seen = new Set<unknown>([error]);
+    while (cause && !seen.has(cause)) {
+      seen.add(cause);
+      if (cause instanceof Error) {
+        if (cause.message) {
+          formatted += ` | ${cause.message}`;
+        }
+        cause = cause.cause;
+      } else if (typeof cause === "string") {
+        formatted += ` | ${cause}`;
+        break;
+      } else {
+        break;
+      }
+    }
+    return formatted;
+  }
+  if (
+    typeof error === "string" ||
+    typeof error === "number" ||
+    typeof error === "boolean" ||
+    typeof error === "bigint"
+  ) {
+    return String(error);
+  }
+  try {
+    return JSON.stringify(error) ?? String(error);
+  } catch {
+    return Object.prototype.toString.call(error);
+  }
+}
+
+function formatRedactedOAuthRefreshError(error: unknown, secrets: string[]): string {
+  let redacted = formatRawErrorMessage(error);
+  for (const secret of secrets) {
+    redacted = redacted.split(secret).join("[redacted]");
+  }
+  return redactSensitiveText(redacted);
+}
 
 const oauthRefreshCleanupAggregates = new WeakSet<AggregateError>();
 // Duplicated module graphs share provenance without mutating provider-owned errors.
@@ -131,13 +176,6 @@ function readProviderOAuthRefreshFailure(error: unknown): OAuthRefreshFailurePre
   };
 }
 
-type StructuredClaudeCliAuthFailure = {
-  provider?: unknown;
-  rawError?: unknown;
-  reason?: unknown;
-  status?: unknown;
-};
-
 /** Error type that carries provider and classified OAuth refresh failure reason. */
 export class OAuthRefreshFailureError extends Error {
   readonly errorType?: string;
@@ -189,13 +227,12 @@ function createOAuthRefreshUserFacingCause(cause: unknown): unknown {
   return cause;
 }
 
-/** Refresh failure that preserves a redacted refreshed store and credential. */
+/** Refresh failure with a redacted public cause and private refreshed store. */
 export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
   override readonly profileId: string;
   readonly code?: string;
   readonly lockPath?: string;
   readonly #refreshedStore: AuthProfileStore;
-  readonly #credential: OAuthCredential;
 
   constructor(params: {
     credential: OAuthCredential;
@@ -231,33 +268,21 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
         : undefined,
     });
     this.name = "OAuthManagerRefreshError";
-    this.#credential = params.credential;
     this.profileId = params.profileId;
     this.#refreshedStore = params.refreshedStore;
     if (isSettledOAuthRefreshFailure(params.cause)) {
       markOAuthRefreshFailureSettled(this);
     }
     if (structuredCause) {
-      this.code = typeof structuredCause.code === "string" ? structuredCause.code : undefined;
-      if (typeof structuredCause.lockPath === "string") {
-        this.lockPath = structuredCause.lockPath;
-      } else if (
-        typeof structuredCause.cause === "object" &&
-        structuredCause.cause !== null &&
-        "lockPath" in structuredCause.cause &&
-        typeof structuredCause.cause.lockPath === "string"
-      ) {
-        this.lockPath = structuredCause.cause.lockPath;
-      }
+      this.code = readStringField(structuredCause, "code");
+      this.lockPath =
+        readStringField(structuredCause, "lockPath") ??
+        readStringField(asOptionalObjectRecord(structuredCause.cause), "lockPath");
     }
   }
 
   getRefreshedStore(): AuthProfileStore {
     return this.#refreshedStore;
-  }
-
-  getCredential(): OAuthCredential {
-    return this.#credential;
   }
 
   toJSON(): { name: string; message: string; profileId: string; provider: string } {
@@ -320,27 +345,16 @@ function isClaudeCliExpiredOAuthMessage(message: string): boolean {
   return CLAUDE_CLI_AUTH_FAILURE_RE.test(message);
 }
 
-function readStructuredClaudeCliAuthFailure(err: unknown): StructuredClaudeCliAuthFailure | null {
-  if (!err || typeof err !== "object") {
-    return null;
-  }
-  const candidate = err as StructuredClaudeCliAuthFailure & { name?: unknown };
-  if (
-    candidate.name !== "FailoverError" ||
-    candidate.provider !== "claude-cli" ||
-    candidate.reason !== "auth" ||
-    candidate.status !== 401
-  ) {
-    return null;
-  }
-  return candidate;
-}
-
 function classifyStructuredClaudeCliOAuthFailureReason(
   err: unknown,
 ): OAuthRefreshFailureReason | null {
-  const failure = readStructuredClaudeCliAuthFailure(err);
-  if (!failure) {
+  const failure = asOptionalObjectRecord(err);
+  if (
+    failure?.name !== "FailoverError" ||
+    failure.provider !== "claude-cli" ||
+    failure.reason !== "auth" ||
+    failure.status !== 401
+  ) {
     return null;
   }
   const rawError = typeof failure.rawError === "string" ? failure.rawError : "";

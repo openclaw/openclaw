@@ -3,20 +3,21 @@
 import { configureAiTransportHost } from "@openclaw/ai";
 import { configureProviderErrorRedactor } from "@openclaw/ai/diagnostics";
 import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-setting.js";
+import { getModelProviderLocalService } from "../agents/provider-local-service.js";
+import { getModelProviderRequestTransport } from "../agents/provider-request-config.js";
 import { unwrapModelHeaderSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
 import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
 } from "../agents/provider-transport-fetch.js";
-import {
-  redactModelVisibleSecrets,
-  redactSecrets,
-  redactToolPayloadText,
-} from "../logging/redact.js";
+import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAnthropicInlineContentBlocks } from "../media/anthropic-inline-images.js";
+import { getProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
 import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { formatModelTransportContext } from "./model-transport-context.js";
 
 const transportLogBySubsystem = new Map<string, ReturnType<typeof createSubsystemLogger>>();
 
@@ -32,10 +33,21 @@ function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogge
 }
 
 configureAiTransportHost({
+  runInDetachedAsyncContext,
   observePendingProviderWork: (pending) => {
     void trackAsyncWork(() => pending).catch(() => {});
   },
   buildModelFetch: buildGuardedModelFetch,
+  // Public SDK adapters can invoke built-ins before the agent/plugin runtime host loads.
+  requiresManagedTransport: (model, scope) => {
+    const request = getModelProviderRequestTransport(model);
+    return Boolean(
+      request?.proxy ||
+      request?.tls ||
+      getModelProviderLocalService(model) ||
+      (scope === "fetch" && getProviderAuthAuthority(model)),
+    );
+  },
   unwrapModelTransportSentinels: unwrapModelHeaderSentinelsForProviderEgress,
   resolveSecretSentinel: (value) => {
     const swapped = swapSecretSentinelsInText(value);
@@ -47,7 +59,6 @@ configureAiTransportHost({
     }
     return swapped.text;
   },
-  redactModelVisibleSecrets,
   redactToolPayloadText,
   normalizeAnthropicInlineContentBlocks,
   resolveOpenAIStrictToolSetting,
@@ -59,9 +70,11 @@ configureAiTransportHost({
     }
     const entry = build();
     if (entry) {
-      log.debug(entry.message, entry.data);
+      log.debug(entry.message + formatModelTransportContext(), entry.data);
     }
   },
-  logInfo: (subsystem, message, data) => transportLog(subsystem).info(message, data),
-  logWarn: (subsystem, message, data) => transportLog(subsystem).warn(message, data),
+  logInfo: (subsystem, message, data) =>
+    transportLog(subsystem).info(message + formatModelTransportContext(), data),
+  logWarn: (subsystem, message, data) =>
+    transportLog(subsystem).warn(message + formatModelTransportContext(), data),
 });

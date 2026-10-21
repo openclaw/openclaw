@@ -1,4 +1,3 @@
-// Control UI route classifier for base-path and root-mounted SPA serving.
 import { resolvePluginDiscoveryIdentity } from "../plugins/catalog-discovery.js";
 import { acceptsControlUiHtmlResponse, isReadHttpMethod } from "./control-ui-http-utils.js";
 import {
@@ -84,29 +83,19 @@ export function classifyControlUiRequest(params: {
         return { kind: "not-control-ui" };
       }
     }
-    if (pathname === "/api" || pathname.startsWith("/api/")) {
+    // API and join namespaces, including disabled OpenAI endpoints, never serve the SPA.
+    if (
+      ["/api", "/j", "/v1"].some((root) => pathname === root || pathname.startsWith(`${root}/`))
+    ) {
       return { kind: "not-control-ui" };
     }
-    if (pathname === "/j" || pathname.startsWith("/j/")) {
-      return { kind: "not-control-ui" };
-    }
-    // Disabled OpenAI-compatible endpoints must return 404, not the SPA HTML.
-    if (pathname === "/v1" || pathname.startsWith("/v1/")) {
-      return { kind: "not-control-ui" };
-    }
-    if (!isReadHttpMethod(method)) {
-      return { kind: "not-control-ui" };
-    }
-    return { kind: "serve", spaFallback };
-  }
-
-  if (!pathname.startsWith(`${basePath}/`) && pathname !== basePath) {
+  } else if (!pathname.startsWith(`${basePath}/`) && pathname !== basePath) {
     return { kind: "not-control-ui" };
   }
   if (!isReadHttpMethod(method)) {
     return { kind: "not-control-ui" };
   }
-  if (pathname === basePath) {
+  if (basePath && pathname === basePath) {
     return { kind: "redirect", location: `${basePath}/${search}` };
   }
   return { kind: "serve", spaFallback };

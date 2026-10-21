@@ -1,6 +1,5 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata.test-support.js";
 import { loadPluginManifest } from "../../../plugins/manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
@@ -26,32 +25,30 @@ import type { ResolvedProviderAuth } from "../../model-auth.js";
 import { prepareModelRunCapabilities } from "../../model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { createEmptyPreparedModelRuntimeFixture } from "../model.fixture.test-support.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
 import { resolveBundledStaticCatalogModel } from "../model.static-catalog.js";
-import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import { prepareEmbeddedRunRuntime } from "./runtime.js";
 
-// Credential acquisition and native process installation are outside this network-free
-// composition. Route planning, model resolution, auth commit, and the overlay remain real.
+// Keep route planning/auth commit real; isolate credential acquisition and native installation.
 vi.mock("../../model-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../model-auth.js")>()),
-  getApiKeyForModelCore: async ({
-    profileId,
-  }: {
-    profileId: string;
-  }): Promise<ResolvedProviderAuth> => ({
-    apiKey: "fixture-key",
-    mode: "api-key",
-    source: "fixture",
-    profileId,
-  }),
+  getApiKeyForModelCore: async ({ profileId }: { profileId: string }) =>
+    ({
+      apiKey: "fixture-key",
+      mode: "api-key",
+      source: "fixture",
+      profileId,
+    }) satisfies ResolvedProviderAuth,
 }));
+// mock-isolation: Runtime preparation uses synthetic credentials without host auth reads.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: async () => ({ mode: "token", apiKey: "fixture-token" }),
-  resolveProviderAuthProfileMetadata: () => ({}),
+  resolveProviderAuthProfileMetadataAsync: async () => ({}),
 }));
 vi.mock("openclaw/plugin-sdk/provider-catalog-live-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime")>()),
-  getCachedLiveProviderModelRows: async () => [
+  fetchLiveProviderModelRows: async () => [
     {
       slug: "gpt-5.6-luna",
       supported_reasoning_levels: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
@@ -103,7 +100,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
     });
     const pluginRegistry = createEmptyPluginRegistry();
     pluginRegistry.providers.push({ pluginId: "openai", source: pluginDir, provider });
-    const config: OpenClawConfig = {};
+    const config = {};
     setCurrentPluginMetadataSnapshot(metadataSnapshot, { config, workspaceDir: root });
     setActivePluginRegistry(pluginRegistry, "effort-route", "default", root);
     const model = resolveBundledStaticCatalogModel({
@@ -119,22 +116,14 @@ describe("selected route thinking metadata at runtime preparation", () => {
     }
     platformModel = model;
     preparedModelRuntime = {
-      catalogOwner: undefined,
-      agentDir: state.agentDir(),
+      ...createEmptyPreparedModelRuntimeFixture({
+        agentDir: state.agentDir(),
+        config,
+        metadataSnapshot,
+        createStores: createEmptyAgentDiscoveryStores,
+      }),
       workspaceDir: root,
-      activeProjectKeys: [],
-      config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
-      metadataSnapshot,
       pluginRegistry,
-      allowGatewaySubagentBinding: false,
-      modelCatalog: { entries: [], routeVariants: [] },
-      configuredRuntimeModels: [],
-      findConfiguredRuntimeModel: () => undefined,
-      inlineProviderModels: [],
-      createStores: createEmptyAgentDiscoveryStores,
     };
     await state.writeAuthProfiles({
       version: 1,
@@ -189,10 +178,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
     const capabilityApi =
       capability === "platform" ? "openai-responses" : "openai-chatgpt-responses";
     expect(capabilityModel.api).toBe(capabilityApi);
-    const capabilityEntry = {
-      ...capabilityModel,
-      api: capabilityApi,
-    } satisfies ModelCatalogEntry;
+    const capabilityEntry = { ...capabilityModel, api: capabilityApi } satisfies ModelCatalogEntry;
     const modelThinkingCapability =
       capability === "absent"
         ? undefined
@@ -232,11 +218,14 @@ describe("selected route thinking metadata at runtime preparation", () => {
     );
     try {
       const { effectiveModel, activePreparedAuthPlan } = runtime.snapshot();
+      const platform = route === "platform";
       expect(activePreparedAuthPlan.modelRoute?.authRequirement).toBe(
-        route === "platform" ? "api-key" : "subscription",
+        platform ? "api-key" : "subscription",
       );
-      expect(effectiveModel.baseUrl).toBe(route === "platform" ? PLATFORM : SUBSCRIPTION);
-      expect(effectiveModel.thinkingLevelMap?.off).toBe(route === "platform" ? "none" : null);
+      expect(effectiveModel).toMatchObject({
+        baseUrl: platform ? PLATFORM : SUBSCRIPTION,
+        thinkingLevelMap: { off: platform ? "none" : null },
+      });
       const efforts = effectiveModel.compat?.supportedReasoningEfforts ?? [];
       if (modelThinkingCapability) {
         expect(modelThinkingCapability.route).toBeUndefined();
@@ -248,7 +237,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
           ),
         );
       }
-      if (route === "platform") {
+      if (platform) {
         expect(efforts).toContain("none");
       } else {
         expect(efforts).not.toContain("none");

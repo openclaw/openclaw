@@ -15,20 +15,36 @@ export function applyCanonicalOwnerEvidence(
   const bySessionKey = new Map(
     inventory.map((item) => [`${item.target.sqlitePath}\0${item.sessionKey}`, item] as const),
   );
-  const resolveCanonicalKey = (
-    item: CanonicalOwnerEvidenceItem,
-    seen = new Set<string>(),
-  ): string => {
-    if (!item.canonicalOwnerSessionKey) {
-      return item.canonicalKey;
+  const resolved = new Map<CanonicalOwnerEvidenceItem, string>();
+  const resolveCanonicalKey = (item: CanonicalOwnerEvidenceItem): string => {
+    const seen = new Set<CanonicalOwnerEvidenceItem>();
+    let current = item;
+    let canonicalKey: string;
+    for (;;) {
+      const cached = resolved.get(current);
+      if (cached !== undefined) {
+        canonicalKey = cached;
+        break;
+      }
+      if (seen.has(current)) {
+        // Cycles keep the repeated row's key; caching that choice would change later roots.
+        return current.canonicalKey;
+      }
+      seen.add(current);
+      const owner = current.canonicalOwnerSessionKey
+        ? bySessionKey.get(`${current.target.sqlitePath}\0${current.canonicalOwnerSessionKey}`)
+        : undefined;
+      if (!owner) {
+        canonicalKey = current.canonicalKey;
+        break;
+      }
+      current = owner;
     }
-    const identity = `${item.target.sqlitePath}\0${item.sessionKey}`;
-    const owner = bySessionKey.get(`${item.target.sqlitePath}\0${item.canonicalOwnerSessionKey}`);
-    if (!owner || seen.has(identity)) {
-      return item.canonicalKey;
+    // Resolve each acyclic suffix once, without consuming stack per owner link.
+    for (const visited of seen) {
+      resolved.set(visited, canonicalKey);
     }
-    seen.add(identity);
-    return owner.canonicalOwnerSessionKey ? resolveCanonicalKey(owner, seen) : owner.canonicalKey;
+    return canonicalKey;
   };
   const canonicalKeysByStoredKey = new Map<string, Set<string>>();
   for (const item of inventory) {

@@ -20,22 +20,6 @@ type HeartbeatLine = {
   visible: string;
 };
 
-type LegacyHeartbeatTaskBuilder = Partial<LegacyHeartbeatTask>;
-
-function splitHeartbeatLines(content: string): Array<{ raw: string; source: string }> {
-  const lines: Array<{ raw: string; source: string }> = [];
-  const matcher = /[^\r\n]*(?:\r\n|\n|\r|$)/g;
-  for (const match of content.matchAll(matcher)) {
-    const source = match[0];
-    if (!source) {
-      continue;
-    }
-    const raw = source.replace(/(?:\r\n|\n|\r)$/, "");
-    lines.push({ raw, source });
-  }
-  return lines;
-}
-
 function scanHeartbeatLine(raw: string, state: { inHtmlComment: boolean }) {
   let cursor = 0;
   let hasHtmlComment = state.inHtmlComment;
@@ -73,18 +57,18 @@ function scanHeartbeatLine(raw: string, state: { inHtmlComment: boolean }) {
 
 function tokenizeHeartbeatLines(content: string): HeartbeatLine[] {
   const state = { inHtmlComment: false };
-  return splitHeartbeatLines(content).map((line) => {
-    const scanned = scanHeartbeatLine(line.raw, state);
-    const lineEnding = line.source.slice(line.raw.length);
-    const token: HeartbeatLine = {
-      raw: line.raw,
-      source: line.source,
+  return (content.match(/[^\r\n]*(?:\r\n|\n|\r|$)/g) ?? []).filter(Boolean).map((source) => {
+    const raw = source.replace(/(?:\r\n|\n|\r)$/, "");
+    const scanned = scanHeartbeatLine(raw, state);
+    const line: HeartbeatLine = {
+      raw,
+      source,
       visible: scanned.visible,
     };
     if (scanned.hasHtmlComment) {
-      token.htmlCommentSource = scanned.htmlCommentRaw + lineEnding;
+      line.htmlCommentSource = scanned.htmlCommentRaw + source.slice(raw.length);
     }
-    return token;
+    return line;
   });
 }
 
@@ -103,7 +87,7 @@ export function analyzeLegacyHeartbeatTasks(content: string): LegacyHeartbeatTas
   let taskEntryCount = 0;
   let hasTasksBlock = false;
   let inTasksBlock = false;
-  let currentTask: LegacyHeartbeatTaskBuilder | undefined;
+  let currentTask: Partial<LegacyHeartbeatTask> | undefined;
   let orphanEntryOpen = false;
 
   const finishCurrentTask = () => {
@@ -153,19 +137,14 @@ export function analyzeLegacyHeartbeatTasks(content: string): LegacyHeartbeatTas
     }
 
     const isIndented = line.visible.startsWith(" ") || line.visible.startsWith("\t");
-    if (isIndented && trimmed.startsWith("interval:")) {
+    const field = trimmed.startsWith("interval:")
+      ? "interval"
+      : trimmed.startsWith("prompt:")
+        ? "prompt"
+        : undefined;
+    if (isIndented && field) {
       if (currentTask) {
-        currentTask.interval = unquoteTaskValue(trimmed.slice("interval:".length));
-      } else if (!orphanEntryOpen) {
-        taskEntryCount += 1;
-        orphanEntryOpen = true;
-      }
-      removedLineIndexes.add(index);
-      continue;
-    }
-    if (isIndented && trimmed.startsWith("prompt:")) {
-      if (currentTask) {
-        currentTask.prompt = unquoteTaskValue(trimmed.slice("prompt:".length));
+        currentTask[field] = unquoteTaskValue(trimmed.slice(field.length + 1));
       } else if (!orphanEntryOpen) {
         taskEntryCount += 1;
         orphanEntryOpen = true;

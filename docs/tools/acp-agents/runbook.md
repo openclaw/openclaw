@@ -34,7 +34,9 @@ Quick `/acp` flow from chat:
     progress, `/acp cancel` first.
   </Step>
   <Step title="Stop">
-    `/acp cancel` (current turn) or `/acp close` (session + bindings).
+    `/acp cancel` (current turn and waiting messages) or `/acp close`
+    (session + bindings). `/acp cancel` also cancels a backend that is still
+    running without an OpenClaw turn; channel `/stop` does not.
   </Step>
 </Steps>
 

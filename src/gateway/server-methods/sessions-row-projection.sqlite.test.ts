@@ -4,6 +4,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import * as historyWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import * as sqlite from "../../infra/kysely-sync.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -115,28 +116,7 @@ describe("resident session rows", () => {
     });
   });
 
-  it("resolves a person reference without SQLite when every row is clean", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const context = requestContext(await seedSessions());
-      const client = identifiedClient("owner@example.com");
-      await listSessions({ context, client, request: { archived: "all" } });
-      expect(getSessionRowProjection(context)!.dirtyRowCount).toBe(0);
-      const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const reads = observeMainThreadReads();
-      const result = await listSessions({
-        context,
-        client,
-        request: { archived: "all", involvingProfileId: "deadbeef" },
-      });
-      expect(result.sessions).toEqual([]);
-      expect({
-        prepares: prepares.mock.calls.length,
-        reads: reads.count(),
-      }).toEqual({ prepares: 0, reads: 0 });
-    });
-  });
-
-  it("lists for different viewers and describes without SQLite after initialization", async () => {
+  it("lists for different viewers, filters a person and describes without SQLite after initialization", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = await seedSessions();
       const context = requestContext(cfg);
@@ -144,6 +124,7 @@ describe("resident session rows", () => {
       const viewer = identifiedClient("viewer@example.com");
       const request = { archived: "all" as const, limit: 100 };
       await listSessions({ context, client, request });
+      expect(getSessionRowProjection(context)!.dirtyRowCount).toBe(0);
 
       const queries = vi.spyOn(sqlite, "executeSqliteQuerySync");
       const firstRows = vi.spyOn(sqlite, "executeSqliteQueryTakeFirstSync");
@@ -151,6 +132,12 @@ describe("resident session rows", () => {
       // Native calls also cover prepared compiled queries and direct PRAGMA probes.
       const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
       const reads = observeMainThreadReads();
+      const person = await listSessions({
+        context,
+        client,
+        request: { archived: "all", involvingProfileId: "deadbeef" },
+      });
+      expect(person.sessions).toEqual([]);
       const listed = await listSessions({
         context,
         client: viewer,
@@ -182,7 +169,7 @@ describe("resident session rows", () => {
     });
   });
 
-  it("refreshes only the dirty identity through bounded keyed readers, then reuses it without SQL", async () => {
+  it("refreshes only the invalidated identity through bounded keyed readers, then reuses it without SQL", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = await seedSessions();
       const context = requestContext(cfg);
@@ -198,6 +185,13 @@ describe("resident session rows", () => {
         { agentId: "main", sessionKey: key },
         { ...current.entry, label: "Committed label" },
       );
+      // Complete commit receipts reuse their facts; missing facts require the keyed fallback.
+      sessionChanges.invalidate({
+        agentId: "main",
+        sessionKey: key,
+        scope: "session-entry",
+        factsInvalidated: true,
+      });
       expect(projection.dirtyRowCount).toBeGreaterThan(0);
       const workerKeys = vi.fn<(keys: readonly string[]) => void>();
       const readDatabases = historyWorker.withSessionHistoryWorkerDatabases;
@@ -217,6 +211,12 @@ describe("resident session rows", () => {
       );
       const hostSql = observeHostDataSql();
       try {
+        sessionChanges.emit({
+          agentId: "main",
+          sessionKey: key,
+          storePath: current.storeTarget.storePath,
+          factsInvalidated: true,
+        });
         const listed = await listSessions({ context, client, request });
         expect(listed.sessions.find((row) => row.key === key)?.label).toBe("Committed label");
         expect(projection.materializedCount - before).toBe(1);

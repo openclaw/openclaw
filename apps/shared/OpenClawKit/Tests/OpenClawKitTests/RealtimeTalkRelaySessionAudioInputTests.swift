@@ -199,7 +199,7 @@ struct RealtimeTalkRelaySessionAudioInputTests {
         #expect(timestamp == timestamp.rounded())
     }
 
-    @Test func `microphone saturation terminates once without sending the fifth frame`() async throws {
+    @Test func `microphone saturation terminates once without sending the frame past the cap`() async throws {
         let requests = ControlledRealtimeAudioRequests()
         let audioCapture = TestRealtimeTalkAudioCapture()
         var statuses: [String] = []
@@ -228,20 +228,21 @@ struct RealtimeTalkRelaySessionAudioInputTests {
         var pending: [Task<Void, Never>] = []
         var saturated: Task<Void, Never>?
         do {
-            for index in 0..<4 {
-                guard let send = session._test_enqueueMicrophoneFrame(Data([UInt8(index)])) else {
+            let cap = RealtimeTalkRelaySession.maxPendingAudioSends
+            for index in 0..<cap {
+                guard let send = session._test_enqueueMicrophoneFrame(Data([UInt8(truncatingIfNeeded: index)])) else {
                     throw RealtimeRelayTestTimeout(operation: "microphone frame \(index) admission")
                 }
                 pending.append(send)
             }
-            try await requests.waitForRequestCount(4)
+            try await requests.waitForRequestCount(cap)
             guard let saturationSend = session._test_enqueueMicrophoneFrame(Data([0xFF])) else {
                 throw RealtimeRelayTestTimeout(operation: "saturation frame admission")
             }
             saturated = saturationSend
             _ = try await terminationObserved.next("microphone saturation termination")
             await saturated?.value
-            try await requests.waitForRequestCount(5)
+            try await requests.waitForRequestCount(cap + 1)
         } catch {
             saturated?.cancel()
             pending.forEach { $0.cancel() }
@@ -255,13 +256,9 @@ struct RealtimeTalkRelaySessionAudioInputTests {
         }
 
         let message = String(localized: "Realtime audio input fell behind. Reconnecting…")
-        #expect(await requests.snapshot() == [
-            "talk.session.appendAudio",
-            "talk.session.appendAudio",
-            "talk.session.appendAudio",
-            "talk.session.appendAudio",
-            "talk.session.close",
-        ])
+        #expect(await requests.snapshot() ==
+            Array(repeating: "talk.session.appendAudio", count: RealtimeTalkRelaySession.maxPendingAudioSends)
+            + ["talk.session.close"])
         #expect(statuses == [message])
         #expect(issues.map(\.code) == ["audio_input_unavailable"])
         #expect(issues.map(\.message) == [message])
@@ -277,6 +274,39 @@ struct RealtimeTalkRelaySessionAudioInputTests {
         #expect(issues.count == 1)
         #expect(terminations.count == 1)
         #expect(await requests.snapshot().filter { $0 == "talk.session.close" }.count == 1)
+    }
+
+    @Test func `a one second gateway stall does not saturate microphone input`() async throws {
+        // Gateway appendAudio round trips over Wi-Fi/Tailscale reach ~1 s; ~23 mic frames stay in flight.
+        let requests = ControlledRealtimeAudioRequests()
+        var terminations: [RealtimeTalkRelayTermination] = []
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+                request: { method, _, _ in try await requests.request(method: method) }),
+            options: .init(sessionKey: "main", provider: "xai", model: nil, voice: nil),
+            audioCapture: TestRealtimeTalkAudioCapture(),
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onIssue: { _ in },
+            onTermination: { terminations.append($0) },
+            onSpeakingChanged: { _ in })
+        session._test_setRelaySessionId("relay-1")
+        session._test_prepareAudioSender(relaySessionId: "relay-1")
+        try session._test_startMicrophonePump()
+
+        var pending: [Task<Void, Never>] = []
+        for index in 0..<23 {
+            if let send = session._test_enqueueMicrophoneFrame(Data([UInt8(index)])) { pending.append(send) }
+        }
+        try await requests.waitForRequestCount(23)
+        #expect(terminations.isEmpty)
+
+        session.stop()
+        await requests.succeedPendingAppends()
+        for task in pending {
+            await task.value
+        }
     }
 
     @Test func `active audio request and response failures share the input failure owner`() async throws {

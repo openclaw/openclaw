@@ -1,21 +1,12 @@
 import type { OpenClawPluginGatewayEvents } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateKeyedStore,
+  SessionEntryCurrentCheck,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 // Browser plugin runtime state shared across lazy bundles and duplicate SDK module instances.
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import type {
-  BrowserDashboardDefinition,
-  SessionBrowserDashboard,
-} from "./browser-dashboard.types.js";
-
-export type BrowserDashboardOperation = {
-  promise: Promise<unknown>;
-  readonly materializationFailure?: {
-    error: unknown;
-    definition: BrowserDashboardDefinition;
-    callerCancelled: boolean;
-  };
-};
+import type { SessionBrowserDashboard } from "./browser-dashboard.types.js";
 
 export type BrowserDashboardRegistration = {
   kind: "dashboard-registration";
@@ -25,12 +16,19 @@ export type BrowserDashboardRegistration = {
 };
 export type BrowserSessionTabOperationKey = string | symbol | BrowserDashboardRegistration;
 
+export type BrowserSessionTabAuthority = {
+  runtime?: BrowserStateRuntime;
+  assertCurrent?: () => void;
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
+  dashboardRegistration?: BrowserDashboardRegistration;
+};
+
 export type BrowserStateRuntime = {
   sessionTabs: PluginStateKeyedStore<unknown>;
   sessionTabInitialization?: Promise<void>;
   sessionTabOperations: Map<BrowserSessionTabOperationKey, Promise<void>>;
   gateway?: PluginRuntime["gateway"];
-  dashboardOperations: Map<string, BrowserDashboardOperation>;
+  dashboardOperations: Map<string, Promise<void>>;
   dashboardEvents?: OpenClawPluginGatewayEvents;
   sessionDashboards?: Map<string, SessionBrowserDashboard>;
 };
@@ -46,31 +44,28 @@ const {
 
 export { getBrowserStateRuntime, getOptionalBrowserStateRuntime, setBrowserStateRuntime };
 
+export function assertBrowserSessionTabAuthority(authority: BrowserSessionTabAuthority) {
+  const runtime = authority.runtime ?? getBrowserStateRuntime();
+  if (getOptionalBrowserStateRuntime() !== runtime) {
+    throw new Error("Browser session tab store owner changed");
+  }
+  authority.assertCurrent?.();
+}
+
+export function captureBrowserSessionTabAuthority(
+  authority: BrowserSessionTabAuthority = {},
+): BrowserSessionTabAuthority {
+  return {
+    ...authority,
+    runtime: authority.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
+  };
+}
+
 export function isBrowserStateRuntimeCurrent(
   runtime: BrowserStateRuntime | undefined,
   isCurrent?: () => boolean,
 ): boolean {
   return (!runtime || getOptionalBrowserStateRuntime() === runtime) && isCurrent?.() !== false;
-}
-
-export async function readCurrentBrowserState<T>(
-  runtime: BrowserStateRuntime | undefined,
-  read: () => Promise<T>,
-  isCurrent?: () => boolean,
-): Promise<T | undefined> {
-  if (!isBrowserStateRuntimeCurrent(runtime, isCurrent)) {
-    return undefined;
-  }
-  try {
-    const value = await read();
-    return isBrowserStateRuntimeCurrent(runtime, isCurrent) ? value : undefined;
-  } catch (error) {
-    // Revoked preparation is discarded; accepted closes and writes still settle.
-    if (!isBrowserStateRuntimeCurrent(runtime, isCurrent)) {
-      return undefined;
-    }
-    throw error;
-  }
 }
 
 export function getPendingBrowserDashboardRegistrations(

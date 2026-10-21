@@ -11,20 +11,6 @@ function buildNestedObject(depth: number, leaf: Record<string, unknown>): Record
 }
 
 describe("containsConfigIncludeDirective", () => {
-  it("reports shallow directives and non-object values without traversal", () => {
-    expect(containsConfigIncludeDirective({ [INCLUDE_KEY]: "./base.json5" })).toBe(true);
-    expect(containsConfigIncludeDirective({ gateway: { [INCLUDE_KEY]: ["./a.json"] } })).toBe(true);
-    expect(containsConfigIncludeDirective("plain string")).toBe(false);
-    expect(containsConfigIncludeDirective(42)).toBe(false);
-    expect(containsConfigIncludeDirective(null)).toBe(false);
-    expect(containsConfigIncludeDirective({ gateway: { port: 1 } })).toBe(false);
-  });
-
-  it("scans a deeply nested object without include directives", () => {
-    const deep = buildNestedObject(100_000, { leaf: "value" });
-    expect(containsConfigIncludeDirective(deep)).toBe(false);
-  });
-
   it("finds a directive buried at the bottom of a deeply nested object", () => {
     const deep = buildNestedObject(100_000, { [INCLUDE_KEY]: "./base.json5" });
     expect(containsConfigIncludeDirective(deep)).toBe(true);

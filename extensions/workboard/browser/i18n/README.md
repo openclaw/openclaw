@@ -1,29 +1,29 @@
 # Workboard translations
 
-`locales/en.ts` owns the browser plugin's source text. `locales/translated.json`
-preserves the existing Control UI translations for those keys, validated against
-the English text hashes by the canonical translation-memory materializer.
-Missing translations fall back to English.
+`locales/en.ts` owns the browser plugin's English text. `locales/translated.json`
+is an authored plugin catalog, including translations retained from the earlier
+Control UI and subsequent plugin edits. Missing translations fall back to English.
 
-Regenerate the snapshot from the repository root after refreshing the shared
-translation memory:
+The repository's `pnpm ui:i18n:verify` discovers `i18n/locales/` beside each
+plugin's declared browser entry. It checks English key references, catalog shape,
+supported locales, and translation placeholders. Historical keys are reported
+without deleting or rewriting their translations.
 
-```sh
-node --import ./scripts/tsx.mjs --input-type=module <<'NODE'
-import { writeFileSync } from 'node:fs';
-import en from './extensions/workboard/browser/i18n/locales/en.ts';
-import { CONTROL_UI_LOCALE_ENTRIES } from './scripts/lib/control-ui-i18n-config.ts';
-import { loadControlUiTranslationMemory, materializeControlUiLocaleCatalog } from './scripts/lib/control-ui-i18n-catalog.ts';
-import { flattenTranslations } from './scripts/lib/control-ui-i18n-sync-plan.ts';
-const source = flattenTranslations(en);
-const catalogs = Object.fromEntries(CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => [
-  locale,
-  materializeControlUiLocaleCatalog(source, loadControlUiTranslationMemory(`ui/src/i18n/.i18n/${locale}.tm.jsonl`)),
-]));
-writeFileSync('extensions/workboard/browser/i18n/locales/translated.json', `${JSON.stringify(catalogs, null, 2)}\n`);
-NODE
-```
+The shared translation memory does not contain matching records for every
+retained translation. Do not regenerate this catalog solely from translation
+memory or assign current English hashes without verifying the translations.
+Keep these plugin translations intact when extending the authoring pipeline.
 
-The shared translation authoring pipeline currently discovers core catalogs.
-Adding plugin-owned source catalogs to that discovery is follow-up work; new
-Workboard copy can be translated directly in the plugin catalog meanwhile.
+The existing Control UI Locale Refresh workflow also fills missing plugin keys.
+Each locale worker writes only its own `.i18n/<locale>.tm.jsonl` and
+`.i18n/<locale>.meta.json` beside `locales/`. These records use verified English
+hashes; authored values take precedence even during a forced refresh.
+
+After collecting those independent patches, the aggregate `ui:i18n:sync --write`
+run inserts only absent keys into `translated.json` and rebuilds the plugin's
+immutable browser assets with the native builder. No-op catalogs keep their
+original bytes. Missing or stale memory is an incomplete result, never generated
+English presented as a translation. The same generated PR publishes memory,
+metadata, the updated catalog and build manifest. Source PRs keep those generated
+outputs separate. Keys shared with the host must have identical English text;
+plugin-only keys stay outside the host's Vite locale catalog.

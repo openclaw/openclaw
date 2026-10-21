@@ -217,23 +217,20 @@ export async function runSetupMemoryImportStep(params: {
         // Conflicts count as incomplete: a selected item was skipped because its
         // target appeared between planning and copying.
         const incomplete = result.summary.errors + result.summary.conflicts;
-        if (incomplete > 0) {
-          const reason = t("wizard.memoryImport.partialFailure", { count: incomplete });
-          recordProviderOutcome({
-            providerId: offer.provider.id,
-            label: offer.provider.label,
-            migrated: result.summary.migrated,
-            skipped: result.summary.skipped,
-            failure: reason,
-          });
-          await reportFailure(reason);
+        const failure =
+          incomplete > 0
+            ? t("wizard.memoryImport.partialFailure", { count: incomplete })
+            : undefined;
+        recordProviderOutcome({
+          providerId: offer.provider.id,
+          label: offer.provider.label,
+          migrated: result.summary.migrated,
+          skipped: result.summary.skipped,
+          ...(failure !== undefined ? { failure } : {}),
+        });
+        if (failure !== undefined) {
+          await reportFailure(failure);
         } else {
-          recordProviderOutcome({
-            providerId: offer.provider.id,
-            label: offer.provider.label,
-            migrated: result.summary.migrated,
-            skipped: result.summary.skipped,
-          });
           progress.stop(t("wizard.memoryImport.imported", { label: offer.provider.label }));
         }
       }

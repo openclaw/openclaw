@@ -24,7 +24,6 @@ import type {
 const require = createRequire(import.meta.url);
 const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });
 
-/** Inputs that identify the Codex app inventory cache scope for one runtime. */
 type CodexPluginAppCacheKeyParams = Omit<
   CodexAppInventoryCacheKeyInput,
   "codexHome" | "endpoint"
@@ -35,7 +34,6 @@ type CodexPluginAppCacheKeyParams = Omit<
   desktopGenerationFingerprint?: string;
 };
 
-/** Builds the full app inventory cache key for Codex plugin/app discovery. */
 export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams): string {
   return buildCodexAppInventoryCacheKey(
     {
@@ -59,12 +57,14 @@ export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams
   );
 }
 
+type CodexConnectionFingerprintOptions = Pick<
+  CodexAppServerRuntimeOptions,
+  "start" | "connectionClass" | "remoteWorkspaceRoot"
+>;
+
 /** Builds a durable thread-binding fingerprint for one initialized app-server runtime. */
 export function buildCodexAppServerRuntimeFingerprint(params: {
-  appServer: Pick<
-    CodexAppServerRuntimeOptions,
-    "start" | "connectionClass" | "remoteWorkspaceRoot"
-  >;
+  appServer: CodexConnectionFingerprintOptions;
   appServerVersion?: string;
   runtimeIdentity?: CodexAppServerRuntimeIdentity;
 }): string {
@@ -79,10 +79,7 @@ export function buildCodexAppServerRuntimeFingerprint(params: {
 
 /** Fingerprints the configured connection that owns a supervised source thread. */
 export function buildCodexAppServerConnectionFingerprint(
-  appServer: Pick<
-    CodexAppServerRuntimeOptions,
-    "start" | "connectionClass" | "remoteWorkspaceRoot"
-  >,
+  appServer: CodexConnectionFingerprintOptions,
   agentDir?: string,
 ): string {
   return JSON.stringify({

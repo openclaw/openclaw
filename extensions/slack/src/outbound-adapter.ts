@@ -36,7 +36,6 @@ import {
   SLACK_QUESTION_FINALIZATION_BLOCKS,
 } from "./reply-action-ids.js";
 import {
-  parseSlackReplyBlockSegments,
   normalizeSlackReplyPayload,
   resolveSlackReplyBlockResolution,
   resolveSlackReplyDeliveryMessages,
@@ -87,12 +86,13 @@ function readSlackRenderedPresentation(
     return undefined;
   }
   try {
-    const segments = parseSlackReplyBlockSegments(slackData?.renderedPresentationSegments);
-    const authoredTextPlacement = readSlackAuthoredTextPlacement(slackData?.authoredTextPlacement);
+    const segments = slackData?.renderedPresentationSegments;
+    const authoredTextPlacement = slackData?.authoredTextPlacement;
     if (!segments || !authoredTextPlacement) {
       return undefined;
     }
     const resolution = { authoredTextPlacement, segments };
+    // A matching signature proves this exact shape came from our typed renderer.
     return safeEqualSecret(provenance, createSlackRenderedPresentationProvenance(resolution))
       ? resolution
       : undefined;
@@ -134,22 +134,7 @@ function resolveSlackOutboundBlockResolution(payload: ReplyPayload): SlackReplyB
     };
   }
 
-  const {
-    authoredTextPlacement: _authoredTextPlacement,
-    renderedPresentationProvenance: _renderedPresentationProvenance,
-    renderedPresentationSegments: _renderedPresentationSegments,
-    ...preservedSlackData
-  } = slackData ?? {};
-  return resolveSlackReplyBlockResolution(
-    {
-      ...payload,
-      channelData: {
-        ...payload.channelData,
-        slack: preservedSlackData,
-      },
-    },
-    { materializeAuthoredText: true },
-  );
+  return resolveSlackReplyBlockResolution(payload, { materializeAuthoredText: true });
 }
 
 function withSlackRenderedPresentation(
@@ -177,10 +162,6 @@ function withSlackRenderedPresentation(
       },
     },
   };
-}
-
-function readSlackAuthoredTextPlacement(value: unknown): SlackAuthoredTextPlacement | undefined {
-  return value === "none" || value === "blocks" || value === "outside-blocks" ? value : undefined;
 }
 
 type SlackOutboundSendParams = ChannelOutboundContext &
@@ -317,20 +298,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
         },
         finalize: async () => {
           for (const message of deliveryMessages) {
-            sentResults.push(
-              await send({
-                ...preparedCtx,
-                text: message.text,
-                ...(message.blocks ? { blocks: message.blocks } : {}),
-                ...(message.authoredTextPlacement
-                  ? { authoredTextPlacement: message.authoredTextPlacement }
-                  : {}),
-                ...(message.nativeDataFallbackBaseText
-                  ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
-                  : {}),
-                ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
-              }),
-            );
+            sentResults.push(await send({ ...preparedCtx, ...message }));
           }
           return mergeSlackSendResults(sentResults);
         },

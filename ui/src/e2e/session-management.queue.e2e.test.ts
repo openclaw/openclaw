@@ -57,10 +57,7 @@ suite.define(() => {
       expect(
         await row.getByRole("link", { name: `${label} Queued repair`, exact: true }).count(),
       ).toBe(1);
-      expect(await ring.evaluate((element) => getComputedStyle(element).animationName)).toBe(
-        "session-run-spin",
-      );
-      expect(await ring.evaluate((element) => getComputedStyle(element).animationPlayState)).toBe(
+      expect(await ring.evaluate((element) => element.getAnimations()[0]?.playState)).toBe(
         playState,
       );
       await captureUiProof(suite, page, `${status}-session-ring.png`);
@@ -113,7 +110,7 @@ suite.define(() => {
       expect(await row.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
       expect(await ring.count()).toBe(1);
       expect(await ring.getAttribute("aria-label")).toBe("Active run");
-      expect(await ring.evaluate((element) => getComputedStyle(element).animationPlayState)).toBe(
+      expect(await ring.evaluate((element) => element.getAnimations()[0]?.playState)).toBe(
         "running",
       );
       await captureUiProof(suite, page, `${status}-session-running.png`);

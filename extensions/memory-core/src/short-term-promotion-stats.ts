@@ -1,4 +1,3 @@
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "./dreaming-shared.js";
@@ -22,10 +21,9 @@ import {
   compareStoreTimestampDesc,
   isShortTermMemoryPath,
   normalizeMemoryPathForWorkspace,
-  normalizeSnippet,
   parseEntryRangeFromKey,
   parseStoreTimestampMs,
-  toNonNegativeInt,
+  toFiniteNonNegativeInt,
 } from "./short-term-promotion-utils.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
@@ -35,63 +33,39 @@ function compareDreamingStatsEntryByRecency(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
 ): number {
-  const byTime = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
-  if (byTime !== 0) {
-    return byTime;
-  }
-  if (b.totalSignalCount !== a.totalSignalCount) {
-    return b.totalSignalCount - a.totalSignalCount;
-  }
-  return a.path.localeCompare(b.path);
+  return (
+    compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt) ||
+    b.totalSignalCount - a.totalSignalCount ||
+    a.path.localeCompare(b.path)
+  );
 }
 
 function compareDreamingStatsEntryBySignals(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
 ): number {
-  if (b.totalSignalCount !== a.totalSignalCount) {
-    return b.totalSignalCount - a.totalSignalCount;
-  }
-  if (b.phaseHitCount !== a.phaseHitCount) {
-    return b.phaseHitCount - a.phaseHitCount;
-  }
-  return compareDreamingStatsEntryByRecency(a, b);
+  return (
+    b.totalSignalCount - a.totalSignalCount ||
+    b.phaseHitCount - a.phaseHitCount ||
+    compareDreamingStatsEntryByRecency(a, b)
+  );
 }
 
 function compareDreamingStatsEntryByPromotion(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
 ): number {
-  const byTime = compareStoreTimestampDesc(a.promotedAt, b.promotedAt);
-  if (byTime !== 0) {
-    return byTime;
-  }
-  return compareDreamingStatsEntryBySignals(a, b);
+  return (
+    compareStoreTimestampDesc(a.promotedAt, b.promotedAt) ||
+    compareDreamingStatsEntryBySignals(a, b)
+  );
 }
 
 function trimDreamingStatsEntries(
   entries: ShortTermDreamingStatsEntry[],
   compare: (a: ShortTermDreamingStatsEntry, b: ShortTermDreamingStatsEntry) => number,
 ): ShortTermDreamingStatsEntry[] {
-  const selected: ShortTermDreamingStatsEntry[] = [];
-  for (const entry of entries) {
-    let insertAt = selected.length;
-    for (let index = 0; index < selected.length; index += 1) {
-      if (compare(entry, expectDefined(selected[index], "selected dreaming stats index")) < 0) {
-        insertAt = index;
-        break;
-      }
-    }
-    if (insertAt < DREAMING_ENTRY_LIST_LIMIT) {
-      selected.splice(insertAt, 0, entry);
-      if (selected.length > DREAMING_ENTRY_LIST_LIMIT) {
-        selected.pop();
-      }
-    } else if (selected.length < DREAMING_ENTRY_LIST_LIMIT) {
-      selected.push(entry);
-    }
-  }
-  return selected;
+  return entries.toSorted(compare).slice(0, DREAMING_ENTRY_LIST_LIMIT);
 }
 
 export async function loadShortTermPromotionDreamingStats(params: {
@@ -110,7 +84,6 @@ export async function loadShortTermPromotionDreamingStats(params: {
     phaseSignalError = formatErrorMessage(err);
     phaseStore = emptyPhaseSignalStore(nowIso);
   }
-  let shortTermCount = 0;
   let recallSignalCount = 0;
   let dailySignalCount = 0;
   let groundedSignalCount = 0;
@@ -118,7 +91,6 @@ export async function loadShortTermPromotionDreamingStats(params: {
   let phaseSignalCount = 0;
   let lightPhaseHitCount = 0;
   let remPhaseHitCount = 0;
-  let promotedTotal = 0;
   let promotedToday = 0;
   let currentDay: string | undefined;
   let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
@@ -128,13 +100,13 @@ export async function loadShortTermPromotionDreamingStats(params: {
   const promotedEntries: ShortTermDreamingStatsEntry[] = [];
 
   for (const [entryKey, entry] of Object.entries(store.entries)) {
-    if (entry.source !== "memory" || !entry.path || !isShortTermMemoryPath(entry.path)) {
+    if (!isShortTermMemoryPath(entry.path)) {
       continue;
     }
     const range = parseEntryRangeFromKey(entryKey, entry.startLine, entry.endLine);
-    const recallCount = toNonNegativeInt(entry.recallCount);
-    const dailyCount = toNonNegativeInt(entry.dailyCount);
-    const groundedCount = toNonNegativeInt(entry.groundedCount);
+    const recallCount = toFiniteNonNegativeInt(entry.recallCount);
+    const dailyCount = toFiniteNonNegativeInt(entry.dailyCount);
+    const groundedCount = toFiniteNonNegativeInt(entry.groundedCount);
     const totalEntrySignalCount = recallCount + dailyCount + groundedCount;
     const normalizedEntryPath = normalizeMemoryPathForWorkspace(workspaceDir, entry.path);
     const detail: ShortTermDreamingStatsEntry = {
@@ -142,7 +114,7 @@ export async function loadShortTermPromotionDreamingStats(params: {
       path: normalizedEntryPath,
       startLine: range.startLine,
       endLine: Math.max(range.startLine, range.endLine),
-      snippet: normalizeSnippet(entry.snippet) || normalizedEntryPath,
+      snippet: entry.snippet || normalizedEntryPath,
       recallCount,
       dailyCount,
       groundedCount,
@@ -153,7 +125,6 @@ export async function loadShortTermPromotionDreamingStats(params: {
       ...(entry.lastRecalledAt ? { lastRecalledAt: entry.lastRecalledAt } : {}),
     };
     if (!entry.promotedAt) {
-      shortTermCount += 1;
       recallSignalCount += recallCount;
       dailySignalCount += dailyCount;
       groundedSignalCount += groundedCount;
@@ -162,7 +133,6 @@ export async function loadShortTermPromotionDreamingStats(params: {
       activeEntries.set(entryKey, detail);
       continue;
     }
-    promotedTotal += 1;
     promotedEntries.push({ ...detail, promotedAt: entry.promotedAt });
     const promotedAtMs = Date.parse(entry.promotedAt);
     if (Number.isFinite(promotedAtMs)) {
@@ -183,8 +153,7 @@ export async function loadShortTermPromotionDreamingStats(params: {
     if (!detail) {
       continue;
     }
-    const lightHits = toNonNegativeInt(phaseEntry.lightHits);
-    const remHits = toNonNegativeInt(phaseEntry.remHits);
+    const { lightHits, remHits } = phaseEntry;
     lightPhaseHitCount += lightHits;
     remPhaseHitCount += remHits;
     phaseSignalCount += lightHits + remHits;
@@ -194,7 +163,7 @@ export async function loadShortTermPromotionDreamingStats(params: {
   }
 
   return {
-    shortTermCount,
+    shortTermCount: shortTermEntries.length,
     recallSignalCount,
     dailySignalCount,
     groundedSignalCount,
@@ -202,7 +171,7 @@ export async function loadShortTermPromotionDreamingStats(params: {
     phaseSignalCount,
     lightPhaseHitCount,
     remPhaseHitCount,
-    promotedTotal,
+    promotedTotal: promotedEntries.length,
     promotedToday,
     storePath: resolveStorePath(workspaceDir),
     phaseSignalPath: resolvePhaseSignalPath(workspaceDir),
@@ -301,12 +270,10 @@ export async function readLightStagedKeys(params: {
     if (entry.lightHits <= 0) {
       continue;
     }
-    const lastLightMs = Date.parse(entry.lastLightAt ?? "");
-    const lastRemMs = Date.parse(entry.lastRemAt ?? "");
-    const lastRemConsideredMs = Date.parse(entry.lastRemConsideredAt ?? "");
+    const lastLightMs = parseStoreTimestampMs(entry.lastLightAt);
     const lastConsumedMs = Math.max(
-      Number.isFinite(lastRemMs) ? lastRemMs : Number.NEGATIVE_INFINITY,
-      Number.isFinite(lastRemConsideredMs) ? lastRemConsideredMs : Number.NEGATIVE_INFINITY,
+      parseStoreTimestampMs(entry.lastRemAt),
+      parseStoreTimestampMs(entry.lastRemConsideredAt),
     );
     const hasPendingLightSignal = Number.isFinite(lastLightMs)
       ? lastLightMs > lastConsumedMs

@@ -1,4 +1,19 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type {
+  AcpSessionRuntimeLocator,
+  AcpSessionControlBinding,
+} from "./session-meta-control.types.js";
+
+/** Runtime names are opaque backend locators; ordinary metadata enrichment may continue. */
+export function matchesAcpSessionRuntimeLocator(
+  current: AcpSessionRuntimeLocator | undefined,
+  expected: AcpSessionRuntimeLocator,
+): boolean {
+  return (
+    current?.backend === expected.backend &&
+    current.runtimeSessionName === expected.runtimeSessionName
+  );
+}
 
 /** ACP task control keeps the spawner authoritative over a navigation parent. */
 export function resolveAcpSessionControlOwner(
@@ -6,14 +21,6 @@ export function resolveAcpSessionControlOwner(
 ): string | undefined {
   return entry?.spawnedBy?.trim() || entry?.parentSessionKey?.trim();
 }
-
-/** A cleanup target constraint; live task and actor authority remain separate. */
-export type AcpSessionControlBinding = Readonly<{
-  sessionId: string;
-  lifecycleRevision?: string;
-  sessionStartedAt?: number;
-  ownerKey: string;
-}>;
 
 export function matchesAcpSessionControlBinding(
   entry: SessionEntry | undefined,

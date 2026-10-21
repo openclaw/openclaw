@@ -84,6 +84,18 @@ function assertPinnedPath(pinned: PinnedPath, allowMissing = false): boolean {
   return true;
 }
 
+/** Retain a planned cleanup leaf without following links or adopting a replacement. */
+export function capturePathRemovalGuard(filePath: string): (() => void) | undefined {
+  const stat = fsSync.lstatSync(filePath, { bigint: true, throwIfNoEntry: false });
+  if (!stat) {
+    return undefined;
+  }
+  const pinned = { path: filePath, stat };
+  return () => {
+    assertPinnedPath(pinned, true);
+  };
+}
+
 function assertPinnedDirectory(pinned: PinnedPath): void {
   if (!pinned.stat.isDirectory() || pinned.stat.isSymbolicLink()) {
     throw new FsSafeError("symlink", `removal parent is not a directory: ${pinned.path}`);
@@ -97,17 +109,14 @@ export async function removePathWithinRoot(params: {
   recursive?: boolean;
   force?: boolean;
   assertBeforeMutation?: () => void;
+  signal?: AbortSignal;
   /** Package trees contain links; unlink their leaves without traversing their targets. */
   symlinks?: "reject" | "unlink";
 }): Promise<void> {
   const assertOwner = retainMutationAuthority(params.assertBeforeMutation ?? (() => {}));
-  const assertCurrent = retainMutationAuthority((assertPaths?: () => void) => {
-    assertOwner();
-    assertPaths?.();
-  });
-  assertCurrent();
+  const assertCurrent = retainMutationAuthority((assertPaths?: () => void) => assertPaths?.());
+  assertOwner();
   const root = await fsSafeRoot(params.rootDir);
-  assertCurrent();
   const suppressNotFound = params.force !== false;
   const run = async <T>(operation: () => Promise<T>, assertReady: () => void): Promise<T> => {
     assertReady();
@@ -155,7 +164,6 @@ export async function removePathWithinRoot(params: {
         // before awaits instead of adopting replacement objects on later visits.
         const children: PinnedPath[] = [];
         for (const name of names) {
-          assertEntry();
           try {
             children.push(pinPath(path.join(entry.path, name)));
           } catch (error) {
@@ -173,7 +181,14 @@ export async function removePathWithinRoot(params: {
       // Root's native removal owns Windows read-only handling. This walk owns
       // the admitted link policy and canonical parent pins through that call.
       await run(
-        () => root.remove(operationPath, { assertBeforeMutation: assertEntry }),
+        () =>
+          root.remove(operationPath, {
+            assertBeforeMutation: () => {
+              assertCurrent(assertOwner);
+              assertEntry();
+            },
+            signal: params.signal,
+          }),
         assertParents,
       );
     } catch (error) {
@@ -206,8 +221,9 @@ export async function removePathWithinRoot(params: {
     }
     assertCurrent(() => parents.forEach(assertPinnedDirectory));
     await removeEntry(pinPath(path.join(parent, name)), parents);
+    assertCurrent(assertOwner);
   } catch (error) {
-    assertCurrent();
+    assertCurrent(assertOwner);
     if (isNotFoundError(error)) {
       if (suppressNotFound) {
         return;

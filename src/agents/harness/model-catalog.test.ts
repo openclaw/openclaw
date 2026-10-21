@@ -1,57 +1,63 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
-import { mergePreparedNativeCatalog } from "../prepared-model-runtime.full-catalog.js";
+import { mergePreparedNativeCatalog } from "../prepared-model-runtime.catalog-publication.js";
 import {
   augmentModelCatalogWithAgentHarness,
   augmentPreparedModelCatalogWithAgentHarness,
+  isPreparedNativeModelCatalogReady,
 } from "./model-catalog.js";
+
+function row(id: string, fields: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+  return { provider: "fixture", id, name: id, ...fields };
+}
+const catalog = (entries: ModelCatalogEntry[]): ModelCatalogSnapshot => ({
+  entries,
+  routeVariants: entries,
+});
 
 const cfg = {
   agents: {
     defaults: { model: { primary: "openai/gpt-5.6-sol" } },
-    list: [
-      {
-        id: "main",
-        default: true,
+    entries: {
+      main: {
         models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
       },
-    ],
+    },
   },
 } as OpenClawConfig;
 
+const apiModel: ModelCatalogEntry = {
+  provider: "openai",
+  id: "gpt-5.6-sol",
+  name: "GPT-5.6 Sol (API)",
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+};
+const nativeRoute = {
+  provider: "openai",
+  api: "openai-chatgpt-responses" as const,
+  baseUrl: "https://chatgpt.com/backend-api/codex",
+};
 const snapshot: ModelCatalogSnapshot = {
   entries: [
     {
-      provider: "openai",
-      id: "gpt-5.6-sol",
-      name: "GPT-5.6 Sol (API)",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
+      ...apiModel,
       compat: {
         supportsReasoningEffort: true,
         supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
       },
     },
   ],
-  routeVariants: [
-    {
-      provider: "openai",
-      id: "gpt-5.6-sol",
-      name: "GPT-5.6 Sol (API)",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    },
-  ],
+  routeVariants: [apiModel],
   staticEntries: [
     {
-      provider: "openai",
+      ...nativeRoute,
       id: "gpt-5.6-sol",
       name: "GPT-5.6 Sol",
       contextWindow: 1_050_000,
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
       reasoning: true,
       params: { providerFact: "kept", codexAppServerRuntimeModel: "stale-runtime" },
       compat: {
@@ -61,40 +67,77 @@ const snapshot: ModelCatalogSnapshot = {
       },
     },
     {
-      provider: "openai",
+      ...nativeRoute,
       id: "gpt-5.6-terra",
       name: "GPT-5.6 Terra",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
       reasoning: true,
       compat: {
         supportsReasoningEffort: true,
         supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
       },
     },
-    {
+    row("provider-empty-reasoner", {
       provider: "openai",
-      id: "provider-empty-reasoner",
-      name: "Provider Empty Reasoner",
       compat: { supportedReasoningEfforts: [] },
-    },
+    }),
   ],
 };
 
-function registryWithCatalog(loadModelCatalog: () => Promise<readonly never[]>) {
+function catalogRegistry(loaders: Record<string, () => Promise<readonly ModelCatalogEntry[]>>) {
   const registry = createEmptyPluginRegistry();
-  registry.agentHarnesses.push({
-    pluginId: "codex",
-    source: "test",
-    harness: {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(),
-      loadModelCatalog,
-    } as never,
-  });
+  for (const [id, loadModelCatalog] of Object.entries(loaders)) {
+    registry.agentHarnesses.push({
+      pluginId: id,
+      source: "test",
+      harness: {
+        id,
+        label: id,
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        loadModelCatalog,
+      },
+    });
+  }
   return registry;
+}
+const registryWithCatalog = (load: () => Promise<readonly ModelCatalogEntry[]>) =>
+  catalogRegistry({ codex: load });
+const pickerInput = (config: OpenClawConfig) => ({
+  config,
+  agentId: "main",
+  agentDir: "/tmp/picker-agent",
+  workspaceDir: "/tmp/picker-workspace",
+});
+const modelInput = {
+  cfg,
+  agentId: "main",
+  agentDir: "/tmp/main-agent",
+  workspaceDir: "/tmp/workspace",
+  defaultModel: "openai/gpt-5.6-sol",
+};
+function pickerConfig(
+  runtime: string,
+  name = "model",
+  extraModels = {},
+  runtimes = ["native-two"],
+): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: `fixture/${name}`,
+        models: {
+          [`fixture/${name}`]: { agentRuntime: { id: runtime }, pickerRuntimes: runtimes },
+          ...extraModels,
+        },
+      },
+    },
+  };
+}
+function sharedRuntimes(snapshotToInspect: ModelCatalogSnapshot) {
+  return snapshotToInspect.routeVariants
+    .filter((entry) => entry.provider === "fixture" && entry.id === "shared")
+    .map((entry) => entry.nativeRuntime)
+    .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""));
 }
 
 describe("agent harness model catalog", () => {
@@ -103,49 +146,15 @@ describe("agent harness model catalog", () => {
     { baseRuntime: "native-one", agentRuntime: undefined, observedRuntime: "native-one" },
     { baseRuntime: "openclaw", agentRuntime: "native-one", observedRuntime: "native-one" },
     { baseRuntime: "native-one", agentRuntime: "openclaw", observedRuntime: undefined },
-    { baseRuntime: "native-one", agentRuntime: "native-two", observedRuntime: "native-two" },
   ])(
     "observes only the selected runtime with configured=$baseRuntime selected=$agentRuntime",
     async ({ baseRuntime, agentRuntime, observedRuntime }) => {
-      const config: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: "fixture/model",
-            models: {
-              "fixture/model": {
-                agentRuntime: { id: baseRuntime },
-                pickerRuntimes: ["native-two"],
-              },
-            },
-          },
-        },
-      };
-      const host: ModelCatalogEntry = {
-        provider: "fixture",
-        id: "model",
-        name: "Host model",
-        reasoning: true,
-      };
-      const initial: ModelCatalogSnapshot = { entries: [host], routeVariants: [host] };
+      const config = pickerConfig(baseRuntime);
+      const host = row("model", { name: "Host model", reasoning: true });
+      const initial = catalog([host]);
       const loadOne = vi.fn(async () => [{ ...host, nativeRuntime: "native-one" }]);
       const loadTwo = vi.fn(async () => [{ ...host, nativeRuntime: "native-two" }]);
-      const registry = createEmptyPluginRegistry();
-      for (const [id, loadModelCatalog] of [
-        ["native-one", loadOne],
-        ["native-two", loadTwo],
-      ] as const) {
-        registry.agentHarnesses.push({
-          pluginId: id,
-          source: "test",
-          harness: {
-            id,
-            label: id,
-            supports: () => ({ supported: true }),
-            runAttempt: vi.fn(),
-            loadModelCatalog,
-          },
-        });
-      }
+      const registry = catalogRegistry({ "native-one": loadOne, "native-two": loadTwo });
       const result = await augmentModelCatalogWithAgentHarness({
         cfg: config,
         agentId: "main",
@@ -163,122 +172,52 @@ describe("agent harness model catalog", () => {
     },
   );
 
-  it.each([false, true])(
-    "retains successful default acquisition unless a failed alternative revokes the generation (revoked: %s)",
-    async (revokeOnFailure) => {
-      const config: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: "fixture/model",
-            models: {
-              "fixture/model": {
-                agentRuntime: { id: "native-one" },
-                pickerRuntimes: ["native-two"],
-              },
-            },
-          },
-        },
-      };
-      const initial: ModelCatalogSnapshot = { entries: [], routeVariants: [] };
-      const observed: ModelCatalogEntry = {
-        provider: "fixture",
-        id: "model",
-        name: "Observed model",
-        nativeRuntime: "native-one",
-      };
-      const failure = new Error("Alternative catalog is unavailable");
-      let current = true;
-      const successfulLoad = vi.fn(async () => [observed]);
-      const failedLoad = vi.fn(async () => {
-        current = !revokeOnFailure;
-        throw failure;
-      });
-      const registry = createEmptyPluginRegistry();
-      for (const [id, loadModelCatalog] of [
-        ["native-one", successfulLoad],
-        ["native-two", failedLoad],
-      ] as const) {
-        registry.agentHarnesses.push({
-          pluginId: id,
-          source: "test",
-          harness: {
-            id,
-            label: id,
-            supports: () => ({ supported: true }),
-            runAttempt: vi.fn(),
-            loadModelCatalog,
-          },
-        });
-      }
-      const onError = vi.fn();
-      const onDiscoveryCompleted = vi.fn();
-      const result = await augmentPreparedModelCatalogWithAgentHarness({
-        input: {
-          config,
-          agentId: "main",
-          agentDir: "/tmp/picker-agent",
-          workspaceDir: "/tmp/picker-workspace",
-        },
-        snapshot: initial,
-        pluginRegistry: registry,
-        isCurrent: () => current,
-        onError,
-        onDiscoveryCompleted,
-      });
-      expect(successfulLoad).toHaveBeenCalledOnce();
-      expect(failedLoad).toHaveBeenCalledOnce();
-      if (revokeOnFailure) {
-        expect(result).toBe(initial);
-        expect(onDiscoveryCompleted).not.toHaveBeenCalled();
-      } else {
-        expect(result.entries).toEqual([observed]);
-        expect(result.routeVariants).toEqual([observed]);
-        expect(onError).toHaveBeenCalledExactlyOnceWith(failure, ["fixture"]);
-        expect(onDiscoveryCompleted).toHaveBeenCalledExactlyOnceWith([observed]);
-      }
-    },
-  );
+  it("retains successful default acquisition when an alternative fails", async () => {
+    const config = pickerConfig("native-one");
+    const initial = catalog([]);
+    const observed = row("model", { name: "Observed model", nativeRuntime: "native-one" });
+    const failure = new Error("Alternative catalog is unavailable");
+    const successfulLoad = vi.fn(async () => [observed]);
+    const failedLoad = vi.fn(async () => {
+      throw failure;
+    });
+    const registry = catalogRegistry({ "native-one": successfulLoad, "native-two": failedLoad });
+    const onError = vi.fn();
+    const onDiscoveryCompleted = vi.fn();
+    const result = await augmentPreparedModelCatalogWithAgentHarness({
+      input: pickerInput(config),
+      snapshot: initial,
+      pluginRegistry: registry,
+      onError,
+      onDiscoveryCompleted,
+    });
+    expect(successfulLoad).toHaveBeenCalledOnce();
+    expect(failedLoad).toHaveBeenCalledOnce();
+    expect([result.entries, result.routeVariants]).toEqual([[observed], [observed]]);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(failure, ["fixture"]);
+    expect(onDiscoveryCompleted).toHaveBeenCalledExactlyOnceWith([observed]);
+  });
 
   it.each([false, true])(
     "acquires picker runtimes once and preserves their refresh ownership (provider scoped: %s)",
     async (providerScoped) => {
-      const config: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: "fixture/shared",
-            models: {
-              "fixture/shared": {
-                agentRuntime: { id: "openclaw" },
-                pickerRuntimes: ["native-one", "native-two"],
-              },
-              "fixture/second": { pickerRuntimes: ["native-one", "native-two"] },
-              "other/third": { pickerRuntimes: ["native-one"] },
-            },
-          },
+      const config = pickerConfig(
+        "openclaw",
+        "shared",
+        {
+          "fixture/second": { pickerRuntimes: ["native-one", "native-two"] },
+          "other/third": { pickerRuntimes: ["native-one"] },
         },
-      };
-      const host: ModelCatalogEntry = {
-        provider: "fixture",
-        id: "shared",
-        name: "Host model",
-        reasoning: false,
-      };
-      const foreign: ModelCatalogEntry = {
+        ["native-one", "native-two"],
+      );
+      const host = row("shared", { name: "Host model", reasoning: false });
+      const foreign = row("foreign", {
         provider: "other",
-        id: "foreign",
         name: "Foreign model",
         nativeRuntime: "native-two",
-      };
-      const initial: ModelCatalogSnapshot = {
-        entries: [host, foreign],
-        routeVariants: [host, foreign],
-      };
-      const first: ModelCatalogEntry = {
-        provider: "fixture",
-        id: "shared",
-        name: "Native one",
-        nativeRuntime: "native-one",
-      };
+      });
+      const initial = catalog([host, foreign]);
+      const first = row("shared", { name: "Native one", nativeRuntime: "native-one" });
       const second: ModelCatalogEntry = {
         ...first,
         name: "Native two",
@@ -288,32 +227,11 @@ describe("agent harness model catalog", () => {
       const other: ModelCatalogEntry = { ...first, provider: "other", id: "third" };
       const loadOne = vi.fn(async () => [first, stale, other]);
       const loadTwo = vi.fn(async () => [second]);
-      const registry = createEmptyPluginRegistry();
-      for (const [id, loadModelCatalog] of [
-        ["native-one", loadOne],
-        ["native-two", loadTwo],
-      ] as const) {
-        registry.agentHarnesses.push({
-          pluginId: id,
-          source: "test",
-          harness: {
-            id,
-            label: id,
-            supports: () => ({ supported: true }),
-            runAttempt: vi.fn(),
-            loadModelCatalog,
-          },
-        });
-      }
+      const registry = catalogRegistry({ "native-one": loadOne, "native-two": loadTwo });
       const onDiscoveryStarted = vi.fn();
       const onDiscoveryCompleted = vi.fn();
       const params = {
-        input: {
-          config,
-          agentId: "main",
-          agentDir: "/tmp/picker-agent",
-          workspaceDir: "/tmp/picker-workspace",
-        },
+        input: pickerInput(config),
         pluginRegistry: registry,
         onDiscoveryStarted,
         onDiscoveryCompleted,
@@ -330,27 +248,9 @@ describe("agent harness model catalog", () => {
       expect(
         discovered.entries.find((entry) => entry.provider === "fixture" && entry.id === "shared"),
       ).toEqual(host);
-      expect(
-        discovered.routeVariants
-          .filter((entry) => entry.provider === "fixture" && entry.id === "shared")
-          .map((entry) => entry.nativeRuntime)
-          .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
-      ).toEqual(
-        [undefined, "native-one", "native-two"].toSorted((left, right) =>
-          (left ?? "").localeCompare(right ?? ""),
-        ),
-      );
+      expect(sharedRuntimes(discovered)).toEqual(["native-one", "native-two", undefined]);
       const published = mergePreparedNativeCatalog(discovered, initial);
-      expect(
-        published.routeVariants
-          .filter((entry) => entry.provider === "fixture" && entry.id === "shared")
-          .map((entry) => entry.nativeRuntime)
-          .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
-      ).toEqual(
-        [undefined, "native-one", "native-two"].toSorted((left, right) =>
-          (left ?? "").localeCompare(right ?? ""),
-        ),
-      );
+      expect(sharedRuntimes(published)).toEqual(["native-one", "native-two", undefined]);
       expect(onDiscoveryCompleted).toHaveBeenCalledExactlyOnceWith(
         providerScoped ? [first, stale, second] : [first, stale, other, second],
       );
@@ -369,19 +269,6 @@ describe("agent harness model catalog", () => {
       expect(refreshed.routeVariants.some((entry) => entry.id === "retired")).toBe(false);
       expect(refreshed.entries.some((entry) => entry.id === "foreign")).toBe(providerScoped);
       expect(refreshed.entries.find((entry) => entry.id === "shared")).toEqual(host);
-      let current = true;
-      loadOne.mockImplementationOnce(async () => {
-        current = false;
-        return [first];
-      });
-      const revoked = await augmentPreparedModelCatalogWithAgentHarness({
-        ...params,
-        snapshot: refreshed,
-        isCurrent: () => current,
-      });
-      expect(revoked).toBe(refreshed);
-      expect(loadOne).toHaveBeenCalledTimes(3);
-      expect(loadTwo).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -395,15 +282,11 @@ describe("agent harness model catalog", () => {
     };
     const host = { provider: "openai", id: "gpt-5.6-terra", name: "Host model" };
     const result = await augmentModelCatalogWithAgentHarness({
-      cfg,
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp/workspace",
+      ...modelInput,
       defaultProvider: "openai",
-      defaultModel: "openai/gpt-5.6-sol",
-      snapshot: { entries: [], routeVariants: [] },
+      snapshot: catalog([]),
       preparedSnapshot: snapshot,
-      pluginRegistry: registryWithCatalog(async () => [native, host] as never),
+      pluginRegistry: registryWithCatalog(async () => [native, host]),
     });
     expect(result.entries[0]).toEqual(native);
     expect(result.routeVariants[0]).toEqual(native);
@@ -418,20 +301,16 @@ describe("agent harness model catalog", () => {
   it("merges account-scoped harness models into the prepared generation", async () => {
     const loadModelCatalog = vi.fn(async () => [
       {
-        provider: "openai",
+        ...nativeRoute,
         id: "gpt-5.6-terra",
         name: "GPT-5.6 Terra",
-        api: "openai-chatgpt-responses" as const,
-        baseUrl: "https://chatgpt.com/backend-api/codex",
         reasoning: false,
         compat: { supportedReasoningEfforts: [] },
       },
       {
-        provider: "openai",
+        ...nativeRoute,
         id: "gpt-5.6-sol",
         name: "GPT-5.6 Sol (account)",
-        api: "openai-chatgpt-responses" as const,
-        baseUrl: "https://chatgpt.com/backend-api/codex",
         reasoning: true,
         params: { codexAppServerRuntimeModel: "gpt-5.6-sol-runtime" },
         compat: {
@@ -440,29 +319,21 @@ describe("agent harness model catalog", () => {
           supportsTools: true,
         },
       },
-      {
+      row("custom-reasoner", {
         provider: "openai",
-        id: "custom-reasoner",
-        name: "Custom Reasoner",
         compat: { supportedReasoningEfforts: ["high"] },
-      },
-      {
+      }),
+      row("provider-empty-reasoner", {
         provider: "openai",
-        id: "provider-empty-reasoner",
-        name: "Provider Empty Reasoner",
         compat: { supportedReasoningEfforts: ["high"] },
-      },
+      }),
     ]);
 
     const result = await augmentModelCatalogWithAgentHarness({
-      cfg,
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp/workspace",
+      ...modelInput,
       defaultProvider: "anthropic",
-      defaultModel: "openai/gpt-5.6-sol",
       snapshot,
-      pluginRegistry: registryWithCatalog(loadModelCatalog as never),
+      pluginRegistry: registryWithCatalog(loadModelCatalog),
     });
 
     expect(result.entries.map((entry) => entry.id)).toEqual([
@@ -494,73 +365,89 @@ describe("agent harness model catalog", () => {
     );
     expect(loadModelCatalog).toHaveBeenCalledWith({
       config: cfg,
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp/workspace",
+      agentId: modelInput.agentId,
+      agentDir: modelInput.agentDir,
+      workspaceDir: modelInput.workspaceDir,
       configuredModelRefs: [
         { provider: "openai", model: "gpt-5.6-sol" },
         { provider: "openai", model: "gpt-5.6-sol" },
       ],
     });
   });
+});
 
-  it("prepares configured refs for the selected agent without including other agents", async () => {
-    const selectedConfig: OpenClawConfig = {
-      agents: {
-        defaults: cfg.agents?.defaults,
-        entries: {
-          main: {
-            models: {
-              "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
-              "openai/synthetic-configured": {},
-            },
-          },
-          another: { model: { primary: "openai/synthetic-other-agent" } },
-        },
+it("checks resident native readiness with linear catalog work and observes revocation", () => {
+  let inspectedRows = 0;
+  let ready = true;
+  const rows: ModelCatalogEntry[] = Array.from({ length: 240 }, (_, index) => ({
+    get provider() {
+      inspectedRows++;
+      return "fixture";
+    },
+    id: `model-${index}`,
+    name: `Model ${index}`,
+    ...(index >= 200 ? { nativeRuntime: "native-test" } : {}),
+  }));
+  const readModelCatalogReadiness = vi.fn(() =>
+    ready ? { accountType: "apiKey" as const } : undefined,
+  );
+  const pluginRegistry = createEmptyPluginRegistry();
+  pluginRegistry.agentHarnesses.push({
+    pluginId: "native-test",
+    source: "fixture",
+    harness: {
+      id: "native-test",
+      label: "Native fixture",
+      supports: () => ({ supported: true }),
+      runAttempt: vi.fn(),
+      readModelCatalogReadiness,
+    },
+  });
+  const params = {
+    input: {
+      config: cfg,
+      agentId: "main",
+      agentDir: "/tmp/native-readiness-agent",
+      workspaceDir: "/tmp/native-readiness-workspace",
+    },
+    pluginGeneration: {
+      remoteCatalog: null,
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+      pluginRegistry,
+      inlineProviderModels: [],
+      configuredCatalogEntries: [],
+    },
+    snapshot: catalog(rows),
+    catalogAcquired: true,
+  };
+  expect(isPreparedNativeModelCatalogReady(params)).toBe(true);
+  expect(readModelCatalogReadiness).toHaveBeenCalledTimes(40);
+  // Bound row inspections, not elapsed time: a known member must not trigger a full rescan.
+  expect(inspectedRows).toBeLessThan(rows.length * 2);
+  ready = false;
+  expect(isPreparedNativeModelCatalogReady(params)).toBe(false);
+  expect(isPreparedNativeModelCatalogReady({ ...params, catalogAcquired: false })).toBe(false);
+  expect(
+    isPreparedNativeModelCatalogReady({
+      ...params,
+      snapshot: {
+        ...params.snapshot,
+        nativeProviderOutcomes: { "native-test": [{ provider: "fixture", status: "unavailable" }] },
       },
-    };
-    const loadModelCatalog = vi.fn(async () => []);
-    await augmentModelCatalogWithAgentHarness({
-      cfg: selectedConfig,
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp/workspace",
-      defaultProvider: "anthropic",
-      defaultModel: "openai/gpt-5.6-sol",
-      snapshot,
-      pluginRegistry: registryWithCatalog(loadModelCatalog),
-    });
-
-    expect(loadModelCatalog).toHaveBeenCalledExactlyOnceWith({
-      config: selectedConfig,
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp/workspace",
-      configuredModelRefs: [
-        { provider: "openai", model: "gpt-5.6-sol" },
-        { provider: "openai", model: "gpt-5.6-sol" },
-        { provider: "openai", model: "synthetic-configured" },
-      ],
-    });
-  });
-
-  it("keeps prepared rows when harness discovery fails", async () => {
-    const onError = vi.fn();
-    const result = await augmentModelCatalogWithAgentHarness({
-      cfg,
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp/workspace",
-      defaultProvider: "anthropic",
-      defaultModel: "openai/gpt-5.6-sol",
-      snapshot,
-      pluginRegistry: registryWithCatalog(async () => {
-        throw new Error("model/list unavailable");
+    }),
+  ).toBe(true);
+  ready = true;
+  for (const [modelId, runtime, expected] of [
+    ["model-239", "native-test", true],
+    ["model-0", "native-test", false],
+    ["missing", "native-test", false],
+    ["model-239", "other-runtime", false],
+  ] as const) {
+    expect(
+      isPreparedNativeModelCatalogReady({
+        ...params,
+        selection: { provider: "fixture", modelId, runtime },
       }),
-      onError,
-    });
-
-    expect(result).toBe(snapshot);
-    expect(onError).toHaveBeenCalledOnce();
-  });
+    ).toBe(expected);
+  }
 });

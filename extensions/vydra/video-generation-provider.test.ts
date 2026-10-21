@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   binaryResponse,
   jsonResponse,
+  registerVydraProviders,
   stubFetch,
   stubVydraApiKey,
 } from "./provider-test-helpers.js";
-import { buildVydraVideoGenerationProvider } from "./video-generation-provider.js";
 
 function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index: number) {
   const call = fetchMock.mock.calls[index];
@@ -20,7 +20,7 @@ function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index: number) {
 
 describe("vydra video-generation provider", () => {
   installPinnedHostnameTestHooks();
-  const provider = buildVydraVideoGenerationProvider();
+  const { videoProvider: provider } = registerVydraProviders();
   const request = { provider: "vydra", model: "kling", prompt: "animate this image", cfg: {} };
   beforeEach(stubVydraApiKey);
   afterEach(() => {
@@ -53,7 +53,7 @@ describe("vydra video-generation provider", () => {
   });
 
   it("submits, polls, and downloads veo3 video with the configured request policy", async () => {
-    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonResponse");
     const pollProviderOperationJsonSpy = vi.spyOn(providerHttp, "pollProviderOperationJson");
     const fetchWithTimeoutGuardedSpy = vi.spyOn(providerHttp, "fetchWithTimeoutGuarded");
     const fetchMock = stubFetch(

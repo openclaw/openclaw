@@ -1,18 +1,16 @@
-// Covers prompt-facing sandbox metadata and full-access availability rules.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import * as execApprovals from "../infra/exec-approvals-store.js";
 import {
   buildEmbeddedSandboxInfo,
   resolveEmbeddedSandboxInfoExecPolicy,
 } from "./embedded-agent-runner/sandbox-info.js";
-import type { SandboxContext } from "./sandbox.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
+import type { SandboxContext } from "./sandbox/types.js";
 
-function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxContext {
-  return createSandboxTestContext({
+const sandbox = (overrides: Partial<SandboxContext> = {}) =>
+  createSandboxTestContext({
     overrides: {
       workspaceDir: "/tmp/openclaw-sandbox",
-      agentWorkspaceDir: "/tmp/openclaw-workspace",
       workspaceAccess: "none",
       browserAllowHostControl: true,
       browser: {
@@ -23,10 +21,8 @@ function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxConte
       ...overrides,
     },
   });
-}
-
-const fullElevation = { enabled: true, allowed: true, defaultLevel: "full" } as const;
-const blockedFullAccess = {
+const elevation = { enabled: true, allowed: true, defaultLevel: "full" } as const;
+const blocked = {
   allowed: true,
   defaultLevel: "full",
   fullAccessAvailable: false,
@@ -41,191 +37,57 @@ const promptInfo = {
   browserBridgeUrl: "http://localhost:9222",
   hostBrowserAllowed: true,
 };
+const fullPolicy = { mode: "full", security: "full", ask: "off" } as const;
+const elevatedInfo = (
+  execPolicy: Parameters<typeof buildEmbeddedSandboxInfo>[2],
+  hostPolicy: Parameters<typeof buildEmbeddedSandboxInfo>[3],
+) => buildEmbeddedSandboxInfo(sandbox(), elevation, execPolicy, hostPolicy)?.elevated;
 
-describe("buildEmbeddedSandboxInfo", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync").mockResolvedValue({
-      version: 1,
-      agents: {},
-    });
+beforeEach(() => {
+  vi.restoreAllMocks();
+  vi.spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync").mockResolvedValue({
+    version: 1,
+    agents: {},
   });
+});
 
-  it("returns undefined when sandbox is missing", () => {
-    expect(buildEmbeddedSandboxInfo()).toBeUndefined();
-  });
-
-  it("maps sandbox context into prompt info", () => {
-    const sandbox = createSandboxContext();
-
-    expect(buildEmbeddedSandboxInfo(sandbox)).toEqual({
-      ...promptInfo,
-    });
-  });
-
-  it("includes elevated info when allowed", () => {
-    const sandbox = createSandboxContext({
-      browserAllowHostControl: false,
-      browser: undefined,
-    });
-
-    expect(
-      buildEmbeddedSandboxInfo(sandbox, {
-        enabled: true,
-        allowed: true,
-        defaultLevel: "on",
-      }),
-    ).toEqual({
-      ...promptInfo,
-      browserBridgeUrl: undefined,
-      hostBrowserAllowed: false,
-      elevated: {
-        allowed: true,
-        defaultLevel: "on",
-        fullAccessAvailable: true,
-      },
-    });
-  });
-
-  it("never advertises elevated host execution for a required sandbox", () => {
-    const sandbox = createSandboxContext({ required: true });
-
-    expect(
-      buildEmbeddedSandboxInfo(sandbox, {
-        ...fullElevation,
-        fullAccessAvailable: true,
-      })?.elevated,
-    ).toEqual({
-      allowed: false,
-      defaultLevel: "off",
-      fullAccessAvailable: false,
-      fullAccessBlockedReason: "host-policy",
-    });
-  });
-
-  it("keeps full-access unavailability truth when provided", () => {
-    // Runtime-level blocks are authoritative and must not be overwritten by
-    // host exec policy that appears permissive.
-    const sandbox = createSandboxContext();
-
-    expect(
-      buildEmbeddedSandboxInfo(sandbox, {
-        ...fullElevation,
-        fullAccessAvailable: false,
-        fullAccessBlockedReason: "runtime",
-      }),
-    ).toEqual({
-      ...promptInfo,
-      elevated: {
-        allowed: true,
-        defaultLevel: "full",
-        fullAccessAvailable: false,
-        fullAccessBlockedReason: "runtime",
-      },
-    });
-  });
-
-  it("marks full access unavailable when exec policy denies execution", () => {
-    const sandbox = createSandboxContext();
-
-    expect(buildEmbeddedSandboxInfo(sandbox, fullElevation, { mode: "deny" })?.elevated).toEqual(
-      blockedFullAccess,
-    );
-  });
-
-  it("uses config exec mode when building prompt full-access state", async () => {
-    const sandbox = createSandboxContext();
-    const execPolicy = await resolveEmbeddedSandboxInfoExecPolicy(
-      {
-        config: {
-          tools: {
-            exec: {
-              mode: "auto",
-            },
-          },
-        },
-        agentId: "main",
-        sandboxAvailable: true,
-      },
-      {},
-    );
-
-    expect(buildEmbeddedSandboxInfo(sandbox, fullElevation, execPolicy)?.elevated).toEqual(
-      blockedFullAccess,
-    );
-  });
-
-  it("uses elevated host policy when sandbox is active and exec policy is unset", async () => {
-    const sandbox = createSandboxContext();
-    const execPolicy = await resolveEmbeddedSandboxInfoExecPolicy(
-      {
-        config: {
-          tools: {
-            exec: {
-              host: "auto",
-            },
-          },
-        },
-        agentId: "main",
-        sandboxAvailable: true,
-      },
-      {},
-    );
-
-    expect(buildEmbeddedSandboxInfo(sandbox, fullElevation, execPolicy)?.elevated).toEqual({
-      allowed: true,
-      defaultLevel: "full",
-      fullAccessAvailable: true,
-    });
-  });
-
-  it("marks full access unavailable when host approval defaults deny execution", () => {
-    const sandbox = createSandboxContext();
-
-    expect(
-      buildEmbeddedSandboxInfo(
-        sandbox,
-        fullElevation,
-        { mode: "full", security: "full" },
-        { security: "deny" },
-      )?.elevated,
-    ).toEqual(blockedFullAccess);
-  });
-
-  it("marks full access unavailable when host approval floors still require review", () => {
-    // Full access is prompt-advertised only when both security level and ask
-    // policy allow execution without review.
-    const sandbox = createSandboxContext();
-
-    expect(
-      buildEmbeddedSandboxInfo(
-        sandbox,
-        fullElevation,
-        { mode: "full", security: "full", ask: "off" },
-        { security: "allowlist", ask: "off" },
-      )?.elevated,
-    ).toEqual(blockedFullAccess);
-
-    expect(
-      buildEmbeddedSandboxInfo(
-        sandbox,
-        fullElevation,
-        { mode: "full", security: "full", ask: "off" },
-        { security: "full", ask: "always" },
-      )?.elevated,
-    ).toEqual(blockedFullAccess);
-
-    expect(
-      buildEmbeddedSandboxInfo(
-        sandbox,
-        fullElevation,
-        { mode: "full", security: "full", ask: "on-miss" },
-        { security: "full", ask: "on-miss" },
-      )?.elevated,
-    ).toEqual({
-      allowed: true,
-      defaultLevel: "full",
-      fullAccessAvailable: true,
-    });
+it("omits missing sandbox information", () => {
+  expect(buildEmbeddedSandboxInfo()).toBeUndefined();
+});
+it("maps sandbox context into prompt information", () => {
+  expect(buildEmbeddedSandboxInfo(sandbox())).toEqual(promptInfo);
+});
+it.each([true, false])("blocks full access with required sandbox=%s", (required) => {
+  const runtime = { fullAccessAvailable: required, fullAccessBlockedReason: "runtime" } as const;
+  const expected = required
+    ? { ...blocked, allowed: false, defaultLevel: "off" }
+    : { ...blocked, fullAccessBlockedReason: "runtime" };
+  expect(
+    buildEmbeddedSandboxInfo(sandbox(required ? { required: true } : {}), {
+      ...elevation,
+      ...runtime,
+    })?.elevated,
+  ).toEqual(expected);
+});
+it("uses the effective configured exec policy", async () => {
+  const policy = await resolveEmbeddedSandboxInfoExecPolicy(
+    {
+      config: { tools: { exec: { mode: "auto" } } },
+      agentId: "main",
+      sandboxAvailable: true,
+    },
+    {},
+  );
+  expect(buildEmbeddedSandboxInfo(sandbox(), elevation, policy)?.elevated).toEqual(blocked);
+});
+it("advertises full access only when host approval floors allow it", () => {
+  expect(elevatedInfo(fullPolicy, { security: "allowlist", ask: "off" })).toEqual(blocked);
+  expect(elevatedInfo(fullPolicy, { security: "full", ask: "always" })).toEqual(blocked);
+  expect(
+    elevatedInfo({ ...fullPolicy, ask: "on-miss" }, { security: "full", ask: "on-miss" }),
+  ).toEqual({
+    allowed: true,
+    defaultLevel: "full",
+    fullAccessAvailable: true,
   });
 });

@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { createGatewayRequestContext } from "./server-request-context.js";
@@ -33,6 +34,7 @@ export function makeContextParams(
   const config = {} as never;
   return {
     runtime: {
+      scheduler: createTestGatewayScheduler(),
       getSessionRowProjection: () => undefined,
       forgetConnectionAncestors: vi.fn(),
       connectionWork: { track: trackAsyncWork },
@@ -46,7 +48,6 @@ export function makeContextParams(
       gatewayTls: { enabled: false },
       sessionCompanion: {} as never,
       sessionObserver: { removeConnection: vi.fn() } as never,
-      mentionInbox: undefined,
       transportBridge: {
         getPortalService: vi.fn(() => undefined),
         getMcpAppSandboxPort: vi.fn(() => undefined),
@@ -56,19 +57,6 @@ export function makeContextParams(
         resolve: vi.fn(() => ({ ok: false as const, block: { kind: "disabled" as const } })),
         isEnabled: vi.fn(() => false),
       },
-      execApprovalManager: undefined,
-      questionManager: undefined,
-      cancelRunBoundApprovals: undefined,
-      forwardPluginApprovalRequest: undefined,
-      forwardExecApprovalRequest: undefined,
-      forwardSystemAgentApprovalRequest: undefined,
-      forwardSystemAgentApprovalResolved: undefined,
-      execApprovalIosPushDelivery: undefined,
-      approvalWebPushDelivery: undefined,
-      pluginApprovalIosPushDelivery: undefined,
-      pluginApprovalManager: undefined,
-      placementStandingGrants: undefined,
-      systemAgentApprovalManager: undefined,
       approvalSessionEvents: { replay: undefined },
       validateAgentRuntimeApprovalAuthority: () => false,
       loadGatewayModelCatalog: vi.fn(async () => []),
@@ -81,7 +69,6 @@ export function makeContextParams(
         entries: [],
         routeVariants: [],
       })),
-      readPreparedGatewayModelCatalog: undefined,
       refreshGatewayHealthSnapshotWithRuntime: vi.fn(async () => ({}) as never),
       broadcast: vi.fn(),
       publishPresence: vi.fn(),
@@ -104,17 +91,10 @@ export function makeContextParams(
       }),
       resolveSharedGatewaySessionGenerationForRuntimeSnapshot: vi.fn(() => undefined),
       nodeRegistry: { invalidateConnectionForPairingChange: vi.fn() } as never,
-      nodeDesktopService: undefined,
-      workerEnvironmentService: undefined,
-      hostDesktopService: undefined,
       workerEnvironmentStartup: undefined,
       workerPlacementRuntime: undefined,
       workerPlacementControlAvailable: undefined,
-      githubPublicationService: undefined,
-      terminalSessions: undefined,
       agentRunSeq: new Map(),
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
       chatRunState: createChatRunState(),
       addChatRun: vi.fn(),
       removeChatRun: vi.fn(),
@@ -125,8 +105,8 @@ export function makeContextParams(
       },
       subscribeSessionMessageEvents: vi.fn(),
       unsubscribeSessionMessageEvents: vi.fn(),
-      sessionMessageSubscribers: { unsubscribeAll: vi.fn() },
-      toolEventRecipients: { add: vi.fn() },
+      sessionMessageSubscribers: { get: vi.fn(() => new Set<string>()), unsubscribeAll: vi.fn() },
+      toolEventRecipients: { add: vi.fn(), removeConnection: vi.fn() },
       dedupe: new Map(),
       wizardSessions: new Map(),
       systemAgentSessions: new Map(),
@@ -148,6 +128,7 @@ export function makeContextParams(
           pluginIds: [],
         })),
         getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
+        pluginRuntimeGeneration: { getReloadStatus: () => undefined },
       },
       unavailableGatewayMethods: new Set(),
       ...overrides,
@@ -161,6 +142,7 @@ export function makeContextParams(
     configRevisionProjector: {
       projectRawHash: (hash) => hash,
       projectResolvedHash: (hash) => hash,
+      hashResponseSessionBearer: () => "unused-test-scope",
     },
   };
 }

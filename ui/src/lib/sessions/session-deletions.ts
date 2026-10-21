@@ -3,6 +3,12 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import { showToast } from "../toast.ts";
 import type { readSessionChangedEvent } from "./reconcile.ts";
+import {
+  normalizeAgentId,
+  resolveUiConversationIdentity,
+  resolveUiSelectedGlobalAgentId,
+} from "./session-key.ts";
+import { requestSessionDelete } from "./session-requests.ts";
 import type {
   SessionConnectionOwner,
   SessionDeleteBatchResult,
@@ -13,13 +19,7 @@ import type {
   SessionListScope,
   SessionRefreshOutcome,
   SessionState,
-} from "./session-capability.ts";
-import {
-  normalizeAgentId,
-  resolveUiConversationIdentity,
-  resolveUiSelectedGlobalAgentId,
-} from "./session-key.ts";
-import { requestSessionDelete } from "./session-requests.ts";
+} from "./session-types.ts";
 
 type Deletion = {
   target: SessionDeleteTarget;
@@ -64,7 +64,7 @@ export function createSessionDeletions(host: DeletionHost) {
     const snapshot = host.snapshot();
     const selectedAgentId = resolveUiSelectedGlobalAgentId(snapshot);
     return (key: string, agentId?: string | null) => {
-      const canonical = resolveUiConversationIdentity(snapshot, key, agentId ?? undefined);
+      const canonical = resolveUiConversationIdentity(snapshot, key, agentId);
       return `${canonical.sessionKey}\0${canonical.agentId ?? normalizeAgentId(agentId ?? selectedAgentId)}`;
     };
   };
@@ -207,8 +207,7 @@ export function createSessionDeletions(host: DeletionHost) {
           return { deleted: false };
         }
         rollback(deletion);
-        const message = formatUiError(error);
-        reportError(message);
+        reportError(formatUiError(error));
         throw error;
       }
     })();

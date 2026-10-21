@@ -859,6 +859,34 @@
       "destination": "/tools/skill-workshop"
     },
     {
+      "source": "/tools/skill-workshop/how-it-works",
+      "destination": "/tools/skill-workshop"
+    },
+    {
+      "source": "/tools/skill-workshop/collection-review",
+      "destination": "/tools/skill-workshop#unused-skill-cleanup"
+    },
+    {
+      "source": "/tools/skill-workshop/authoring",
+      "destination": "/tools/skill-workshop#learn"
+    },
+    {
+      "source": "/tools/skill-workshop/proposals",
+      "destination": "/tools/skill-workshop#upgrading-from-earlier-releases"
+    },
+    {
+      "source": "/tools/skill-workshop/configuration",
+      "destination": "/tools/skill-workshop#configuration"
+    },
+    {
+      "source": "/tools/skill-workshop/reference",
+      "destination": "/tools/skill-workshop#operator-surfaces"
+    },
+    {
+      "source": "/tools/skill-workshop/troubleshooting",
+      "destination": "/tools/skill-workshop#troubleshooting"
+    },
+    {
       "source": "/skills-config",
       "destination": "/tools/skills-config"
     },
@@ -1357,6 +1385,7 @@
                   "install/node-compatibility",
                   "install/bun",
                   "install/bun-compatibility",
+                  "install/standalone",
                   "install/nix"
                 ]
               },
@@ -1562,7 +1591,8 @@
                       "channels/telegram/troubleshooting"
                     ]
                   },
-                  "channels/whatsapp"
+                  "channels/whatsapp",
+                  "channels/x"
                 ]
               },
               {
@@ -1646,6 +1676,7 @@
                 "pages": [
                   "concepts/agent-workspace",
                   "concepts/managed-worktrees",
+                  "concepts/storage-locations",
                   "concepts/oauth",
                   "start/bootstrapping",
                   "concepts/experimental-features"
@@ -1657,6 +1688,7 @@
                   "concepts/main-session",
                   "concepts/multi-user",
                   "concepts/session",
+                  "concepts/session-controller",
                   "concepts/session-attachment",
                   "concepts/session-search",
                   "concepts/session-pruning",
@@ -1739,6 +1771,8 @@
               {
                 "group": "Plugin guides",
                 "pages": [
+                  "plugins/agent-guidance",
+                  "plugins/agentsapi",
                   {
                     "group": "Codex",
                     "pages": [
@@ -1764,6 +1798,7 @@
                     ]
                   },
                   "plugins/copilot",
+                  "plugins/muse",
                   {
                     "group": "Meetings and calls",
                     "pages": [
@@ -1782,6 +1817,7 @@
                         ]
                       },
                       "plugins/teams-meetings",
+                      "plugins/slack-huddles",
                       "plugins/voice-call",
                       {
                         "group": "Voice call",
@@ -1804,6 +1840,7 @@
                       "plugins/memory-lancedb",
                       "plugins/memory-wiki",
                       "plugins/onnx",
+                      "plugins/subq",
                       "plugins/typesafe"
                     ]
                   },
@@ -1819,8 +1856,10 @@
                     "pages": [
                       "plugins/admin-http-rpc",
                       "plugins/beam",
+                      "plugins/cloudflare",
                       "plugins/geolocation",
                       "plugins/logbook",
+                      "plugins/mcp-relay",
                       "plugins/oc-path",
                       "plugins/session-share",
                       "plugins/workboard",
@@ -1881,19 +1920,7 @@
                   "tools/skills",
                   "tools/custodian-skills",
                   "tools/skill-workshop",
-                  {
-                    "group": "Skill Workshop",
-                    "pages": [
-                      "tools/skill-workshop/personal-library",
-                      "tools/skill-workshop/how-it-works",
-                      "tools/skill-workshop/collection-review",
-                      "tools/skill-workshop/authoring",
-                      "tools/skill-workshop/proposals",
-                      "tools/skill-workshop/configuration",
-                      "tools/skill-workshop/reference",
-                      "tools/skill-workshop/troubleshooting"
-                    ]
-                  },
+                  "tools/skill-workshop/personal-library",
                   "tools/self-learning",
                   "tools/creating-skills",
                   "tools/skills-config",
@@ -1920,6 +1947,7 @@
                     ]
                   },
                   "automation/imap",
+                  "automation/mcp-events",
                   "automation/standing-orders",
                   "automation/hooks",
                   {
@@ -1992,6 +2020,7 @@
                           "tools/code-mode/maintainers"
                         ]
                       },
+                      "tools/autoreview",
                       "tools/llm-task",
                       "tools/lobster",
                       "tools/mcp",
@@ -2154,6 +2183,7 @@
                 "group": "Concepts and configuration",
                 "pages": [
                   "concepts/models",
+                  "concepts/recommended-models",
                   "concepts/decision-models",
                   "concepts/model-providers",
                   {
@@ -2193,6 +2223,7 @@
                       "providers/google",
                       "providers/groq",
                       "providers/huggingface",
+                      "providers/levanto",
                       "providers/longcat",
                       "providers/meta",
                       "providers/minimax",
@@ -2219,6 +2250,7 @@
                       "providers/opencode",
                       "providers/opencode-go",
                       "providers/perplexity-provider",
+                      "providers/poolside",
                       "providers/qianfan",
                       "providers/qwen",
                       "providers/radius",
@@ -2251,6 +2283,7 @@
                     "pages": [
                       "providers/comfy",
                       "providers/fal",
+                      "providers/kie",
                       "providers/pixverse",
                       "providers/runway",
                       "providers/vydra"
@@ -2259,11 +2292,13 @@
                   {
                     "group": "Gateways and routers",
                     "pages": [
+                      "providers/bifrost",
                       "providers/claude-max-api-proxy",
                       "providers/clawrouter",
                       "providers/cloudflare-ai-gateway",
                       "providers/kilocode",
                       "providers/litellm",
+                      "providers/neon",
                       "providers/openrouter",
                       "providers/vercel-ai-gateway"
                     ]
@@ -2289,6 +2324,7 @@
                           "providers/ollama/troubleshooting"
                         ]
                       },
+                      "providers/omlx",
                       "providers/sglang",
                       "providers/vllm"
                     ]
@@ -2450,6 +2486,7 @@
                     "group": "Health and diagnostics",
                     "pages": [
                       "gateway/health",
+                      "gateway/postgresql",
                       "gateway/doctor",
                       {
                         "group": "Doctor",
@@ -2497,6 +2534,7 @@
                   {
                     "group": "Scaling and operations",
                     "pages": [
+                      "gateway/postgresql",
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/restart-recovery",
@@ -2506,6 +2544,7 @@
                         "group": "Cloud Workers",
                         "pages": [
                           "gateway/cloud-workers/warm-images",
+                          "gateway/cloud-workers/environment-file",
                           "gateway/cloud-workers/per-project-default-profiles",
                           "gateway/cloud-workers/setup-and-bundle-installation",
                           "gateway/cloud-workers/verify-the-profile",
@@ -2514,11 +2553,11 @@
                           "gateway/cloud-workers/session-lifecycle",
                           "gateway/cloud-workers/desktop",
                           "gateway/cloud-workers/security-model",
+                          "gateway/cloud-workers/native-inference",
                           "gateway/cloud-workers/troubleshooting"
                         ]
                       },
-                      "gateway/multiple-gateways",
-                      "gateway/multi-tenant-hosting"
+                      "gateway/multiple-gateways"
                     ]
                   },
                   {
@@ -2728,7 +2767,6 @@
                     "group": "Running the service",
                     "pages": [
                       "cli/daemon",
-                      "cli/fleet",
                       "cli/gateway",
                       {
                         "group": "Gateway",
@@ -2754,6 +2792,7 @@
                       "cli/openclaw",
                       "cli/reset",
                       "cli/setup",
+                      "cli/storage",
                       "cli/uninstall",
                       "cli/update",
                       {
@@ -2818,6 +2857,7 @@
                       "cli/directory",
                       "cli/pairing",
                       "cli/qr",
+                      "cli/users",
                       "cli/voicecall"
                     ]
                   },
@@ -2990,6 +3030,7 @@
                     ]
                   },
                   "plugins/sdk-subpaths",
+                  "plugins/sdk-gateway-ingress",
                   "plugins/sdk-entrypoints",
                   {
                     "group": "Plugin entry points",
@@ -3059,9 +3100,11 @@
                     "group": "Plugin SDK migration",
                     "pages": [
                       "plugins/sdk-migration/how-to-migrate",
+                      "plugins/sdk-migration/sqlite-async",
                       "plugins/sdk-migration/import-paths",
                       "plugins/sdk-migration/removed-surfaces",
                       "plugins/sdk-migration/talk",
+                      "plugins/sdk-migration/async-transcript-and-tts",
                       "plugins/sdk-migration/compatibility-policy",
                       "plugins/sdk-migration/removal-timeline"
                     ]
@@ -3120,11 +3163,13 @@
                       "reference/session-management-compaction/maintenance",
                       "reference/session-management-compaction/schema",
                       "reference/session-management-compaction/compaction",
-                      "reference/session-management-compaction/housekeeping"
+                      "reference/session-management-compaction/housekeeping",
+                      "reference/session-management-compaction/resident-history"
                     ]
                   },
                   "reference/transcript-hygiene",
                   "reference/memory-config",
+                  "reference/database-engines",
                   "reference/database-schemas",
                   {
                     "group": "Database schemas",
@@ -3156,7 +3201,19 @@
                 "group": "Project and contributing",
                 "pages": [
                   "reference/credits",
-                  "reference/pull-request-review-flow"
+                  "reference/pull-request-review-flow",
+                  {
+                    "group": "Maintainer scripts",
+                    "pages": [
+                      "reference/scripts/pr-preparation",
+                      "reference/scripts/pr-tooling",
+                      "reference/scripts/remote-gates",
+                      "reference/scripts/github-transport",
+                      "reference/scripts/prior-ci",
+                      "reference/scripts/merge-admission",
+                      "reference/scripts/merge-recovery"
+                    ]
+                  }
                 ]
               }
             ]
@@ -3168,6 +3225,14 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.10.5",
+                  "releases/2026.10.4",
+                  "releases/2026.10.3",
+                  "releases/2026.10.2",
+                  "releases/2026.10.1",
+                  "releases/2026.9.9",
+                  "releases/2026.9.8",
+                  "releases/2026.9.7",
                   "releases/2026.9.6",
                   "releases/2026.9.5",
                   "releases/2026.9.4",

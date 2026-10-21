@@ -18,6 +18,45 @@ type RuntimeUserTurnTranscriptContext = {
   recorder: UserTurnTranscriptRecorder;
 };
 
+export async function withCurrentUserTurnInput<T>(
+  recorder: UserTurnTranscriptRecorder | undefined,
+  run: () => T,
+): Promise<Awaited<T>> {
+  return await (recorder?.withPendingInputCurrent
+    ? recorder.withPendingInputCurrent(run)
+    : recorder?.withPendingInput
+      ? recorder.withPendingInput(run)
+      : run());
+}
+
+export function bindUserTurnInput(
+  recorder: UserTurnTranscriptRecorder | undefined,
+  assertCallerCurrent: () => void,
+) {
+  const assertNativeCurrent = () => {
+    assertCallerCurrent();
+    recorder?.withPendingInput?.(() => {});
+  };
+  return {
+    assertNativeCurrent,
+    assertLifetimeCurrent: () => {
+      assertCallerCurrent();
+      if (recorder?.assertPendingInputLifetimeCurrent) {
+        recorder.assertPendingInputLifetimeCurrent();
+      } else {
+        recorder?.withPendingInput?.(() => {});
+      }
+    },
+    withCurrent: async <T>(run: () => T): Promise<Awaited<T>> => {
+      assertCallerCurrent();
+      return await withCurrentUserTurnInput(recorder, () => {
+        assertCallerCurrent();
+        return run();
+      });
+    },
+  };
+}
+
 /** Carries transcript-only fields with a queued runtime message without exposing them to the model. */
 export function attachRuntimeUserTurnTranscriptContext(
   runtimeMessage: PersistedUserTurnMessage,
@@ -80,6 +119,16 @@ export function withRuntimeUserTurnTranscriptRecorder<T>(
     : undefined;
   const persist = () => append(beforeFreshMessageCommit);
   return recorder?.withPendingInput ? recorder.withPendingInput(persist) : persist();
+}
+
+export async function withCurrentRuntimeUserTurnTranscriptRecorder<T>(
+  runtimeMessage: AgentMessage,
+  append: (beforeFreshMessageCommit?: () => void) => T,
+): Promise<Awaited<T>> {
+  const recorder = readRuntimeUserTurnTranscriptRecorder(runtimeMessage);
+  return await withCurrentUserTurnInput(recorder, () =>
+    withRuntimeUserTurnTranscriptRecorder(runtimeMessage, append),
+  );
 }
 
 export function takeRuntimeUserTurnTranscriptRecorder(

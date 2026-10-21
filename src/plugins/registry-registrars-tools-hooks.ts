@@ -6,7 +6,7 @@ import {
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { HookEntry } from "../hooks/types.js";
-import { withTimeout } from "../utils/with-timeout.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
 import {
   agentToolResultMiddlewareRegistrationCoversTool,
@@ -14,12 +14,12 @@ import {
   normalizeAgentToolResultMiddlewareRuntimeIds,
   normalizeAgentToolResultMiddlewareRuntimes,
 } from "./agent-tool-result-middleware.js";
-import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
-import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import {
   resolveConversationAccessAllowed,
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
+import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import {
   resolveTypedHookTimeoutMs,
   type PluginRegistryState,
@@ -32,7 +32,6 @@ import type {
 import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import {
-  isConversationHookName,
   isPluginHookAgentTrigger,
   isPluginHookName,
   isPluginHookReplyDispatchKind,
@@ -76,62 +75,13 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
   } = state;
   const declaredToolNames = new WeakMap<PluginRecord, ReadonlySet<string>>();
 
-  const registerCodexAppServerExtensionFactory = (
-    record: PluginRecord,
-    factory: Parameters<OpenClawPluginApi["registerCodexAppServerExtensionFactory"]>[0],
-  ) => {
-    if (record.origin !== "bundled") {
-      reportRegistrationError(
-        record,
-        "only bundled plugins can register Codex app-server extension factories",
-      );
-      return;
-    }
-    if (
-      !(record.contracts?.embeddedExtensionFactories ?? []).includes(
-        CODEX_APP_SERVER_EXTENSION_RUNTIME_ID,
-      )
-    ) {
-      reportRegistrationError(
-        record,
-        'plugin must declare contracts.embeddedExtensionFactories: ["codex-app-server"] to register Codex app-server extension factories',
-      );
-      return;
-    }
-    if (typeof (factory as unknown) !== "function") {
-      reportRegistrationError(record, "codex app-server extension factory must be a function");
-      return;
-    }
-    if (
-      registry.codexAppServerExtensionFactories.some(
-        (entry) => entry.pluginId === record.id && entry.rawFactory === factory,
-      )
-    ) {
-      return;
-    }
-    const safeFactory: CodexAppServerExtensionFactory = async (codex) => {
-      try {
-        await factory(codex);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        registryParams.logger.warn(
-          `[plugins] codex app-server extension factory failed for ${record.id}: ${detail}`,
-        );
-      }
-    };
-    registry.codexAppServerExtensionFactories.push({
-      ...createRegistration(record, { factory: safeFactory }),
-      rawFactory: factory,
-    });
-  };
-
   const registerAgentToolResultMiddleware = (
     record: PluginRecord,
     handler: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[0],
     options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
     policy?: PluginTypedHookPolicy,
   ) => {
-    if (typeof (handler as unknown) !== "function") {
+    if (typeof handler !== "function") {
       reportRegistrationError(record, "agent tool result middleware must be a function");
       return;
     }
@@ -260,12 +210,15 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
+    getPluginInstance(record)?.admitFactory(factory, "tool");
     registry.tools.push({
       ...createRegistration(record, {
         factory,
         ...(versioned ? { contextVersion: 2 as const } : {}),
         names: normalized,
         optional,
+        workspaceAccess:
+          opts?.workspaceAccess ?? (typeof tool !== "function" && !versioned ? "execute" : true),
         origin: record.origin,
       }),
       // Host-owned membership must not re-enter the callable wrapper's graph walk.
@@ -311,32 +264,21 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       return;
     }
     const description = entry?.hook.description ?? opts?.description ?? "";
-    const hookEntry: HookEntry = entry
-      ? {
-          ...entry,
-          hook: {
-            ...entry.hook,
-            name: hookName,
-            description,
-            source: "openclaw-plugin",
-            pluginId: record.id,
-          },
-          metadata: { ...entry.metadata, events: normalizedEvents },
-        }
-      : {
-          hook: {
-            name: hookName,
-            description,
-            source: "openclaw-plugin",
-            pluginId: record.id,
-            filePath: record.source,
-            baseDir: path.dirname(record.source),
-            handlerPath: record.source,
-          },
-          frontmatter: {},
-          metadata: { events: normalizedEvents },
-          invocation: { enabled: true },
-        };
+    const hookEntry: HookEntry = {
+      ...(entry ?? { frontmatter: {}, invocation: { enabled: true } }),
+      hook: {
+        ...(entry?.hook ?? {
+          filePath: record.source,
+          baseDir: path.dirname(record.source),
+          handlerPath: record.source,
+        }),
+        name: hookName,
+        description,
+        source: "openclaw-plugin",
+        pluginId: record.id,
+      },
+      metadata: { ...entry?.metadata, events: normalizedEvents },
+    };
     record.hookNames.push(hookName);
     registry.hooks.push({
       pluginId: record.id,
@@ -392,10 +334,8 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    if (
-      isConversationHookName(hookName) &&
-      !resolveConversationAccessAllowed(record.origin, policy)
-    ) {
+    const conversationAccessAllowed = resolveConversationAccessAllowed(record.origin, policy);
+    if (PLUGIN_HOOK_METADATA[hookName].conversationAccess && !conversationAccessAllowed) {
       if (record.origin !== "bundled") {
         reportRegistrationWarning(
           record,
@@ -440,12 +380,14 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       ...(hookName === "before_prompt_build" && opts?.requiresToolAuthority === true
         ? { requiresToolAuthority: true }
         : {}),
+      ...(hookName === "session_end" && conversationAccessAllowed
+        ? { conversationAccessAllowed: true }
+        : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };
 
   return {
-    registerCodexAppServerExtensionFactory,
     registerAgentToolResultMiddleware,
     registerTool,
     registerHook,

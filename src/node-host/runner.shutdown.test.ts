@@ -15,7 +15,7 @@ describe("node runner shutdown", () => {
   });
   afterEach(() => {
     mocks.activeRuntime.close.mockReset().mockResolvedValue(undefined);
-    mocks.activeRuntime.cancelAll.mockReset();
+    mocks.activeRuntime.cancelAll.mockReset().mockResolvedValue(undefined);
     vi.restoreAllMocks();
   });
 
@@ -44,7 +44,7 @@ describe("node runner shutdown", () => {
       mocks.activeRuntime.close.mockImplementationOnce(async () => {
         runtimeClosed = true;
       });
-      mocks.activeRuntime.cancelAll.mockImplementation(() => {
+      mocks.activeRuntime.cancelAll.mockImplementation(async () => {
         cleanupRestartedAfterClose ||= runtimeClosed;
       });
       running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: address.port });

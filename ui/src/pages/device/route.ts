@@ -1,21 +1,9 @@
-import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
-import { routePageSpec } from "../../app-route-paths.ts";
+import { defineSolidPage } from "../../app-route-types.ts";
 
-export const page = definePage({
-  ...routePageSpec("device"),
-  component: () =>
-    import("./device-page.ts").then(() => ({
-      header: true,
-      render: () => html`<openclaw-device-page></openclaw-device-page>`,
-    })),
-});
+export const page = defineSolidPage("device", () =>
+  import("./device-page.tsx").then((module) => module.DevicePage),
+);
 
-export const permissionsPage = definePage({
-  ...routePageSpec("device-permissions"),
-  component: () =>
-    import("./permissions-page.ts").then(() => ({
-      header: true,
-      render: () => html`<openclaw-device-permissions-page></openclaw-device-permissions-page>`,
-    })),
-});
+export const permissionsPage = defineSolidPage("device-permissions", () =>
+  import("./permissions-page.tsx").then((module) => module.DevicePermissionsPage),
+);

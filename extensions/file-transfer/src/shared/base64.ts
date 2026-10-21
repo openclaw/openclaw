@@ -1,46 +1,15 @@
-function isBase64DataChar(code: number): boolean {
-  return (
-    (code >= 0x41 && code <= 0x5a) ||
-    (code >= 0x61 && code <= 0x7a) ||
-    (code >= 0x30 && code <= 0x39) ||
-    code === 0x2b ||
-    code === 0x2f ||
-    code === 0x2d ||
-    code === 0x5f
-  );
-}
-
 /** Validates base64 structure and returns its decoded size without allocating a decode buffer. */
 export function inspectStrictBase64(value: string): number | undefined {
-  let dataChars = 0;
-  let padding = 0;
-  let sawPadding = false;
-
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code === 0x3d) {
-      padding += 1;
-      if (padding > 2) {
-        return undefined;
-      }
-      sawPadding = true;
-      continue;
-    }
-    if (sawPadding || !isBase64DataChar(code)) {
-      return undefined;
-    }
-    dataChars += 1;
+  const match = /^[A-Za-z0-9+/_-]*={0,2}$/u.exec(value);
+  // `$` also matches before a final line break; base64 input must consume every byte.
+  if (!match || match[0].length !== value.length) {
+    return undefined;
   }
-
-  if (dataChars === 0) {
-    return padding === 0 ? 0 : undefined;
-  }
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const dataChars = value.length - padding;
   const remainder = dataChars % 4;
   if (padding === 0) {
     return remainder === 1 ? undefined : Math.floor((dataChars * 3) / 4);
-  }
-  if (dataChars + padding < 4 || (dataChars + padding) % 4 !== 0) {
-    return undefined;
   }
   if ((padding === 1 && remainder !== 3) || (padding === 2 && remainder !== 2)) {
     return undefined;

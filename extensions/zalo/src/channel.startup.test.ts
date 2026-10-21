@@ -29,24 +29,6 @@ vi.mock("./probe.js", () => {
   };
 });
 
-vi.mock("./channel.runtime.js", () => ({
-  probeZaloAccount: hoisted.probeZalo,
-  startZaloGatewayAccount: async (ctx: {
-    account: ResolvedZaloAccount;
-    abortSignal: AbortSignal;
-    setStatus: (patch: Partial<ResolvedZaloAccount>) => void;
-  }) => {
-    await hoisted.probeZalo();
-    ctx.setStatus({ accountId: ctx.account.accountId });
-    return await hoisted.monitorZaloProvider({
-      token: ctx.account.token,
-      account: ctx.account,
-      abortSignal: ctx.abortSignal,
-      useWebhook: false,
-    });
-  },
-}));
-
 import { zaloPlugin } from "./channel.js";
 
 type ZaloGateway = NonNullable<typeof zaloPlugin.gateway>;
@@ -68,15 +50,6 @@ function buildAccount(): ResolvedZaloAccount {
     tokenSource: "config",
     config: {},
   };
-}
-
-function requireMonitorArgs() {
-  const [call] = hoisted.monitorZaloProvider.mock.calls;
-  if (!call) {
-    throw new Error("expected Zalo monitor call");
-  }
-  const [monitorArgs] = call;
-  return monitorArgs;
 }
 
 describe("zaloPlugin gateway.startAccount", () => {
@@ -110,13 +83,13 @@ describe("zaloPlugin gateway.startAccount", () => {
 
     expectLifecyclePatch(patches, { accountId: "default" });
     expect(isSettled()).toBe(true);
-    expect(hoisted.monitorZaloProvider).toHaveBeenCalledTimes(1);
-    const monitorArgs = requireMonitorArgs();
-    expect(monitorArgs).toStrictEqual({
-      token: "test-token",
-      account: buildAccount(),
-      abortSignal: abort.signal,
-      useWebhook: false,
-    });
+    expect(hoisted.monitorZaloProvider).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        token: "test-token",
+        account: buildAccount(),
+        abortSignal: abort.signal,
+        useWebhook: false,
+      }),
+    );
   });
 });

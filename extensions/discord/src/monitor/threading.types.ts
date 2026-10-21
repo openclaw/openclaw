@@ -1,14 +1,13 @@
-import type { APIAttachment, APIStickerItem } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { ChannelType, Client, DiscordMessageDispatchData } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
+import type { DiscordSnapshotMessage } from "./message-forwarded.js";
 
 export type DiscordThreadChannel = {
   id: string;
   name?: string | null;
   parentId?: string | null;
-  parent?: { id?: string; name?: string };
   ownerId?: string | null;
 };
 
@@ -28,23 +27,7 @@ export type DiscordThreadParentInfo = {
   type?: ChannelType;
 };
 
-type DiscordThreadStarterRestEmbed = {
-  title?: string | null;
-  description?: string | null;
-};
-
-type DiscordThreadStarterRestSnapshotMessage = {
-  content?: string | null;
-  attachments?: APIAttachment[] | null;
-  embeds?: DiscordThreadStarterRestEmbed[] | null;
-  sticker_items?: APIStickerItem[] | null;
-};
-
-export type DiscordThreadStarterRestAuthor = {
-  id?: string | null;
-  username?: string | null;
-  discriminator?: string | null;
-};
+export type DiscordThreadStarterRestAuthor = NonNullable<DiscordSnapshotMessage["author"]>;
 
 type DiscordThreadStarterRestMember = {
   nick?: string | null;
@@ -52,15 +35,9 @@ type DiscordThreadStarterRestMember = {
   roles?: string[];
 };
 
-export type DiscordThreadStarterRestMessage = {
-  content?: string | null;
-  components?: unknown;
-  attachments?: APIAttachment[] | null;
-  embeds?: DiscordThreadStarterRestEmbed[] | null;
-  message_snapshots?: Array<{ message?: DiscordThreadStarterRestSnapshotMessage | null }> | null;
-  sticker_items?: APIStickerItem[] | null;
+export type DiscordThreadStarterRestMessage = DiscordSnapshotMessage & {
+  message_snapshots?: Array<{ message?: DiscordSnapshotMessage | null }> | null;
   member?: DiscordThreadStarterRestMember | null;
-  author?: DiscordThreadStarterRestAuthor | null;
   timestamp?: string | null;
 };
 
@@ -83,7 +60,6 @@ export type DiscordAutoThreadContext = {
 };
 
 export type DiscordAutoThreadReplyPlan = DiscordReplyDeliveryPlan & {
-  createdThreadId?: string;
   autoThreadContext: DiscordAutoThreadContext | null;
 };
 

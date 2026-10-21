@@ -19,7 +19,9 @@
   --accent-subtle: rgba(49, 84, 155, 0.09);
   --accent-glow: rgba(49, 84, 155, 0.14);
   --primary: #31549b;
+  --primary-hover: var(--accent-hover);
   --primary-foreground: #ffffff;
+  --accent-foreground: #ffffff;
 
   --bg: #f6f1e4;
   --bg-accent: #efe8d6;
@@ -34,11 +36,6 @@
   --popover: #fdfbf3;
   --popover-foreground: #1d1a12;
   --session-hovercard-surface: var(--card);
-  --session-hovercard-progress-surface: color-mix(
-    in srgb,
-    var(--card) 52%,
-    var(--panel-strong) 48%
-  );
 
   --panel: #f6f1e4;
   --panel-strong: #ece3cf;
@@ -102,6 +99,7 @@
   --primary: #8fa8e0;
   --primary-hover: #a8bce9;
   --primary-foreground: #101c33;
+  --accent-foreground: #101c33;
 
   --destructive: #c93a30;
   --destructive-hover: #b3332a;

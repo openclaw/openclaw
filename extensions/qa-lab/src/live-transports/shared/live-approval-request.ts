@@ -5,6 +5,31 @@ import {
   readAcceptedApprovalRequestId,
 } from "./live-approval-result.js";
 
+type ApprovalDecisionRequest = {
+  approvalId: string;
+  gateway: Pick<QaGatewayChild, "call">;
+  kind: ChannelApprovalKind;
+  timeoutMs: number;
+};
+
+export async function waitForLiveQaApprovalDecision(params: ApprovalDecisionRequest) {
+  return await params.gateway.call(
+    `${params.kind}.approval.waitDecision`,
+    { id: params.approvalId },
+    { expectFinal: true, timeoutMs: params.timeoutMs },
+  );
+}
+
+export async function resolveLiveQaApprovalDecision(
+  params: ApprovalDecisionRequest & { decision: string },
+) {
+  return await params.gateway.call(
+    `${params.kind}.approval.resolve`,
+    { decision: params.decision, id: params.approvalId },
+    { expectFinal: false, timeoutMs: params.timeoutMs },
+  );
+}
+
 export async function requestLiveQaApproval(params: {
   approvalId: string;
   approvalKind: ChannelApprovalKind;

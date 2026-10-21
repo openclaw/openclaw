@@ -1,30 +1,16 @@
-/**
- * Sandbox runtime management commands.
- *
- * Supports listing active sandbox containers/browsers and recreating them by
- * session, agent, or all scopes.
- */
 import { confirm as clackConfirm } from "@clack/prompts";
 import {
   listSandboxBrowsers,
   listSandboxContainers,
   removeSandboxBrowserContainer,
   removeSandboxContainer,
-  type SandboxBrowserInfo,
   type SandboxContainerInfo,
-} from "../agents/sandbox.js";
+} from "../agents/sandbox/manage.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import {
-  displayBrowsers,
-  displayContainers,
-  displayRecreatePreview,
-  displayRecreateResult,
-  displaySummary,
-} from "./sandbox-display.js";
-
-// --- Types ---
 
 type SandboxListOptions = {
   browser: boolean;
@@ -39,14 +25,21 @@ type SandboxRecreateOptions = {
   force: boolean;
 };
 
-type ContainerItem = SandboxContainerInfo | SandboxBrowserInfo;
+function displayUsage(container: SandboxContainerInfo, runtime: RuntimeEnv): void {
+  runtime.log(
+    `    Age:     ${formatDurationCompact(Date.now() - container.createdAtMs, { spaced: true }) ?? "0s"}`,
+  );
+  runtime.log(
+    `    Idle:    ${formatDurationCompact(Date.now() - container.lastUsedAtMs, { spaced: true }) ?? "0s"}`,
+  );
+  runtime.log(`    Session: ${container.sessionKey}`);
+  runtime.log("");
+}
 
-type FilteredContainers = {
-  containers: SandboxContainerInfo[];
-  browsers: SandboxBrowserInfo[];
-};
+function formatRecreateRuntimeLabel(container: SandboxContainerInfo): string {
+  return `${container.runtimeLabel ?? container.containerName} [${container.backendId ?? "docker"}]`;
+}
 
-/** Lists active sandbox containers or browser containers. */
 export async function sandboxListCommand(
   opts: SandboxListOptions,
   runtime: RuntimeEnv,
@@ -62,122 +55,144 @@ export async function sandboxListCommand(
   }
 
   if (opts.browser) {
-    displayBrowsers(browsers, runtime);
+    if (browsers.length === 0) {
+      runtime.log("No sandbox browser containers found.");
+    } else {
+      runtime.log("\n🌐 Sandbox Browser Containers:\n");
+      for (const browser of browsers) {
+        runtime.log(`  ${browser.containerName}`);
+        runtime.log(`    Status:  ${browser.running ? "🟢 running" : "⚫ stopped"}`);
+        runtime.log(`    Image:   ${browser.image} ${browser.imageMatch ? "✓" : "⚠️  mismatch"}`);
+        runtime.log(`    CDP:     ${browser.cdpPort}`);
+        if (browser.noVncPort) {
+          runtime.log(`    noVNC:   ${browser.noVncPort}`);
+        }
+        displayUsage(browser, runtime);
+      }
+    }
+  } else if (containers.length === 0) {
+    runtime.log("No sandbox runtimes found.");
   } else {
-    displayContainers(containers, runtime);
+    runtime.log("\n📦 Sandbox Runtimes:\n");
+    for (const container of containers) {
+      runtime.log(`  ${container.runtimeLabel ?? container.containerName}`);
+      runtime.log(`    Status:  ${container.running ? "🟢 running" : "⚫ stopped"}`);
+      runtime.log(
+        `    ${container.configLabelKind ?? "Image"}:   ${container.image} ${container.imageMatch ? "✓" : "⚠️  mismatch"}`,
+      );
+      runtime.log(`    Backend: ${container.backendId ?? "docker"}`);
+      displayUsage(container, runtime);
+    }
   }
 
-  displaySummary(opts.browser ? browsers : containers, opts.browser, runtime);
+  const entries = opts.browser ? browsers : containers;
+  const runningCount = entries.filter((entry) => entry.running).length;
+  const mismatchCount = entries.filter((entry) => !entry.imageMatch).length;
+  runtime.log(`Total: ${entries.length} (${runningCount} running)`);
+  if (mismatchCount > 0) {
+    runtime.log(`\n⚠️  ${mismatchCount} runtime(s) with config mismatch detected.`);
+    const command = formatCliCommand(
+      `openclaw sandbox recreate --all${opts.browser ? " --browser" : ""}`,
+    );
+    runtime.log(`   Run '${command}' to update all runtimes.`);
+  }
 }
 
-/** Stops and removes sandbox runtimes matching the requested scope. */
 export async function sandboxRecreateCommand(
   opts: SandboxRecreateOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  if (!validateRecreateOptions(opts, runtime)) {
+  if (!opts.all && !opts.session && !opts.agent) {
+    runtime.error(
+      `Choose the sandbox scope: --all, --session <key>, or --agent <id>. Run ${formatCliCommand(`openclaw sandbox list${opts.browser ? " --browser" : ""}`)} to inspect active runtimes first.`,
+    );
+    runtime.exit(1);
+    return;
+  }
+  if ([opts.all, opts.session, opts.agent].filter(Boolean).length > 1) {
+    runtime.error("Choose only one sandbox scope: --all, --session, or --agent.");
+    runtime.exit(1);
     return;
   }
 
-  const filtered = await fetchAndFilterContainers(opts);
+  const selected = { ...opts };
+  await runWithLocalStateOwner({
+    method: "sandbox.recreate",
+    params: {},
+    target: selected.session ?? selected.agent ?? "all sandbox runtimes",
+    onForeignOwner: "refuse",
+    runLocal: ({ assertCurrent }) => recreateOwnedSandboxes(selected, runtime, assertCurrent),
+  });
+}
 
-  if (filtered.containers.length + filtered.browsers.length === 0) {
+async function recreateOwnedSandboxes(
+  opts: SandboxRecreateOptions,
+  runtime: RuntimeEnv,
+  assertCurrent: () => void,
+): Promise<void> {
+  const agentPrefix = `agent:${opts.agent}`;
+  const matches = opts.session
+    ? (item: Pick<SandboxContainerInfo, "sessionKey">) => item.sessionKey === opts.session
+    : opts.agent
+      ? (item: Pick<SandboxContainerInfo, "sessionKey">) =>
+          item.sessionKey === agentPrefix || item.sessionKey.startsWith(`${agentPrefix}:`)
+      : undefined;
+  const containers = opts.browser
+    ? await listSandboxBrowsers(matches)
+    : await listSandboxContainers(matches);
+  assertCurrent();
+
+  if (containers.length === 0) {
     runtime.log(
       `No sandbox runtimes found matching the criteria. Run ${formatCliCommand(`openclaw sandbox list${opts.browser ? " --browser" : ""}`)} to inspect active runtimes.`,
     );
     return;
   }
 
-  displayRecreatePreview(filtered.containers, filtered.browsers, runtime);
+  runtime.log("\nSandbox runtimes to be recreated:\n");
+  runtime.log(opts.browser ? "\n🌐 Browser Containers:" : "📦 Sandbox Runtimes:");
+  for (const container of containers) {
+    const label = opts.browser ? container.containerName : formatRecreateRuntimeLabel(container);
+    runtime.log(`  - ${label} (${container.running ? "running" : "stopped"})`);
+  }
+  runtime.log(`\nTotal: ${containers.length} runtime(s)`);
 
-  if (!opts.force && !(await confirmRecreate())) {
+  if (
+    !opts.force &&
+    (await clackConfirm({
+      message: "This will stop and remove these containers. Continue?",
+      initialValue: false,
+    })) !== true
+  ) {
     runtime.log("Cancelled.");
     return;
   }
 
-  const result = await removeContainers(filtered, runtime);
-  displayRecreateResult(result, runtime);
+  assertCurrent();
+  runtime.log("\nRemoving sandbox runtimes...\n");
 
-  if (result.failCount > 0) {
+  let successCount = 0;
+  const remove = opts.browser ? removeSandboxBrowserContainer : removeSandboxContainer;
+  for (const { containerName } of containers) {
+    try {
+      assertCurrent();
+      await remove(containerName);
+      runtime.log(`✓ Removed ${containerName}`);
+      successCount++;
+    } catch (err) {
+      runtime.error(`Failed to remove ${containerName}: ${formatErrorMessage(err)}.`);
+    }
+  }
+
+  const failCount = containers.length - successCount;
+  runtime.log(`\nDone: ${successCount} removed, ${failCount} failed`);
+  if (successCount > 0) {
+    runtime.log("\nRuntimes will be automatically recreated when the agent is next used.");
+  }
+  if (failCount > 0) {
     runtime.error(
       `Run ${formatCliCommand(`openclaw sandbox list${opts.browser ? " --browser" : ""}`)} to inspect what remains.`,
     );
     runtime.exit(1);
   }
-}
-
-function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeEnv): boolean {
-  if (!opts.all && !opts.session && !opts.agent) {
-    runtime.error(
-      `Choose the sandbox scope: --all, --session <key>, or --agent <id>. Run ${formatCliCommand(`openclaw sandbox list${opts.browser ? " --browser" : ""}`)} to inspect active runtimes first.`,
-    );
-    runtime.exit(1);
-    return false;
-  }
-
-  const exclusiveCount = [opts.all, opts.session, opts.agent].filter(Boolean).length;
-  if (exclusiveCount > 1) {
-    runtime.error("Choose only one sandbox scope: --all, --session, or --agent.");
-    runtime.exit(1);
-    return false;
-  }
-
-  return true;
-}
-
-async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<FilteredContainers> {
-  const matches = opts.session
-    ? (item: Pick<ContainerItem, "sessionKey">) => item.sessionKey === opts.session
-    : opts.agent
-      ? createAgentMatcher(opts.agent)
-      : undefined;
-  return {
-    containers: opts.browser ? [] : await listSandboxContainers(matches),
-    browsers: opts.browser ? await listSandboxBrowsers(matches) : [],
-  };
-}
-
-function createAgentMatcher(agentId: string) {
-  const agentPrefix = `agent:${agentId}`;
-  return (item: Pick<ContainerItem, "sessionKey">) =>
-    item.sessionKey === agentPrefix || item.sessionKey.startsWith(`${agentPrefix}:`);
-}
-
-async function confirmRecreate(): Promise<boolean> {
-  const result = await clackConfirm({
-    message: "This will stop and remove these containers. Continue?",
-    initialValue: false,
-  });
-
-  return result === true;
-}
-
-async function removeContainers(
-  filtered: FilteredContainers,
-  runtime: RuntimeEnv,
-): Promise<{ successCount: number; failCount: number }> {
-  runtime.log("\nRemoving sandbox runtimes...\n");
-
-  let successCount = 0;
-  let failCount = 0;
-
-  // Remove normal sandboxes first, then browser containers; reporting keeps one
-  // aggregate fail count so callers can exit non-zero on partial cleanup.
-  for (const [containers, remove] of [
-    [filtered.containers, removeSandboxContainer],
-    [filtered.browsers, removeSandboxBrowserContainer],
-  ] as const) {
-    for (const { containerName } of containers) {
-      try {
-        await remove(containerName);
-        runtime.log(`✓ Removed ${containerName}`);
-        successCount++;
-      } catch (err) {
-        runtime.error(`Failed to remove ${containerName}: ${formatErrorMessage(err)}.`);
-        failCount++;
-      }
-    }
-  }
-
-  return { successCount, failCount };
 }

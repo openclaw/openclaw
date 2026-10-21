@@ -4,7 +4,9 @@ import {
   appendInterruptedTurnMessage,
 } from "../../../../packages/agent-core/src/turn-interruption.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { loadSessionEntryForAdmission } from "../../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { persistInternalSourceReply } from "../../../gateway/internal-source-reply-persistence.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
@@ -12,6 +14,7 @@ import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-tr
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
@@ -24,12 +27,13 @@ import {
 import { createResourceLoader } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
+import type { ExtensionFactory } from "../../sessions/extensions/types.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   persistToolResultProjections,
 } from "../session-prompt-state.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
@@ -41,22 +45,22 @@ import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-l
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-export function appendCompletedToolWork(
+export async function appendCompletedToolWork(
   manager: SessionManager,
   runId: string,
-  beforeNested?: () => void,
+  beforeNested?: () => void | Promise<void>,
   suffix = "",
 ) {
   const original = guardSessionManager(manager, { runId });
-  original.appendMessage(
+  await original.appendMessageAsync(
     createAssistant(
       testModel,
       [{ type: "toolCall", id: "completed-read" + suffix, name: "read", arguments: {} }],
       "toolUse",
     ),
   );
-  beforeNested?.();
-  original.appendMessage(
+  await beforeNested?.();
+  await original.appendMessageAsync(
     createNestedToolActivity({
       runId,
       scopeId: "nested-scope" + suffix,
@@ -72,7 +76,7 @@ export function appendCompletedToolWork(
       timestamp: 3,
     }),
   );
-  original.appendMessage({
+  await original.appendMessageAsync({
     role: "toolResult",
     toolCallId: "completed-read" + suffix,
     toolName: "read",
@@ -80,17 +84,19 @@ export function appendCompletedToolWork(
     isError: false,
     timestamp: 4,
   });
-  original.appendCustomEntry("openclaw.cache-ttl", { timestamp: 4 });
+  await original.appendCustomEntryAsync("openclaw.cache-ttl", { timestamp: 4 });
 }
 
-export function appendOversizedCacheSnapshot(manager: SessionManager) {
+export async function appendOversizedCacheSnapshot(manager: SessionManager) {
   const state = createToolResultPromptProjectionState();
   state.frozen.add("prior-result");
   state.sourceHashByKey.set("prior-result", "synthetic-source");
   state.replacements.set("prior-result", {
     content: [{ type: "text", text: "x".repeat(64_000) }],
   });
-  persistToolResultProjections(state, (type, data) => manager.appendCustomEntry(type, data));
+  await persistToolResultProjections(state, (type, data) =>
+    manager.appendCustomEntryAsync(type, data),
+  );
 }
 
 export async function withInterruptedTurn(
@@ -106,19 +112,31 @@ export async function withInterruptedTurn(
   }) => Promise<void>,
   options: {
     interruptedTurn?: boolean;
+    partialText?: string;
     toolProgress?: boolean;
     settledPrefix?: boolean;
     oversizedMetadata?: boolean;
+    compactedInput?: boolean;
+    selectedOwner?: boolean;
+    sharedStore?: boolean;
+    admittedReceipt?: boolean;
+    sourceReply?: { final?: boolean; runId?: string };
   } = {},
 ) {
   await withOpenClawTestState({ label: "interrupted-keyed-replay" }, async (state) => {
     const runId = "interrupted-keyed-replay";
+    const agentId = options.sharedStore ? "ops" : "main";
     const target = {
-      agentId: "main",
+      agentId,
       sessionId: runId,
-      sessionKey: `agent:main:${runId}`,
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      sessionKey: `agent:${agentId}:${runId}`,
+      storePath: options.sharedStore
+        ? state.statePath("shared.sqlite")
+        : path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
+    if (options.sharedStore) {
+      openOpenClawAgentDatabase({ agentId: "main", path: target.storePath, env: state.env });
+    }
     await upsertSessionEntryCore(target, {
       sessionId: target.sessionId,
       updatedAt: 1,
@@ -132,30 +150,37 @@ export async function withInterruptedTurn(
       });
     if (options.settledPrefix) {
       // A completed earlier turn that fenced current-turn reads must still see.
-      const seed = SessionManager.open(target, state.workspaceDir);
-      seed.appendMessage({
+      const seed = await SessionManager.openAsync(target, state.workspaceDir);
+      await seed.appendMessageAsync({
         role: "user",
         content: "Earlier settled question",
         timestamp: 1,
         idempotencyKey: `${runId}:earlier`,
       } as never);
-      seed.appendMessage(
+      await seed.appendMessageAsync(
         createAssistant(testModel, [{ type: "text", text: "Earlier settled answer" }]),
       );
     }
     const previous = makeRecorder();
     await previous.stageApproved!({ runId, assertCurrent: () => {} });
-    const original = guardSessionManager(SessionManager.open(target, state.workspaceDir), {
-      runId,
-      preparedUserTurnMessage: await previous.resolveMessage(),
-      preparedUserTurnTranscriptRecorder: previous,
-    });
-    previous.withPendingInput!(() =>
-      original.appendMessage({ role: "user", content: "Finish this exact turn", timestamp: 1 }),
+    const original = guardSessionManager(
+      await SessionManager.openAsync(target, state.workspaceDir),
+      {
+        runId,
+        preparedUserTurnMessage: await previous.resolveMessage(),
+        preparedUserTurnTranscriptRecorder: previous,
+      },
+    );
+    await previous.withPendingInput!(() =>
+      original.appendMessageAsync({
+        role: "user",
+        content: "Finish this exact turn",
+        timestamp: 1,
+      }),
     );
     if (appendOnlyRuntimeContext) {
       const carrier = buildRuntimeContextCustomMessage("Original runtime context")!;
-      original.appendCustomMessageEntry(
+      await original.appendCustomMessageEntryAsync(
         carrier.customType,
         carrier.content,
         carrier.display,
@@ -163,17 +188,47 @@ export async function withInterruptedTurn(
       );
     }
     if (options.oversizedMetadata) {
-      appendCompletedToolWork(original, runId, undefined, "-before-window");
-      appendOversizedCacheSnapshot(original);
+      await appendCompletedToolWork(original, runId, undefined, "-before-window");
+      await appendOversizedCacheSnapshot(original);
+    }
+    if (options.compactedInput) {
+      const firstKeptEntryId = await original.appendCustomEntryAsync("openclaw.cache-ttl", {
+        timestamp: 2,
+      });
+      await original.appendCompactionAsync(
+        "Continue the unfinished request",
+        firstKeptEntryId,
+        9_000,
+      );
+    }
+    if (options.sourceReply) {
+      await persistInternalSourceReply({
+        cfg: { session: { store: target.storePath } },
+        agentId,
+        sessionKey: target.sessionKey,
+        expectedSessionId: target.sessionId,
+        runId: options.sourceReply.runId ?? runId,
+        sourceReplyFinal: options.sourceReply.final,
+        payload: { text: "Still working after restart." },
+        idempotencyKey: `${runId}:progress`,
+      });
+      // The delivery sink appended outside the manager, as a live transcript update does.
+      await original.reloadPersistedTranscriptAsync();
     }
     if (options.toolProgress) {
-      appendCompletedToolWork(original, runId);
+      await appendCompletedToolWork(original, runId);
     }
     if (options.interruptedTurn !== false) {
-      original.appendMessage(
-        createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
-      );
-      await appendInterruptedTurnMessage([], (event) => {
+      await original.appendMessageAsync({
+        ...createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
+        ...(options.partialText
+          ? {
+              content: [{ type: "text" as const, text: options.partialText }],
+              errorCode: "OPENCLAW_RESTART_ABORT",
+            }
+          : {}),
+      });
+      await appendInterruptedTurnMessage([], async (event) => {
         if (event.type !== "message_end") {
           return;
         }
@@ -181,7 +236,7 @@ export async function withInterruptedTurn(
         if (interrupted.role !== "custom") {
           throw new Error("expected interruption context");
         }
-        original.appendCustomMessageEntry(
+        await original.appendCustomMessageEntryAsync(
           interrupted.customType,
           interrupted.content,
           interrupted.display,
@@ -194,6 +249,16 @@ export async function withInterruptedTurn(
     closeOpenClawAgentDatabasesForTest();
     const recorder = makeRecorder();
     await recorder.stageApproved!({ runId, assertCurrent: () => {} });
+    if (options.admittedReceipt) {
+      recorder.markRuntimePersisted(
+        previous.getPersistedMessage?.(),
+        previous.getAdmissionReceipt(),
+        {
+          appended: false,
+        },
+      );
+      await recorder.waitForRuntimePersistence();
+    }
     const attempt = {
       config: {},
       contextTokenBudget: 8000,
@@ -210,6 +275,14 @@ export async function withInterruptedTurn(
       userTurnTranscriptRecorder: recorder,
     } as EmbeddedRunAttemptParams;
     const lifecycle = createEmbeddedAttemptTranscriptLifecycle(attempt);
+    const selected = options.selectedOwner ? await loadSessionEntryForAdmission(target) : undefined;
+    const sessionReader =
+      selected && "kind" in selected.databaseClaim && selected.databaseClaim.kind === "worker"
+        ? selected.databaseClaim.reader
+        : undefined;
+    if (selected && !sessionReader) {
+      throw new Error("Replay fixture requires a selected worker reader");
+    }
     let active = true;
     const withOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) =>
       withOwnedSessionTranscriptWrites(
@@ -219,6 +292,7 @@ export async function withInterruptedTurn(
             expectedLifecycleRevision: "current-generation",
             expectedWriterRunId: runId,
           },
+          sessionReader,
           assertCommitAllowed: () => {
             if (!active) {
               throw new Error("original writer closed");
@@ -245,14 +319,14 @@ export async function withInterruptedTurn(
             onSessionManagerCreated: onCreated ?? (() => {}),
             replayAllowedToolNames: new Set(["read"]),
             resolveActiveContextEnginePluginId: () => undefined,
-            sessionAgentId: "main",
-            transcriptLifecycle: lifecycle,
+            sessionAgentId: target.agentId,
             withOwnedTranscriptWrite,
           }),
       });
     } finally {
       recorder.finishPendingInput!("interrupted");
       await lifecycle.dispose();
+      await selected?.databaseClaim.release();
       clearEmbeddedSessionPromptStates([target.sessionId]);
     }
   });
@@ -271,13 +345,14 @@ export async function withReplaySession(
 ) {
   const { attempt, target, prepare } = fixture;
   const prepared = await prepare();
-  const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>();
-  if (options.beforeStart) {
-    handlers.set("before_agent_start", [options.beforeStart]);
-  }
-  if (options.recovery === "compaction") {
-    handlers.set("session_before_compact", [
-      async (event) => {
+  const handlers: ExtensionFactory = (api) => {
+    if (options.beforeStart) {
+      api.on("before_agent_start", async () => {
+        await options.beforeStart?.();
+      });
+    }
+    if (options.recovery === "compaction") {
+      api.on("session_before_compact", async (event) => {
         const { preparation } = event as {
           preparation: { firstKeptEntryId: string; tokensBefore: number };
         };
@@ -288,12 +363,12 @@ export async function withReplaySession(
             tokensBefore: preparation.tokensBefore,
           },
         };
-      },
-    ]);
-  }
+      });
+    }
+  };
   const { session } = await createTestSession({
     sessionManager: prepared.sessionManager,
-    resourceLoader: createResourceLoader(handlers),
+    resourceLoader: await createResourceLoader(handlers),
     settingsManager: SettingsManager.inMemory({
       compaction: {
         enabled: options.recovery === "compaction",
@@ -318,7 +393,8 @@ export async function withReplaySession(
       sessionManager: prepared.sessionManager,
       setActiveSessionSystemPrompt: () => {},
     });
-    const promptState = getEmbeddedSessionPromptState(target.sessionId);
+    using promptStateLease = retainEmbeddedSessionPromptState(target.sessionId);
+    const promptState = promptStateLease.state;
     const submit = () =>
       submitEmbeddedAttemptPrompt({
         attempt,
@@ -331,7 +407,6 @@ export async function withReplaySession(
         onSteeringAcknowledged: () => {},
         persistToolResultProjections: async () => {},
         runtimeOnly: false,
-        sessionPromptState: promptState,
         systemPrompt: "",
         toolResultAggregateMaxChars: 8000,
         toolResultMaxChars: 4000,

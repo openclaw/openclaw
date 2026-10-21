@@ -4,7 +4,6 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   clearCurrentPluginMetadataSnapshot,
   isGatewayPluginMetadataSnapshotActive,
-  selectCurrentPluginMetadataCache,
 } from "./current-plugin-metadata-state.js";
 import type {
   PluginHostCleanupResult,
@@ -34,18 +33,13 @@ type GatewayMetadataOwner = {
   retirements: Set<{
     cache: PluginCache;
     beforeRetire?: PluginHostRegistryRetirement;
-    prerequisite?: Promise<PluginHostCleanupResult | undefined>;
     promise?: Promise<PluginHostCleanupResult>;
   }>;
 };
-const gatewayMetadataOwners = resolveGlobalSingleton<Set<GatewayMetadataOwner>>(
-  Symbol.for("openclaw.gatewayPluginMetadataOwners"),
-  () => new Set(),
+const gatewayMetadata = resolveGlobalSingleton<{ owner?: GatewayMetadataOwner }>(
+  Symbol.for("openclaw.gatewayPluginMetadataOwner"),
+  () => ({}),
 );
-
-function hasClosingGateway(): boolean {
-  return [...gatewayMetadataOwners].some((owner) => owner.phase === "closing");
-}
 
 /** The kernel owns bootstrap acquisition, published inventory, and unfinished retirement. */
 export function retainGatewayPluginMetadata(
@@ -54,7 +48,7 @@ export function retainGatewayPluginMetadata(
 ) {
   scheduler.signal.throwIfAborted();
   const bootstrapCache = getPluginCache();
-  if (hasClosingGateway() || bootstrapCache.retirement) {
+  if (gatewayMetadata.owner?.phase === "closing" || bootstrapCache.retirement) {
     throw new Error(
       "Gateway plugin metadata is shutting down; finish cleanup before starting another Gateway. If cleanup failed, resolve the failure and restart.",
     );
@@ -67,7 +61,8 @@ export function retainGatewayPluginMetadata(
     phase: "booting",
     retirements: new Set(),
   };
-  gatewayMetadataOwners.add(owner);
+  // A process runs one Gateway; overlapping independent Gateways are best effort.
+  gatewayMetadata.owner = owner;
   const releaseCache = (
     cache: PluginCache | undefined,
     beforeRetire?: PluginHostRegistryRetirement,
@@ -84,28 +79,17 @@ export function retainGatewayPluginMetadata(
     const results = await Promise.allSettled([
       ...required,
       ...[...owner.retirements].map(async (retirement) => {
-        const prerequisite = (retirement.prerequisite ??= Promise.resolve().then(() =>
-          retirement.beforeRetire?.(),
-        ));
-        const pending = (retirement.promise ??= prerequisite.then(async (previous) => {
+        const pending = (retirement.promise ??= Promise.resolve().then(async () => {
+          const previous = await retirement.beforeRetire?.();
           const { cache } = retirement;
-          let cleanup: PluginHostCleanupResult | undefined;
-          // A startup admitted before this join can still acquire the released inventory.
-          if (![...gatewayMetadataOwners].some((other) => other.cache === cache)) {
-            cleanup = await retirePluginCache(cache, () => {
-              // Keep shared setup entries visible to borrowed old scopes until teardown starts.
-              const retained = new Set(
-                [...gatewayMetadataOwners].flatMap((other) =>
-                  Array.from(other.cache?.setupModules.values() ?? []),
-                ),
-              );
-              for (const [key, instance] of cache.setupModules) {
-                if (retained.has(instance)) {
-                  cache.setupModules.delete(key);
-                }
+          const cleanup = await retirePluginCache(cache, () => {
+            // Old scopes retain their setup entries until retirement starts.
+            for (const [key, instance] of cache.setupModules) {
+              if (owner.cache?.setupModules.get(key) === instance) {
+                cache.setupModules.delete(key);
               }
-            });
-          }
+            }
+          });
           return {
             cleanupCount: (previous?.cleanupCount ?? 0) + (cleanup?.cleanupCount ?? 0),
             failures: [...(previous?.failures ?? []), ...(cleanup?.failures ?? [])],
@@ -146,22 +130,12 @@ export function retainGatewayPluginMetadata(
     };
   };
   const beginClose = (): void | Promise<void> => {
-    if (!gatewayMetadataOwners.has(owner)) {
-      return;
-    }
     owner.phase = "closing";
-    if (!owner.prelude && [...gatewayMetadataOwners].every((entry) => entry.phase === "closing")) {
-      const prelude = Promise.resolve().then(onAllGatewaysClosing);
-      // Overlapping closes share one stop, including when the final bootstrap fails.
-      for (const entry of gatewayMetadataOwners) {
-        entry.prelude = prelude;
-      }
-      void prelude.catch(() => {});
-    }
+    owner.prelude ??= Promise.resolve().then(onAllGatewaysClosing);
+    void owner.prelude.catch(() => {});
     return owner.prelude;
   };
   return {
-    // Fence admission before teardown can fail, without retiring a live sibling's inventory.
     beginClose,
     retire: releaseCache,
     runBootstrap<T>(run: () => T): T {
@@ -175,14 +149,14 @@ export function retainGatewayPluginMetadata(
       changedPluginIds: ReadonlySet<string> = new Set(),
       beforeRetire?: PluginHostRegistryRetirement,
     ) {
-      if (owner.phase === "closing" || !gatewayMetadataOwners.has(owner)) {
+      if (owner.phase === "closing") {
         throw new Error("Gateway plugin metadata owner is closing");
       }
       const previous = owner.cache;
       // An absent snapshot does not release bootstrap facts still used by this Gateway.
       const next = snapshot ? getPluginMetadataSnapshotCache(snapshot) : previous;
       if (previous && next && previous !== next) {
-        // Shared boot inventories keep their entry while each successor retains the exact handle.
+        // Unchanged setup instances transfer to the replacement inventory.
         for (const [key, instance] of previous.setupModules) {
           if (!changedPluginIds.has(instance.pluginId) && !next.setupModules.has(key)) {
             next.setupModules.set(key, instance);
@@ -192,8 +166,6 @@ export function retainGatewayPluginMetadata(
       owner.cache = next;
       if (owner.phase === "booting") {
         owner.phase = "active";
-        gatewayMetadataOwners.delete(owner);
-        gatewayMetadataOwners.add(owner);
       }
       if (previous !== next) {
         releaseCache(previous, beforeRetire);
@@ -208,50 +180,26 @@ export function retainGatewayPluginMetadata(
       if (owner.closing) {
         return owner.closing;
       }
-      if (!gatewayMetadataOwners.has(owner)) {
-        return Promise.resolve({ cleanupCount: 0, failures: [] });
-      }
-      const otherOwners = [...gatewayMetadataOwners].filter((other) => other !== owner);
-      const precedingCloses = otherOwners.flatMap((other) =>
-        other.closing ? [other.closing] : [],
-      );
-      // The last entrant owns shared close, including when prior retirements are still pending.
-      const final = precedingCloses.length === otherOwners.length;
       let retirement: Promise<PluginHostCleanupResult> | undefined;
       const retire = () =>
         (retirement ??= Promise.resolve().then(async () => {
           const previous = owner.cache;
           owner.cache = undefined;
           releaseCache(previous);
-          if (previous && getProcessPluginCache() === previous) {
-            // Closing admission is not cache retirement: a sibling may still be joining memory.
-            const others = [...gatewayMetadataOwners].filter(
-              (other) => other.cache && !other.cache.retirement,
-            );
-            const survivor = others.findLast((other) => other.phase === "active") ?? others.at(-1);
-            if (survivor?.cache) {
-              selectCurrentPluginMetadataCache(survivor.cache);
-            }
-          }
-          return await waitForRetirement([
-            ...(retireRegistry ? [Promise.resolve().then(retireRegistry)] : []),
-            ...(final ? precedingCloses : []),
-          ]);
+          return await waitForRetirement(
+            retireRegistry ? [Promise.resolve().then(retireRegistry)] : [],
+          );
         }));
       owner.closing = Promise.resolve().then(async () => {
         try {
           await prelude;
           // Keep the final cache bound until model publication has joined through onFinal.
-          if (final) {
-            await onFinal?.(retire);
-          }
+          await onFinal?.(retire);
           const cleanup = await retire();
-          if (final) {
-            clearPluginMetadataCaches();
-          }
+          clearPluginMetadataCaches();
           await sourceSweep;
           await sourceCaptures.releaseAsync();
-          gatewayMetadataOwners.delete(owner);
+          gatewayMetadata.owner = undefined;
           releaseReaders();
           return cleanup;
         } catch (error) {
@@ -280,11 +228,11 @@ export function clearPluginMetadataLifecycleCaches(): void {
       clearMemo();
     }
   }
-  // Installs and a sibling Gateway's teardown cannot retire a running inventory.
+  // Installs cannot retire a running inventory.
   // Pre-publication planning remains refreshable until boot metadata is pinned.
   if (
-    gatewayMetadataOwners.size > 0 &&
-    ([...gatewayMetadataOwners].some((owner) => owner.phase !== "booting") ||
+    gatewayMetadata.owner &&
+    (gatewayMetadata.owner.phase !== "booting" ||
       isGatewayPluginMetadataSnapshotActive() ||
       getProcessPluginCache().retirement)
   ) {

@@ -6,9 +6,9 @@ import {
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import type { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
-import {
+import type {
   createWorkerSessionPlacementStore,
-  type WorkerSessionPlacementRecord,
+  WorkerSessionPlacementRecord,
 } from "./placement-store.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 
@@ -60,7 +60,7 @@ export async function seedSyncingPlacement(
   executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
 ): Promise<WorkerSessionPlacementRecord> {
   let current = await seedProvisioningPlacement(store, environmentId, executionMode);
-  current = store.transition({
+  current = await store.transition({
     sessionId: REQUEST.sessionId,
     from: "provisioning",
     to: "syncing",
@@ -76,7 +76,7 @@ export async function seedStartingPlacement(
   executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
 ): Promise<WorkerSessionPlacementRecord> {
   let current = await seedSyncingPlacement(store, environmentId, executionMode);
-  current = store.transition({
+  current = await store.transition({
     sessionId: REQUEST.sessionId,
     from: "syncing",
     to: "starting",

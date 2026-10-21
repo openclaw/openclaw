@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -72,7 +73,6 @@ type BrokerOptions = {
   resolveConfig: () => OnePasswordConfig | undefined;
   opClient: Pick<OpClient, "getItem">;
   stores: BrokerStores;
-  now?: () => number;
 };
 
 type AccessContext = {
@@ -120,11 +120,6 @@ type ListedItem = {
 const APPROVAL_TIMEOUT_MS = 600_000;
 const PENDING_AUTHORIZATION_TTL_MS = APPROVAL_TIMEOUT_MS;
 
-function textParam(params: Record<string, unknown>, key: string): string | undefined {
-  const value = params[key];
-  return typeof value === "string" ? value.trim() : undefined;
-}
-
 class BrokerError extends Error {
   readonly code: AuditInternalErrorCode;
 
@@ -154,14 +149,14 @@ export function parseToolInput(params: Record<string, unknown>): ParsedToolInput
   if (params.action !== "get") {
     throw new BrokerError("INVALID_ACTION", "action must be list or get");
   }
-  const reason = textParam(params, "reason");
+  const reason = readStringValue(params.reason)?.trim();
   if (!reason || reason.length > 300) {
     throw new BrokerError(
       "INVALID_REASON",
       "reason is required and must be at most 300 characters",
     );
   }
-  const slug = textParam(params, "slug");
+  const slug = readStringValue(params.slug)?.trim();
   if (!slug || !SLUG_PATTERN.test(slug)) {
     throw new BrokerError("INVALID_SLUG", "slug must match ^[a-z0-9][a-z0-9-]{0,63}$");
   }
@@ -179,7 +174,6 @@ export class OnePasswordBroker {
   private readonly resolveConfig: () => OnePasswordConfig | undefined;
   private readonly opClient: Pick<OpClient, "getItem">;
   private readonly stores: BrokerStores;
-  private readonly now: () => number;
   private readonly cache = new Map<string, CacheEntry>();
   private lastConfigFingerprint: string | null | undefined;
 
@@ -187,7 +181,6 @@ export class OnePasswordBroker {
     this.resolveConfig = options.resolveConfig;
     this.opClient = options.opClient;
     this.stores = options.stores;
-    this.now = options.now ?? Date.now;
   }
 
   private observeConfigFingerprint(fingerprint: string | null): void {
@@ -232,7 +225,7 @@ export class OnePasswordBroker {
     outcome: AuditOutcome,
     options: { errorCode?: AuditErrorCode } = {},
   ): Promise<void> {
-    const timestampMs = this.now();
+    const timestampMs = Date.now();
     const key = `${String(timestampMs).padStart(16, "0")}:${context.toolCallId}:${randomUUID()}`;
     await this.stores.audit.register(key, {
       timestampMs,
@@ -247,7 +240,7 @@ export class OnePasswordBroker {
   }
 
   private async pruneStaleGrants(config: OnePasswordConfig): Promise<void> {
-    const now = this.now();
+    const now = Date.now();
     for (const entry of await this.stores.grants.entries()) {
       const item = Object.hasOwn(config.items, entry.value.slug)
         ? config.items[entry.value.slug]
@@ -275,8 +268,8 @@ export class OnePasswordBroker {
       input = parseToolInput(event.params);
     } catch (error) {
       const context = this.context(event, ctx, {
-        slug: textParam(event.params, "slug"),
-        reason: textParam(event.params, "reason"),
+        slug: readStringValue(event.params.slug)?.trim(),
+        reason: readStringValue(event.params.reason)?.trim(),
       });
       await this.audit(context, "error", { errorCode: errorCode(error) ?? "INVALID_ACTION" });
       return {
@@ -343,7 +336,7 @@ export class OnePasswordBroker {
       grant &&
       grant.agentId === context.agentId &&
       grant.slug === input.slug &&
-      grant.expiresAtMs > this.now() &&
+      grant.expiresAtMs > Date.now() &&
       grant.targetFingerprint === fingerprintOnePasswordTarget(item)
     ) {
       await authorize("grant");
@@ -411,7 +404,7 @@ export class OnePasswordBroker {
         grants = keys.map((key) => entries.get(key));
       }
     }
-    const now = this.now();
+    const now = Date.now();
     return items.map(([slug, item], index) => {
       const grant = grants[index];
       return {
@@ -509,7 +502,7 @@ export class OnePasswordBroker {
         !grant ||
         grant.agentId !== authorization.agentId ||
         grant.slug !== input.slug ||
-        grant.expiresAtMs <= this.now() ||
+        grant.expiresAtMs <= Date.now() ||
         grant.targetFingerprint !== fingerprintOnePasswordTarget(item)
       ) {
         await this.audit(authorization, "error", { errorCode: "GRANT_EXPIRED" });
@@ -521,7 +514,7 @@ export class OnePasswordBroker {
     }
 
     if (authorization.persistGrant) {
-      const grantedAtMs = this.now();
+      const grantedAtMs = Date.now();
       const ttlMs = Math.round(config.grantTtlHours * 60 * 60 * 1000);
       try {
         await this.pruneStaleGrants(config);
@@ -546,7 +539,7 @@ export class OnePasswordBroker {
     const targetFingerprint = fingerprintOnePasswordTarget(item);
     if (
       cached &&
-      cached.expiresAtMs > this.now() &&
+      cached.expiresAtMs > Date.now() &&
       cached.targetFingerprint === targetFingerprint
     ) {
       await this.audit(authorization, "cache-hit");
@@ -566,7 +559,7 @@ export class OnePasswordBroker {
         this.cache.set(input.slug, {
           ...secret,
           targetFingerprint,
-          expiresAtMs: this.now() + config.cacheTtlSeconds * 1000,
+          expiresAtMs: Date.now() + config.cacheTtlSeconds * 1000,
         });
       }
       return { slug: input.slug, ...secret };

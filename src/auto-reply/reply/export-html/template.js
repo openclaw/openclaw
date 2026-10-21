@@ -2,8 +2,6 @@
 (function () {
   "use strict";
 
-  // DATA LOADING
-
   const base64 = document.getElementById("session-data").textContent;
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -21,9 +19,6 @@
     warning,
   } = data;
 
-  // URL PARAMETER HANDLING
-
-  // Parse URL parameters for deep linking: leafId and targetId
   // Check for injected params (when loaded in iframe via srcdoc) or use window.location
   const injectedParams = document.querySelector('meta[name="openclaw-url-params"]');
   const searchString = injectedParams
@@ -32,17 +27,8 @@
   const urlParams = new URLSearchParams(searchString);
   const urlLeafId = urlParams.get("leafId");
   const urlTargetId = urlParams.get("targetId");
-  // Use URL leafId if provided, otherwise fall back to session default
   const leafId = urlLeafId || defaultLeafId;
 
-  // DATA STRUCTURES
-
-  const byId = new Map();
-  for (const entry of entries) {
-    byId.set(entry.id, entry);
-  }
-
-  // Tool call lookup (toolCallId -> {name, arguments})
   const toolCallMap = new Map();
   for (const entry of entries) {
     if (entry.type === "message" && entry.message.role === "assistant") {
@@ -57,7 +43,6 @@
     }
   }
 
-  // Label lookup (entryId -> label string)
   // Labels are stored in 'label' entries that reference their target via targetId
   const labelMap = new Map();
   for (const entry of entries) {
@@ -66,12 +51,6 @@
     }
   }
 
-  // TREE DATA PREPARATION (no DOM, pure data)
-
-  /**
-   * Build tree structure from flat entries.
-   * Returns array of root nodes, each with { entry, children, label }.
-   */
   function buildTree() {
     const nodeMap = new Map();
     const roots = [];
@@ -86,48 +65,36 @@
 
     for (const entry of entries) {
       const node = nodeMap.get(entry.id);
-      if (entry.parentId === null || entry.parentId === undefined || entry.parentId === entry.id) {
-        roots.push(node);
-      } else {
-        const parent = nodeMap.get(entry.parentId);
-        if (parent) {
-          parent.children.push(node);
-        } else {
-          roots.push(node);
-        }
-      }
+      const parent =
+        entry.parentId != null && entry.parentId !== entry.id
+          ? nodeMap.get(entry.parentId)
+          : undefined;
+      (parent ? parent.children : roots).push(node);
     }
 
-    function sortChildren(node) {
+    for (const node of nodeMap.values()) {
       node.children.sort(
         (a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime(),
       );
-      node.children.forEach(sortChildren);
     }
-    roots.forEach(sortChildren);
 
-    return roots;
+    return { roots, nodeMap };
   }
 
-  /**
-   * Get array of entries from root to target (the conversation path).
-   */
   function getPath(targetId) {
     const path = [];
-    let current = byId.get(targetId);
+    let current = treeNodeMap.get(targetId)?.entry;
     while (current) {
       path.push(current);
-      // Stop if no parent or self-referencing (root)
       if (!current.parentId || current.parentId === current.id) {
         break;
       }
-      current = byId.get(current.parentId);
+      current = treeNodeMap.get(current.parentId)?.entry;
     }
     return path.reverse();
   }
 
-  // Tree node lookup for finding leaves
-  let treeNodeMap = null;
+  const { roots: tree, nodeMap: treeNodeMap } = buildTree();
 
   /**
    * Find the newest leaf node reachable from a given node.
@@ -135,22 +102,11 @@
    * Children are sorted by timestamp, so the newest is always last.
    */
   function findNewestLeaf(nodeId) {
-    if (!treeNodeMap) {
-      treeNodeMap = new Map();
-      const tree = buildTree();
-      function mapNodes(node) {
-        treeNodeMap.set(node.entry.id, node);
-        node.children.forEach(mapNodes);
-      }
-      tree.forEach(mapNodes);
-    }
-
     const node = treeNodeMap.get(nodeId);
     if (!node) {
       return nodeId;
     }
 
-    // Follow the newest (last) child at each level
     let current = node;
     while (current.children.length > 0) {
       current = current.children[current.children.length - 1];
@@ -193,19 +149,9 @@
 
       const children = getChildren(node);
       const multipleChildren = children.length > 1;
-      let childIndent;
-      if (multipleChildren) {
-        // Parent branches: children get +1
-        childIndent = indent + 1;
-      } else if (justBranched && indent > 0) {
-        // First generation after a branch: +1 for visual grouping
-        childIndent = indent + 1;
-      } else {
-        // Single-child chain: stay flat
-        childIndent = indent;
-      }
+      // Indent branches and their first generation; single-child chains stay flat.
+      const childIndent = multipleChildren || (justBranched && indent > 0) ? indent + 1 : indent;
 
-      // Build gutters for children
       const connectorDisplayed = showConnector && !isVirtualRootChild;
       const currentDisplayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
       const connectorPosition = Math.max(0, currentDisplayIndent - 1);
@@ -231,23 +177,12 @@
   /** Flatten the full tree with the active branch first at each level. */
   function flattenTree(roots, activePathIds) {
     const result = [];
-    const containsActive = new Map();
-    function markActive(node) {
-      let has = activePathIds.has(node.entry.id);
-      for (const child of node.children) {
-        if (markActive(child)) {
-          has = true;
-        }
-      }
-      containsActive.set(node, has);
-      return has;
-    }
-    roots.forEach(markActive);
-
-    const activeFirst = (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a));
+    // The active path already includes every ancestor of the selected leaf.
+    const activeFirst = (a, b) =>
+      Number(activePathIds.has(b.entry.id)) - Number(activePathIds.has(a.entry.id));
     layoutTree(
-      [...roots].toSorted(activeFirst),
-      (node) => [...node.children].toSorted(activeFirst),
+      roots.toSorted(activeFirst),
+      (node) => node.children.toSorted(activeFirst),
       (node) => {
         const target = { node };
         result.push(target);
@@ -257,40 +192,25 @@
     return result;
   }
 
-  /**
-   * Build ASCII prefix string for tree node.
-   */
   function buildTreePrefix(flatNode) {
     const { indent, showConnector, isLast, gutters, isVirtualRootChild, multipleRoots } = flatNode;
     const displayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
     const connector = showConnector && !isVirtualRootChild ? (isLast ? "└─ " : "├─ ") : "";
     const connectorPosition = connector ? displayIndent - 1 : -1;
 
-    const totalChars = displayIndent * 3;
-    const prefixChars = [];
-    for (let i = 0; i < totalChars; i++) {
-      const level = Math.floor(i / 3);
-      const posInLevel = i % 3;
-
+    const prefix = [];
+    for (let level = 0; level < displayIndent; level++) {
       const gutter = gutters.find((g) => g.position === level);
       if (gutter) {
-        prefixChars.push(posInLevel === 0 ? (gutter.show ? "│" : " ") : " ");
+        prefix.push(gutter.show ? "│  " : "   ");
       } else if (connector && level === connectorPosition) {
-        if (posInLevel === 0) {
-          prefixChars.push(isLast ? "└" : "├");
-        } else if (posInLevel === 1) {
-          prefixChars.push("─");
-        } else {
-          prefixChars.push(" ");
-        }
+        prefix.push(connector);
       } else {
-        prefixChars.push(" ");
+        prefix.push("   ");
       }
     }
-    return prefixChars.join("");
+    return prefix.join("");
   }
-
-  // FILTERING (pure data)
 
   let filterMode = "default";
   let searchQuery = "";
@@ -299,20 +219,6 @@
     return entry.type === "message"
       ? entry.message.display === false
       : entry.type === "custom_message" && !entry.display;
-  }
-
-  function hasTextContent(content) {
-    if (typeof content === "string") {
-      return content.trim().length > 0;
-    }
-    if (Array.isArray(content)) {
-      for (const c of content) {
-        if (c.type === "text" && c.text && c.text.trim().length > 0) {
-          return true;
-        }
-      }
-    }
-    return false;
   }
 
   function extractContent(content) {
@@ -338,6 +244,13 @@
     return [];
   }
 
+  function messageText(content) {
+    return renderableContentBlocks(content)
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+  }
+
   function getSearchableText(entry, label) {
     const parts = [];
     if (label) {
@@ -358,9 +271,7 @@
       }
       case "custom_message":
         parts.push(entry.customType);
-        parts.push(
-          typeof entry.content === "string" ? entry.content : extractContent(entry.content),
-        );
+        parts.push(extractContent(entry.content));
         break;
       case "compaction":
         parts.push("compaction");
@@ -379,9 +290,6 @@
     return parts.join(" ").toLowerCase();
   }
 
-  /**
-   * Filter flat nodes based on current filterMode and searchQuery.
-   */
   function filterNodes(flatNodes, currentLeafId) {
     const searchTokens = searchQuery.toLowerCase().split(/\s+/).filter(Boolean);
 
@@ -402,10 +310,9 @@
       // Hide assistant messages with only tool calls (no text) unless error/aborted
       if (entry.type === "message" && entry.message.role === "assistant") {
         const msg = entry.message;
-        const hasText = hasTextContent(msg.content);
         const isErrorOrAborted =
           msg.stopReason && msg.stopReason !== "stop" && msg.stopReason !== "toolUse";
-        if (!hasText && !isErrorOrAborted) {
+        if (!messageText(msg.content).trim() && !isErrorOrAborted) {
           return false;
         }
       }
@@ -429,7 +336,7 @@
         case "all":
           passesFilter = true;
           break;
-        default: // 'default'
+        default:
           passesFilter = !isSettingsEntry;
           break;
       }
@@ -448,7 +355,6 @@
       return true;
     });
 
-    // Recalculate visual structure based on visible tree
     recalculateVisualStructure(filtered, flatNodes);
 
     return filtered;
@@ -467,10 +373,7 @@
 
     const visibleIds = new Set(filteredNodes.map((n) => n.node.entry.id));
 
-    const entryMap = new Map();
-    for (const flatNode of allFlatNodes) {
-      entryMap.set(flatNode.node.entry.id, flatNode);
-    }
+    const entryMap = new Map(allFlatNodes.map((node) => [node.node.entry.id, node]));
 
     function findVisibleAncestor(nodeId) {
       let currentId = entryMap.get(nodeId)?.node.entry.parentId;
@@ -485,7 +388,7 @@
     }
 
     const visibleChildren = new Map();
-    visibleChildren.set(null, []); // root-level nodes
+    visibleChildren.set(null, []);
 
     for (const flatNode of filteredNodes) {
       const nodeId = flatNode.node.entry.id;
@@ -499,10 +402,7 @@
 
     const visibleRootIds = visibleChildren.get(null);
 
-    const filteredNodeMap = new Map();
-    for (const flatNode of filteredNodes) {
-      filteredNodeMap.set(flatNode.node.entry.id, flatNode);
-    }
+    const filteredNodeMap = new Map(filteredNodes.map((node) => [node.node.entry.id, node]));
 
     // Filtering preserves the full traversal's order; update the original last-ID records.
     layoutTree(
@@ -511,8 +411,6 @@
       (nodeId) => filteredNodeMap.get(nodeId),
     );
   }
-
-  // TREE DISPLAY TEXT (pure data -> string)
 
   function shortenPath(p) {
     if (typeof p !== "string") {
@@ -617,9 +515,6 @@
     }
     return `<img src="data:${mimeType};base64,${imgBase64}" class="${className}" />`;
   }
-  /**
-   * Truncate string to maxLen chars, append "..." if truncated.
-   */
   function truncate(s, maxLen = 100) {
     if (s.length <= maxLen) {
       return s;
@@ -627,9 +522,6 @@
     return truncateUtf16Safe(s, maxLen) + "...";
   }
 
-  /**
-   * Get display text for tree node (returns HTML string).
-   */
   function getTreeNodeDisplayHtml(entry, label) {
     const normalize = (s) => s.replace(/[\n\t]/g, " ").trim();
     const labelHtml =
@@ -676,7 +568,10 @@
               `<span class="tree-role-tool">${escapeHtml(formatToolCall(toolCall.name, toolCall.arguments))}</span>`
             );
           }
-          return labelHtml + `<span class="tree-role-tool">[${escapeHtml(msg.toolName || "tool")}]</span>`;
+          return (
+            labelHtml +
+            `<span class="tree-role-tool">[${escapeHtml(msg.toolName || "tool")}]</span>`
+          );
         }
         if (msg.role === "bashExecution") {
           const cmd = truncate(normalize(msg.command || ""));
@@ -697,8 +592,7 @@
         );
       }
       case "custom_message": {
-        const content =
-          typeof entry.content === "string" ? entry.content : extractContent(entry.content);
+        const content = extractContent(entry.content);
         return (
           labelHtml +
           `<span class="tree-custom">[${escapeHtml(entry.customType)}]:</span> ${escapeHtml(truncate(normalize(content)))}`
@@ -707,20 +601,20 @@
       case "model_change":
         return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.modelId)}]</span>`;
       case "thinking_level_change":
-        return labelHtml + `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`;
+        return (
+          labelHtml +
+          `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`
+        );
       default:
         return labelHtml + `<span class="tree-muted">[${escapeHtml(entry.type)}]</span>`;
     }
   }
-
-  // TREE RENDERING (DOM manipulation)
 
   let currentLeafId = leafId;
   let currentTargetId = urlTargetId || leafId;
   let treeRendered = false;
 
   function renderTree() {
-    const tree = buildTree();
     const activePathIds = new Set(getPath(currentLeafId).map((entry) => entry.id));
     const flatNodes = flattenTree(tree, activePathIds);
     const filtered = filterNodes(flatNodes, currentLeafId);
@@ -805,8 +699,6 @@
     renderTree();
   }
 
-  // MESSAGE RENDERING
-
   function formatTokens(count) {
     if (count < 1000) {
       return count.toString();
@@ -883,27 +775,29 @@
   }
 
   function findToolResult(toolCallId) {
-    for (const entry of entries) {
-      if (entry.type === "message" && entry.message.role === "toolResult") {
-        if (entry.message.toolCallId === toolCallId) {
-          return entry.message;
-        }
-      }
+    return (
+      entries.find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message.role === "toolResult" &&
+          entry.message.toolCallId === toolCallId,
+      )?.message ?? null
+    );
+  }
+
+  function highlightCode(code, lang) {
+    try {
+      return lang ? hljs.highlight(code, { language: lang }).value : hljs.highlightAuto(code).value;
+    } catch {
+      return escapeHtml(code);
     }
-    return null;
   }
 
   function formatOutputLines(lines, lang) {
     if (lang) {
-      const code = lines.join("\n");
-      try {
-        return hljs.highlight(code, { language: lang }).value;
-      } catch {
-        return escapeHtml(code);
-      }
+      return `<pre><code class="hljs">${highlightCode(lines.join("\n"), lang)}</code></pre>`;
     }
-
-    return lines.map((line) => `<div>${escapeHtml(replaceTabs(line))}</div>`).join("");
+    return lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
   }
 
   function formatExpandableOutput(text, maxLines, lang) {
@@ -912,60 +806,27 @@
     const displayLines = lines.slice(0, maxLines);
     const remaining = lines.length - maxLines;
 
-    if (lang) {
-      const highlighted = formatOutputLines(lines, lang);
-
-      if (remaining > 0) {
-        const previewHighlighted = formatOutputLines(displayLines, lang);
-
-        return `<div class="tool-output expandable" onclick="this.classList.toggle('expanded')">
-              <div class="output-preview"><pre><code class="hljs">${previewHighlighted}</code></pre>
-              <div class="expand-hint">... (${remaining} more lines)</div></div>
-              <div class="output-full"><pre><code class="hljs">${highlighted}</code></pre></div></div>`;
-      }
-
-      return `<div class="tool-output"><pre><code class="hljs">${highlighted}</code></pre></div>`;
-    }
-
     if (remaining > 0) {
-      let out =
-        '<div class="tool-output expandable" onclick="this.classList.toggle(\'expanded\')">';
-      out += '<div class="output-preview">';
-      out += formatOutputLines(displayLines);
-      out += `<div class="expand-hint">... (${remaining} more lines)</div></div>`;
-      out += '<div class="output-full">';
-      out += formatOutputLines(lines);
-      out += "</div></div>";
-      return out;
+      return `<div class="tool-output expandable" onclick="this.classList.toggle('expanded')">
+              <div class="output-preview">${formatOutputLines(displayLines, lang)}
+              <div class="expand-hint">... (${remaining} more lines)</div></div>
+              <div class="output-full">${formatOutputLines(lines, lang)}</div></div>`;
     }
 
-    return `<div class="tool-output">${formatOutputLines(displayLines)}</div>`;
+    return `<div class="tool-output">${formatOutputLines(displayLines, lang)}</div>`;
+  }
+
+  function renderContentImages(content, containerClass, imageClass) {
+    const images = renderableContentBlocks(content).filter((block) => block.type === "image");
+    return images.length > 0
+      ? `<div class="${containerClass}">${images.map((img) => renderDataUrlImage(img, imageClass)).join("")}</div>`
+      : "";
   }
 
   function renderToolCall(call) {
     const result = findToolResult(call.id);
     const isError = result?.isError || false;
     const statusClass = result ? (isError ? "error" : "success") : "pending";
-
-    const getResultText = () => {
-      if (!result) {
-        return "";
-      }
-      const textBlocks = renderableContentBlocks(result.content).filter((c) => c.type === "text");
-      return textBlocks.map((c) => c.text).join("\n");
-    };
-
-    const renderResultImages = () => {
-      const images = renderableContentBlocks(result?.content).filter((c) => c.type === "image");
-      if (images.length === 0) {
-        return "";
-      }
-      return (
-        '<div class="tool-images">' +
-        images.map((img) => renderDataUrlImage(img, "tool-image")).join("") +
-        "</div>"
-      );
-    };
 
     let html = `<div class="tool-execution ${statusClass}">`;
     const args = call.arguments || {};
@@ -979,7 +840,7 @@
         const cmdDisplay = command === null ? invalidArg : escapeHtml(command || "...");
         html += `<div class="tool-command">$ ${cmdDisplay}</div>`;
         if (result) {
-          const output = getResultText().trim();
+          const output = messageText(result.content).trim();
           if (output) {
             html += formatExpandableOutput(output, 5);
           }
@@ -995,13 +856,14 @@
         if (filePath !== null && (offset !== undefined || limit !== undefined)) {
           const startLine = offset ?? 1;
           const endLine = limit !== undefined ? startLine + limit - 1 : "";
-          pathHtml += `<span class="line-numbers">:${startLine}${endLine ? "-" + endLine : ""}</span>`;
+          const lineNumbers = `:${startLine}${endLine ? "-" + endLine : ""}`;
+          pathHtml += `<span class="line-numbers">${escapeHtml(lineNumbers)}</span>`;
         }
 
         html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;
         if (result) {
-          html += renderResultImages();
-          const output = getResultText();
+          html += renderContentImages(result.content, "tool-images", "tool-image");
+          const output = messageText(result.content);
           const lang = filePath ? getLanguageFromPath(filePath) : null;
           if (output) {
             html += formatExpandableOutput(output, 10, lang);
@@ -1029,7 +891,7 @@
           html += formatExpandableOutput(content, 10, lang);
         }
         if (result) {
-          const output = getResultText().trim();
+          const output = messageText(result.content).trim();
           if (output) {
             html += `<div class="tool-output"><div>${escapeHtml(output)}</div></div>`;
           }
@@ -1053,7 +915,7 @@
           }
           html += "</div>";
         } else if (result) {
-          const output = getResultText().trim();
+          const output = messageText(result.content).trim();
           if (output) {
             html += `<div class="tool-output"><pre>${escapeHtml(output)}</pre></div>`;
           }
@@ -1064,7 +926,7 @@
         html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
         html += `<div class="tool-output"><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></div>`;
         if (result) {
-          const output = getResultText();
+          const output = messageText(result.content);
           if (output) {
             html += formatExpandableOutput(output, 10);
           }
@@ -1076,10 +938,6 @@
     return html;
   }
 
-  /**
-   * Download the session data as a JSONL file.
-   * Reconstructs the original format: header line + entry lines.
-   */
   window.downloadSessionJson = function () {
     const lines = [];
     if (header) {
@@ -1106,9 +964,8 @@
    * URL format: base?gistId&leafId=<leafId>&targetId=<entryId>
    */
   function buildShareUrl(entryId) {
-    // Check for injected base URL (used when loaded in iframe via srcdoc)
+    // The iframe's srcdoc location cannot identify the share target.
     const baseUrlMeta = document.querySelector('meta[name="openclaw-share-base-url"]');
-    const baseUrl = baseUrlMeta ? baseUrlMeta.content : window.location.href.split("?")[0];
 
     const url = new URL(window.location.href);
     // Find the gist ID (first query param without value, e.g., ?abc123)
@@ -1118,20 +975,14 @@
     params.set("leafId", currentLeafId);
     params.set("targetId", entryId);
 
-    // If we have an injected base URL (iframe context), use it directly
     if (baseUrlMeta) {
-      return `${baseUrl}&${params.toString()}`;
+      return `${baseUrlMeta.content}&${params.toString()}`;
     }
 
-    // Otherwise build from current location (direct file access)
     url.search = gistId ? `?${gistId}&${params.toString()}` : `?${params.toString()}`;
     return url.toString();
   }
 
-  /**
-   * Copy text to clipboard with visual feedback.
-   * Uses navigator.clipboard with fallback to execCommand for HTTP contexts.
-   */
   async function copyToClipboard(text, button) {
     let success = false;
     try {
@@ -1170,9 +1021,6 @@
     }
   }
 
-  /**
-   * Render the copy-link button HTML for a message.
-   */
   function renderCopyLinkButton(entryId) {
     return `<button class="copy-link-btn" data-entry-id="${escapeHtmlAttr(entryId)}" title="Copy link to this message">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1198,26 +1046,8 @@
         let html = `<div class="user-message" id="${entryId}">${copyBtnHtml}${tsHtml}`;
         const content = msg.content;
 
-        if (Array.isArray(content)) {
-          const images = content.filter((c) => c.type === "image");
-          if (images.length > 0) {
-            html += '<div class="message-images">';
-            for (const img of images) {
-              html += renderDataUrlImage(img, "message-image");
-            }
-            html += "</div>";
-          }
-        }
-
-        const text =
-          typeof content === "string"
-            ? content
-            : Array.isArray(content)
-                ? content
-                    .filter((c) => c.type === "text")
-                    .map((c) => c.text)
-                    .join("\n")
-                : "";
+        html += renderContentImages(content, "message-images", "message-image");
+        const text = messageText(content);
         if (text.trim()) {
           html += `<div class="markdown-content">${marked.parse(text)}</div>`;
         }
@@ -1306,8 +1136,6 @@
     return "";
   }
 
-  // HEADER / STATS
-
   function computeStats(entryList) {
     let userMessages = 0,
       assistantMessages = 0,
@@ -1332,18 +1160,16 @@
             models.add(msg.provider ? `${msg.provider}/${msg.model}` : msg.model);
           }
           if (msg.usage) {
-            tokens.input += msg.usage.input || 0;
-            tokens.output += msg.usage.output || 0;
-            tokens.cacheRead += msg.usage.cacheRead || 0;
-            tokens.cacheWrite += msg.usage.cacheWrite || 0;
-            if (msg.usage.cost) {
-              cost.input += msg.usage.cost.input || 0;
-              cost.output += msg.usage.cost.output || 0;
-              cost.cacheRead += msg.usage.cost.cacheRead || 0;
-              cost.cacheWrite += msg.usage.cost.cacheWrite || 0;
+            for (const key of Object.keys(tokens)) {
+              tokens[key] += msg.usage[key] || 0;
+              if (msg.usage.cost) {
+                cost[key] += msg.usage.cost[key] || 0;
+              }
             }
           }
-          toolCalls += (Array.isArray(msg.content) ? msg.content : []).filter((c) => c.type === "toolCall").length;
+          toolCalls += (Array.isArray(msg.content) ? msg.content : []).filter(
+            (c) => c.type === "toolCall",
+          ).length;
         }
         if (msg.role === "toolResult") {
           toolResults++;
@@ -1395,7 +1221,7 @@
       ["customMessages", "custom"],
       ["compactions", "compactions"],
       ["branchSummaries", "branch summaries"],
-    ].flatMap(([key, label]) => globalStats[key] ? [`${globalStats[key]} ${label}`] : []);
+    ].flatMap(([key, label]) => (globalStats[key] ? [`${globalStats[key]} ${label}`] : []));
 
     let html = "";
     if (warning) {
@@ -1418,7 +1244,6 @@
             </div>
           </div>`;
 
-    // Render system prompt (user's base prompt, applies to all providers)
     if (systemPrompt) {
       const lines = systemPrompt.split("\n");
       const previewLines = 10;
@@ -1479,9 +1304,6 @@
     return html;
   }
 
-  // NAVIGATION
-
-  // Cache for rendered entry DOM nodes
   const entryCache = new Map();
 
   function renderEntryToNode(entry) {
@@ -1553,8 +1375,6 @@
       }
     }, 0);
   }
-
-  // INITIALIZATION
 
   // Escape HTML tags in text (but not code blocks)
   function escapeHtmlTags(text) {
@@ -1644,37 +1464,20 @@
     return `${html}>${text}</a>`;
   }
 
-  // Configure marked with syntax highlighting and HTML escaping for text
   marked.use({
     breaks: true,
     gfm: true,
     renderer: {
-      // Code blocks: syntax highlight, no HTML escaping
       code(token) {
         const code = token.text;
         const lang = token.lang;
-        let highlighted;
-        if (lang && hljs.getLanguage(lang)) {
-          try {
-            highlighted = hljs.highlight(code, { language: lang }).value;
-          } catch {
-            highlighted = escapeHtml(code);
-          }
-        } else {
-          // Auto-detect language if not specified
-          try {
-            highlighted = hljs.highlightAuto(code).value;
-          } catch {
-            highlighted = escapeHtml(code);
-          }
-        }
+        const highlighted = highlightCode(code, lang && hljs.getLanguage(lang) ? lang : undefined);
         return `<pre><code class="hljs">${highlighted}</code></pre>`;
       },
       // Delegate nested inline tokens; leaf text keeps the existing escaping.
       text(token) {
         return token.tokens ? false : escapeHtmlTags(escapeHtml(token.text));
       },
-      // Inline code: escape HTML
       codespan(token) {
         return `<code>${escapeHtml(token.text)}</code>`;
       },
@@ -1748,6 +1551,7 @@
     if (e.key === "Escape") {
       searchInput.value = "";
       searchQuery = "";
+      treeRendered = false;
       navigateTo(leafId, "bottom");
     }
     if (e.ctrlKey && e.key === "t") {
@@ -1760,9 +1564,8 @@
     }
   });
 
-  // If URL has targetId, scroll to that specific message; otherwise stay at top
   if (leafId) {
-    if (urlTargetId && byId.has(urlTargetId)) {
+    if (urlTargetId && treeNodeMap.has(urlTargetId)) {
       navigateTo(leafId, "target", urlTargetId);
     } else {
       navigateTo(leafId, "none");

@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import type {
   GatewaySuspendPrepareResult,
   GatewaySuspendResumeResult,
@@ -15,8 +16,6 @@ type SuspendRpcCall = (method: string, opts: SuspendRpcOpts, params?: unknown) =
 type SuspendCliDeps = {
   callGateway: SuspendRpcCall;
   runtime: OutputRuntimeEnv;
-  nowMs?: () => number;
-  sleep?: (delayMs: number) => Promise<void>;
 };
 
 const MIN_SUSPEND_POLL_DELAY_MS = 50;
@@ -66,23 +65,16 @@ export async function runGatewaySuspend(
   },
   deps: SuspendCliDeps,
 ): Promise<void> {
-  const nowMs = deps.nowMs ?? Date.now;
-  const sleep =
-    deps.sleep ??
-    (async (delayMs: number) =>
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, delayMs);
-      }));
   const requestId = resolveRequestId(options.requestId);
   const waitMs = parseWaitMs(options.waitSeconds);
-  const deadlineMs = waitMs === undefined ? undefined : nowMs() + waitMs;
+  const deadlineMs = waitMs === undefined ? undefined : Date.now() + waitMs;
   const maxAttempts = waitMs === undefined ? 1 : Math.ceil(waitMs / MIN_SUSPEND_POLL_DELAY_MS) + 1;
   let latest: GatewaySuspendPrepareResult | undefined;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     // A sleep can overshoot the deadline; never issue a prepare that could
     // suspend the Gateway after the operator's advertised --wait window.
-    if (attempt > 0 && deadlineMs !== undefined && nowMs() >= deadlineMs) {
+    if (attempt > 0 && deadlineMs !== undefined && Date.now() >= deadlineMs) {
       break;
     }
     latest = (await deps.callGateway("gateway.suspend.prepare", options.rpcOpts, {
@@ -111,15 +103,10 @@ export async function runGatewaySuspend(
     }
 
     if (deadlineMs === undefined) {
-      if (options.json) {
-        deps.runtime.writeJson({ ...latest, requestId });
-        deps.runtime.exit(1);
-        return;
-      }
-      throw new Error(`${formatBusyResult(latest)}\nRetry later or use --wait <seconds>.`);
+      break;
     }
 
-    const remainingMs = deadlineMs - nowMs();
+    const remainingMs = deadlineMs - Date.now();
     if (remainingMs <= 0) {
       break;
     }
@@ -135,12 +122,16 @@ export async function runGatewaySuspend(
     deps.runtime.exit(1);
     return;
   }
-  throw new Error(`${formatBusyResult(latest)}\nTimed out waiting for the Gateway to become idle.`);
+  const hint =
+    deadlineMs === undefined
+      ? "Retry later or use --wait <seconds>."
+      : "Timed out waiting for the Gateway to become idle.";
+  throw new Error(`${formatBusyResult(latest)}\n${hint}`);
 }
 
 export async function runGatewayResume(
   options: { rpcOpts: SuspendRpcOpts; suspensionId: string; json?: boolean },
-  deps: Pick<SuspendCliDeps, "callGateway" | "runtime">,
+  deps: SuspendCliDeps,
 ): Promise<void> {
   const result = (await deps.callGateway("gateway.suspend.resume", options.rpcOpts, {
     suspensionId: options.suspensionId,

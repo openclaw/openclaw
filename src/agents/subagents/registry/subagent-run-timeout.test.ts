@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Subagent run timeout tests keep semantic deadlines separate from the maximum
 // delay that Node timers can safely schedule.
 import { describe, expect, it } from "vitest";
@@ -6,7 +5,6 @@ import {
   resolveSubagentRunDeadlineMs,
   resolveSubagentRunDurationMs,
   resolveSubagentRunEffectiveEndedAt,
-  resolveSubagentRunTimerDelayMs,
 } from "./subagent-run-timeout.js";
 
 describe("subagent run timeout helpers", () => {
@@ -43,15 +41,6 @@ describe("subagent run timeout helpers", () => {
         5_000,
       ),
     ).toBe(65_000);
-  });
-
-  it("caps actual timer delays without shortening semantic durations", () => {
-    // Long-lived subagent runs retain their requested deadline even though the
-    // watchdog timer must be scheduled in bounded chunks.
-    const thirtyDaysSeconds = 30 * 24 * 60 * 60;
-
-    expect(resolveSubagentRunTimerDelayMs(thirtyDaysSeconds)).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(resolveSubagentRunDurationMs(thirtyDaysSeconds)).toBeGreaterThan(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("clamps delayed terminal observations to the explicit deadline", () => {

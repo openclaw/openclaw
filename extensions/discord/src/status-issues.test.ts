@@ -109,7 +109,7 @@ describe("collectDiscordStatusIssues", () => {
         kind: "permissions",
         message:
           "Channel 123 permission check failed. missing ViewChannel, SendMessages: 403 (matchKey=alerts matchSource=guilds.ops.channels)",
-        fix: "Ensure the bot role can view + send in this channel (and that channel overrides don't deny it).",
+        fix: "Check that the bot role can view + send in this channel (and that channel overrides don't deny it).",
       },
     ]);
   });

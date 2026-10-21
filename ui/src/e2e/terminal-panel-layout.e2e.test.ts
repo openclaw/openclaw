@@ -103,10 +103,12 @@ suite.define(() => {
           await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
           await page.keyboard.press("Control+Backquote");
           await gateway.waitForRequest("terminal.open");
+          const terminalOutput =
+            "OpenClaw release workspace\r\n$ pnpm test ui/src/components/terminal/terminal-panel.test.ts\r\n22 tests passed\r\n$ ";
           await gateway.emitGatewayEvent("terminal.data", {
             sessionId: `terminal-layout-${theme}`,
-            seq: 0,
-            data: "OpenClaw release workspace\r\n$ pnpm test ui/src/components/terminal/terminal-panel.test.ts\r\n22 tests passed\r\n$ ",
+            seq: terminalOutput.length,
+            data: terminalOutput,
           });
 
           const panel = page.locator("openclaw-terminal-panel");
@@ -117,10 +119,13 @@ suite.define(() => {
 
           await expect.poll(() => surface.getAttribute("class")).toContain("tp--bottom");
           await captureLayout(page, theme, "bottom");
+          expect(await fill.count()).toBe(0);
+          await right.click();
+          await expect.poll(() => surface.getAttribute("class")).toContain("tp--right");
           await fill.click();
           await expect.poll(() => surface.getAttribute("class")).toContain("tp--main");
           await expect.poll(() => fill.count()).toBe(0);
-          await captureLayout(page, theme, "bottom-fill");
+          await captureLayout(page, theme, "right-to-main");
           await bottom.click();
           const bottomRestored = await surface.getAttribute("class");
           await captureLayout(page, theme, "bottom-restored");

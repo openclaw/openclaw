@@ -1,4 +1,3 @@
-// Defines host hook scheduled turn payload types.
 import type { PluginJsonValue } from "./host-hook-json.js";
 
 /** Placement for context injected into the next agent turn. */
@@ -56,7 +55,4 @@ export type PluginHeartbeatPromptContributionEvent = {
 };
 
 /** Plugin contribution to heartbeat prompt context. */
-export type PluginHeartbeatPromptContributionResult = {
-  prependContext?: string;
-  appendContext?: string;
-};
+export type PluginHeartbeatPromptContributionResult = PluginAgentTurnPrepareResult;

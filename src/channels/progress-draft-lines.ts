@@ -1,17 +1,20 @@
 import { isShellToolDisplayName } from "../agents/tool-display.js";
-// Small progress-draft line helpers shared by streaming renderers.
 export type ChannelProgressDraftLine = {
   /** Stable line id used to update an existing progress line in place. */
   id?: string;
-  /** Progress event family that produced this line. */
-  kind: "tool" | "item" | "plan" | "approval" | "command-output" | "patch";
+  kind:
+    | "tool"
+    | "item"
+    | "plan"
+    | "approval"
+    | "command-output"
+    | "patch"
+    | "operation-status"
+    | "subagent-status";
   /** Rendered line text before final draft truncation/prefix formatting. */
   text: string;
-  /** Human-readable label for UI renderers. */
   label: string;
-  /** Optional leading icon for rich or plain progress renderers. */
   icon?: string;
-  /** Compact detail text separated from label/icon. */
   detail?: string;
   /** Optional lifecycle status, such as completed or exit code. */
   status?: string;
@@ -23,7 +26,6 @@ export type ChannelProgressDraftLine = {
   prefix?: boolean;
 };
 
-/** Progress draft state can mix legacy plain text lines with keyed structured lines. */
 type ProgressDraftLine = string | ChannelProgressDraftLine;
 
 /**
@@ -97,7 +99,10 @@ export function getProgressDraftLineText(line: string | ChannelProgressDraftLine
       : `${prefix}${text}`;
   }
   if (displayStatus) {
-    return label ? `${prefix}${label}: ${displayStatus}` : `${prefix}${displayStatus}`;
+    // A label-less status row already carries its status in its prepared text.
+    return label
+      ? `${prefix}${label}: ${displayStatus}`
+      : line.text.trim() || `${prefix}${displayStatus}`;
   }
   const text = line.text.trim();
   if (!icon && text && text !== label) {

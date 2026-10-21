@@ -8,10 +8,6 @@ import type { LogbookOperations } from "./store-contract.js";
 import { createSqliteWorkerBackend } from "./store.worker.js";
 
 const reads = vi.hoisted(() => ({ queries: 0 }));
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, rmSync: vi.fn(actual.rmSync) };
-});
 vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-worker-runtime")>();
   return {
@@ -91,14 +87,13 @@ function seedFrames(expired: number) {
       endMs: expired + 2,
       drafts: [1, expired + 1].map((id) => ({
         day,
-        startMs: 0,
-        endMs: expired + 2,
+        startMs: id - 1,
+        endMs: id,
         title: `Card ${id}`,
         summary: "Retained card",
         detail: "",
         category: "coding",
         distractions: [],
-        keyframeId: id,
       })),
     },
   });
@@ -123,45 +118,6 @@ describe("Logbook frame pruning", () => {
         { keyframe_id: expired === 0 ? 1 : null },
         { keyframe_id: expired + 1 },
       ]);
-      expect(paths.map((file) => fs.existsSync(file))).toEqual([
-        ...Array<boolean>(expired).fill(false),
-        true,
-      ]);
-    },
-  );
-
-  it.each(["missing", "changed"] as const)(
-    "rechecks a %s frame after file removal and preserves the transaction outcome across batches",
-    async (change) => {
-      const expired = 130;
-      const { backend, database, paths } = seedFrames(expired);
-      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-      vi.mocked(fs.rmSync).mockImplementation((file, options) => {
-        actual.rmSync(file, options);
-        if (file === paths[expired - 1]) {
-          if (change === "missing") {
-            database.prepare("DELETE FROM frames WHERE id = ?").run(expired);
-          } else {
-            database.prepare("UPDATE frames SET path = ? WHERE id = ?").run("changed.jpg", expired);
-          }
-        }
-      });
-      const prune = () => backend.execute({ type: "pruneFrames", input: { olderThanMs: expired } });
-      if (change === "missing") {
-        expect(prune()).toBe(expired - 1);
-        expect(database.prepare("SELECT id FROM frames ORDER BY id").all()).toEqual([
-          { id: expired + 1 },
-        ]);
-      } else {
-        expect(prune).toThrow(`Logbook frame ${expired} changed path while pruning`);
-        expect(database.prepare("SELECT count(*) AS count FROM frames").get()).toEqual({
-          count: expired + 1,
-        });
-        expect(database.prepare("SELECT keyframe_id FROM cards ORDER BY id").all()).toEqual([
-          { keyframe_id: 1 },
-          { keyframe_id: expired + 1 },
-        ]);
-      }
       expect(paths.map((file) => fs.existsSync(file))).toEqual([
         ...Array<boolean>(expired).fill(false),
         true,

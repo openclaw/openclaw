@@ -21,6 +21,7 @@ describe("onepassword plugin", () => {
         source: "test",
         config: {},
         runtime: {
+          config: { current: () => ({}) },
           state: {
             openKeyedStore,
             resolveStateDir: () => "/tmp/openclaw-onepassword-test",

@@ -30,8 +30,8 @@ import {
 } from "./media-attachment-outcomes.js";
 import {
   createMediaAttachmentCache,
+  createScopedMediaAttachmentCache,
   normalizeMediaAttachments,
-  resolveMediaAttachmentLocalRoots,
 } from "./runner.attachments.js";
 import type { MediaAttachment } from "./types.js";
 
@@ -110,14 +110,14 @@ async function classifyFileAttachment(params: {
     return { outcome: { kind: "read-failure" }, filename: displayFilename };
   }
   params.assertCurrent?.();
-  const filename = attachment.fileName ?? bufferResult?.fileName;
+  const filename = attachment.fileName ?? bufferResult.fileName;
   const classification: AttachmentClassification = bufferResult.classification;
   // Marker mime prefers the sender-declared type; never the name-forced text mime,
   // which would mislabel binary bytes inside a text-named file as a text format.
   // Both candidates pass strict token validation so raw header text never
   // reaches model context; undefined drops the mime from block and marker.
-  const classifiedMime = sanitizeMimeType(classification.mime);
-  const binaryMime = sanitizeMimeType(normalizeMimeType(attachment.mime)) ?? classifiedMime;
+  const mimeType = sanitizeMimeType(classification.mime);
+  const binaryMime = sanitizeMimeType(normalizeMimeType(attachment.mime)) ?? mimeType;
   // Preserve only the cache's root-approved local read. Rendering still waits
   // for the reply runtime's final filesystem capability (#122411).
   const selfServeLocalPath = bufferResult.localPath;
@@ -127,14 +127,11 @@ async function classifyFileAttachment(params: {
   ) {
     // An operator-pinned allowlist that excludes this type is a policy "no";
     // it must win before any self-serve directive can name the file.
-    if (
-      limits.allowedMimesConfigured &&
-      !(classifiedMime && limits.allowedMimes.has(classifiedMime))
-    ) {
+    if (limits.allowedMimesConfigured && !(mimeType && limits.allowedMimes.has(mimeType))) {
       return {
-        outcome: { kind: "policy-rejected", mime: classifiedMime ?? binaryMime },
+        outcome: { kind: "policy-rejected", mime: mimeType ?? binaryMime },
         filename,
-        mimeType: classifiedMime ?? binaryMime,
+        mimeType: mimeType ?? binaryMime,
       };
     }
     return {
@@ -147,7 +144,6 @@ async function classifyFileAttachment(params: {
       mimeType: binaryMime,
     };
   }
-  const mimeType = sanitizeMimeType(classification.mime);
   if (
     classification.class === "text" &&
     attachment.mime &&
@@ -196,6 +192,7 @@ async function classifyFileAttachment(params: {
       limits: { ...baseLimits, allowedMimes },
       config: cfg,
       classification,
+      mimeType: attachment.mime,
     });
   } catch (err) {
     if (shouldLogVerbose()) {
@@ -225,16 +222,10 @@ export async function extractFileContext(params: {
   selfServePathsEnabled: boolean;
 }) {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
-  if (!attachments || attachments.length === 0) {
-    return { blocks: [], images: [], localPathSelfServeUpgrades: [] };
-  }
   const blocks: AttachmentContextBlock[] = [];
   const images: ExtractedFileImage[] = [];
   const localPathSelfServeUpgrades: LocalPathSelfServeUpgrade[] = [];
   for (const attachment of attachments) {
-    if (!attachment) {
-      continue;
-    }
     const { outcome, filename, mimeType } = await classifyFileAttachment({
       attachment,
       cache,
@@ -328,18 +319,7 @@ export async function renderInboundDocumentContext(params: {
   const { ctx, cfg } = params;
   const limits = resolveFileExtractionLimits(cfg);
   const attachments = normalizeMediaAttachments(ctx);
-  const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: resolveMediaAttachmentLocalRoots({
-      cfg,
-      ctx,
-      workspaceDir: params.workspaceDir,
-    }),
-    // The scoped root set is authoritative: merging sessionless defaults back in would restore
-    // the shared workspace/sandbox parents for sandboxed sessions.
-    includeDefaultLocalPathRoots: false,
-    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
-    workspaceDir: params.workspaceDir,
-  });
+  const cache = createScopedMediaAttachmentCache(attachments, params);
   try {
     const context = await extractFileContext({
       attachments,

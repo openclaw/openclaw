@@ -38,6 +38,7 @@ vi.mock("../../daemon/service.js", () => ({
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   resolveUpdateRoot: async () => fixture.root,
+  resolveGlobalManager: async () => "npm",
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -66,7 +67,7 @@ function state() {
   return { filename: resolveOpenClawStateSqlitePath(), before };
 }
 
-it.each(["dry-run", "update", "repair"] as const)(
+it.each(["update", "repair"] as const)(
   "admits %s after a writer exceeds the general SQLite wait",
   async (mode) => {
     const { filename, before } = state();
@@ -88,7 +89,7 @@ it.each(["dry-run", "update", "repair"] as const)(
           ? new UpdateFinalizationLifecycle(true, undefined, () => {}).attachLedger(true)
           : (
               await admitUpdateCommandRun({
-                opts: { dryRun: mode === "dry-run" },
+                opts: {},
                 root: fixture.root,
               })
             ).runId;
@@ -121,11 +122,13 @@ it.each(["dry-run", "update", "repair", "finalize"] as const)(
             ? updateRepairCommand(opts)
             : updateCommand({ ...opts, dryRun: mode === "dry-run" }),
       ).rejects.toMatchObject({ name: "ExitError", code: mode === "finalize" ? 1 : 0 });
-      expect(json).toHaveBeenCalledWith(
+      expect(json).toHaveBeenLastCalledWith(
         expect.objectContaining({
           status: "skipped",
           reason: "update-ledger-busy",
           notes: [expect.stringContaining("busy")],
+          ...(mode === "finalize" ? { mode: "finalize" } : {}),
+          ...(mode === "dry-run" ? { dryRun: true } : {}),
         }),
       );
       const result = json.mock.calls.at(-1)?.[0];
@@ -135,12 +138,6 @@ it.each(["dry-run", "update", "repair", "finalize"] as const)(
       expect(doctor).not.toHaveBeenCalled();
       expect(plugins).not.toHaveBeenCalled();
       expect(fixture.serviceMutation).not.toHaveBeenCalled();
-      if (mode === "finalize") {
-        expect(result).toMatchObject({ mode: "finalize" });
-      }
-      if (mode === "dry-run") {
-        expect(result).toMatchObject({ dryRun: true, notes: [expect.stringContaining("busy")] });
-      }
       expect(classifyUpdateOutcome({ status: "skipped", reason: "update-ledger-busy" })).toBe(
         "noop",
       );

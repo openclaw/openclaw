@@ -1,4 +1,6 @@
-import { execFile, execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -12,6 +14,16 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const url = "https://github.com/openclaw/synthetic-preparation.git";
 const token = "synthetic-inherited-project-token";
 const execFileAsync = promisify(execFile);
+const read = (file: string) => fs.readFile(file, "utf8");
+async function expectAbsent(...files: string[]) {
+  for (const file of files) {
+    await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+}
+function expectReady(result: SpawnSyncReturns<string>) {
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({ ready: true });
+}
 
 async function fixture(fail = false, networkUrl?: string) {
   const root = await fs.realpath(tempDirs.make("project-seed-script-"));
@@ -56,8 +68,7 @@ async function fixture(fail = false, networkUrl?: string) {
     `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(askpassWitness)}, "unexpected inherited authentication");\nprocess.exit(98);\n`,
     { mode: 0o700 },
   );
-  // Replace only the network boundary. All object transfer, fsck, checkout and
-  // cache-hit verification execute real Git against an independently created repo.
+  // Only the network boundary is replaced; object transfer and verification use real Git.
   const shim = path.join(bin, "git");
   await fs.writeFile(
     shim,
@@ -67,12 +78,7 @@ const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 if (args.includes("fetch") && args.includes(${JSON.stringify(url)})) {
-  assert(args.includes("--depth=1"));
-  assert(args.includes("--no-write-fetch-head"));
-  assert(args.includes("--no-recurse-submodules"));
-  assert(args.includes("http.followRedirects=false"));
-  assert(args.includes("protocol.allow=never"));
-  assert(args.includes("credential.helper="));
+  for (const flag of ["--depth=1", "--no-write-fetch-head", "--no-recurse-submodules", "http.followRedirects=false", "protocol.allow=never", "credential.helper="]) assert(args.includes(flag));
   assert.equal(args.at(-1), ${JSON.stringify(baseCommit)});
   const inheritedAuthKeys = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_TRACE", "GH_TOKEN", "GITHUB_TOKEN", "git_config_count", "git_config_key_0", "git_config_value_0", "Git_Trace", "gh_token", "GitHub_Token"].filter((key) => process.env[key] !== undefined);
   fs.writeFileSync(${JSON.stringify(inheritedAuthWitness)}, JSON.stringify(inheritedAuthKeys));
@@ -101,9 +107,10 @@ process.exit(result.status ?? 1);
     { mode: 0o700 },
   );
   const input = { namespace: "gateway", seedKey: "a".repeat(64), baseCommit };
-  const command = (extra?: Parameters<typeof createProjectSeedScript>[0]["repository"]) => [
+  type SeedOptions = Omit<Parameters<typeof createProjectSeedScript>[0], keyof typeof input>;
+  const command = (extra: SeedOptions = {}) => [
     "-c",
-    createProjectSeedScript({ ...input, repository: extra }),
+    createProjectSeedScript({ ...input, ...extra }),
   ];
   const env = {
     ...process.env,
@@ -124,7 +131,7 @@ process.exit(result.status ?? 1);
     gh_token: token,
     GitHub_Token: token,
   };
-  const run = (extra?: Parameters<typeof createProjectSeedScript>[0]["repository"]) =>
+  const run = (extra: SeedOptions = {}) =>
     spawnSync("sh", command(extra), {
       encoding: "utf8",
       timeout: 30_000,
@@ -135,6 +142,7 @@ process.exit(result.status ?? 1);
   const { directory } = JSON.parse(inspection.stdout) as { directory: string };
   return {
     directory,
+    env,
     home,
     repository,
     git,
@@ -145,11 +153,8 @@ process.exit(result.status ?? 1);
     askpassWitness,
     setupScript,
     run,
-    runAsync: (
-      extra: Parameters<typeof createProjectSeedScript>[0]["repository"],
-      inheritedEnv: NodeJS.ProcessEnv,
-    ) =>
-      execFileAsync("sh", command(extra), {
+    runAsync: (inheritedEnv: NodeJS.ProcessEnv) =>
+      execFileAsync("sh", command({ repository: { directory, url } }), {
         encoding: "utf8",
         timeout: 30_000,
         env: { ...env, ...inheritedEnv },
@@ -163,87 +168,91 @@ process.exit(result.status ?? 1);
 describe("public repository project seeds", () => {
   it("refuses an HTTP authentication challenge without consulting the machine's netrc files", async () => {
     const authorizationPresent: boolean[] = [];
-    const server = createServer((request, response) => {
+    await using server = createServer((request, response) => {
       authorizationPresent.push(request.headers.authorization !== undefined);
       response.writeHead(401, { "WWW-Authenticate": 'Basic realm="synthetic-test"' });
       response.end();
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("HTTP authentication fixture did not bind a TCP port");
-      }
-      const f = await fixture(false, `http://127.0.0.1:${address.port}/repository.git`);
-      const netrc = "machine 127.0.0.1 login synthetic-user password synthetic-password\n";
-      for (const name of [".netrc", "_netrc", "override.netrc"]) {
-        await fs.writeFile(path.join(f.home, name), netrc, { mode: 0o600 });
-      }
-      await expect(
-        f.runAsync(f.transport, {
-          USERPROFILE: f.home,
-          NETRC: path.join(f.home, "override.netrc"),
-          netrc: path.join(f.home, "override.netrc"),
-          NO_PROXY: "127.0.0.1",
-          no_proxy: "127.0.0.1",
-        }),
-      ).rejects.toMatchObject({ code: 1, stderr: "Project repository fetch failed\n" });
-      expect(authorizationPresent.length).toBeGreaterThan(0);
-      expect(authorizationPresent).not.toContain(true);
-      expect(JSON.parse(await fs.readFile(f.authHomeWitness, "utf8"))).toEqual({
-        inheritedHome: false,
-        inheritedUserProfile: false,
-        netrcOverridePresent: false,
-      });
-      expect(await fs.readdir(path.dirname(f.directory))).toEqual([]);
-      expect(await fs.readFile(path.join(f.home, ".netrc"), "utf8")).toBe(netrc);
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+    await once(server.listen(0, "127.0.0.1"), "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("HTTP authentication fixture did not bind a TCP port");
     }
+    const f = await fixture(false, `http://127.0.0.1:${address.port}/repository.git`);
+    const netrc = "machine 127.0.0.1 login synthetic-user password synthetic-password\n";
+    for (const name of [".netrc", "_netrc", "override.netrc"]) {
+      await fs.writeFile(path.join(f.home, name), netrc, { mode: 0o600 });
+    }
+    await expect(
+      f.runAsync({
+        USERPROFILE: f.home,
+        NETRC: path.join(f.home, "override.netrc"),
+        netrc: path.join(f.home, "override.netrc"),
+        NO_PROXY: "127.0.0.1",
+        no_proxy: "127.0.0.1",
+      }),
+    ).rejects.toMatchObject({ code: 1, stderr: "Project repository fetch failed\n" });
+    expect(authorizationPresent.length).toBeGreaterThan(0);
+    expect(authorizationPresent).not.toContain(true);
+    expect(JSON.parse(await read(f.authHomeWitness))).toEqual({
+      inheritedHome: false,
+      inheritedUserProfile: false,
+      netrcOverridePresent: false,
+    });
+    expect(await fs.readdir(path.dirname(f.directory))).toEqual([]);
+    expect(await read(path.join(f.home, ".netrc"))).toBe(netrc);
   });
 
   it("installs only the pinned Git objects without inherited authentication or executing repository code, then reuses them offline", async () => {
     const f = await fixture();
-    const result = f.run(f.transport);
-    expect(JSON.parse(await fs.readFile(f.inheritedAuthWitness, "utf8"))).toEqual([]);
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ ready: true });
-    expect(await fs.readFile(path.join(f.seed, "input.txt"), "utf8")).toBe("pinned A\n");
+    expectReady(f.run({ repository: f.transport }));
+    expect(JSON.parse(await read(f.inheritedAuthWitness))).toEqual([]);
+    expect(await read(path.join(f.seed, "input.txt"))).toBe("pinned A\n");
     expect((await fs.readdir(f.seed)).toSorted()).toEqual([".git", ".openclaw", "input.txt"]);
-    expect(await fs.readFile(path.join(f.seed, ".openclaw", "worktree-setup.sh"), "utf8")).toBe(
-      f.setupScript,
-    );
+    expect(await read(path.join(f.seed, ".openclaw", "worktree-setup.sh"))).toBe(f.setupScript);
     expect(f.git(f.seed, ["rev-parse", "HEAD"])).toBe(f.baseCommit);
     expect(f.git(f.seed, ["rev-list", "--count", "HEAD"])).toBe("1");
     expect(f.git(f.seed, ["remote", "get-url", "origin"])).toBe(url);
     expect(f.git(f.seed, ["status", "--porcelain"])).toBe("");
-    expect(await fs.readFile(path.join(f.seed, ".git", "config"), "utf8")).not.toContain(token);
-    await expect(fs.stat(path.join(f.seed, ".git", "FETCH_HEAD"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(fs.stat(f.directory)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await read(path.join(f.seed, ".git", "config"))).not.toContain(token);
+    await expectAbsent(path.join(f.seed, ".git", "FETCH_HEAD"), f.directory);
     await fs.rename(f.repository, `${f.repository}-offline`);
-    const hit = f.run();
-    expect(hit.status, hit.stderr).toBe(0);
-    expect(JSON.parse(hit.stdout)).toEqual({ ready: true });
-    expect(await fs.readFile(f.witness, "utf8")).toBe("fetch\n");
-    await expect(fs.stat(f.codeWitness)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(f.askpassWitness)).rejects.toMatchObject({ code: "ENOENT" });
+    expectReady(f.run());
+    expect(await read(f.witness)).toBe("fetch\n");
+    await expectAbsent(f.codeWitness, f.askpassWitness);
+  });
+
+  it("installs an enterprise repository pack without contacting its credentialed origin", async () => {
+    const f = await fixture();
+    const pack = execFileSync("git", ["-C", f.repository, "pack-objects", "--stdout", "--revs"], {
+      input: `${f.baseCommit}\n`,
+      env: f.env,
+    });
+    await fs.writeFile(path.join(f.directory, "base.pack"), pack);
+    const enterpriseUrl = "https://ghe.example.test/acme/private-repo.git";
+    expectReady(
+      f.run({
+        pack: {
+          directory: f.directory,
+          bytes: pack.byteLength,
+          sha256: createHash("sha256").update(pack).digest("hex"),
+          repositoryUrl: enterpriseUrl,
+        },
+      }),
+    );
+    expect(f.git(f.seed, ["remote", "get-url", "origin"])).toBe(enterpriseUrl);
+    await expectAbsent(f.witness);
   });
 
   it("returns a bounded generic failure and removes staging when public fetch emits excessive diagnostics", async () => {
     const f = await fixture(true);
-    const result = f.run(f.transport);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toBe("Project repository fetch failed\n");
-    expect(result.stdout).toBe("");
-    expect(await fs.readFile(f.witness, "utf8")).toBe("fetch\n");
+    expect(f.run({ repository: f.transport })).toMatchObject({
+      status: 1,
+      stderr: "Project repository fetch failed\n",
+      stdout: "",
+    });
+    expect(await read(f.witness)).toBe("fetch\n");
     expect(await fs.readdir(path.dirname(f.directory))).toEqual([]);
-    await expect(fs.stat(f.codeWitness)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(f.askpassWitness)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectAbsent(f.codeWitness, f.askpassWitness);
   });
 });

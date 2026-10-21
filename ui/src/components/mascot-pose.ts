@@ -1,15 +1,16 @@
-// Pure pose model shared by the mascot animator and canvas renderer.
+export const MASCOT_MOODS = [
+  "idle",
+  "curious",
+  "thinking",
+  "working",
+  "happy",
+  "celebrating",
+  "sad",
+  "sleepy",
+  "attentive",
+] as const;
 
-export type MascotMood =
-  | "idle"
-  | "curious"
-  | "thinking"
-  | "working"
-  | "happy"
-  | "celebrating"
-  | "sad"
-  | "sleepy"
-  | "attentive";
+export type MascotMood = (typeof MASCOT_MOODS)[number];
 
 type MascotEffect = "none" | "sparkles" | "zzz" | "sparks" | "sweat";
 
@@ -28,7 +29,6 @@ export type MascotPose = {
   mouthCurve: number;
   mouthOpen: number;
   mouthRound: number;
-  blush: number;
   hardHat: number;
   bodyTilt: number;
   bodyStretch: number;
@@ -70,7 +70,6 @@ export function createMascotPose(): MascotPose {
     mouthCurve: 0,
     mouthOpen: 0,
     mouthRound: 0,
-    blush: 0,
     hardHat: 0,
     bodyTilt: 0,
     bodyStretch: 1,
@@ -110,7 +109,6 @@ export function clampMascotPose(pose: MascotPose): MascotPose {
   pose.mouthCurve = clampMascotValue(pose.mouthCurve, -1, 1);
   pose.mouthOpen = clampMascotValue(pose.mouthOpen, 0, 1);
   pose.mouthRound = clampMascotValue(pose.mouthRound, 0, 1);
-  pose.blush = clampMascotValue(pose.blush, 0, 1);
   pose.hardHat = clampMascotValue(pose.hardHat, 0, 1);
   pose.bodyTilt = clampMascotValue(pose.bodyTilt, -8, 8);
   pose.bodyStretch = clampMascotValue(pose.bodyStretch, 0.86, 1.05);

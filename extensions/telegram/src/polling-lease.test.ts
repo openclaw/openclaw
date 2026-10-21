@@ -1,15 +1,27 @@
-// Telegram tests cover polling lease plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireTelegramPollingLease,
   releaseStoppedTelegramPollingLease,
 } from "./polling-lease.js";
 import { resetTelegramPollingLeasesForTest as resetTelegramPollingLeasesForTests } from "./runtime.test-support.js";
 
+const leaseOptions = { token: "123:abc", accountId: "default" };
+const acquire = (options: Partial<Parameters<typeof acquireTelegramPollingLease>[0]> = {}) =>
+  acquireTelegramPollingLease({ ...leaseOptions, ...options });
+const releaseStopped = (waitMs?: number) =>
+  releaseStoppedTelegramPollingLease({ ...leaseOptions, waitMs });
+async function initialLease(accountId = "default") {
+  const abort = new AbortController();
+  const first = await acquire({ accountId, abortSignal: abort.signal });
+  return { abort, first };
+}
+
 describe("Telegram polling lease", () => {
-  beforeEach(() => {
-    resetTelegramPollingLeasesForTests();
+  beforeEach(resetTelegramPollingLeasesForTests);
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("refuses an old active duplicate poller for the same bot token", async () => {
@@ -38,89 +50,43 @@ describe("Telegram polling lease", () => {
   });
 
   it("waits for an aborting same-token poller before acquiring", async () => {
-    const oldAbort = new AbortController();
-    const first = await acquireTelegramPollingLease({
-      token: "123:abc",
-      accountId: "default",
-      abortSignal: oldAbort.signal,
-    });
-    oldAbort.abort();
-
-    const acquire = acquireTelegramPollingLease({
-      token: "123:abc",
-      accountId: "default",
-      waitMs: 1_000,
-    });
+    const { abort, first } = await initialLease();
+    abort.abort();
+    const pending = acquire({ waitMs: 1_000 });
     await Promise.resolve();
     first.release();
-    const second = await acquire;
-
-    expect(second.waitedForPrevious).toBe(true);
-    expect(second.replacedStoppingPrevious).toBe(false);
-
+    const second = await pending;
+    expect(second).toMatchObject({ waitedForPrevious: true, replacedStoppingPrevious: false });
     second.release();
   });
 
   it("does not let stale release clear a replacement lease", async () => {
     vi.useFakeTimers();
-    try {
-      const oldAbort = new AbortController();
-      const first = await acquireTelegramPollingLease({
-        token: "123:abc",
-        accountId: "old",
-        abortSignal: oldAbort.signal,
-      });
-      oldAbort.abort();
+    const { abort, first } = await initialLease("old");
+    abort.abort();
+    const acquireReplacement = acquire({ accountId: "new", waitMs: 10 });
+    await vi.advanceTimersByTimeAsync(10);
+    const replacement = await acquireReplacement;
+    expect(replacement.replacedStoppingPrevious).toBe(true);
 
-      const acquireReplacement = acquireTelegramPollingLease({
-        token: "123:abc",
-        accountId: "new",
-        waitMs: 10,
-      });
-      await vi.advanceTimersByTimeAsync(10);
-      const replacement = await acquireReplacement;
-      expect(replacement.replacedStoppingPrevious).toBe(true);
+    first.release();
 
-      first.release();
+    await expect(acquire({ accountId: "third" })).rejects.toThrow('account "new"');
 
-      await expect(
-        acquireTelegramPollingLease({
-          token: "123:abc",
-          accountId: "third",
-        }),
-      ).rejects.toThrow('account "new"');
-
-      replacement.release();
-    } finally {
-      vi.useRealTimers();
-    }
+    replacement.release();
   });
 
   it("caps oversized duplicate-poller wait timers before scheduling", async () => {
     vi.useFakeTimers();
-    try {
-      const oldAbort = new AbortController();
-      const first = await acquireTelegramPollingLease({
-        token: "123:abc",
-        accountId: "old",
-        abortSignal: oldAbort.signal,
-      });
-      oldAbort.abort();
-      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const { abort, first } = await initialLease("old");
+    abort.abort();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-      void acquireTelegramPollingLease({
-        token: "123:abc",
-        accountId: "new",
-        waitMs: Number.MAX_SAFE_INTEGER,
-      }).catch(() => undefined);
-      await Promise.resolve();
+    void acquire({ accountId: "new", waitMs: Number.MAX_SAFE_INTEGER }).catch(() => undefined);
+    await Promise.resolve();
 
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-      first.release();
-    } finally {
-      vi.useRealTimers();
-      vi.restoreAllMocks();
-    }
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    first.release();
   });
 
   it("does not release a no-signal active lease", async () => {
@@ -154,81 +120,24 @@ describe("Telegram polling lease", () => {
   });
 
   it("does not release a non-aborted active lease", async () => {
-    const abort = new AbortController();
-    const first = await acquireTelegramPollingLease({
-      token: "123:abc",
-      accountId: "default",
-      abortSignal: abort.signal,
-    });
-
-    await expect(
-      releaseStoppedTelegramPollingLease({
-        token: "123:abc",
-        accountId: "default",
-      }),
-    ).resolves.toBe(false);
-
-    await expect(
-      acquireTelegramPollingLease({
-        token: "123:abc",
-        accountId: "ops",
-      }),
-    ).rejects.toThrow('account "default"');
-
+    const { first } = await initialLease();
+    await expect(releaseStopped()).resolves.toBe(false);
+    await expect(acquire({ accountId: "ops" })).rejects.toThrow('account "default"');
     first.release();
   });
 
-  it("releases an aborted same-account lease after the stop wait elapses", async () => {
-    vi.useFakeTimers();
-    try {
-      const abort = new AbortController();
-      const first = await acquireTelegramPollingLease({
-        token: "123:abc",
-        accountId: "default",
-        abortSignal: abort.signal,
-      });
-      abort.abort();
-
-      const release = releaseStoppedTelegramPollingLease({
-        token: "123:abc",
-        accountId: "default",
-        waitMs: 10,
-      });
-      await vi.advanceTimersByTimeAsync(10);
-      await expect(release).resolves.toBe(true);
-
-      const next = await acquireTelegramPollingLease({
-        token: "123:abc",
-        accountId: "default",
-      });
-      next.release();
-      first.release();
-    } finally {
-      vi.useRealTimers();
+  it.each([0, 10])("releases an aborted same-account lease after %i ms", async (waitMs) => {
+    if (waitMs > 0) {
+      vi.useFakeTimers();
     }
-  });
-
-  it("releases an aborted same-account lease immediately with no stop wait", async () => {
-    const abort = new AbortController();
-    const first = await acquireTelegramPollingLease({
-      token: "123:abc",
-      accountId: "default",
-      abortSignal: abort.signal,
-    });
+    const { abort, first } = await initialLease();
     abort.abort();
-
-    await expect(
-      releaseStoppedTelegramPollingLease({
-        token: "123:abc",
-        accountId: "default",
-        waitMs: 0,
-      }),
-    ).resolves.toBe(true);
-
-    const next = await acquireTelegramPollingLease({
-      token: "123:abc",
-      accountId: "default",
-    });
+    const release = releaseStopped(waitMs);
+    if (waitMs > 0) {
+      await vi.advanceTimersByTimeAsync(waitMs);
+    }
+    await expect(release).resolves.toBe(true);
+    const next = await acquire();
     next.release();
     first.release();
   });

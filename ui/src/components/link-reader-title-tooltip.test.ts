@@ -7,6 +7,7 @@ import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import type { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
+import { settleTooltip } from "./tooltip.test-support.ts";
 
 const runtimeLoad = vi.hoisted(() => {
   let release!: () => void;
@@ -53,7 +54,9 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
   const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
   const provider = document.createElement(tag) as LinkReaderHovercardProvider;
   provider.readers = [TEST_LINK_READER];
-  provider.client = createTestGatewayClient(request);
+  const client = createTestGatewayClient(request);
+  vi.spyOn(client, "connected", "get").mockReturnValue(true);
+  provider.client = client;
   const anchor = document.createElement("a");
   anchor.href = href;
   anchor.title = href;
@@ -75,7 +78,9 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
     document.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip");
   const titleIsOpen = () =>
     Boolean(
-      tooltip()?.shadowRoot?.querySelector<HTMLElement & { open: boolean }>("wa-tooltip")?.open,
+      tooltip()
+        ?.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface")
+        ?.matches(":popover-open"),
     );
   const noPopupAria = () => {
     expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
@@ -153,6 +158,7 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
       (inside ? provider : document.body).append(control);
       control.focus();
       await vi.advanceTimersByTimeAsync(200);
+      await settleTooltip(tooltip()!);
       expect(titleIsOpen()).toBe(true);
       expect(tooltip()?.content).toBe("Ordinary title hint");
       control.blur();
@@ -199,7 +205,9 @@ it("keeps rendered GitHub links free of native titles across preview closure and
   document.body.append(base);
   const provider = document.createElement(tag) as LinkReaderHovercardProvider;
   provider.readers = [TEST_LINK_READER];
-  provider.client = createTestGatewayClient(async () => response);
+  const client = createTestGatewayClient(() => Promise.resolve(response));
+  vi.spyOn(client, "connected", "get").mockReturnValue(true);
+  provider.client = client;
   provider.innerHTML = toSanitizedMarkdownHtml(
     `${href}\n\n[the **related** issue](${href} "${href}")\n\n[![Issue icon](data:image/png;base64,x "Icon hint")](${href} "Issue details")\n\n[](${href} "Issue details")\n\n[<button>](${href} "Issue details")\n\n[\\*](${href} "Issue details")\n\n[Documentation](https://example.com "Read the documentation")`,
   );
@@ -252,7 +260,7 @@ it("keeps rendered GitHub links free of native titles across preview closure and
   await vi.advanceTimersByTimeAsync(300);
   expect(document.querySelector(".link-reader-hovercard")).not.toBeNull();
   noNativeTitles();
-  expect(links[0]?.textContent).toBe("#99815");
+  expect(links[0]?.textContent).toBe("openclaw/openclaw#99815");
   expect(anchor.textContent).toBe("the related issue");
   expect(links[2]?.querySelector("img")?.alt).toBe("Issue icon");
   expect(links[3]?.getAttribute("aria-label")).toBe("Issue details");
@@ -278,9 +286,10 @@ it("keeps rendered GitHub links free of native titles across preview closure and
   await vi.advanceTimersByTimeAsync(200);
   const tooltip =
     document.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip");
+  await settleTooltip(tooltip!);
   expect(tooltip?.content).toBe("Read the documentation");
   expect(
-    tooltip?.shadowRoot?.querySelector<HTMLElement & { open: boolean }>("wa-tooltip")?.open,
+    tooltip?.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface")?.matches(":popover-open"),
   ).toBe(true);
   ordinary.blur();
   expect(ordinary.title).toBe("Read the documentation");

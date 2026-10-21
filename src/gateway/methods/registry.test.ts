@@ -10,11 +10,7 @@ import {
   createPluginGatewayMethodDescriptor,
   type GatewayMethodDescriptorInput,
 } from "./descriptor.js";
-import {
-  createCoreGatewayMethodDescriptors,
-  createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptors,
-} from "./registry.js";
+import { createCoreGatewayMethodDescriptors, createGatewayMethodRegistry } from "./registry.js";
 
 const handler: GatewayRequestHandler = ({ respond }) => respond(true, { ok: true });
 
@@ -66,9 +62,13 @@ describe("gateway method registry", () => {
       };
       const policy = {
         startup: "unavailable-until-sidecars",
+        lifetime: "observation",
         controlPlaneWrite: true,
         advertise: false,
-      } satisfies Pick<GatewayMethodDescriptorInput, "startup" | "controlPlaneWrite" | "advertise">;
+      } satisfies Pick<
+        GatewayMethodDescriptorInput,
+        "startup" | "lifetime" | "controlPlaneWrite" | "advertise"
+      >;
       if (properties === "inherited") {
         Object.setPrototypeOf(writeDescriptor, policy);
       } else {
@@ -97,6 +97,8 @@ describe("gateway method registry", () => {
       expect(registry.getHandler("example.read")).toBe(handler);
       expect(registry.getScope("example.write")).toBe(WRITE_SCOPE);
       expect(registry.isStartupUnavailable("example.write")).toBe(true);
+      expect(registry.isObservation("example.write")).toBe(true);
+      expect(registry.isObservation("example.read")).toBe(false);
       expect(registry.isControlPlaneWrite("example.write")).toBe(true);
     },
   );
@@ -127,6 +129,20 @@ describe("gateway method registry", () => {
     expect(createCoreGatewayMethodDescriptors({ "config.openFile": handler })).toMatchObject([
       { name: "config.openFile", advertise: false, handler },
     ]);
+  });
+
+  it("classifies Claw Add as a control-plane write without lifecycle methods", () => {
+    const descriptors = createCoreGatewayMethodDescriptors({
+      "claws.add.apply": handler,
+    });
+    const registry = createGatewayMethodRegistry(descriptors);
+
+    expect(registry.isControlPlaneWrite("claws.add.apply")).toBe(true);
+    for (const method of ["claws.status", "claws.update.apply", "claws.remove.apply"]) {
+      expect(() => createCoreGatewayMethodDescriptors({ [method]: handler })).toThrow(
+        `gateway method handler is missing a descriptor: ${method}`,
+      );
+    }
   });
 
   it("coerces reserved plugin namespaces to admin scope", () => {
@@ -163,17 +179,17 @@ describe("gateway method registry", () => {
     expect(registry.getScope("exec.approvals.get")).toBe("operator.approvals");
   });
 
-  it("defaults handler-only plugin registries to admin scope", () => {
-    const descriptors = createPluginGatewayMethodDescriptors({
-      gatewayHandlers: { "legacy.ping": handler },
-    });
+  it("defaults plugin methods without an explicit scope to admin", () => {
+    const descriptors = [
+      createPluginGatewayMethodDescriptor({ pluginId: "demo", name: "demo.ping", handler }),
+    ];
 
     const registry = createGatewayMethodRegistry(descriptors);
 
-    expect(registry.listMethods()).toEqual(["legacy.ping"]);
-    expect(registry.getHandler("legacy.ping")).toBe(handler);
-    expect(registry.getScope("legacy.ping")).toBe(ADMIN_SCOPE);
-    expect(registry.requiresAuthenticatedProfile("legacy.ping")).toBe(true);
+    expect(registry.listMethods()).toEqual(["demo.ping"]);
+    expect(registry.getHandler("demo.ping")).toBe(handler);
+    expect(registry.getScope("demo.ping")).toBe(ADMIN_SCOPE);
+    expect(registry.requiresAuthenticatedProfile("demo.ping")).toBe(true);
   });
 
   it("classifies every core method and defaults non-core owners fail-closed", () => {
@@ -197,7 +213,7 @@ describe("gateway method registry", () => {
         descriptor.profileAccess === "required",
       );
     }
-    expect(registry.requiresAuthenticatedProfile("users.self")).toBe(false);
+    expect(registry.requiresAuthenticatedProfile("users.self")).toBe(true);
     expect(registry.requiresAuthenticatedProfile("status")).toBe(false);
     // talk.config projects the caller's profile accent; a pending GitHub
     // identity sync must complete before the handler runs.

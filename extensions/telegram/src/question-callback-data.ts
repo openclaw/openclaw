@@ -1,4 +1,3 @@
-// Telegram-private ask_user callback envelope.
 const TELEGRAM_QUESTION_CALLBACK_PREFIXES = ["tgq1:", "tgqo1:"] as const;
 // Fixed question IDs and option indices keep both envelopes below Telegram's 64-byte limit.
 const QUESTION_RECORD_ID_PATTERN = /^ask_[a-f0-9]{32}$/u;
@@ -11,14 +10,10 @@ export function hasTelegramQuestionCallbackPrefix(data?: string | null): boolean
   return TELEGRAM_QUESTION_CALLBACK_PREFIXES.some((prefix) => data?.startsWith(prefix) === true);
 }
 
-export function buildTelegramQuestionCallbackData(
-  callback:
-    | Extract<TelegramQuestionCallback, { intent: "select" }>
-    | {
-        questionId: string;
-        optionIndex: number;
-      },
-): string | undefined {
+export function buildTelegramQuestionCallbackData(callback: {
+  questionId: string;
+  optionIndex: number;
+}): string | undefined {
   if (
     !QUESTION_RECORD_ID_PATTERN.test(callback.questionId) ||
     !Number.isInteger(callback.optionIndex) ||
@@ -33,10 +28,7 @@ export function buildTelegramQuestionCallbackData(
 export function buildTelegramQuestionCustomInputCallbackData(
   questionId: string,
 ): string | undefined {
-  if (!QUESTION_RECORD_ID_PATTERN.test(questionId)) {
-    return undefined;
-  }
-  return `tgqo1:${questionId}`;
+  return QUESTION_RECORD_ID_PATTERN.test(questionId) ? `tgqo1:${questionId}` : undefined;
 }
 
 export function parseTelegramQuestionCallbackData(

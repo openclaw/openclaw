@@ -1,15 +1,8 @@
-/**
- * Channel config matching helpers.
- *
- * Resolves direct, parent, normalized, and wildcard config entries with match metadata.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
-/** How a channel config entry was selected. */
 export type ChannelMatchSource = "direct" | "parent" | "wildcard";
 
-/** Match result carrying direct, parent, and wildcard candidates for channel config lookup. */
 export type ChannelEntryMatch<T> = {
   entry?: T;
   key?: string;
@@ -21,7 +14,6 @@ export type ChannelEntryMatch<T> = {
   matchSource?: ChannelMatchSource;
 };
 
-/** Copies match metadata onto resolved channel config output. */
 export function applyChannelMatchMeta<
   TResult extends { matchKey?: string; matchSource?: ChannelMatchSource },
 >(result: TResult, match: ChannelEntryMatch<unknown>): TResult {
@@ -43,7 +35,6 @@ export function resolveChannelMatchConfig<
   return applyChannelMatchMeta(resolveEntry(match.entry), match);
 }
 
-/** Normalizes human channel names into config-safe slugs. */
 export function normalizeChannelSlug(value: string): string {
   return normalizeLowercaseStringOrEmpty(value)
     .replace(/^#/, "")
@@ -51,7 +42,6 @@ export function normalizeChannelSlug(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-/** Builds unique config lookup keys from optional channel/account identifiers. */
 export function buildChannelKeyCandidates(...keys: Array<string | undefined | null>): string[] {
   return normalizeUniqueSingleOrTrimmedStringList(keys);
 }

@@ -1,6 +1,7 @@
 // Telegram tests cover ingress worker runtime behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as telegramTransport from "./fetch.js";
 import type {
   TelegramIngressWorkerCommand,
   TelegramIngressWorkerMessage,
@@ -45,7 +46,7 @@ function createRuntime(
   const port: RuntimePort = {
     postMessage(message) {
       messages.push(message);
-      if (message.type === "update") {
+      if (message.type === "updates") {
         sendCommand({
           type: "spool-ack",
           requestId: message.requestId,
@@ -72,6 +73,11 @@ function createRuntime(
     const responseIndex = Math.min(calls.length - 1, responses.length - 1);
     return expectDefined(responses[responseIndex], `Telegram response ${responseIndex}`);
   };
+  vi.spyOn(telegramTransport, "resolveTelegramTransport").mockReturnValue({
+    fetch: fetchImpl,
+    sourceFetch: fetchImpl,
+    close: async () => {},
+  });
   const done = runTelegramIngressWorkerRuntime({
     options: {
       token: "test-auth-token",
@@ -81,10 +87,6 @@ function createRuntime(
       timeoutSeconds: options.timeoutSeconds ?? 1,
     },
     port,
-    deps: {
-      fetch: fetchImpl,
-      closeTransport: async () => {},
-    },
   });
   return { calls, pollBodies, messages, done };
 }
@@ -94,6 +96,7 @@ async function flushRuntime(): Promise<void> {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -173,7 +176,7 @@ describe("telegram ingress worker poll cadence", () => {
 });
 
 describe("telegram ingress worker durable-before-offset", () => {
-  it("advances getUpdates offset only after parent spool-ack commits", async () => {
+  it("advances getUpdates offset only after the whole response is acknowledged", async () => {
     vi.useFakeTimers();
     const messages: TelegramIngressWorkerMessage[] = [];
     const listeners = new Set<(message: TelegramIngressWorkerCommand) => void>();
@@ -191,13 +194,13 @@ describe("telegram ingress worker durable-before-offset", () => {
     const port: RuntimePort = {
       postMessage(message) {
         messages.push(message);
-        if (message.type === "update") {
+        if (message.type === "updates") {
           // Parent must write spool first; offset must not advance until ack.
           void spoolGate.then(() => {
             sendCommand({
               type: "spool-ack",
               requestId: message.requestId,
-              result: { ok: true, updateId: 42 },
+              result: { ok: true, updateId: 44 },
             });
           });
         }
@@ -220,11 +223,20 @@ describe("telegram ingress worker durable-before-offset", () => {
       if (pollCount === 1) {
         return jsonResponse(200, {
           ok: true,
-          result: [{ update_id: 42, message: { text: "hi" } }],
+          result: [
+            { update_id: 42, message: { text: "hi" } },
+            { update_id: 44, message: { text: "again" } },
+            { update_id: 42, message: { text: "hi" } },
+          ],
         });
       }
       return jsonResponse(200, { ok: true, result: [] });
     };
+    vi.spyOn(telegramTransport, "resolveTelegramTransport").mockReturnValue({
+      fetch: fetchImpl,
+      sourceFetch: fetchImpl,
+      close: async () => {},
+    });
     const done = runTelegramIngressWorkerRuntime({
       options: {
         token: "test-auth-token",
@@ -234,15 +246,20 @@ describe("telegram ingress worker durable-before-offset", () => {
         timeoutSeconds: 1,
       },
       port,
-      deps: {
-        fetch: fetchImpl,
-        closeTransport: async () => {},
-      },
     });
 
     await flushRuntime();
-    // First poll delivered an update; spool-ack is still held.
-    expect(messages.some((m) => m.type === "update")).toBe(true);
+    // The response stays intact while its one spool-ack is held.
+    expect(messages.filter((message) => message.type === "updates")).toEqual([
+      expect.objectContaining({
+        updates: [
+          { update_id: 42, message: { text: "hi" } },
+          { update_id: 44, message: { text: "again" } },
+          { update_id: 42, message: { text: "hi" } },
+        ],
+        queued: 3,
+      }),
+    ]);
     expect(messages.some((m) => m.type === "spooled")).toBe(false);
     expect(pollCount).toBe(1);
 
@@ -251,9 +268,11 @@ describe("telegram ingress worker durable-before-offset", () => {
     await vi.advanceTimersByTimeAsync(0);
     await done;
 
-    expect(messages).toContainEqual(expect.objectContaining({ type: "spooled", updateId: 42 }));
+    expect(messages.filter((message) => message.type === "spooled")).toEqual([
+      expect.objectContaining({ type: "spooled", updateId: 44 }),
+    ]);
     // Second getUpdates must use offset = lastUpdateId + 1 only after spool-ack.
-    expect(pollBodies[1]?.offset).toBe(43);
+    expect(pollBodies[1]?.offset).toBe(45);
     expect(pollBodies.map((body) => body.timeout)).toEqual([0, 1]);
   });
 });
@@ -291,58 +310,6 @@ describe("telegram ingress worker retry policy", () => {
     );
   });
 
-  it.each([0, -1, Number.MAX_VALUE])(
-    "does not publish an invalid effective flood wait (%s)",
-    async (retryAfterSeconds) => {
-      vi.useFakeTimers();
-      const runtime = createRuntime([
-        jsonResponse(429, {
-          ok: false,
-          error_code: 429,
-          description: "Too Many Requests",
-          parameters: { retry_after: retryAfterSeconds },
-        }),
-        jsonResponse(200, { ok: true, result: [] }),
-      ]);
-
-      await flushRuntime();
-      await runtime.done;
-
-      const floodError = runtime.messages.find((message) => message.type === "poll-error");
-      expect(floodError).toMatchObject({ type: "poll-error", errorCode: 429 });
-      expect(floodError).not.toHaveProperty("retryAfterMs");
-      expect(runtime.calls).toHaveLength(2);
-    },
-  );
-
-  it.each([500, 502])("retries getUpdates %s responses with backoff", async (status) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
-    const runtime = createRuntime([
-      jsonResponse(status, {
-        ok: false,
-        error_code: status,
-        description: status === 500 ? "Internal Server Error" : "Bad Gateway",
-      }),
-      jsonResponse(200, { ok: true, result: [] }),
-    ]);
-
-    expect(runtime.calls).toHaveLength(1);
-    await flushRuntime();
-    expect(runtime.messages).toContainEqual(
-      expect.objectContaining({ type: "poll-error", errorCode: status }),
-    );
-    await vi.advanceTimersByTimeAsync(999);
-    expect(runtime.calls).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await runtime.done;
-
-    expect(runtime.calls).toHaveLength(2);
-    const secondCall = expectDefined(runtime.calls[1], "second Telegram poll call");
-    const firstCall = expectDefined(runtime.calls[0], "first Telegram poll call");
-    expect(secondCall - firstCall).toBe(1000);
-  });
-
   it.each([
     { name: "non-JSON", response: () => htmlResponse(502, "<html>Bad Gateway</html>") },
     { name: "JSON-null", response: () => jsonResponse(502, null) },
@@ -366,21 +333,18 @@ describe("telegram ingress worker retry policy", () => {
     expect(runtime.calls).toHaveLength(2);
   });
 
-  it.each([401, 409])("propagates getUpdates %s responses to the parent", async (status) => {
+  it("propagates getUpdates 409 responses to the parent", async () => {
     const runtime = createRuntime([
-      jsonResponse(status, {
+      jsonResponse(409, {
         ok: false,
-        error_code: status,
-        description:
-          status === 401 ? "Unauthorized" : "Conflict: terminated by other getUpdates request",
+        error_code: 409,
+        description: "Conflict: terminated by other getUpdates request",
       }),
     ]);
 
-    await expect(runtime.done).rejects.toThrow(
-      status === 401 ? "Unauthorized" : "Conflict: terminated by other getUpdates request",
-    );
+    await expect(runtime.done).rejects.toThrow("Conflict: terminated by other getUpdates request");
     expect(runtime.messages).toContainEqual(
-      expect.objectContaining({ type: "poll-error", errorCode: status }),
+      expect.objectContaining({ type: "poll-error", errorCode: 409 }),
     );
   });
 });

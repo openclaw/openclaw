@@ -14,13 +14,16 @@ export type QaScenarioCommandStep = {
 
 export function buildQaScenarioCommandSteps(
   scenario: QaTestFileScenario,
-  context: { outputDir: string },
+  context: { outputDir: string; repoRoot: string },
 ): QaScenarioCommandStep[] {
   const execution = scenario.execution;
   if (execution.kind === "script") {
     const scenarioOutputDir = path.join(context.outputDir, scenario.id);
     const args = (execution.args ?? []).map((arg) =>
-      arg.replaceAll("${outputDir}", scenarioOutputDir).replaceAll("${scenarioId}", scenario.id),
+      arg
+        .replaceAll("${repoRoot}", path.resolve(context.repoRoot))
+        .replaceAll("${outputDir}", scenarioOutputDir)
+        .replaceAll("${scenarioId}", scenario.id),
     );
     return [
       {

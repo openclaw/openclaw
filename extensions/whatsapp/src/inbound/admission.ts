@@ -45,10 +45,6 @@ type WhatsAppInboundAdmissionPolicy = {
   isSamePhone: (value?: string | null) => boolean;
 };
 
-type WhatsAppInboundAdmissionCarrier = {
-  admission?: WhatsAppInboundAdmission;
-};
-
 /** Accepted ingress facts exclude raw allowlists and session-dependent state. */
 export type WhatsAppInboundAdmission = WhatsAppInboundAdmissionAccess & {
   channelIngress?: ResolvedChannelMessageIngress;
@@ -71,26 +67,6 @@ type WhatsAppIngressResolver = (
 ) => Promise<ResolvedChannelMessageIngress>;
 const ingressResolverByAdmission = new WeakMap<WhatsAppInboundAdmission, WhatsAppIngressResolver>();
 
-function copyAccount(
-  account: WhatsAppInboundAdmissionPolicy["account"],
-): WhatsAppInboundAdmission["account"] {
-  const copied: WhatsAppInboundAdmission["account"] = {
-    accountId: account.accountId,
-    enabled: account.enabled,
-    sendReadReceipts: account.sendReadReceipts,
-  };
-  if (account.name) {
-    copied.name = account.name;
-  }
-  if (typeof account.selfChatMode === "boolean") {
-    copied.selfChatMode = account.selfChatMode;
-  }
-  if (account.replyToMode) {
-    copied.replyToMode = account.replyToMode;
-  }
-  return copied;
-}
-
 export function buildWhatsAppInboundAdmission(params: {
   policy: WhatsAppInboundAdmissionPolicy;
   access: WhatsAppInboundAdmissionAccess;
@@ -100,11 +76,13 @@ export function buildWhatsAppInboundAdmission(params: {
   conversationId: string;
   senderId: string;
 }): WhatsAppInboundAdmission {
+  const { accountId, name, enabled, sendReadReceipts, selfChatMode, replyToMode } =
+    params.policy.account;
   const admission: WhatsAppInboundAdmission = {
     channelIngress: params.channelIngress,
     accountId: params.policy.account.accountId,
     isSelfChat: params.policy.isSelfChat,
-    account: copyAccount(params.policy.account),
+    account: { accountId, name, enabled, sendReadReceipts, selfChatMode, replyToMode },
     conversation: {
       kind: params.isGroup ? "group" : "direct",
       id: params.conversationId,
@@ -150,13 +128,4 @@ export async function resolveWhatsAppAdmissionChannelIngress(
   contextBinding: ChannelIngressContextBinding,
 ): Promise<ResolvedChannelMessageIngress | undefined> {
   return await ingressResolverByAdmission.get(admission)?.(contextBinding);
-}
-
-export function requireWhatsAppInboundAdmission(
-  params: WhatsAppInboundAdmissionCarrier,
-): WhatsAppInboundAdmission {
-  if (!params.admission) {
-    throw new Error("WhatsApp inbound message is missing admission facts");
-  }
-  return params.admission;
 }

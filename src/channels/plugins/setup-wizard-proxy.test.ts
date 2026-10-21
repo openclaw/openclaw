@@ -128,6 +128,8 @@ describe("createDelegatedSetupWizardProxy", () => {
     expect(await wizard.status.resolveStatusLines?.({ cfg: {}, configured: false })).toEqual([
       "line",
     ]);
+    expect(await wizard.status.resolveSelectionHint?.({ cfg: {}, configured: false })).toBe("hint");
+    expect(await wizard.status.resolveQuickstartScore?.({ cfg: {}, configured: false })).toBe(3);
     expect(await runSetupWizardPrepare({ prepare: wizard.prepare })).toEqual({
       cfg: {
         channels: {

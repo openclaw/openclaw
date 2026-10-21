@@ -1,457 +1,349 @@
 /* @vitest-environment jsdom */
 
-import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { html, nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { publishTranscriptScroll } from "../pages/chat/components/chat-transcript-scroll-events.ts";
-import { observeTranscript } from "./session-progress-card.test-support.ts";
-import { renderSessionProgressCard } from "./session-progress-card.ts";
-import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-controller.ts";
+import {
+  observeTranscript,
+  cardPart,
+  advance,
+  RUN_STARTED_MS,
+  RUN_ENDED_MS,
+  progressCard,
+  progressCardFixture,
+} from "./session-progress-card.test-support.tsx";
+import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-binding.ts";
 
-const containers: HTMLDivElement[] = [];
-function createContainer() {
-  const container = document.createElement("div");
-  document.body.append(container);
-  containers.push(container);
-  return container;
-}
+const { createView, transcriptCleanups } = progressCardFixture();
 
-const transcriptCleanups: Array<() => void> = [];
-
-const NOW_MS = Date.UTC(2026, 7, 26, 13, 37);
-const RUN_STARTED_MS = NOW_MS - 3 * 60_000;
-const RUN_ENDED_MS = NOW_MS - 30_000;
-
-const progressCard: ProgressCard = {
-  sessionKey: "agent:main:work",
-  revision: 2,
-  updatedAt: NOW_MS - 2 * 60_000,
-  markdown: '**Focused change**\n\n<progress value="1" max="3"></progress>',
-  steps: [
-    { step: "Inspect the route", status: "completed" },
-    { step: "Wire the checklist", status: "in_progress" },
-    { step: "Run focused tests", status: "pending" },
-  ],
-};
-
-function renderTranscriptCard(
-  container: HTMLElement,
-  context: ComposerProgressDisclosureContext,
-  card = progressCard,
-  sessionStatus: "running" | "done" = "running",
-) {
-  return render(
-    html`<div class="chat-main">
-      <div class="chat-thread"></div>
-      ${renderSessionProgressCard(card, "composer", undefined, sessionStatus, RUN_STARTED_MS, sessionStatus === "done" ? RUN_ENDED_MS : undefined, sessionStatus === "running", false, context)}
-    </div>`,
+function disclosure(context: ComposerProgressDisclosureContext = {}, collapsed = false) {
+  const { container, show: render } = createView({
+    startedAt: RUN_STARTED_MS,
+    collapseComposerByDefault: collapsed,
+    transcript: true,
+  });
+  const card = () => container.querySelector("details")!;
+  const body = () => cardPart(container, "body")!;
+  return {
     container,
-  );
+    card,
+    body,
+    unmount: () => render(null),
+    show: (value = progressCard, status: "running" | "done" = "running", lifecycle = context) =>
+      render({
+        card: value,
+        sessionStatus: status,
+        endedAt: status === "done" ? RUN_ENDED_MS : undefined,
+        hasActiveRun: status === "running",
+        composerDisclosureContext: lifecycle,
+      }),
+    click: () => card().querySelector("summary")!.click(),
+    wheel(deltaY: number, bubbles = true) {
+      const event = new WheelEvent("wheel", { deltaY, bubbles, cancelable: true });
+      card().querySelector("summary")!.dispatchEvent(event);
+      return event.defaultPrevented;
+    },
+    expectChoice(this: void, open: boolean, height = "") {
+      expect(card()).toMatchObject({ open });
+      expect(body().style.height).toBe(height);
+    },
+  };
 }
 
-describe("elastic progress disclosure controller", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW_MS);
-  });
+function wheelThenAdvance(transcript: ReturnType<typeof observeTranscript>, ms = 301) {
+  transcript.wheel(200);
+  advance(ms);
+}
 
-  afterEach(() => {
-    for (const cleanup of transcriptCleanups.splice(0)) {
-      cleanup();
-    }
-    for (const container of containers.splice(0)) {
-      render(nothing, container);
-      container.remove();
-    }
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
+it("parks disclosure gestures and restores the retained choice on reveal", () => {
+  const fixture = disclosure({ cardLifetime: {} });
+  const view = fixture.show();
+  const body = fixture.body();
+  expect(fixture.wheel(-48)).toBe(true);
+  const chosenHeight = body.style.height;
+  view.setPresented(false);
+  expect(fixture.wheel(-48)).toBe(false);
+  view.setPresented(true);
+  expect(body.style.height).toBe(chosenHeight);
+  expect(fixture.wheel(-48)).toBe(true);
+});
 
-  it.each([false, true])(
-    "uses fresh-card defaults and retains the opposite manual choice (mobile=%s)",
-    (mobile) => {
-      vi.stubGlobal(
-        "matchMedia",
-        vi.fn(() => ({ matches: mobile })),
-      );
-      const container = createContainer();
-      const gatewayScope = {};
-      const cardLifetime = {};
-      const show = (lifetime = cardLifetime, revision = 2, final = false) =>
-        renderTranscriptCard(
-          container,
-          { gatewayScope, cardLifetime: lifetime },
-          {
-            ...progressCard,
-            revision,
-            steps: final
+it.each([
+  { mobile: false, partial: false, retained: true },
+  { mobile: true, partial: false, retained: true },
+  { mobile: false, partial: true, retained: true },
+  { mobile: false, partial: false, retained: false },
+])(
+  "retains choice: mobile=$mobile partial=$partial lifetime=$retained",
+  ({ mobile, partial, retained }) => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: mobile })),
+    );
+    const gatewayScope = {};
+    const cardLifetime = {};
+    const fixture = disclosure({}, partial);
+    const show = (lifetime = cardLifetime, revision = 2, final = false) =>
+      fixture.show(
+        {
+          ...progressCard,
+          revision,
+          steps:
+            final && !partial
               ? progressCard.steps?.map(({ step }) => ({ step, status: "completed" as const }))
               : progressCard.steps,
-          },
-          final ? "done" : "running",
-        );
-      show();
-      let card = container.querySelector("details")!;
-      expect(card.open).toBe(!mobile);
-      card.querySelector("summary")!.click();
-      expect(card.open).toBe(mobile);
-      show(cardLifetime, 3);
-      expect(card.open).toBe(mobile);
-      show(cardLifetime, 4, true);
-      expect(card.open).toBe(mobile);
-      render(nothing, container);
-      show(cardLifetime, 4, true);
-      card = container.querySelector("details")!;
-      expect(card.open).toBe(mobile);
-      show(cardLifetime, 5);
-      expect(card.open).toBe(mobile);
-      const replacement = {};
-      show(replacement, 1);
-      expect(card.open).toBe(!mobile);
-      render(nothing, container);
-      show(replacement, 1);
-      expect(container.querySelector("details")!.open).toBe(!mobile);
-    },
-  );
-
-  it.each([
-    "history",
-    "delayed history",
-    "keyboard replacement",
-    "pointer replacement",
-    "programmatic replacement",
-    "scope replacement",
-    "header",
-  ] as const)(
-    "retains a %s collapse through revisions, completion, and remount",
-    async (choice) => {
-      const container = createContainer();
-      const context = { gatewayScope: {}, cardLifetime: {}, readingHistory: true };
-      renderTranscriptCard(container, context);
-      let card = container.querySelector("details")!;
-      const summary = card.querySelector("summary")!;
-      if (choice !== "header") {
-        const transcript = observeTranscript(container, transcriptCleanups);
-        await Promise.resolve();
-        if (choice !== "history") {
-          transcript.thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -200, bubbles: true }));
-          vi.advanceTimersByTime(301);
-          expect(card.open).toBe(true);
-          if (choice === "keyboard replacement") {
-            transcript.thread.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
-          } else if (choice === "pointer replacement") {
-            transcript.thread.dispatchEvent(new PointerEvent("pointerdown"));
-          } else if (choice === "programmatic replacement") {
-            publishTranscriptScroll(transcript.thread, {
-              type: "offset",
-              delta: 0,
-              scrolling: false,
-              touching: false,
-              programmatic: true,
-            });
-          } else if (choice === "scope replacement") {
-            context.gatewayScope = {};
-            renderTranscriptCard(container, context);
-            await Promise.resolve();
-          }
-          transcript.scroll(200);
-          if (choice !== "delayed history") {
-            vi.advanceTimersByTime(301);
-            expect(card.open).toBe(true);
-            transcript.wheel(200);
-            vi.advanceTimersByTime(301);
-            expect(card.open).toBe(true);
-          }
-        } else {
-          transcript.wheel(200);
-        }
-        vi.advanceTimersByTime(201);
-        transcript.wheel(200);
-        vi.advanceTimersByTime(301);
-      } else {
-        summary.dispatchEvent(new WheelEvent("wheel", { deltaY: 400, cancelable: true }));
-      }
-      expect(card.open).toBe(false);
-      context.readingHistory = false;
-      const revised = { ...progressCard, revision: 3, markdown: "Revised progress" };
-      renderTranscriptCard(container, context, revised);
-      expect(card.open).toBe(false);
-      renderTranscriptCard(container, context, revised, "done");
-      expect(card.open).toBe(false);
-      render(nothing, container);
-      renderTranscriptCard(container, context, revised, "done");
-      card = container.querySelector("details")!;
-      expect(card.open).toBe(false);
-      renderTranscriptCard(container, context, { ...revised, revision: 4 });
-      expect(card.open).toBe(false);
-      card.querySelector("summary")!.click();
-      renderTranscriptCard(container, context, { ...revised, revision: 5 });
-      expect(card.open).toBe(true);
-    },
-  );
-
-  it.each([true, false])(
-    "records endpoint wheel ownership and cancels following (collapsed=%s)",
-    (collapsed) => {
-      const container = createContainer();
-      const onManipulate = vi.fn();
-      const show = (final = false) =>
-        render(
-          renderSessionProgressCard(
-            progressCard,
-            "composer",
-            undefined,
-            final ? "done" : "running",
-            RUN_STARTED_MS,
-            final ? RUN_ENDED_MS : undefined,
-            !final,
-            collapsed,
-            {
-              onManipulate,
-            },
-          ),
-          container,
-        );
-      show();
-      const card = container.querySelector("details")!;
-      const body = card.querySelector<HTMLElement>(".session-progress-card__body")!;
-      if (!collapsed) {
-        vi.spyOn(body, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 300, 300));
-      }
-      card.querySelector("summary")!.dispatchEvent(
-        new WheelEvent("wheel", {
-          deltaY: collapsed ? 48 : -48,
-          bubbles: true,
-          cancelable: true,
-        }),
+        },
+        final ? "done" : "running",
+        {
+          gatewayScope,
+          sessionIdentity: "same-session",
+          cardLifetime: retained ? lifetime : undefined,
+        },
       );
-      expect(onManipulate).toHaveBeenCalledTimes(1);
-      expect(body.style.height).toBe(collapsed ? "" : "300px");
-      show(true);
-      expect(card.open).toBe(!collapsed);
-      expect(body.style.height).toBe(collapsed ? "" : "300px");
-    },
-  );
-
-  it("retains partial extent for one card across revisions, run status, and remount, but not replacement", () => {
-    const container = createContainer();
-    const cardLifetime = {};
-    const show = (lifetime = cardLifetime, revision = 2, final = false) =>
-      render(
-        renderSessionProgressCard(
-          { ...progressCard, revision },
-          "composer",
-          undefined,
-          final ? "done" : "running",
-          RUN_STARTED_MS,
-          final ? RUN_ENDED_MS : undefined,
-          !final,
-          true,
-          { cardLifetime: lifetime },
-        ),
-        container,
-      );
-    const body = () => container.querySelector<HTMLElement>(".session-progress-card__body")!;
+    const initialOpen = !mobile && !partial;
+    const manualOpen = mobile || partial;
+    const { expectChoice } = fixture;
     show();
-    container
-      .querySelector("summary")!
-      .dispatchEvent(new WheelEvent("wheel", { deltaY: -48, bubbles: true, cancelable: true }));
-    expect(container.querySelector("details")!.open).toBe(true);
-    expect(body().style.height).toBe("48px");
-    show(cardLifetime, 3);
-    expect(body().style.height).toBe("48px");
-    show(cardLifetime, 4, true);
-    expect(body().style.height).toBe("48px");
-    render(nothing, container);
-    show(cardLifetime, 4, true);
-    expect(body().style.height).toBe("48px");
-    show(cardLifetime, 5);
-    expect(body().style.height).toBe("48px");
-    expect(container.querySelector("details")!.open).toBe(true);
+    expectChoice(initialOpen);
+    if (partial) {
+      fixture.wheel(-48);
+    } else {
+      fixture.click();
+    }
+    expectChoice(manualOpen, partial ? "48px" : "");
+    show();
+    expectChoice(manualOpen, partial ? "48px" : "");
+    let remounted = false;
+    for (const [revision, final, remount] of [
+      [3, false, false],
+      [4, true, false],
+      [4, true, true],
+      [5, false, false],
+    ] as const) {
+      if (remount) {
+        fixture.unmount();
+        remounted = true;
+      }
+      show(cardLifetime, revision, final);
+      expectChoice(!retained && remounted ? initialOpen : manualOpen, partial ? "48px" : "");
+    }
     const replacement = {};
     show(replacement, 1);
-    expect(container.querySelector("details")!.open).toBe(false);
-    expect(body().style.height).toBe("");
-    expect(body().style.minHeight).toBe("");
-    render(nothing, container);
+    expectChoice(initialOpen);
+    expect(fixture.body().style.minHeight).toBe("");
+    fixture.unmount();
     show(replacement, 1);
-    expect(container.querySelector("details")!.open).toBe(false);
-    expect(body().style.height).toBe("");
-  });
+    expectChoice(initialOpen);
+  },
+);
 
-  it("does not retain choices across remount without an authoritative card lifetime", () => {
-    const container = createContainer();
-    const context = { gatewayScope: {}, sessionIdentity: "same-session" };
-    renderTranscriptCard(container, context);
-    container.querySelector("summary")!.click();
-    renderTranscriptCard(container, context);
-    expect(container.querySelector("details")!.open).toBe(false);
-    render(nothing, container);
-    renderTranscriptCard(container, context);
-    expect(container.querySelector("details")!.open).toBe(true);
-  });
-
-  it("does not let a stale pane's old card overwrite the replacement card's choice", () => {
-    const current = createContainer();
-    const stale = createContainer();
-    const context = { gatewayScope: {}, sessionIdentity: "same-session", cardLifetime: {} };
-    renderTranscriptCard(current, context);
-    renderTranscriptCard(stale, context);
-    const replacement = { ...context, cardLifetime: {} };
-    renderTranscriptCard(current, replacement, { ...progressCard, revision: 1 });
-    current.querySelector("summary")!.click();
-    expect(current.querySelector("details")!.open).toBe(false);
-    stale.querySelector("summary")!.click();
-    stale.querySelector("summary")!.click();
-    expect(stale.querySelector("details")!.open).toBe(true);
-    render(nothing, current);
-    renderTranscriptCard(current, replacement, { ...progressCard, revision: 1 });
-    expect(current.querySelector("details")!.open).toBe(false);
-  });
-
-  it("preserves disclosure while hidden and starts fresh scroll gestures when presented again", async () => {
-    const container = createContainer();
-    const cardLifetime = {};
-    const show = (presented: boolean) =>
-      renderTranscriptCard(container, { cardLifetime, readingHistory: true, presented });
-    show(true);
-    const transcript = observeTranscript(container, transcriptCleanups);
+it.each([
+  "history",
+  "delayed history",
+  "keyboard replacement",
+  "pointer replacement",
+  "programmatic replacement",
+  "scope replacement",
+  "header",
+] as const)("retains %s collapse through revisions, completion, and remount", async (choice) => {
+  const context = { gatewayScope: {}, cardLifetime: {}, readingHistory: true };
+  const fixture = disclosure(context);
+  fixture.show();
+  if (choice !== "header") {
+    const transcript = observeTranscript(fixture.container, transcriptCleanups);
     await Promise.resolve();
-    const card = container.querySelector("details")!;
-    transcript.wheel(200);
-    vi.advanceTimersByTime(201);
-    transcript.wheel(200);
-
-    show(false);
-    await Promise.resolve();
-    vi.advanceTimersByTime(1000);
-    expect(card.open).toBe(true);
-    transcript.wheel(200);
-    vi.advanceTimersByTime(301);
-    transcript.wheel(200);
-    vi.advanceTimersByTime(301);
-    expect(card.open).toBe(true);
-
-    show(true);
-    await Promise.resolve();
-    expect(container.querySelector("details")).toBe(card);
-    transcript.wheel(200);
-    vi.advanceTimersByTime(301);
-    expect(card.open).toBe(true);
-    transcript.wheel(200);
-    vi.advanceTimersByTime(301);
-    expect(card.open).toBe(false);
-  });
-
-  it("header takeover clears pending transcript gestures before fresh history can collapse it", async () => {
-    const container = createContainer();
-    renderTranscriptCard(container, { readingHistory: true });
-    const transcript = observeTranscript(container, transcriptCleanups);
-    await Promise.resolve();
-    transcript.wheel(200);
-    vi.advanceTimersByTime(201);
-    transcript.wheel(200);
-    const card = container.querySelector("details")!;
-    const body = card.querySelector<HTMLElement>(".session-progress-card__body")!;
-    card
-      .querySelector("summary")!
-      .dispatchEvent(new WheelEvent("wheel", { deltaY: -48, bubbles: true, cancelable: true }));
-    vi.advanceTimersByTime(1000);
-    expect(card.open).toBe(true);
-    expect(body.style.height).toBe("48px");
-    transcript.wheel(200);
-    vi.advanceTimersByTime(301);
-    expect(card.open).toBe(true);
-    transcript.wheel(200);
-    vi.advanceTimersByTime(301);
-    expect(card.open).toBe(false);
-    expect(body.style.height).toBe("");
-  });
-  it("preserves another pane's newer manual reopen after stale automatic collapse and remount", async () => {
-    const first = createContainer();
-    const second = createContainer();
-    const context = { gatewayScope: {}, cardLifetime: {}, readingHistory: true };
-    renderTranscriptCard(first, context);
-    renderTranscriptCard(second, context);
-    const transcript = observeTranscript(first, transcriptCleanups);
-    await Promise.resolve();
-    second.querySelector("summary")!.click();
-    second.querySelector("summary")!.click();
-    expect(second.querySelector("details")!.open).toBe(true);
-    transcript.wheel(200);
-    vi.advanceTimersByTime(201);
-    transcript.wheel(200);
-    vi.advanceTimersByTime(300);
-    expect(first.querySelector("details")!.open).toBe(false);
-    render(nothing, second);
-    renderTranscriptCard(second, context);
-    expect(second.querySelector("details")!.open).toBe(true);
-  });
-
-  it.each([
-    { first: progressCard.sessionKey, next: "agent:main:next" },
-    { first: "global", next: "agent:main:global" },
-  ])(
-    "remembers each authoritative card across Gateway/session switching and remounting: $first",
-    ({ first: session, next }) => {
-      const container = createContainer();
-      const gatewayA = {};
-      const gatewayB = {};
-      const firstLifetime = {};
-      const nextLifetime = {};
-      const otherGatewayLifetime = {};
-      const renderCard = (gatewayScope: object, sessionKey = session) =>
-        render(
-          renderSessionProgressCard(
-            {
-              ...progressCard,
-              sessionKey: sessionKey === "global" ? "agent:main:global" : sessionKey,
-            },
-            "composer",
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            true,
-            false,
-            {
-              gatewayScope,
-              sessionIdentity: JSON.stringify(["main", sessionKey]),
-              cardLifetime:
-                gatewayScope === gatewayB
-                  ? otherGatewayLifetime
-                  : sessionKey === session
-                    ? firstLifetime
-                    : nextLifetime,
-            },
-          ),
-          container,
-        );
-      renderCard(gatewayA);
-      const first = container.querySelector<HTMLDetailsElement>(
-        '[data-progress-card-placement="composer"]',
-      );
-      first!.querySelector("summary")!.click();
-      first!.open = true;
-      first!.querySelector("summary")!.click();
-      renderCard(gatewayA);
-      expect(first!.open).toBe(false);
-
-      renderCard(gatewayA, next);
-
-      expect(
-        container.querySelector<HTMLDetailsElement>('[data-progress-card-placement="composer"]')
-          ?.open,
-      ).toBe(true);
-      renderCard(gatewayA);
-      expect(container.querySelector("details")!.open).toBe(false);
-      renderCard(gatewayB);
-      expect(container.querySelector("details")!.open).toBe(true);
-      renderCard(gatewayA);
-      expect(container.querySelector("details")!.open).toBe(false);
-      render(nothing, container);
-      renderCard(gatewayA);
-      expect(container.querySelector("details")!.open).toBe(false);
-    },
-  );
+    if (choice !== "history") {
+      transcript.thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -200, bubbles: true }));
+      advance(301);
+      expect(fixture.card().open).toBe(true);
+      if (choice === "keyboard replacement") {
+        transcript.thread.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
+      } else if (choice === "pointer replacement") {
+        transcript.thread.dispatchEvent(new PointerEvent("pointerdown"));
+      } else if (choice === "programmatic replacement") {
+        publishTranscriptScroll(transcript.thread, {
+          type: "offset",
+          delta: 0,
+          scrolling: false,
+          touching: false,
+          programmatic: true,
+        });
+      } else if (choice === "scope replacement") {
+        context.gatewayScope = {};
+        fixture.show();
+        await Promise.resolve();
+      }
+      transcript.scroll(200);
+      if (choice !== "delayed history") {
+        advance(301);
+        expect(fixture.card().open).toBe(true);
+        wheelThenAdvance(transcript);
+        expect(fixture.card().open).toBe(true);
+      }
+    } else {
+      transcript.wheel(200);
+    }
+    advance(201);
+    wheelThenAdvance(transcript);
+  } else {
+    fixture.wheel(400, false);
+  }
+  expect(fixture.card().open).toBe(false);
+  context.readingHistory = false;
+  const revised = { ...progressCard, revision: 3, markdown: "Revised progress" };
+  for (const [status, remount] of [
+    ["running", false],
+    ["done", false],
+    ["done", true],
+  ] as const) {
+    if (remount) {
+      fixture.unmount();
+    }
+    fixture.show(revised, status);
+    expect(fixture.card().open).toBe(false);
+  }
+  fixture.show({ ...revised, revision: 4 });
+  expect(fixture.card().open).toBe(false);
+  fixture.click();
+  fixture.show({ ...revised, revision: 5 });
+  expect(fixture.card().open).toBe(true);
 });
+
+it.each([true, false])("owns endpoint wheel and cancels following: collapsed=%s", (collapsed) => {
+  const onManipulate = vi.fn();
+  const fixture = disclosure({ onManipulate }, collapsed);
+  fixture.show();
+  const body = fixture.body();
+  if (!collapsed) {
+    vi.spyOn(body, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 300, 300));
+  }
+  fixture.wheel(collapsed ? 48 : -48);
+  expect(onManipulate).toHaveBeenCalledTimes(1);
+  expect(body.style.height).toBe(collapsed ? "" : "300px");
+  fixture.show(progressCard, "done");
+  fixture.expectChoice(!collapsed, collapsed ? "" : "300px");
+});
+
+it("does not let a stale pane's old card overwrite the replacement card's choice", () => {
+  const context = { gatewayScope: {}, sessionIdentity: "same-session", cardLifetime: {} };
+  const current = disclosure(context);
+  const stale = disclosure(context);
+  current.show();
+  stale.show();
+  const replacement = { ...context, cardLifetime: {} };
+  current.show({ ...progressCard, revision: 1 }, "running", replacement);
+  current.click();
+  expect(current.card().open).toBe(false);
+  stale.click();
+  stale.click();
+  expect(stale.card().open).toBe(true);
+  current.unmount();
+  current.show({ ...progressCard, revision: 1 }, "running", replacement);
+  expect(current.card().open).toBe(false);
+});
+
+it.each(["hidden", "header"])(
+  "%s takeover requires fresh gestures before collapse",
+  async (takeover) => {
+    const cardLifetime = takeover === "hidden" ? {} : undefined;
+    const fixture = disclosure();
+    const show = (presented: boolean) =>
+      fixture.show(progressCard, "running", { cardLifetime, readingHistory: true, presented });
+    show(true);
+    const transcript = observeTranscript(fixture.container, transcriptCleanups);
+    await Promise.resolve();
+    const card = fixture.card();
+    wheelThenAdvance(transcript, 201);
+    transcript.wheel(200);
+
+    if (takeover === "hidden") {
+      show(false);
+      await Promise.resolve();
+    } else {
+      fixture.wheel(-48);
+    }
+    advance(1000);
+    fixture.expectChoice(true, takeover === "header" ? "48px" : "");
+    if (takeover === "hidden") {
+      wheelThenAdvance(transcript);
+      wheelThenAdvance(transcript);
+      expect(card.open).toBe(true);
+      show(true);
+      await Promise.resolve();
+      expect(fixture.card()).toBe(card);
+    }
+    wheelThenAdvance(transcript);
+    expect(card.open).toBe(true);
+    wheelThenAdvance(transcript);
+    fixture.expectChoice(false);
+  },
+);
+it("preserves another pane's newer manual reopen after stale automatic collapse and remount", async () => {
+  const context = { gatewayScope: {}, cardLifetime: {}, readingHistory: true };
+  const first = disclosure(context);
+  const second = disclosure(context);
+  first.show();
+  second.show();
+  const transcript = observeTranscript(first.container, transcriptCleanups);
+  await Promise.resolve();
+  second.click();
+  second.click();
+  expect(second.card().open).toBe(true);
+  wheelThenAdvance(transcript, 201);
+  wheelThenAdvance(transcript, 300);
+  expect(first.card().open).toBe(false);
+  second.unmount();
+  second.show();
+  expect(second.card().open).toBe(true);
+});
+
+it.each([
+  { first: progressCard.sessionKey, next: "agent:main:next" },
+  { first: "global", next: "agent:main:global" },
+])(
+  "retains authority across Gateway/session switches and remount: $first",
+  ({ first: session, next }) => {
+    const fixture = createView({ hasActiveRun: true, collapseComposerByDefault: false });
+    const gatewayA = {};
+    const gatewayB = {};
+    const firstLifetime = {};
+    const nextLifetime = {};
+    const otherGatewayLifetime = {};
+    const renderCard = (gatewayScope: object, sessionKey = session) =>
+      fixture.show({
+        card: {
+          ...progressCard,
+          sessionKey: sessionKey === "global" ? "agent:main:global" : sessionKey,
+        },
+        composerDisclosureContext: {
+          gatewayScope,
+          sessionIdentity: JSON.stringify(["main", sessionKey]),
+          cardLifetime:
+            gatewayScope === gatewayB
+              ? otherGatewayLifetime
+              : sessionKey === session
+                ? firstLifetime
+                : nextLifetime,
+        },
+      });
+    renderCard(gatewayA);
+    const card = () => fixture.container.querySelector("details")!;
+    const first = card();
+    first.querySelector("summary")!.click();
+    first.open = true;
+    first.querySelector("summary")!.click();
+    renderCard(gatewayA);
+    expect(first.open).toBe(false);
+    for (const [gateway, sessionKey, open] of [
+      [gatewayA, next, true],
+      [gatewayA, session, false],
+      [gatewayB, session, true],
+      [gatewayA, session, false],
+    ] as const) {
+      renderCard(gateway, sessionKey);
+      expect(card().open).toBe(open);
+    }
+    fixture.show(null);
+    renderCard(gatewayA);
+    expect(card().open).toBe(false);
+  },
+);

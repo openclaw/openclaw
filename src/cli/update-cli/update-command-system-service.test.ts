@@ -2,16 +2,21 @@ import "./update-command-service-maintenance.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import type { SystemdGatewayInstallation } from "../../daemon/service-types.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
+import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { withUpdateInProgressEnv } from "./update-command-service-env.js";
+import {
+  gatewayCommand,
+  maintenanceDefaults,
+} from "./update-command-service-fixtures.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import { maybeRestartService } from "./update-command-service.js";
 
@@ -23,9 +28,11 @@ it.runIf(process.platform === "linux").each([
   { account: "root", uid: 0, writable: true, update: true },
   { account: "user", uid: 2001, writable: false, update: true },
   { account: "standalone Doctor", uid: 0, writable: true, update: false },
+  { account: "dueling", uid: 2001, writable: true, update: true },
+  { account: "dueling", uid: 2001, writable: false, update: true },
 ])(
   "preserves system-service ownership for $account (writable=$writable, update=$update)",
-  ({ uid, writable, update }) =>
+  ({ account, uid, writable, update }) =>
     withServiceHome(async (home) => {
       vi.spyOn(process, "getuid").mockReturnValue(uid);
       vi.spyOn(process, "geteuid").mockReturnValue(uid);
@@ -35,24 +42,31 @@ it.runIf(process.platform === "linux").each([
       const restartCommand = `sudo systemctl restart ${unitName}`;
       const service = createMockGatewayService();
       mocks.service.mockReturnValue(service);
+      const system = {
+        scope: "system" as const,
+        unitName,
+        unitPath: "/etc/systemd/system/" + unitName,
+      };
+      const systemdInstallation: SystemdGatewayInstallation =
+        account === "dueling"
+          ? {
+              kind: "dueling",
+              system,
+              user: {
+                scope: "user",
+                unitName,
+                unitPath: path.join(home, ".config/systemd/user", unitName),
+              },
+            }
+          : { kind: "system", system };
       vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
         installed: true,
         loadState: { status: "loaded" },
         running: true,
         env: { HOME: home },
-        command: {
-          programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-          environment: { HOME: home },
-        },
+        command: gatewayCommand(home, root),
         runtime: { status: "running", pid: fixtureGatewayPid, systemd: { managerUid: 0 } },
-        systemdInstallation: {
-          kind: "system",
-          system: {
-            scope: "system",
-            unitName,
-            unitPath: `/etc/systemd/system/${unitName}`,
-          },
-        },
+        systemdInstallation,
       });
       if (!writable) {
         const access = fs.access;
@@ -65,11 +79,9 @@ it.runIf(process.platform === "linux").each([
       }
       const prepare = () =>
         maybeStopManagedServiceBeforeMutableUpdate({
+          ...maintenanceDefaults,
           root,
-          updateInstallKind: "package",
-          shouldRestart: true,
           phase: "prepare",
-          jsonMode: true,
         });
       const preparation = update ? withUpdateInProgressEnv(undefined, prepare) : prepare();
       if (!update) {
@@ -95,13 +107,7 @@ it.runIf(process.platform === "linux").each([
           serviceMutationAllowed: false,
           serviceMutationSkipMessage: expect.stringContaining(restartCommand),
         });
-        const result: UpdateRunResult = {
-          status: "ok",
-          mode: "npm",
-          root,
-          steps: [],
-          durationMs: 0,
-        };
+        const result = updateResult({ root, durationMs: 0 });
         await expect(
           maybeRestartService({
             shouldRestart: false,
@@ -115,14 +121,14 @@ it.runIf(process.platform === "linux").each([
           }),
         ).resolves.toBe("ok");
         expect(classifyUpdateOutcome(result)).toBe("succeeded");
-        expect(result.steps).toEqual([
-          expect.objectContaining({
+        expect(result.steps).toMatchObject([
+          {
             exitCode: 0,
             advisory: {
               kind: "recoverable-maintenance",
               message: expect.stringContaining(restartCommand),
             },
-          }),
+          },
         ]);
         const report = renderUpdateRunReport(updateRunReportInputFromResult(result));
         expect(report.markdown).toContain(restartCommand);

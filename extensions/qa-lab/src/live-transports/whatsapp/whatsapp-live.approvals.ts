@@ -1,56 +1,24 @@
 import { randomUUID } from "node:crypto";
-import type {
-  WhatsAppQaDriverObservedMessage,
-  WhatsAppQaDriverSession,
-} from "@openclaw/whatsapp/api.js";
+import type { WhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { requestLiveQaApproval } from "../shared/live-approval-request.js";
+import type { QaGatewayChild } from "../../gateway-child.js";
+import {
+  requestLiveQaApproval,
+  resolveLiveQaApprovalDecision,
+  waitForLiveQaApprovalDecision,
+} from "../shared/live-approval-request.js";
 import { assertApprovalDecisionResult } from "../shared/live-approval-result.js";
 import type {
-  WhatsAppObservedMessage,
   WhatsAppQaApprovalDecision,
   WhatsAppQaApprovalScenarioRun,
-  WhatsAppQaGateway,
   WhatsAppQaScenarioMetadata,
 } from "./whatsapp-live.contracts.js";
-import { formatDiagnosticId } from "./whatsapp-live.operations.js";
+import {
+  formatDiagnosticId,
+  waitForWhatsAppObservedMessage,
+} from "./whatsapp-live.observations.js";
 
 const WHATSAPP_QA_APPROVAL_DECISION_TIMEOUT_MS = 60_000;
-
-async function waitForApprovalDecision(params: {
-  approvalId: string;
-  gateway: WhatsAppQaGateway;
-  kind: ChannelApprovalKind;
-}) {
-  const method =
-    params.kind === "exec" ? "exec.approval.waitDecision" : "plugin.approval.waitDecision";
-  return await params.gateway.call(
-    method,
-    { id: params.approvalId },
-    {
-      expectFinal: true,
-      timeoutMs: WHATSAPP_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-    },
-  );
-}
-
-async function resolveApprovalDecision(params: {
-  approvalId: string;
-  decision: WhatsAppQaApprovalDecision;
-  gateway: WhatsAppQaGateway;
-  kind: ChannelApprovalKind;
-}) {
-  const method = params.kind === "exec" ? "exec.approval.resolve" : "plugin.approval.resolve";
-  return await params.gateway.call(
-    method,
-    { decision: params.decision, id: params.approvalId },
-    {
-      expectFinal: false,
-      timeoutMs: WHATSAPP_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-    },
-  );
-}
 
 function matchesWhatsAppApprovalText(
   params: {
@@ -131,16 +99,14 @@ async function waitForWhatsAppApprovalMessage(params: {
   decision?: WhatsAppQaApprovalDecision;
   driver: WhatsAppQaDriverSession;
   observedAfter?: Date;
-  observedMessages: WhatsAppObservedMessage[];
-  scenario: WhatsAppQaScenarioMetadata;
   state: "pending" | "resolved";
   sutPhoneE164: string;
   timeoutMs: number;
   token: string;
 }) {
-  let reply: WhatsAppQaDriverObservedMessage;
-  try {
-    reply = await params.driver.waitForMessage({
+  return await waitForWhatsAppObservedMessage(
+    params.driver,
+    {
       observedAfter: params.observedAfter,
       timeoutMs: params.timeoutMs,
       match: (message) => {
@@ -148,31 +114,14 @@ async function waitForWhatsAppApprovalMessage(params: {
           !message.fromPhoneE164 || message.fromPhoneE164 === params.sutPhoneE164;
         return fromExpectedSender && matchesWhatsAppApprovalText(params, message.text);
       },
-    });
-  } catch (error) {
-    if (/\btimed out waiting for WhatsApp QA driver message\b/iu.test(formatErrorMessage(error))) {
-      throw new Error(
-        `${formatErrorMessage(error)}; ${formatWhatsAppApprovalWaitDiagnostics(params)}`,
-        { cause: error },
-      );
-    }
-    throw error;
-  }
-  const observed: WhatsAppObservedMessage = {
-    ...reply,
-    approvalState: params.state,
-    matchedScenario: true,
-    scenarioId: params.scenario.id,
-    scenarioTitle: params.scenario.title,
-  };
-  params.observedMessages.push(observed);
-  return observed;
+    },
+    () => formatWhatsAppApprovalWaitDiagnostics(params),
+  );
 }
 
 export async function runWhatsAppApprovalScenario(params: {
   driver: WhatsAppQaDriverSession;
-  gateway: WhatsAppQaGateway;
-  observedMessages: WhatsAppObservedMessage[];
+  gateway: QaGatewayChild;
   run: WhatsAppQaApprovalScenarioRun;
   scenario: WhatsAppQaScenarioMetadata;
   sutAccountId: string;
@@ -200,8 +149,6 @@ export async function runWhatsAppApprovalScenario(params: {
     decision: params.run.decision,
     driver: params.driver,
     observedAfter: requestStartedAt,
-    observedMessages: params.observedMessages,
-    scenario: params.scenario,
     sutPhoneE164: params.sutPhoneE164,
     timeoutMs: params.scenario.timeoutMs,
     token: params.run.token,
@@ -218,19 +165,21 @@ export async function runWhatsAppApprovalScenario(params: {
         participant: pending.participantJid,
       });
     } else {
-      await resolveApprovalDecision({
+      await resolveLiveQaApprovalDecision({
         approvalId,
         decision: params.run.decision,
         gateway: params.gateway,
         kind: params.run.approvalKind,
+        timeoutMs: WHATSAPP_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
       });
     }
     assertApprovalDecisionResult({
       decision: params.run.decision,
-      result: await waitForApprovalDecision({
+      result: await waitForLiveQaApprovalDecision({
         approvalId,
         gateway: params.gateway,
         kind: params.run.approvalKind,
+        timeoutMs: WHATSAPP_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
       }),
     });
   } catch (error) {

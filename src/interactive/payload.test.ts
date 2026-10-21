@@ -1,6 +1,9 @@
-// Interactive payload tests cover validation of interactive response payloads.
 import { describe, expect, it } from "vitest";
-import type { MessagePresentationAction, ModelPickerAction } from "./payload.js";
+import type {
+  MessagePresentationAction,
+  MessagePresentationBlock,
+  ModelPickerAction,
+} from "./payload.js";
 import {
   hasReplyChannelData,
   hasReplyContent,
@@ -16,13 +19,16 @@ import {
   resolveInteractiveTextFallback,
 } from "./payload.js";
 
+function buttonPresentation<const T extends unknown[]>(...buttons: T) {
+  return { blocks: [{ type: "buttons" as const, buttons }] };
+}
+
 describe("hasReplyChannelData", () => {
   it.each([
     { value: undefined, expected: false },
     { value: {}, expected: false },
     { value: [], expected: false },
-    { value: { slack: { blocks: [] } }, expected: true },
-  ] as const)("accepts non-empty objects only: %j", ({ value, expected }) => {
+  ] as const)("rejects empty or non-object channel data: %j", ({ value, expected }) => {
     expect(hasReplyChannelData(value)).toBe(expected);
   });
 });
@@ -39,24 +45,10 @@ describe("hasReplyContent", () => {
     ).toBe(false);
   });
 
-  it.each([
-    {
-      name: "shared interactive blocks",
-      input: {
-        interactive: {
-          blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
-        },
-      },
-    },
-    {
-      name: "explicit extra content",
-      input: {
-        text: "   ",
-        extraContent: true,
-      },
-    },
-  ] as const)("accepts $name", ({ input }) => {
-    expect(hasReplyContent(input)).toBe(true);
+  it("accepts shared interactive blocks", () => {
+    expect(
+      hasReplyContent({ interactive: buttonPresentation({ label: "Retry", value: "retry" }) }),
+    ).toBe(true);
   });
 });
 
@@ -124,232 +116,114 @@ describe("interactive payload helpers", () => {
   });
 
   it("preserves URL-only presentation buttons for native link renderers and fallback text", () => {
-    const presentation = {
-      blocks: [
-        {
-          type: "buttons" as const,
-          buttons: [{ label: "Docs", url: "https://example.com/docs" }],
-        },
-      ],
-    };
+    const presentation = buttonPresentation({ label: "Docs", url: "https://example.com/docs" });
 
-    expect(presentationToInteractiveReply(presentation)).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [{ label: "Docs", url: "https://example.com/docs" }],
-        },
-      ],
-    });
+    expect(presentationToInteractiveReply(presentation)).toEqual(
+      buttonPresentation({ label: "Docs", url: "https://example.com/docs" }),
+    );
     expect(renderMessagePresentationFallbackText({ presentation })).toBe(
       "- Docs: https://example.com/docs",
     );
   });
 
   it("preserves web app presentation buttons for channel-native renderers", () => {
-    const presentation = {
-      blocks: [
-        {
-          type: "buttons" as const,
-          buttons: [{ label: "Launch", web_app: { url: "https://example.com/app" } }],
-        },
-      ],
-    };
+    const presentation = buttonPresentation({
+      label: "Launch",
+      web_app: { url: "https://example.com/app" },
+    });
     const normalized = normalizeMessagePresentation(presentation);
 
-    expect(normalized).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [{ label: "Launch", webApp: { url: "https://example.com/app" } }],
-        },
-      ],
-    });
-    expect(presentationToInteractiveReply(normalized!)).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [{ label: "Launch", webApp: { url: "https://example.com/app" } }],
-        },
-      ],
-    });
+    expect(normalized).toEqual(
+      buttonPresentation({ label: "Launch", webApp: { url: "https://example.com/app" } }),
+    );
+    expect(presentationToInteractiveReply(normalized!)).toEqual(
+      buttonPresentation({ label: "Launch", webApp: { url: "https://example.com/app" } }),
+    );
     expect(renderMessagePresentationFallbackText({ presentation: normalized })).toBe(
       "- Launch: https://example.com/app",
     );
   });
 
   it("normalizes typed presentation actions and bridges them to legacy values", () => {
-    const normalized = normalizeMessagePresentation({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Plugins",
-              action: { type: "command", command: "/codex plugins menu" },
-            },
-            {
-              label: "Approve",
-              action: { type: "callback", value: "/approve req allow-once" },
-            },
-            {
-              label: "Allow once",
-              action: {
-                type: "approval",
-                approvalId: "approval/😀",
-                approvalKind: "exec",
-                decision: "allow-once",
-              },
-            },
-            {
-              label: "Review",
-              action: { type: "url", url: "https://example.com/approve/id" },
-            },
-            {
-              label: "Open app",
-              action: { type: "web-app", url: "https://example.com/app" },
-            },
-          ],
+    const presentation = buttonPresentation(
+      {
+        label: "Plugins",
+        action: { type: "command", command: "/codex plugins menu" },
+      },
+      {
+        label: "Approve",
+        action: { type: "callback", value: "/approve req allow-once" },
+      },
+      {
+        label: "Allow once",
+        action: {
+          type: "approval",
+          approvalId: "approval/😀",
+          approvalKind: "exec",
+          decision: "allow-once",
         },
-      ],
-    });
-
-    expect(normalized).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Plugins",
-              action: { type: "command", command: "/codex plugins menu" },
-            },
-            {
-              label: "Approve",
-              action: { type: "callback", value: "/approve req allow-once" },
-            },
-            {
-              label: "Allow once",
-              action: {
-                type: "approval",
-                approvalId: "approval/😀",
-                approvalKind: "exec",
-                decision: "allow-once",
-              },
-            },
-            {
-              label: "Review",
-              action: { type: "url", url: "https://example.com/approve/id" },
-            },
-            {
-              label: "Open app",
-              action: { type: "web-app", url: "https://example.com/app" },
-            },
-          ],
-        },
-      ],
-    });
-    expect(presentationToInteractiveReply(normalized!)).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Plugins",
-              action: { type: "command", command: "/codex plugins menu" },
-              value: "/codex plugins menu",
-            },
-            {
-              label: "Approve",
-              action: { type: "callback", value: "/approve req allow-once" },
-              value: "/approve req allow-once",
-            },
-            {
-              label: "Allow once",
-              action: {
-                type: "approval",
-                approvalId: "approval/😀",
-                approvalKind: "exec",
-                decision: "allow-once",
-              },
-            },
-            {
-              label: "Review",
-              action: { type: "url", url: "https://example.com/approve/id" },
-              url: "https://example.com/approve/id",
-            },
-            {
-              label: "Open app",
-              action: { type: "web-app", url: "https://example.com/app" },
-              webApp: { url: "https://example.com/app" },
-            },
-          ],
-        },
-      ],
-    });
+      },
+      {
+        label: "Review",
+        action: { type: "url", url: "https://example.com/approve/id" },
+      },
+      {
+        label: "Open app",
+        action: { type: "web-app", url: "https://example.com/app" },
+      },
+    );
+    const normalized = normalizeMessagePresentation(structuredClone(presentation));
+    expect(normalized).toEqual(presentation);
+    const [command, callback, approval, url, webApp] = presentation.blocks[0]!.buttons;
+    expect(presentationToInteractiveReply(normalized!)).toEqual(
+      buttonPresentation(
+        { ...command, value: "/codex plugins menu" },
+        { ...callback, value: "/approve req allow-once" },
+        approval,
+        { ...url, url: "https://example.com/approve/id" },
+        { ...webApp, webApp: { url: "https://example.com/app" } },
+      ),
+    );
   });
 
   it("requires a web-app target and preserves hosted widget ids", () => {
-    const normalized = normalizeMessagePresentation({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Hosted widget",
-              action: { type: "web-app", widgetId: " AAAAAAAAAAAAAAAAAAAAAA " },
-            },
-            {
-              label: "Hosted fallback",
-              action: {
-                type: "web-app",
-                widgetId: "BBBBBBBBBBBBBBBBBBBBBB",
-                url: " https://example.com/app ",
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(normalized).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Hosted widget",
-              action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
-            },
-            {
-              label: "Hosted fallback",
-              action: {
-                type: "web-app",
-                widgetId: "BBBBBBBBBBBBBBBBBBBBBB",
-                url: "https://example.com/app",
-              },
-            },
-          ],
-        },
-      ],
-    });
-    const interactive = presentationToInteractiveReply(normalized!);
-    expect(interactive?.blocks[0]).toMatchObject({
-      type: "buttons",
-      buttons: [
+    const normalized = normalizeMessagePresentation(
+      buttonPresentation(
         {
           label: "Hosted widget",
-          action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+          action: { type: "web-app", widgetId: " AAAAAAAAAAAAAAAAAAAAAA " },
         },
         {
           label: "Hosted fallback",
           action: {
             type: "web-app",
             widgetId: "BBBBBBBBBBBBBBBBBBBBBB",
-            url: "https://example.com/app",
+            url: " https://example.com/app ",
           },
-          webApp: { url: "https://example.com/app" },
         },
-      ],
+      ),
+    );
+
+    const expected = buttonPresentation(
+      {
+        label: "Hosted widget",
+        action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+      },
+      {
+        label: "Hosted fallback",
+        action: {
+          type: "web-app",
+          widgetId: "BBBBBBBBBBBBBBBBBBBBBB",
+          url: "https://example.com/app",
+        },
+      },
+    );
+    expect(normalized).toEqual(expected);
+    const [widget, fallback] = expected.blocks[0]!.buttons;
+    const interactive = presentationToInteractiveReply(normalized!);
+    expect(interactive?.blocks[0]).toMatchObject({
+      type: "buttons",
+      buttons: [widget, { ...fallback, webApp: { url: "https://example.com/app" } }],
     });
     expect(interactive?.blocks[0]).not.toHaveProperty("buttons.0.webApp");
     expect(renderMessagePresentationFallbackText({ presentation: normalized })).toBe(
@@ -362,14 +236,9 @@ describe("interactive payload helpers", () => {
       }),
     ).toBeUndefined();
     expect(
-      normalizeMessagePresentation({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Missing", action: { type: "web-app" } }],
-          },
-        ],
-      }),
+      normalizeMessagePresentation(
+        buttonPresentation({ label: "Missing", action: { type: "web-app" } }),
+      ),
     ).toBeUndefined();
   });
 
@@ -503,47 +372,18 @@ describe("interactive payload helpers", () => {
       approvalKind: "plugin" as const,
       decision: "allow-always" as const,
     };
-    expect(resolveMessagePresentationControlValue({ action, value: "legacy-shadow" })).toBe(
-      undefined,
+    const button = {
+      label: "Approve",
+      action,
+      value: "legacy-shadow",
+      url: "https://ignored.example",
+    };
+    const presentation = buttonPresentation(button);
+    expect(resolveMessagePresentationControlValue(button)).toBeUndefined();
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe("- Approve");
+    expect(presentationToInteractiveReply(presentation)).toEqual(
+      buttonPresentation({ label: "Approve", action }),
     );
-    expect(
-      renderMessagePresentationFallbackText({
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Approve",
-                  action,
-                  value: "legacy-shadow",
-                  url: "https://ignored.example",
-                },
-              ],
-            },
-          ],
-        },
-      }),
-    ).toBe("- Approve");
-    expect(
-      presentationToInteractiveReply({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Approve",
-                action,
-                value: "legacy-shadow",
-                url: "https://ignored.example",
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual({
-      blocks: [{ type: "buttons", buttons: [{ label: "Approve", action }] }],
-    });
   });
 
   it("normalizes question actions without exposing their transport data", () => {
@@ -552,20 +392,18 @@ describe("interactive payload helpers", () => {
       questionId: "ask_0123456789abcdef0123456789abcdef",
       optionValue: "Production",
     };
-    const presentation = normalizeMessagePresentation({
-      blocks: [{ type: "buttons", buttons: [{ label: "Production", action }] }],
-    });
+    const presentation = normalizeMessagePresentation(
+      buttonPresentation({ label: "Production", action }),
+    );
 
-    expect(presentation).toEqual({
-      blocks: [{ type: "buttons", buttons: [{ label: "Production", action }] }],
-    });
+    expect(presentation).toEqual(buttonPresentation({ label: "Production", action }));
     expect(resolveMessagePresentationControlValue({ action })).toBeUndefined();
     expect(renderMessagePresentationFallbackText({ presentation: presentation ?? undefined })).toBe(
       "- Production",
     );
-    expect(presentationToInteractiveReply(presentation ?? { blocks: [] })).toEqual({
-      blocks: [{ type: "buttons", buttons: [{ label: "Production", action }] }],
-    });
+    expect(presentationToInteractiveReply(presentation ?? { blocks: [] })).toEqual(
+      buttonPresentation({ label: "Production", action }),
+    );
   });
 
   it.each([
@@ -575,158 +413,71 @@ describe("interactive payload helpers", () => {
     { type: "question", questionId: "ask_1", optionValue: "   " },
   ])("rejects malformed question action %#", (action) => {
     expect(
-      normalizeMessagePresentation({
-        blocks: [{ type: "buttons", buttons: [{ label: "Yes", action }] }],
-      }),
+      normalizeMessagePresentation(buttonPresentation({ label: "Yes", action })),
     ).toBeUndefined();
   });
 
   it("rejects malformed canonical actions instead of falling back to legacy fields", () => {
+    const approval = {
+      type: "approval",
+      approvalId: "approval:1",
+      approvalKind: "exec",
+      decision: "allow-once",
+    };
+    for (const action of [
+      { ...approval, decision: "yes" },
+      { ...approval, approvalId: "\ud800" },
+      {
+        type: " APPROVAL ",
+        approvalId: " approval:1 ",
+        approvalKind: " EXEC ",
+        decision: " ALLOW-ONCE ",
+      },
+    ]) {
+      expect(
+        normalizeMessagePresentation(
+          buttonPresentation({ label: "Approve", action, value: "legacy" }),
+        ),
+      ).toBeUndefined();
+    }
     expect(
       normalizeMessagePresentation({
         blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Approve",
-                action: {
-                  type: "approval",
-                  approvalId: "approval:1",
-                  approvalKind: "exec",
-                  decision: "yes",
-                },
-                value: "legacy",
-              },
-            ],
-          },
-        ],
-      }),
-    ).toBeUndefined();
-
-    expect(
-      normalizeMessagePresentation({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Approve",
-                action: {
-                  type: "approval",
-                  approvalId: "\ud800",
-                  approvalKind: "exec",
-                  decision: "allow-once",
-                },
-              },
-            ],
-          },
-        ],
-      }),
-    ).toBeUndefined();
-
-    expect(
-      normalizeMessagePresentation({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Approve",
-                action: {
-                  type: " APPROVAL ",
-                  approvalId: " approval:1 ",
-                  approvalKind: " EXEC ",
-                  decision: " ALLOW-ONCE ",
-                },
-                value: "legacy",
-              },
-            ],
-          },
-        ],
-      }),
-    ).toBeUndefined();
-
-    expect(
-      normalizeMessagePresentation({
-        blocks: [
-          {
-            type: "select",
-            options: [
-              {
-                label: "Approve",
-                action: {
-                  type: "approval",
-                  approvalId: "approval:1",
-                  approvalKind: "exec",
-                  decision: "allow-once",
-                },
-                value: "legacy",
-              },
-            ],
-          },
+          { type: "select", options: [{ label: "Approve", action: approval, value: "legacy" }] },
         ],
       }),
     ).toBeUndefined();
   });
 
   it("preserves protocol-valid boundary whitespace in typed approval actions", () => {
-    const approvalId = "\uFEFF";
-
-    expect(
-      normalizeMessagePresentation({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Deny",
-                action: {
-                  type: "approval",
-                  approvalId,
-                  approvalKind: "exec",
-                  decision: "deny",
-                },
-              },
-            ],
-          },
-        ],
-      }),
-    ).toMatchObject({
-      blocks: [
-        {
-          buttons: [
-            {
-              action: { type: "approval", approvalId, approvalKind: "exec", decision: "deny" },
-            },
-          ],
-        },
-      ],
-    });
+    const action = {
+      type: "approval",
+      approvalId: "\uFEFF",
+      approvalKind: "exec",
+      decision: "deny",
+    } as const;
+    const expected = buttonPresentation({ label: "Deny", action });
+    expect(normalizeMessagePresentation(structuredClone(expected))).toEqual(expected);
   });
 
   it("converts only presentation controls for native component renderers", () => {
+    const controls = [
+      {
+        type: "buttons",
+        buttons: [{ label: "Approve", value: "approve", style: "success", reusable: true }],
+      },
+      {
+        type: "select",
+        placeholder: "Rollback target",
+        options: [{ label: "Previous", value: "previous" }],
+      },
+    ] satisfies MessagePresentationBlock[];
     const presentation = {
       title: "Deploy approval",
       blocks: [
         { type: "text" as const, text: "Canary is ready." },
         { type: "divider" as const },
-        {
-          type: "buttons" as const,
-          buttons: [
-            {
-              label: "Approve",
-              value: "approve",
-              style: "success" as const,
-              reusable: true,
-            },
-          ],
-        },
-        {
-          type: "select" as const,
-          placeholder: "Rollback target",
-          options: [{ label: "Previous", value: "previous" }],
-        },
+        ...structuredClone(controls),
       ],
     };
 
@@ -734,57 +485,30 @@ describe("interactive payload helpers", () => {
       blocks: [
         { type: "text", text: "Deploy approval" },
         { type: "text", text: "Canary is ready." },
-        {
-          type: "buttons",
-          buttons: [{ label: "Approve", value: "approve", style: "success", reusable: true }],
-        },
-        {
-          type: "select",
-          placeholder: "Rollback target",
-          options: [{ label: "Previous", value: "previous" }],
-        },
+        ...controls,
       ],
     });
-    expect(presentationToInteractiveControlsReply(presentation)).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [{ label: "Approve", value: "approve", style: "success", reusable: true }],
-        },
-        {
-          type: "select",
-          placeholder: "Rollback target",
-          options: [{ label: "Previous", value: "previous" }],
-        },
-      ],
-    });
+    expect(presentationToInteractiveControlsReply(presentation)).toEqual({ blocks: controls });
   });
 
   it("preserves command values in button fallback text while keeping callback values private", () => {
-    const presentation = {
-      blocks: [
-        {
-          type: "buttons" as const,
-          buttons: [
-            { label: "Approve", value: "/approve req_1 allow-once" },
-            { label: "Deny", action: { type: "command" as const, command: "/approve req_1 deny" } },
-            { label: "Ignore", action: { type: "callback" as const, value: "ignore_123" } },
-            { label: "Docs", url: "https://example.com/docs" },
-            {
-              label: "Legacy link override",
-              action: { type: "command" as const, command: "/approve req_1" },
-              url: "https://example.com/review",
-            },
-            { label: "Disabled", disabled: true },
-            {
-              label: "DisabledCmd",
-              disabled: true,
-              action: { type: "command" as const, command: "/test" },
-            },
-          ],
-        },
-      ],
-    };
+    const presentation = buttonPresentation(
+      { label: "Approve", value: "/approve req_1 allow-once" },
+      { label: "Deny", action: { type: "command" as const, command: "/approve req_1 deny" } },
+      { label: "Ignore", action: { type: "callback" as const, value: "ignore_123" } },
+      { label: "Docs", url: "https://example.com/docs" },
+      {
+        label: "Legacy link override",
+        action: { type: "command" as const, command: "/approve req_1" },
+        url: "https://example.com/review",
+      },
+      { label: "Disabled", disabled: true },
+      {
+        label: "DisabledCmd",
+        disabled: true,
+        action: { type: "command" as const, command: "/test" },
+      },
+    );
 
     expect(renderMessagePresentationFallbackText({ presentation })).toBe(
       [
@@ -814,57 +538,31 @@ describe("interactive payload helpers", () => {
   });
 
   it("normalizes chart data and renders deterministic accessible fallback text", () => {
-    const presentation = normalizeMessagePresentation({
-      blocks: [
-        {
-          type: "chart",
-          chartType: "pie",
-          title: "Requests by region",
-          segments: [
-            { label: "Americas", value: 52 },
-            { label: "Europe", value: 31 },
-          ],
-        },
-        {
-          type: "chart",
-          chartType: "line",
-          title: "Weekly latency",
-          categories: ["Mon", "Tue"],
-          series: [
-            { name: "p50", values: [120, 110] },
-            { name: "p95", values: [250, 230] },
-          ],
-          xLabel: "Day",
-          yLabel: "Milliseconds",
-        },
-      ],
-    });
-
-    expect(presentation).toEqual({
-      blocks: [
-        {
-          type: "chart",
-          chartType: "pie",
-          title: "Requests by region",
-          segments: [
-            { label: "Americas", value: 52 },
-            { label: "Europe", value: 31 },
-          ],
-        },
-        {
-          type: "chart",
-          chartType: "line",
-          title: "Weekly latency",
-          categories: ["Mon", "Tue"],
-          series: [
-            { name: "p50", values: [120, 110] },
-            { name: "p95", values: [250, 230] },
-          ],
-          xLabel: "Day",
-          yLabel: "Milliseconds",
-        },
-      ],
-    });
+    const blocks = [
+      {
+        type: "chart",
+        chartType: "pie",
+        title: "Requests by region",
+        segments: [
+          { label: "Americas", value: 52 },
+          { label: "Europe", value: 31 },
+        ],
+      },
+      {
+        type: "chart",
+        chartType: "line",
+        title: "Weekly latency",
+        categories: ["Mon", "Tue"],
+        series: [
+          { name: "p50", values: [120, 110] },
+          { name: "p95", values: [250, 230] },
+        ],
+        xLabel: "Day",
+        yLabel: "Milliseconds",
+      },
+    ] satisfies MessagePresentationBlock[];
+    const presentation = normalizeMessagePresentation({ blocks: structuredClone(blocks) });
+    expect(presentation).toEqual({ blocks });
     expect(renderMessagePresentationFallbackText({ presentation })).toBe(
       [
         "Requests by region (pie chart)",
@@ -986,59 +684,20 @@ describe("interactive payload helpers", () => {
     });
   });
 
+  const table = { type: "table", caption: "Report", headers: ["Name"], rows: [["Acme"]] };
   it.each([
-    {
-      name: "missing caption",
-      block: { type: "table", headers: ["Name"], rows: [["Acme"]] },
-    },
-    {
-      name: "empty headers",
-      block: { type: "table", caption: "Report", headers: [], rows: [["Acme"]] },
-    },
+    { name: "missing caption", block: { ...table, caption: undefined } },
+    { name: "empty headers", block: { ...table, headers: [] } },
     {
       name: "duplicate headers",
-      block: {
-        type: "table",
-        caption: "Report",
-        headers: ["Name", "Name"],
-        rows: [["Acme", "Won"]],
-      },
+      block: { ...table, headers: ["Name", "Name"], rows: [["Acme", "Won"]] },
     },
-    {
-      name: "empty rows",
-      block: { type: "table", caption: "Report", headers: ["Name"], rows: [] },
-    },
-    {
-      name: "mismatched row width",
-      block: {
-        type: "table",
-        caption: "Report",
-        headers: ["Name", "Stage"],
-        rows: [["Acme"]],
-      },
-    },
-    {
-      name: "empty string cell",
-      block: { type: "table", caption: "Report", headers: ["Name"], rows: [[" "]] },
-    },
-    {
-      name: "non-finite numeric cell",
-      block: { type: "table", caption: "Report", headers: ["ARR"], rows: [[Infinity]] },
-    },
-    {
-      name: "non-scalar cell",
-      block: { type: "table", caption: "Report", headers: ["Name"], rows: [[true]] },
-    },
-    {
-      name: "out-of-range row header column",
-      block: {
-        type: "table",
-        caption: "Report",
-        headers: ["Name"],
-        rows: [["Acme"]],
-        rowHeaderColumnIndex: 1,
-      },
-    },
+    { name: "empty rows", block: { ...table, rows: [] } },
+    { name: "mismatched row width", block: { ...table, headers: ["Name", "Stage"] } },
+    { name: "empty string cell", block: { ...table, rows: [[" "]] } },
+    { name: "non-finite numeric cell", block: { ...table, headers: ["ARR"], rows: [[Infinity]] } },
+    { name: "non-scalar cell", block: { ...table, rows: [[true]] } },
+    { name: "out-of-range row header column", block: { ...table, rowHeaderColumnIndex: 1 } },
   ])("drops table blocks with $name instead of repairing their data", ({ block }) => {
     expect(normalizeMessagePresentation({ blocks: [block] })).toBeUndefined();
   });

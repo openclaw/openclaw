@@ -16,7 +16,7 @@ describe("throwFromNodePayload", () => {
         message: "blocked",
         canonicalPath: "/tmp/x",
       }),
-    ).toThrow(/canonical=\/tmp\/x/);
+    ).toThrow(/resolved=\/tmp\/x/);
   });
 
   it("falls back to ERROR / generic message when fields are missing", () => {

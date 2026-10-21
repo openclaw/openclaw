@@ -38,10 +38,12 @@ import {
 } from "./session-upstream-marker.js";
 
 const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
-const continueOperations = new Map<
-  string,
-  Promise<{ sessionKey: string; disposition: CodexSessionDisposition }>
->();
+type ContinuedCodexSession = {
+  sessionKey: string;
+  disposition: CodexSessionDisposition;
+  upstream?: CodexUpstreamBaseline & { connectionFingerprint: string };
+};
+const continueOperations = new Map<string, Promise<ContinuedCodexSession>>();
 
 const boundCatalogSessionId = (value: unknown) =>
   boundedCatalogString(value, MAX_SESSION_ID_LENGTH);
@@ -80,6 +82,21 @@ export function isAdoptionSessionKeyForThread(
 
 type CodexSupervisionMarker = { sourceThreadId: string; sourceHomeId?: string };
 
+type AdoptionCandidate = {
+  agentId: string;
+  sessionKey: string;
+  sessionKeyRest: string;
+  sessionId: string;
+  marker: CodexSupervisionMarker;
+  identity: ReturnType<typeof sessionBindingIdentity>;
+};
+
+// The snapshot revision retires derived facts; binding authority stays live below.
+const adoptionCandidatesByRevision = new WeakMap<
+  object,
+  { config?: OpenClawConfig; agentId?: string; candidates: AdoptionCandidate[] }
+>();
+
 function readCodexSupervisionMarker(entry: {
   pluginExtensions?: Record<string, unknown>;
 }): CodexSupervisionMarker | undefined {
@@ -107,53 +124,58 @@ export async function listAdoptedSessionEntries(params: {
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
 }): Promise<Map<string, AdoptedSessionEntry>> {
-  const entries = listSessionCatalogEntries({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    config: params.config ?? {},
-    runtime: params.runtime,
-    sessionEntries: params.sessionEntries,
-  });
-  const candidateForEntry = ({ agentId, entry, sessionKey }: (typeof entries)[number]) => {
-    const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
-    const marker = readCodexSupervisionMarker(entry);
-    if (
-      !sessionKeyRest.startsWith(CODEX_SUPERVISION_SESSION_KEY_PREFIX) ||
-      !marker ||
-      entry.initializationPending === true ||
-      entry.agentHarnessId !== "codex" ||
-      entry.modelSelectionLocked !== true
-    ) {
-      return undefined;
-    }
-    const sessionId = entry.sessionId?.trim();
-    if (!sessionId) {
-      return undefined;
-    }
-    return {
-      agentId,
-      sessionKey,
-      sessionKeyRest,
-      sessionId,
-      marker,
-      identity: sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
-    };
-  };
   function* candidates() {
-    for (const entry of entries) {
-      const candidate = candidateForEntry(entry);
-      if (candidate) {
-        yield candidate;
+    for (const { agentId, entry, sessionKey } of listSessionCatalogEntries({
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      config: params.config ?? {},
+      runtime: params.runtime,
+      sessionEntries: params.sessionEntries,
+    })) {
+      const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
+      const marker = readCodexSupervisionMarker(entry);
+      if (
+        !sessionKeyRest.startsWith(CODEX_SUPERVISION_SESSION_KEY_PREFIX) ||
+        !marker ||
+        entry.initializationPending === true ||
+        entry.agentHarnessId !== "codex" ||
+        entry.modelSelectionLocked !== true
+      ) {
+        continue;
       }
+      const sessionId = entry.sessionId?.trim();
+      if (!sessionId) {
+        continue;
+      }
+      yield {
+        agentId,
+        sessionKey,
+        sessionKeyRest,
+        sessionId,
+        marker,
+        identity: sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
+      };
     }
   }
-  const collect = (
-    selected: Iterable<NonNullable<ReturnType<typeof candidateForEntry>>>,
-    readBinding: CodexAppServerBindingStore["read"] = (identity) =>
-      params.bindingStore.read(identity),
-  ) => {
+  const revision = params.sessionEntries?.revision;
+  const cached = revision ? adoptionCandidatesByRevision.get(revision) : undefined;
+  let prepared: AdoptionCandidate[];
+  if (cached && cached.config === params.config && cached.agentId === params.agentId) {
+    prepared = cached.candidates;
+  } else {
+    prepared = [...candidates()];
+    if (revision) {
+      adoptionCandidatesByRevision.set(revision, {
+        config: params.config,
+        agentId: params.agentId,
+        candidates: prepared,
+      });
+    }
+  }
+  const bindings = params.bindingStore.readMany(prepared.map(({ identity }) => identity));
+  try {
     const adopted = new Map<string, AdoptedSessionEntry>();
-    for (const { agentId, sessionKey, sessionKeyRest, sessionId, marker, identity } of selected) {
-      const binding = readBinding(identity);
+    for (const { agentId, sessionKey, sessionKeyRest, sessionId, marker } of prepared) {
+      const binding = (await bindings.next()).value;
       const sourceThreadId = binding?.supervisionSourceThreadId?.trim();
       const boundThreadId = binding?.threadId.trim();
       if (
@@ -176,22 +198,8 @@ export async function listAdoptedSessionEntries(params: {
       adopted.set(sourceKey, { key: sessionKey, sessionId, agentId, boundThreadId });
     }
     return adopted;
-  };
-  if (!params.bindingStore.readMany) {
-    return collect(candidates());
-  }
-  let prepared: Array<NonNullable<ReturnType<typeof candidateForEntry>>>;
-  try {
-    prepared = [...candidates()];
-  } catch {
-    // Replay validation in row order before any bulk acquisition.
-    return collect(candidates());
-  }
-  const bindings = params.bindingStore.readMany(prepared.map(({ identity }) => identity));
-  try {
-    return collect(prepared, () => bindings.next().value);
   } finally {
-    bindings.return(undefined);
+    await bindings.return(undefined);
   }
 }
 
@@ -270,7 +278,7 @@ async function ensurePendingAdoptionBinding(params: {
   if (!ownsGeneration) {
     throw new Error(`failed to claim the OpenClaw session generation for ${params.sourceThreadId}`);
   }
-  const existing = params.bindingStore.read(params.identity);
+  const existing = await params.bindingStore.readAsync(params.identity);
   params.initialization.assertCurrent();
   if (existing) {
     if (matchesPendingAdoptionBinding(existing, params)) {
@@ -395,7 +403,7 @@ type ContinueLocalCodexSessionParams = {
 
 async function continueLocalCodexSessionInner(
   params: ContinueLocalCodexSessionParams,
-): Promise<{ sessionKey: string; disposition: CodexSessionDisposition }> {
+): Promise<ContinuedCodexSession> {
   await params.control.requireEligibleThread(params.threadId);
   const existing = await findAdoptedSessionEntry({ ...params, runtime: params.api.runtime });
   if (existing) {
@@ -408,11 +416,11 @@ async function continueLocalCodexSessionInner(
     // under the session-store write lock so a stale Open Chat cannot revive a replacement.
     const changedError = () =>
       new CatalogParamsError("Codex OpenClaw session changed before it could be opened. Retry.");
-    const restored = await params.api.runtime.agent.session.patchSessionEntry({
+    const restored = await params.api.runtime.agent.session.prepareSessionEntryPatch({
       sessionKey: existing.key,
       readConsistency: "latest",
       preserveActivity: true,
-      update: (entry) => {
+      prepare: (entry) => {
         if (
           entry.sessionId?.trim() !== existing.sessionId ||
           entry.initializationPending === true ||
@@ -428,13 +436,18 @@ async function continueLocalCodexSessionInner(
       throw changedError();
     }
     const connectionFingerprint = params.control.connectionFingerprint;
-    if (connectionFingerprint) {
-      params.onContinued?.({
-        connectionFingerprint,
-        ...codexUpstreamBaseline(boundThread, boundCatalogSessionId),
-      });
-    }
-    return { sessionKey: existing.key, disposition: "existing" };
+    return {
+      sessionKey: existing.key,
+      disposition: "existing",
+      ...(connectionFingerprint
+        ? {
+            upstream: {
+              connectionFingerprint,
+              ...codexUpstreamBaseline(boundThread, boundCatalogSessionId),
+            },
+          }
+        : {}),
+    };
   }
 
   const sourceThread = await params.control.readThread(params.threadId, true);
@@ -461,11 +474,14 @@ async function continueLocalCodexSessionInner(
   if (baselineThread.id !== boundThreadId) {
     throw new Error("Codex app-server returned a different thread than requested");
   }
-  params.onContinued?.({
-    connectionFingerprint,
-    ...codexUpstreamBaseline(baselineThread, boundCatalogSessionId),
-  });
-  return { sessionKey: adopted.key, disposition: "forked" };
+  return {
+    sessionKey: adopted.key,
+    disposition: "forked",
+    upstream: {
+      connectionFingerprint,
+      ...codexUpstreamBaseline(baselineThread, boundCatalogSessionId),
+    },
+  };
 }
 
 /** Creates one locked OpenClaw branch whose first harness run forks the Codex source. */
@@ -480,18 +496,22 @@ export async function continueLocalCodexSession(params: ContinueLocalCodexSessio
   const operationKey = sessionCatalogAdoptedSourceKey(params.agentId, sourceKey);
   // Memoization is agent-qualified while the native action lock is source-qualified,
   // so different agents serialize on one thread without joining one adoption result.
-  const current = continueOperations.get(operationKey);
-  if (current) {
-    return await current;
+  let operation = continueOperations.get(operationKey);
+  if (!operation) {
+    const run = async (control: CodexSessionCatalogControl) =>
+      await continueLocalCodexSessionInner({ ...params, control });
+    operation = catalogSessionActions.enqueue(sourceKey, async () =>
+      params.control.withPinnedConnection(run),
+    );
+    continueOperations.set(operationKey, operation);
   }
-  const run = async (control: CodexSessionCatalogControl) =>
-    await continueLocalCodexSessionInner({ ...params, control });
-  const operation = catalogSessionActions.enqueue(sourceKey, async () =>
-    params.control.withPinnedConnection(run),
-  );
-  continueOperations.set(operationKey, operation);
   try {
-    return await operation;
+    const { sessionKey, disposition, upstream } = await operation;
+    // The native work is shared, but each request needs its own upstream seed.
+    if (upstream) {
+      params.onContinued?.(upstream);
+    }
+    return { sessionKey, disposition };
   } finally {
     if (continueOperations.get(operationKey) === operation) {
       continueOperations.delete(operationKey);

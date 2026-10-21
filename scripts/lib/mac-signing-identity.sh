@@ -3,32 +3,16 @@
 ELEVATION_IDENTITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"
 
 select_identity() {
-  local preferred available first
+  local preferred available first identity_type
 
-  # Prefer a Developer ID Application cert.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Developer ID Application/ { print $2; exit }')"
-
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Next, try Apple Distribution.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Distribution/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Then, try Apple Development.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Development/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
+  for identity_type in "Developer ID Application" "Apple Distribution" "Apple Development"; do
+    preferred="$(security find-identity -p codesigning -v 2>/dev/null \
+      | awk -F'\"' -v identity_type="$identity_type" '$0 ~ identity_type { print $2; exit }')"
+    if [ -n "$preferred" ]; then
+      echo "$preferred"
+      return
+    fi
+  done
 
   # Fallback to the first valid signing identity.
   available="$(security find-identity -p codesigning -v 2>/dev/null \
