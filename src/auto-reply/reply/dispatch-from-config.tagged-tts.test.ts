@@ -107,7 +107,7 @@ it.each([
       "See you tomorrow.",
     ]);
     expect(delivered.filter((payload) => payload.mediaUrl)).toEqual([
-      expect.objectContaining({ mediaUrl: audioPath, audioAsVoice: true }),
+      expect.objectContaining({ mediaUrl: audioPath, audioAsVoice: true, spokenText: speech }),
     ]);
   },
 );

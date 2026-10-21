@@ -390,17 +390,18 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         throwIfDispatchOperationAborted();
         let ttsOnlyPayload: ReplyPayload | undefined;
         if (ttsSyntheticReply.mediaUrl || (deferFinalTtsText && ttsSyntheticReply.text?.trim())) {
+          const spokenText = ttsSyntheticReply.spokenText ?? ttsSyntheticReply.text;
           const ttsPayload = deferFinalTtsText
             ? ttsSyntheticReply
             : {
                 mediaUrl: ttsSyntheticReply.mediaUrl,
                 audioAsVoice: ttsSyntheticReply.audioAsVoice,
-                spokenText: deferredTtsTextPending,
+                spokenText,
                 trustedLocalMedia: true,
               };
           ttsOnlyPayload =
             !deferFinalTtsText && turnLedger.resolveTerminalDelivery() === "delivered"
-              ? markReplyPayloadAsTtsSupplement(ttsPayload, deferredTtsTextPending, {
+              ? markReplyPayloadAsTtsSupplement(ttsPayload, spokenText, {
                   visibleTextAlreadyDelivered: true,
                 })
               : ttsPayload;
