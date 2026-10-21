@@ -14,6 +14,7 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
+import { sendNodeWebSocketEvent } from "../node-event-send.js";
 import {
   SerializedGatewayFrame,
   SerializedJsonArray,
@@ -63,7 +64,7 @@ afterEach(async () => {
 });
 
 it.each([false, {}, { serverMaxWindowBits: 10 }] as const)(
-  "counts frame and wire bytes with compression %j",
+  "counts raw frame sizes and actual payload bytes for node and direct events with compression %j",
   async (perMessageDeflate) => {
     const observations: DiagnosticEventPayload[] = [];
     setDiagnosticsEnabledForProcess(true);
@@ -77,7 +78,7 @@ it.each([false, {}, { serverMaxWindowBits: 10 }] as const)(
       const threshold = GATEWAY_PER_MESSAGE_DEFLATE.threshold;
       const envelope = { type: "event", event: "chat", payload: "" };
       const envelopeLength = JSON.stringify(envelope).length;
-      const frames = [threshold - 1, threshold + 1, threshold + 2].map((bytes) =>
+      const frames = [threshold + 2, threshold - 1, threshold + 1].map((bytes) =>
         Buffer.from(JSON.stringify({ ...envelope, payload: "x".repeat(bytes - envelopeLength) })),
       );
       const before = request.socket.bytesWritten;
@@ -89,8 +90,9 @@ it.each([false, {}, { serverMaxWindowBits: 10 }] as const)(
       });
       const ping = once(peer, "ping");
       transport.batchWrites?.();
+      expect(sendNodeWebSocketEvent(transport, "chat", () => frames[0]!.toString())).toBe(true);
       const sent = Promise.all(
-        frames.map(
+        frames.slice(1).map(
           (frame) =>
             new Promise<void>((resolve, reject) => {
               const wireBytes = transport.send(frame, { binary: false }, (error) =>
