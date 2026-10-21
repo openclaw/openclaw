@@ -60,6 +60,12 @@ describe("connect setup-code replay", () => {
       const on = vi.spyOn(process, "on");
       const previousExitCode = process.exitCode;
       let running: Promise<void> | undefined;
+      const connected = Promise.withResolvers<void>();
+      fixture.connected.mockImplementation((value: unknown) => {
+        if (value) {
+          connected.resolve();
+        }
+      });
       // Ignore earlier import-time listeners: the foreground runner registers its
       // shutdown handler last, before opening the connection.
       const stop = () => on.mock.calls.findLast(([event]) => event === "SIGTERM")?.[1]?.("SIGTERM");
@@ -113,13 +119,13 @@ describe("connect setup-code replay", () => {
             );
           });
         });
-        let returned = false;
-        running = runConnect(["--target-file", targetFile, "--ephemeral"]).finally(() => {
-          returned = true;
-        });
-        await vi.waitFor(() => {
-          expect(returned || fixture.connected.mock.calls.some(([value]) => value)).toBe(true);
-        });
+        running = runConnect(["--target-file", targetFile, "--ephemeral"]);
+        await Promise.race([
+          connected.promise,
+          running.then(() => {
+            throw new Error("connect returned before the node connected");
+          }),
+        ]);
         expect(fixture.runtime.error).not.toHaveBeenCalled();
         expect(fixture.connected).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -138,6 +144,7 @@ describe("connect setup-code replay", () => {
       } finally {
         stop();
         await running;
+        fixture.connected.mockReset();
         for (const socket of server.clients) {
           socket.terminate();
         }
