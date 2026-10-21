@@ -40,7 +40,7 @@ function normalizeThinkingLevel(raw?: string | null) {
   return undefined;
 }
 
-function fakeApi(overrides: Record<string, unknown> = {}): LlmTaskApi {
+function fakeApi(): LlmTaskApi {
   return {
     id: "llm-task",
     name: "llm-task",
@@ -67,7 +67,6 @@ function fakeApi(overrides: Record<string, unknown> = {}): LlmTaskApi {
     },
     logger: { debug() {}, info() {}, warn() {}, error() {} },
     registerTool() {},
-    ...overrides,
   } as unknown as LlmTaskApi;
 }
 
@@ -75,12 +74,6 @@ function mockIsolatedCompletionJson(payload: unknown) {
   complete.mockImplementationOnce(async (params) =>
     completionResult(params, JSON.stringify(payload)),
   );
-}
-
-async function executeIsolatedCompletion(input: Record<string, unknown>, api = fakeApi()) {
-  const tool = createLlmTaskTool(api);
-  await tool.execute("id", input);
-  return firstIsolatedCompletionCall();
 }
 
 function firstIsolatedCompletionCall() {
@@ -118,40 +111,28 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("validates caller schemas with repeated $id independently across calls", async () => {
-    mockIsolatedCompletionJson({ foo: "bar" });
-    mockIsolatedCompletionJson({ count: 1 });
-
-    await expect(
-      tool.execute("id", {
-        prompt: "return foo",
-        schema: {
-          $id: "https://example.test/llm-task-result",
-          type: "object",
-          properties: { foo: { type: "string" } },
-          required: ["foo"],
-          additionalProperties: false,
-        },
-      }),
-    ).resolves.toEqual({
-      content: [{ type: "text", text: '{\n  "foo": "bar"\n}' }],
-      details: { json: { foo: "bar" }, provider: "openai", model: "gpt-5.5" },
-    });
-
-    await expect(
-      tool.execute("id", {
-        prompt: "return count",
-        schema: {
-          $id: "https://example.test/llm-task-result",
-          type: "object",
-          properties: { count: { type: "number" } },
-          required: ["count"],
-          additionalProperties: false,
-        },
-      }),
-    ).resolves.toEqual({
-      content: [{ type: "text", text: '{\n  "count": 1\n}' }],
-      details: { json: { count: 1 }, provider: "openai", model: "gpt-5.5" },
-    });
+    for (const [key, value, type, text] of [
+      ["foo", "bar", "string", '{\n  "foo": "bar"\n}'],
+      ["count", 1, "number", '{\n  "count": 1\n}'],
+    ] as const) {
+      const json = { [key]: value };
+      mockIsolatedCompletionJson(json);
+      await expect(
+        tool.execute("id", {
+          prompt: `return ${key}`,
+          schema: {
+            $id: "https://example.test/llm-task-result",
+            type: "object",
+            properties: { [key]: { type } },
+            required: [key],
+            additionalProperties: false,
+          },
+        }),
+      ).resolves.toEqual({
+        content: [{ type: "text", text }],
+        details: { json, provider: "openai", model: "gpt-5.5" },
+      });
+    }
   });
 
   it("throws on invalid json", async () => {
@@ -166,12 +147,12 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("accepts model overrides that already include the selected provider prefix", async () => {
-    const call = await executeIsolatedCompletion({
+    await tool.execute("id", {
       prompt: "x",
       provider: "anthropic",
       model: "anthropic/claude-4-sonnet",
     });
-    expect(call.model).toBe("anthropic/claude-4-sonnet");
+    expect(firstIsolatedCompletionCall().model).toBe("anthropic/claude-4-sonnet");
   });
 
   it("throws on invalid thinking level", async () => {
