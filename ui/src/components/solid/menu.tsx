@@ -18,6 +18,7 @@ import { registerMenuShortcuts } from "../menu-shortcuts.ts";
 import type { OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed, registryFor } from "../overlay-registry.ts";
+import { Icon } from "./icon.tsx";
 import { MENU_FORM_CONTROL_SELECTOR, useMenuMachine, type MenuBinding } from "./menu-machine.ts";
 import { useOverlayControl } from "./overlay-control.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
@@ -660,7 +661,7 @@ export function Menu(props: BranchProps): JSX.Element {
         <span class="oc-menu-item__label">{props.trigger ?? props.label}</span>
         <Show when={initialIdentity.parent}>
           <span class="oc-menu-item__submenu-icon" aria-hidden="true">
-            ›
+            <Icon name="chevronRight" />
           </span>
         </Show>
       </button>

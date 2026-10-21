@@ -405,7 +405,9 @@ suite.define(() => {
     const shellControls = page.locator(
       ".macos-titlebar-controls button:visible, .sidebar-rail__bottom button:visible",
     );
-    const panelControls = page.locator(".chat-pane__actions button:visible");
+    const panelControls = page.locator(
+      '[data-region-header="side"] .side-panel__actions button:visible',
+    );
     const shellBoxes = await boxes(shellControls);
     const panelBoxes = await boxes(panelControls);
     expect(shellBoxes.length).toBeGreaterThan(0);

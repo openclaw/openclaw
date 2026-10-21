@@ -80,10 +80,7 @@ export async function setClawHubArchiveEntryMode(
 }
 
 export function createLoggerSpies(): Record<"info" | "warn", Mock<(message: string) => void>> {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-  };
+  return { info: vi.fn(), warn: vi.fn() };
 }
 
 export function clawHubPackageDetail(overrides: Record<string, unknown> = {}) {
@@ -108,12 +105,9 @@ type MockWithCalls = {
   };
 };
 
-export type PackageLookupCall = {
-  artifact?: string;
-  baseUrl?: string;
-  name?: string;
-  version?: string;
-};
+export type PackageLookupCall = Partial<
+  Record<"artifact" | "baseUrl" | "name" | "version", string>
+>;
 
 export type ArchiveInstallCall = {
   archivePath?: string;
@@ -127,19 +121,9 @@ export type ArchiveInstallCall = {
   trustedSourceLinkedOfficialInstall?: boolean;
 };
 
-type InstallSuccess = {
-  clawhub?: Record<string, unknown>;
-  ok: true;
-  packageName?: string;
-  pluginId?: string;
-  version?: string;
-  warning?: string;
-};
-
-type InstallFailure = {
-  code?: string;
-  error: string;
-  ok: false;
+type InstallResult = Awaited<ReturnType<typeof import("./clawhub.js").installPluginFromClawHub>>;
+type InstallSuccess = Extract<InstallResult, { ok: true }>;
+type InstallFailure = Extract<InstallResult, { ok: false }> & {
   version?: string;
   warning?: string;
 };
@@ -170,21 +154,23 @@ export function expectInstallFailureFields(
   code: ClawHubInstallErrorCode,
   error: string,
 ) {
-  const failure = expectInstallFailure(result);
-  expect(failure.code).toBe(code);
-  expect(failure.error).toBe(error);
+  expect(result).toMatchObject({ ok: false, code, error });
 }
 
 export function expectSuccessfulClawHubInstall(
   result: unknown,
   expected: { clawhubChannel?: string } = {},
 ) {
-  const success = expectInstallSuccess(result);
-  expect(success.pluginId).toBe("demo");
-  expect(success.version).toBe("2026.3.22");
-  expect(success.clawhub?.source).toBe("clawhub");
-  expect(success.clawhub?.clawhubPackage).toBe("demo");
-  expect(success.clawhub?.clawhubFamily).toBe("code-plugin");
-  expect(success.clawhub?.clawhubChannel).toBe(expected.clawhubChannel ?? "official");
-  expect(success.clawhub?.integrity).toBe(DEMO_ARCHIVE_INTEGRITY);
+  expect(result).toMatchObject({
+    ok: true,
+    pluginId: "demo",
+    version: "2026.3.22",
+    clawhub: {
+      source: "clawhub",
+      clawhubPackage: "demo",
+      clawhubFamily: "code-plugin",
+      clawhubChannel: expected.clawhubChannel ?? "official",
+      integrity: DEMO_ARCHIVE_INTEGRITY,
+    },
+  });
 }

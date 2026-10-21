@@ -6,9 +6,17 @@ import type {
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import type { ChatSessionProgressProps } from "./chat-composer-types.ts";
+import type { ChatOutputsDesktopProps } from "./chat-outputs.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
 type ChatDetailsWorkspace = { root: string | null; label: string | null; branch?: string };
+
+/** Published assistant-artifact/dashboard facts and real destination/icon operations. */
+export type ChatDetailsOutputs = ChatOutputsDesktopProps;
+export type ChatDetailsOutputsIcons = Pick<
+  ChatDetailsOutputs,
+  "renderArtifactIcon" | "renderViewAllIcon"
+>;
 
 // Both the composing view and Details consume this contract; child components
 // must not import their parent renderer to recover accepted pane facts.
@@ -22,7 +30,11 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "subagentSessionsRead"
     | "onOpenSubagent"
     | "onOpenSubagents"
+    | "onScrollPortRef"
   > & {
+    outputs?: ChatDetailsOutputs;
+    /** Stable per native resource identity; acquire only while Details is presented. */
+    retainOutputs?: () => (() => void) | undefined;
     onSessionSelect?: (sessionKey: string) => void;
     detailsWorkspace?: ChatDetailsWorkspace;
     onHideTaskProgress?: () => void;

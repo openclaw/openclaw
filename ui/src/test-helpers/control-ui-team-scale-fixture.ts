@@ -1,5 +1,4 @@
 import type { Buffer } from "node:buffer";
-import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/ext-apps/app-bridge";
 import type {
   SessionCatalog,
   SessionsCatalogHostEvent,
@@ -24,6 +23,11 @@ import {
   createTeamScalePeople,
   TEAM_SCALE_SELF_INSTANCE_ID,
 } from "./control-ui-team-scale-people.ts";
+import {
+  dashboardMcpAppHtml,
+  dashboardWidgetHtml,
+  widgetHtml,
+} from "./control-ui-team-scale-widget-html.ts";
 
 export { TEAM_SCALE_SELF_INSTANCE_ID };
 
@@ -76,41 +80,9 @@ type FixtureOptions = {
   largeSnapshot?: boolean;
   transcriptMessages?: number;
   dashboardMcpApp?: { font: Buffer };
+  /** Opt into a scripted HTML dashboard with an independently fetched web font. */
+  dashboardWidgetFontUrl?: string;
 };
-
-function dashboardMcpAppHtml(stylesheetUrl: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Team dashboard</title>
-<link rel="stylesheet" href="${stylesheetUrl}"></head><body>
-<h2>Team metric 1</h2><p>Synthetic dashboard activity</p><main aria-label="Metric charts"></main>
-<script>
-const send = (message) => parent.postMessage({ jsonrpc: "2.0", ...message }, "*");
-addEventListener("message", ({ source, data }) => {
-  if (source !== parent) return;
-  if (data.id === 1 && data.result) send({ method: "ui/notifications/initialized" });
-  if (data.method === "ui/resource-teardown") send({ id: data.id, result: {} });
-});
-send({ id: 1, method: "ui/initialize", params: {
-  appInfo: { name: "Synthetic team dashboard", version: "1.0.0" }, appCapabilities: {},
-  protocolVersion: ${JSON.stringify(LATEST_PROTOCOL_VERSION)}
-} });
-const charts = document.querySelector("main");
-for (let index = 0; index < 4; index++) {
-  const chart = document.createElement("section");
-  const values = Array.from({ length: 12 }, (_, point) => 20 + (point * 17 + index * 23) % 75);
-  chart.innerHTML = '<h3>Metric ' + (index + 1) + '</h3><svg role="img" aria-label="Synthetic chart ' +
-    (index + 1) + '" viewBox="0 0 240 100"><polyline fill="none" stroke="currentColor" stroke-width="3" points="' +
-    values.map((value, point) => (point * 20) + ',' + (100 - value)).join(' ') + '"/></svg>';
-  charts.append(chart);
-}
-</script></body></html>`;
-}
-
-function widgetHtml(index: number) {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Team metric ${index + 1}</title>
-<style>:root{color-scheme:dark light;font-family:system-ui}body{margin:0;padding:20px}h2{font-size:18px}progress{width:100%}</style></head>
-<body><h2>Team metric ${index + 1}</h2><p>Synthetic completed work: ${60 + index}%</p>
-<progress value="${60 + index}" max="100"></progress><p>All fixture systems are available.</p></body></html>`;
-}
 
 /** One deterministic inventory shared by browser benchmarks and focused UI proofs. */
 export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
@@ -310,7 +282,12 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   });
   const boardPath = `/__openclaw__/board/${encodeURIComponent(selectedSessionKey)}/team-overview/index.html`;
   if (!options.dashboardMcpApp) {
-    assets.set(boardPath, { contentType: "text/html", body: widgetHtml(0) });
+    assets.set(boardPath, {
+      contentType: "text/html",
+      body: options.dashboardWidgetFontUrl
+        ? dashboardWidgetHtml(options.dashboardWidgetFontUrl)
+        : widgetHtml(0),
+    });
   }
   const sandbox = { sandboxUrl: options.sandboxUrl, sandboxPort: options.sandboxPort };
   const dashboardAssetPath = "/__openclaw__/fixture-dashboard";
@@ -413,6 +390,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "cron.list",
       "cron.status",
       ...(options.dashboardMcpApp ? ["board.widget.appView", "mcp.app.view"] : []),
+      ...(options.dashboardWidgetFontUrl ? ["mcp.app.discover"] : []),
       ...(duplicateReads?.featureMethods ?? []),
     ],
     methodResponses: {
@@ -420,6 +398,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         ? { "session.members.listEvidence": { sessionKey: selectedSessionKey, ...sharingMembers } }
         : {}),
       "question.list": { questions: [] },
+      ...(options.dashboardWidgetFontUrl ? { "mcp.app.discover": { servers: [] } } : {}),
       ...(largeHistory ? { "chat.startup": largeHistory, "chat.history": largeHistory } : {}),
       ...duplicateReads?.methodResponses,
       "agents.list": agents,

@@ -217,7 +217,6 @@ describe("terminal resolution", () => {
       taskKind: "image_generation",
       requesterSessionKey: "agent:main:telegram:group:-100",
       requesterAgentId: "main",
-      createdAt: Date.now(),
       status: "running",
     });
     return makeEmbeddedRunnerAttempt({

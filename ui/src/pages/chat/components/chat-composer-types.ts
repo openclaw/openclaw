@@ -36,7 +36,6 @@ import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
-import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
 import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.tsx";
@@ -89,6 +88,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
   getTranscriptElement?: () => HTMLElement | null;
   onComposerShellRef?: (element: HTMLElement) => void | (() => void);
+  onComposerFloatRef?: (element: HTMLElement) => void | (() => void);
   /** Provisional/deleted previews must not mount session-scoped extension controllers. */
   sessionAdmitted?: boolean;
   connected: boolean;
@@ -115,7 +115,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   runId?: string | null;
   /** The pane scopes Gateway questions to this conversation's agent and session. */
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
-  asyncQuestions?: AsyncQuestionPresentation;
   stream: string | null;
   queue: ChatQueueItem[];
   draft: string;
@@ -216,10 +215,6 @@ export type ChatComposerState = {
   presentation: {
     dictationError: string | null;
     goalExpandedId: string | null;
-    activeQuestionKey: string | null;
-    gatewayQuestionIds: Set<string>;
-    asyncQuestionIds: Set<string>;
-    questionCollapsed: boolean;
   };
   updatePresentation: StoreSetter<ChatComposerState["presentation"]>;
   questionTakeoverActive: boolean;

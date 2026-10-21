@@ -3,11 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { pluginLifecycleError } from "../gateway/server-methods/plugins-lifecycle-error.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.types.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { PluginInstallPersistedError } from "../plugins/lifecycle.js";
+import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -28,6 +32,8 @@ import {
   reportClawHubPluginInstallTelemetryMock,
   recordHookInstallMock,
   recordPluginInstallMock,
+  pluginLifecycleGatewayMock,
+  resolvePluginLifecycleGatewayMock,
   resetPluginsCliTestState,
   runPluginsCommand,
   runtimeErrors,
@@ -918,5 +924,190 @@ describe("plugins cli install", () => {
     ).rejects.toThrow("__exit__:1");
     expect(runtimeErrors.at(-1)).toContain("--no-enable is only supported for plugins");
     expectNoCalls(installNpmHooks, configWriteMock);
+  });
+
+  describe("npm hook-pack install records", () => {
+    const ALPHA_INSTALL_PATH = installedPluginRoot("/tmp/openclaw", "alpha");
+    const resolution = {
+      name: "@acme/plugin-alpha",
+      version: "1.2.3",
+      resolvedSpec: "@acme/plugin-alpha@1.2.3",
+    };
+    const missingFields = {
+      resolvedName: undefined,
+      resolvedVersion: undefined,
+      resolvedSpec: undefined,
+      integrity: undefined,
+      shasum: undefined,
+      resolvedAt: undefined,
+    };
+    const resolvedFields = {
+      ...missingFields,
+      resolvedName: "@acme/plugin-alpha",
+      resolvedVersion: "1.2.3",
+      resolvedSpec: "@acme/plugin-alpha@1.2.3",
+    };
+    const pinOutput = () =>
+      logs.filter((line) =>
+        /Pinned npm install record|Could not resolve exact npm version/.test(line),
+      );
+
+    it.each([
+      {
+        name: "pins the install record to the resolved spec and logs a notice",
+        raw: "@acme/plugin-alpha@latest",
+        pin: true,
+        resolution,
+        spec: "@acme/plugin-alpha@1.2.3",
+        fields: resolvedFields,
+        message: "Pinned npm install record to @acme/plugin-alpha@1.2.3.",
+      },
+      {
+        name: "keeps the requested spec and warns when pin resolution is missing",
+        raw: "@acme/plugin-alpha@latest",
+        pin: true,
+        resolution: undefined,
+        spec: "@acme/plugin-alpha@latest",
+        fields: missingFields,
+        message: theme.warn(
+          "Could not resolve exact npm version for --pin; storing original npm spec.",
+        ),
+      },
+      {
+        name: "keeps the requested selector and metadata when pin is disabled",
+        raw: "@acme/plugin-alpha",
+        pin: false,
+        resolution,
+        spec: "@acme/plugin-alpha",
+        fields: resolvedFields,
+        message: undefined,
+      },
+    ])("$name", async ({ raw, pin, resolution: npmResolution, spec, fields, message }) => {
+      installNpm.mockResolvedValue({
+        ok: false,
+        error: "package.json missing openclaw.extensions",
+        code: "missing_openclaw_extensions",
+      });
+      installNpmHooks.mockResolvedValue({
+        ok: true,
+        hookPackId: "alpha",
+        hooks: ["alpha-hook"],
+        targetDir: ALPHA_INSTALL_PATH,
+        version: "1.2.3",
+        npmResolution,
+      });
+      configWriteMock.mockImplementation(async () => expect(pinOutput()).toEqual([]));
+
+      await installAcknowledged(`npm:${raw}`, ...(pin ? ["--pin"] : []));
+
+      expect(recordHookInstallMock).toHaveBeenCalledOnce();
+      expect(recordHookInstallMock.mock.calls[0]?.[0]).toEqual({
+        hookId: "alpha",
+        hooks: ["alpha-hook"],
+        source: "npm",
+        spec,
+        installPath: ALPHA_INSTALL_PATH,
+        version: "1.2.3",
+        ...fields,
+      });
+      expect(configWriteMock).toHaveBeenCalledOnce();
+      expect(pinOutput()).toEqual(message ? [message] : []);
+    });
+  });
+
+  describe("Gateway plugin installation outcomes", () => {
+    function wireError(cause: unknown) {
+      const error = pluginLifecycleError(cause, { entered: true });
+      return Object.assign(new Error(error.message), { details: error.details });
+    }
+
+    beforeEach(() => {
+      resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+    });
+
+    it.each(["lost reply", "saved install", "unclassified failure"])(
+      "does not turn %s into permission to retry locally or probe hooks",
+      async (phase) => {
+        const cause = new ManagedPluginLifecycleError("source rejected", {
+          installRejected: true,
+          code: "missing_openclaw_extensions",
+        });
+        const error =
+          phase === "lost reply"
+            ? new Error("connection closed after send")
+            : wireError(
+                phase === "saved install"
+                  ? new PluginInstallPersistedError("demo", cause)
+                  : new Error("disk unavailable"),
+              );
+        pluginLifecycleGatewayMock.mockRejectedValue(error);
+
+        await expect(installAcknowledged("npm:demo@1.2.3")).rejects.toThrow("__exit__:1");
+
+        expect(runtimeErrors.at(-1)).toContain(
+          phase === "saved install" ? "installation is saved" : error.message,
+        );
+        expect(pluginLifecycleGatewayMock).toHaveBeenCalledExactlyOnceWith(
+          "plugins.install",
+          expect.objectContaining({ source: "npm", spec: "demo@1.2.3" }),
+          expect.any(Function),
+        );
+        expectNoCalls(installNpm, installPath, installNpmHooks, installPathHooks);
+      },
+    );
+
+    it("preserves the install owner's selected artifact when permitting hook fallback", async () => {
+      const source = {
+        source: "npm",
+        spec: "selected-artifact@2.3.4",
+        expectedIntegrity: "sha512-reviewed",
+      } as const;
+      findBundledPluginSourceMock.mockReturnValue(undefined);
+      pluginLifecycleGatewayMock.mockRejectedValue(
+        wireError(
+          new ManagedPluginLifecycleError("not a plugin", {
+            installRejected: true,
+            code: "missing_openclaw_extensions",
+            installSource: source,
+          }),
+        ),
+      );
+
+      await expect(installAcknowledged("wecom-openclaw-plugin")).rejects.toThrow("__exit__:1");
+
+      expect(pluginLifecycleGatewayMock).toHaveBeenCalledExactlyOnceWith(
+        "plugins.install",
+        expect.objectContaining({ source: "official", pluginId: "wecom-openclaw-plugin" }),
+        expect.any(Function),
+      );
+      expect(installNpmHooks).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ spec: source.spec, expectedIntegrity: source.expectedIntegrity }),
+      );
+      expect(runtimeErrors.at(-1)).toContain("not a plugin");
+      expectNoCalls(installNpm, installPath, installPathHooks);
+    });
+
+    it("preserves install-only intent and the Gateway's disabled result", async () => {
+      const plugin = {
+        id: "demo",
+        name: "Demo",
+        installed: true,
+        enabled: false,
+        state: "disabled",
+      };
+      const runtime = { operationId: "installed-demo", generation: 7, pluginIds: ["demo"] };
+      pluginLifecycleGatewayMock.mockResolvedValue({ plugin, runtime });
+
+      await installAcknowledged("npm:demo@1.2.3", "--no-enable");
+
+      expect(pluginLifecycleGatewayMock).toHaveBeenCalledExactlyOnceWith(
+        "plugins.install",
+        expect.objectContaining({ source: "npm", spec: "demo@1.2.3", enable: false }),
+        expect.any(Function),
+      );
+      expect(logs).toContain("Installed plugin: demo");
+      expect(logs).toContain("Applied in Gateway generation 7.");
+      expectNoCalls(installNpm, installNpmHooks);
+    });
   });
 });

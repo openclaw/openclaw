@@ -9,7 +9,6 @@ import "../../styles/agent-row-chip.css";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
-  createEffect,
   createMemo,
   createSignal,
   createStore,
@@ -19,9 +18,9 @@ import {
   Switch,
   For,
 } from "solid-js";
-import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
@@ -181,10 +180,13 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
   const activityExpiry = createPresenceActivityLifecycle(presence, () =>
     setPresentationTime(Date.now()),
   );
-  createEffect(pageRevision, () => activityExpiry.sync());
   onSettled(() => {
+    const stop = pageProps.page.subscribe(() => activityExpiry.sync());
     activityExpiry.connect();
-    return () => activityExpiry.disconnect();
+    return () => {
+      stop();
+      activityExpiry.disconnect();
+    };
   });
   function LiveActivityView(liveProps: { basePath: string; entries: readonly ActivityEntry[] }) {
     function StatusFilter(props: { status: ActivityStatus }) {
@@ -479,15 +481,12 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
 
   return (
     <Show when={Boolean(route() && location())} fallback={<LoadingState />}>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true, activityPage: true }}>
-        <section class="content-header">
-          <div>
-            <div class="page-title">{titleForRoute("activity")}</div>
-            <Show when={route()?.mode !== "live"}>
-              <div class="page-sub">{t("subtitles.activity")}</div>
-            </Show>
-          </div>
-        </section>
+      <ShellLayoutBoundary traits={{ activityPage: true }}>
+        <HubPageHeader
+          active="activity"
+          wide
+          docsUrl="https://docs.openclaw.ai/web/control-ui/settings#activity-tab"
+        />
       </ShellLayoutBoundary>
       <SettingsWorkspace fillHeight>
         <Show when={route()?.mode !== "run"}>

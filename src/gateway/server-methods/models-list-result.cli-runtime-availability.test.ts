@@ -109,12 +109,14 @@ afterEach(() => {
 });
 
 it.each([
-  [true, false, false, true, undefined],
-  [false, true, false, false, "missing-auth"],
-  [true, false, true, false, "missing-auth"],
+  ["api_key", false, false, true, undefined],
+  [{ source: "native", mode: "oauth" }, false, false, true, undefined],
+  [undefined, true, false, false, "missing-auth"],
+  ["api_key", false, true, false, "missing-auth"],
+  [{ source: "native", mode: "oauth" }, false, true, false, "missing-auth"],
 ] as const)(
-  "reports native login=%s, provider key=%s, plugin disabled=%s",
-  async (authenticated, providerApiKey, pluginDisabled, available, reason) => {
+  "reports CLI auth=%j, provider key=%s, plugin disabled=%s",
+  async (authMode, providerApiKey, pluginDisabled, available, reason) => {
     vi.stubEnv("ANTHROPIC_API_KEY", providerApiKey ? "test-key" : "");
     const result = await listModels({
       catalog: [],
@@ -122,7 +124,7 @@ it.each([
       cfg: pluginDisabled
         ? { ...config, plugins: { entries: { anthropic: { enabled: false } } } }
         : config,
-      preparedAuthModes: authenticated ? { "claude-cli": "api_key" } : {},
+      preparedAuthModes: authMode ? { "claude-cli": authMode } : {},
       catalogComplete: true,
       view: "configured",
       includeDefaultModels: false,

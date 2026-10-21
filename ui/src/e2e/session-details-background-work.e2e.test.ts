@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionProcessSummary } from "../../../packages/gateway-protocol/src/schema/session-processes.js";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -238,6 +239,15 @@ suite.define(() => {
               .poll(() => pane.locator(".chat-details").getAttribute("role"))
               .toBe(width === 1728 ? "complementary" : "dialog");
             await openChatDetails(pane);
+            if (width === 390) {
+              const mobileHost = pane.locator(".chat-mobile-host");
+              await mobileHost
+                .locator(".chat-mobile-host__header")
+                .getByRole("button", { name: "Expand Side panel", exact: true })
+                .click();
+              await expect.poll(() => mobileHost.getAttribute("data-mode")).toBe("expanded");
+              await waitForLayoutSettled(page, ".chat-mobile-host, .chat-details");
+            }
             const controls = details.locator(
               ".chat-subagent-activity__row, .chat-details__process, .chat-details__more, .chat-details__navigation",
             );

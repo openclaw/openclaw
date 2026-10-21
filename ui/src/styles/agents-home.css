@@ -1,14 +1,5 @@
 .agents-home {
-  padding: 0 24px 24px;
-}
-
-.agents-home__header .content-header {
-  max-height: none;
-  padding: 4px 24px 16px;
-}
-
-.agents-home__header .page-header-actions {
-  flex-shrink: 0;
+  padding-bottom: 24px;
 }
 
 .agents-home__card {
@@ -247,18 +238,7 @@
 
 @media (max-width: 560px) {
   .agents-home {
-    padding: 0 16px 16px;
-  }
-
-  .agents-home__header .content-header {
-    flex-direction: column;
-    align-items: stretch;
-    padding-inline: 16px;
-  }
-
-  .agents-home__header .page-header-actions {
-    justify-content: flex-start;
-    flex-wrap: wrap;
+    padding-bottom: 16px;
   }
 
   .agents-home__explore-toolbar {

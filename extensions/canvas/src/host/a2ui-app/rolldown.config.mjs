@@ -17,7 +17,8 @@ const createConfig = (input, file) => ({
   input: path.resolve(here, input),
   platform: "browser",
   experimental: { attachDebugInfo: "none" },
-  treeshake: false,
+  // The v0.9 barrel also exports Lit elements. Only its headless catalog APIs are used.
+  treeshake: input === "bootstrap-v0.9.jsx",
   plugins: [
     {
       name: "canvas-solid",

@@ -301,12 +301,6 @@ vi.mock("../config-update.js", () => ({
   updateMatrixAccountConfig: vi.fn((cfg: unknown) => cfg),
 }));
 
-vi.mock("../device-health.js", () => ({
-  summarizeMatrixDeviceHealth: vi.fn(() => ({
-    staleOpenClawDevices: [],
-  })),
-}));
-
 vi.mock("../profile.js", () => ({
   syncMatrixOwnProfile: vi.fn(async () => ({
     displayNameUpdated: false,

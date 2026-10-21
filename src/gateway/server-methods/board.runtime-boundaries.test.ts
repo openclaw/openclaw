@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -5,7 +6,6 @@ import { GatewayClient } from "../../../packages/gateway-client/src/index.js";
 import type { BoardSnapshot, RequestFrame } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -122,7 +122,6 @@ describe("board gateway runtime boundaries", () => {
 
   beforeEach(() => {
     resetGatewayWorkAdmission();
-    resetBoardEventNoticeStateForTest();
     resetSystemEventsForTest();
     reviewWidgetApproval.mockReset();
     sessionList.mockReset();
@@ -457,24 +456,25 @@ describe("board gateway runtime boundaries", () => {
   });
 
   it("caps board.event payloads and preserves Unicode at the notice boundary", async () => {
+    const sessionKey = `notice-${randomUUID()}`;
     const { invoke } = createHarness();
-    await invoke("board.widget.put", htmlWidget("counter"));
+    await invoke("board.widget.put", { ...htmlWidget("counter"), sessionKey });
     const clippedCodeUnits = 500 - "[dashboard] ".length - " on widget counter".length - 1;
     // JSON's opening quote places the emoji across the legacy slice boundary.
     const payload = `${"x".repeat(clippedCodeUnits - 2)}😀tail`;
-    await invoke("board.event", { sessionKey: "session", widget: "counter", payload });
-    const unicodeNotice = peekSystemEvents("agent:main:session")[0] ?? "";
+    await invoke("board.event", { sessionKey, widget: "counter", payload });
+    const unicodeNotice = peekSystemEvents(`agent:main:${sessionKey}`)[0] ?? "";
     expect(unicodeNotice.length).toBeLessThanOrEqual(500);
     expect(unicodeNotice).not.toContain(String.fromCharCode(0xd83d));
     expect(unicodeNotice).toMatch(/… on widget counter$/u);
     await invoke("board.event", {
-      sessionKey: "session",
+      sessionKey,
       widget: "counter",
       payload: "x".repeat(1_000),
     });
-    expect(peekSystemEvents("agent:main:session")[1]).toHaveLength(500);
+    expect(peekSystemEvents(`agent:main:${sessionKey}`)[1]).toHaveLength(500);
     const oversized = await invoke("board.event", {
-      sessionKey: "session",
+      sessionKey,
       widget: "counter",
       payload: "x".repeat(8_193),
     });

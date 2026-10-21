@@ -73,7 +73,6 @@ it.each(["claude-cli", "anthropic"])(
       .mockResolvedValueOnce(completion);
     const harness = createHarness({
       config,
-      utilityModelRef: config.agents.defaults.utilityModel,
       prepareModel: vi.fn(defaultPrepareModel),
       completeModel: vi.fn(defaultCompleteModel),
     });

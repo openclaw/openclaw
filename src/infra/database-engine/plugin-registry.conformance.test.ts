@@ -3,12 +3,27 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as configIO from "../../config/io.factory.js";
-import { withPluginLifecycleLeaseAsync } from "../../plugins/plugin-lifecycle-lease.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import {
+  withPluginLifecycleLeaseAsync,
+  type PluginMetadataLeaseContext,
+} from "../../plugins/plugin-lifecycle-lease.js";
 import { readPluginMetadataStateRow } from "../../plugins/plugin-metadata-state-worker.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
+const retained = { retained: { source: "archive" as const, version: "1.0.0" } };
+const publish =
+  (records: Record<string, PluginInstallRecord> = retained, warn?: (message: string) => void) =>
+  (lease: PluginMetadataLeaseContext) =>
+    refreshPluginRegistryAfterConfigMutation({
+      reason: "source-changed",
+      lease,
+      installRecords: records,
+      invalidateRuntimeCache: false,
+      logger: { warn },
+    });
 
 describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
   "%s post-ready plugin registry",
@@ -37,22 +52,11 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       const warn = vi.fn();
       observation.subscribe(observe);
       try {
-        await withPluginLifecycleLeaseAsync({ processBound: true }, (lease) =>
-          refreshPluginRegistryAfterConfigMutation({
-            reason: "source-changed",
-            lease,
-            installRecords: { retained: { source: "archive", version: "1.0.0" } },
-            invalidateRuntimeCache: false,
-            logger: { warn },
-          }),
-        );
+        await withPluginLifecycleLeaseAsync({ processBound: true }, publish(retained, warn));
         const row = await readPluginMetadataStateRow("installed-index", {});
         expect(row).toBeDefined();
         expect(JSON.parse(row!.value_json)).toMatchObject({
-          index: {
-            refreshReason: "source-changed",
-            installRecords: { retained: { source: "archive", version: "1.0.0" } },
-          },
+          index: { refreshReason: "source-changed", installRecords: retained },
         });
         expect(warn).not.toHaveBeenCalled();
         expect(statements).toEqual([]);
@@ -62,14 +66,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
     });
 
     it("rejects authority lost during config preparation without replacing the durable registry", async () => {
-      await withPluginLifecycleLeaseAsync({}, (lease) =>
-        refreshPluginRegistryAfterConfigMutation({
-          reason: "source-changed",
-          lease,
-          installRecords: { retained: { source: "archive", version: "1.0.0" } },
-          invalidateRuntimeCache: false,
-        }),
-      );
+      await withPluginLifecycleLeaseAsync({}, publish());
       const before = await readPluginMetadataStateRow("installed-index", {});
       expect(before).toBeDefined();
       const refusal = new Error("Post-ready plugin owner revoked during config preparation");
@@ -97,14 +94,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
               }
             },
           },
-          (lease) =>
-            refreshPluginRegistryAfterConfigMutation({
-              reason: "source-changed",
-              lease,
-              installRecords: { replacement: { source: "archive", version: "2.0.0" } },
-              invalidateRuntimeCache: false,
-              logger: { warn },
-            }),
+          publish({ replacement: { source: "archive", version: "2.0.0" } }, warn),
         ),
       ).rejects.toBe(refusal);
       expect(current).toBe(false);

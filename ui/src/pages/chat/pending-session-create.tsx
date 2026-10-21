@@ -13,6 +13,7 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { CreationComposer } from "../new-session/creation-composer-render.tsx";
 import { NewSessionBody } from "../new-session/draft-body.solid.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
 import { ChatPaneHeader, type ChatPaneHeaderProps } from "./components/chat-pane-header.tsx";
@@ -202,6 +203,7 @@ function PendingSessionCreateContent(
       },
     };
   });
+  const questions = createComposerQuestions(composerId, () => view().composer);
   return (
     <>
       <div class="sidebar-region">
@@ -216,7 +218,7 @@ function PendingSessionCreateContent(
                 <Show
                   when={view().creationComposer}
                   keyed
-                  fallback={<ChatComposer {...view().composer} />}
+                  fallback={<ChatComposer {...view().composer} questions={questions} />}
                 >
                   {(composer) => <CreationComposer composer={composer} onOpenImage={openImage} />}
                 </Show>

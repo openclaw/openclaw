@@ -89,6 +89,31 @@ describe("migrateSlackChannelConfig", () => {
     });
   });
 
+  it("does not borrow channels from a case alias when the exact account has none", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          accounts: {
+            Primary: { channels: { C123: { requireMention: true } } },
+            primary: {},
+          },
+        },
+      },
+    };
+
+    expect(
+      migrateSlackChannelConfig({
+        cfg,
+        accountId: "primary",
+        oldChannelId: "C123",
+        newChannelId: "C999",
+      }),
+    ).toEqual({ migrated: false, skippedExisting: false });
+    expect(cfg.channels.slack.accounts.Primary.channels).toEqual({
+      C123: { requireMention: true },
+    });
+  });
+
   it("skips migration when new id already exists", () => {
     const cfg = createSlackGlobalChannelConfig({
       C123: { requireMention: true },

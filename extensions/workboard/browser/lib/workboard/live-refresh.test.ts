@@ -1,5 +1,5 @@
 import "../../test/host.setup.ts";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test/wait-for.ts";

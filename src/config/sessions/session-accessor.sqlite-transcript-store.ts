@@ -132,16 +132,14 @@ export function appendTranscriptEventInTransaction(
       // still need their recency-only write, without advancing the transcript fence.
       const deferWindowTouch =
         cursor.deferWrites || (options.touchMutation !== false && windowExists);
-      const touchWindow = () => {
-        if (!cursor.deferWrites) {
+      const touchWindow = (shouldTouch: boolean) => {
+        if (shouldTouch && !cursor.deferWrites) {
           touchTranscriptWindowRecency(database, scope.sessionId, createdAt, cursor);
         }
       };
       if (cursor.initialized) {
         // The first attempt established this window and the batch cannot delete it.
-        if (!deferWindowTouch) {
-          touchWindow();
-        }
+        touchWindow(!deferWindowTouch);
       } else {
         ensureTranscriptSessionRoot(database, scope, createdAt, {
           allowStoredAlias: options.allowStoredAlias === true,
@@ -184,9 +182,7 @@ export function appendTranscriptEventInTransaction(
               identity.eventId,
             ));
         if (exists) {
-          if (deferWindowTouch) {
-            touchWindow();
-          }
+          touchWindow(deferWindowTouch);
           return false;
         }
       }
@@ -197,13 +193,21 @@ export function appendTranscriptEventInTransaction(
           : readIdempotencyKeyOwner(database, scope.sessionId, key)
         : undefined;
       if (idempotencyKeyOwner && options.idempotencyKeyMode === "dedupe") {
-        if (deferWindowTouch) {
-          touchWindow();
-        }
+        touchWindow(deferWindowTouch);
         return false;
       }
       cursor.insertEvent ??= createTranscriptEventInserter(database.db, scope.sessionId);
       const insertEvent = cursor.insertEvent;
+      if (identity && idempotencyKeyOwner && options.idempotencyKeyMode !== "relocate-owner") {
+        identity.messageIdempotencyKey = null;
+      }
+      // Relocation must accept the event before clearing the previous identity's key.
+      const insertWithIdentity =
+        !batch &&
+        identity &&
+        !(idempotencyKeyOwner && options.idempotencyKeyMode === "relocate-owner")
+          ? insertEvent.withIdentity
+          : undefined;
       const eventJson =
         options.eventJson ??
         withoutSqliteDatabaseWriteScope(database.db, () => JSON.stringify(persistedEvent));
@@ -226,14 +230,18 @@ export function appendTranscriptEventInTransaction(
           );
           batch.events.push(row);
           batch.bytes += serializedBytes;
-        } else if (
-          !insertEvent({
+        } else {
+          const input = {
             ...row,
             eventId: actor?.transcript.complete ? undefined : identity?.eventId,
-          })
-        ) {
-          accepted = false;
-          return;
+          };
+          accepted =
+            insertWithIdentity && identity
+              ? insertWithIdentity(input, identity)
+              : insertEvent(input);
+          if (!accepted) {
+            return;
+          }
         }
         if (actor) {
           actor.hot.transcript.version.rawSeq = seq;
@@ -273,9 +281,7 @@ export function appendTranscriptEventInTransaction(
         }
       });
       if (!accepted) {
-        if (deferWindowTouch) {
-          touchWindow();
-        }
+        touchWindow(deferWindowTouch);
         return false;
       }
       if (projectionNeedsRebuild) {
@@ -310,10 +316,6 @@ export function appendTranscriptEventInTransaction(
               });
             }
           }
-          identity.messageIdempotencyKey =
-            idempotencyKeyOwner && options.idempotencyKeyMode !== "relocate-owner"
-              ? null
-              : identity.messageIdempotencyKey;
           cursor.insertIdentity ??= createTranscriptIdentityInserter(
             database,
             scope.sessionId,
@@ -329,7 +331,7 @@ export function appendTranscriptEventInTransaction(
                 seq,
               });
             }
-          } else {
+          } else if (!insertWithIdentity) {
             cursor.insertIdentity(row);
           }
           actor?.transcript.identities.set(identity.eventId, {

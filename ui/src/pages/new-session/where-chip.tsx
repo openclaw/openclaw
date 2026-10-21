@@ -3,6 +3,7 @@ import { resolveCloudProfileIconData } from "../../components/provider-icon-data
 import { Icon } from "../../components/solid/icon.tsx";
 import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { resolveMacFormFactorFromName } from "../../lib/mac-form-factor.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -19,44 +20,23 @@ import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 import type { resolveWhereChip } from "./where-chip.ts";
 function DevicePoolIcon() {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
+    <StrokeIcon>
       <rect x="2" y="7" width="14" height="11" />
       <path d="M6 7V3h16v12h-6M6 22h6M9 18v4" />
-    </svg>
+    </StrokeIcon>
   );
 }
 function ConnectDeviceIcon() {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
+    <StrokeIcon>
       <circle cx="12" cy="12" r="9" />
       <path d="M12 8v8M8 12h8" />
-    </svg>
+    </StrokeIcon>
   );
 }
 function MacDeviceIcon(props: { form: "laptop" | "mini" | "studio" }) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
+    <StrokeIcon>
       {props.form === "laptop" ? (
         <>
           <path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z" />
@@ -73,7 +53,7 @@ function MacDeviceIcon(props: { form: "laptop" | "mini" | "studio" }) {
           <path d="M3 8h18M6 15h2M11 15h2M17 15h.01" />
         </>
       )}
-    </svg>
+    </StrokeIcon>
   );
 }
 function EnvironmentDeviceIcon(props: { device?: DevicePlacementOption }) {

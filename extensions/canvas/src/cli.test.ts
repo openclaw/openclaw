@@ -150,23 +150,8 @@ describe("nodes canvas CLI", () => {
     expect(gatewayMocks.callGatewayFromCli).not.toHaveBeenCalled();
   });
 
-  it("resolves and invokes a paired node when an older Gateway lacks node.list", async () => {
-    gatewayMocks.callGatewayFromCli.mockRejectedValueOnce(requestError()).mockResolvedValueOnce({
-      pending: [],
-      paired: [{ nodeId: "legacy-node", displayName: "Legacy Node" }],
-    });
-
-    await runCanvas(["hide"], "Legacy Node");
-
-    expect(gatewayMocks.callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
-      "node.list",
-      "node.pair.list",
-      "node.invoke",
-    ]);
-    expectInvoke(expect.objectContaining({ nodeId: "legacy-node", command: "canvas.hide" }));
-  });
-
   it.each([
+    ["an unknown-method rejection", requestError()],
     ["an authorization rejection", requestError({ code: "FORBIDDEN" })],
     ["a retryable unknown-method rejection", requestError({ retryable: true })],
     [

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { ok, type Result } from "@openclaw/normalization-core/result";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import { normalizeMediaExecutionProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
@@ -17,11 +18,13 @@ import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
+import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { logWarn } from "../logger.js";
 import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
+import { runFfmpeg } from "../media/media-services.js";
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalProviderCatalogEntries,
@@ -51,7 +54,6 @@ import {
 } from "./provider-execution.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveCliModelEntry, resolveEntryRunOptions } from "./resolve.js";
-import { resolveCliMediaPath } from "./runner.cli-media.js";
 import { isTranscriptArtifactText } from "./transcription-text.js";
 import type {
   AudioTranscriptionResult,
@@ -547,14 +549,37 @@ export async function runCliEntry(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-cli-"),
   );
   try {
-    const mediaPath = await resolveCliMediaPath({
-      capability,
-      command,
-      mediaPath: attachmentPath,
-      outputDir,
-      assertCurrent: params.assertCurrent,
-      execution: params.execution,
-    });
+    let mediaPath = attachmentPath;
+    if (
+      capability === "audio" &&
+      path.parse(command).name === "whisper-cli" &&
+      normalizeLowercaseStringOrEmpty(path.extname(attachmentPath)) !== ".wav"
+    ) {
+      const wavPath = path.join(outputDir, `${path.parse(attachmentPath).name}.wav`);
+      await writeExternalFileWithinRoot({
+        rootDir: outputDir,
+        path: path.basename(wavPath),
+        write: async (outputPath) => {
+          params.assertCurrent?.();
+          assertMediaExecutionCurrent(params.execution);
+          await runFfmpeg([
+            "-y",
+            "-i",
+            attachmentPath,
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            "-f",
+            "wav",
+            outputPath,
+          ]);
+        },
+      });
+      mediaPath = wavPath;
+    }
     const outputBase = path.join(outputDir, path.parse(mediaPath).name);
 
     const templCtx: TemplateContext & Record<string, unknown> = {

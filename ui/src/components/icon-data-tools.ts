@@ -30,6 +30,7 @@ export function hasKeyboardIcon(symbol: string): symbol is KeyboardIconSymbol {
 }
 
 export const toolIconData = {
+  codeXml: strokePathData("m18 16 4-4-4-4", "m6 8-4 4 4 4", "m14.5 4-5 16"),
   bookOpenText: strokePathData(
     "M12 5v16M16 13h2M16 9h2",
     "M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z",
@@ -71,6 +72,12 @@ export const toolIconData = {
   paperclip: strokePathData(
     "m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48",
   ),
+  sharingOptions: strokeIconData([
+    ["circle", { cx: "18", cy: "5", r: "3" }],
+    ["circle", { cx: "6", cy: "12", r: "3" }],
+    ["circle", { cx: "18", cy: "19", r: "3" }],
+    ["path", { d: "m8.59 10.49 6.83-3.98m-6.83 6.98 6.83 3.98" }],
+  ]),
   globe: strokeIconData([
     ["circle", { cx: "12", cy: "12", r: "10" }],
     ["path", { d: "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" }],
@@ -349,6 +356,40 @@ export const toolIconData = {
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }],
     ["path", { d: "M15 3v18M10 10l-3 2 3 2" }],
   ]),
+  // Session chrome has its own approved silhouettes; generic panel icons stay unchanged.
+  sessionMenu: strokePathData("M4 8h16M4 16h10"),
+  sessionPanels: strokeIconData([
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M15 3v18", "stroke-width": "1.8" }],
+  ]),
+  // Dock is a destination action, so it has no open/close chevron or active fill.
+  sessionPanelDockBottom: strokeIconData([
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M3 15h18", "stroke-width": "1.8" }],
+  ]),
+  sessionPanelsActive: strokeIconData([
+    [
+      "path",
+      {
+        d: "M15 3h3a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-3Z",
+        fill: "currentColor",
+        stroke: "none",
+        style: "fill-opacity:.4",
+      },
+    ],
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M15 3v18", "stroke-width": "1.8" }],
+  ]),
+  sessionSidebarOpen: strokeIconData([
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M9 3v18M14 10l3 2-3 2", "stroke-width": "1.8" }],
+  ]),
+  sessionSidebarClose: strokeIconData([
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M9 3v18M16 10l-3 2 3 2", "stroke-width": "1.8" }],
+  ]),
+  sessionPanelExpand: strokePathData("M12 5h7v7M5 12v7h7"),
+  sessionPanelRestore: strokePathData("M14.121 2.808v7.071h7.071M2.808 14.121h7.071v7.071"),
   panelRightClose: strokeIconData([
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }],
     ["path", { d: "M15 3v18M8 10l3 2-3 2" }],

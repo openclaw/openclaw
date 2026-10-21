@@ -17,10 +17,11 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import {
-  createCompactionHandlers,
+  compactionHandler,
   createResourceLoader,
 } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
+import type { ExtensionFactory } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
@@ -175,26 +176,21 @@ describe("AgentSession refusal compaction", () => {
         (_activeModel: Model, context: Context, options?: SimpleStreamOptions) =>
           streamAnthropic(model, context, { ...options, apiKey: "redacted-fixture-token" }),
       );
-      const handlers = createCompactionHandlers();
-      const handler = handlers.get("session_before_compact")?.[0];
-      if (!handler) {
-        throw new Error("Expected compaction fixture handler");
-      }
       let queuedUser = false;
-      handlers.set("session_before_compact", [
-        async (...args: unknown[]) => {
+      const handlers: ExtensionFactory = (api) => {
+        api.on("session_before_compact", async (event) => {
           if (queued && !queuedUser) {
             queuedUser = true;
             await session.followUp("explicit queued user turn");
           }
-          return handler(...args);
-        },
-      ]);
+          return compactionHandler(event);
+        });
+      };
       const { session } = await createTestSession({
         model,
         sessionManager,
         settingsManager: createAutoCompactionSettings(),
-        resourceLoader: createResourceLoader(handlers),
+        resourceLoader: await createResourceLoader(handlers),
       });
       const compactions: Array<Extract<AgentSessionEvent, { type: "compaction_end" }>> = [];
       const assistants: AssistantMessage[] = [];

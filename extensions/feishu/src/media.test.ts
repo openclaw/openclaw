@@ -491,7 +491,7 @@ describe("saveMessageResourceFeishu", () => {
           await vi.advanceTimersByTimeAsync(1);
           await expect(download).rejects.toMatchObject({
             name: "FeishuInboundMediaTimeoutError",
-            chunkTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+            message: `Feishu media download stalled: no data received for ${FEISHU_MEDIA_HTTP_TIMEOUT_MS}ms`,
           });
           expect(stalled.destroyed).toBe(true);
         } finally {

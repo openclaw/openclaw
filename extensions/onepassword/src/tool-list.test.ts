@@ -58,11 +58,13 @@ describe("onepassword list with SQLite grants", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("onepassword-list-") };
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
   });
 
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
+    vi.restoreAllMocks();
   });
 
   function openGrants() {
@@ -79,7 +81,6 @@ describe("onepassword list with SQLite grants", () => {
       throw new Error("list must not retrieve a secret");
     });
     const broker = new OnePasswordBroker({
-      now: () => NOW,
       resolveConfig: () => configured(slugs),
       opClient: { getItem },
       stores: { grants, audit: new MemoryKeyedStore(), pending: new MemoryKeyedStore() },

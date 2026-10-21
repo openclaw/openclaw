@@ -1,6 +1,5 @@
 import type {
   createTerminalDefaultColorQueryResponder,
-  CreateGhosttyTerminalOptions,
   GhosttyTerminalController,
 } from "@openclaw/libterminal/browser";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -42,11 +41,6 @@ export type TerminalInputs = {
   tabsInHeader: boolean;
   page: boolean;
   routeTarget: TerminalRouteTarget;
-  createTerminalController: (
-    options: CreateGhosttyTerminalOptions,
-    shouldFocusOnOpen?: () => boolean,
-  ) => Promise<GhosttyTerminalController>;
-  catalogReadyTimeoutMs: number;
 };
 
 export type TerminalOperation = {

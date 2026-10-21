@@ -1,13 +1,17 @@
 // Nextcloud Talk tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
-import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
+import { nextcloudTalkPlugin } from "./channel.js";
 
 describe("nextcloudTalkApprovalAuth", () => {
   it("matches Nextcloud Talk actor ids case-insensitively", () => {
     const cfg = { channels: { "nextcloud-talk": { allowFrom: ["Owner"] } } };
+    const approvalCapability = nextcloudTalkPlugin.approvalCapability;
+    if (!approvalCapability?.authorizeActorAction) {
+      throw new Error("Nextcloud Talk approval authorization unavailable");
+    }
 
     expect(
-      nextcloudTalkApprovalAuth.authorizeActorAction({
+      approvalCapability.authorizeActorAction({
         cfg,
         senderId: "owner",
         action: "approve",

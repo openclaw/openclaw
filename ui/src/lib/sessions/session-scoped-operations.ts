@@ -126,13 +126,18 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     key: string,
     path: string,
     content: string,
-    options: { agentId?: string | null; expectedHash: string },
+    options: {
+      agentId?: string | null;
+      expectedHash: string;
+      expectedSource?: SessionWorkspaceGetResult["source"];
+    },
   ) =>
     requestCurrent<SessionWorkspaceSetResult>("sessions.files.set", {
       sessionKey: key,
       path,
       content,
       expectedHash: options.expectedHash,
+      ...(options.expectedSource !== undefined ? { expectedSource: options.expectedSource } : {}),
       ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
     });
 

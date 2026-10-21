@@ -11,7 +11,7 @@
     "@solidjs/web": "2.0.0-rc.14",
     "nostr-tools": "2.25.2",
     "solid-js": "2.0.0-rc.14",
-    "zod": "4.6.6"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

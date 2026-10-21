@@ -35,8 +35,8 @@ it.each<{ outcomes: ("delivered" | "failed")[]; maxLines?: number; plan?: true }
     });
     return () =>
       outcome === "delivered"
-        ? lifecycle.completeTaskRun({ handle, provider: "fixture", model: "fixture", count: 1 })
-        : lifecycle.failTaskRun({ handle, error: new Error("provider failed") });
+        ? lifecycle.completeTaskRun({ handle, count: 1 })
+        : lifecycle.failTaskRun({ handle });
   });
   let adopted = false;
   await http.dispatchProgressTurn(

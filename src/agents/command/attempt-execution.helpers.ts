@@ -210,7 +210,9 @@ export async function claudeCliSessionTranscriptHasOrphanedToolUse(
         continue;
       }
       const rec = safeParseJsonRecord(line);
-      if (rec?.isSidechain === true) {
+      // Only conversation records count. Claude also logs request echoes
+      // (`api-request-blob`) that repeat answered tool calls under role=assistant.
+      if (rec?.isSidechain === true || (rec?.type !== "user" && rec?.type !== "assistant")) {
         continue;
       }
       const message = asOptionalRecord(rec?.message);

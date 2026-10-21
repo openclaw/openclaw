@@ -10,7 +10,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv } from "../test-utils/env.js";
 import { rewriteUpdateFlagArgv } from "./argv.js";
 import {
-  resolveGatewayCatalogCommandPath,
+  resolveGatewayCommandPath,
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import {
@@ -174,7 +174,7 @@ describe("Gateway argv boundaries", () => {
     { args: ["gateway", "run", "--", "--reset"], commandPath: ["gateway", "run"] },
   ])("preserves literal commands without destructive flags: $args", ({ args, commandPath }) => {
     const argv = cliArgs(...args);
-    expect(resolveGatewayCatalogCommandPath(argv)).toEqual(commandPath);
+    expect(resolveGatewayCommandPath(argv)).toEqual(commandPath);
     const options = resolveGatewayRunPreBootstrapOptions(argv);
     expect(options?.force).not.toBe(true);
     expect(options?.reset).not.toBe(true);
@@ -240,11 +240,12 @@ describe("plugin command policy", () => {
 });
 
 it("keeps post-root log levels out of the gateway command path", () => {
+  expect(resolveGatewayCommandPath(cliArgs("gateway", "--log-level", "debug", "run"))).toEqual([
+    "gateway",
+    "run",
+  ]);
   expect(
-    resolveGatewayCatalogCommandPath(cliArgs("gateway", "--log-level", "debug", "run")),
-  ).toEqual(["gateway", "run"]);
-  expect(
-    resolveGatewayCatalogCommandPath(
+    resolveGatewayCommandPath(
       cliArgs("gateway", "--log-level=debug", "restart-handoff", "capabilities"),
     ),
   ).toEqual(["gateway", "restart-handoff"]);

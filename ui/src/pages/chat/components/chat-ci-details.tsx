@@ -5,6 +5,7 @@ import type {
   ControlUiSessionPullRequestCheckStep,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatCiEnglish } from "../../../i18n/locales/en-chat-ci.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
@@ -61,18 +62,10 @@ function CheckStatus(props: { state: CheckState }) {
       <Show
         when={props.state !== "skipped"}
         fallback={
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
+          <StrokeIcon aria-hidden="true">
             <circle cx="12" cy="12" r="10" />
             <path d="M8 12h8" />
-          </svg>
+          </StrokeIcon>
         }
       >
         <Icon name={CHECK_PRESENTATION[props.state][1]} />

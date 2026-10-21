@@ -145,17 +145,4 @@ describe("OpenClaw assistant", () => {
     expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
     expect(prompt).toContain("OpenClaw source: /tmp/openclaw");
   });
-
-  it("keeps truncated conversation history valid at a UTF-16 boundary", () => {
-    const prefix = "a".repeat(499);
-    const prompt = buildSystemAgentAssistantUserPrompt({
-      input: "continue",
-      overview: overview(),
-      history: [{ role: "user", text: `${prefix}🎉tail` }],
-    });
-
-    expect(prompt.slice(0, prompt.indexOf("User request:"))).toBe(
-      `Conversation so far:\nUser: ${prefix}…\n\n`,
-    );
-  });
 });

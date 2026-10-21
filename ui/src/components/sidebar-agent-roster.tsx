@@ -48,7 +48,6 @@ function cachedRosterCards(host: RosterHost) {
     avatar: card.avatar ?? null,
     textAvatar: card.textAvatar ?? null,
     activeNow: false,
-    sessionCount: 0,
     lastActiveAt: 0,
     preview: undefined,
     assistantPreview: undefined,
@@ -142,7 +141,7 @@ export function SidebarAgentRoster(props: RosterProps) {
       await currentContext.agents.refreshList();
     }
   };
-  const agentMenu = (card: () => { id: string; name: string; sessionCount: number }) => (
+  const agentMenu = (card: () => { id: string; name: string }) => (
     <Menu
       id={`sidebar-agent-roster-${card().id}`}
       class="sidebar-customize-menu sidebar-agent-roster__menu"

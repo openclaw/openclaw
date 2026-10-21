@@ -13,7 +13,6 @@ import type {
   ExecApprovalDurableLookup,
   ExecApprovalForceDenyResult,
   ExecApprovalManagerOptions,
-  ExecApprovalPreparedConsumption,
   ExecApprovalRecord,
   ExecApprovalReadAuthority,
   ExecApprovalResolutionSource,
@@ -52,10 +51,12 @@ import {
   type OperatorApprovalTerminalReason,
   type ResolveOperatorApprovalResult,
 } from "./operator-approval-store.js";
-import type { OperatorApprovalStoreGuard } from "./operator-approval-store.types.js";
+import type {
+  ExecApprovalPreparedConsumption,
+  OperatorApprovalStoreGuard,
+} from "./operator-approval-store.types.js";
 
 export type {
-  ExecApprovalPreparedConsumption,
   ExecApprovalRecord,
   OperatorApprovalLifecycleEvent,
   OperatorStandingGrantMintSpec,

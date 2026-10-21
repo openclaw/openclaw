@@ -121,26 +121,19 @@ describe("durable model prompt projection at provider dispatch", () => {
             });
             const { session } = await createTestSession({
               sessionManager: manager,
-              resourceLoader: createResourceLoader(
-                new Map([
-                  [
-                    "message_end",
-                    [
-                      async (event: unknown) => {
-                        if (
-                          typeof event === "object" &&
-                          event !== null &&
-                          "message" in event &&
-                          isUserMessage(event.message)
-                        ) {
-                          return { message: { ...event.message, content: "extension text" } };
-                        }
-                        return undefined;
-                      },
-                    ],
-                  ],
-                ]),
-              ),
+              resourceLoader: await createResourceLoader((api) => {
+                api.on("message_end", async (event: unknown) => {
+                  if (
+                    typeof event === "object" &&
+                    event !== null &&
+                    "message" in event &&
+                    isUserMessage(event.message)
+                  ) {
+                    return { message: { ...event.message, content: "extension text" } };
+                  }
+                  return undefined;
+                });
+              }),
             });
             const convert = session.agent.convertToLlm;
             session.agent.convertToLlm = async (messages) =>

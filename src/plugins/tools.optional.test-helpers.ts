@@ -19,6 +19,63 @@ export type MockRegistryToolEntry = {
   factory: (ctx: unknown) => unknown;
 };
 
+export function createXaiToolManifest() {
+  return {
+    id: "xai",
+    origin: "bundled",
+    enabledByDefault: true,
+    channels: [],
+    providers: ["xai"],
+    setup: {
+      providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }],
+    },
+    contracts: {
+      tools: ["x_search"],
+    },
+    toolMetadata: {
+      x_search: {
+        replaySafe: true,
+        authSignals: [{ provider: "xai" }],
+        configSignals: [
+          {
+            rootPath: "plugins.entries.xai.config",
+            overlayPath: "webSearch",
+            required: ["apiKey"],
+          },
+        ],
+      },
+    },
+  };
+}
+
+export function createFeishuToolManifest() {
+  return {
+    id: "feishu",
+    origin: "bundled",
+    enabledByDefault: true,
+    channels: ["feishu"],
+    providers: [],
+    contracts: {
+      tools: ["feishu_doc"],
+    },
+    toolMetadata: {
+      feishu_doc: {
+        configSignals: [
+          {
+            rootPath: "channels.feishu",
+            required: ["appId", "appSecret"],
+          },
+          {
+            rootPath: "channels.feishu",
+            overlayMapPath: "accounts",
+            required: ["appId", "appSecret"],
+          },
+        ],
+      },
+    },
+  };
+}
+
 export function makeTool(name: string) {
   return {
     name,

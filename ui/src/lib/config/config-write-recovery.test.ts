@@ -168,7 +168,7 @@ describe("config write recovery", () => {
         }
         return serverA.request(method, params);
       });
-      store.current().opts.onHello?.(hello);
+      store.current().testOptions.onHello?.(hello);
       await runtimeConfig.ensureLoaded();
       runtimeConfig.patchForm(["count"], 2);
       await expect(
@@ -187,7 +187,7 @@ describe("config write recovery", () => {
           ([method]) => method === "config.set" || method === "config.apply",
         );
       replacement.request.mockImplementation(serverB.request);
-      replacement.opts.onHello?.(hello);
+      replacement.testOptions.onHello?.(hello);
       await vi.advanceTimersByTimeAsync(0);
       expect(state.configForm).toEqual({ count: 2 });
       expect(state.configSnapshot?.hash).toBe("hash-1");
@@ -217,7 +217,7 @@ describe("config write recovery", () => {
         if (operation === "save") {
           store.gateway.connect({ gatewayUrl: originalUrl });
           store.current().request.mockImplementation(serverA.request);
-          store.current().opts.onHello?.(hello);
+          store.current().testOptions.onHello?.(hello);
           await vi.advanceTimersByTimeAsync(0);
           await expect(runtimeConfig.retry()).resolves.toBe(true);
           expect(serverA.submissions).toMatchObject([{ method: "config.set" }]);

@@ -1,4 +1,3 @@
-/** Tests manifest owner availability policy for bundled, workspace, and installed plugins. */
 import { describe, expect, it } from "vitest";
 import { normalizePluginsConfig } from "./config-state.js";
 import {
@@ -10,154 +9,57 @@ import {
 } from "./manifest-owner-policy.js";
 
 describe("manifest owner policy", () => {
-  it("treats bundled owners as bundled and others as non-bundled", () => {
+  it("distinguishes bundled owners", () => {
     expect(isBundledManifestOwner({ origin: "bundled" })).toBe(true);
     expect(isBundledManifestOwner({ origin: "workspace" })).toBe(false);
   });
 
-  it("respects enabled, denylist, explicit disable, and allowlist bounds", () => {
-    const normalizedConfig = normalizePluginsConfig({
-      enabled: true,
-      allow: ["demo"],
-      deny: ["blocked"],
-      entries: {
-        disabled: { enabled: false },
-        enabled: { enabled: true },
-      },
-    });
-
-    expect(
-      passesManifestOwnerBasePolicy({
-        plugin: { id: "demo" },
-        normalizedConfig,
-      }),
-    ).toBe(true);
-    expect(
-      passesManifestOwnerBasePolicy({
-        plugin: { id: "blocked" },
-        normalizedConfig,
-      }),
-    ).toBe(false);
-    expect(
-      passesManifestOwnerBasePolicy({
-        plugin: { id: "disabled" },
-        normalizedConfig,
-      }),
-    ).toBe(false);
-
-    const explicitlyTrustedDisabledConfig = normalizePluginsConfig({
-      enabled: true,
-      allow: ["disabled"],
-      entries: {
-        disabled: { enabled: false },
-      },
-    });
-    expect(
-      passesManifestOwnerBasePolicy({
-        plugin: { id: "disabled" },
-        normalizedConfig: explicitlyTrustedDisabledConfig,
-      }),
-    ).toBe(false);
-    expect(
-      passesManifestOwnerBasePolicy({
-        plugin: { id: "other" },
-        normalizedConfig,
-      }),
-    ).toBe(false);
-  });
-
-  it("reports base policy block reasons and supports explicit allowlist bypasses", () => {
-    const normalizedConfig = normalizePluginsConfig({
-      enabled: true,
-      allow: ["allowed"],
-      deny: ["blocked"],
-      entries: {
-        disabled: { enabled: false },
-      },
-    });
-
-    expect(
-      resolveManifestOwnerBasePolicyBlock({
-        plugin: { id: "other" },
-        normalizedConfig,
-      }),
-    ).toBe("not-in-allowlist");
-    expect(
-      resolveManifestOwnerBasePolicyBlock({
-        plugin: { id: "other" },
-        normalizedConfig,
-        allowRestrictiveAllowlistBypass: true,
-      }),
-    ).toBeNull();
-    expect(
-      resolveManifestOwnerBasePolicyBlock({
-        plugin: { id: "blocked" },
-        normalizedConfig,
-        allowRestrictiveAllowlistBypass: true,
-      }),
-    ).toBe("blocked-by-denylist");
-    expect(
-      resolveManifestOwnerBasePolicyBlock({
-        plugin: { id: "disabled" },
-        normalizedConfig,
-        allowRestrictiveAllowlistBypass: true,
-      }),
-    ).toBe("plugin-disabled");
-  });
-
-  it("detects explicit manifest owner trust from allowlist or explicit enablement", () => {
-    const allowlistConfig = normalizePluginsConfig({
-      allow: ["demo"],
-    });
-    const entriesConfig = normalizePluginsConfig({
-      entries: {
-        demo: { enabled: true },
-      },
-    });
-
-    expect(
-      hasExplicitManifestOwnerTrust({
-        plugin: { id: "demo" },
-        normalizedConfig: allowlistConfig,
-      }),
-    ).toBe(true);
-    expect(
-      hasExplicitManifestOwnerTrust({
-        plugin: { id: "demo" },
-        normalizedConfig: entriesConfig,
-      }),
-    ).toBe(true);
-    expect(
-      hasExplicitManifestOwnerTrust({
-        plugin: { id: "demo" },
-        normalizedConfig: normalizePluginsConfig({}),
-      }),
-    ).toBe(false);
-  });
-
-  it("uses effective activation state for activated manifest owners", () => {
-    expect(
-      isActivatedManifestOwner({
-        plugin: {
-          id: "demo",
-          origin: "bundled",
-          enabledByDefault: true,
-        },
-        normalizedConfig: normalizePluginsConfig({}),
-      }),
-    ).toBe(true);
-
-    expect(
-      isActivatedManifestOwner({
-        plugin: {
-          id: "demo",
-          origin: "bundled",
-          enabledByDefault: true,
-        },
+  const policies: Array<
+    [string, boolean, string[], ReturnType<typeof resolveManifestOwnerBasePolicyBlock>]
+  > = [
+    ["demo", false, ["demo"], null],
+    ["blocked", false, ["demo"], "blocked-by-denylist"],
+    ["disabled", false, ["demo"], "plugin-disabled"],
+    ["disabled", false, ["disabled"], "plugin-disabled"],
+    ["other", false, ["demo"], "not-in-allowlist"],
+    ["other", true, ["demo"], null],
+    ["blocked", true, ["demo"], "blocked-by-denylist"],
+    ["disabled", true, ["demo"], "plugin-disabled"],
+  ];
+  it("keeps base-policy decisions and block reasons consistent, including allowlist bypasses", () => {
+    for (const [id, bypass, allow, reason] of policies) {
+      const params = {
+        plugin: { id },
         normalizedConfig: normalizePluginsConfig({
-          enabled: false,
+          enabled: true,
+          allow,
+          deny: ["blocked"],
+          entries: { disabled: { enabled: false } },
         }),
+        allowRestrictiveAllowlistBypass: bypass,
+      };
+      expect(resolveManifestOwnerBasePolicyBlock(params)).toBe(reason);
+      expect(passesManifestOwnerBasePolicy(params)).toBe(reason === null);
+    }
+  });
+
+  it("detects explicit trust", () => {
+    const trusted = (config: Parameters<typeof normalizePluginsConfig>[0]) =>
+      hasExplicitManifestOwnerTrust({
+        plugin: { id: "demo" },
+        normalizedConfig: normalizePluginsConfig(config),
+      });
+    expect(trusted({ allow: ["demo"] })).toBe(true);
+    expect(trusted({ entries: { demo: { enabled: true } } })).toBe(true);
+    expect(trusted({})).toBe(false);
+  });
+
+  it.each([true, false])("resolves bundled default activation when enabled=%s", (enabled) => {
+    expect(
+      isActivatedManifestOwner({
+        plugin: { id: "demo", origin: "bundled", enabledByDefault: true },
+        normalizedConfig: normalizePluginsConfig(enabled ? {} : { enabled: false }),
       }),
-    ).toBe(false);
+    ).toBe(enabled);
   });
 });

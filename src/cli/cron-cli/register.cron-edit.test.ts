@@ -94,6 +94,10 @@ it.each([
   ],
   [["--failure-alert-cooldown", "0"], { failureAlert: { cooldownMs: 0 } }],
   [["--failure-alert-cooldown", "1h30m"], { failureAlert: { cooldownMs: 5_400_000 } }],
+  [
+    ["--failure-alert-channel", "", "--failure-alert-to", " ", "--failure-alert-account-id", ""],
+    { failureAlert: { channel: null, to: null, accountId: null } },
+  ],
 ] as const)("patches %j without loading the old job", async (args, patch) => {
   await edit(args, patch);
   expect(methods()).toEqual(["cron.update", "cron.status"]);
@@ -298,8 +302,12 @@ it.each([
   await run([...addArgs, ...args, ...(value === undefined ? [] : [flag, value])]);
   const creation = callGatewayFromCli.mock.calls.find(([method]) => method === "cron.add");
   expect(creation?.[2]).toHaveProperty(target);
-  expect(creation?.[2]?.[target]?.cwd).toBe(value === undefined ? undefined : "/repo");
+  expect(creation?.[2]?.[target]?.cwd).toBe(value);
   expect(defaultRuntime.error).not.toHaveBeenCalled();
+});
+
+it("preserves leading and trailing cwd whitespace on command-cwd edit", async () => {
+  await edit(["--command-cwd", " /repo "], { payload: { kind: "command", cwd: " /repo " } });
 });
 
 it.each([undefined, ""])("preserves stream cwd edit semantics for %j", async (value) => {

@@ -1,5 +1,5 @@
 import { PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
-import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
+import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol/gateway-error-details";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { raceWithTimeout } from "@openclaw/retry";
 import type { ApplicationContext } from "../app/context.ts";
@@ -421,10 +421,7 @@ export function createMcpAppView(
     };
   }
 
-  async function setupResources(
-    binding: McpAppBinding,
-    signal: AbortSignal,
-  ): Promise<McpAppResources> {
+  async function setupResources(binding: McpAppBinding, signal: AbortSignal): Promise<void> {
     const { sessionKey, viewId, agentId } = binding;
     let resources: McpAppResources | null = null;
     try {
@@ -707,7 +704,6 @@ export function createMcpAppView(
       });
       await bridge.sendToolResult(payload.toolResult);
       signal.throwIfAborted();
-      return createdResources;
     } catch (error) {
       await teardownResources(resources);
       throw error;

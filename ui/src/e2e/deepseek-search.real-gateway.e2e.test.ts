@@ -1,4 +1,3 @@
-// Opt-in real browser + built Gateway + installed candidate + authenticated API proof.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -15,13 +14,11 @@ if (!live) {
     { createOpenClawTestInstance },
     { runQaGatewayFixture },
     { waitForControlUiGatewayReady },
-    { takeControlUiScreenshotFrame },
     { createControlUiE2eSuite },
   ] = await Promise.all([
     import("../../../test/helpers/openclaw-test-instance.ts"),
     import("../../../test/helpers/qa-gateway-cleanup.ts"),
     import("../test-helpers/control-ui-e2e-readiness.ts"),
-    import("../test-helpers/control-ui-e2e-screenshot.ts"),
     import("./control-ui-e2e-suite.test-support.ts"),
   ]);
   let owner: OpenClawTestInstance;
@@ -73,14 +70,14 @@ if (!live) {
   });
   suite.define(() => {
     it("saves DeepSeek search settings, performs a real search, and survives reload", async () => {
-      const handoff = await owner.cli(["dashboard", "--json"]);
-      expect(handoff.code, handoff.stderr).toBe(0);
-      const { browserUrl } = JSON.parse(handoff.stdout) as { browserUrl: string };
-      const url = new URL(pathForRoute("search", ""), browserUrl);
-      url.hash = new URL(browserUrl).hash;
       await suite.withPage(
         { viewport: { width: 1440, height: 1200 }, locale: "en-US", serviceWorkers: "block" },
         async ({ page }) => {
+          const handoff = await owner.cli(["dashboard", "--json"]);
+          expect(handoff.code, handoff.stderr).toBe(0);
+          const { browserUrl } = JSON.parse(handoff.stdout) as { browserUrl: string };
+          const url = new URL(pathForRoute("search", ""), browserUrl);
+          url.hash = new URL(browserUrl).hash;
           const methods: string[] = [];
           page.on("websocket", (socket) =>
             socket.on("framesent", ({ payload }) => {
@@ -98,15 +95,8 @@ if (!live) {
           expect(await picker.locator('option[value="deepseek"]').count()).toBe(1);
           await picker.selectOption("deepseek");
           await expect.poll(() => picker.inputValue()).toBe("deepseek");
-          const before = await takeControlUiScreenshotFrame(
-            page,
-            surface,
-            [picker, surface.getByText("Off", { exact: true })],
-            { animations: "disabled" },
-          );
-          await fs.writeFile(path.join(suite.artifactDir, "before-setup.png"), before.png);
-          const toggle = surface.getByRole("switch", { name: "Web search", exact: true });
-          await toggle.check();
+          await surface.getByText("Off", { exact: true }).waitFor();
+          await surface.getByRole("switch", { name: "Web search", exact: true }).check();
           await expect.poll(() => picker.inputValue()).toBe("deepseek");
           const readback = async () => {
             const result = await owner.cli(["config", "get", "tools.web.search", "--json"]);
@@ -121,18 +111,9 @@ if (!live) {
           await expect.poll(() => test.isEnabled()).toBe(true);
           await test.click();
           await surface.getByText("Search succeeded", { exact: true }).waitFor({ timeout: 40_000 });
-          const source = surface.locator('a[href^="https://docs.openclaw.ai/"]').first();
-          await source.waitFor();
-          expect(methods).toContain("webSearch.status");
-          expect(methods).toContain("webSearch.test");
+          await surface.locator('a[href^="https://docs.openclaw.ai/"]').first().waitFor();
+          expect(methods).toEqual(expect.arrayContaining(["webSearch.status", "webSearch.test"]));
           expect(methods.some((method) => method.startsWith("config."))).toBe(true);
-          const after = await takeControlUiScreenshotFrame(
-            page,
-            surface,
-            [surface.getByText("Search succeeded", { exact: true }), source],
-            { animations: "disabled" },
-          );
-          await fs.writeFile(path.join(suite.artifactDir, "after-live-search.png"), after.png);
           await page.reload();
           await waitForControlUiGatewayReady(page);
           await expect.poll(() => picker.inputValue()).toBe("deepseek");
@@ -140,7 +121,6 @@ if (!live) {
           const scripts = await page
             .locator('script[type="module"][src]')
             .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("src")!));
-          const assets: Array<{ asset: string; sha256: string }> = [];
           for (const src of scripts) {
             const asset = new URL(src, suite.server.baseUrl);
             const response = await page.request.get(asset.toString());
@@ -150,26 +130,7 @@ if (!live) {
             );
             const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
             expect(hash(await response.body())).toBe(hash(built));
-            assets.push({ asset: asset.pathname, sha256: hash(built) });
           }
-          await fs.writeFile(
-            path.join(suite.artifactDir, "report.json"),
-            JSON.stringify(
-              {
-                scenario:
-                  "real installed candidate, real Gateway and Chromium, real authenticated DeepSeek HTTP",
-                profile,
-                viewport: { width: 1440, height: 1200 },
-                assets,
-                methods: [...new Set(methods)],
-                persistedSearch: await readback(),
-                credentialsPrinted: false,
-              },
-              null,
-              2,
-            ),
-          );
-          console.log(`DeepSeek browser proof: ${suite.artifactDir}`);
         },
       );
     }, 120_000);

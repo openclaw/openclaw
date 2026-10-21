@@ -268,6 +268,14 @@ You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g
 `--verbose` only affects console output and WS log verbosity; it does not change
 file log levels.
 
+### Expected shutdown cancellation
+
+During Gateway shutdown, automatic provider catalog discovery can be canceled,
+and cron startup or session recovery can be refused admission. These expected
+lifecycle outcomes do not emit failure warnings or errors. Provider, storage,
+and cleanup failures still use their existing error reporting, including failures
+that wrap a cancellation error.
+
 ### Provider request failures
 
 Model transport failures emit `Model request failed` at warning level with the

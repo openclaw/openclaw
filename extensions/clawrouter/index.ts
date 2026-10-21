@@ -1,11 +1,11 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { ModelInferenceCapabilitiesSchema } from "openclaw/plugin-sdk/decisions";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderResolveDynamicModelContext,
-  ProviderRuntimeModel,
   ProviderThinkingProfile,
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
@@ -14,6 +14,8 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
+import { wrapProviderPayloadHook } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildProviderToolCompatFamilyHooks,
   findUnsupportedSchemaKeywords,
@@ -25,8 +27,12 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord as readRecord,
+  normalizeFastMode,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { buildClawRouterDecisionProvider } from "./decision-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
@@ -38,12 +44,23 @@ import {
   normalizeClawRouterResolvedModel,
   prepareClawRouterRequestModel,
 } from "./provider-catalog.js";
+import {
+  resolveClawRouterServiceTiers,
+  resolveFastModeSupport,
+  resolveServiceTiers,
+} from "./provider-policy-api.js";
 import { fetchClawRouterUsage } from "./usage.js";
 
 const PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "patternProperties",
   "additionalProperties",
 ]);
+
+const decisionCapabilities = ModelInferenceCapabilitiesSchema.parse(
+  manifest.modelCatalog.providers.clawrouter.models.find(
+    (model) => model.id === "openai/gpt-6-luna",
+  )?.inference,
+);
 
 const ENV_API_KEY_MARKER = "CLAWROUTER_API_KEY";
 const ATTRIBUTION_VALUE_MAX_LENGTH = 256;
@@ -134,6 +151,8 @@ function setHeaderDefault(
   }
 }
 
+const openAiServiceTier = buildProviderStreamFamilyHooks("openai-responses-service-tier");
+
 function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   const underlying = ctx.streamFn;
   if (!underlying) {
@@ -166,7 +185,44 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
     if (dispatchKey) {
       headers.Authorization = `Bearer ${dispatchKey}`;
     }
-    return underlying({ ...preparedModel, headers }, context, options);
+    const tiers = resolveClawRouterServiceTiers(model);
+    const preference = ctx.extraParams?.fastMode ?? ctx.extraParams?.fast_mode;
+    // Reuse the native tier/Auto precedence only for catalog-qualified routes.
+    const stream = tiers
+      ? (openAiServiceTier.wrapStreamFn?.({
+          ...ctx,
+          streamFn: (requestModel, requestContext, requestOptions) =>
+            underlying(requestModel, requestContext, {
+              ...requestOptions,
+              onPayload: wrapProviderPayloadHook(
+                requestOptions?.onPayload,
+                (payload, replacement) => {
+                  // The caller owns explicit tiers, including async replacements.
+                  const body = readRecord(replacement ?? payload);
+                  if (body?.service_tier === "ultrafast" && !tiers.includes("ultrafast")) {
+                    throw new Error(
+                      "ClawRouter model " +
+                        model.id +
+                        " does not advertise ultrafast; supported tiers: " +
+                        tiers.join(", "),
+                    );
+                  }
+                  return replacement;
+                },
+              ),
+            }),
+          extraParams: {
+            ...ctx.extraParams,
+            fastMode: () => {
+              const fast = normalizeFastMode(
+                typeof preference === "function" ? preference() : preference,
+              );
+              return fast === true && !tiers.includes("priority") ? undefined : fast;
+            },
+          },
+        }) ?? underlying)
+      : underlying;
+    return stream({ ...preparedModel, headers }, context, options);
   };
 }
 
@@ -330,38 +386,6 @@ function configuredBaseUrl(
   return config?.models?.providers?.[PROVIDER_ID]?.baseUrl;
 }
 
-function dynamicModelScope(ctx: ProviderResolveDynamicModelContext): string {
-  return JSON.stringify([
-    ctx.agentDir ?? "",
-    ctx.workspaceDir ?? "",
-    ctx.authProfileId ?? "",
-    normalizeClawRouterRootUrl(ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config)),
-  ]);
-}
-
-function buildRuntimeModels(
-  providerConfig: Awaited<ReturnType<typeof buildClawRouterProviderConfig>>,
-): Map<string, ProviderRuntimeModel> {
-  const models = new Map<string, ProviderRuntimeModel>();
-  for (const model of providerConfig.models) {
-    const api = model.api ?? providerConfig.api;
-    const baseUrl = model.baseUrl ?? providerConfig.baseUrl;
-    if (!api || !baseUrl) {
-      continue;
-    }
-    models.set(model.id, {
-      ...model,
-      api,
-      baseUrl,
-      provider: PROVIDER_ID,
-      input: model.input.filter(
-        (entry): entry is "text" | "image" => entry === "text" || entry === "image",
-      ),
-    });
-  }
-  return models;
-}
-
 function resolveToolFamily(modelId: string) {
   const normalized = modelId.toLowerCase();
   if (normalized.startsWith("deepseek/")) {
@@ -382,6 +406,7 @@ export default defineSingleProviderPluginEntry({
   description: "Managed multi-provider model routing and quotas",
   manifest,
   register(api) {
+    api.registerDecisionProvider(buildClawRouterDecisionProvider());
     api.registerGatewayMethod(
       "clawrouter.pool.get",
       async (request) => {
@@ -481,8 +506,6 @@ export default defineSingleProviderPluginEntry({
     );
   },
   provider() {
-    const dynamicModels = new Map<string, Map<string, ProviderRuntimeModel>>();
-
     return {
       label: "ClawRouter",
       docsPath: "/providers/clawrouter",
@@ -529,28 +552,22 @@ export default defineSingleProviderPluginEntry({
           };
         },
       },
-      resolveDynamicModel: (ctx) => dynamicModels.get(dynamicModelScope(ctx))?.get(ctx.modelId),
-      // Match by agentDir/workspaceDir/baseUrl; the context carries no auth
-      // profile id, so any profile scope for the same deployment counts.
-      preferRuntimeResolvedModel: (ctx) => {
-        const agentDir = ctx.agentDir ?? "";
-        const workspaceDir = ctx.workspaceDir ?? "";
-        const rootUrl = normalizeClawRouterRootUrl(configuredBaseUrl(ctx.config));
-        for (const [scope, models] of dynamicModels) {
-          const [scopeAgentDir, scopeWorkspaceDir, , scopeRootUrl] = JSON.parse(scope) as string[];
-          if (
-            scopeAgentDir === agentDir &&
-            scopeWorkspaceDir === workspaceDir &&
-            scopeRootUrl === rootUrl &&
-            models.has(ctx.modelId)
-          ) {
-            return true;
-          }
-        }
-        return false;
-      },
+      // This is protocol support, not a key grant. The decision executor checks the
+      // selected credential's catalog before using its native route.
+      augmentModelCatalog: ({ entries }) =>
+        entries.map((entry) =>
+          entry.provider === PROVIDER_ID &&
+          entry.id === "openai/gpt-6-luna" &&
+          entry.api === "openai-responses"
+            ? {
+                ...entry,
+                inference: { ...decisionCapabilities, chat: entry.inference?.chat ?? true },
+              }
+            : entry,
+        ),
+      // Live catalog routing also applies to explicitly configured model rows.
+      preferRuntimeResolvedModel: () => true,
       prepareDynamicModel: async (ctx) => {
-        const scope = dynamicModelScope(ctx);
         const { resolveApiKeyForProvider } =
           await import("openclaw/plugin-sdk/provider-auth-runtime");
         const apiKey = (
@@ -563,23 +580,34 @@ export default defineSingleProviderPluginEntry({
           })
         )?.apiKey;
         if (!apiKey) {
-          // Rebuilds publish atomically so catalog errors keep the prior snapshot.
-          // Missing credentials are the sole fail-closed clearing path.
-          dynamicModels.delete(scope);
-          return;
+          return undefined;
         }
         const providerConfig = await buildClawRouterProviderConfig({
           apiKey,
           discoveryApiKey: apiKey,
           baseUrl: ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config),
         });
-        dynamicModels.set(scope, buildRuntimeModels(providerConfig));
+        const model = providerConfig.models.find((entry) => entry.id === ctx.modelId);
+        if (!model) {
+          return undefined;
+        }
+        return {
+          ...model,
+          api: model.api ?? providerConfig.api,
+          baseUrl: model.baseUrl ?? providerConfig.baseUrl,
+          provider: PROVIDER_ID,
+          input: model.input.filter(
+            (entry): entry is "text" | "image" => entry === "text" || entry === "image",
+          ),
+        };
       },
       normalizeConfig: ({ providerConfig }) => {
         const baseUrl = normalizeClawRouterApiBaseUrl(providerConfig.baseUrl);
         return baseUrl !== providerConfig.baseUrl ? { ...providerConfig, baseUrl } : undefined;
       },
       normalizeResolvedModel: ({ model }) => normalizeClawRouterResolvedModel(model),
+      resolveFastModeSupport,
+      resolveServiceTiers,
       wrapSimpleCompletionStreamFn: wrapClawRouterProviderStream,
       wrapStreamFn: wrapClawRouterProviderStream,
       buildReplayPolicy: (ctx) => {

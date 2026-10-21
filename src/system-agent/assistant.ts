@@ -13,7 +13,6 @@ import {
   buildSystemAgentGreetingUserPrompt,
   parseSystemAgentAssistantPlanText,
   type SystemAgentAssistantPlan,
-  type SystemAgentAssistantTurn,
 } from "./assistant-prompts.js";
 import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 import type { SystemAgentGreetingFacts, SystemAgentGreetingPlan } from "./greeting.js";
@@ -36,14 +35,6 @@ export {
   type SystemAgentAssistantTurn,
 } from "./assistant-prompts.js";
 
-export type SystemAgentAssistantPlanner = (params: {
-  input: string;
-  overview: SystemAgentOverview;
-  history?: SystemAgentAssistantTurn[];
-  pendingOperation?: string;
-  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-}) => Promise<SystemAgentAssistantPlan | null>;
-
 const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
   type: "object",
   properties: {
@@ -58,8 +49,6 @@ const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
 export async function planSystemAgentCommand(params: {
   input: string;
   overview: SystemAgentOverview;
-  history?: SystemAgentAssistantTurn[];
-  pendingOperation?: string;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
 }): Promise<SystemAgentAssistantPlan | null> {
   const input = params.input.trim();
@@ -69,8 +58,6 @@ export async function planSystemAgentCommand(params: {
   const prompt = buildSystemAgentAssistantUserPrompt({
     input,
     overview: params.overview,
-    ...(params.history ? { history: params.history } : {}),
-    ...(params.pendingOperation ? { pendingOperation: params.pendingOperation } : {}),
   });
   const result = await runConfiguredSystemAgentText({
     prompt,
@@ -108,11 +95,7 @@ async function runConfiguredSystemAgentText(params: {
   timeoutMs?: number;
   responseFormat?: Record<string, unknown>;
 }): Promise<{ text: string; modelLabel: string } | null> {
-  const route = await requireSystemAgentInferenceRoute(
-    params.verifiedInference,
-    undefined,
-    "planner",
-  );
+  const route = await requireSystemAgentInferenceRoute(params.verifiedInference, "planner");
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
     typeof resolveSystemAgentExpectedAgentHarnessRuntimeArtifact
   >;
@@ -213,6 +196,6 @@ async function runConfiguredSystemAgentText(params: {
   }
   // Cleanup is the final suspension before callers can display model text, so
   // authority must still match after cleanup completes.
-  await requireSystemAgentInferenceRoute(params.verifiedInference, undefined, "planner");
+  await requireSystemAgentInferenceRoute(params.verifiedInference, "planner");
   return { text, modelLabel: route.modelLabel };
 }

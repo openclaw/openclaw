@@ -1,5 +1,4 @@
 /** Resolves and validates session-target keys used by cron jobs and delivery. */
-import type { CronDelivery } from "./types.js";
 
 const INVALID_CRON_SESSION_TARGET_ID_ERROR = "invalid cron sessionTarget session id";
 
@@ -52,8 +51,6 @@ export function resolveCronDeliverySessionKey(job: {
   sessionTarget?: string | null;
   sessionKey?: string | null;
   sourceConversation?: { sessionKey: string };
-  payload?: { kind: string };
-  delivery?: CronDelivery;
 }): string | undefined {
   const conversationKey = job.sourceConversation?.sessionKey.trim();
   if (conversationKey) {

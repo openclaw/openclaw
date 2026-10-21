@@ -3,6 +3,11 @@ import { resolveContextTokensForModelFromCache } from "../agents/context-resolut
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
+import {
+  recordReasoningSuppressedDiagnostic,
+  resetDiagnosticSessionStateForTest,
+} from "../logging/diagnostic-session-state.js";
+import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -226,6 +231,7 @@ describe("getStatusSummary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetDiagnosticSessionStateForTest();
     vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
     setActiveDegradedPlugins([]);
     clearActiveCredentialDegradedOwner("account", "telegram:work");
@@ -398,6 +404,24 @@ describe("getStatusSummary", () => {
     expect(statusSummaryMocks.withSessionEntriesFromStoresInWorker).not.toHaveBeenCalled();
   });
 
+  it("projects observed reasoning mismatches without exposing incognito or redacted model names", async () => {
+    recordReasoningSuppressedDiagnostic(
+      { sessionId: "private-session", sessionKey: "agent:main:dashboard:incognito-fixture" },
+      "ollama",
+      "private-model",
+    );
+    expect((await getStatusSummary()).modelReasoningWarning).toBeUndefined();
+    recordReasoningSuppressedDiagnostic({ sessionId: "visible-session" }, "ollama", "qwen3:4b");
+
+    const visible = await getStatusSummary();
+    expect(visible.modelReasoningWarning).toContain('"ollama/qwen3:4b"');
+    expect(visible.modelReasoningWarning).toContain("Set reasoning: true");
+    expect(visible.modelReasoningWarning).not.toContain("private-model");
+    const redacted = await getStatusSummary({ includeSensitive: false });
+    expect(redacted.modelReasoningWarning).toContain("Set reasoning: true");
+    expect(redacted.modelReasoningWarning).not.toContain("qwen3:4b");
+  });
+
   it("skips session model discovery and projection when sensitive output is disabled", async () => {
     setSession({ model: "gpt-5.5", modelProvider: "openai", totalTokens: 42 });
 
@@ -504,6 +528,69 @@ describe("getStatusSummary", () => {
       ["telegram:work", "cold", "secret resolution failed"],
     ]);
     expect(JSON.stringify(summary.degradedSecretOwners)).not.toContain("PRIVATE_REF_ID");
+  });
+
+  it("reports utility capability warnings with details only for configuration access", async () => {
+    const backend: CliBackendPlugin = {
+      id: "fixture-cli",
+      config: { command: "fixture" },
+      nativeToolMode: "always-on",
+      ownsNativeCompaction: false,
+      runtimeArtifact: {
+        kind: "bundled-package-tree",
+        packageName: "@fixture/cli",
+        entrypoint: "command",
+      },
+    };
+    const setup = vi
+      .spyOn(await import("../plugins/setup-registry.js"), "resolvePluginSetupCliBackend")
+      .mockImplementation(({ backend: id }) =>
+        id === backend.id ? { pluginId: "fixture", backend } : undefined,
+      );
+    const registered = vi
+      .spyOn(await import("../plugins/cli-backends.runtime.js"), "resolveRuntimeCliBackends")
+      .mockReturnValue([]);
+    const config = {
+      agents: {
+        defaults: { utilityModel: "fixture-cli/small" },
+        entries: { worker: {} },
+      },
+    };
+    try {
+      const visible = await getStatusSummary({ config, includeChannelSummary: false });
+      expect(visible.utilityModelWarnings).toEqual([
+        expect.objectContaining({
+          path: "agents.defaults.utilityModel",
+          message: expect.stringContaining('Utility model "fixture-cli/small"'),
+        }),
+      ]);
+      const redacted = await getStatusSummary({
+        config,
+        includeSensitive: false,
+        includeChannelSummary: false,
+      });
+      expect(redacted.utilityModelWarnings).toEqual([
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "Choose a capable utility model or add capable utilityModel fallbacks",
+          ),
+        }),
+      ]);
+      expect(JSON.stringify(redacted.utilityModelWarnings)).not.toMatch(
+        /fixture-cli|small|worker|agents\./,
+      );
+      for (const includeSensitive of [true, false]) {
+        const capable = await getStatusSummary({
+          config: { agents: { ...config.agents, defaults: { utilityModel: "local/capable" } } },
+          includeSensitive,
+          includeChannelSummary: false,
+        });
+        expect(capable.utilityModelWarnings).toBeUndefined();
+      }
+    } finally {
+      setup.mockRestore();
+      registered.mockRestore();
+    }
   });
 
   it("reports every plugin configured unavailable by startup verification", async () => {

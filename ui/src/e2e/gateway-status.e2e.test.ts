@@ -242,6 +242,7 @@ suite.define(() => {
       await retry.waitFor({ state: "visible" });
       await page.keyboard.press("Tab");
       expect(await retry.evaluate((element) => element === document.activeElement)).toBe(true);
+      await page.clock.resume();
 
       await composer.locator("textarea").focus();
       await page.setViewportSize({ width: 1280, height: 900 });

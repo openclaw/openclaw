@@ -268,7 +268,9 @@ it.each(["value", "apiKey", "account"])(
       };
     };
     const resourceLoader = client
-      ? createResourceLoader(new Map([["message_end", [extendReply]]]))
+      ? await createResourceLoader((api) => {
+          api.on("message_end", extendReply);
+        })
       : undefined;
     const { session } = await createTestSession({ sessionManager, customTools, resourceLoader });
     const started: string[] = [];

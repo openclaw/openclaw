@@ -42,6 +42,8 @@ On npm 12, local `.tgz` and `.tar.gz` installs and updates need a comma-free arc
 
 Install-method switches verify the replacement before retiring the current owner. Source wrappers use a same-directory atomic replacement; when an npm shim shares that path, the installer moves only an identity-matched source wrapper aside and restores it if npm installation, lifecycle checks, or candidate verification fails. On upgrades, `install.sh` and `install.ps1` run `openclaw doctor --fix`; repair or final verification failure exits nonzero, and the success banner appears only after those steps complete.
 
+Installer help includes [official OpenClaw support](https://community.openclaw.ai/) alongside the self-service FAQ. Handled installation failures also show the support link in human-readable output; `install-cli.sh --json` keeps its existing error and completion events without human support text. Review diagnostics for credentials and personal data before sharing them.
+
 ## Private Node recovery
 
 When the active Node.js is unsupported, the CLI can offer `Update NodeJS: Y/N [N]:` before loading OpenClaw. Enter **Y** to install a checksum-verified private runtime and retry the same command. Provisioning leaves system Node.js, shell settings, OpenClaw packages, and Gateway services unchanged; the retried command keeps its normal behavior. Enter **N**, press Enter, or cancel to receive manual upgrade instructions.

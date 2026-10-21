@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal } from "solid-js";
+import { createComponent } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ControlUiHost,
@@ -19,6 +19,7 @@ import { resetComposerFixture } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 import {
   installTranscriptDomMocks,
@@ -69,31 +70,21 @@ function createPluginChat(replacement: ControlUiReplacement<"composer">, initial
     },
   } as unknown as ApplicationContext;
   const provider = document.body.appendChild(createApplicationContextProvider(context));
-  let current: ChatProps;
-  let update: ((next: ChatProps) => void) | undefined;
-  function render(props: ChatProps) {
-    current = props;
-    if (update) {
-      update(props);
-    } else {
-      const [value, setValue] = createSignal(props, { equals: false });
-      update = (next) => setValue(() => ({ ...next }));
-      const view = mountSolid(
-        () =>
-          createComponent(ChatView, {
-            get props() {
-              return value();
-            },
-          }),
-        { container: provider, wrapper: createSolidApplicationContextProvider(context).wrapper },
-      );
-      onTestFinished(() => {
-        view.unmount();
-        current.transcript.dispose();
-        lifetime.abort();
-        provider.remove();
-      });
-    }
+  function render(overrides: Partial<ChatProps>) {
+    const props = createChatProps({ sessionKey: "agent:main:main", ...overrides });
+    const view = mountSolid(
+      () => {
+        const questions = createComposerQuestions(props.paneId, () => props);
+        return createComponent(ChatView, { props, questions });
+      },
+      { container: provider, wrapper: createSolidApplicationContextProvider(context).wrapper },
+    );
+    onTestFinished(() => {
+      view.unmount();
+      props.transcript.dispose();
+      lifetime.abort();
+      provider.remove();
+    });
     flush();
     props.transcript.start();
     props.transcript.update();
@@ -103,6 +94,7 @@ function createPluginChat(replacement: ControlUiReplacement<"composer">, initial
     provider,
     render,
     reportError,
+    count: (selector: string) => provider.querySelectorAll(selector).length,
     selectReplacement: () => {
       selected = true;
       for (const listener of listeners) {
@@ -119,7 +111,7 @@ it.each([
 ] as const)(
   "keeps one usable async question when switching to a $mode plugin composer",
   async ({ mode, action }) => {
-    const { provider, render, reportError, selectReplacement } = createPluginChat(
+    const { provider, render, reportError, selectReplacement, count } = createPluginChat(
       {
         id: "custom-draft",
         label: "Custom draft",
@@ -141,31 +133,26 @@ it.each([
       false,
     );
     const submit = vi.fn(async () => true);
-    render(
-      createChatProps({
-        paneId: "plugin-question",
-        sessionKey: "agent:main:main",
-        messages: [
-          {
-            role: "assistant",
-            content: "Which audience?",
-            openclawAsyncDelivery: {
-              itemId: "audience",
-              questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
-            },
+    render({
+      paneId: "plugin-question",
+      messages: [
+        {
+          role: "assistant",
+          content: "Which audience?",
+          openclawAsyncDelivery: {
+            itemId: "audience",
+            questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
           },
-        ],
-        onAsyncQuestionSubmit: submit,
-      }),
-    );
+        },
+      ],
+      onAsyncQuestionSubmit: submit,
+    });
     selectReplacement();
     await waitForSolid(async () => {
       await questionPanelIn(provider);
-      expect(provider.querySelectorAll("openclaw-chat-question-panel")).toHaveLength(1);
-      expect(provider.querySelectorAll('textarea[aria-label="Custom draft"]')).toHaveLength(
-        mode === "nondelegating" ? 1 : 0,
-      );
-      expect(provider.querySelectorAll(".agent-chat__composer-combobox textarea")).toHaveLength(
+      expect(count("openclaw-chat-question-panel")).toBe(1);
+      expect(count('textarea[aria-label="Custom draft"]')).toBe(mode === "nondelegating" ? 1 : 0);
+      expect(count(".agent-chat__composer-combobox textarea")).toBe(
         mode === "nondelegating" ? 0 : 1,
       );
     });
@@ -176,7 +163,7 @@ it.each([
     flush();
     provider
       .querySelector<HTMLButtonElement>(
-        action === "submit" ? ".chat-question-panel__advance" : ".chat-question-panel__skip",
+        `.chat-question-panel__${action === "submit" ? "advance" : "skip"}`,
       )!
       .click();
     await vi.waitFor(() => {
@@ -213,23 +200,20 @@ it("keeps one actionable local queue row with a nondelegating plugin composer", 
     },
   });
   const onQueueRemove = vi.fn();
-  render(
-    createChatProps({
-      paneId: "plugin-queue-nondelegating",
-      sessionKey: "agent:main:main",
-      queue: [
-        {
-          id: "local-row",
-          sendRunId: "accepted-run",
-          sessionKey: "agent:main:main",
-          text: "Keep this editable",
-          createdAt: 100,
-          sendState: "waiting-idle",
-        },
-      ],
-      onQueueRemove,
-    }),
-  );
+  render({
+    paneId: "plugin-queue-nondelegating",
+    queue: [
+      {
+        id: "local-row",
+        sendRunId: "accepted-run",
+        sessionKey: "agent:main:main",
+        text: "Keep this editable",
+        createdAt: 100,
+        sendState: "waiting-idle",
+      },
+    ],
+    onQueueRemove,
+  });
   flush();
   await waitForSolid(() => expect(provider.querySelectorAll(".chat-queue__item")).toHaveLength(1));
   const row = provider.querySelector<HTMLElement>(".chat-queue__item");

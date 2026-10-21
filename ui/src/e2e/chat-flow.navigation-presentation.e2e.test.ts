@@ -302,13 +302,23 @@ suite.define(() => {
 
     const cells = page.locator(".chat-split-view__cell");
     const actionRows = headers.locator(".chat-pane__actions");
-    await expect.poll(() => actionRows.first().isVisible()).toBe(false);
+    expect(
+      await headers.first().getByRole("button", { name: "Details", exact: true }).isVisible(),
+    ).toBe(true);
+    await expect
+      .poll(() => headers.first().getByRole("button", { name: "Layout", exact: true }).isVisible())
+      .toBe(false);
     await expect.poll(() => actionRows.last().isVisible()).toBe(true);
 
     await panes.first().click({ position: { x: 20, y: 80 } });
     await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
     await expect.poll(() => actionRows.first().isVisible()).toBe(true);
-    await expect.poll(() => actionRows.last().isVisible()).toBe(false);
+    expect(
+      await headers.last().getByRole("button", { name: "Details", exact: true }).isVisible(),
+    ).toBe(true);
+    await expect
+      .poll(() => headers.last().getByRole("button", { name: "Layout", exact: true }).isVisible())
+      .toBe(false);
     const paneEmphasis = await cells.evaluateAll((nodes) =>
       nodes.map((cell) => {
         const style = getComputedStyle(cell);
@@ -328,22 +338,30 @@ suite.define(() => {
     const lastPane = page.locator(".chat-split-view__pane").last();
     await lastPane.click({ position: { x: 20, y: 80 } });
     await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
-    await expect.poll(() => actionRows.first().isVisible()).toBe(false);
+    expect(
+      await headers.first().getByRole("button", { name: "Details", exact: true }).isVisible(),
+    ).toBe(true);
+    await expect
+      .poll(() => headers.first().getByRole("button", { name: "Layout", exact: true }).isVisible())
+      .toBe(false);
     await expect.poll(() => actionRows.last().isVisible()).toBe(true);
     const targetHeader = headers.first();
     const headerGeometry = await headers.evaluateAll((nodes) =>
       nodes.map((header) => {
         const owner = header.closest("openclaw-chat-pane");
         const main = owner?.querySelector('[data-region="main"]:not([hidden])');
-        if (!main) {
-          throw new Error("Each task toolbar must have visible main content");
+        const frame = header.closest(".sidebar-region__header");
+        if (!main || !frame) {
+          throw new Error("Each task toolbar must have its frame and visible main content");
         }
         const toolbar = header.getBoundingClientRect();
+        const headerFrame = frame.getBoundingClientRect();
         const content = main.getBoundingClientRect();
         return {
           height: toolbar.height,
-          left: Math.abs(toolbar.left - content.left),
-          right: Math.abs(toolbar.right - content.right),
+          toggleReserve: headerFrame.right - toolbar.right,
+          left: Math.abs(headerFrame.left - content.left),
+          right: Math.abs(headerFrame.right - content.right),
           gap: Math.abs(toolbar.bottom - content.top),
         };
       }),

@@ -36,6 +36,9 @@ const { values } = parseArgs({
     "poll-ms": { type: "string", default: "0" },
     "churn-ms": { type: "string", default: "0" },
     "nested-cwd": { type: "boolean" },
+    "missing-cwd": { type: "boolean" },
+    "nested-repository": { type: "boolean" },
+    "excludes-file": { type: "boolean" },
     "start-at": { type: "string" },
     output: { type: "string" },
     revision: { type: "string" },
@@ -59,6 +62,12 @@ checkout. The RPC boundary starts an isolated loopback Gateway on --port >=40000
 Use --tracked 267000 at seed time for an unchanged large tracked inventory. Files
 are empty and written sequentially; Linux Dirty memory is checked every 1,000 files.
 Use --nested-cwd to launch sessions from the existing new/ subdirectory.
+Use --missing-cwd to remove that subdirectory after session creation and verify
+negative-result reuse, then recreate it and verify recovery after polling.
+At seed time, --nested-repository replaces one untracked file with an opaque
+agent-created Git checkout. --excludes-file adds an external core.excludesFile
+and an ignored file in a >64 KiB branch config; RPC measurement verifies an
+ignore-file edit is visible.
 Add --poll-state-dir <other seeded fixture> to poll multiple checkouts concurrently
 through separate sessions. Extra fixtures are read-only and prohibit --mutate.
 Use --observe-git-queues to collect queue timings through benchmark-only loader
@@ -86,6 +95,7 @@ const repo = path.join(root, "repository");
 const marker = path.join(root, "checkout-diff-fixture.json");
 const trace = path.join(root, "git-trace.jsonl");
 const untracked = integer(values.untracked, "--untracked", 4);
+assert(!values["nested-repository"] || untracked >= 5, "--nested-repository needs --untracked >=5");
 if (untracked > 100) {
   throw new Error("--untracked must not exceed the 100-file diff response cap");
 }
@@ -94,6 +104,11 @@ const tracked = integer(values.tracked, "--tracked");
 assert(tracked <= 500_000, "--tracked must not exceed 500000 files");
 const pollMs = integer(values["poll-ms"], "--poll-ms");
 const churnMs = integer(values["churn-ms"], "--churn-ms");
+assert(
+  !values["missing-cwd"] ||
+    (values.boundary === "rpc" && !values.mutate && !churnMs && !values["poll-state-dir"]?.length),
+  "--missing-cwd requires RPC polling without mutation or extra fixtures",
+);
 assert(!churnMs || values.boundary === "rpc", "--churn-ms requires --boundary rpc");
 assert(!churnMs || !values["poll-state-dir"]?.length, "--churn-ms requires one owned checkout");
 const gitEnv = {
@@ -170,7 +185,7 @@ async function seed() {
   await git("add", "staged.txt");
   await fs.unlink(path.join(repo, "deleted.txt"));
   await fs.mkdir(path.join(repo, "new"));
-  for (let index = 0; index < untracked - 4; index++) {
+  for (let index = 0; index < untracked - 4 - (values["nested-repository"] ? 1 : 0); index++) {
     await fs.writeFile(
       path.join(repo, "new", `text-${String(index).padStart(3, "0")}.txt`),
       `Synthetic untracked file ${index}\n${"Added content\n".repeat(16)}`,
@@ -182,6 +197,40 @@ async function seed() {
   await fs.symlink("../modified.txt", path.join(repo, "new", "link.txt"));
   await fs.mkdir(path.join(repo, "ignored"));
   await fs.writeFile(path.join(repo, "ignored", "hidden.txt"), "Ignored synthetic content\n");
+  if (values["nested-repository"]) {
+    const nestedRepo = path.join(repo, "agent-clone");
+    await fs.mkdir(nestedRepo);
+    const nestedGit = (...args: string[]) =>
+      promisify(execFile)("git", ["-C", nestedRepo, ...args], { env: gitEnv });
+    await nestedGit("init", "--template=", "--initial-branch=main");
+    await fs.writeFile(path.join(nestedRepo, "README.md"), "Synthetic nested checkout\n");
+    await nestedGit("add", ".");
+    await nestedGit(
+      "-c",
+      "commit.gpgSign=false",
+      "commit",
+      "--quiet",
+      "-m",
+      "test: seed agent clone",
+    );
+  }
+  if (values["excludes-file"]) {
+    await fs.writeFile(path.join(root, "git-excludes"), "external-ignored.txt\n");
+    await fs.writeFile(path.join(repo, "external-ignored.txt"), "External ignore control\n");
+    await git("config", "core.excludesFile", path.join(root, "git-excludes"));
+    const commonGitDir = path.resolve(
+      repo,
+      (await git("rev-parse", "--git-common-dir")).stdout.trim(),
+    );
+    await fs.appendFile(
+      path.join(commonGitDir, "config"),
+      Array.from(
+        { length: 1000 },
+        (_, index) =>
+          `[branch "synthetic-agent-task-${index}"]\n\tremote = origin\n\tmerge = refs/heads/synthetic-agent-task-${index}\n`,
+      ).join(""),
+    );
+  }
   const heavyFiles = integer(values["heavy-files"], "--heavy-files", 1);
   const heavyLines = integer(values["heavy-lines"], "--heavy-lines", 1);
   if (values.boundary === "rpc") {
@@ -211,6 +260,8 @@ async function seed() {
     untracked,
     tracked: 3,
     unchangedTracked: tracked + 1,
+    nestedRepository: values["nested-repository"] === true,
+    excludesFile: values["excludes-file"] === true,
   };
   await fs.writeFile(marker, `${JSON.stringify(fixture, null, 2)}\n`);
   console.log(JSON.stringify(fixture));
@@ -506,7 +557,7 @@ async function measureRpc(fixture: object) {
       await ready.promise;
     }
     const targets = checkoutRoots.map((cwd, checkout) => ({
-      cwd: values["nested-cwd"] ? path.join(cwd, "new") : cwd,
+      cwd: values["nested-cwd"] || values["missing-cwd"] ? path.join(cwd, "new") : cwd,
       params: {
         sessionKey: `agent:main:synthetic-diff-contention${checkout ? `-${checkout}` : ""}`,
         scope: "all",
@@ -519,6 +570,9 @@ async function measureRpc(fixture: object) {
         cwd: target.cwd,
         visibility: "shared",
       });
+    }
+    if (values["missing-cwd"]) {
+      await fs.rename(path.join(repo, "new"), path.join(repo, "missing-cwd-saved"));
     }
     const warmupStarted = performance.now();
     const responseHash = (
@@ -535,6 +589,18 @@ async function measureRpc(fixture: object) {
       ),
     );
     const warmupHashes = warmupResults.map(responseHash);
+    for (const [index, result] of warmupResults.entries()) {
+      assert.equal(result.unavailableReason, values["missing-cwd"] ? "not_git" : undefined);
+      const currentFixture = index === 0 ? fixture : extraFixtures[index - 1]!;
+      if ("nestedRepository" in currentFixture && currentFixture.nestedRepository === true) {
+        const nested = result.files.find((file) => file.path === "agent-clone/");
+        assert(
+          nested?.untracked && nested.truncated,
+          "nested checkout must remain an opaque entry",
+        );
+      }
+      assert(!result.files.some((file) => file.path === "external-ignored.txt"));
+    }
     const warmupRpcMs = performance.now() - warmupStarted;
     await Promise.all(
       Array.from({ length: Math.max(1, background) }, () =>
@@ -576,6 +642,7 @@ async function measureRpc(fixture: object) {
       }
     };
     measured = true;
+    const cpuStarted = process.cpuUsage();
     const started = performance.now();
     deadline = started + durationMs;
     await Promise.all([
@@ -652,7 +719,10 @@ async function measureRpc(fixture: object) {
                 const result = await peer.request<
                   import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult
                 >("sessions.diff", target.params);
-                assert.equal(result.unavailableReason, undefined);
+                assert.equal(
+                  result.unavailableReason,
+                  values["missing-cwd"] ? "not_git" : undefined,
+                );
                 if (values.mutate) {
                   const modified = result.files.find((file) => file.path === "modified.txt");
                   assert(modified, "mutated file must reach RPC response");
@@ -664,11 +734,11 @@ async function measureRpc(fixture: object) {
                   assert.equal(modified.deletions, 0);
                 }
                 const hash = responseHash(result);
-                if (churnMs && !values.mutate) {
+                if (!values.mutate) {
                   assert.equal(
                     hash,
                     warmupHashes[checkout],
-                    "irrelevant churn must preserve the diff",
+                    "unchanged polling and irrelevant churn must preserve the diff",
                   );
                 }
                 rpcSamples.push({
@@ -686,8 +756,30 @@ async function measureRpc(fixture: object) {
       })(),
     ]);
     const elapsedMs = performance.now() - started;
+    const cpuUsed = process.cpuUsage(cpuStarted);
+    const processCpuMs = (cpuUsed.user + cpuUsed.system) / 1_000;
     await waitForDiagnosticEventsDrained();
     measured = false;
+    let missingRecoveryMs: number | null = null;
+    if (values["missing-cwd"]) {
+      await fs.rename(path.join(repo, "missing-cwd-saved"), path.join(repo, "new"));
+      const recoveryStarted = performance.now();
+      for (;;) {
+        const result = await peers[0]!.request<
+          import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult
+        >("sessions.diff", targets[0]!.params);
+        const recoveryMs = performance.now() - recoveryStarted;
+        assert(recoveryMs < 2_000, "recreated cwd must recover within two seconds");
+        if (
+          !result.unavailableReason &&
+          result.files.some((file) => file.path === "modified.txt")
+        ) {
+          missingRecoveryMs = recoveryMs;
+          break;
+        }
+        await delay(50);
+      }
+    }
     let editControlVerified = false;
     let editFirstPollVisible: boolean[] = [];
     let editVisibilityMs: number[] = [];
@@ -745,6 +837,27 @@ async function measureRpc(fixture: object) {
         await fs.writeFile(changedFile, originalContent);
       }
     }
+    let excludesFileControlVerified: boolean | null = null;
+    if ("excludesFile" in fixture && fixture.excludesFile === true) {
+      const excludesPath = path.join(root, "git-excludes");
+      const original = await fs.readFile(excludesPath);
+      try {
+        await fs.writeFile(excludesPath, "");
+        const results = await Promise.all(
+          peers.map((peer) =>
+            peer.request<import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult>(
+              "sessions.diff",
+              targets[0]!.params,
+            ),
+          ),
+        );
+        excludesFileControlVerified = results.every((result) =>
+          result.files.some((file) => file.path === "external-ignored.txt" && file.additions === 1),
+        );
+      } finally {
+        await fs.writeFile(excludesPath, original);
+      }
+    }
     assert(
       rpcSamples.length > 0,
       "No RPC polls completed; reduce --poll-ms or extend --duration-ms",
@@ -796,11 +909,14 @@ async function measureRpc(fixture: object) {
       agents,
       maintenance,
       churnMs,
+      missingCwd: values["missing-cwd"] === true,
+      missingRecoveryMs,
       completedChurn: churnTimings.length,
       churnLatencyMs: churnTimings.length ? summarize(churnTimings) : null,
       editControlVerified,
       editFirstPollVisible,
       editVisibilityMs,
+      excludesFileControlVerified,
       durationMs,
       warmupRpcMs,
       completedRpc: rpcSamples.length,
@@ -815,6 +931,8 @@ async function measureRpc(fixture: object) {
       pollMs,
       node: process.version,
       elapsedMs,
+      processCpuMs,
+      processCpuMsPerRpc: processCpuMs / rpcSamples.length,
       rpcLatencyMs: summarize(rpcSamples.map((sample) => sample.elapsedMs)),
       rpcRoundLatencyMs: summarize([...roundMaxMs.values()]),
       heavyContentMs: heavyMs.length ? summarize(heavyMs) : null,
@@ -885,7 +1003,17 @@ async function measureRpc(fixture: object) {
     if (churnMs) {
       assert(editControlVerified, "a real post-churn edit must reach every tab within 12 seconds");
     }
+    assert(excludesFileControlVerified !== false, "an external ignore edit must reach every tab");
   } finally {
+    if (values["missing-cwd"]) {
+      await fs
+        .rename(path.join(repo, "missing-cwd-saved"), path.join(repo, "new"))
+        .catch((error: unknown) => {
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+            throw error;
+          }
+        });
+    }
     stopPhases();
     operationChannel.unsubscribe(observe);
     for (const peer of peers) {

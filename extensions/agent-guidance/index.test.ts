@@ -11,10 +11,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { PluginHookRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { loadGuidance } from "./src/guidance.js";
+
+type BeforePromptBuildHook = PluginHookRegistration<"before_prompt_build">["handler"];
+const promptEvent: Parameters<BeforePromptBuildHook>[0] = {
+  prompt: "Synthetic request.",
+  messages: [],
+};
+const mainContext: Parameters<BeforePromptBuildHook>[1] = { agentId: "main" };
 
 describe("agent-guidance", () => {
   let directory: string;
@@ -29,6 +36,28 @@ describe("agent-guidance", () => {
     return { directory, agents: ["main"], append: ["instructions.md"], ...extra };
   }
 
+  function registerGuidance(
+    pluginConfig: OpenClawPluginApi["pluginConfig"],
+  ): BeforePromptBuildHook {
+    const registrations: PluginHookRegistration[] = [];
+    plugin.register(
+      createTestPluginApi({
+        pluginConfig,
+        on(hookName, handler) {
+          registrations.push({ pluginId: "agent-guidance", source: "test", hookName, handler });
+        },
+      }),
+    );
+    const registration = registrations.find(
+      (entry): entry is PluginHookRegistration<"before_prompt_build"> =>
+        entry.hookName === "before_prompt_build",
+    );
+    if (!registration) {
+      throw new Error("expected before_prompt_build hook registration");
+    }
+    return registration.handler;
+  }
+
   it("registers only the native prompt hook and is disabled by default", () => {
     const on = vi.fn<OpenClawPluginApi["on"]>();
     plugin.register(createTestPluginApi({ pluginConfig: config(), on }));
@@ -37,34 +66,37 @@ describe("agent-guidance", () => {
     expect(manifest.enabledByDefault).toBe(false);
   });
 
-  it("adds ordered system context only for exact selected agent IDs", () => {
+  it("adds ordered system context only for exact selected agent IDs", async () => {
     writeFileSync(path.join(directory, "first.md"), "First.");
     writeFileSync(path.join(directory, "second.md"), "Second.");
-    const hook = loadGuidance(config({ prepend: ["first.md", "second.md"] }));
-    expect(hook({}, { agentId: "main" })).toEqual({
+    const hook = registerGuidance(config({ prepend: ["first.md", "second.md"] }));
+    expect(await hook(promptEvent, mainContext)).toEqual({
       prependSystemContext: "First.\n\nSecond.",
       appendSystemContext: "Synthetic guidance V1.",
     });
-    expect(hook({ agentId: "main" }, { agentId: "other" })).toBeUndefined();
-    expect(hook({}, { agentId: "MAIN" })).toBeUndefined();
-    expect(hook({}, {})).toBeUndefined();
+    const misleadingEvent = { ...promptEvent, agentId: "main" };
+    expect(await hook(misleadingEvent, { agentId: "other" })).toBeUndefined();
+    expect(await hook(promptEvent, { agentId: "MAIN" })).toBeUndefined();
+    expect(await hook(promptEvent, {})).toBeUndefined();
   });
 
-  it("retains a registration snapshot until a new registration reads edited files", () => {
-    const hook = loadGuidance(config());
+  it("retains a registration snapshot until a new registration reads edited files", async () => {
+    const hook = registerGuidance(config());
     writeFileSync(path.join(directory, "instructions.md"), "Synthetic guidance V2.");
-    expect(hook({}, { agentId: "main" })).toEqual({
+    expect(await hook(promptEvent, mainContext)).toEqual({
       appendSystemContext: "Synthetic guidance V1.",
     });
-    expect(loadGuidance(config())({}, { agentId: "main" })).toEqual({
+    expect(await registerGuidance(config())(promptEvent, mainContext)).toEqual({
       appendSystemContext: "Synthetic guidance V2.",
     });
   });
 
-  it("accepts nested relative names", () => {
+  it("accepts nested relative names", async () => {
     mkdirSync(path.join(directory, "nested"));
     writeFileSync(path.join(directory, "nested", "rules.md"), "Nested.");
-    expect(loadGuidance(config({ append: ["nested/rules.md"] }))({}, { agentId: "main" })).toEqual({
+    expect(
+      await registerGuidance(config({ append: ["nested/rules.md"] }))(promptEvent, mainContext),
+    ).toEqual({
       appendSystemContext: "Nested.",
     });
   });
@@ -88,8 +120,12 @@ describe("agent-guidance", () => {
     ["duplicate files", { prepend: ["instructions.md"] }],
     ["too many files", { append: Array.from({ length: 9 }, (_, i) => `${i}.md`) }],
   ])("rejects %s configuration", (_name, extra) => {
-    const value = extra === undefined || Array.isArray(extra) ? extra : config(extra);
-    expect(() => loadGuidance(value)).toThrow("agent-guidance:");
+    if (Array.isArray(extra)) {
+      expect(plugin.configSchema?.safeParse?.(extra).success).toBe(false);
+      return;
+    }
+    const value = extra === undefined ? undefined : config(extra);
+    expect(() => registerGuidance(value)).toThrow("agent-guidance:");
   });
 
   it.each([
@@ -106,16 +142,16 @@ describe("agent-guidance", () => {
     "a/",
     "a".repeat(257),
   ])("rejects unsafe file name %s", (name) =>
-    expect(() => loadGuidance(config({ append: [name] }))).toThrow("relative file names"),
+    expect(() => registerGuidance(config({ append: [name] }))).toThrow("relative file names"),
   );
 
   it.each(["", " \n", "bad\0text", Buffer.from([0xff]), "a".repeat(16385)])(
     "rejects invalid file content without disclosing text or paths (%#)",
     (content) => {
       writeFileSync(path.join(directory, "instructions.md"), content);
-      expect(() => loadGuidance(config())).toThrow("instruction file 1 could not be loaded");
+      expect(() => registerGuidance(config())).toThrow("instruction file 1 could not be loaded");
       try {
-        loadGuidance(config());
+        registerGuidance(config());
       } catch (error) {
         expect(String(error)).not.toContain(directory);
         expect(String(error)).not.toContain("bad\0text");
@@ -123,14 +159,18 @@ describe("agent-guidance", () => {
     },
   );
 
-  it("counts UTF-8 bytes and separators against the combined limit", () => {
+  it("counts UTF-8 bytes and separators against the combined limit", async () => {
     const names = ["a.md", "b.md", "c.md", "d.md"];
     for (const name of names) {
       writeFileSync(path.join(directory, name), "\u00e9".repeat(8192));
     }
-    expect(() => loadGuidance(config({ append: names }))).toThrow("combined instructions exceed");
+    expect(() => registerGuidance(config({ append: names }))).toThrow(
+      "combined instructions exceed",
+    );
     writeFileSync(path.join(directory, "d.md"), "\u00e9".repeat(8189));
-    expect(loadGuidance(config({ append: names }))({}, { agentId: "main" })).toBeDefined();
+    expect(
+      await registerGuidance(config({ append: names }))(promptEvent, mainContext),
+    ).toBeDefined();
   });
 
   it.each(["missing", "directory", "symlink", "hardlink", "linked parent", "linked root"])(
@@ -153,7 +193,7 @@ describe("agent-guidance", () => {
             ? config({ directory: path.join(directory, "linked"), append: ["target.md"] })
             : config({ append: ["linked/target.md"] });
       }
-      expect(() => loadGuidance(options)).toThrow("instruction file 1 could not be loaded");
+      expect(() => registerGuidance(options)).toThrow("instruction file 1 could not be loaded");
     },
   );
 
@@ -181,7 +221,7 @@ describe("agent-guidance", () => {
     (files) => {
       const value = { directory, agents: ["main"], ...files };
       expect(plugin.configSchema?.safeParse?.(value).success).toBe(false);
-      expect(() => loadGuidance(value)).toThrow("configure 1 to 8 instruction files in total");
+      expect(() => registerGuidance(value)).toThrow("configure 1 to 8 instruction files in total");
     },
   );
 
@@ -191,10 +231,10 @@ describe("agent-guidance", () => {
     { prepend: [], append: ["instructions.md"] },
     { prepend: ["instructions.md"], append: [] },
     { prepend: ["instructions.md"], append: ["second.md"] },
-  ])("accepts nonempty instruction lists through schema and registration (%#)", (files) => {
+  ])("accepts nonempty instruction lists through schema and registration (%#)", async (files) => {
     writeFileSync(path.join(directory, "second.md"), "Second.");
     const value = { directory, agents: ["main"], ...files };
     expect(plugin.configSchema?.safeParse?.(value).success).toBe(true);
-    expect(loadGuidance(value)({}, { agentId: "main" })).toBeDefined();
+    expect(await registerGuidance(value)(promptEvent, mainContext)).toBeDefined();
   });
 });

@@ -8,6 +8,7 @@ import {
   projectGatewayClawAddPlan,
   type GatewayClawAddPlanningContext,
 } from "./gateway-add-plan.js";
+import { plansMatchAcrossSourceRoots } from "./gateway-plan-projection.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { readClawManifestFile } from "./reader.js";
 import type { ClawReadResult } from "./types.js";
@@ -59,6 +60,34 @@ const buildPlan = (
 ) => buildGatewayClawAddPlan(source, { config, agentId, sourceMcpServers: {} });
 
 describe("Gateway Claw Add plan", () => {
+  it("compares relocated plan paths without treating sibling paths as source contents", () => {
+    const previewRoot = path.resolve("preview-claw");
+    const persistedRoot = path.resolve("persisted-claw");
+    const external = path.resolve("external-claw");
+    const plan = (root: string, outside = external) => ({
+      planIntegrity: root,
+      paths: [root, { file: path.join(root, "nested", "asset"), outside }],
+      relative: "nested/asset",
+      scalar: [null, 7, true],
+    });
+    expect(
+      plansMatchAcrossSourceRoots({
+        preview: plan(previewRoot),
+        previewRoot,
+        persisted: plan(persistedRoot),
+        persistedRoot,
+      }),
+    ).toBe(true);
+    expect(
+      plansMatchAcrossSourceRoots({
+        preview: plan(previewRoot, `${previewRoot}-sibling`),
+        previewRoot,
+        persisted: plan(persistedRoot, `${persistedRoot}-sibling`),
+        persistedRoot,
+      }),
+    ).toBe(false);
+  });
+
   it.each([
     [3, 4],
     [10, 11],

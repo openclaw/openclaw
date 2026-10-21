@@ -27,6 +27,7 @@ export async function openChatSidePanelType(page: Page | Locator, label: string)
   const panelActions: Record<string, { slot: string; action: string | RegExp }> = {
     Browser: { slot: "browser", action: "Toggle browser panel" },
     browser: { slot: "browser", action: "Toggle browser panel" },
+    Dashboard: { slot: "dashboard", action: "Dashboard" },
     Desktop: { slot: "desktop", action: /^(Toggle desktop panel|Desktop)$/ },
     Files: { slot: "workspace", action: /^(Show session files|Collapse session workspace)$/ },
     "Side chat": { slot: "companion", action: /^(Show side chat|Collapse side chat)$/ },
@@ -42,15 +43,17 @@ export async function openChatSidePanelType(page: Page | Locator, label: string)
 }
 
 export async function focusChatSidePanel(page: Page): Promise<void> {
-  await selectChatLayoutAction(page, /^Swap /);
-  await selectChatLayoutAction(page, "Focus");
+  await selectChatLayoutAction(page, "Expand Side panel");
   await page.locator(".sidebar-region--expanded").waitFor();
 }
 
 export async function restoreChatAsMain(page: Page): Promise<void> {
-  const side = page.locator('[data-region-header="side"]');
-  await side.locator('.tabstrip-tab[data-tab-value="conversation"]').click();
-  await selectChatLayoutAction(page, /^Swap /);
+  const chat = page.locator(".sidebar-region__primary");
+  if ((await chat.getAttribute("data-region")) !== "main") {
+    const side = page.locator('[data-region-header="side"]');
+    await side.locator('.tabstrip-tab[data-tab-value="conversation"]').click();
+    await selectChatLayoutAction(page, /^Swap /);
+  }
   await page.locator('.sidebar-region__primary[data-region="main"]').waitFor();
 }
 

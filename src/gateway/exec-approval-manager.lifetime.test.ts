@@ -3,14 +3,30 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from "vitest";
 import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../agents/admitted-run-context.js";
+import { CronService } from "../cron/service.js";
+import { createNoopLogger } from "../cron/service.test-harness.js";
+import { loadCronJobsStore } from "../cron/store.js";
+import {
+  CronStreamExecApprovalRequiredError,
+  cronStreamExecApprovalBinding,
+} from "../cron/stream-exec-authority.js";
+import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
-import type { ExecApprovalManager } from "./exec-approval-manager.js";
+import { ExecApprovalManager } from "./exec-approval-manager.js";
 import {
   createTestApprovalFixture,
   createTestApprovalManager,
@@ -154,6 +170,159 @@ describe("ExecApprovalManager lifetime", () => {
       expect(await getOperatorApprovalDetailed({ id: record.id, databaseOptions })).toMatchObject({
         outcome: "found",
         record: { decision: "allow-once", consumedAtMs: null },
+      });
+    },
+  );
+
+  it.for(["current", "revoked"] as const)(
+    "settles a borrowed %s approval with its cron write after storage preparation waits",
+    async (authority) => {
+      await withOpenClawTestState({ label: "borrowed-cron-approval" }, async (state) => {
+        const scheduler = createTestGatewayScheduler("fake-timers");
+        const manager = new ExecApprovalManager({
+          scheduler,
+          persistence: { runtimeEpoch: "borrowed-cron-approval" },
+        });
+        const storePath = state.statePath("cron", "jobs.json");
+        const cron = new CronService({
+          scheduler,
+          nowMs: () => Date.now(),
+          storePath,
+          cronEnabled: false,
+          defaultAgentId: "main",
+          cronConfig: { triggers: { enabled: true } },
+          log: createNoopLogger(),
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: async () => ({ status: "ok" }),
+        });
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const effect = createDeferredCore<{ ok: true } | { ok: false; error: unknown }>();
+        const runId = `borrowed-cron-${authority}`;
+        const admission = prepareAgentRunAdmission({
+          cfg: {},
+          operationalRunInstance: createOperationalRunInstanceRef(runId),
+          facts: {
+            runId,
+            agentId: "main",
+            ingress: { kind: "system", state: "present", boundary: "borrowed-cron-approval" },
+          },
+        });
+        let handoff: ReturnType<typeof manager.registerDecisionHandoff> | undefined;
+        try {
+          const job = await cron.add({
+            name: "Borrowed approval watcher",
+            enabled: false,
+            schedule: { kind: "stream", command: ["synthetic-source"] },
+            sessionTarget: "main",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "systemEvent", text: "Synthetic event" },
+          });
+          const policyKey = "borrowed-watcher-policy";
+          const execPolicy = {
+            kind: "resolved" as const,
+            assertCurrent: (approvedPolicyKey?: string) => {
+              if (approvedPolicyKey !== policyKey) {
+                throw new CronStreamExecApprovalRequiredError(policyKey, "full", "always");
+              }
+            },
+          };
+          const proposal = await cron.update(job.id, { enabled: true }, { execPolicy }).then(
+            () => {
+              throw new Error("Expected approval before enabling the watcher");
+            },
+            (error: unknown) => {
+              if (!(error instanceof CronStreamExecApprovalRequiredError) || !error.mutation) {
+                throw error;
+              }
+              return error.mutation;
+            },
+          );
+          const before = await loadCronJobsStore(storePath);
+          const record = manager.create({ command: "synthetic-source" }, 60_000);
+          record.approvalAuthority = expectDefined(
+            resolveAdmittedRunActiveAssertion(await admission.admit("embedded")),
+            "live creator authority",
+          );
+          await manager.register(record, 60_000);
+          sqliteWorkerOwnerProbe.command(stateWorker, async (command, options, scope) => {
+            if (command.type === "cron.mutateJobs") {
+              entered.resolve();
+              await release.promise;
+            }
+            return await scope.execute(command, options);
+          });
+          handoff = manager.registerDecisionHandoff(record.id, async (decision) => {
+            try {
+              expect(decision).toBe("allow-once");
+              const consumption = expectDefined(
+                manager.prepareConsumeAllowOnce(record.id, `cron.update:${job.id}`),
+                "borrowed approval consumption",
+              );
+              await cron.update(
+                job.id,
+                { enabled: true },
+                {
+                  execPolicy,
+                  streamExecApproval: {
+                    policyKey,
+                    binding: cronStreamExecApprovalBinding(proposal),
+                    consumption,
+                  },
+                },
+              );
+              effect.resolve({ ok: true });
+            } catch (error) {
+              effect.resolve({ ok: false, error });
+            }
+          });
+          await manager.resolve(record.id, "allow-once");
+          expect(
+            await Promise.race([
+              entered.promise.then(() => "storage-wait"),
+              effect.promise.then(() => "effect-settled"),
+            ]),
+          ).toBe("storage-wait");
+          manager.retire();
+          if (authority === "revoked") {
+            admission.close();
+          }
+          release.resolve();
+          const outcome = await effect.promise;
+          await handoff.observation;
+          const stored = await getOperatorApprovalDetailed({ id: record.id });
+          if (authority === "current") {
+            expect(outcome).toEqual({ ok: true });
+            expect((await loadCronJobsStore(storePath)).jobs).toMatchObject([
+              { id: job.id, enabled: true },
+            ]);
+            expect(stored).toMatchObject({
+              outcome: "found",
+              record: { decision: "allow-once", consumedBy: `cron.update:${job.id}` },
+            });
+            expect(record.consumedDecision).toBe("allow-once");
+          } else {
+            expect(outcome).toMatchObject({
+              ok: false,
+              error: { message: "approval authority is no longer active" },
+            });
+            expect(await loadCronJobsStore(storePath)).toEqual(before);
+            expect(stored).toMatchObject({
+              outcome: "found",
+              record: { decision: "allow-once", consumedAtMs: null },
+            });
+            expect(record.consumedDecision).toBeUndefined();
+          }
+        } finally {
+          admission.close();
+          release.resolve();
+          handoff?.abandon();
+          await manager.drain();
+          cron.stop();
+          await cron.waitForIdle();
+          await scheduler.stop();
+        }
       });
     },
   );

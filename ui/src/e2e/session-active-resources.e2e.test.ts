@@ -14,6 +14,7 @@ import {
   waitForControlUiRoute,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -157,7 +158,9 @@ suite.define(() => {
         const desktopBox = await pane(page).locator(".desktop-surface").boundingBox();
         expect(desktopBox!.width).toBeLessThanOrEqual(width);
         if (width === 390) {
-          expect(chatBox).toBeNull();
+          // Mobile discovery opens the panel dock while retaining Chat above it.
+          expect(chatBox!.height).toBeGreaterThan(100);
+          await pane(page).locator('.chat-mobile-host[data-mode="dock"]').waitFor();
           expect(desktopBox!.width).toBeGreaterThan(width - 32);
           expect(desktopBox!.height).toBeGreaterThan(100);
         } else {
@@ -236,6 +239,17 @@ suite.define(() => {
             nodeId: "worker-desktop",
           });
           expect(await desktopTab(page).isVisible()).toBe(false);
+          // Closing the sheet is temporary; closing its Desktop tab dismisses discovery.
+          await selectChatLayoutAction(pane(page), "Side panel");
+          await desktopTab(page).waitFor();
+          expect(await desktopTab(page).getAttribute("aria-selected")).toBe("true");
+          await openChatDetails(pane(page));
+          expect(await desktopTab(page).isVisible()).toBe(false);
+          await selectChatLayoutAction(pane(page), "Side panel");
+          await desktopTab(page).waitFor();
+          expect(await desktopTab(page).getAttribute("aria-selected")).toBe("true");
+          await pane(page).getByRole("button", { name: "Close Desktop", exact: true }).click();
+          await desktopTab(page).waitFor({ state: "hidden" });
           await page.reload();
           await ready(page);
           expect(await desktopTab(page).isVisible()).toBe(false);

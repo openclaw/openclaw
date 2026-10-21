@@ -1,8 +1,7 @@
 import type { PortalSummary } from "@openclaw/gateway-protocol";
 import { For, Show, createMemo, onCleanup } from "solid-js";
-import { titleForRoute } from "../../app-navigation.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerPortalsEnglish } from "../../i18n/locales/en-portals.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -20,15 +19,12 @@ type PortalsPageMethods = { handleToggleRequest(event: Event): void };
 type PortalsPageElement = SolidBridgeElement<PortalsPageProps, PortalsPageMethods>;
 const owners = new WeakMap<HTMLElement, PortalsModel>();
 
-function PortalsPageContent(props: PortalsPageProps, host: PortalsPageElement) {
+// The bridge supplies presentation props; the model reads them through the host.
+function PortalsPageContent(_props: PortalsPageProps, host: PortalsPageElement) {
   const model = createPortals(useApplication(), () => host);
   owners.set(host, model);
   onCleanup(() => owners.delete(host));
-  return (
-    <ShellLayoutBoundary traits={{ toolbarHeader: !props.embedded }}>
-      <PortalContent model={model} />
-    </ShellLayoutBoundary>
-  );
+  return <PortalContent model={model} />;
 }
 
 function EmptyState(props: { model: PortalsModel }) {
@@ -223,11 +219,11 @@ function PortalContent(props: { model: PortalsModel }) {
           when={props.model.presentation().embedded}
           fallback={
             <>
-              <section class="content-header content-header--page">
-                <div>
-                  <h1 class="page-title">{titleForRoute("portals")}</h1>
-                </div>
-              </section>
+              <HubPageHeader
+                active="portals"
+                wide
+                docsUrl="https://docs.openclaw.ai/gateway/portals"
+              />
               <Show when={selectedPortal()} fallback={<EmptyState model={props.model} />}>
                 <section class="portals-layout">
                   <aside class="portals-rail" aria-label={t("portalsPage.listLabel")}>

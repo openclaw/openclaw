@@ -64,7 +64,7 @@ type PreparationOverrides = Partial<Omit<PreparationInput, "attempt" | "runParam
   heartbeat?: { continuesConversation: boolean };
 };
 
-export function preparationInput(input: PreparationOverrides): PreparationInput {
+function preparationInput(input: PreparationOverrides): PreparationInput {
   const { admittedRunContext, sourceReplyDeliveryMode, heartbeat, runParams, ...overrides } = input;
   return {
     runParams: {

@@ -422,6 +422,7 @@ describe("chat attachment read failures", () => {
     async (name, files, text, imageLimit, accepted, maxBytes = 1024) => {
       const onAttachmentsChange = vi.fn<(attachments: ChatAttachment[]) => void>();
       handleChatAttachmentPaste(pasteEventWithFiles(files, text), {
+        draft: "Review the attachment",
         attachmentLimits:
           imageLimit === undefined
             ? undefined

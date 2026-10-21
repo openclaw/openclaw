@@ -60,7 +60,7 @@ describe("Control UI refresh nudge", () => {
     const overlays = createApplicationOverlays(store.gateway);
     try {
       store.gateway.connect({ gatewayUrl });
-      store.current().opts.onHello?.({
+      store.current().testOptions.onHello?.({
         ...GATEWAY_STORE_TEST_HELLO,
         server: { version: "1.0.0", buildId: "gateway-build", connId: "first" },
       });
@@ -68,8 +68,8 @@ describe("Control UI refresh nudge", () => {
       expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
 
       // A restart onto another package version stays a reconnect, not a refresh.
-      store.current().opts.onClose?.({ code: 1012, reason: "restarting", willRetry: true });
-      store.current().opts.onHello?.({
+      store.current().testOptions.onClose?.({ code: 1012, reason: "restarting", willRetry: true });
+      store.current().testOptions.onHello?.({
         ...GATEWAY_STORE_TEST_HELLO,
         server: { version: "2.0.0", connId: "restarted" },
       });

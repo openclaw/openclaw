@@ -15,16 +15,11 @@ export type MediaGenerationOperation = {
   requesterAgentId?: string;
   task?: string;
   status: "queued" | "running" | "succeeded" | "failed";
-  createdAt: number;
-  startedAt?: number;
   endedAt?: number;
-  lastEventAt?: number;
   progressSummary?: string;
   /** The durable queue owns delivery; the requester must release its turn. */
   completionDelivery?: "queued";
-  terminalSummary?: string;
   terminalOutcome?: "blocked";
-  error?: string;
 };
 
 type MediaProgressDraft = {
@@ -174,12 +169,9 @@ export function updateMediaGenerationOperation(
       | "requestKey"
       | "status"
       | "endedAt"
-      | "lastEventAt"
       | "progressSummary"
       | "completionDelivery"
-      | "terminalSummary"
       | "terminalOutcome"
-      | "error"
     >
   >,
 ): void {

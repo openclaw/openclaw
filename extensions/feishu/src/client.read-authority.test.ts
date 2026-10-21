@@ -8,11 +8,7 @@ import { setImmediate } from "node:timers/promises";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createFeishuClient,
-  resetFeishuProxyAgentForTest,
-  type FeishuClientCredentials,
-} from "./client.js";
+import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
 
 const { captureReadAuthority, resolveProxy } = vi.hoisted(() => ({
   captureReadAuthority: vi.fn<() => (() => void) | undefined>(),
@@ -106,7 +102,6 @@ describe("Feishu read authority over the real Lark SDK transport", () => {
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
     captureReadAuthority.mockImplementation(() => authority.getStore());
     resolveProxy.mockResolvedValue(undefined);
-    resetFeishuProxyAgentForTest();
     requests = [];
     pendingRequests = [];
     interceptors = [];
@@ -192,7 +187,6 @@ describe("Feishu read authority over the real Lark SDK transport", () => {
     interceptors.forEach((interceptor) => http.interceptors.request.eject(interceptor));
     http.defaults.transformRequest = defaultTransforms;
     http.defaults.beforeRedirect = defaultBeforeRedirect;
-    resetFeishuProxyAgentForTest();
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));

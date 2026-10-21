@@ -180,7 +180,6 @@ export function createConfigWriteNotification(
     revision,
     fingerprint,
     sourceFingerprint,
-    writtenAtMs: Date.now(),
     ...overrides,
     snapshot: overrides.snapshot ?? {
       ...createValidConfigSnapshot(sourceConfig, overrides.persistedHash ?? persistedHash),

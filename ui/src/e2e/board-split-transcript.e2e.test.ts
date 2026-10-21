@@ -67,6 +67,10 @@ async function visibleTranscriptState(page: Page) {
     if (!inner || !scroller) {
       return { present: false, intersectingRows: 0 };
     }
+    // Expanded desktop panels retain the hidden transcript's geometry.
+    if (!scroller.checkVisibility({ visibilityProperty: true })) {
+      return { present: true, intersectingRows: 0 };
+    }
     const rect = scroller.getBoundingClientRect();
     const intersectingRows = [...inner.querySelectorAll<HTMLElement>(".chat-virtual-row")].filter(
       (row) => {
@@ -262,7 +266,7 @@ suite.define(() => {
     await expect
       .poll(() => terminalPanel.evaluate((element) => element.getBoundingClientRect().width))
       .toBeGreaterThan(widthBeforeExpand);
-    await expectSidePanelTabs(page, ["Dashboard", "Browser", "OpenClaw"], false);
+    await expectSidePanelTabs(page, expectedTabLabels);
 
     await selectChatLayoutAction(page, "Restore split");
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);

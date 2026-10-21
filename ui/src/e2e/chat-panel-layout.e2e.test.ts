@@ -86,18 +86,41 @@ function boardResponse(sizeH: number) {
   };
 }
 
+async function waitForPanelGeometry(page: Page) {
+  await page.locator(".sidebar-region").evaluate(async (element) => {
+    const animations = element
+      .getAnimations({ subtree: true })
+      .filter(
+        (animation) =>
+          animation.playState === "running" &&
+          Number.isFinite(animation.effect?.getComputedTiming().endTime),
+      );
+    await Promise.all(animations.map((animation) => animation.finished.catch(() => undefined)));
+  });
+}
+
 async function layoutAndWait(
   owner: Page | Locator,
   action: string | RegExp,
   visible: Locator,
   hidden?: Locator,
 ) {
-  await selectChatLayoutAction(owner, action);
+  const page = "page" in owner ? owner.page() : owner;
+  if (
+    action === "Restore split" &&
+    (await page.locator(".sidebar-region--expanded-side").count())
+  ) {
+    await page.getByRole("button", { name: "Restore split", exact: true }).click();
+  } else {
+    await selectChatLayoutAction(owner, action);
+  }
   await visible.waitFor();
   await hidden?.waitFor({ state: "hidden" });
+  await waitForPanelGeometry(page);
 }
 
 async function expectPaneHeaderGeometry(page: Page, dock: "left" | "right" | "bottom") {
+  await waitForPanelGeometry(page);
   const boxes = await page.evaluate(() => {
     const bounds = (selector: string) => {
       const element = document.querySelector(selector);
@@ -168,13 +191,13 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await chat.waitFor();
         expect(await chat.getAttribute("aria-pressed")).toBe("false");
-        expect(await composer.isVisible()).toBe(false);
+        await expect.poll(() => composer.isVisible()).toBe(false);
         // Details is session context, not a shortcut that reveals the transcript.
         await header.locator(".chat-header-session-menu__trigger").click();
         await page.getByRole("menuitem", { name: "Session details", exact: true }).click();
         const details = page.getByRole("dialog", { name: "Details", exact: true });
         await details.waitFor();
-        expect(await composer.isVisible()).toBe(false);
+        await expect.poll(() => composer.isVisible()).toBe(false);
         await details.getByRole("button", { name: "Close details", exact: true }).click();
         await chat.click();
         await composer.fill("Let's review the eight remaining changes.");
@@ -193,14 +216,17 @@ suite.define(() => {
         await composer.waitFor({ state: "hidden" });
         await chat.click();
         expect(await composer.inputValue()).toBe("Let's review the eight remaining changes.");
-        // Mobile presents one surface at a time without changing the saved desktop layout.
+        // The mobile dock keeps the conversation available and retains the saved desktop layout.
         await page.setViewportSize({ width: 390, height: 844 });
-        await composer.waitFor();
-        await expect.poll(() => input.isVisible()).toBe(false);
-        await chat.click();
+        const host = page.locator(".chat-mobile-host");
         await input.waitFor();
-        await composer.waitFor({ state: "hidden" });
-        await chat.click();
+        expect(await composer.isVisible()).toBe(true);
+        await host
+          .locator(".chat-mobile-host__header")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
+        await host.waitFor({ state: "hidden" });
+        expect(await composer.inputValue()).toBe("Let's review the eight remaining changes.");
         await page.setViewportSize({ width: 1440, height: 960 });
         await input.waitFor();
         expect(await composer.inputValue()).toBe("Let's review the eight remaining changes.");
@@ -339,6 +365,7 @@ suite.define(() => {
         const dashboard = page.locator('[data-panel-slot="dashboard"]');
         const paneHeader = page.locator(".chat-pane__header");
         const sideHeader = page.locator('[data-region-header="side"]');
+        await waitForPanelGeometry(page);
         const width = await regionSize(dashboard);
         const expectContinuity = async () => {
           expect(await documentIdentity(input)).toBe(identity);
@@ -350,9 +377,11 @@ suite.define(() => {
         const dashboardTab = sideHeader.locator('.tabstrip-tab[data-tab-value="dashboard"]');
         for (const dock of ["right", "left", "bottom"] as const) {
           await dockChatSidePanel(page, dock);
+          await waitForPanelGeometry(page);
           const priorSize = await dashboard.boundingBox();
           await dashboardTab.click();
-          await chat.waitFor({ state: "hidden" });
+          expect(await chat.isVisible()).toBe(true);
+          await layoutAndWait(paneHeader, "Expand Dashboard", dashboard, chat);
           expect(await sideHeader.isVisible()).toBe(true);
           expect(await dashboard.getAttribute("data-region")).toBe("side");
           expect(await regionSize(dashboard)).toBeCloseTo(
@@ -367,13 +396,14 @@ suite.define(() => {
           await layoutAndWait(paneHeader, "Expand Dashboard", dashboard, chat);
           await dashboardTab.focus();
           await page.keyboard.press("Space");
-          await chat.waitFor();
+          expect(await chat.isVisible()).toBe(false);
+          await layoutAndWait(paneHeader, "Restore split", chat);
           await expectContinuity();
         }
         await dockChatSidePanel(page, "right");
         await expectPaneHeaderGeometry(page, "right");
         await layoutAndWait(paneHeader, "Expand Dashboard", dashboard, chat);
-        await selectChatLayoutAction(paneHeader, "Restore split");
+        await layoutAndWait(paneHeader, "Restore split", chat);
         await layoutAndWait(paneHeader, "Minimize side panel", chat, dashboard);
         await layoutAndWait(paneHeader, /^(Side panel|Minimize side panel)$/, dashboard);
         await expectContinuity();
@@ -419,6 +449,7 @@ suite.define(() => {
         await divider.focus();
         await page.keyboard.press("ArrowRight");
         await expect.poll(() => regionSize(chat)).toBeGreaterThan(width);
+        await waitForPanelGeometry(page);
         const resizedWidth = await regionSize(chat);
         await layoutAndWait(paneHeader, "Minimize side panel", dashboard, chat);
         await expectContinuity();
@@ -450,11 +481,13 @@ suite.define(() => {
         await dashboard.waitFor();
         expect(await terminal.isVisible()).toBe(true);
         await page.keyboard.press("Enter");
-        await terminal.waitFor({ state: "hidden" });
+        expect(await terminal.isVisible()).toBe(true);
+        await layoutAndWait(paneHeader, "Expand Dashboard", dashboard, terminal);
         await layoutAndWait(paneHeader, "Restore split", terminal);
         await chatTab.click();
         await dashboardTab.click();
-        await terminal.waitFor({ state: "hidden" });
+        expect(await terminal.isVisible()).toBe(true);
+        await layoutAndWait(paneHeader, "Expand Dashboard", dashboard, terminal);
         await dashboard.waitFor();
         await layoutAndWait(paneHeader, "Restore split", terminal);
         expect(await terminal.locator(".tp-host canvas").count()).toBe(1);
@@ -472,9 +505,13 @@ suite.define(() => {
           await regionSize(page.locator(".sidebar-region")),
           0,
         );
-        // Mobile presents one tool at a time. Minimize the selected Dashboard
-        // before measuring the retained Terminal that is still the saved main.
-        await layoutAndWait(paneHeader, "Minimize side panel", terminal);
+        // Mobile selects tools in the dock while retaining the desktop main Terminal.
+        await waitForPanelGeometry(page);
+        const narrowSize = await dashboard.boundingBox();
+        const canvas = await terminal.locator(".tp-host canvas").elementHandle();
+        const terminalTab = sideHeader.locator('.tabstrip-tab[data-tab-value^="hosted:terminal:"]');
+        await terminalTab.click();
+        await terminal.waitFor();
         await expect
           .poll(
             async () =>
@@ -482,22 +519,22 @@ suite.define(() => {
           )
           .toBeGreaterThan(30);
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(400);
-        await layoutAndWait(paneHeader, "Side panel", dashboard, terminal);
-        await selectChatLayoutAction(paneHeader, /^Swap /);
-        await expect.poll(() => dashboard.getAttribute("data-region")).toBe("main");
-        await terminal.waitFor();
-        await dashboard.waitFor({ state: "hidden" });
-        await layoutAndWait(paneHeader, "Focus", dashboard, terminal);
-        await layoutAndWait(paneHeader, "Restore split", terminal.locator(".tp-host canvas"));
-        await layoutAndWait(paneHeader, /^Swap /, dashboardTab);
-        const narrowSize = await dashboard.boundingBox();
         await dashboardTab.click();
+        await dashboard.waitFor();
         await terminal.waitFor({ state: "hidden" });
-        await layoutAndWait(paneHeader, "Restore split", dashboard, terminal);
+        await waitForPanelGeometry(page);
         expect(await dashboard.boundingBox()).toEqual(narrowSize);
-        expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
-        await page.setViewportSize({ width: 1440, height: 1000 });
+        await terminalTab.click();
         await terminal.waitFor();
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await expect
+          .poll(() => page.locator('[data-panel-slot="terminal"]').getAttribute("data-region"))
+          .toBe("main");
+        expect(await canvas?.evaluate((element) => element.isConnected)).toBe(true);
+        expect(await terminal.locator(".tp-host canvas").count()).toBe(1);
+        expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
+        expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
+        await canvas?.dispose();
         await expectPaneHeaderGeometry(page, "right");
       },
     );

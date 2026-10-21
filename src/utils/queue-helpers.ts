@@ -32,38 +32,6 @@ export function previewQueueSummaryPrompt(state: QueueSummaryState): string | un
   return lines.join("\n");
 }
 
-/** Apply runtime queue settings while preserving previous values for omitted fields. */
-export function applyQueueRuntimeSettings<TMode extends string>(params: {
-  target: {
-    mode: TMode;
-    debounceMs: number;
-    cap: number;
-    dropPolicy: QueueDropPolicy;
-  };
-  settings: {
-    mode: TMode;
-    debounceMs?: number;
-    cap?: number;
-    dropPolicy?: QueueDropPolicy;
-  };
-}): void {
-  params.target.mode = params.settings.mode;
-  params.target.debounceMs =
-    typeof params.settings.debounceMs === "number"
-      ? Math.max(0, params.settings.debounceMs)
-      : params.target.debounceMs;
-  params.target.cap =
-    typeof params.settings.cap === "number" && params.settings.cap > 0
-      ? Math.floor(params.settings.cap)
-      : params.target.cap;
-  params.target.dropPolicy = params.settings.dropPolicy ?? params.target.dropPolicy;
-}
-
-function buildQueueSummaryLine(text: string): string {
-  const cleaned = text.replace(/\s+/g, " ").trim();
-  return cleaned.length <= 160 ? cleaned : `${truncateUtf16Safe(cleaned, 159).trimEnd()}…`;
-}
-
 /** Count identities that are still pending in the queue, excluding active deliveries. */
 export function countPendingQueueItems<T>(items: readonly T[], inFlight?: ReadonlySet<T>): number {
   if (!inFlight || inFlight.size === 0) {
@@ -117,7 +85,10 @@ export function applyQueueDropPolicy<T>(params: {
   if (params.queue.dropPolicy === "summarize") {
     for (const item of dropped) {
       params.queue.droppedCount += 1;
-      params.queue.summaryLines.push(buildQueueSummaryLine(params.summarize(item)));
+      const cleaned = params.summarize(item).replace(/\s+/g, " ").trim();
+      params.queue.summaryLines.push(
+        cleaned.length <= 160 ? cleaned : `${truncateUtf16Safe(cleaned, 159).trimEnd()}…`,
+      );
     }
     // Summary memory is bounded independently from the item cap to avoid prompt blowups.
     const summaryLines = params.queue.summaryLines;

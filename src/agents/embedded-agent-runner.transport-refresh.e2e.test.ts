@@ -1,7 +1,7 @@
 // Keep the publication fixture installed before importing runtime consumers.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
@@ -21,6 +21,9 @@ import {
 } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "transport-refresh" });
+const oldUrl = "http://127.0.0.1:21431/v1";
+const currentUrl = "http://127.0.0.1:21432/v1";
+const remoteUrl = "https://model.example/v1";
 const attempt = vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>();
 // Load the runtime during collection, before lifecycle hook deadlines start.
 
@@ -57,11 +60,14 @@ beforeEach(() => {
 });
 
 function config(
-  baseUrl: string,
-  key: string | undefined,
-  header: string,
-  limits = { contextWindow: 16_000, maxTokens: 2048 },
+  current = false,
+  options: {
+    baseUrl?: string;
+    noAuth?: boolean;
+    limits?: { contextWindow: number; maxTokens: number };
+  } = {},
 ) {
+  const epoch = current ? "current" : "old";
   return {
     agents: {
       defaults: { workspace: fixture.state.workspaceDir, model: "local-fixture/chat" },
@@ -71,9 +77,9 @@ function config(
       providers: {
         "local-fixture": {
           api: "openai-completions",
-          baseUrl,
-          ...(key ? { apiKey: key } : {}),
-          headers: { "X-Local-Route": header },
+          baseUrl: options.baseUrl ?? (current ? currentUrl : oldUrl),
+          ...(!options.noAuth ? { apiKey: `synthetic-${epoch}-key` } : {}),
+          headers: { "X-Local-Route": `${epoch}-route` },
           models: [
             {
               id: "chat",
@@ -81,8 +87,7 @@ function config(
               reasoning: false,
               input: ["text"],
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: limits.contextWindow,
-              maxTokens: limits.maxTokens,
+              ...(options.limits ?? { contextWindow: 16_000, maxTokens: 2048 }),
             },
           ],
         },
@@ -111,6 +116,29 @@ function success(sessionId: string) {
     }),
   });
 }
+
+function failure(sessionId: string, serverError = false) {
+  return makeEmbeddedRunnerAttempt({
+    sessionIdUsed: sessionId,
+    terminal: {
+      kind: "failed",
+      source: "prompt",
+      error: serverError
+        ? Object.assign(new Error("500 Internal Server Error"), { status: 500 })
+        : Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    },
+  });
+}
+
+type TransportCase = {
+  label: string;
+  credentialWithdrawn?: boolean;
+  assistantFailure?: boolean;
+  localNoAuth?: boolean;
+  initialNoAuth?: boolean;
+  remote?: boolean;
+  serverError?: boolean;
+};
 
 async function run(cfg: OpenClawConfig, runId: string) {
   const admission = prepareSystemAgentRunAdmission(cfg, runId, "test", "transport-refresh-fixture");
@@ -142,296 +170,208 @@ async function run(cfg: OpenClawConfig, runId: string) {
   }
 }
 
-describe("connection retry transport refresh", () => {
-  it.each(["rejecting release", "hung release", "rejecting discard"] as const)(
-    "preserves the successful turn after %s",
-    async (scenario) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      vi.stubEnv("OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS", "100");
-      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-      const disposalStarted = createDeferredCore();
-      const disposalFinished = createDeferredCore();
-      const acquire = preparedModelRuntime.acquirePreparedModelRuntimeSnapshot;
-      const acquireSpy = vi
-        .spyOn(preparedModelRuntime, "acquirePreparedModelRuntimeSnapshot")
-        .mockImplementation(async (...args) => {
-          const lease = await acquire(...args);
-          return {
-            ...lease,
-            [Symbol.asyncDispose]: async () => {
-              await lease[Symbol.asyncDispose]();
-              disposalStarted.resolve();
-              if (scenario === "hung release") {
-                await disposalFinished.promise;
-              } else {
-                throw new Error("fixture lease disposal failed");
-              }
-            },
-          };
-        });
-      try {
-        const initial = config("http://127.0.0.1:21431/v1", "synthetic-old-key", "old-route");
-        const discard = scenario === "rejecting discard";
-        const current = config(
-          discard ? "https://model.example/v1" : "http://127.0.0.1:21432/v1",
-          discard ? undefined : "synthetic-current-key",
-          "current-route",
-        );
-        await publish(initial);
-        attempt.mockImplementationOnce(async (params) => {
-          await publish(current);
-          return makeEmbeddedRunnerAttempt({
-            sessionIdUsed: params.sessionId,
-            terminal: {
-              kind: "failed",
-              source: "prompt",
-              error: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
-            },
-          });
-        });
-        attempt.mockImplementationOnce(async (params) => {
-          expect(params.model.baseUrl).toBe(
-            discard ? "http://127.0.0.1:21431/v1" : "http://127.0.0.1:21432/v1",
-          );
-          expect(params.resolvedApiKey).toBe(
-            discard ? "synthetic-old-key" : "synthetic-current-key",
-          );
-          return success(params.sessionId);
-        });
-        const result = run(initial, `cleanup-${scenario.replaceAll(" ", "-")}`);
-        const settled = vi.fn();
-        void result.then(settled, settled);
-        const assertion = expect(result).resolves.toMatchObject({
-          payloads: [{ text: "recovered" }],
-        });
-        await disposalStarted.promise;
-        if (scenario === "hung release") {
-          await vi.advanceTimersByTimeAsync(99);
-          expect(settled).not.toHaveBeenCalled();
-          await vi.advanceTimersByTimeAsync(1);
-        }
-        await assertion;
-        expect((await result).meta.error).toBeUndefined();
-        expect(attempt).toHaveBeenCalledTimes(2);
-        expect(warn).toHaveBeenCalledWith(
-          expect.stringContaining(
-            scenario === "hung release"
-              ? "agent cleanup timed out"
-              : "fixture lease disposal failed",
-          ),
-        );
-      } finally {
-        disposalFinished.resolve();
-        acquireSpy.mockRestore();
-        warn.mockRestore();
-        vi.unstubAllEnvs();
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  it.each([
-    [
-      "changed origin",
-      "http://127.0.0.1:21431/v1",
-      "http://127.0.0.1:21432/v1",
-      false,
-      false,
-      false,
-      false,
-    ],
-    [
-      "unchanged origin",
-      "http://127.0.0.1:21431/v1",
-      "http://127.0.0.1:21431/v1",
-      false,
-      true,
-      false,
-      false,
-    ],
-    [
-      "local no-auth transport",
-      "http://127.0.0.1:21431/v1",
-      "http://127.0.0.1:21432/v1",
-      true,
-      false,
-      true,
-      false,
-    ],
-    [
-      "initial local no-auth transport",
-      "http://127.0.0.1:21431/v1",
-      "http://127.0.0.1:21432/v1",
-      true,
-      false,
-      true,
-      true,
-    ],
-    [
-      "unavailable remote credential",
-      "http://127.0.0.1:21431/v1",
-      "https://model.example/v1",
-      true,
-      false,
-      false,
-      false,
-    ],
-  ] as const)(
-    "keeps credentials and endpoint coherent after a %s publication",
-    async (
-      _label,
-      before,
-      after,
-      credentialWithdrawn,
-      assistantFailure,
-      localNoAuth,
-      initialNoAuth,
-    ) => {
-      const initial = config(before, initialNoAuth ? undefined : "synthetic-old-key", "old-route");
-      const current = config(
-        after,
-        credentialWithdrawn ? undefined : "synthetic-current-key",
-        "current-route",
-        { contextWindow: 32_000, maxTokens: 4096 },
-      );
-      current.agents.defaults.model = "local-fixture/unrelated-model";
-      await publish(initial);
-      const history = [
-        { role: "user" as const, content: "Original recorded request.", timestamp: 1 },
-      ];
-      type AttemptObservation = Pick<
-        EmbeddedRunAttemptParams,
-        | "provider"
-        | "modelId"
-        | "resolvedApiKey"
-        | "model"
-        | "admittedRunContext"
-        | "config"
-        | "sessionTarget"
-        | "continuation"
-      >;
-      const observations: AttemptObservation[] = [];
-      attempt.mockImplementation(async (params) => {
-        // Run disposal clears continuation payloads; record their dispatch-time facts.
-        observations.push({
-          provider: params.provider,
-          modelId: params.modelId,
-          resolvedApiKey: params.resolvedApiKey,
-          model: params.model,
-          admittedRunContext: params.admittedRunContext,
-          config: params.config,
-          sessionTarget: params.sessionTarget,
-          continuation: params.continuation && {
-            prompt: params.continuation.prompt,
-            messages: [...params.continuation.messages],
+it.each(["rejecting release", "hung release", "rejecting discard"] as const)(
+  "preserves the successful turn after %s",
+  async (scenario) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.stubEnv("OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS", "100");
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const disposalStarted = createDeferredCore();
+    const disposalFinished = createDeferredCore();
+    const acquire = preparedModelRuntime.acquirePreparedModelRuntimeSnapshot;
+    const acquireSpy = vi
+      .spyOn(preparedModelRuntime, "acquirePreparedModelRuntimeSnapshot")
+      .mockImplementation(async (...args) => {
+        const lease = await acquire(...args);
+        return {
+          ...lease,
+          [Symbol.asyncDispose]: async () => {
+            await lease[Symbol.asyncDispose]();
+            disposalStarted.resolve();
+            if (scenario === "hung release") {
+              await disposalFinished.promise;
+            } else {
+              throw new Error("fixture lease disposal failed");
+            }
           },
+        };
+      });
+    try {
+      const initial = config();
+      const discard = scenario === "rejecting discard";
+      const current = config(true, {
+        baseUrl: discard ? remoteUrl : currentUrl,
+        noAuth: discard,
+      });
+      await publish(initial);
+      attempt.mockImplementationOnce(async (params) => {
+        await publish(current);
+        return failure(params.sessionId);
+      });
+      attempt.mockImplementationOnce(async (params) => {
+        expect(params).toMatchObject({
+          model: { baseUrl: discard ? oldUrl : currentUrl },
+          resolvedApiKey: discard ? "synthetic-old-key" : "synthetic-current-key",
         });
-        if (observations.length === 1) {
+        return success(params.sessionId);
+      });
+      const result = run(initial, `cleanup-${scenario.replaceAll(" ", "-")}`);
+      const settled = vi.fn();
+      void result.then(settled, settled);
+      const assertion = expect(result).resolves.toMatchObject({
+        payloads: [{ text: "recovered" }],
+      });
+      await disposalStarted.promise;
+      if (scenario === "hung release") {
+        await vi.advanceTimersByTimeAsync(99);
+        expect(settled).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      await assertion;
+      expect((await result).meta.error).toBeUndefined();
+      expect(attempt).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          scenario === "hung release" ? "agent cleanup timed out" : "fixture lease disposal failed",
+        ),
+      );
+    } finally {
+      disposalFinished.resolve();
+      acquireSpy.mockRestore();
+      warn.mockRestore();
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it.each<TransportCase>([
+  { label: "changed origin" },
+  { label: "unchanged origin", assistantFailure: true },
+  { label: "local no-auth transport", credentialWithdrawn: true, localNoAuth: true },
+  {
+    label: "initial local no-auth transport",
+    credentialWithdrawn: true,
+    localNoAuth: true,
+    initialNoAuth: true,
+  },
+  { label: "unavailable remote credential", credentialWithdrawn: true, remote: true },
+  { label: "server-error", serverError: true },
+])(
+  "keeps credentials and endpoint coherent after a $label publication",
+  async ({
+    label,
+    credentialWithdrawn = false,
+    assistantFailure = false,
+    localNoAuth = false,
+    initialNoAuth = false,
+    remote = false,
+    serverError = false,
+  }) => {
+    const before = oldUrl;
+    const after = remote ? remoteUrl : assistantFailure ? before : currentUrl;
+    const initial = config(false, { noAuth: initialNoAuth });
+    const current = config(true, {
+      baseUrl: after,
+      noAuth: credentialWithdrawn,
+      ...(serverError ? {} : { limits: { contextWindow: 32_000, maxTokens: 4096 } }),
+    });
+    if (!serverError) {
+      current.agents.defaults.model = "local-fixture/unrelated-model";
+    }
+    await publish(initial);
+    const history = [
+      { role: "user" as const, content: "Original recorded request.", timestamp: 1 },
+    ];
+    const observations: EmbeddedRunAttemptParams[] = [];
+    attempt.mockImplementation(async (params) => {
+      // Run disposal clears continuation payloads; record their dispatch-time facts.
+      observations.push({
+        ...params,
+        continuation: params.continuation && {
+          prompt: params.continuation.prompt,
+          messages: [...params.continuation.messages],
+        },
+      });
+      if (observations.length === 1) {
+        if (!serverError) {
           expect(params).toMatchObject({
             model: { baseUrl: before, headers: { "X-Local-Route": "old-route" } },
             resolvedApiKey: initialNoAuth ? CUSTOM_LOCAL_AUTH_MARKER : "synthetic-old-key",
             prompt: "Preserve this admitted request exactly.",
           });
-          await publish(current);
-          return makeEmbeddedRunnerAttempt({
-            sessionIdUsed: params.sessionId,
-            messagesSnapshot: history,
-            terminal: assistantFailure
-              ? { kind: "ok" }
-              : {
-                  kind: "failed",
-                  source: "prompt",
-                  error: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
-                },
-            // The SDK can retain the connection class only in a diagnostic, without an error code.
-            lastAssistant: assistantFailure
-              ? buildEmbeddedRunnerAssistant({
-                  api: "openai-completions",
-                  provider: "local-fixture",
-                  model: "chat",
-                  stopReason: "error",
-                  errorMessage: "Connection error.",
-                  diagnostics: [
-                    {
-                      type: "provider_transport_failure",
-                      timestamp: 1,
-                      error: { message: "Connection error." },
-                      details: { eventsEmitted: false, phase: "before_message_stream_start" },
-                    },
-                  ],
-                })
-              : undefined,
-          });
         }
-        return success(params.sessionId);
-      });
-
-      const runId = `connection-${_label.replaceAll(" ", "-")}`;
-      const result = await run(initial, runId);
-
-      expect(result.payloads?.[0]?.text).toBe("recovered");
-      expect(observations).toHaveLength(2);
-      const first = observations[0]!;
-      const retry = observations[1]!;
-      expect(retry).toMatchObject({
-        provider: "local-fixture",
-        modelId: "chat",
-        resolvedApiKey: localNoAuth
-          ? CUSTOM_LOCAL_AUTH_MARKER
-          : credentialWithdrawn
-            ? "synthetic-old-key"
-            : "synthetic-current-key",
-        model: {
-          baseUrl: credentialWithdrawn && !localNoAuth ? before : after,
-          contextWindow: 16_000,
-          maxTokens: 2048,
-          headers: {
-            "X-Local-Route": credentialWithdrawn && !localNoAuth ? "old-route" : "current-route",
-            ...(localNoAuth ? { Authorization: null } : {}),
-          },
-        },
-        continuation: { prompt: "Preserve this admitted request exactly.", messages: history },
-      });
-      expect(first.admittedRunContext).toBeDefined();
-      expect(retry.admittedRunContext).toBe(first.admittedRunContext);
-      expect(retry.config).toBe(initial);
-      expect(retry.sessionTarget).toMatchObject({
-        agentId: "test",
-        sessionId: runId,
-        sessionKey: `agent:test:${runId}`,
-      });
-    },
-  );
-
-  it("keeps the admitted transport on an accepted server-error retry", async () => {
-    const initial = config("http://127.0.0.1:21431/v1", "synthetic-old-key", "old-route");
-    await publish(initial);
-    attempt.mockImplementationOnce(async (params) => {
-      await publish(config("http://127.0.0.1:21432/v1", "synthetic-current-key", "current-route"));
-      return makeEmbeddedRunnerAttempt({
-        sessionIdUsed: params.sessionId,
-        terminal: {
-          kind: "failed",
-          source: "prompt",
-          error: Object.assign(new Error("500 Internal Server Error"), { status: 500 }),
-        },
-      });
-    });
-    attempt.mockImplementationOnce(async (params) => {
-      expect(params).toMatchObject({
-        model: {
-          baseUrl: "http://127.0.0.1:21431/v1",
-          headers: { "X-Local-Route": "old-route" },
-        },
-        resolvedApiKey: "synthetic-old-key",
-      });
-      expect(params.config).toBe(initial);
+        await publish(current);
+        return makeEmbeddedRunnerAttempt({
+          sessionIdUsed: params.sessionId,
+          messagesSnapshot: serverError ? [] : history,
+          terminal: assistantFailure
+            ? { kind: "ok" }
+            : failure(params.sessionId, serverError).terminal,
+          // The SDK can retain the connection class only in a diagnostic, without an error code.
+          lastAssistant: assistantFailure
+            ? buildEmbeddedRunnerAssistant({
+                api: "openai-completions",
+                provider: "local-fixture",
+                model: "chat",
+                stopReason: "error",
+                errorMessage: "Connection error.",
+                diagnostics: [
+                  {
+                    type: "provider_transport_failure",
+                    timestamp: 1,
+                    error: { message: "Connection error." },
+                    details: { eventsEmitted: false, phase: "before_message_stream_start" },
+                  },
+                ],
+              })
+            : undefined,
+        });
+      }
       return success(params.sessionId);
     });
 
-    const result = await run(initial, "server-error");
+    const runId = serverError ? "server-error" : `connection-${label.replaceAll(" ", "-")}`;
+    const result = await run(initial, runId);
 
     expect(result.payloads?.[0]?.text).toBe("recovered");
-    expect(attempt).toHaveBeenCalledTimes(2);
-  });
-});
+    expect(observations).toHaveLength(2);
+    const first = observations[0]!;
+    const retry = observations[1]!;
+    if (serverError) {
+      expect(retry).toMatchObject({
+        model: { baseUrl: oldUrl, headers: { "X-Local-Route": "old-route" } },
+        resolvedApiKey: "synthetic-old-key",
+      });
+      expect(retry.config).toBe(initial);
+      return;
+    }
+    expect(retry).toMatchObject({
+      provider: "local-fixture",
+      modelId: "chat",
+      resolvedApiKey: localNoAuth
+        ? CUSTOM_LOCAL_AUTH_MARKER
+        : credentialWithdrawn
+          ? "synthetic-old-key"
+          : "synthetic-current-key",
+      model: {
+        baseUrl: credentialWithdrawn && !localNoAuth ? before : after,
+        contextWindow: 16_000,
+        maxTokens: 2048,
+        headers: {
+          "X-Local-Route": credentialWithdrawn && !localNoAuth ? "old-route" : "current-route",
+          ...(localNoAuth ? { Authorization: null } : {}),
+        },
+      },
+      continuation: { prompt: "Preserve this admitted request exactly.", messages: history },
+    });
+    expect(first.admittedRunContext).toBeDefined();
+    expect(retry.admittedRunContext).toBe(first.admittedRunContext);
+    expect(retry.config).toBe(initial);
+    expect(retry.sessionTarget).toMatchObject({
+      agentId: "test",
+      sessionId: runId,
+      sessionKey: `agent:test:${runId}`,
+    });
+  },
+);

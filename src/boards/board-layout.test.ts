@@ -51,6 +51,9 @@ describe("board layout", () => {
     widget.declaredSummary = ["Tool access: sessions"];
     const before = structuredClone(original);
     const inserted = { ...widget, name: "inserted" };
+    const emptyBatch = applyBoardOps(original, []);
+    expect(emptyBatch.tabs.map((tab) => tab.position)).toEqual([0, 1]);
+    expect(emptyBatch.widgets.map((item) => item.position)).toEqual([0, 1, 0]);
     const results = [
       normalizeBoardLayout(original),
       applyBoardOps(original, [
@@ -58,6 +61,7 @@ describe("board layout", () => {
         { kind: "widget_move", name: "alpha", position: 1 },
       ]),
       insertBoardWidget(original, inserted, { tabId: "two" }),
+      emptyBatch,
     ];
     for (const result of results) {
       const copied = result.widgets.find((candidate) => candidate.name === "alpha")!;
