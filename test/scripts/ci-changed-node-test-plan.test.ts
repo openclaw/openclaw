@@ -1387,8 +1387,6 @@ describe("CI changed Node test plan", () => {
         expect(group.env).toEqual(owner.env);
         expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
         expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
-        const serialProjection =
-          job.planConcurrency === 1 && isSerialNodeTestProjection(job.groups, ownerJob);
         // CI gives overlapping plans two workers; a qualified serial 32-vCPU row can inherit eight.
         // Job and group composition must keep the canonical two-worker ceiling in either shape.
         const childEnv = buildChildEnv(
@@ -1412,7 +1410,7 @@ describe("CI changed Node test plan", () => {
         expect(childEnv).toEqual(ownerChildEnv);
         expect(childEnv.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
         expect(job.runner).toBe(ownerJob.runner);
-        expect(job.planConcurrency).toBe(serialProjection ? 1 : ownerJob.planConcurrency);
+        expect(job.planConcurrency).toBe(ownerJob.planConcurrency);
       }
     }
     const cheapFiles = vi
