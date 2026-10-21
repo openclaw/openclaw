@@ -14,16 +14,15 @@ vi.mock("./worker-environments/workspace-sync-preflight.js", () => ({
 
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
-  GatewayDrainingError,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import {
-  beginSessionWorkAdmission,
-  closeSessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-  startSessionWorkAdmissionInterruption,
-} from "../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  closeSessionControllerAdmission,
+  runSessionMutation,
+  startSessionControllerInterruption,
+} from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
@@ -51,6 +50,7 @@ const REQUEST = {
 };
 
 const sessionIdentity = (scope = `${support.testState.root}/sessions.sqlite`) => ({
+  agentId: REQUEST.agentId,
   scope,
   identities: [REQUEST.sessionKey, REQUEST.sessionId],
 });
@@ -106,7 +106,8 @@ describe("dispatch Stop before provider allocation", () => {
     const start = vi.spyOn(placements, "startDispatch");
     const runtime = await createRuntime(placements, environments);
     const interrupted = vi.fn();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
+      agentId: REQUEST.agentId,
       scope: `${support.testState.root}/sessions.sqlite`,
       identities: [identity],
       assertAllowed: () => {},
@@ -312,7 +313,7 @@ describe("dispatch Stop before provider allocation", () => {
       } finally {
         release.resolve();
         await Promise.allSettled([moving, stopping]);
-        await runExclusiveSessionLifecycleMutation("placement-move", {
+        await runSessionMutation({
           ...sessionIdentity(sessionTarget.storePath),
           run: async () => {},
         });
@@ -458,7 +459,7 @@ describe("dispatch Stop before provider allocation", () => {
     const environments = support.createService(support.createProvider());
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const interrupted = vi.fn();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       ...sessionIdentity(),
       assertAllowed: () => {},
       onInterrupt: interrupted,
@@ -588,12 +589,12 @@ describe("dispatch Stop before provider allocation", () => {
       const identity = sessionIdentity(target.storePath);
       // A task kill acquires this mutation outside the admitted operation's ALS,
       // then drains admissions while its own lifecycle mutation remains active.
-      const mutation = runExclusiveSessionLifecycleMutation("subagent-kill", {
+      const mutation = runSessionMutation({
         ...identity,
         prepare: async () => {
           mutationEntered.resolve();
           await interrupt.promise;
-          const { released } = startSessionWorkAdmissionInterruption(identity);
+          const { released } = startSessionControllerInterruption(identity);
           void released.then(() => events.push("admission-released"));
           await Promise.race([released, releaseMutation.promise]);
           await releaseMutation.promise;
@@ -614,11 +615,79 @@ describe("dispatch Stop before provider allocation", () => {
         releaseMutation.resolve();
         await Promise.allSettled([operation, mutation]);
         // Flush the canceled contender: it must never execute after its predecessor releases.
-        await runExclusiveSessionLifecycleMutation("patch", { ...identity, run: async () => {} });
+        await runSessionMutation({ ...identity, run: async () => {} });
       }
       expect(events).toEqual(["admission-released", "mutation-finished"]);
     },
   );
+
+  it("shutdown cancels recovery queued behind a session mutation before provider entry", async () => {
+    const mutationEntered = createDeferredCore();
+    const releaseMutation = createDeferredCore();
+    const admissionTargetReady = createDeferredCore();
+    const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+      "./session-utils-store-worker.js",
+    );
+    moveDestinationMocks.prepareGatewaySessionTarget.mockImplementation(async (params) => {
+      const target = await targetReader.resolveGatewaySessionStoreTargetInWorker(params);
+      admissionTargetReady.resolve();
+      return target;
+    });
+    const provider = support.createProvider();
+    vi.spyOn(provider, "provision");
+    vi.spyOn(provider, "destroy");
+    const environments = support.createService(provider);
+    const environment = await support.seedBootstrapping("environment-shutdown-queued-recovery");
+    const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+    await seedProvisioningPlacement(placements, environment.environmentId, "remote-exec");
+    const runtime = await createRuntime(placements, environments);
+    const uninstall = installWorkerPlacementReconcileGuard({
+      placements,
+      environments,
+      dispatch: runtime.dispatchService,
+      isStopping: environments.isStopping,
+    });
+    const mutation = runSessionMutation({
+      ...sessionIdentity(),
+      prepare: async () => {
+        mutationEntered.resolve();
+        await releaseMutation.promise;
+      },
+      run: async () => {},
+    });
+    let recovery: Promise<unknown> = Promise.resolve();
+    let stopping: Promise<unknown> = Promise.resolve();
+    try {
+      await mutationEntered.promise;
+      recovery = environments.reconcileEnvironment(environment.environmentId).catch(captureError);
+      await waitForBoundary(
+        admissionTargetReady.promise,
+        recovery,
+        "Recovery ended before session admission",
+      );
+      let stopped = false;
+      environments.beginClose();
+      stopping = environments.stop().then(() => {
+        stopped = true;
+      });
+      // Shutdown must release queued recovery without waiting for the unrelated mutation.
+      await support.waitForFast(() => expect(stopped).toBe(true));
+      await recovery;
+      expect(provider.provision).not.toHaveBeenCalled();
+      expect(provider.destroy).not.toHaveBeenCalled();
+      expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "bootstrapping",
+        leaseId: environment.leaseId,
+        destroyRequestedAtMs: null,
+      });
+    } finally {
+      releaseMutation.resolve();
+      await Promise.allSettled([mutation, recovery, stopping]);
+      await uninstall();
+    }
+  });
 
   it.each([
     "replaced",
@@ -699,7 +768,7 @@ describe("dispatch Stop before provider allocation", () => {
       }
       const releaseIngress =
         reason === "closed-ingress"
-          ? closeSessionWorkAdmissions({
+          ? closeSessionControllerAdmission({
               ...sessionIdentity(),
               reason: new Error("session cancellation owns ingress"),
             })
@@ -711,7 +780,7 @@ describe("dispatch Stop before provider allocation", () => {
       const recovery = environments.reconcileEnvironment(environment.environmentId).then(
         () => {
           settled = true;
-          return "recovered";
+          return "settled";
         },
         (error: unknown) => {
           settled = true;
@@ -743,7 +812,7 @@ describe("dispatch Stop before provider allocation", () => {
           expect(
             destroy.mock.calls.filter(([lease]) => lease.leaseId === environment.leaseId),
           ).toEqual([[{ leaseId: environment.leaseId, profile: { region: "test" } }]]);
-          const interruption = startSessionWorkAdmissionInterruption(sessionIdentity());
+          const interruption = startSessionControllerInterruption(sessionIdentity());
           const admissionReleased = vi.fn();
           void interruption.released.then(admissionReleased);
           if (reason === "started-failure") {
@@ -761,7 +830,8 @@ describe("dispatch Stop before provider allocation", () => {
             reason === "started-failure" ? "failed" : "destroyed",
           );
         } else {
-          expect(first).toBeInstanceOf(reason === "shutdown" ? GatewayDrainingError : Error);
+          // Shutdown skips reconciliation before admission and preserves recovery state.
+          expect(first).toEqual(reason === "shutdown" ? "settled" : expect.any(Error));
           expect(destroy).not.toHaveBeenCalled();
           expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
           expect(support.testState.store.get(environment.environmentId)).toMatchObject({

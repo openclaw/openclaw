@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import {
   collectNestedErrorCandidates,
   extractErrorCode,
@@ -8,18 +7,22 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import {
   boundedCronCompletionRetention,
   drainMatrixReconnect,
   matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
+import {
+  awaitCustodyReply,
+  installCustodyMatrixPlugin,
+} from "./delivery-queue-custody.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import type { DeliverFn } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
 import { holdDeliveryQueueReply } from "./delivery-queue-worker-reply.test-support.js";
 import {
+  createQueueMedia,
   installDeliveryQueueTmpDirHooks,
   readQueuedEntry,
   setQueuedEntryState,
@@ -44,22 +47,8 @@ describe("recovery claim reply loss", () => {
     const stateDir = fixtures.tmpDir();
     process.env.OPENCLAW_STATE_DIR = stateDir;
     const id = "cron-direct-delivery:v1:claim-reply-loss";
-    const artifact = path.join(
-      stateDir,
-      "delivery-queue-media",
-      "00000000-0000-4000-8000-000000000001.ogg",
-    );
-    await fs.mkdir(path.dirname(artifact), { recursive: true });
-    await fs.writeFile(artifact, "synthetic queued audio");
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
-        },
-      ]),
-    );
+    const artifact = await createQueueMedia(stateDir, "000000000001", "synthetic queued audio");
+    installCustodyMatrixPlugin(matrixOutboundForQueueTest);
     await enqueueDeliveryOnce(
       {
         channel: "matrix",
@@ -92,12 +81,7 @@ describe("recovery claim reply loss", () => {
     let committedClaim: string;
     let failure: unknown;
     try {
-      committedClaim = await Promise.race([
-        reply.held,
-        outcome.then((error) => {
-          throw new Error("Recovery settled before its committed claim reply", { cause: error });
-        }),
-      ]);
+      committedClaim = await awaitCustodyReply(reply.held, outcome);
       await reply.lose();
       failure = await outcome;
       expect(reply.attempts()).toBe(1);

@@ -36,6 +36,7 @@ CREATE TABLE "github_personal_publication_requests" (
   "created_at_ms" bigint NOT NULL,
   "updated_at_ms" bigint NOT NULL,
   "reported_at_ms" bigint,
+  "draft" bigint,
   PRIMARY KEY ("request_id"),
   CHECK ((char_length("request_id") = 36)),
   CHECK ((char_length("owner_profile_id") BETWEEN 1 AND 128)),

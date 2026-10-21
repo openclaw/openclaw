@@ -120,6 +120,13 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
   );
   const { ws } = await openClient();
   try {
+    // Transcript enrichment starts only when a reader requests the selected row.
+    const demand = await rpcReq<SessionsListResult>(ws, "sessions.list", {
+      includeGlobal: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+    });
+    expect(demand.ok).toBe(true);
     await backfilled.promise;
     for (const search of [undefined, "gpt-5.5"]) {
       const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {

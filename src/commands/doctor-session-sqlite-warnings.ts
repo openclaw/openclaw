@@ -1,4 +1,10 @@
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
+import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
+import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { readCanonicalSessionMainKey } from "../config/sessions/session-canonical-key.js";
+import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
   formatMigrationWarningSummary,
   MIGRATION_WARNING_EXAMPLE_LIMIT,
@@ -6,8 +12,143 @@ import {
 import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
+  type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { countTranscriptEventsForPath } from "../infra/session-sqlite-migration-readers.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import { resolveActiveSqliteTranscriptFile } from "./doctor-session-sqlite-transcript-file.js";
 import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
+
+// Old manifests stored paths in diagnostic text, not structured artifact fields.
+const TRANSCRIPT_FINDINGS = new Map([
+  [
+    "active_sqlite_transcript_jsonl",
+    /^SQLite-backed session has a legacy JSONL transcript awaiting verification: (.+)\. Run openclaw doctor /s,
+  ],
+  ["transcript_missing", /^Transcript file is missing: (.+)$/s],
+  ["transcript_malformed", /^(.+\.jsonl): (?:SyntaxError|Error|TypeError|RangeError)\b/s],
+]);
+
+function currentMigrationIssues(
+  target: SessionSqliteMigrationTargetManifest,
+  env: NodeJS.ProcessEnv,
+) {
+  if (!target.issues.some((issue) => TRANSCRIPT_FINDINGS.has(issue.code))) {
+    return target.issues;
+  }
+  const claims = target.issues.filter(
+    (issue) =>
+      issue.code !== "active_sqlite_transcript_jsonl" && TRANSCRIPT_FINDINGS.has(issue.code),
+  );
+  const keys = [
+    ...new Set(
+      claims.flatMap((issue) => (issue.sessionKey ? [issue.sessionKey.toLowerCase()] : [])),
+    ),
+  ];
+  const ids = [
+    ...new Set(
+      claims.flatMap((issue) => {
+        const file = TRANSCRIPT_FINDINGS.get(issue.code)?.exec(issue.message)?.[1];
+        return file
+          ? [extractGeneratedTranscriptSessionId(file) ?? path.basename(file, ".jsonl")]
+          : [];
+      }),
+    ),
+  ];
+  try {
+    const read = withOpenClawAgentDatabaseReadOnly(
+      (database) => {
+        const query = getSessionKysely(database.db);
+        const live = new Set(
+          keys.length
+            ? executeSqliteQuerySync(
+                database.db,
+                query
+                  .selectFrom("session_nodes")
+                  .select("session_key")
+                  .where("entry_valid", "=", 1)
+                  .where(query.fn<string>("lower", ["session_key"]), "in", keys),
+              ).rows.map((row) => row.session_key.toLowerCase())
+            : [],
+        );
+        const transcripts = new Set(
+          keys.length && ids.length
+            ? executeSqliteQuerySync(
+                database.db,
+                query
+                  .selectFrom("session_windows")
+                  .select(["session_key", "session_id"])
+                  .where(query.fn<string>("lower", ["session_key"]), "in", keys)
+                  .where("session_id", "in", ids)
+                  .where((eb) =>
+                    eb.exists(
+                      eb
+                        .selectFrom("transcript_events")
+                        .select("session_id")
+                        .whereRef(
+                          "transcript_events.session_id",
+                          "=",
+                          "session_windows.session_id",
+                        ),
+                    ),
+                  ),
+              ).rows.map((row) => `${row.session_key.toLowerCase()}\0${row.session_id}`)
+            : [],
+        );
+        const mainAliases = new Set(
+          keys.length ? ["main", readCanonicalSessionMainKey(database)] : [],
+        );
+        return target.issues.filter((issue) => {
+          const pattern = TRANSCRIPT_FINDINGS.get(issue.code);
+          const file = pattern?.exec(issue.message)?.[1];
+          if (!file || !path.isAbsolute(file)) {
+            return true;
+          }
+          if (issue.code === "active_sqlite_transcript_jsonl") {
+            return Boolean(
+              resolveActiveSqliteTranscriptFile(target, {
+                sessionId: "migration-warning",
+                sessionFile: file,
+              }),
+            );
+          }
+          const parsed = parseAgentSessionKey(issue.sessionKey);
+          // Renamed legacy keys and unknown diagnostics cannot establish resolution.
+          if (
+            !issue.sessionKey ||
+            !parsed ||
+            normalizeAgentId(parsed.agentId) !== normalizeAgentId(target.agentId) ||
+            normalizeStoreSessionKey(issue.sessionKey) !== issue.sessionKey
+          ) {
+            return true;
+          }
+          const hasSession = live.has(issue.sessionKey.toLowerCase());
+          if (!hasSession && mainAliases.has(parsed.rest.toLowerCase())) {
+            return true;
+          }
+          const current = countTranscriptEventsForPath(file);
+          // Existing malformed originals still need repair even if a prefix was imported.
+          if (current.status === "malformed") {
+            return true;
+          }
+          const transcriptId =
+            extractGeneratedTranscriptSessionId(file) ?? path.basename(file, ".jsonl");
+          return (
+            current.status === "missing" &&
+            hasSession &&
+            !transcripts.has(`${issue.sessionKey.toLowerCase()}\0${transcriptId}`)
+          );
+        });
+      },
+      { agentId: target.agentId, path: target.sqlitePath, env },
+    );
+    return read.found ? read.value : target.issues;
+  } catch {
+    // Missing, unreadable, or unsupported stores are not evidence of recovery.
+    return target.issues;
+  }
+}
 
 export function formatSessionSqliteMigrationWarnings(
   targets: readonly Pick<DoctorSessionSqliteTargetReport, "storePath" | "issues">[],
@@ -56,7 +197,28 @@ export function readSessionSqliteMigrationWarnings(env = process.env): string[] 
         continue;
       }
       seen.add(key);
-      warnings.push(...formatSessionSqliteMigrationWarnings([target], env));
+      warnings.push(
+        ...formatSessionSqliteMigrationWarnings(
+          [
+            {
+              ...target,
+              issues: currentMigrationIssues(target, env).map((issue) =>
+                issue.code === "active_sqlite_transcript_jsonl"
+                  ? {
+                      code: issue.code,
+                      sessionKey: issue.sessionKey,
+                      message: issue.message.replace(
+                        /Run openclaw doctor --fix or .*$/s,
+                        "Run openclaw doctor --session-sqlite inspect to check current originals before choosing recovery.",
+                      ),
+                    }
+                  : issue,
+              ),
+            },
+          ],
+          env,
+        ),
+      );
     }
   }
   return warnings;

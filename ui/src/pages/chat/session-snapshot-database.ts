@@ -1,5 +1,6 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   sidebarSnapshotInvalidationMatches,
   type SessionSnapshotInvalidationReason,
@@ -33,12 +34,14 @@ function indexedDbFactory(): IDBFactory | null {
   }
 }
 
-// IndexedDB requests own their one-shot listeners; database listeners end when callers close it.
+// Upgrade listeners retire on request completion; database listeners end when callers close it.
 // Persistence stays independent of any Solid view's lifetime.
 function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = factory.open(CHAT_SNAPSHOT_DB_NAME, CHAT_SNAPSHOT_DB_VERSION);
-    request.addEventListener("upgradeneeded", (event) => {
+    let blocked = false;
+    const options = { once: true };
+    const upgrade = (event: IDBVersionChangeEvent) => {
       const database = request.result;
       // Unscoped derived transcripts have no provable account owner. Never adopt them.
       if (event.oldVersion < 4) {
@@ -60,16 +63,47 @@ function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
       }
       // The unified projection replaces this disposable cache; retirement never gates startup.
       try {
-        factory
-          .deleteDatabase("openclaw-session-roster")
-          .addEventListener("error", (error) => error.preventDefault());
+        listen(
+          factory.deleteDatabase("openclaw-session-roster"),
+          "error",
+          (error) => error.preventDefault(),
+          { once: true },
+        );
       } catch {}
-    });
-    request.addEventListener("success", () => resolve(request.result));
-    request.addEventListener("error", () =>
-      reject(request.error ?? new Error("IndexedDB open failed")),
+    };
+    request.addEventListener("upgradeneeded", upgrade, options);
+    listen(
+      request,
+      "success",
+      () => {
+        request.removeEventListener("upgradeneeded", upgrade);
+        // Blocked opens can still finish after their callers receive the rejection.
+        if (blocked) {
+          request.result.close();
+        } else {
+          resolve(request.result);
+        }
+      },
+      options,
     );
-    request.addEventListener("blocked", () => reject(new Error("IndexedDB open was blocked")));
+    listen(
+      request,
+      "error",
+      () => {
+        request.removeEventListener("upgradeneeded", upgrade);
+        reject(request.error ?? new Error("IndexedDB open failed"));
+      },
+      options,
+    );
+    listen(
+      request,
+      "blocked",
+      () => {
+        blocked = true;
+        reject(new Error("IndexedDB open was blocked"));
+      },
+      options,
+    );
   });
 }
 
@@ -77,9 +111,9 @@ function deleteIndexedDb(factory: IDBFactory): Promise<boolean> {
   return new Promise((resolve) => {
     try {
       const request = factory.deleteDatabase(CHAT_SNAPSHOT_DB_NAME);
-      request.addEventListener("success", () => resolve(true));
-      request.addEventListener("error", () => resolve(false));
-      request.addEventListener("blocked", () => resolve(false));
+      listen(request, "success", () => resolve(true), { once: true });
+      listen(request, "error", () => resolve(false), { once: true });
+      listen(request, "blocked", () => resolve(false), { once: true });
     } catch {
       resolve(false);
     }
@@ -91,41 +125,12 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
   if (!factory) {
     return null;
   }
-  let database: IDBDatabase;
   try {
-    database = await openIndexedDb(factory);
-  } catch (error) {
-    debugSnapshotStore("resetting cache after IndexedDB open failure", error);
-    if (!(await deleteIndexedDb(factory))) {
-      return null;
-    }
-    try {
-      database = await openIndexedDb(factory);
-    } catch (retryError) {
-      debugSnapshotStore("IndexedDB cache remains unavailable", retryError);
-      return null;
-    }
-  }
-  database.addEventListener("versionchange", () => database.close());
-  if (
-    database.objectStoreNames.length === 3 &&
-    database.objectStoreNames.contains(CHAT_SNAPSHOT_STORE_NAME) &&
-    database.objectStoreNames.contains(CHAT_SNAPSHOT_METADATA_STORE_NAME) &&
-    database.objectStoreNames.contains(SIDEBAR_SNAPSHOT_STORE_NAME)
-  ) {
+    const database = await openIndexedDb(factory);
+    listen(database, "versionchange", () => database.close(), { once: true });
     return database;
-  }
-  database.close();
-  debugSnapshotStore("resetting cache after IndexedDB schema mismatch");
-  if (!(await deleteIndexedDb(factory))) {
-    return null;
-  }
-  try {
-    const fresh = await openIndexedDb(factory);
-    fresh.addEventListener("versionchange", () => fresh.close());
-    return fresh;
   } catch (error) {
-    debugSnapshotStore("IndexedDB cache reset failed", error);
+    debugSnapshotStore("IndexedDB cache is unavailable", error);
     return null;
   }
 }

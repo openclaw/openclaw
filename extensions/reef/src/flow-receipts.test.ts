@@ -5,7 +5,9 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
-  composeOutbound,
+  bodyHash,
+  prepareOutboundProposal,
+  seal,
   generateIdentity,
   sha256Hex,
   signReceipt,
@@ -109,17 +111,34 @@ describe("ReefMessageFlow delivery receipts", () => {
     const originalPeer = await trusted.get("alice");
     const id = "01JZ0000000000000000000127";
     const text = "queued before delivery bindings";
-    await composeOutbound({
+    const proposal = {
       id,
       from: "bob#1",
       to: "alice#1",
       body: { text },
       senderSigningSecretKey: bob.signing.secretKey,
       recipientEncryptionPublicKey: alice.encryption.publicKey,
-      guard: guard(allow),
-      audit,
       policyVersion: "v1",
+    };
+    const { approvalDigest } = prepareOutboundProposal(proposal, 32);
+    await audit.appendEvent("proposal", {
+      id,
+      from: proposal.from,
+      to: proposal.to,
+      body: proposal.body,
+      bodyHash: bodyHash(proposal.body),
+      approvalDigest,
     });
+    await audit.appendEvent("guard_verdict", {
+      id,
+      from: proposal.from,
+      to: proposal.to,
+      direction: "outbound",
+      bodyHash: bodyHash(proposal.body),
+      approvalDigest,
+      ...allow,
+    });
+    await audit.appendEvent("envelope", { id, approvalDigest, envelope: seal(proposal) });
     const historicalEntries = structuredClone(await audit.entries());
     const auditEntries = vi.spyOn(audit, "entries");
     const notify = vi.fn(async () => {});

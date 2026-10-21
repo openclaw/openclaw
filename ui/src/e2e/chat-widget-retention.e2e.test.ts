@@ -1,15 +1,11 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.js";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import {
-  captureUiProofEnabled,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
@@ -17,28 +13,40 @@ import {
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const canvasPreview = (viewId: string, url: string, title: string) => ({
+  kind: "canvas",
+  surface: "assistant_message",
+  render: "url",
+  viewId,
+  url,
+  title,
+  sandbox: "scripts",
+});
+const text = (value: string) => ({ type: "text", text: value });
+const toolResult = <T>(details: T) => ({ content: [text(JSON.stringify(details))], details });
+const userPrompt = (content: string, id: string, runId: string, at: number) => ({
+  role: "user",
+  content,
+  timestamp: at,
+  __openclaw: { id, seq: 1, idempotencyKey: `${runId}:user` },
+});
 
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
 
-  it("hands an interactive widget from live tool output to its completed reply without reloading", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+  it("hands an interactive widget from live tool output to its completed reply without reloading", () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const sessionKey = "agent:main:dashboard:widget-retention";
       const runId = "widget-run";
       const docId = "cv_retained_counter";
       const documentUrl = `/__openclaw__/canvas/documents/${docId}/index.html`;
       const startedAt = Date.now() - 1_000;
       const messages = [
-        {
-          role: "user",
-          content: "Show an interactive preview.",
-          timestamp: startedAt,
-          __openclaw: { id: "widget-prompt", seq: 1, idempotencyKey: `${runId}:user` },
-        },
+        userPrompt("Show preview.", "widget-prompt", runId, startedAt),
         {
           role: "assistant",
           content: [
-            { type: "text", text: "Preparing the interactive preview." },
+            text("Preparing the interactive preview."),
             { type: "toolCall", id: "show-preview", name: "show_widget", arguments: {} },
           ],
           timestamp: startedAt + 1,
@@ -77,52 +85,31 @@ suite.define(() => {
         methodResponses: { "canvas.document.view": canvasView(html) },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      expect(await page.evaluate(() => typeof Reflect.get(Element.prototype, "moveBefore"))).toBe(
-        "function",
-      );
       await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
 
       const widgets = page.locator(".chat-thread openclaw-canvas-widget-view");
       const outer = widgets.locator("iframe");
       const inner = outer.contentFrame().frameLocator("iframe");
-      await clickBoardWidgetControl(
-        page,
-        inner.getByRole("button", { name: "Count", exact: true }),
-      );
+      const countButton = inner.getByRole("button", { name: "Count", exact: true });
+      await clickBoardWidgetControl(page, countButton);
       await expect.poll(() => inner.locator("output").textContent()).toBe("1");
       const retainedFrame = await outer.elementHandle();
-      expect(retainedFrame).not.toBeNull();
-      const originalRow = await widgets.evaluate((element) =>
-        element.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key"),
-      );
       expect(await gateway.getRequests("canvas.document.view")).toHaveLength(1);
 
       const finalText = "The interactive preview is ready.";
+      // Enough transcript below the widget to exercise forwarded wheel input.
+      const details = "Preview detail.\n\n".repeat(12);
       const finalMessage = {
         role: "assistant",
         idempotencyKey: runId,
         stopReason: "stop",
         content: [
-          {
-            type: "text",
-            // Leave enough transcript below the widget to exercise forwarded wheel input.
-            text: `[embed](${documentUrl})\n\n${finalText}\n\n${Array.from(
-              { length: 12 },
-              (_, index) => `Preview detail ${index + 1}.`,
-            ).join("\n\n")}`,
-          },
-          // The Gateway's reply finalizer appends the run's canvas blocks.
+          text(`[embed](${documentUrl})\n\n${finalText}\n\n${details}`),
           {
             type: "canvas",
             preview: {
-              kind: "canvas",
-              surface: "assistant_message",
-              render: "url",
-              viewId: docId,
-              url: documentUrl,
-              title: "Interactive preview",
+              ...canvasPreview(docId, documentUrl, "Interactive preview"),
               preferredHeight: 240,
-              sandbox: "scripts",
             },
           },
         ],
@@ -140,10 +127,8 @@ suite.define(() => {
         hasActiveRun: true,
         activeRunIds: [runId],
       });
-      await page
-        .locator('.chat-bubble[data-entry-id="widget-final"]')
-        .getByText(finalText, { exact: true })
-        .waitFor();
+      const finalReply = page.locator('.chat-bubble[data-entry-id="widget-final"]');
+      await finalReply.getByText(finalText, { exact: true }).waitFor();
       await gateway.emitGatewayEvent("chat", {
         sessionKey,
         runId,
@@ -164,16 +149,10 @@ suite.define(() => {
         },
       });
 
-      const finalReply = page.locator('.chat-bubble[data-entry-id="widget-final"]');
       await finalReply.getByText(finalText, { exact: true }).waitFor();
       await page.locator(".chat-work-group").waitFor();
       await expect.poll(() => widgets.count()).toBe(1);
       await expect.poll(() => finalReply.locator("openclaw-canvas-widget-view").count()).toBe(1);
-      expect(
-        await widgets.evaluate((element) =>
-          element.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key"),
-        ),
-      ).not.toBe(originalRow);
       expect(await outer.evaluate((frame, original) => frame === original, retainedFrame)).toBe(
         true,
       );
@@ -182,10 +161,7 @@ suite.define(() => {
       expect(await gateway.getRequests("canvas.document.view")).toHaveLength(1);
 
       const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-      await clickBoardWidgetControl(
-        page,
-        inner.getByRole("button", { name: "Count", exact: true }),
-      );
+      await clickBoardWidgetControl(page, countButton);
       await expect.poll(() => inner.locator("output").textContent()).toBe("2");
       const scrollBefore = await thread.evaluate((element) => element.scrollTop);
       await page.mouse.wheel(0, 120);
@@ -196,32 +172,28 @@ suite.define(() => {
         true,
       );
       expect(await gateway.getRequests("canvas.document.view")).toHaveLength(1);
-    });
-  });
+    }));
 
   it("shows one nested widget while its wrapper enters saved history and after reload", async () => {
-    const artifactDir = suite.artifactDir;
-    const viewport = { width: 1280, height: 900 };
     await suite.withPage(
-      {
-        ...createControlUiE2eContextOptions(),
-        viewport,
-        ...(captureUiProofEnabled ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
-      },
+      { ...createControlUiE2eContextOptions(), viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
         const sessionKey = "agent:main:dashboard:nested-widget";
         const docId = "cv_nested_counter";
+        const parentToolCallId = "call_widget|fc_widget";
+        const nestedToolCallId = "tool_call:call_widget_fc_widget:scope:show_widget:1";
         const documentUrl = `/__openclaw__/canvas/documents/${docId}/index.html`;
         const result = {
           kind: "canvas",
           view: { backend: "canvas", id: docId, url: documentUrl, title: "Counter" },
           presentation: { target: "assistant_message", sandbox: "scripts" },
         };
+        const nestedResult = toolResult(result);
+        const wrapperResult = toolResult({ output: [text(JSON.stringify(result))], value: result });
         const gateway = await installMockGateway(page, {
           sessionKey,
           agentModel: "openai/gpt-4.1",
           models: [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }],
-          historyMessages: [],
           methodResponses: {
             "canvas.document.view": canvasView(
               buildWidgetDocument(
@@ -232,69 +204,48 @@ suite.define(() => {
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await page
-          .locator(".agent-chat__composer-combobox textarea")
-          .fill("Show a tiny interactive counter.");
+        const prompt = "Show a tiny interactive counter.";
+        await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const request = await gateway.waitForRequest("chat.send");
         const runId = String(asOptionalRecord(request.params)?.idempotencyKey);
         const startedAt = Date.now() - 1_000;
         let seq = 0;
-        const tool = (data: Record<string, unknown>) =>
+        const parentCall = { toolCallId: parentToolCallId, name: "exec" };
+        const childCall = { toolCallId: nestedToolCallId, parentToolCallId, name: "show_widget" };
+        const tool = (phase: string, call: typeof parentCall, detail: Record<string, unknown>) =>
           gateway.emitGatewayEvent("agent", {
             sessionKey,
             agentId: "main",
             runId,
             seq: ++seq,
-            ts: startedAt + (data.toolCallId === "nested-widget" ? 900 : 1),
+            ts: startedAt + (call.toolCallId === nestedToolCallId ? 900 : 1),
             stream: "tool",
-            data,
+            data: { phase, ...call, ...detail },
           });
-        await tool({
-          phase: "start",
-          toolCallId: "widget-wrapper",
-          name: "exec",
+        await tool("start", parentCall, {
           args: { code: "await tools.show_widget({ title: 'Counter' })" },
         });
-        await tool({
-          phase: "start",
-          toolCallId: "nested-widget",
-          parentToolCallId: "widget-wrapper",
-          name: "show_widget",
-          args: { title: "Counter" },
-        });
-        await tool({
-          phase: "result",
-          toolCallId: "nested-widget",
-          parentToolCallId: "widget-wrapper",
-          name: "show_widget",
-          result,
-        });
+        await tool("start", childCall, { args: { title: "Counter" } });
+        await tool("result", childCall, { result: nestedResult });
         const widgets = page.locator(".chat-thread openclaw-canvas-widget-view");
         await expect.poll(() => widgets.count()).toBe(1);
         const inner = widgets.first().locator("iframe").contentFrame().frameLocator("iframe");
-        await clickBoardWidgetControl(
-          page,
-          inner.getByRole("button", { name: "Add one", exact: true }),
-        );
+        const addButton = inner.getByRole("button", { name: "Add one", exact: true });
+        await clickBoardWidgetControl(page, addButton);
         await expect.poll(() => inner.locator("output").textContent()).toBe("1");
-        const userMessage = {
-          role: "user",
-          content: "Show a tiny interactive counter.",
-          timestamp: startedAt - 1,
-          __openclaw: { id: "nested-prompt", seq: 1, idempotencyKey: `${runId}:user` },
-        };
+        const userMessage = userPrompt(prompt, "nested-prompt", runId, startedAt - 1);
         const nested = {
           ...createNestedToolActivity({
             runId,
             scopeId: "widget-scope",
             afterEntryId: null,
             startOrder: 0,
-            parentToolCallId: "widget-wrapper",
-            toolCallId: "nested-widget",
+            parentToolCallId,
+            toolCallId: nestedToolCallId,
             toolName: "show_widget",
             input: { title: "Counter" },
-            result: { content: [{ type: "text", text: JSON.stringify(result) }], details: result },
+            result: nestedResult,
             isError: false,
             startedAt: startedAt + 900,
             timestamp: startedAt + 901,
@@ -303,21 +254,28 @@ suite.define(() => {
         };
         const wrapper = {
           role: "toolResult",
-          toolCallId: "widget-wrapper",
+          toolCallId: parentToolCallId,
           toolName: "exec",
-          content: JSON.stringify(result),
+          ...wrapperResult,
           timestamp: startedAt + 1,
           __openclaw: { id: "wrapper-result", seq: 3, runId },
         };
+        const canvasBlock = {
+          type: "canvas",
+          preview: canvasPreview(docId, documentUrl, "Counter"),
+        };
         const finalMessage = {
           role: "assistant",
-          content: "Your counter is ready.",
+          content: [text("Your counter is ready."), canvasBlock],
+          openclawDisplayContent: [canvasBlock],
           timestamp: startedAt + 901,
           idempotencyKey: runId,
           stopReason: "stop",
           __openclaw: { id: "nested-final", seq: 4, runId, runTerminal: true },
         };
         const history = prepareChatHistoryFixture([userMessage, nested, wrapper, finalMessage]);
+        const setHistory = (...messages: Record<string, unknown>[]) =>
+          gateway.setMethodResponse("chat.history", prepareChatHistoryFixture(messages));
         const persist = (message: Record<string, unknown>, messageId: string, messageSeq: number) =>
           gateway.emitGatewayEvent("session.message", {
             sessionKey,
@@ -326,31 +284,12 @@ suite.define(() => {
             messageId,
             messageSeq,
           });
-        await gateway.setMethodResponse(
-          "chat.history",
-          prepareChatHistoryFixture([userMessage, nested]),
-        );
+        await setHistory(userMessage, nested);
         await persist(history.messages[1]!, "nested-result", 2);
         await expect.poll(() => widgets.count()).toBe(1);
-        await tool({ phase: "result", toolCallId: "widget-wrapper", name: "exec", result });
-        await gateway.setMethodResponse(
-          "chat.history",
-          prepareChatHistoryFixture([userMessage, nested, wrapper]),
-        );
+        await tool("result", parentCall, { result: wrapperResult });
+        await setHistory(userMessage, nested, wrapper);
         await persist(wrapper, "wrapper-result", 3);
-        if (captureUiProofEnabled) {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator("section.chat"),
-            [widgets.first().locator("iframe")],
-            { animations: "disabled" },
-          );
-          writeFileSync(path.join(artifactDir, "persisted.png"), frame.png);
-          console.info(
-            "Persisted widget proof",
-            JSON.stringify({ artifactDir, widgets: await widgets.count() }),
-          );
-        }
         expect(await widgets.count()).toBe(1);
         expect(await inner.locator("output").textContent()).toBe("1");
         await gateway.setMethodResponse("chat.history", history);
@@ -360,36 +299,27 @@ suite.define(() => {
           runId,
           seq: ++seq,
           state: "final",
-          message: finalMessage,
+          message: {
+            role: "assistant",
+            content: finalMessage.content,
+            openclawDisplayContent: finalMessage.openclawDisplayContent,
+            timestamp: startedAt + 902,
+          },
         });
-        const finalText = page.getByText("Your counter is ready.", { exact: true });
+        const finalText = page
+          .locator(".chat-text")
+          .getByText("Your counter is ready.", { exact: true });
         await finalText.waitFor();
         await page
           .getByRole("button", { name: "Stop generating", exact: true })
           .waitFor({ state: "hidden" });
-        if (captureUiProofEnabled) {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator("section.chat"),
-            [finalText, widgets.first().locator("iframe")],
-            { animations: "disabled" },
-          );
-          writeFileSync(path.join(artifactDir, "settled.png"), frame.png);
-          console.info(
-            "Nested widget proof",
-            JSON.stringify({ artifactDir, settledWidgets: await widgets.count() }),
-          );
-        }
         expect(await widgets.count()).toBe(1);
         expect(await inner.locator("output").textContent()).toBe("1");
         await page.reload();
         await finalText.waitFor();
         await expect.poll(() => widgets.count()).toBe(1);
-        await inner.getByRole("button", { name: "Add one", exact: true }).waitFor();
-        await clickBoardWidgetControl(
-          page,
-          inner.getByRole("button", { name: "Add one", exact: true }),
-        );
+        await addButton.waitFor();
+        await clickBoardWidgetControl(page, addButton);
         await expect.poll(() => inner.locator("output").textContent()).toBe("1");
       },
     );

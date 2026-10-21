@@ -19,7 +19,10 @@ import {
   readTranscriptMessageAppendMetadataInTransaction,
 } from "./session-accessor.sqlite-transcript-anchor.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
-import { readTranscriptMessageByEventId } from "./session-accessor.sqlite-transcript-identity.js";
+import {
+  readTranscriptMessageByEventId,
+  readTranscriptMessageByScopedIdempotencyKey,
+} from "./session-accessor.sqlite-transcript-identity.js";
 import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
 import {
   isTranscriptEntryOnActivePathInTransaction,
@@ -28,7 +31,6 @@ import {
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
-  readTranscriptMessageByScopedIdempotencyKey,
   sanitizeTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
@@ -59,6 +61,8 @@ type TranscriptMessageEnvelope = {
   id: string;
   parentId: string | null;
   appendMode?: "side";
+  /** Entry id this branch-rewrite copy replaces; absent on ordinary appends. */
+  supersedesEntryId?: string;
   timestamp: string;
 };
 
@@ -94,6 +98,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   resolved: ResolvedTranscriptScope,
   options: TranscriptMessageAppendOptions<TMessage> & {
     appendMode?: "side";
+    supersedesEntryId?: string;
   },
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
   projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
@@ -220,6 +225,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     id: messageId,
     parentId: parentId ?? null,
     ...(options.appendMode ? { appendMode: options.appendMode } : {}),
+    ...(options.supersedesEntryId ? { supersedesEntryId: options.supersedesEntryId } : {}),
     timestamp: resolveTimestampMsToIsoString(now),
     message: storagePreparation?.persistedMessage ?? finalMessage,
   };

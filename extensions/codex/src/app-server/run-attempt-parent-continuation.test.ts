@@ -224,6 +224,7 @@ describe("Codex parent continuation with native child custody", () => {
       const params = createParams(sessionFile, workspaceDir);
       // Full host tool construction can exceed the lightweight fixture's 5s budget.
       params.timeoutMs = 30_000;
+      params.agentId = "main";
       params.runtimePlan = createCodexRuntimePlanFixture();
       setCodexTestModelSupportsTools(params, true);
       let sourceRevoked = false;
@@ -292,7 +293,7 @@ describe("Codex parent continuation with native child custody", () => {
             arguments: { message: "Waiting for native child" },
           },
         });
-        expect(response).toMatchObject({ success: true });
+        expect(response, JSON.stringify(response)).toMatchObject({ success: true });
         const outcome = await Promise.allSettled([run]);
         expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(true);
         const ownership = await consumeCodexAppServerLiveThread(harness.client, "thread-1");

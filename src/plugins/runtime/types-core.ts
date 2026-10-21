@@ -3,7 +3,7 @@ import type { CreateChannelIngressDrainOptions } from "../../channels/message/in
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
 import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
-import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import type { HeartbeatRunResult } from "../../infra/heartbeat-wake-contracts.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
 import type { OpenAsyncKeyedStoreOptions } from "../../plugin-state/plugin-state-store.types.js";
@@ -294,6 +294,8 @@ export type LlmCompleteErrorCode =
   | "LLM_ISOLATED_INPUT_REJECTED"
   | "LLM_ISOLATED_UNSUPPORTED"
   | "LLM_RUNTIME_UNAVAILABLE"
+  /** The plugin or model runtime is reloading or retired; retry from a fresh plugin operation. */
+  | "LLM_RUNTIME_LIFECYCLE"
   | "LLM_COMPLETION_ABORTED"
   | "LLM_COMPLETION_TIMEOUT"
   | "LLM_COMPLETION_OUTPUT_REJECTED"

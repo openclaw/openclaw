@@ -45,6 +45,13 @@ const healthyFacts = (): SystemAgentGreetingFacts => ({
   auditSequence: 0,
 });
 
+const HEALTHY_GREETING_TEMPLATE = [
+  "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
+  "Model: openai/gpt-5.5.",
+  "Config: valid. Default agent: main (Main).",
+  "Gateway: reachable at ws://127.0.0.1:18789.",
+].join("\n");
+
 function createCache(
   initial?: Omit<SystemAgentGreetingCacheRecord, "lastSeenAuditSequence"> & {
     lastSeenAuditSequence?: number;
@@ -119,7 +126,7 @@ describe("system agent greeting cache", () => {
         allowInference: false,
         cacheStore: cache.store,
       }),
-    ).resolves.toEqual({ text: cached.text, source: "cache" });
+    ).resolves.toBe(cached.text);
     await acknowledgeSystemAgentGreetingDelivery({ auditSequence: 5, cacheStore: cache.store });
     expect(planner).not.toHaveBeenCalled();
     expect(cache.read()?.lastSeenAuditSequence).toBe(5);
@@ -137,7 +144,7 @@ describe("system agent greeting cache", () => {
         allowInference: false,
         cacheStore: cache.store,
       }),
-    ).resolves.toMatchObject({ source: "template" });
+    ).resolves.toBe(HEALTHY_GREETING_TEMPLATE);
 
     expect(planner).not.toHaveBeenCalled();
     expect(cache.read()).toBeUndefined();
@@ -166,7 +173,7 @@ describe("system agent greeting cache", () => {
       now: () => 200,
     });
 
-    expect(result.source).toBe("model");
+    expect(result).toBe("I'm steady.\nAn upgrade to 2026.7.20 is ready when you are.");
     expect(planner).toHaveBeenCalledOnce();
     expect(planner).toHaveBeenCalledWith(
       expect.objectContaining({ overview, facts, timeoutMs: 20_000 }),
@@ -200,7 +207,7 @@ describe("system agent greeting cache", () => {
       now: () => 200,
     });
 
-    expect(result.text).toContain(SYSTEM_AGENT_EXTERNAL_EDIT_ALERT);
+    expect(result).toBe(`All systems nominal.\n${SYSTEM_AGENT_EXTERNAL_EDIT_ALERT}`);
     // The cache stores only the model text; the alert is delivery-scoped.
     expect(cache.read()?.text).toBe("All systems nominal.");
 
@@ -211,8 +218,8 @@ describe("system agent greeting cache", () => {
       cacheStore: cache.store,
       now: () => 300,
     });
-    expect(calm.source).toBe("cache");
-    expect(calm.text).not.toContain(SYSTEM_AGENT_EXTERNAL_EDIT_ALERT);
+    expect(calm).toBe("All systems nominal.");
+    expect(planner).toHaveBeenCalledOnce();
   });
 
   it("reports an edit that arrives between the facts read and delivery", async () => {
@@ -255,7 +262,7 @@ describe("system agent greeting cache", () => {
         },
         cacheStore: cache.store,
       }),
-    ).resolves.toMatchObject({ source: "template" });
+    ).resolves.toBe(`${HEALTHY_GREETING_TEMPLATE}\nChannel health is not available yet.`);
     await acknowledgeSystemAgentGreetingDelivery({
       auditSequence: facts.auditSequence,
       cacheStore: cache.store,
@@ -365,8 +372,8 @@ describe("system agent greeting cache", () => {
     plan.resolve({ text: "All systems nominal.", modelRef: "openai/gpt-5.5" });
 
     await expect(Promise.all([first, second])).resolves.toEqual([
-      { text: "All systems nominal.", source: "model" },
-      { text: "All systems nominal.", source: "model" },
+      "All systems nominal.",
+      "All systems nominal.",
     ]);
     expect(planner).toHaveBeenCalledOnce();
   });
@@ -424,11 +431,9 @@ describe("system agent greeting cache", () => {
       now: () => 200,
     });
 
-    expect(result).toMatchObject({ source: "template" });
-    expect(result.text).toContain("caretaker of this gateway");
-    expect(result.text).toContain("Update 2026.7.20 is available");
-    expect(result.text).toContain("Channels needing attention: Telegram");
-    expect(result.text).toContain(SYSTEM_AGENT_EXTERNAL_EDIT_ALERT);
+    expect(result).toBe(
+      `${HEALTHY_GREETING_TEMPLATE}\nUpdate 2026.7.20 is available. Channels needing attention: Telegram.\n${SYSTEM_AGENT_EXTERNAL_EDIT_ALERT}`,
+    );
     expect(repeated).toEqual(result);
     expect(planner).toHaveBeenCalledOnce();
     await acknowledgeSystemAgentGreetingDelivery({
@@ -451,7 +456,7 @@ describe("system agent greeting cache", () => {
       now: () => 100,
     });
 
-    expect(result).toMatchObject({ source: "template" });
+    expect(result).toBe(HEALTHY_GREETING_TEMPLATE);
     expect(cache.read()?.text).toBeUndefined();
   });
 
@@ -468,7 +473,7 @@ describe("system agent greeting cache", () => {
       now: () => 100,
     });
 
-    expect(result).toMatchObject({ source: "template" });
+    expect(result).toBe(`${HEALTHY_GREETING_TEMPLATE}\nUpdate 2026.7.20 is available.`);
     expect(cache.read()).toBeUndefined();
   });
 
@@ -488,7 +493,9 @@ describe("system agent greeting cache", () => {
       now: () => 100,
     });
 
-    expect(result).toMatchObject({ source: "template" });
+    expect(result).toBe(
+      `${HEALTHY_GREETING_TEMPLATE}\nChannels needing attention: Telegram, Discord.`,
+    );
     expect(cache.read()).toBeUndefined();
   });
 
@@ -508,10 +515,7 @@ describe("system agent greeting cache", () => {
       now: () => 100,
     });
 
-    expect(result).toEqual({
-      text: "Telegram and Discord need attention.",
-      source: "model",
-    });
+    expect(result).toBe("Telegram and Discord need attention.");
     expect(cache.read()?.text).toBe("Telegram and Discord need attention.");
   });
 
@@ -530,8 +534,7 @@ describe("system agent greeting cache", () => {
       now: () => 100,
     });
 
-    expect(result).toMatchObject({ source: "template" });
-    expect(result.text).toContain("Channel health is not available yet");
+    expect(result).toBe(`${HEALTHY_GREETING_TEMPLATE}\nChannel health is not available yet.`);
     expect(cache.read()).toBeUndefined();
   });
 
@@ -590,8 +593,7 @@ describe("system agent greeting cache", () => {
         now: () => 100,
       });
 
-      expect(result).toMatchObject({ source: "template" });
-      expect(result.text).toContain(expected);
+      expect(result).toContain(expected);
       expect(planner).not.toHaveBeenCalled();
       expect(cache.store.latest).not.toHaveBeenCalled();
       expect(cache.read()).toBeUndefined();
@@ -609,8 +611,7 @@ describe("system agent greeting cache", () => {
       },
     });
 
-    expect(result).toMatchObject({ source: "template" });
-    expect(result.text).toContain("caretaker of this gateway");
+    expect(result).toBe(HEALTHY_GREETING_TEMPLATE);
     expect(planner).not.toHaveBeenCalled();
   });
 
@@ -654,7 +655,7 @@ describe("system agent greeting cache", () => {
       if (failure === "revoked") {
         await expect(greeting).rejects.toThrow("store authority revoked");
       } else {
-        await expect(greeting).resolves.toMatchObject({ source: "template" });
+        await expect(greeting).resolves.toBe(HEALTHY_GREETING_TEMPLATE);
       }
       expect(planner).not.toHaveBeenCalled();
       expect(cache.store.compareAndSet).not.toHaveBeenCalled();

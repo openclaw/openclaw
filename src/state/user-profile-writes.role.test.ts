@@ -2,16 +2,16 @@ import { afterEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { onUserProfilesChanged } from "./user-profile-events.js";
 import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
-import { readResidentUserProfileIdentity, prepareUserProfileCatalog } from "./user-profile-list.js";
+import { readResidentUserProfileIdentity } from "./user-profile-list.js";
 import { setCanonicalUserProfileRole } from "./user-profile-writes.js";
 import { setUserProfileRole } from "./user-profile-writes.worker.js";
+import { useProfileState } from "./user-profiles-fixture.test-support.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
 
 const delivery = vi.hoisted(() => ({
@@ -22,28 +22,28 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openclaw-state-worker-store.js")>();
   return {
     ...actual,
-    runOpenClawStateWorkerOperation: (
-      context: Parameters<typeof actual.runOpenClawStateWorkerOperation>[0],
-      operation: Parameters<typeof actual.runOpenClawStateWorkerOperation>[1],
-      options: Parameters<typeof actual.runOpenClawStateWorkerOperation>[2],
-    ) =>
-      actual.runOpenClawStateWorkerOperation(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === "userProfiles.setRole") {
-                await delivery.afterResult?.(delivery.roleCommands++);
-              }
-              return result;
-            },
-          }),
-        options,
+    runOpenClawStateWorkerOperation: vi
+      .fn(actual.runOpenClawStateWorkerOperation)
+      .mockImplementation((context, operation, options) =>
+        actual.runOpenClawStateWorkerOperation(
+          context,
+          (scope) =>
+            operation({
+              execute: async (command, executeOptions) => {
+                const result = await scope.execute(command, executeOptions);
+                if (command.type === "userProfiles.setRole") {
+                  await delivery.afterResult?.(delivery.roleCommands++);
+                }
+                return result;
+              },
+            }),
+          options,
+        ),
       ),
   };
 });
 
+const catalog = useProfileState();
 afterEach(() => {
   delivery.afterResult = undefined;
   delivery.roleCommands = 0;
@@ -53,20 +53,15 @@ afterEach(() => {
 it.each(["ordered", "reversed", "recovery first", "native successor", "native ABA"] as const)(
   "preserves durable role order through %s result delivery",
   async (order) => {
-    const state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "canonical-role-order-",
-    });
     const gates = Array.from({ length: 3 }, () => ({
       received: createDeferredCore(),
       resume: createDeferredCore(),
     }));
     const pending: Array<ReturnType<typeof setCanonicalUserProfileRole>> = [];
     const lostDelivery = new Error("synthetic first role result delivery failure");
-    let release = () => {};
     try {
       const profile = ensureProfileForEmail("role-order@example.test");
-      release = (await prepareUserProfileCatalog()).release;
+      await catalog.hydrate();
       delivery.afterResult = async (index) => {
         const gate = gates[index]!;
         gate.received.resolve();
@@ -114,8 +109,7 @@ it.each(["ordered", "reversed", "recovery first", "native successor", "native AB
         gate.resume.resolve();
       }
       await Promise.allSettled(pending);
-      release();
-      await state.cleanup();
+      catalog.release();
     }
   },
 );
@@ -123,18 +117,13 @@ it.each(["ordered", "reversed", "recovery first", "native successor", "native AB
 it.each(["delivered", "lost during close"] as const)(
   "publishes committed roles before observers when the reply is %s",
   async (reply) => {
-    const state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "canonical-role-placement-",
-    });
     const lostDelivery = new Error("synthetic committed role result delivery failure");
-    let release = () => {};
     let stop = () => {};
     let closing: ReturnType<typeof closeOpenClawStateDatabaseByPathAsync> | undefined;
     try {
       const profile = ensureProfileForEmail("role-placement@example.test");
       const pathname = openOpenClawStateDatabase().path;
-      release = (await prepareUserProfileCatalog()).release;
+      await catalog.hydrate();
       const observed: Array<string | null | undefined> = [];
       stop = onUserProfilesChanged(() => {
         observed.push(readResidentUserProfileIdentity(profile.id)?.role);
@@ -160,8 +149,8 @@ it.each(["delivered", "lost during close"] as const)(
       expect(observed).toEqual(["guest"]);
       vi.restoreAllMocks();
       if (reply === "lost during close") {
-        release();
-        release = (await prepareUserProfileCatalog()).release;
+        catalog.release();
+        await catalog.hydrate();
       }
       expect(readResidentUserProfileIdentity(profile.id)?.role).toBe("guest");
       expect(getUserProfileListItem(profile.id).role).toBe("guest");
@@ -169,8 +158,7 @@ it.each(["delivered", "lost during close"] as const)(
       vi.restoreAllMocks();
       await Promise.allSettled([closing]);
       stop();
-      release();
-      await state.cleanup();
+      catalog.release();
     }
   },
 );

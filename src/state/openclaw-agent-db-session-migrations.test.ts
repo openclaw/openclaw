@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import type { SQLInputValue } from "node:sqlite";
+import { describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
@@ -10,15 +11,44 @@ import {
 } from "./openclaw-agent-db-session-migrations.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
+const deliveryContext = (channel: string, to: string) => ({ channel, accountId: "default", to });
+
+function conversationDatabase(deliveryTarget = true) {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(":memory:");
+  database.exec(`
+    ${deliveryTarget ? "PRAGMA foreign_keys = ON;" : ""}
+    CREATE TABLE conversations (
+      conversation_id TEXT PRIMARY KEY, channel TEXT NOT NULL, account_id TEXT NOT NULL,
+      kind TEXT NOT NULL, peer_id TEXT NOT NULL,
+      ${deliveryTarget ? "delivery_target TEXT NOT NULL," : ""}
+      parent_conversation_id TEXT, thread_id TEXT, native_channel_id TEXT,
+      native_direct_user_id TEXT, label TEXT, metadata_json TEXT,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE sessions (
+      session_id TEXT PRIMARY KEY, session_key TEXT NOT NULL, session_scope TEXT NOT NULL,
+      chat_type TEXT, primary_conversation_id TEXT
+    );
+    CREATE TABLE session_entries (
+      session_key TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+      entry_json TEXT NOT NULL, updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE session_conversations (
+      session_id TEXT NOT NULL, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
+      first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, conversation_id, role)
+    );
+    CREATE UNIQUE INDEX idx_agent_conversations_identity${deliveryTarget ? "" : "_v8"}
+      ON conversations(channel, account_id, kind, peer_id,
+        IFNULL(parent_conversation_id, ''), IFNULL(thread_id, ''));
+    CREATE UNIQUE INDEX idx_agent_session_conversations_primary
+      ON session_conversations(session_id) WHERE role = 'primary';
+  `);
+  return database;
+}
+
 describe("agent DB conversation migration", () => {
-  const databases: Array<{ close: () => void }> = [];
-
-  afterEach(() => {
-    for (const database of databases.splice(0)) {
-      database.close();
-    }
-  });
-
   it("covers every installed same-version column in admission facts", () => {
     const { DatabaseSync } = requireNodeSqlite();
     using canonical = new DatabaseSync(":memory:");
@@ -58,8 +88,7 @@ describe("agent DB conversation migration", () => {
 
   it("adds nullable route context without advancing the schema version", () => {
     const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(":memory:");
-    databases.push(database);
+    using database = new sqlite.DatabaseSync(":memory:");
     database.exec(`
       PRAGMA user_version = 17;
       CREATE TABLE session_conversations (
@@ -77,40 +106,25 @@ describe("agent DB conversation migration", () => {
 
     ensureSessionAdditiveColumns(database);
     ensureSessionAdditiveColumns(database);
-    database
-      .prepare(
-        "UPDATE session_conversations SET route_context_json = ? WHERE session_id = ? AND conversation_id = ?",
-      )
-      .run(
-        '{"version":1,"writeId":"candidate-write","observedAt":1,"context":{"guildId":"guild-a"}}',
-        "session-a",
-        "conversation-a",
-      );
-    database
-      .prepare(
-        "UPDATE session_conversations SET route_context_json = ?, last_seen_at = ? WHERE session_id = ? AND conversation_id = ?",
-      )
-      .run(
-        '{"version":1,"writeId":"current-write","observedAt":1,"context":{"guildId":"guild-a"}}',
-        1,
-        "session-a",
-        "conversation-a",
-      );
+    const update = (columns: string, ...values: SQLInputValue[]) =>
+      database
+        .prepare(
+          `UPDATE session_conversations SET ${columns} WHERE session_id = ? AND conversation_id = ?`,
+        )
+        .run(...values, "session-a", "conversation-a");
+    const route = (writeId: string) =>
+      JSON.stringify({ version: 1, writeId, observedAt: 1, context: { guildId: "guild-a" } });
+    const currentRoute = route("current-write");
+    update("route_context_json = ?", route("candidate-write"));
+    update("route_context_json = ?, last_seen_at = ?", currentRoute, 1);
     expect(
       database
         .prepare(
           "SELECT route_context_json FROM session_conversations WHERE session_id = 'session-a'",
         )
         .get(),
-    ).toEqual({
-      route_context_json:
-        '{"version":1,"writeId":"current-write","observedAt":1,"context":{"guildId":"guild-a"}}',
-    });
-    database
-      .prepare(
-        "UPDATE session_conversations SET last_seen_at = ? WHERE session_id = ? AND conversation_id = ?",
-      )
-      .run(1, "session-a", "conversation-a");
+    ).toEqual({ route_context_json: currentRoute });
+    update("last_seen_at = ?", 1);
 
     expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
     expect(
@@ -123,155 +137,75 @@ describe("agent DB conversation migration", () => {
   });
 
   it("backfills direct addresses and keeps shared-main peers as participants", () => {
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(":memory:");
-    databases.push(database);
-    database.exec(`
-      PRAGMA foreign_keys = ON;
-      CREATE TABLE conversations (
-        conversation_id TEXT PRIMARY KEY,
-        channel TEXT NOT NULL,
-        account_id TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        peer_id TEXT NOT NULL,
-        delivery_target TEXT NOT NULL,
-        parent_conversation_id TEXT,
-        thread_id TEXT,
-        native_channel_id TEXT,
-        native_direct_user_id TEXT,
-        label TEXT,
-        metadata_json TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE sessions (
-        session_id TEXT PRIMARY KEY,
-        session_key TEXT NOT NULL,
-        session_scope TEXT NOT NULL,
-        chat_type TEXT,
-        primary_conversation_id TEXT
-      );
-      CREATE TABLE session_entries (
-        session_key TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        entry_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE session_conversations (
-        session_id TEXT NOT NULL,
-        conversation_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        first_seen_at INTEGER NOT NULL,
-        last_seen_at INTEGER NOT NULL,
-        PRIMARY KEY (session_id, conversation_id, role)
-      );
-      CREATE UNIQUE INDEX idx_agent_conversations_identity
-        ON conversations(
-          channel,
-          account_id,
-          kind,
-          peer_id,
-          IFNULL(parent_conversation_id, ''),
-          IFNULL(thread_id, '')
-        );
-      CREATE UNIQUE INDEX idx_agent_session_conversations_primary
-        ON session_conversations(session_id) WHERE role = 'primary';
-    `);
+    using database = conversationDatabase();
     const insertSession = database.prepare(
       "INSERT INTO sessions (session_id, session_key, session_scope, chat_type) VALUES (?, ?, ?, ?)",
     );
-    const insertEntry = database.prepare(
+    const entryStatement = database.prepare(
       "INSERT INTO session_entries (session_key, session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
     );
+    const insertEntry = (key: string, session: string, entry: object, updatedAt: number) =>
+      entryStatement.run(key, session, JSON.stringify(entry), updatedAt);
     insertSession.run("shared", "agent:main:main", "shared-main", "channel");
-    insertEntry.run(
+    insertEntry(
       "agent:main:main",
       "shared",
-      JSON.stringify({
-        groupId: "shared-ops",
-        deliveryContext: {
-          channel: "discord",
-          accountId: "default",
-          to: "channel:shared-ops",
-        },
-      }),
+      { groupId: "shared-ops", deliveryContext: deliveryContext("discord", "channel:shared-ops") },
       50,
     );
-    insertEntry.run(
+    insertEntry(
       "agent:main:reef:direct:peer-a",
       "shared",
-      JSON.stringify({
-        deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
-      }),
+      { deliveryContext: deliveryContext("reef", "reef:peer-a") },
       100,
     );
     insertSession.run("dedicated", "agent:main:reef:direct:peer-b", "conversation", "direct");
-    insertEntry.run(
+    insertEntry(
       "agent:main:reef:direct:peer-b",
       "dedicated",
-      JSON.stringify({
+      {
         chatType: "direct",
-        origin: {
-          provider: "reef",
-          nativeDirectUserId: "stale-peer",
-          from: "reef:stale-peer",
-        },
-        deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-b" },
-      }),
+        origin: { provider: "reef", nativeDirectUserId: "stale-peer", from: "reef:stale-peer" },
+        deliveryContext: deliveryContext("reef", "reef:peer-b"),
+      },
       200,
     );
-    insertEntry.run(
+    insertEntry(
       "agent:main:reef:direct:peer-a:related",
       "dedicated",
-      JSON.stringify({
+      {
         chatType: "direct",
         origin: { provider: "reef", nativeDirectUserId: "peer-a" },
-        deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
-      }),
+        deliveryContext: deliveryContext("reef", "reef:peer-a"),
+      },
       300,
     );
     insertSession.run("channel-case", "agent:main:legacy-room", "channel", null);
-    insertEntry.run(
+    insertEntry(
       "agent:main:legacy-room",
       "channel-case",
-      JSON.stringify({
-        groupId: "ops-room",
-        deliveryContext: {
-          channel: "discord",
-          accountId: "default",
-          to: "channel:ops-room",
-        },
-      }),
+      { groupId: "ops-room", deliveryContext: deliveryContext("discord", "channel:ops-room") },
       400,
     );
     insertSession.run("group-case", "agent:main:legacy-group", "channel", null);
-    insertEntry.run(
+    insertEntry(
       "agent:main:legacy-group",
       "group-case",
-      JSON.stringify({
-        groupId: "crew-room",
-        deliveryContext: {
-          channel: "telegram",
-          accountId: "default",
-          to: "-100123",
-        },
-      }),
+      { groupId: "crew-room", deliveryContext: deliveryContext("telegram", "-100123") },
       500,
     );
     insertSession.run("thread-case", "agent:main:discord:channel:ops-room:thread", "channel", null);
-    insertEntry.run(
+    insertEntry(
       "agent:main:discord:channel:ops-room:thread",
       "thread-case",
-      JSON.stringify({
+      {
         chatType: "channel",
         groupId: "ops-room",
         deliveryContext: {
-          channel: "discord",
-          accountId: "default",
-          to: "channel:ops-room",
+          ...deliveryContext("discord", "channel:ops-room"),
           threadId: "user-context",
         },
-      }),
+      },
       600,
     );
 
@@ -286,57 +220,23 @@ describe("agent DB conversation migration", () => {
            ORDER BY sc.session_id, sc.role, c.peer_id`,
         )
         .all(),
-    ).toEqual([
-      {
-        session_id: "channel-case",
-        role: "primary",
-        kind: "channel",
-        peer_id: "ops-room",
-        delivery_target: "channel:ops-room",
-      },
-      {
-        session_id: "dedicated",
-        role: "primary",
-        kind: "direct",
-        peer_id: "peer-a",
-        delivery_target: "reef:peer-a",
-      },
-      {
-        session_id: "dedicated",
-        role: "related",
-        kind: "direct",
-        peer_id: "peer-b",
-        delivery_target: "reef:peer-b",
-      },
-      {
-        session_id: "group-case",
-        role: "primary",
-        kind: "group",
-        peer_id: "-100123",
-        delivery_target: "-100123",
-      },
-      {
-        session_id: "shared",
-        role: "participant",
-        kind: "direct",
-        peer_id: "peer-a",
-        delivery_target: "reef:peer-a",
-      },
-      {
-        session_id: "shared",
-        role: "primary",
-        kind: "channel",
-        peer_id: "shared-ops",
-        delivery_target: "channel:shared-ops",
-      },
-      {
-        session_id: "thread-case",
-        role: "primary",
-        kind: "channel",
-        peer_id: "ops-room",
-        delivery_target: "channel:ops-room",
-      },
-    ]);
+    ).toEqual(
+      [
+        ["channel-case", "primary", "channel", "ops-room", "channel:ops-room"],
+        ["dedicated", "primary", "direct", "peer-a", "reef:peer-a"],
+        ["dedicated", "related", "direct", "peer-b", "reef:peer-b"],
+        ["group-case", "primary", "group", "-100123", "-100123"],
+        ["shared", "participant", "direct", "peer-a", "reef:peer-a"],
+        ["shared", "primary", "channel", "shared-ops", "channel:shared-ops"],
+        ["thread-case", "primary", "channel", "ops-room", "channel:ops-room"],
+      ].map(([session_id, role, kind, peer_id, delivery_target]) => ({
+        session_id,
+        role,
+        kind,
+        peer_id,
+        delivery_target,
+      })),
+    );
     expect(
       database
         .prepare(
@@ -359,88 +259,30 @@ describe("agent DB conversation migration", () => {
     });
     expect(
       database
-        .prepare("SELECT primary_conversation_id FROM sessions WHERE session_id = 'shared'")
-        .get(),
-    ).toEqual({ primary_conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u) });
-    expect(
-      database
         .prepare(
-          `SELECT c.peer_id
+          `SELECT s.session_id, s.primary_conversation_id, c.peer_id
            FROM sessions s
            JOIN conversations c ON c.conversation_id = s.primary_conversation_id
-           WHERE s.session_id = 'shared'`,
+           WHERE s.session_id IN ('shared', 'dedicated') ORDER BY s.session_id`,
         )
-        .get(),
-    ).toEqual({ peer_id: "shared-ops" });
-    expect(
-      database
-        .prepare("SELECT primary_conversation_id FROM sessions WHERE session_id = 'dedicated'")
-        .get(),
-    ).toEqual({ primary_conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u) });
-    expect(
-      database
-        .prepare(
-          `SELECT c.peer_id
-           FROM sessions s
-           JOIN conversations c ON c.conversation_id = s.primary_conversation_id
-           WHERE s.session_id = 'dedicated'`,
-        )
-        .get(),
-    ).toEqual({ peer_id: "peer-a" });
+        .all(),
+    ).toEqual([
+      {
+        session_id: "dedicated",
+        primary_conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
+        peer_id: "peer-a",
+      },
+      {
+        session_id: "shared",
+        primary_conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
+        peer_id: "shared-ops",
+      },
+    ]);
   });
 
   it("drops v8 conversation rows whose exact delivery target cannot be reconstructed", () => {
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(":memory:");
-    databases.push(database);
+    using database = conversationDatabase(false);
     database.exec(`
-      CREATE TABLE conversations (
-        conversation_id TEXT PRIMARY KEY,
-        channel TEXT NOT NULL,
-        account_id TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        peer_id TEXT NOT NULL,
-        parent_conversation_id TEXT,
-        thread_id TEXT,
-        native_channel_id TEXT,
-        native_direct_user_id TEXT,
-        label TEXT,
-        metadata_json TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE sessions (
-        session_id TEXT PRIMARY KEY,
-        session_key TEXT NOT NULL,
-        session_scope TEXT NOT NULL,
-        chat_type TEXT,
-        primary_conversation_id TEXT
-      );
-      CREATE TABLE session_entries (
-        session_key TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        entry_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE session_conversations (
-        session_id TEXT NOT NULL,
-        conversation_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        first_seen_at INTEGER NOT NULL,
-        last_seen_at INTEGER NOT NULL,
-        PRIMARY KEY (session_id, conversation_id, role)
-      );
-      CREATE UNIQUE INDEX idx_agent_conversations_identity_v8
-        ON conversations(
-          channel,
-          account_id,
-          kind,
-          peer_id,
-          IFNULL(parent_conversation_id, ''),
-          IFNULL(thread_id, '')
-        );
-      CREATE UNIQUE INDEX idx_agent_session_conversations_primary
-        ON session_conversations(session_id) WHERE role = 'primary';
       INSERT INTO conversations (
         conversation_id, channel, account_id, kind, peer_id, created_at, updated_at
       ) VALUES

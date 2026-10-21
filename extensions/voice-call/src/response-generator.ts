@@ -12,7 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveVoiceCallSessionKey, type VoiceCallConfig } from "./config.js";
 import { resolveCallAgentId } from "./resolve-call-agent-id.js";
@@ -22,7 +22,6 @@ type VoiceResponseParams = {
   voiceConfig: VoiceCallConfig;
   coreConfig: OpenClawConfig;
   agentRuntime: OpenClawPluginApi["runtime"]["agent"];
-  /** Call ID for session tracking */
   callId: string;
   /** Persisted call session key */
   sessionKey?: string;
@@ -146,15 +145,11 @@ function tryParseSpokenJson(text: string): string | null {
   }
 
   for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as { spoken?: unknown };
-      if (typeof parsed?.spoken !== "string") {
-        continue;
-      }
-      return normalizeSpokenText(parsed.spoken) ?? "";
-    } catch {
-      // Continue trying other candidates.
+    const parsed = safeParseJson<{ spoken?: unknown }>(candidate);
+    if (typeof parsed?.spoken !== "string") {
+      continue;
     }
+    return normalizeSpokenText(parsed.spoken) ?? "";
   }
 
   const inlineSpokenMatch = trimmed.match(/"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
@@ -162,12 +157,8 @@ function tryParseSpokenJson(text: string): string | null {
     return null;
   }
 
-  try {
-    const decoded = JSON.parse(`"${inlineSpokenMatch[1] ?? ""}"`) as string;
-    return normalizeSpokenText(decoded) ?? "";
-  } catch {
-    return null;
-  }
+  const decoded = safeParseJson<string>(`"${inlineSpokenMatch[1] ?? ""}"`);
+  return decoded === null ? null : (normalizeSpokenText(decoded) ?? "");
 }
 
 function isLikelyMetaReasoningParagraph(paragraph: string): boolean {

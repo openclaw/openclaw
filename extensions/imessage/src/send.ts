@@ -99,29 +99,7 @@ type IMessageSendOpts = IMessageSendHandoff & {
   config: OpenClawConfig;
   account?: ResolvedIMessageAccount;
   approvalPrompt?: IMessageApprovalPromptBinding;
-  resolveAttachmentImpl?: (
-    mediaUrl: string,
-    maxBytes: number,
-    options?: Parameters<typeof resolveOutboundAttachmentFromUrl>[2],
-  ) => Promise<{ path: string; contentType?: string }>;
-  createClient?: (params: {
-    cliPath: string;
-    dbPath?: string;
-    remoteHost?: string;
-  }) => Promise<IMessageRpcClient>;
-  withRemoteFile?: typeof withIMessageRemoteFile;
-  runCliJson?: (args: readonly string[]) => Promise<Record<string, unknown>>;
   onDeliveryResult?: (result: IMessageDeliveryProgress) => Promise<void> | void;
-  resolveMessageGuidImpl?: (params: {
-    dbPath?: string;
-    messageId: string;
-  }) => Promise<string | null> | string | null;
-  resolveSentMessageGuidImpl?: (params: {
-    dbPath?: string;
-    target: ParsedIMessageTarget;
-    text: string;
-    sentAfterMs?: number;
-  }) => Promise<string | null> | string | null;
 };
 
 type IMessageSendResult = {
@@ -191,7 +169,6 @@ async function resolveApprovalBindingMessageGuid(params: {
   dbPath?: string;
   messageId: string | null;
   result: Record<string, unknown> | null | undefined;
-  resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<string | null> {
   // Tapbacks identify their target by GUID, never the numeric ROWID some sends return.
   for (const key of ["messageGuid", "guid", "messageId", "message_id", "id"]) {
@@ -203,11 +180,6 @@ async function resolveApprovalBindingMessageGuid(params: {
   const messageId = params.messageId?.trim();
   if (!messageId || !isNumericMessageRowId(messageId)) {
     return null;
-  }
-  if (params.resolveMessageGuidImpl) {
-    return normalizeResolvedMessageGuid(
-      await params.resolveMessageGuidImpl({ dbPath: params.dbPath, messageId }),
-    );
   }
   const dbPath = params.dbPath?.trim();
   return dbPath
@@ -224,23 +196,22 @@ async function resolveFallbackSentMessageGuid(params: {
   target: ParsedIMessageTarget;
   text: string;
   sentAfterMs?: number;
-  resolveSentMessageGuidImpl?: IMessageSendOpts["resolveSentMessageGuidImpl"];
 }): Promise<string | null> {
   const dbPath = params.dbPath?.trim();
-  if (!params.resolveSentMessageGuidImpl && !canResolveLatestSentMessageGuidFromChatDb(dbPath)) {
+  if (!dbPath || !canResolveLatestSentMessageGuidFromChatDb(dbPath)) {
     return null;
   }
   const deadlineMs = Date.now() + 5_000;
-  const poll = async (
-    resolver: NonNullable<IMessageSendOpts["resolveSentMessageGuidImpl"]>,
-  ): Promise<string | null> => {
+  return await withIMessageReceiptGuidReader(dbPath, async (read) => {
     while (Date.now() <= deadlineMs) {
       const resolved = normalizeResolvedMessageGuid(
-        await resolver({
-          dbPath: params.dbPath,
-          target: params.target,
-          text: params.text,
-          sentAfterMs: params.sentAfterMs,
+        await read({
+          type: "latestSentGuid",
+          input: {
+            target: params.target,
+            text: params.text,
+            sentAfterMs: params.sentAfterMs,
+          },
         }),
       );
       if (resolved) {
@@ -252,18 +223,7 @@ async function resolveFallbackSentMessageGuid(params: {
       await delay(250);
     }
     return null;
-  };
-  if (params.resolveSentMessageGuidImpl) {
-    return await poll(params.resolveSentMessageGuidImpl);
-  }
-  if (!dbPath) {
-    return null;
-  }
-  return await withIMessageReceiptGuidReader(dbPath, (read) =>
-    poll(({ target, text, sentAfterMs }) =>
-      read({ type: "latestSentGuid", input: { target, text, sentAfterMs } }),
-    ),
-  );
+  });
 }
 
 function createIMessageSendReceipt(params: {
@@ -439,8 +399,7 @@ export async function sendMessageIMessage(
   let mediaContentType: string | undefined;
 
   if (opts.mediaUrl?.trim()) {
-    const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
-    const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes, {
+    const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
       mediaAccess: opts.mediaAccess,
       localRoots: opts.mediaLocalRoots,
       readFile: opts.mediaReadFile,
@@ -488,7 +447,7 @@ export async function sendMessageIMessage(
   const runCliJson = bindIMessageCliSend(opts, { cliPath, dbPath, timeoutMs });
   const requestOwnedRpc = async (method: string, rpcParams: Record<string, unknown>) => {
     opts.assertDirectAdapterHandoff?.();
-    const rpcClient = await (opts.createClient ?? createIMessageRpcClient)({
+    const rpcClient = await createIMessageRpcClient({
       cliPath,
       dbPath,
       remoteHost,
@@ -499,7 +458,6 @@ export async function sendMessageIMessage(
       await rpcClient.stop();
     }
   };
-  const withRemoteFile = opts.withRemoteFile ?? withIMessageRemoteFile;
   const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
 
   async function recordAcceptedSend(
@@ -517,7 +475,6 @@ export async function sendMessageIMessage(
       dbPath: chatDbLookupPath,
       messageId: resolvedId,
       result,
-      resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
     });
     if (!guid && isMessage && opts.approvalPrompt && !filePath && !effectiveReplyToId) {
       guid = await resolveFallbackSentMessageGuid({
@@ -525,7 +482,6 @@ export async function sendMessageIMessage(
         target,
         text: message,
         sentAfterMs: delivery.startedAtMs,
-        resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
       });
     }
     await rememberPersistedIMessageEcho({
@@ -673,7 +629,7 @@ export async function sendMessageIMessage(
         attachmentFilePath,
         async (attachmentPath) => {
           if (remoteHost) {
-            return await withRemoteFile({
+            return await withIMessageRemoteFile({
               remoteHost,
               localPath: attachmentPath,
               timeoutMs,
@@ -811,9 +767,7 @@ export async function sendMessageIMessage(
   }
 
   opts.assertDirectAdapterHandoff?.();
-  const client =
-    opts.client ??
-    (await (opts.createClient ?? createIMessageRpcClient)({ cliPath, dbPath, remoteHost }));
+  const client = opts.client ?? (await createIMessageRpcClient({ cliPath, dbPath, remoteHost }));
   const shouldClose = !opts.client;
   const requestSuccessfulSend = async (sendParams: Record<string, unknown>) => {
     const request = async (nativeParams: Record<string, unknown>) =>
@@ -821,7 +775,7 @@ export async function sendMessageIMessage(
     const response = filePath
       ? await withOriginalIMessageAttachmentPath(filePath, async (attachmentPath) => {
           if (remoteHost) {
-            return await withRemoteFile({
+            return await withIMessageRemoteFile({
               remoteHost,
               localPath: attachmentPath,
               timeoutMs,
@@ -862,10 +816,7 @@ export async function sendMessageIMessage(
       } else if (
         !opts.approvalPrompt ||
         resolvedReplyToId ||
-        !(
-          opts.resolveSentMessageGuidImpl ||
-          canResolveLatestSentMessageGuidFromChatDb(chatDbLookupPath)
-        )
+        !canResolveLatestSentMessageGuidFromChatDb(chatDbLookupPath)
       ) {
         throw error;
       } else {
@@ -874,7 +825,6 @@ export async function sendMessageIMessage(
           target,
           text: message,
           sentAfterMs: sendStartedAtMs,
-          resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
         });
         if (recoveredGuid) {
           result = { guid: recoveredGuid, status: "sent" };

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { filterStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { detectPackageManager } from "./detect-package-manager.js";
 import { readPackageManagerSpec } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
@@ -15,6 +16,13 @@ export function resolvePnpmCandidateEnv(
   // Set every spelling: inherited lower-case keys can win over upper-case overrides.
   return {
     ...env,
+    // pnpm 12 selects the global graph independently of virtualStoreDir. Its
+    // hoisted/global materializer can also emit unpatched registry bytes while
+    // recording the patch hash. Candidates need the project materializer.
+    PNPM_CONFIG_VIRTUAL_STORE_TYPE: "project",
+    pnpm_config_virtual_store_type: "project",
+    NPM_CONFIG_VIRTUAL_STORE_TYPE: "project",
+    npm_config_virtual_store_type: "project",
     PNPM_CONFIG_VIRTUAL_STORE_DIR: virtualStoreDir,
     pnpm_config_virtual_store_dir: virtualStoreDir,
     NPM_CONFIG_VIRTUAL_STORE_DIR: virtualStoreDir,
@@ -62,87 +70,6 @@ async function isManagerAvailable(
   }
 }
 
-function cloneCommandEnv(env?: NodeJS.ProcessEnv): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(env ?? process.env)
-      .filter(([, value]) => value != null)
-      .map(([key, value]) => [key, String(value)]),
-  ) as Record<string, string>;
-}
-
-async function enablePnpmViaCorepack(
-  runCommand: PackageManagerCommandRunner,
-  timeoutMs: number,
-  env?: NodeJS.ProcessEnv,
-  expectedVersion?: string,
-  work?: { timeoutMs?: number },
-): Promise<"enabled" | "missing" | "failed"> {
-  if (!(await isManagerAvailable(runCommand, "corepack", timeoutMs, env))) {
-    return "missing";
-  }
-  try {
-    const res = await runCommand(["corepack", "enable"], {
-      timeoutMs: work ? work.timeoutMs : timeoutMs,
-      env,
-    });
-    if (res.code !== 0) {
-      return "failed";
-    }
-  } catch {
-    return "failed";
-  }
-  return (await isManagerAvailable(runCommand, "pnpm", timeoutMs, env, expectedVersion))
-    ? "enabled"
-    : "failed";
-}
-
-async function bootstrapPnpmViaNpm(params: {
-  version: string;
-  runCommand: PackageManagerCommandRunner;
-  timeoutMs: number;
-  work?: { timeoutMs?: number };
-  baseEnv?: NodeJS.ProcessEnv;
-}): Promise<{ env: NodeJS.ProcessEnv; cleanup: () => Promise<void> } | null> {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-pnpm-"));
-  const cleanup = async () => {
-    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
-  };
-  try {
-    // npm 11.16+ requires project policy for local installs; only this pinned
-    // tool may run its native-binary provisioning script in the temporary prefix.
-    await fs.writeFile(
-      path.join(tempRoot, "package.json"),
-      JSON.stringify({
-        private: true,
-        allowScripts: { [`pnpm@${params.version}`]: true },
-      }),
-    );
-    const installResult = await params.runCommand(
-      ["npm", "install", "--prefix", tempRoot, `pnpm@${params.version}`],
-      {
-        timeoutMs: params.work ? params.work.timeoutMs : params.timeoutMs,
-        env: params.baseEnv,
-      },
-    );
-    if (installResult.code !== 0) {
-      await cleanup();
-      return null;
-    }
-    const env = cloneCommandEnv(params.baseEnv);
-    applyPathPrepend(env, [path.join(tempRoot, "node_modules", ".bin")]);
-    if (
-      !(await isManagerAvailable(params.runCommand, "pnpm", params.timeoutMs, env, params.version))
-    ) {
-      await cleanup();
-      return null;
-    }
-    return { env, cleanup };
-  } catch {
-    await cleanup();
-    return null;
-  }
-}
-
 export function parsePnpmPackageManagerVersion(pin: string | null): string | undefined {
   return /^pnpm@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\+.*)?$/u.exec(pin ?? "")?.[1];
 }
@@ -165,35 +92,66 @@ export async function resolveUpdateBuildManager(
       return { kind: "resolved", manager: "pnpm", fallback: false };
     }
 
-    const corepackStatus = await enablePnpmViaCorepack(
-      runCommand,
-      timeoutMs,
-      baseEnv,
-      pnpmVersion,
-      work,
-    );
+    const corepackStatus = await (async () => {
+      if (!(await isManagerAvailable(runCommand, "corepack", timeoutMs, baseEnv))) {
+        return "missing";
+      }
+      try {
+        const res = await runCommand(["corepack", "enable"], {
+          timeoutMs: work ? work.timeoutMs : timeoutMs,
+          env: baseEnv,
+        });
+        if (res.code !== 0) {
+          return "failed";
+        }
+      } catch {
+        return "failed";
+      }
+      return (await isManagerAvailable(runCommand, "pnpm", timeoutMs, baseEnv, pnpmVersion))
+        ? "enabled"
+        : "failed";
+    })();
     if (corepackStatus === "enabled") {
       return { kind: "resolved", manager: "pnpm", fallback: false };
     }
 
     const npmAvailable = await isManagerAvailable(runCommand, "npm", timeoutMs, baseEnv);
     if (npmAvailable && pnpmVersion) {
-      const pnpmBootstrap = await bootstrapPnpmViaNpm({
-        version: pnpmVersion,
-        runCommand,
-        timeoutMs,
-        work,
-        baseEnv,
-      });
-      if (pnpmBootstrap) {
-        return {
-          kind: "resolved",
-          manager: "pnpm",
-          fallback: false,
-          env: pnpmBootstrap.env,
-          cleanup: pnpmBootstrap.cleanup,
-        };
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-pnpm-"));
+      const cleanup = async () => {
+        await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+      };
+      try {
+        // npm 11.16+ requires project policy for local installs; only this pinned
+        // tool may run its native-binary provisioning script in the temporary prefix.
+        await fs.writeFile(
+          path.join(tempRoot, "package.json"),
+          JSON.stringify({
+            private: true,
+            allowScripts: { [`pnpm@${pnpmVersion}`]: true },
+          }),
+        );
+        const installResult = await runCommand(
+          ["npm", "install", "--prefix", tempRoot, `pnpm@${pnpmVersion}`],
+          { timeoutMs: work ? work.timeoutMs : timeoutMs, env: baseEnv },
+        );
+        if (installResult.code === 0) {
+          const env = filterStringRecord(baseEnv ?? process.env) ?? {};
+          applyPathPrepend(env, [path.join(tempRoot, "node_modules", ".bin")]);
+          if (await isManagerAvailable(runCommand, "pnpm", timeoutMs, env, pnpmVersion)) {
+            return {
+              kind: "resolved",
+              manager: "pnpm",
+              fallback: false,
+              env,
+              cleanup,
+            };
+          }
+        }
+      } catch {
+        // Failed preparation shares the same temporary-prefix cleanup and outcome.
       }
+      await cleanup();
       return { kind: "missing-required", preferred, reason: "pnpm-npm-bootstrap-failed" };
     }
 

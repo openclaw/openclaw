@@ -1,4 +1,3 @@
-// Gateway assistant identity resolver.
 // Combines agent config and workspace identity files for Control UI display.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -23,6 +22,7 @@ import {
   isWindowsAbsolutePath,
   looksLikeAvatarPath,
 } from "../shared/avatar-policy.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 
 const ASSISTANT_IDENTITY_LIMITS = {
   name: 50,
@@ -169,11 +169,7 @@ export async function resolveAssistantIdentity(
     workspaceDir && (!agentName || !agentAvatar || !agentEmoji)
       ? await loadAgentIdentityFromWorkspaceAsync(workspaceDir)
       : null;
-  let prepared = preparedIdentities.get(params.cfg);
-  if (!prepared) {
-    prepared = new Map();
-    preparedIdentities.set(params.cfg, prepared);
-  }
+  const prepared = getOrCreateWeakOwnerMap(preparedIdentities, params.cfg);
   const key = JSON.stringify([agentId, workspaceDir]);
   const cached = prepared.get(key);
   if (

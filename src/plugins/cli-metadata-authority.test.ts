@@ -20,54 +20,55 @@ import {
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
+function makeEnvironment() {
+  const root = fs.realpathSync(makePluginLoaderTempDir());
+  return {
+    HOME: root,
+    OPENCLAW_STATE_DIR: path.join(root, "state"),
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+  };
+}
+
 it.each(["system-agent", "install-roots", "install-state"] as const)(
   "prepares %s scopes without mutating the supplied config or env",
   async (kind) => {
-    const root = fs.realpathSync(makePluginLoaderTempDir());
-    for (const id of ["alpha", "beta"]) {
+    const env = makeEnvironment();
+    const at = (...parts: string[]) => path.join(env.HOME, ...parts);
+    const ids = ["alpha", "beta"];
+    const entries = Object.fromEntries(ids.map((id) => [id, { workspace: at(id) }]));
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries },
+      plugins: { allow: ids },
+    };
+    for (const id of ids) {
+      const installPath = at(id, ".openclaw", "extensions", id);
       writePlugin({
         id,
-        dir: path.join(root, id, ".openclaw", "extensions", id),
+        dir: installPath,
         filename: "index.cjs",
         body: `module.exports = { id: ${JSON.stringify(id)}, register(api) { api.registerCli(({ program }) => program.command(${JSON.stringify(id)}), { descriptors: [{ name: ${JSON.stringify(id)}, description: "Scope", hasSubcommands: false }] }); } };`,
       });
     }
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          alpha: { workspace: path.join(root, "alpha") },
-          beta: { workspace: path.join(root, "beta") },
-        },
-      },
-      plugins: { allow: ["alpha", "beta"] },
-    };
-    const env = {
-      HOME: root,
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
     if (kind === "install-state") {
-      for (const id of ["alpha", "beta"]) {
-        const installPath = path.join(root, id, ".openclaw", "extensions", id);
+      for (const id of ids) {
+        const installPath = at(id, ".openclaw", "extensions", id);
         await refreshPersistedInstalledPluginIndex({
           config: cfg,
           env,
-          stateDir: path.join(root, id, "state"),
+          stateDir: at(id, "state"),
           reason: "source-changed",
           installRecords: { [id]: { source: "path", installPath, sourcePath: installPath } },
         });
       }
     }
     const session = createPluginCliLoadSession();
+    const params = { cfg, env, session };
     let previous: Awaited<ReturnType<typeof loadPluginCliRegistrationEntriesWithDefaults>> = [];
-    for (const id of ["alpha", "beta"]) {
+    for (const id of ids) {
       const run = async () => {
         const serialized = JSON.stringify([cfg, env]);
-        expect(
-          (await loadPluginCliDescriptors({ cfg, env, session })).map(({ name }) => name),
-        ).toEqual([id]);
-        previous = await loadPluginCliRegistrationEntriesWithDefaults({ cfg, env, session });
+        expect((await loadPluginCliDescriptors(params)).map(({ name }) => name)).toEqual([id]);
+        previous = await loadPluginCliRegistrationEntriesWithDefaults(params);
         const program = new Command();
         await previous[0]!.register(program);
         expect(program.commands.map((command) => command.name())).toEqual([id]);
@@ -79,15 +80,10 @@ it.each(["system-agent", "install-roots", "install-state"] as const)(
       } else {
         await withPluginInstallRoots(
           {
-            extensionsDir: path.join(
-              root,
-              kind === "install-state" ? "shared" : id,
-              ".openclaw",
-              "extensions",
-            ),
-            gitDir: path.join(root, "shared", "git"),
-            npmDir: path.join(root, "shared", "npm"),
-            stateDir: path.join(root, id, "state"),
+            extensionsDir: at(kind === "install-state" ? "shared" : id, ".openclaw", "extensions"),
+            gitDir: at("shared", "git"),
+            npmDir: at("shared", "npm"),
+            stateDir: at(id, "state"),
           },
           run,
         );
@@ -100,12 +96,7 @@ it.each(["system-agent", "install-roots", "install-state"] as const)(
 );
 
 it("retains the exact new config object when a fresh read has identical serialized values", () => {
-  const root = fs.realpathSync(makePluginLoaderTempDir());
-  const env = {
-    HOME: root,
-    OPENCLAW_STATE_DIR: path.join(root, "state"),
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-  };
+  const env = makeEnvironment();
   const cfg = { plugins: { enabled: false } };
   const fresh = { ...cfg };
   const session = createPluginCliLoadSession();

@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import {
   readSessionMethodAccess,
   sessionAccessRowForBatch,
@@ -9,6 +10,8 @@ import {
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionMenuActionKind } from "./session-menu-solid.tsx";
 import { sessionPlacementActionReason } from "./session-placement-action.ts";
+
+registerSessionOrganizationEnglish();
 
 type SessionMenuAccessRow = Pick<
   GatewaySessionRow,
@@ -40,6 +43,7 @@ export function sessionMenuReasons(params: {
       params: { key: session.key, ...patch },
       sessionScope,
       session,
+      allowDeferred: true,
     });
   const renameReason = patchReason({ label: null }, true);
   const promotionReason = !session.sessionId?.trim()

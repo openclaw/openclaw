@@ -1,17 +1,20 @@
 import { performance } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { closeOwnedStdioProcess } from "../owned-stdio.js";
 import * as childAdapter from "./adapters/child.js";
-import { firstMockArg } from "./adapters/child.test-support.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import { runWithProcessCleanupBudget } from "./cleanup-budget.js";
 import {
-  encodeServiceChildMessage,
-  type ServiceChildAnchorPayload,
-} from "./service-child-protocol.js";
+  closeStub,
+  mockWritableRelay as buildRelay,
+  observeSettlement,
+  relayDefaults,
+  relayPeer,
+} from "./service-child-relay-host.fixture.test-support.js";
 import {
   createRelayFixture,
   createServiceChildRelayAdapter,
@@ -25,11 +28,6 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn: mocks.spawn,
 }));
 
-let platformMock: ReturnType<typeof mockProcessPlatform> | undefined;
-const nextTurn = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 const cleanups: Array<() => void> = [];
 afterEach(async () => {
   vi.useRealTimers();
@@ -37,15 +35,13 @@ afterEach(async () => {
     cleanup();
   }
   await nextTurn();
-  platformMock?.mockRestore();
-  platformMock = undefined;
   mocks.spawn.mockReset();
   vi.restoreAllMocks();
 });
 
 // These fixtures model POSIX process-group receipts, not Linux subreaper certificates.
 async function createRelay(platform: "darwin" | "win32", retainLineage = false) {
-  platformMock = mockProcessPlatform(platform);
+  mockProcessPlatform(platform);
   return createRelayFixture(
     platform,
     retainLineage,
@@ -54,12 +50,17 @@ async function createRelay(platform: "darwin" | "win32", retainLineage = false) 
   );
 }
 
+const mockWritableRelay = () => buildRelay((child) => mocks.spawn.mockReturnValue(child));
+const startRelay = (
+  params: Partial<
+    Parameters<typeof createServiceChildRelayAdapter>[0] & { ownedWorker?: false }
+  > = {},
+) => createServiceChildRelayAdapter({ ...relayDefaults, ...params });
+
 it.each(["before", "after"] as const)(
   "checks launch policy %s relay start dispatch",
   async (timing) => {
-    platformMock = mockProcessPlatform("darwin");
-    const stub = createWritableRelayChild();
-    mocks.spawn.mockReturnValue(stub.child);
+    const stub = mockWritableRelay();
     let allowed = true;
     mocks.spawn.mockImplementation(() => {
       if (timing === "before") {
@@ -67,11 +68,7 @@ it.each(["before", "after"] as const)(
       }
       return stub.child;
     });
-    const starting = createServiceChildRelayAdapter({
-      command: "synthetic-command",
-      args: [],
-      stdinMode: "pipe-closed",
-      oomScoreWrapperSelected: false,
+    const starting = startRelay({
       beforeSpawn: () => {
         if (!allowed) {
           throw new Error("relay launch policy revoked");
@@ -83,20 +80,11 @@ it.each(["before", "after"] as const)(
         await expect(starting).rejects.toThrow("relay launch policy revoked");
         expect(stub.sendMock.mock.calls.length).toBe(0);
       } else {
-        const start = firstMockArg(stub.sendMock, "service start");
-        if (!isRecord(start) || typeof start.generation !== "string") {
-          throw new Error("Expected an admitted service generation");
-        }
-        const generation = start.generation;
+        const { emit } = relayPeer(stub);
         allowed = false;
-        const emit = (payload: ServiceChildAnchorPayload, sequence: number) => {
-          stub.control.push(
-            Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence })),
-          );
-        };
-        emit({ type: "ready", commandPid: 1234, anchorPid: 1235 }, 1);
+        emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
         const adapter = await starting;
-        emit({ type: "root-result", code: 0, signal: null }, 2);
+        emit({ type: "root-result", code: 0, signal: null });
         stub.child.stdout?.emit("end");
         stub.child.stderr?.emit("end");
         expect((await adapter.wait()).code).toBe(0);
@@ -113,18 +101,12 @@ it.each(["before", "after"] as const)(
 it.each(["current", "revoked"] as const)(
   "checks %s authority after remote preparation and retains custody until native readiness",
   async (authority) => {
-    platformMock = mockProcessPlatform("darwin");
-    const stub = createWritableRelayChild();
-    mocks.spawn.mockReturnValue(stub.child);
+    const stub = mockWritableRelay();
     const writes = vi.spyOn(stub.control, "write");
     const grantReached = createDeferredCore();
     let current = true;
     let released = false;
-    const starting = createServiceChildRelayAdapter({
-      command: "synthetic-command",
-      args: [],
-      stdinMode: "pipe-closed",
-      oomScoreWrapperSelected: false,
+    const starting = startRelay({
       initiateSpawn(launch, settlement) {
         grantReached.resolve();
         if (!current) {
@@ -136,19 +118,11 @@ it.each(["current", "revoked"] as const)(
         return launch();
       },
     });
-    const start = firstMockArg(stub.sendMock, "remote preparation");
-    if (!isRecord(start) || typeof start.generation !== "string") {
-      throw new Error("Expected remote preparation identity");
-    }
-    const generation = start.generation;
-    const emit = (payload: ServiceChildAnchorPayload, sequence: number) =>
-      stub.control.push(
-        Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence })),
-      );
+    const { emit } = relayPeer(stub);
     const rejected =
       authority === "current" ? undefined : expect(starting).rejects.toThrow("launch revoked");
     current = authority !== "revoked";
-    emit({ type: "prepared" }, 1);
+    emit({ type: "prepared" });
     await grantReached.promise;
     expect(released).toBe(false);
     try {
@@ -161,27 +135,22 @@ it.each(["current", "revoked"] as const)(
         expect(writes.mock.calls.some(([chunk]) => String(chunk).includes('"type":"launch"'))).toBe(
           true,
         );
-        emit({ type: "ready", commandPid: 1234, anchorPid: 1235 }, 2);
+        emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
         const adapter = await starting;
         expect(released).toBe(true);
-        emit({ type: "root-result", code: 0, signal: null }, 3);
+        emit({ type: "root-result", code: 0, signal: null });
         stub.stdout.emit("end");
         stub.stderr.emit("end");
         await adapter.wait();
       }
     } finally {
-      stub.control.destroy();
-      stub.lineage.destroy();
-      stub.disconnectMock();
-      stub.emitExit(0);
+      closeStub(stub);
     }
   },
 );
 
 it("checks input authority after readiness before writing private stdin", async () => {
-  platformMock = mockProcessPlatform("darwin");
-  const stub = createWritableRelayChild();
-  mocks.spawn.mockReturnValue(stub.child);
+  const stub = mockWritableRelay();
   const inputWrites = vi.spyOn(stub.child.stdin!, "write");
   const preparing = createDeferredCore();
   const releasePreparation = createDeferredCore();
@@ -194,35 +163,18 @@ it("checks input authority after readiness before writing private stdin", async 
       throw revoked;
     }
   });
-  const starting = createServiceChildRelayAdapter({
-    command: "synthetic-command",
-    args: [],
-    stdinMode: "pipe-closed",
+  const starting = startRelay({
     input: "private prompt",
     prepareInput,
-    oomScoreWrapperSelected: false,
   });
   const outcome = starting.then(
     () => undefined,
     (error: unknown) => error,
   );
   try {
-    const start = firstMockArg(stub.sendMock, "service start");
-    if (!isRecord(start) || typeof start.generation !== "string") {
-      throw new Error("Expected an admitted service generation");
-    }
+    const { emit } = relayPeer(stub);
     expect(prepareInput).not.toHaveBeenCalled();
-    stub.control.push(
-      Buffer.from(
-        encodeServiceChildMessage({
-          type: "ready",
-          commandPid: 1234,
-          anchorPid: 1235,
-          generation: start.generation,
-          sequence: 1,
-        }),
-      ),
-    );
+    emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
     await Promise.race([preparing.promise, outcome]);
     expect(prepareInput).toHaveBeenCalledOnce();
     expect(inputWrites).not.toHaveBeenCalled();
@@ -233,18 +185,13 @@ it("checks input authority after readiness before writing private stdin", async 
     expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
   } finally {
     releasePreparation.resolve();
-    stub.control.destroy();
-    stub.lineage.destroy();
-    stub.disconnectMock();
-    stub.emitExit(0);
+    closeStub(stub);
     await outcome;
   }
 });
 
 it("reports cleanup uncertainty when deferred start delivery fails after abort", async () => {
-  platformMock = mockProcessPlatform("darwin");
-  const stub = createWritableRelayChild();
-  mocks.spawn.mockReturnValue(stub.child);
+  const stub = mockWritableRelay();
   const startCallbacks: Array<(error: Error | null) => void> = [];
   stub.sendMock.mockImplementation((_message, ...args) => {
     const callback = args.findLast(
@@ -257,11 +204,7 @@ it("reports cleanup uncertainty when deferred start delivery fails after abort",
     return true;
   });
   const abort = new AbortController();
-  const starting = createServiceChildRelayAdapter({
-    command: "synthetic-command",
-    args: [],
-    stdinMode: "pipe-closed",
-    oomScoreWrapperSelected: false,
+  const starting = startRelay({
     abortSignal: abort.signal,
   });
   await nextTurn();
@@ -279,7 +222,7 @@ it("reports cleanup uncertainty when deferred start delivery fails after abort",
 });
 
 it("keeps rejected Windows construction ownership failures visible to supervisor joins", async () => {
-  platformMock = mockProcessPlatform("win32");
+  mockProcessPlatform("win32");
   const stub = createWritableRelayChild();
   mocks.spawn.mockReturnValue(stub.child);
   const supervisor = createProcessSupervisor();
@@ -380,62 +323,61 @@ it.each(["fragmented", "completed"] as const)(
   },
 );
 
-it("publishes root exit before drain, replays it, and acknowledges only the closing receipt", async () => {
-  const { adapter, start, acknowledgements, emit, completeRoot, close } =
-    await createRelay("darwin");
-  expect(start.acknowledgeClosing).toBe(true);
-  const onExit = vi.fn();
-  adapter.onExit(onExit);
-  emit({ type: "root-result", code: 0, signal: null });
-  await nextTurn();
-  expect(onExit).toHaveBeenCalledExactlyOnceWith(0, null);
-  const lateExit = vi.fn();
-  adapter.onExit(lateExit);
-  expect(lateExit).toHaveBeenCalledExactlyOnceWith(0, null);
-  completeRoot();
-  await adapter.wait();
-  const closing = emit({ type: "closing", reason: "lineage-closed" });
-  const settled = vi.fn();
-  const extinction = adapter.waitForExtinction();
-  void extinction.then(settled, settled);
-  await nextTurn();
-  expect(acknowledgements).toEqual([
-    {
-      type: "closing-ack",
-      generation: closing.generation,
-      sequence: 1,
-      closingSequence: closing.sequence,
-    },
-  ]);
-  expect(settled).not.toHaveBeenCalled();
-  close();
-  await expect(extinction).resolves.toBeUndefined();
-});
-
-it("publishes confirmed cancellation when the root result is missing", async () => {
-  const { adapter, emit, endOutput, close } = await createRelay("darwin");
-  const onExit = vi.fn();
-  adapter.onExit(onExit);
-  adapter.kill("SIGKILL");
-  endOutput();
-  emit({ type: "closing", reason: "lineage-closed" });
-  await nextTurn();
-  close();
-  await expect(adapter.wait()).resolves.toEqual({ code: null, signal: "SIGKILL" });
-  await expect(adapter.waitForExtinction()).resolves.toBeUndefined();
-  expect(onExit).toHaveBeenCalledExactlyOnceWith(null, "SIGKILL");
-  const lateExit = vi.fn();
-  adapter.onExit(lateExit);
-  expect(lateExit).toHaveBeenCalledExactlyOnceWith(null, "SIGKILL");
-});
+it.each(["root", "cancellation"] as const)(
+  "publishes and replays %s exit while retaining the independent closing receipt",
+  async (source) => {
+    const { adapter, start, acknowledgements, emit, completeRoot, endOutput, close } =
+      await createRelay("darwin");
+    const onExit = vi.fn();
+    adapter.onExit(onExit);
+    const exit = source === "root" ? [0, null] : [null, "SIGKILL"];
+    if (source === "root") {
+      expect(start.acknowledgeClosing).toBe(true);
+      emit({ type: "root-result", code: 0, signal: null });
+      await nextTurn();
+      expect(onExit).toHaveBeenCalledExactlyOnceWith(...exit);
+      const lateExit = vi.fn();
+      adapter.onExit(lateExit);
+      expect(lateExit).toHaveBeenCalledExactlyOnceWith(...exit);
+      completeRoot();
+      await adapter.wait();
+    } else {
+      adapter.kill("SIGKILL");
+      endOutput();
+    }
+    const closing = emit({ type: "closing", reason: "lineage-closed" });
+    const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
+    await nextTurn();
+    if (source === "root") {
+      expect(acknowledgements).toEqual([
+        {
+          type: "closing-ack",
+          generation: closing.generation,
+          sequence: 1,
+          closingSequence: closing.sequence,
+        },
+      ]);
+      expect(settled).not.toHaveBeenCalled();
+    }
+    close();
+    if (source === "cancellation") {
+      await expect(adapter.wait()).resolves.toEqual({ code: null, signal: "SIGKILL" });
+    }
+    await expect(extinction).resolves.toBeUndefined();
+    if (source === "cancellation") {
+      expect(onExit).toHaveBeenCalledExactlyOnceWith(...exit);
+      const lateExit = vi.fn();
+      adapter.onExit(lateExit);
+      expect(lateExit).toHaveBeenCalledExactlyOnceWith(...exit);
+    }
+  },
+);
 
 it("keeps cleanup authority when a root-exit consumer ends already-closed stdin", async () => {
-  platformMock = mockProcessPlatform("darwin");
+  const stub = mockWritableRelay();
   vi.spyOn(process, "kill").mockImplementation(() => {
     throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
   });
-  const stub = createWritableRelayChild();
-  mocks.spawn.mockReturnValue(stub.child);
   const write = stub.control.write.bind(stub.control);
   vi.spyOn(stub.control, "write").mockImplementation((chunk, encoding, callback) => {
     const message: unknown = JSON.parse(chunk.toString());
@@ -445,24 +387,11 @@ it("keeps cleanup authority when a root-exit consumer ends already-closed stdin"
     }
     return write(chunk, encoding, callback);
   });
-  const starting = createServiceChildRelayAdapter({
-    command: "synthetic-command",
-    args: [],
+  const starting = startRelay({
     stdinMode: "pipe-open",
     terminateOnHostLoss: true,
-    oomScoreWrapperSelected: false,
   });
-  const start = firstMockArg(stub.sendMock, "service start");
-  if (!isRecord(start) || typeof start.generation !== "string") {
-    throw new Error("Expected an admitted service generation");
-  }
-  const generation = start.generation;
-  let sequence = 0;
-  const emit = (payload: ServiceChildAnchorPayload) => {
-    stub.control.push(
-      Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence: ++sequence })),
-    );
-  };
+  const { emit } = relayPeer(stub);
   emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
   const adapter = await starting;
   adapter.onExit(() => adapter.stdin!.end());
@@ -482,10 +411,7 @@ it("keeps cleanup authority when a root-exit consumer ends already-closed stdin"
     await expect(extinction).resolves.toBeUndefined();
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
   } finally {
-    stub.control.destroy();
-    stub.lineage.destroy();
-    stub.disconnectMock();
-    stub.emitExit(0);
+    closeStub(stub);
     adapter.dispose();
   }
 });
@@ -495,9 +421,7 @@ it("keeps an observed Windows root result independent of failed extinction", asy
   adapter.kill("SIGTERM");
   emit({ type: "root-result", code: 23, signal: null });
   await nextTurn();
-  const root = adapter.wait();
-  const settled = vi.fn();
-  void root.then(settled, settled);
+  const [root, settled] = observeSettlement(adapter.wait());
   close();
   await expect(adapter.waitForExtinction()).rejects.toThrow("cleanup identity lost");
   expect(settled).not.toHaveBeenCalled();
@@ -511,9 +435,7 @@ it.each(["darwin", "win32"] as const)(
     const { adapter, cancellations, emit, completeRoot, close } = await createRelay(platform);
     completeRoot();
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
-    const extinction = adapter.waitForExtinction();
-    const settled = vi.fn();
-    void extinction.then(settled, settled);
+    const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
     adapter.kill();
     expect(cancellations).toHaveLength(1);
     emit({ type: "closing", reason: "lineage-closed" });
@@ -549,9 +471,7 @@ it.each(["EOF", "close"])("joins outside-group lineage with %s", async (ending) 
   await adapter.wait();
   emit({ type: "closing", reason: "cancel" });
   await nextTurn();
-  const extinction = adapter.waitForExtinction();
-  const settled = vi.fn();
-  void extinction.then(settled, settled);
+  const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
   close();
   await nextTurn();
   expect(settled).not.toHaveBeenCalled();
@@ -577,9 +497,7 @@ it("waits for relay reaping before confirming extinction", async () => {
   await nextTurn();
   emit({ type: "closing", reason: "lineage-closed" });
   await nextTurn();
-  const settled = vi.fn();
-  const extinction = adapter.waitForExtinction();
-  void extinction.then(settled, settled);
+  const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
   closeControl();
   await nextTurn();
   expect(settled).not.toHaveBeenCalled();
@@ -600,9 +518,7 @@ it.each(["before", "after"])(
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
     const warn = vi.fn();
-    const settled = vi.fn();
-    const extinction = adapter.waitForExtinction();
-    void extinction.then(settled, settled);
+    const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
     if (order === "before") {
       runWithProcessCleanupBudget({ deadline: 20_000, warn }, () => adapter.kill("SIGTERM"));
     }
@@ -658,9 +574,7 @@ it("retires a queued ordinary expiry when shutdown adopts the pending cleanup", 
     await createRelay("darwin");
   const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setImmediate", "clearImmediate"] });
-  const settled = vi.fn();
-  const extinction = adapter.waitForExtinction();
-  void extinction.then(settled, settled);
+  const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
   completeRoot();
   emit({ type: "closing", reason: "cancel" });
   lineage.end();
@@ -703,7 +617,9 @@ it.each(["EPERM", "EIO"])(
       );
     } else {
       await expect(adapter.waitForExtinction()).rejects.toMatchObject({
-        cause: { durationMs: GRACEFUL_CANCEL_TIMEOUT_MS, escalationAfterMs: undefined },
+        cause: expect.objectContaining({
+          message: expect.stringContaining(`"durationMs":${GRACEFUL_CANCEL_TIMEOUT_MS}`),
+        }),
       });
     }
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
@@ -719,9 +635,7 @@ it("retains extinction ownership after EPERM until ESRCH", async () => {
   });
   completeRoot();
   await adapter.wait();
-  const settled = vi.fn();
-  const extinction = adapter.waitForExtinction();
-  void extinction.then(settled, settled);
+  const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
   emit({ type: "closing", reason: "lineage-closed" });
   await nextTurn();
   expect(groupProbe).not.toHaveBeenCalled();
@@ -758,15 +672,12 @@ it.each(["before", "after"])(
     emit({ type: "closing", reason: "lineage-closed" });
     await nextTurn();
     expect(acknowledgements).toContainEqual(expect.objectContaining({ type: "closing-ack" }));
-    const extinct = vi.fn();
-    void adapter.waitForExtinction().then(extinct, extinct);
+    const [, extinct] = observeSettlement(adapter.waitForExtinction());
     if (controlCloses === "before") {
       closeControl();
       await nextTurn();
     }
-    const finished = vi.fn();
-    const closing = closeOwnedStdioProcess(adapter, { force: true });
-    void closing.then(finished, finished);
+    const [closing, finished] = observeSettlement(closeOwnedStdioProcess(adapter, { force: true }));
     await vi.advanceTimersByTimeAsync(500);
     expect(finished).not.toHaveBeenCalled();
     expect(extinct).not.toHaveBeenCalled();

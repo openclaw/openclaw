@@ -6,7 +6,10 @@ import type {
   EmbeddingProviderCallOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  loadSqliteVecExtension,
+  type MemoryExtraPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -33,7 +36,7 @@ type ManagerConfig = Parameters<GetMemorySearchManager>[0]["cfg"];
 type ManagerResult = Awaited<ReturnType<GetMemorySearchManager>>;
 
 type ManagerIndexFixtureConfig = {
-  extraPaths?: string[];
+  extraPaths?: MemoryExtraPath[];
   sources?: Array<"memory" | "sessions">;
   sessionMemory?: boolean;
   rememberAcrossConversations?: boolean;
@@ -55,8 +58,6 @@ type ManagerIndexFixtureConfig = {
 };
 
 type ProviderCall = Pick<ManagerIndexFixtureConfig, "provider" | "model" | "outputDimensionality">;
-
-export type ManagerIndexFixture = ReturnType<typeof createManagerIndexFixture>;
 
 type SessionTranscript = {
   messages: Array<{

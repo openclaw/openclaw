@@ -27,8 +27,6 @@ type AdvertisedLanHostCommandRunner = (
 type ResolveAdvertisedLanHostOptions = {
   networkInterfaces?: () => NetworkInterfacesSnapshot;
   runCommandWithTimeout?: AdvertisedLanHostCommandRunner;
-  platform?: NodeJS.Platform;
-  timeoutMs?: number;
 };
 
 type WindowsRouteRow = {
@@ -112,14 +110,12 @@ function parseLinuxDefaultRouteHints(stdout: string): string[] {
   return hints;
 }
 
-async function resolveDefaultRouteHints(params: {
-  platform: NodeJS.Platform;
-  runCommandWithTimeout: AdvertisedLanHostCommandRunner;
-  timeoutMs: number;
-}): Promise<string[]> {
+async function resolveDefaultRouteHints(
+  runCommandWithTimeout: AdvertisedLanHostCommandRunner,
+): Promise<string[]> {
   let argv: string[];
   let parse: typeof parseWindowsDefaultRouteHints;
-  if (params.platform === "win32") {
+  if (process.platform === "win32") {
     argv = [
       "powershell.exe",
       "-NoProfile",
@@ -129,10 +125,10 @@ async function resolveDefaultRouteHints(params: {
       WINDOWS_DEFAULT_ROUTE_COMMAND,
     ];
     parse = parseWindowsDefaultRouteHints;
-  } else if (params.platform === "darwin") {
+  } else if (process.platform === "darwin") {
     argv = ["route", "-n", "get", "default"];
     parse = parseMacOsDefaultRouteHints;
-  } else if (params.platform === "linux") {
+  } else if (process.platform === "linux") {
     argv = ["ip", "-4", "route", "show", "default"];
     parse = parseLinuxDefaultRouteHints;
   } else {
@@ -141,9 +137,8 @@ async function resolveDefaultRouteHints(params: {
 
   let stdout: string;
   try {
-    const runCommandWithTimeout = params.runCommandWithTimeout;
     const result = await runCommandWithTimeout(argv, {
-      timeoutMs: params.timeoutMs,
+      timeoutMs: DEFAULT_ROUTE_HINT_TIMEOUT_MS,
       maxOutputBytes: DEFAULT_ROUTE_HINT_OUTPUT_BYTES,
     });
     if (result.code !== 0) {
@@ -167,11 +162,9 @@ export async function resolveAdvertisedLanHostCore(
     return candidates[0]?.address ?? null;
   }
 
-  const routeHints = await resolveDefaultRouteHints({
-    platform: options.platform ?? process.platform,
-    runCommandWithTimeout: options.runCommandWithTimeout ?? defaultRunCommandWithTimeout,
-    timeoutMs: options.timeoutMs ?? DEFAULT_ROUTE_HINT_TIMEOUT_MS,
-  });
+  const routeHints = await resolveDefaultRouteHints(
+    options.runCommandWithTimeout ?? defaultRunCommandWithTimeout,
+  );
   for (const hint of routeHints) {
     const hintedName = normalizeInterfaceName(hint);
     if (!hintedName) {

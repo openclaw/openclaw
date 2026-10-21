@@ -392,7 +392,7 @@ if (!match) {
     fi
     pnpm install --frozen-lockfile --prefer-offline
     pnpm build
-  elif [ "$hydrate_mode" = "prehydrated" ]; then
+  else
     test -d node_modules || {
       echo "hydrate-mode=prehydrated requires node_modules in the remote workspace." >&2
       exit 3
@@ -401,9 +401,6 @@ if (!match) {
       echo "hydrate-mode=prehydrated requires a built dist/ directory in the remote workspace." >&2
       exit 3
     }
-  else
-    echo "Unsupported hydrate mode: $hydrate_mode" >&2
-    exit 3
   fi
   if [ "$setup_gateway" = "1" ]; then
     export OPENCLAW_HOME="$HOME/.openclaw-mantis/slack-openclaw"
@@ -484,14 +481,8 @@ const timeoutMs = Number.parseInt(
 	);
 	const browserBin = process.env.OPENCLAW_MANTIS_APPROVAL_BROWSER_BIN;
 
-if (!checkpointDir) {
-  throw new Error("OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR is required.");
-}
 if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
   throw new Error("OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS must be a positive integer.");
-}
-if (!Array.isArray(scenarioIds) || scenarioIds.length === 0) {
-  throw new Error("At least one approval checkpoint scenario id is required.");
 }
 
 	const states = ["pending", "resolved"];
@@ -590,9 +581,6 @@ async function waitForCheckpoint(filePath) {
 	}
 
 	async function captureScreenshot(screenshotPath, checkpoint) {
-	  if (!browserBin) {
-	    throw new Error("OPENCLAW_MANTIS_APPROVAL_BROWSER_BIN is required to render approval checkpoint screenshots.");
-	  }
 	  const htmlPath = screenshotPath + ".html";
 	  await fs.writeFile(htmlPath, renderCheckpointHtml(checkpoint), "utf8");
 	  await new Promise((resolve, reject) => {
@@ -630,11 +618,7 @@ async function writeJson(filePath, value) {
   await fs.rename(tmpPath, filePath);
 }
 
-const acknowledgements = [];
 for (const scenarioId of scenarioIds) {
-  if (typeof scenarioId !== "string" || scenarioId.length === 0) {
-    throw new Error("Approval checkpoint scenario ids must be non-empty strings.");
-  }
   for (const state of states) {
 	    const checkpointPath = path.join(checkpointDir, \`\${scenarioId}.\${state}.json\`);
 	    const screenshotPath = path.join(checkpointDir, \`\${scenarioId}-\${state}.png\`);
@@ -651,16 +635,10 @@ for (const scenarioId of scenarioIds) {
       capturedAt: new Date().toISOString(),
     };
     await writeJson(ackPath, acknowledgement);
-    acknowledgements.push(acknowledgement);
     process.stdout.write(\`acknowledged \${scenarioId} \${state}: \${screenshotPath}\\n\`);
   }
 }
 
-await writeJson(path.join(checkpointDir, ".watcher-complete.json"), {
-  version: 1,
-  acknowledgements,
-  completedAt: new Date().toISOString(),
-});
 MANTIS_APPROVAL_WATCHER
       node "$out/approval-checkpoint-watcher.mjs" >"$out/approval-checkpoint-watcher.log" 2>&1 &
       watcher_pid="$!"

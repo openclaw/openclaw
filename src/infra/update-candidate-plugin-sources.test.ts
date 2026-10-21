@@ -29,9 +29,15 @@ it.each([
     const shared = path.join(repository, "shared");
     await fs.mkdir(plugin, { recursive: true });
     await fs.mkdir(shared);
-    await fs.writeFile(path.join(repository, "package.json"), '{"type":"module"}');
-    await fs.writeFile(path.join(repository, "unrelated.txt"), "not a plugin dependency");
+    const write = (file: string, content: string | object) =>
+      fs.writeFile(
+        path.join(repository, file),
+        typeof content === "string" ? content : JSON.stringify(content),
+      );
+    await write("package.json", { type: "module" });
+    await write("unrelated.txt", "not a plugin dependency");
     const commonjs = syntax === "require" || syntax === "require-package-subpath";
+    const workspace = syntax === "workspace-dependency" || syntax === "require-package-subpath";
     const basename = commonjs ? "index.cjs" : "index.mjs";
     const dependency = path.join(shared, commonjs ? "value.cjs" : "value.js");
     const dependencyText = commonjs
@@ -42,23 +48,17 @@ it.each([
     let importTarget = commonjs ? "../shared/value.cjs" : "../shared/value.js";
     if (syntax === "package-map") {
       importTarget = "#helper";
-      await fs.writeFile(
-        path.join(plugin, "mapped.mjs"),
-        'export { default } from "../shared/value.js";',
-      );
-    } else if (syntax === "workspace-dependency" || syntax === "require-package-subpath") {
+      await write("plugin/mapped.mjs", 'export { default } from "../shared/value.js";');
+    } else if (workspace) {
       importTarget = commonjs ? "sibling-helper/lib/value" : "sibling-helper";
       const helper = path.join(repository, "helper");
       await fs.mkdir(path.join(helper, "lib"), { recursive: true });
-      await fs.writeFile(
-        path.join(helper, "package.json"),
-        JSON.stringify({
-          name: "sibling-helper",
-          ...(commonjs ? {} : { type: "module", exports: "./index.mjs" }),
-        }),
-      );
-      await fs.writeFile(
-        path.join(helper, commonjs ? "lib/value.js" : "index.mjs"),
+      await write("helper/package.json", {
+        name: "sibling-helper",
+        ...(commonjs ? {} : { type: "module", exports: "./index.mjs" }),
+      });
+      await write(
+        `helper/${commonjs ? "lib/value.js" : "index.mjs"}`,
         commonjs
           ? 'module.exports = require("../../shared/value.cjs");'
           : 'export { default } from "../shared/value.js";',
@@ -66,22 +66,14 @@ it.each([
       await fs.mkdir(path.join(plugin, "node_modules"));
       await fs.symlink(helper, path.join(plugin, "node_modules", "sibling-helper"), "junction");
     }
-    await fs.writeFile(
-      path.join(plugin, "package.json"),
-      JSON.stringify({
-        name: "demo",
-        type: "module",
-        openclaw: { extensions: [`./${basename}`] },
-        ...(syntax === "package-map" ? { imports: { "#helper": "./mapped.mjs" } } : {}),
-        ...(syntax === "workspace-dependency" || syntax === "require-package-subpath"
-          ? { dependencies: { "sibling-helper": "1.0.0" } }
-          : {}),
-      }),
-    );
-    await fs.writeFile(
-      path.join(plugin, "openclaw.plugin.json"),
-      JSON.stringify({ id: "demo", configSchema: { type: "object", properties: {} } }),
-    );
+    await write("plugin/package.json", {
+      name: "demo",
+      type: "module",
+      openclaw: { extensions: [`./${basename}`] },
+      ...(syntax === "package-map" ? { imports: { "#helper": "./mapped.mjs" } } : {}),
+      ...(workspace ? { dependencies: { "sibling-helper": "1.0.0" } } : {}),
+    });
+    await write("plugin/openclaw.plugin.json", { id: "demo", configSchema: { type: "object" } });
     await fs.writeFile(
       entry,
       commonjs
@@ -92,19 +84,16 @@ it.each([
             ? 'export default async () => { try { await import("#optional"); } catch { return "shared source survived"; } };'
             : `import value from ${JSON.stringify(importTarget)}; export default () => value;`,
     );
-    const execute = (file: string) =>
-      runCommandBuffered(
-        [
-          process.execPath,
-          "--input-type=module",
-          "-e",
-          `console.log(await (await import(${JSON.stringify(pathToFileURL(file).href)})).default())`,
-        ],
+    const expectExecutable = async (file: string) => {
+      const expression = `console.log(await (await import(${JSON.stringify(pathToFileURL(file).href)})).default())`;
+      const result = await runCommandBuffered(
+        [process.execPath, "--input-type=module", "-e", expression],
         { timeoutMs: 10_000 },
       );
-    const before = await execute(entry);
-    expect(before.code, before.stderr.toString()).toBe(0);
-    expect(before.stdout.toString().trim()).toBe("shared source survived");
+      expect(result.code, result.stderr.toString()).toBe(0);
+      expect(result.stdout.toString().trim()).toBe("shared source survived");
+    };
+    await expectExecutable(entry);
     const rehearsal = await prepareUpdateCandidateRehearsal({
       config: { plugins: { load: { paths: [fileLocator ? entry : plugin] } } },
       stateDir: path.join(root, "source-state"),
@@ -117,9 +106,7 @@ it.each([
       expect(await fs.readFile(dependency, "utf8")).toBe(dependencyText);
       // Removing the original tree makes a live-source fallback fail this proof.
       await fs.rename(repository, path.join(root, "retained-original"));
-      const result = await execute(copiedEntry);
-      expect(result.code, result.stderr.toString()).toBe(0);
-      expect(result.stdout.toString().trim()).toBe("shared source survived");
+      await expectExecutable(copiedEntry);
       await expect(
         fs.access(path.resolve(path.dirname(copiedEntry), "..", "unrelated.txt")),
       ).rejects.toMatchObject({ code: "ENOENT" });

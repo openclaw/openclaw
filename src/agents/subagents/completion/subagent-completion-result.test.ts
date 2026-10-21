@@ -13,6 +13,11 @@ describe("resolveSubagentCompletionResultText", () => {
       expected: "authoritative reply",
     },
     {
+      name: "visible prepared token text",
+      terminalReply: { disposition: "visible", text: "NO_REPLY" } as const,
+      expected: "NO_REPLY",
+    },
+    {
       name: "silent",
       terminalReply: { disposition: "silent" } as const,
       expected: undefined,

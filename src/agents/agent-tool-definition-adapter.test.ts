@@ -1,11 +1,22 @@
 /** Runtime/client tool coercion, delegation, and conflicts at the definition boundary. */
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+  withTestTimeout,
+} from "../../test/helpers/promise.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "./admitted-run-context.js";
 import {
   findClientToolNameConflicts,
   isClientToolNameConflictError,
@@ -16,8 +27,16 @@ import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.j
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "./runtime/internal-hooks.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
@@ -141,6 +160,113 @@ describe("agent tool definition adapter", () => {
       }
     },
     10_000,
+  );
+
+  it.for([
+    { route: "ordinary", owner: "live" },
+    { route: "ordinary", owner: "closed" },
+    { route: "ordinary", owner: "replaced" },
+    { route: "prepared", owner: "live" },
+    { route: "prepared", owner: "closed" },
+    { route: "prepared", owner: "replaced" },
+  ] as const)(
+    "checks the retained $route invocation owner before file I/O ($owner)",
+    async ({ route, owner }, { signal }) => {
+      await withTestDir({ prefix: "openclaw-adapter-authority-" }, async (dir) => {
+        const runId = `adapter-${route}-${owner}`;
+        const prepareAdmission = () =>
+          prepareAgentRunAdmission({
+            cfg: {},
+            operationalRunInstance: createOperationalRunInstanceRef(runId),
+            facts: {
+              runId,
+              agentId: "main",
+              ingress: { kind: "system", boundary: "adapter-tool", state: "present" },
+            },
+          });
+        const admission = prepareAdmission();
+        let replacement: ReturnType<typeof prepareAdmission> | undefined;
+        const entered = createDeferred();
+        const release = createDeferred();
+        const file = path.join(dir, "protected-effect.txt");
+        const write = async () => {
+          await fs.writeFile(file, "written by the admitted invocation");
+          return receipt("written");
+        };
+        const source = {
+          ...toolFixture("fixture_write", write),
+          prepareBeforeToolCallParams: async (params: unknown) => {
+            entered.resolve();
+            await release.promise;
+            return params;
+          },
+        };
+        if (route === "prepared") {
+          attachInternalToolExecutionPreparer(source, async ({ args }) => {
+            entered.resolve();
+            await release.promise;
+            return { kind: "ready", args, execute: write, dispose() {} };
+          });
+        }
+        let execution: ReturnType<typeof executeDefinition> | undefined;
+        try {
+          const caller = expectDefined(
+            createAdmittedGatewayToolCallerIdentity({
+              admittedRunContext: await admission.admit("embedded"),
+              agentId: "main",
+              sessionKey: `agent:main:${runId}`,
+            }),
+            "admitted tool caller",
+          );
+          const definition = expectDefined(toToolDefinitions([source])[0], "adapted tool");
+          execution = withGatewayToolCallerIdentity(caller, async () => {
+            if (route === "ordinary") {
+              return executeDefinition(definition, runId, {});
+            }
+            const prepare = expectDefined(
+              getInternalToolExecutionPreparer(definition),
+              "adapted native preparer",
+            );
+            const prepared = await prepare({ toolCallId: runId, args: {} });
+            try {
+              if (prepared.kind !== "ready") {
+                throw new Error("Tool preparation did not reach executable work");
+              }
+              return await prepared.execute();
+            } finally {
+              prepared.dispose();
+            }
+          });
+          await withinTest(
+            awaitGateBeforeSettlement(entered.promise, execution, "Tool skipped preparation"),
+            signal,
+          );
+          if (owner === "closed") {
+            admission.close();
+          } else if (owner === "replaced") {
+            replacement = prepareAdmission();
+            await replacement.admit("embedded");
+          }
+          release.resolve();
+          const result = await withinTest(execution, signal);
+          if (owner === "live") {
+            expect(result).toEqual(receipt("written"));
+            expect(await fs.readFile(file, "utf8")).toBe("written by the admitted invocation");
+          } else {
+            expect(result.details).toMatchObject({
+              status: "error",
+              error: expect.stringContaining("authority is no longer active"),
+            });
+            expect(await fs.readdir(dir)).toEqual([]);
+          }
+        } finally {
+          admission.close();
+          replacement?.close();
+          release.resolve();
+          await execution?.catch(() => undefined);
+        }
+      });
+    },
   );
 
   it("preserves exec deny before prepared workdir failures", async () => {

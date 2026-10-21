@@ -26,14 +26,10 @@ import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
-import type {
-  DefaultModelSelection,
-  ModelPickerEntry,
-  ModelProviderCard,
-  ProviderOption,
-} from "./data.ts";
+import type { DefaultModelSelection, ModelProviderCard } from "./data.ts";
 import { DefaultModels, type DefaultModelsViewProps } from "./default-models-view.tsx";
 import { MODEL_PROVIDERS_COST_DAYS } from "./load.ts";
+import type { ModelProvidersOwner } from "./model-providers-controller.ts";
 import {
   apiKeySource,
   ProviderProfiles,
@@ -49,60 +45,35 @@ import {
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-export type ModelProvidersViewProps = Omit<
-  DefaultModelsViewProps,
-  "models" | "selection" | "message"
-> &
-  Omit<ProviderProfilesViewProps, "onAddAccount" | "addAccountDisabled"> & {
-    connected: boolean;
-    loading: boolean;
-    providerDetailsReady?: boolean;
-    refreshing: boolean;
-    error: string | null;
-    providerUsageFailed: boolean;
-    supplementalLoading: boolean;
-    updatedAt: number | null;
-    credentialAgentLabel: string;
-    cards: ModelProviderCard[];
-    configuredModels: ModelPickerEntry[];
-    defaultModels: DefaultModelSelection;
-    catalogDiscovering: boolean;
-    /** Retryable error from a picker-triggered catalog discovery. */
-    catalogDiscoveryError: string | null;
-    configBusy: boolean;
-    unconfiguredProviders: ProviderOption[];
-    canViewProfiles: boolean;
-    defaultsMutationBlockedReason: string | null;
-    /** Usage never converged before the retry budget ran out; cards lack usage. */
-    providerUsageStalled: boolean;
-    probeAvailable: boolean;
-    messages: Record<string, ModelProviderRowMessage>;
-    probeResults: Record<string, ModelsProbeResult>;
-    keyEditorProvider: string | null;
-    keyDraft: string;
-    addProviderOpen: boolean;
-    addProviderId: string;
-    addProviderKey: string;
-    installedAgents: JSX.Element | typeof undefined;
-    onRefresh: () => void;
-    onOpenKeyEditor: (provider: string) => void;
-    onCloseKeyEditor: () => void;
-    onKeyDraftChange: (value: string) => void;
-    onSaveKey: (provider: string, configKey: string) => void;
-    onRemoveKey: (provider: string, configKey: string) => void;
-    onProbe: (cardId: string, providers: string[]) => void;
-    onAddProviderToggle: () => void;
-    onAddProviderKeyChange: (value: string) => void;
-    onAddProvider: () => void;
-    providerScope?: JSX.Element;
-    accountRecovery?: JSX.Element | typeof undefined;
-    providerQuery?: string;
-    onProviderQueryChange?: (value: string) => void;
-    onConnectProvider: () => void;
-    onConnect: (card: ModelProviderCard) => void;
-    canConnect: (card: ModelProviderCard) => boolean;
-    loginBusy: boolean;
-  };
+type SharedModelProvidersProps = Omit<DefaultModelsViewProps, "models" | "selection" | "message"> &
+  Omit<ProviderProfilesViewProps, "onAddAccount" | "addAccountDisabled">;
+type ModelProvidersOwnerProps = Omit<
+  ReturnType<ModelProvidersOwner["viewProps"]>["props"],
+  | keyof SharedModelProvidersProps
+  | "installedAgents"
+  | "defaultModels"
+  | "providerQuery"
+  | "onProviderQueryChange"
+>;
+
+export type ModelProvidersViewProps = SharedModelProvidersProps & {
+  [Key in keyof ModelProvidersOwnerProps]: Key extends "canConnect"
+    ? ModelProvidersOwnerProps[Key]
+    : ModelProvidersOwnerProps[Key] extends (...args: infer Args) => unknown
+      ? (...args: Args) => void
+      : ModelProvidersOwnerProps[Key];
+} & {
+  defaultModels: DefaultModelSelection;
+  loading: boolean;
+  catalogDiscovering: boolean;
+  catalogDiscoveryError: string | null;
+  providerDetailsReady?: boolean;
+  installedAgents: JSX.Element | typeof undefined;
+  providerScope?: JSX.Element;
+  accountRecovery?: JSX.Element | typeof undefined;
+  providerQuery?: string;
+  onProviderQueryChange?: (value: string) => void;
+};
 
 function configMutationDisabled(state: ModelProvidersViewProps): boolean {
   return !state.canMutate || state.configBusy;
@@ -506,27 +477,12 @@ function renderProviderNoticeRow(text: string) {
 
 export function ModelProviders(props: ModelProvidersViewProps) {
   return (
-    <Show
-      when={props.connected}
-      fallback={
-        <SettingsPage>
-          <SettingsGroup>
-            <SettingsEmpty message={t("modelProviders.disconnected")} />
-          </SettingsGroup>
-        </SettingsPage>
-      }
-    >
-      <ConnectedModelProviders {...props} />
-    </Show>
-  );
-}
-
-function ConnectedModelProviders(props: ModelProvidersViewProps) {
-  return (
     <>
       <SettingsPage>
         <>
-          <ModelReadiness {...props} />
+          <Show when={props.connected || !props.loading}>
+            <ModelReadiness {...props} />
+          </Show>
           <div id={MODEL_SETTINGS_TARGET_IDS.behavior}>
             <DefaultModels
               {...props}

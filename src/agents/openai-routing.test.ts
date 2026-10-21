@@ -4,12 +4,8 @@ import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js"
 import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  listOpenAIAuthProfileProvidersForAgentRuntime,
   modelSelectionShouldEnsureCodexPlugin,
   resolveOpenAIImplicitAgentRuntime,
-  resolveContextConfigProviderForRuntime,
-  resolveOpenAIRuntimeProvider,
-  resolveSelectedOpenAIRuntimeProvider,
 } from "./openai-routing.js";
 
 function implicit(params: Parameters<typeof resolveOpenAIImplicitAgentRuntime>[0] = {}) {
@@ -80,13 +76,6 @@ describe("OpenAI runtime routing policy", () => {
 
     expect(resolveOpenAIImplicitAgentRuntime({ provider: "openai", config })).toBe("openclaw");
     expect(ensure(config)).toBe(false);
-    expect(
-      resolveContextConfigProviderForRuntime({
-        provider: "openai",
-        runtimeId: "codex",
-        config,
-      }),
-    ).toBe("openai");
   });
 
   it("uses the configured fixed-store owner for agent-scoped request parameters", () => {
@@ -169,41 +158,5 @@ describe("OpenAI runtime routing policy", () => {
     } satisfies OpenClawConfigWithLegacyRoster;
 
     expect(ensure(config)).toBe(true);
-  });
-
-  it("keeps explicit OpenClaw plus Codex auth profile under the unified OpenAI provider", () => {
-    // OpenAI auth now stays canonical even when the runtime is not Codex.
-    expect(
-      listOpenAIAuthProfileProvidersForAgentRuntime({
-        provider: "openai",
-        harnessRuntime: "openclaw",
-      }),
-    ).toEqual(["openai"]);
-    expect(
-      resolveOpenAIRuntimeProvider({
-        provider: "openai",
-        harnessRuntime: "openclaw",
-        authProfileProvider: "openai",
-        authProfileId: "openai:work",
-      }),
-    ).toBe("openai");
-  });
-
-  it("keeps OpenAI as the runtime provider when harness runtime is codex", () => {
-    expect(
-      resolveSelectedOpenAIRuntimeProvider({
-        provider: "openai",
-        harnessRuntime: "codex",
-      }),
-    ).toBe("openai");
-  });
-
-  it("does not route non-OpenAI providers when runtime is codex", () => {
-    expect(
-      resolveSelectedOpenAIRuntimeProvider({
-        provider: "anthropic",
-        harnessRuntime: "codex",
-      }),
-    ).toBe("anthropic");
   });
 });

@@ -14,9 +14,12 @@ import {
 } from "./kysely-sync.js";
 import * as reportReceipts from "./restart-sentinel.js";
 import { readUpdateFailureReportReceipt } from "./restart-sentinel.js";
-import * as reportArtifacts from "./update-failure-report-artifact.js";
 import type { PreparedUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { submitUpdateFailureReport } from "./update-failure-report.js";
+
+type AsyncOverride<F extends (...args: never[]) => unknown> = (
+  ...args: Parameters<F>
+) => ReturnType<F> | Awaited<ReturnType<F>>;
 
 type ReportFixtureControls = {
   createIssue?: (
@@ -27,22 +30,9 @@ type ReportFixtureControls = {
     issue: PreparedGithubIssue,
     hooks: githubIssue.GithubIssueReconcileHooks,
   ) => Promise<githubIssue.GithubIssueReconcileResult>;
-  finalizeReceipt?: (
-    ...args: Parameters<typeof reportReceipts.finalizeUpdateFailureReportReceipt>
-  ) => boolean | Promise<boolean>;
-  markPending?: (
-    ...args: Parameters<typeof reportReceipts.markUpdateFailureReportReceiptPending>
-  ) => boolean | Promise<boolean>;
-  readReceipt?: (
-    ...args: Parameters<typeof reportReceipts.readUpdateFailureReportReceipt>
-  ) =>
-    | reportReceipts.UpdateFailureReportReceipt
-    | null
-    | Promise<reportReceipts.UpdateFailureReportReceipt | null>;
-  artifactSweepHooks?: {
-    beforeList?: () => Promise<void>;
-    listCandidates?: typeof reportArtifacts.listRetiredUpdateFailureReportArtifacts;
-  };
+  finalizeReceipt?: AsyncOverride<typeof reportReceipts.finalizeUpdateFailureReportReceipt>;
+  markPending?: AsyncOverride<typeof reportReceipts.markUpdateFailureReportReceiptPending>;
+  readReceipt?: AsyncOverride<typeof reportReceipts.readUpdateFailureReportReceipt>;
 };
 
 type ReportFixtureOptions = NonNullable<Parameters<typeof submitUpdateFailureReport>[2]> &
@@ -61,8 +51,6 @@ beforeEach(() => {
   const finalize = reportReceipts.finalizeUpdateFailureReportReceipt;
   const pending = reportReceipts.markUpdateFailureReportReceiptPending;
   const read = reportReceipts.readUpdateFailureReportReceipt;
-  const claim = reportReceipts.claimUpdateFailureReportArtifactSweep;
-  const list = reportArtifacts.listRetiredUpdateFailureReportArtifacts;
   vi.spyOn(githubIssue, "submitGithubIssue").mockImplementation((issue, runGh, hooks) => {
     const override = reportFixtureControls.getStore()?.createIssue;
     return override
@@ -95,29 +83,6 @@ beforeEach(() => {
       ? Promise.resolve(withoutFixtureControl("readReceipt", () => override(...args)))
       : read(...args);
   });
-  vi.spyOn(reportReceipts, "claimUpdateFailureReportArtifactSweep").mockImplementation(
-    (...args) => {
-      const beforeList = reportFixtureControls.getStore()?.artifactSweepHooks?.beforeList;
-      const result = claim(...args);
-      // Pause after the real claim commits, before the sweep's first lease read, as before.
-      return beforeList
-        ? result.then(async (claimed) => {
-            if (claimed) {
-              await withoutFixtureControl("artifactSweepHooks", beforeList);
-            }
-            return claimed;
-          })
-        : result;
-    },
-  );
-  vi.spyOn(reportArtifacts, "listRetiredUpdateFailureReportArtifacts").mockImplementation(
-    (...args) => {
-      const override = reportFixtureControls.getStore()?.artifactSweepHooks?.listCandidates;
-      return override
-        ? withoutFixtureControl("artifactSweepHooks", () => override(...args))
-        : list(...args);
-    },
-  );
 });
 
 // useStateDatabaseTempDirs restores the module spies before closing each suite's real stores.
@@ -128,17 +93,10 @@ export function submitUpdateFailureReportFixture(
   previewDigest: string,
   fixture: ReportFixtureOptions = {},
 ) {
-  const {
-    createIssue,
-    reconcileIssue,
-    finalizeReceipt,
-    markPending,
-    readReceipt,
-    artifactSweepHooks,
-    ...options
-  } = fixture;
+  const { createIssue, reconcileIssue, finalizeReceipt, markPending, readReceipt, ...options } =
+    fixture;
   return reportFixtureControls.run(
-    { createIssue, reconcileIssue, finalizeReceipt, markPending, readReceipt, artifactSweepHooks },
+    { createIssue, reconcileIssue, finalizeReceipt, markPending, readReceipt },
     () => submitUpdateFailureReport(prepared, previewDigest, options),
   );
 }
@@ -170,43 +128,34 @@ export function savedReportArtifactPath(
   return path.join(parsed.dir, `${parsed.name}.${artifactKey}${parsed.ext}`);
 }
 
-export function mockCreatedIssue(url: string) {
+function mockIssue<T extends githubIssue.GithubIssueSubmitResult>(result: T, create: boolean) {
   return vi.fn(async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
     await hooks.afterAuthPreflight?.();
-    const commitIssueCreate = await hooks.beforeIssueCreate?.();
-    commitIssueCreate?.();
-    return { status: "created" as const, url };
+    if (create) {
+      const commitIssueCreate = await hooks.beforeIssueCreate?.();
+      commitIssueCreate?.();
+    }
+    return result;
   });
 }
 
-export function mockFallbackIssue(fallbackUrl: string | undefined) {
-  if (!fallbackUrl) {
-    throw new Error("expected an available browser handoff");
-  }
-  return vi.fn(async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
-    await hooks.afterAuthPreflight?.();
-    return {
-      url: fallbackUrl,
-      reason: "cli-unavailable" as const,
-      status: "browser-fallback" as const,
-    };
-  });
-}
+export const mockCreatedIssue = (url: string) => mockIssue({ status: "created", url }, true);
+export const mockFallbackIssue = (url: string | undefined) => fallbackIssue(url, false);
+export const mockFallbackAfterIssueCreateNoStart = (url: string | undefined) =>
+  fallbackIssue(url, true);
 
-export function mockFallbackAfterIssueCreateNoStart(fallbackUrl: string | undefined) {
+function fallbackIssue(fallbackUrl: string | undefined, create: boolean) {
   if (!fallbackUrl) {
     throw new Error("expected an available browser handoff");
   }
-  return vi.fn(async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
-    await hooks.afterAuthPreflight?.();
-    const commitIssueCreate = await hooks.beforeIssueCreate?.();
-    commitIssueCreate?.();
-    return {
+  return mockIssue(
+    {
       url: fallbackUrl,
-      reason: "transport-unavailable" as const,
-      status: "browser-fallback" as const,
-    };
-  });
+      reason: create ? "transport-unavailable" : "cli-unavailable",
+      status: "browser-fallback",
+    },
+    create,
+  );
 }
 
 /** Age the persisted lease through a foreign writer, preserving worker-clock behavior. */
@@ -232,9 +181,6 @@ export function expireUpdateFailureReportReceipt(attemptId: string, stateDir: st
       }
       if (receipt.preparingSinceMs !== undefined) {
         receipt.preparingSinceMs = 1;
-      }
-      if (receipt.sweepSinceMs !== undefined) {
-        receipt.sweepSinceMs = 1;
       }
       executeSqliteQuerySync(
         db,

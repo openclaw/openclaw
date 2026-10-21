@@ -3,7 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { resetChatViewState } from "../chat-view-state.ts";
+import { resetChatViewState } from "../chat-view-state.test-support.ts";
 import { renderChatThread, TranscriptTestHost } from "../test-helpers/chat-transcript-native.tsx";
 import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 import { toggleTranscriptSearch, type ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -31,14 +31,10 @@ function fullMessage(content: string): FullMessageResult {
 class RecoveryTranscriptElement extends TranscriptTestHost {
   props: ChatThreadProps = threadProps("recovery-pane");
   resetPresentationOnDisconnect = true;
-  override readonly transcript = createChatTranscript(
-    () => this.requestRender(),
-    () => this.props.paneId,
-  );
+  override readonly transcript = createChatTranscript(() => this.props.paneId);
 
   override renderTranscript = () => {
-    const requestUpdate = () => this.requestRender();
-    return renderChatThread({ ...this.props, onRequestUpdate: requestUpdate }, this.transcript, {
+    return renderChatThread(this.props, this.transcript, {
       search: true,
     });
   };

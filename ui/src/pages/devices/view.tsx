@@ -19,7 +19,7 @@ export function DevicesView(props: DevicesProps) {
   return (
     <SettingsPage wide={true}>
       <>
-        {!props.canManagePairing || !props.canAdmin ? (
+        {props.connected && (!props.canManagePairing || !props.canAdmin) ? (
           <div class="callout info" role="note">
             {t(
               !props.canManagePairing && !props.canAdmin
@@ -56,11 +56,11 @@ function resolveBindingsState(input: DevicesProps) {
 }
 
 function Bindings(props: BindingState) {
-  const supportsBinding = createMemo(() => props.nodes.length > 0);
+  const supportsBinding = () => props.nodes.length > 0;
   const saveButton = (
     <button
       class="btn"
-      disabled={props.disabled || !props.configDirty}
+      disabled={!props.connected || props.disabled || !props.configDirty}
       onClick={() => props.onSaveBindings()}
     >
       {props.configSaving ? t("common.saving") : t("common.save")}
@@ -68,7 +68,9 @@ function Bindings(props: BindingState) {
   );
   const rows = (
     <>
-      {!props.canAdmin ? <SettingsRow title={t("devices.readOnly.adminRequired")} /> : undefined}
+      {props.connected && !props.canAdmin ? (
+        <SettingsRow title={t("devices.readOnly.adminRequired")} />
+      ) : undefined}
       {props.configFormMode === "raw" ? (
         <SettingsRow title={t("devices.binding.formModeHint")} />
       ) : undefined}
@@ -76,7 +78,11 @@ function Bindings(props: BindingState) {
         <SettingsRow
           title={t("devices.binding.loadConfigHint")}
           control={
-            <button class="btn" disabled={props.configLoading} onClick={props.onLoadConfig}>
+            <button
+              class="btn"
+              disabled={!props.connected || props.configLoading}
+              onClick={props.onLoadConfig}
+            >
               {props.configLoading ? t("common.loading") : t("common.loadConfig")}
             </button>
           }
@@ -115,10 +121,9 @@ function Bindings(props: BindingState) {
 }
 
 function AgentBinding(props: BindingState & { agent: BindingAgent }) {
-  const bindingValue = createMemo(() => props.agent.binding ?? "__default__");
-  const label = createMemo(() =>
-    props.agent.name?.trim() ? `${props.agent.name} (${props.agent.id})` : props.agent.id,
-  );
+  const bindingValue = () => props.agent.binding ?? "__default__";
+  const label = () =>
+    props.agent.name?.trim() ? `${props.agent.name} (${props.agent.id})` : props.agent.id;
   return (
     <SettingsRow
       title={label()}

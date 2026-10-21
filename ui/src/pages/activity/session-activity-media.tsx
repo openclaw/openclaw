@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onSettled, untrack } from "solid-js";
+import { createEffect, createSignal, onSettled, Show } from "solid-js";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -13,7 +13,7 @@ import { ChatImageLightbox } from "../chat/components/chat-image-lightbox-view.t
 import { MessageImages } from "../chat/components/chat-message-images-solid.tsx";
 import {
   assistantMediaPolicyKey,
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type ImageBlock,
 } from "../chat/components/chat-message-media.ts";
 import "./session-activity-media.css";
@@ -93,7 +93,19 @@ export type ActivitySessionMediaProps = {
 };
 
 export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
+  return (
+    <Show when={props.context.gateway} keyed>
+      {(gateway) => SessionMedia(gateway, props)}
+    </Show>
+  );
+}
+
+function SessionMedia(
+  sourceGateway: ApplicationContext["gateway"],
+  props: ActivitySessionMediaProps,
+) {
   let host!: HTMLElement;
+  const mediaOwner = {};
   const [revision, setRevision] = createSignal(0);
   let visible = false;
   let observer: IntersectionObserver | undefined;
@@ -144,7 +156,7 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
       settledEntry = undefined;
       displayedImages = [];
       closeImage(false);
-      releaseChatMediaResourceSubscriber(refresh);
+      releaseChatMediaResourceOwner(mediaOwner);
       boundImageIdentity = identity;
     }
     if (nextOwner !== owner || nextKey !== key) {
@@ -291,7 +303,7 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
         settings: { token: gateway.connection.token },
         password: gateway.connection.password,
       }),
-      onRequestUpdate: refresh,
+      mediaOwner,
       onRequestOpenImage: () => ++imageRequest,
       onOpenImage: (item: ImageLightboxItem, version?: number) => {
         if (
@@ -327,13 +339,7 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
         ),
     };
   }
-  // The projection is seeded once; its source follows the tracked effect below.
-  const gatewayProjection = projectGateway(untrack(() => props.context.gateway));
-  // Keep the Gateway observer attached to the presented connection owner.
-  createEffect(
-    () => props.context.gateway,
-    (source) => gatewayProjection.replaceSource(source),
-  );
+  const gatewayProjection = projectGateway(sourceGateway);
   // Synchronize the viewport-gated artifact requests with their Gateway/session scope.
   createEffect(
     () => [
@@ -362,7 +368,7 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
       observer?.disconnect();
       visible = false;
       closeImage(false);
-      releaseChatMediaResourceSubscriber(refresh);
+      releaseChatMediaResourceOwner(mediaOwner);
     };
   });
   const displayEntry = () => {

@@ -1,33 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   canonicalPathFromExistingAncestor,
   isPathInside,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import { createMigrationItem, MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
 import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CLAUDE_AUTO_MEMORY_MAX_FILES,
   CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES,
-  readMemoryDir,
+  listMarkdownFiles,
   type ClaudeSource,
 } from "./source.js";
 
 const MIGRATION_REASON_TARGET_NOT_REGULAR = "target is not a regular file";
-
-async function lstatIfExists(filePath: string) {
-  try {
-    return await fs.lstat(filePath);
-  } catch (error) {
-    const code = extractErrorCode(error);
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return undefined;
-    }
-    throw error;
-  }
-}
 
 async function addInstructionItem(params: {
   items: MigrationItem[];
@@ -54,45 +42,6 @@ async function addInstructionItem(params: {
       details: { sourceLabel: params.sourceLabel },
     }),
   );
-}
-
-type MarkdownFileScan = {
-  files: string[];
-  truncatedBy?: "files" | "entries";
-};
-
-async function listMarkdownFiles(root: string, maxFiles: number): Promise<MarkdownFileScan> {
-  const files: string[] = [];
-  const pending = [""];
-  let visited = 0;
-  let truncatedBy: MarkdownFileScan["truncatedBy"];
-  scan: while (pending.length > 0) {
-    const relativeDir = pending.pop();
-    if (relativeDir === undefined) {
-      break;
-    }
-    for (const entry of await readMemoryDir(path.join(root, relativeDir))) {
-      visited += 1;
-      if (visited > CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES) {
-        truncatedBy = "entries";
-        break scan;
-      }
-      const relativePath = path.join(relativeDir, entry.name);
-      if (entry.isDirectory()) {
-        pending.push(relativePath);
-      } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
-        files.push(relativePath);
-        if (files.length > maxFiles) {
-          truncatedBy = "files";
-          break scan;
-        }
-      }
-    }
-  }
-  return {
-    files: files.toSorted((left, right) => left.localeCompare(right)),
-    ...(truncatedBy ? { truncatedBy } : {}),
-  };
 }
 
 function collectionSlug(label: string, id: string): string {

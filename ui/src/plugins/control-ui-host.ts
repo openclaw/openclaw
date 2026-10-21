@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ControlUiDisposer,
   ControlUiHost,
@@ -119,11 +120,18 @@ export function createControlUiPluginHost(
     request: (method, params = {}) => call(() => owner.client.request(method, params)),
     onEvent(event, listener) {
       return retain(
-        current().gateway.subscribeEvents((frame) => {
-          if (runtime.isCurrent(owner) && frame.event === event) {
-            listener(frame.payload);
-          }
-        }),
+        current().gateway.subscribeEvents(
+          (frame) => {
+            if (
+              runtime.isCurrent(owner) &&
+              frame.event === event &&
+              (event !== "session.message" || asOptionalRecord(frame.payload)?.message != null)
+            ) {
+              listener(frame.payload);
+            }
+          },
+          { includeMessageBodies: event === "session.message" },
+        ),
       );
     },
     subscribe(listener) {
@@ -133,15 +141,16 @@ export function createControlUiPluginHost(
           listener();
         }
       };
+      // The public SDK subscription delivers each owner publication within its activation.
       const stops = [
-        context.gateway.subscribe(notify),
-        context.sessions.subscribe(notify),
-        context.agents.subscribe(notify),
-        context.agentSelection.subscribe(notify),
-        context.theme.subscribe(notify),
-        i18n.subscribe(notify),
-        ...(dock ? [dock.subscribe(notify)] : []),
-      ];
+        context.gateway,
+        context.sessions,
+        context.agents,
+        context.agentSelection,
+        context.theme,
+        i18n,
+        ...(dock ? [dock] : []),
+      ].map((source) => source.subscribe(notify));
       return retain(() => stops.forEach((stop) => stop()));
     },
     sessions: {
@@ -203,7 +212,8 @@ export function createControlUiPluginHost(
       open({ sessionKey, agentId }) {
         openPreferredApplicationSession(current(), sessionKey, agentId);
       },
-      create: (params) => call((context) => context.sessions.create(params)),
+      create: (params) =>
+        call((context) => context.sessions.create(params, { signal: owner.abort.signal })),
       patch: ({ sessionKey, agentId }, patch) =>
         call(async (context) => {
           // A plugin query may target another global owner. Its mutation does not

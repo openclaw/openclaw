@@ -20,6 +20,7 @@ export type ConfirmDialogOptions = {
   signal?: AbortSignal;
   skipPreference?: ConfirmDialogSkipPreference;
   requiredAcknowledgement?: string;
+  canConfirm?: () => boolean;
 };
 
 export type ConfirmDialogChoiceOptions = ConfirmDialogOptions & { alternativeLabel: string };

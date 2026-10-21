@@ -5,7 +5,6 @@ import { chunkDiscordTextWithMode } from "./chunk.js";
 
 it("bounds inline range queries while preserving every Discord message", () => {
   const lines = Array.from({ length: 1_000 }, (_, index) => `\`code-${index}\``);
-  const source = lines.join("\n");
   let spanVisits = 0;
   let prefixReads = 0;
   let instrumentedSpans = 0;
@@ -53,9 +52,7 @@ it("bounds inline range queries while preserving every Discord message", () => {
       *value(this: unknown[]) {
         const measured = isInlineSpanArray(this);
         for (const value of nativeIterator.call(this)) {
-          if (measured) {
-            spanVisits += 1;
-          }
+          spanVisits += Number(measured);
           yield value;
         }
       },
@@ -88,7 +85,7 @@ it("bounds inline range queries while preserving every Discord message", () => {
       }
       return regions;
     });
-    chunks = chunkDiscordTextWithMode(source, {
+    chunks = chunkDiscordTextWithMode(lines.join("\n"), {
       maxChars: 2_000,
       maxLines: 1,
       chunkMode: "length",

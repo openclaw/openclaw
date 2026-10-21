@@ -3,14 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveOwnedManagedUpdateEnv } from "../cli/update-cli/update-command-service-env.js";
 import * as exec from "../process/exec.js";
 import * as diskSpace from "./disk-space.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { observeUpdateCandidateIoProgress } from "./update-candidate-io.test-support.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
-import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
+import {
+  captureUpdateCandidateDeadline,
+  materializeUpdateCandidateStateWorker,
+} from "./update-candidate-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -75,6 +78,77 @@ async function fixture(sizeMiB = 0) {
   return { root, stateDir, file };
 }
 
+it.each([undefined, true])(
+  "uses the requested integrity coverage for a disposable rehearsal (full=%s)",
+  async (fullIntegrityCheck) => {
+    const input = await fixture();
+    const db = openNodeSqliteDatabase(input.file);
+    try {
+      db.exec(`
+        CREATE TABLE retained(value TEXT, alternate TEXT);
+        CREATE INDEX retained_value ON retained(value);
+        INSERT INTO retained VALUES ('alpha', 'zeta'), ('beta', 'eta');
+      `);
+      db.enableDefensive?.(false);
+      db.exec(`
+        PRAGMA writable_schema = ON;
+        UPDATE sqlite_schema SET sql = 'CREATE INDEX retained_value ON retained(alternate)'
+        WHERE name = 'retained_value';
+        PRAGMA writable_schema = OFF;
+      `);
+    } finally {
+      db.close();
+    }
+    const before = await fs.readFile(input.file);
+    const pending = prepare(input, { fullIntegrityCheck });
+    if (fullIntegrityCheck) {
+      await expect(pending).rejects.toThrow(/integrity_check.*retained_value/su);
+    } else {
+      await withRehearsal(pending, async (rehearsal) => {
+        const copied = openNodeSqliteDatabase(
+          path.join(rehearsal.stateDir, path.relative(input.stateDir, input.file)),
+          { readOnly: true },
+        );
+        try {
+          expect(copied.prepare("SELECT * FROM retained NOT INDEXED").all()).toEqual([
+            { value: "alpha", alternate: "zeta" },
+            { value: "beta", alternate: "eta" },
+          ]);
+        } finally {
+          copied.close();
+        }
+      });
+    }
+    expect(await fs.readFile(input.file)).toEqual(before);
+  },
+);
+
+it("checks indexes on shared tables before rewriting the rehearsal", async () => {
+  const input = await fixture();
+  const shared = path.join(input.stateDir, "state", "openclaw.sqlite");
+  await fs.mkdir(path.dirname(shared), { recursive: true });
+  const db = openNodeSqliteDatabase(shared);
+  try {
+    db.exec(`
+      CREATE TABLE state_leases(value TEXT, alternate TEXT);
+      CREATE INDEX lease_value ON state_leases(value);
+      INSERT INTO state_leases VALUES ('alpha', 'zeta'), ('beta', 'eta');
+    `);
+    db.enableDefensive?.(false);
+    db.exec(`
+      PRAGMA writable_schema = ON;
+      UPDATE sqlite_schema SET sql = 'CREATE INDEX lease_value ON state_leases(alternate)'
+      WHERE name = 'lease_value';
+      PRAGMA writable_schema = OFF;
+    `);
+  } finally {
+    db.close();
+  }
+  const before = await fs.readFile(shared);
+  await expect(prepare(input)).rejects.toThrow(/integrity_check.*lease_value/su);
+  expect(await fs.readFile(shared)).toEqual(before);
+});
+
 async function syntheticSnapshotWorker(body: string) {
   const root = tempDirs.make("candidate-progress-");
   const stateDir = path.join(root, "source");
@@ -88,11 +162,9 @@ async function syntheticSnapshotWorker(body: string) {
     `
       import fs from "node:fs/promises";
       import path from "node:path";
-      import { setTimeout as sleep } from "node:timers/promises";
       let text = "";
       for await (const chunk of process.stdin) text += chunk;
       const input = JSON.parse(text);
-      const controlRoot = ${JSON.stringify(root)};
       if (input.mode === "inventory") {
         process.stdout.write(JSON.stringify({ databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json", warnings: [] }));
         process.exit(0);
@@ -109,31 +181,41 @@ async function syntheticSnapshotWorker(body: string) {
   return { root, stateDir, receipt };
 }
 
-it.each(["progressing", "stalled"] as const)("settles a %s snapshot worker", async (outcome) => {
+it("reaps an expired snapshot worker before removing its database and WAL scratch", async () => {
   const { root, stateDir, receipt } = await syntheticSnapshotWorker(
-    outcome === "progressing"
-      ? `
-      for (const [index, blocks] of [4, 3, 3].entries()) {
-        await fs.appendFile(path.join(scratch, "database.sqlite"), Buffer.alloc(blocks * 1024));
-        while (!(await fs.stat(path.join(controlRoot, "continue-" + index)).catch(() => undefined))) {
-          await sleep(10);
-        }
-      }
-      process.stdout.write(JSON.stringify({ versions: [], pluginPaths: {} }));
     `
-      : `
       await fs.writeFile(path.join(scratch, "database.sqlite"), "partial database");
       await fs.writeFile(path.join(scratch, "database.sqlite-wal"), "partial WAL");
       process.on("SIGTERM", () => {});
       setInterval(() => {}, 1000);
-      await fs.writeFile(path.join(scratch, "ready"), "ready");
+      process.stderr.write("snapshot fixture ready\\n");
     `,
   );
   const now = Date.now.bind(Date);
   let elapsed = 0;
   vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+  const ready = createDeferred();
+  const run = exec.runUtf8CommandWithTimeout;
+  vi.spyOn(exec, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
+    if (typeof options === "number") {
+      return run(argv, options);
+    }
+    let stderr = "";
+    return run(argv, {
+      ...options,
+      onOutputChunk(chunk, stream) {
+        options.onOutputChunk?.(chunk, stream);
+        if (stream === "stderr") {
+          stderr += chunk.toString();
+          if (stderr.includes("snapshot fixture ready\n")) {
+            ready.resolve();
+          }
+        }
+      },
+    });
+  });
+  const expireDeadline = captureUpdateCandidateDeadline();
   const cancel = new AbortController();
-  const waitForBytes = observeUpdateCandidateIoProgress();
   const operation = prepare(
     { root, stateDir },
     {
@@ -142,42 +224,23 @@ it.each(["progressing", "stalled"] as const)("settles a %s snapshot worker", asy
     },
   );
   const prematureExit = operation.then(() => {
-    throw new Error("Snapshot unexpectedly completed");
+    throw new Error("Stalled snapshot unexpectedly completed");
   });
-  const started = Date.now();
   try {
-    if (outcome === "progressing") {
-      for (const [index, blocks] of [4, 7, 10].entries()) {
-        await Promise.race([waitForBytes(blocks * 1024), prematureExit]);
-        elapsed += 200_000;
-        await fs.writeFile(path.join(root, `continue-${index}`), "continue");
-      }
-      const rehearsal = await operation;
-      expect(Date.now() - started).toBeGreaterThan(300_000);
-      await expectSize(
-        path.join(rehearsal.stateDir, ".sqlite-snapshot-fixture/database.sqlite"),
-        10 * 1024,
-      );
-    } else {
-      await Promise.race([
-        waitForBytes(Buffer.byteLength("partial databasepartial WALready")),
-        prematureExit,
-      ]);
-      elapsed = 400_000;
-      await expect(operation).rejects.toThrow(
-        /snapshot made no progress.*Check storage performance/,
-      );
-      const child = z
-        .object({ pid: z.number().int().positive(), directory: z.string() })
-        .parse(JSON.parse(await fs.readFile(receipt, "utf8")));
-      expect(() => process.kill(child.pid, 0)).toThrow();
-      await expect(fs.stat(child.directory)).rejects.toMatchObject({ code: "ENOENT" });
-    }
+    await Promise.race([ready.promise, prematureExit]);
+    elapsed = 400_000;
+    expireDeadline();
+    await expect(operation).rejects.toThrow(/snapshot exceeded its.*Check storage performance/);
+    const child = z
+      .object({ pid: z.number().int().positive(), directory: z.string() })
+      .parse(JSON.parse(await fs.readFile(receipt, "utf8")));
+    expect(() => process.kill(child.pid, 0)).toThrow();
+    await expect(fs.stat(child.directory)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readdir(stateDir)).resolves.toEqual([]);
   } finally {
     cancel.abort();
-    await cleanup(operation);
+    await operation.catch(() => undefined);
   }
-  await expect(fs.readdir(stateDir)).resolves.toEqual([]);
 });
 
 it("keeps the SQLite startup floor when the caller supplies a smaller timeout", async () => {

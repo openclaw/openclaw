@@ -88,6 +88,7 @@ let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | nul
 // The accessibility-tree suite remains Chromium-only until its CDP probe is replaced.
 const webkitTestFiles = [
   "src/components/select-picker.behavior.browser.test.ts",
+  "src/components/select-picker.browser.test.tsx",
   "src/components/multi-select.browser.test.ts",
   "src/components/model-picker.browser.test.ts",
   "src/components/decision-model-picker.browser.test.tsx",
@@ -198,6 +199,7 @@ export function createUiBrowserVitestConfig(
         "@zag-js/menu",
         "@zag-js/rect-utils",
         "@zag-js/vanilla",
+        "croner",
         "dompurify",
         "file-type",
         "highlight.js/lib/core",

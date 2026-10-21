@@ -127,6 +127,7 @@ the same Compose files and overlays as your current deployment:
 
 ```bash
 docker compose pull openclaw-gateway openclaw-cli
+docker compose stop openclaw-gateway
 docker compose up -d openclaw-gateway
 ```
 
@@ -233,6 +234,23 @@ maintenance ownership before starting the Gateway. This covers the default image
 command and Compose's foreground Gateway command, including its selected profile.
 Routine image upgrades do not require a separate Doctor pass.
 
+Keep one Gateway replica per state volume, and stop the old container before
+starting its replacement. The startup repair needs exclusive maintenance
+ownership of that state; an overlapping Gateway can prevent it from completing.
+For Compose, use the same files and overlays as your running deployment:
+
+```bash
+docker compose pull openclaw-gateway openclaw-cli
+docker compose stop openclaw-gateway
+docker compose up -d openclaw-gateway
+```
+
+In Docker Swarm, keep `replicas: 1` and use `update_config.order: stop-first` and
+`rollback_config.order: stop-first`. In Kubernetes, keep `replicas: 1` and use a
+`Recreate` Deployment strategy, as the [provided manifest](/install/kubernetes)
+does. A shared volume is not a way to scale Gateway replicas. Back up the state
+before upgrading; see [Backups](/install/backups).
+
 Activation retains a full pre-repair copy of local state under
 `<state-dir>.update-captures/` the first time Doctor captures in a container.
 Later starts of the same container (`docker stop`/`docker start`, restart
@@ -330,7 +348,12 @@ podman run --rm -v <openclaw-state>:/home/node/.openclaw <image> openclaw doctor
 
 After doctor finishes, restart the Gateway container with its default command.
 In Kubernetes, run the same command in a one-off Job or debug pod mounted to the
-same PVC, then restart the Deployment or StatefulSet.
+same PVC. First scale the Gateway workload to zero and wait for its pods to
+terminate; in Swarm, scale the Gateway service to zero and wait for its tasks to
+stop. Keep the workload stopped until Doctor finishes, then restore one replica.
+If ownership is still refused after the old container has stopped, follow
+[Gateway lock recovery](/gateway/gateway-lock#recover-a-crashed-foreign-owner).
+Do not delete lock files or repeatedly restart competing containers.
 
 After the container is running again, run the read-only deployment preflight
 against the same mounted state:

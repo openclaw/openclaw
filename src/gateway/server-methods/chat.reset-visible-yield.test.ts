@@ -8,10 +8,13 @@ import { afterEach, expect, it, onTestFailed, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
+import * as sessionAdmission from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -19,7 +22,6 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import * as agentJob from "../agent-turn/agent-job.js";
-import * as githubPublication from "../github-publication-discovery.js";
 import { waitForGatewayDispatch } from "../server-in-process-dispatch.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
@@ -143,10 +145,6 @@ it.for(["reset", "complete"] as const)(
     const resumedCatalog = createDeferred<string[]>();
     const publicationCatalogs: string[][] = [];
     let childResponse: ServerResponse | undefined;
-    const publicationSpy = vi.spyOn(githubPublication, "readGitHubPublicationFact");
-    if (outcome === "complete") {
-      publicationSpy.mockReturnValue({ available: true });
-    }
     const requesterWaitFinished = createDeferred<WaitResult>();
     const resetAcknowledged = createDeferred<{ state?: string }>();
     const attachedChatRuns = new Set<string>();
@@ -160,6 +158,7 @@ it.for(["reset", "complete"] as const)(
     let yieldDispatched = false;
     let unexpectedInference = 0;
     let stopping = false;
+    let stopRecordingPublished: (() => void) | undefined;
     let providerServer: ReturnType<typeof createServer> | undefined;
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     onTestFailed(() => {
@@ -194,6 +193,15 @@ it.for(["reset", "complete"] as const)(
             requesterWaitFinished.resolve(result);
           }
         },
+        () => {},
+      );
+      return pending;
+    });
+    const originalInterrupt = sessionAdmission.interruptSessionControllerEffects;
+    vi.spyOn(sessionAdmission, "interruptSessionControllerEffects").mockImplementation((params) => {
+      const pending = originalInterrupt(params);
+      void pending.then(
+        () => {},
         () => {},
       );
       return pending;
@@ -327,6 +335,11 @@ it.for(["reset", "complete"] as const)(
               return;
             }
             child = parseSpawnReceipt(body.input, childCallId);
+            if (requester && !attachedChatRuns.has(requester.runId)) {
+              void gateway?.client
+                .request("agent.wait", { runId: requester.runId, timeoutMs: 30_000 })
+                .catch(() => undefined);
+            }
             await waitForFixture("nested provider open", nestedOpen.promise);
             await waitForFixture("requester chat waiter attached", requesterWaitAttached.promise);
             yieldDispatched = true;
@@ -476,6 +489,18 @@ it.for(["reset", "complete"] as const)(
         expect(fixtureErrors).toEqual([]);
         return;
       }
+      // A confirmed kill retires its row, so retain the last published terminal facts.
+      const lastPublished = new Map<string, SubagentRunRecord>();
+      const recordPublished = () => {
+        for (const receipt of [requester, child]) {
+          const run = receipt ? subagentRuns.get(receipt.runId) : undefined;
+          if (run) {
+            lastPublished.set(run.runId, structuredClone(run));
+          }
+        }
+      };
+      recordPublished();
+      stopRecordingPublished = subscribeSubagentRunChanges("projection", recordPublished);
       await gateway.client.request(
         "chat.send",
         { sessionKey, message: "/new", deliver: false, idempotencyKey: resetId },
@@ -493,11 +518,12 @@ it.for(["reset", "complete"] as const)(
       expect(closed).toEqual({ writableEnded: false, fixtureStopping: false });
       for (const receipt of [requester, child]) {
         expect(receipt).toBeDefined();
-        const run = receipt ? subagentRuns.get(receipt.runId) : undefined;
+        const run = receipt ? lastPublished.get(receipt.runId) : undefined;
         expect(run?.execution).toMatchObject({ status: "terminal" });
         expect(run?.endedReason).toBe("subagent-killed");
       }
     } finally {
+      stopRecordingPublished?.();
       stopping = true;
       fixtureAbort.abort();
       providerServer?.closeAllConnections();
@@ -514,7 +540,6 @@ it.for(["reset", "complete"] as const)(
       await Promise.allSettled(handlers);
       unsubscribe();
       waiterSpy.mockRestore();
-      publicationSpy.mockRestore();
       clearRuntimeConfigSnapshot();
       clearConfigCache();
       clearSessionStoreCacheForTest();

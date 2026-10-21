@@ -267,6 +267,59 @@ describe("message-tool-only source replies", () => {
     expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { finalByDefault: false, final: undefined, terminates: false },
+    { finalByDefault: false, final: false, terminates: false },
+    { finalByDefault: false, final: true, terminates: true },
+    { finalByDefault: undefined, final: undefined, terminates: true },
+  ])(
+    "ends a delivered send to a configured target only when final resolves true (default $finalByDefault, final $final)",
+    async ({ finalByDefault, final, terminates }) => {
+      // Shape of a cron send: automatic mode, explicit target, confirmed source delivery.
+      const agent = {} as unknown as Agent;
+      const onDeliveredSourceReply = vi.fn();
+      installMessageToolTerminalHook({
+        agent,
+        currentProvider: "telegram",
+        currentChannelId: "-1001234567890",
+        ...(finalByDefault === undefined ? {} : { messageToolFinalByDefault: finalByDefault }),
+        onDeliveredSourceReply,
+      });
+      const args = {
+        action: "send",
+        channel: "telegram",
+        target: "-1001234567890",
+        message: "daily drop",
+        ...(final === undefined ? {} : { final }),
+      };
+
+      await expect(
+        agent.afterToolCall?.(
+          createAfterToolCallContext({
+            toolName: "message",
+            args,
+            result: {
+              content: [{ type: "text", text: '{"ok":true,"messageId":"4242"}' }],
+              details: {
+                ok: true,
+                messageId: "4242",
+                messageDelivery: {
+                  status: "settled",
+                  primaryPlatformMessageId: "4242",
+                  partialDelivery: false,
+                  createdThreadIds: [],
+                  sourceReplyDelivered: true,
+                },
+              },
+            },
+          }),
+        ),
+      ).resolves.toEqual(terminates ? { terminate: true } : undefined);
+      // The send is still recorded as delivered whether or not the turn ends.
+      expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("continues after delivered progress", async () => {
     const agent = {} as unknown as Agent;
     installMessageToolTerminalHook({

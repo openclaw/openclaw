@@ -69,7 +69,7 @@ it("keeps default status concise and reports configured family choices without s
   expect(value).toContain("workboard: default=sqlite, override=postgres, effective=postgres");
   expect(value).toContain("quarantine: default=sqlite, override=fixed local, effective=sqlite");
   expect(value).not.toContain("secret");
-  expect(value).toContain("PostgreSQL is experimental");
+  expect(value).not.toContain("experimental");
 });
 
 it("shows the latest offsite attempt beside a newer local backup", () => {
@@ -149,6 +149,24 @@ it("shows managed host desktop coordinates", () => {
   );
 });
 
+it("shows utility model capability warnings in normal and full status", () => {
+  expect(findRowValue(buildStatusCommandOverviewRows(params), "Utility model")).toBeUndefined();
+  params.summary.utilityModelWarnings = [
+    { path: "agents.defaults.utilityModel", message: "fixture-cli/small cannot disable tools." },
+  ];
+  expect(findRowValue(buildStatusCommandOverviewRows(params), "Utility model")).toBe(
+    "warn(agents.defaults.utilityModel: fixture-cli/small cannot disable tools.)",
+  );
+  const rows = buildStatusAllOverviewRows({
+    ...params,
+    configPath: "/fixture/openclaw.json",
+    secretDiagnosticsCount: 0,
+  });
+  expect(findRowValue(rows, "Utility model")).toBe(
+    "agents.defaults.utilityModel: fixture-cli/small cannot disable tools.",
+  );
+});
+
 it("builds status-all overview rows from the shared surface", () => {
   const rows = buildStatusAllOverviewRows({
     surface: {
@@ -159,6 +177,7 @@ it("builds status-all overview rows from the shared surface", () => {
     },
     summary: {
       ...params.summary,
+      modelReasoningWarning: "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.",
       secretEgressProxy: {
         state: "degraded",
         caExpiresAt: "2036-09-01T00:00:00.000Z",
@@ -204,6 +223,7 @@ it("builds status-all overview rows from the shared surface", () => {
     "Secret egress proxy": "Check OpenSSL, then retry the request.",
     "Degraded secrets": "1 degraded · capability:tts",
     "Degraded plugins": "1 configured-unavailable · discord",
+    "Model reasoning": "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.",
     Secrets: "2 diagnostics",
   });
 });

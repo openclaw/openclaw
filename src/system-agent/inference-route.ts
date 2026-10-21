@@ -41,15 +41,8 @@ export type SystemAgentConfiguredRoute = {
 export type SystemAgentConfiguredRouteDeps = {
   /** Explicit role selection for verifying a utility candidate alongside a working primary. */
   modelTarget?: "utility";
-  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  loadAuthProfileStoreForRuntimeAsync?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntimeAsync;
   pluginMetadataPlugins?: PluginMetadataSnapshot["plugins"];
 };
-type SystemAgentRouteProjectionDeps = Pick<
-  SystemAgentConfiguredRouteDeps,
-  "loadAuthProfileStoreForRuntimeAsync" | "pluginMetadataPlugins" | "modelTarget"
->;
-
 /** The canonical source and default-materialized view from one authoritative read. */
 export type SystemAgentConfigSnapshot = Pick<
   ConfigFileSnapshot,
@@ -101,7 +94,7 @@ function projectSystemAgentExecutionConfig(
 export async function resolveSystemAgentConfiguredRouteFromConfig(
   runConfig: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentRouteProjectionDeps = {},
+  deps: SystemAgentConfiguredRouteDeps = {},
   configSnapshot?: SystemAgentConfigSnapshot,
 ): Promise<SystemAgentConfiguredRoute | null> {
   // Match before adding the reserved execution agent changes the source shape.
@@ -174,9 +167,6 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
               },
             }
           : {}),
-        ...(deps.loadAuthProfileStoreForRuntimeAsync
-          ? { loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync }
-          : {}),
       })
     : undefined;
   const authProfileId = allowCliAuthProfileForwarding ? cliAuthProfileId : selection.profileId;
@@ -241,7 +231,7 @@ function projectRelevantModelMap(params: {
 export async function projectInferenceRoute(
   config: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentRouteProjectionDeps = {},
+  deps: SystemAgentConfiguredRouteDeps = {},
   sourceConfig: OpenClawConfig = config,
 ): Promise<DefaultInferenceRouteProjection> {
   const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");

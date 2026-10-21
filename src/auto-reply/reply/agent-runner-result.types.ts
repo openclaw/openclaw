@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type {
   AgentTurnCompletion,
@@ -11,7 +12,6 @@ import type { SettledAgentTurn } from "./agent-runner-execution.types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 import type { resolveReplyToMode } from "./reply-threading.js";
 import type { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import type { TypingSignaler } from "./typing-mode.js";

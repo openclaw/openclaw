@@ -4,7 +4,7 @@ import {
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type {
   GitHubPublicationRow,
   RepositoryGitHubPublicationRow,
@@ -108,7 +108,7 @@ export function readSharedGitHubPublicationRequestInDatabase(
   selector: SharedGitHubPublicationReadInput["selector"],
   entry: SharedGitHubPublicationReadInput["entry"],
 ): GitHubPublicationRow | undefined {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     if (!tableExists(db, "github_publication_requests")) {
       return undefined;
     }
@@ -198,7 +198,7 @@ export function readSharedRepositoryGitHubPublicationInDatabase(
   selector: SharedGitHubPublicationReadInput["selector"],
   entry: SharedGitHubPublicationReadInput["entry"],
 ): RepositoryGitHubPublicationRow | undefined {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     if (!tableExists(db, table)) {
       return undefined;
     }

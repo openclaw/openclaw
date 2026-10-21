@@ -1,5 +1,6 @@
 import http from "node:http";
 import { URL } from "node:url";
+import { promisify } from "node:util";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -41,10 +42,7 @@ import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { acceptRealtimeInboundRequest } from "./webhook/realtime-inbound-admission.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
-import {
-  StreamDisconnectGrace,
-  type StreamDisconnectLifecycle,
-} from "./webhook/stream-disconnect-grace.js";
+import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 import { appendRecentTalkEventMetadata } from "./webhook/talk-event-metadata.js";
 
 const MAX_WEBHOOK_BODY_BYTES = WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes;
@@ -186,7 +184,7 @@ export class VoiceCallWebhookServer {
     this.realtimeHandler = handler;
   }
 
-  getStreamDisconnectLifecycle(): StreamDisconnectLifecycle {
+  getStreamDisconnectLifecycle(): StreamDisconnectGrace {
     return this.streamDisconnectGrace;
   }
 
@@ -493,19 +491,7 @@ export class VoiceCallWebhookServer {
     }
 
     const server = this.server;
-    const serverClosePromise = new Promise<void>((resolve, reject) => {
-      if (!server) {
-        resolve();
-        return;
-      }
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
+    const serverClosePromise = server ? promisify(server.close.bind(server))() : Promise.resolve();
     this.startPromise = null;
     this.streamDisconnectGrace.close();
     const reaperStopped = this.stopStaleCallReaper?.();
@@ -883,12 +869,7 @@ export class VoiceCallWebhookServer {
   private async processParsedEvents(events: NormalizedEvent[]): Promise<boolean> {
     let replayable = false;
     for (const event of events) {
-      try {
-        replayable = (await this.processEventWithAutoResponse(event)) || replayable;
-      } catch (err) {
-        this.logger.error(`Error processing event ${event.type}: ${String(err)}`);
-        throw err;
-      }
+      replayable = (await this.processEventWithAutoResponse(event)) || replayable;
     }
     return replayable;
   }

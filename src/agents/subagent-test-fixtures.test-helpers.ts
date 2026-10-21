@@ -13,18 +13,15 @@ import {
   loadPendingFinalDeliveryPayload,
   projectSubagentRunForSessionList,
 } from "./subagents/registry/subagent-delivery-state.js";
-import type { PendingFinalDeliveryPayload } from "./subagents/registry/subagent-registry-read.types.js";
 import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-launch-record.js";
 import type * as RegistryState from "./subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
 /** Worker commands use a closed discriminant; generic execute callers retain correlated inputs. */
+type WorkerCommand = SqliteWorkerCommand<OpenClawStateWorkerOperations>;
 export function isSubagentRegistryWriteCommand(
   command: Parameters<DomainScope["execute"]>[0],
-): command is Extract<
-  SqliteWorkerCommand<OpenClawStateWorkerOperations>,
-  { type: "subagents.persistChanges" }
-> {
+): command is Extract<WorkerCommand, { type: "subagents.persistChanges" }> {
   return command.type === "subagents.persistChanges";
 }
 
@@ -35,35 +32,25 @@ type GatewayResponse<TRequest, TResult> =
   | Error
   | ((request: TRequest) => TResult | Promise<TResult>);
 
-function createGatewayMethodMock<
-  TRequest extends GatewayRequest,
-  TResult = Record<string, unknown>,
->(
-  responses: Record<string, GatewayResponse<TRequest, TResult>>,
-  fallback: GatewayResponse<TRequest, TResult>,
-) {
-  return vi.fn(async (request: TRequest) => {
-    const response =
-      request.method === undefined ? fallback : (responses[request.method] ?? fallback);
-    if (response instanceof Error) {
-      throw response;
-    }
-    if (typeof response === "function") {
-      const handler = response as (request: TRequest) => TResult | Promise<TResult>;
-      return await handler(request);
-    }
-    return response;
-  });
-}
-
 export function mockGatewayMethods<TRequest extends GatewayRequest, TResult>(
-  mock: {
-    mockImplementation(impl: (request: TRequest) => Promise<TResult>): unknown;
-  },
+  mock: { mockImplementation(impl: (request: TRequest) => Promise<TResult>): unknown },
   responses: Record<string, GatewayResponse<TRequest, TResult>>,
   fallback = {} as TResult,
 ): void {
-  mock.mockImplementation(createGatewayMethodMock(responses, fallback));
+  mock.mockImplementation(
+    vi.fn(async (request: TRequest) => {
+      const response =
+        request.method === undefined ? fallback : (responses[request.method] ?? fallback);
+      if (response instanceof Error) {
+        throw response;
+      }
+      if (typeof response === "function") {
+        const handler = response as (request: TRequest) => TResult | Promise<TResult>;
+        return await handler(request);
+      }
+      return response;
+    }),
+  );
 }
 
 export type MockSubagentRegistryRows = (
@@ -85,47 +72,36 @@ export async function configureMockSubagentRegistryPersistence(methods: {
       context.admission.assertCurrent();
       options?.assertCurrent?.();
       return operation({
-        execute: vi
-          .fn()
-          .mockImplementation(
-            async (
-              command: import("../infra/sqlite-worker-contract.js").SqliteWorkerCommand<
-                import("../state/openclaw-state-worker-contract.js").OpenClawStateWorkerOperations
-              >,
-            ) => {
-              if (command.type !== "subagents.persistChanges") {
-                return original(context, (scope) => scope.execute(command), options);
+        execute: vi.fn().mockImplementation(async (command: WorkerCommand) => {
+          if (command.type !== "subagents.persistChanges") {
+            return original(context, (scope) => scope.execute(command), options);
+          }
+          const write = command.input;
+          const values = write.values.map((row) => {
+            if (typeof row.payload_json !== "string") {
+              throw new Error("Registry fixture write is missing its payload");
+            }
+            return {
+              ...row,
+              payload_json: row.payload_json,
+              controller_session_key: row.controller_session_key ?? null,
+              controller_store_path: row.controller_store_path ?? null,
+              requester_store_path: row.requester_store_path ?? null,
+            };
+          });
+          const rows = new Map(
+            values.map((row) => {
+              const entry = rowToSubagentRunRecord(row);
+              if (!entry) {
+                throw new Error("Registry fixture write has an invalid payload");
               }
-              const write = command.input;
-              const values = write.values.map((row) => {
-                if (typeof row.payload_json !== "string") {
-                  throw new Error("Registry fixture write is missing its payload");
-                }
-                return {
-                  ...row,
-                  payload_json: row.payload_json,
-                  controller_session_key: row.controller_session_key ?? null,
-                  controller_store_path: row.controller_store_path ?? null,
-                  requester_store_path: row.requester_store_path ?? null,
-                };
-              });
-              const rows = new Map(
-                values.map((row) => {
-                  const entry = rowToSubagentRunRecord(row);
-                  if (!entry) {
-                    throw new Error("Registry fixture write has an invalid payload");
-                  }
-                  return [row.run_id, entry] as const;
-                }),
-              );
-              await methods.persistRegistryRows(rows, [...rows.keys(), ...write.deleteRunIds]);
-              options?.assertCurrent?.();
-              return {
-                writeId: write.writeId,
-                notices: [],
-              };
-            },
-          ),
+              return [row.run_id, entry] as const;
+            }),
+          );
+          await methods.persistRegistryRows(rows, [...rows.keys(), ...write.deleteRunIds]);
+          options?.assertCurrent?.();
+          return { writeId: write.writeId, notices: [] };
+        }),
       });
     });
   onTestFinished(() => spy.mockRestore());
@@ -176,9 +152,7 @@ export function createSessionStore(
   overrides: SessionEntryFixture = {},
   sessionKey = "agent:main:subagent:child",
 ): Record<string, InternalSessionEntry> {
-  return {
-    [sessionKey]: createSessionEntry(overrides),
-  };
+  return { [sessionKey]: createSessionEntry(overrides) };
 }
 
 export function createSessionEntry(overrides: SessionEntryFixture = {}): InternalSessionEntry {
@@ -190,11 +164,7 @@ export function createSessionEntry(overrides: SessionEntryFixture = {}): Interna
 }
 
 export function createAssistantToolCallMessage(content: unknown[]) {
-  return {
-    role: "assistant",
-    content,
-    stopReason: "toolUse",
-  };
+  return { role: "assistant", content, stopReason: "toolUse" };
 }
 
 export type SubagentRunParamsOverrides = Pick<RegisterSubagentRunParams, "runId"> &
@@ -287,7 +257,6 @@ export const imageCompletionEvents = (overrides: Partial<TaskCompletionEvent> = 
     childSessionId: "task-123",
     announceType: "image generation task",
     taskLabel: "daily media",
-    statusLabel: "completed successfully",
     result: "Generated 1 image.\nMEDIA:/tmp/generated-daily.png",
     mediaUrls: ["/tmp/generated-daily.png"],
     replyInstruction: "Deliver the generated image through the requester run.",
@@ -347,8 +316,7 @@ export type SubagentRegistryHarness = Omit<SubagentRegistryModule, "registerSuba
 
 export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
   const now = Date.now();
-  const payload: PendingFinalDeliveryPayload = loadPendingFinalDeliveryPayload(args.entry);
-
+  const payload = loadPendingFinalDeliveryPayload(args.entry);
   const delivery = ensureDeliveryState(args.entry);
   delivery.status = "pending";
   delivery.createdAt ??= now;

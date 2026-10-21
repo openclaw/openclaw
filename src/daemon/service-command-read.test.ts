@@ -1,9 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import * as currentService from "./launchd-current-service.js";
+import { restartLaunchAgent } from "./launchd-lifecycle.js";
 import {
   buildLaunchAgentPlist,
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
@@ -16,6 +20,7 @@ import {
   resolveLaunchAgentEnvWrapperPath,
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
+import * as ownership from "./launchd-system.js";
 import {
   buildTaskScript,
   readScheduledTaskCommand,
@@ -109,6 +114,40 @@ describe("native service command inspection", () => {
     await fs.writeFile(filename, contents);
   }
 
+  it("preserves nested native cleanup while proving a missing plist is absent", async () => {
+    const failure = new AggregateError(
+      [new CommandProcessCleanupError()],
+      "native inspection failed",
+    );
+    native.launchctl.mockImplementation(async (_command: string, args: string[]) => {
+      if (args.some((arg) => arg.startsWith("gui/"))) {
+        throw failure;
+      }
+      return missingJob;
+    });
+
+    await expect(readLaunchAgentProgramArguments(env, { requireEffective: true })).rejects.toBe(
+      failure,
+    );
+  });
+
+  it("stops restart when the plist reader cannot confirm native cleanup", async () => {
+    const failure = new CommandProcessCleanupError();
+    await writeFile(resolveLaunchAgentPlistPath(env), renderPlist(programArguments));
+    native.plutil.mockRejectedValue(failure);
+    vi.spyOn(currentService, "isCurrentProcessInsideLaunchdService").mockResolvedValue(false);
+    vi.spyOn(ownership, "assertNoSystemLaunchDaemonOwnership").mockResolvedValue();
+    const stdout = new PassThrough();
+    const onMutation = vi.fn();
+
+    await expect(
+      restartLaunchAgent({ env, stdout, onMutation, preserveDefinition: true }),
+    ).rejects.toBe(failure);
+    expect(native.launchctl).not.toHaveBeenCalled();
+    expect(onMutation).not.toHaveBeenCalled();
+    expect(stdout.read()).toBeNull();
+  });
+
   const strictTask = (options: GatewayServiceReadOptions = {}) =>
     readScheduledTaskCommand(env, { requireEffective: true, ...options });
   const strictPlist = () => readLaunchAgentProgramArguments(env, { requireEffective: true });
@@ -151,7 +190,11 @@ describe("native service command inspection", () => {
   });
 
   describe("Windows aggregate Scheduler timeout transport", () => {
-    async function windowsFixture(present: boolean, onRead: () => void) {
+    async function windowsFixture(
+      present: boolean,
+      onRead: () => void,
+      content = buildTaskScript({ programArguments }),
+    ) {
       mockProcessPlatform("win32");
       const windowsEnv = {
         ...env,
@@ -161,7 +204,7 @@ describe("native service command inspection", () => {
       const scriptPath = resolveTaskScriptPath(windowsEnv);
       const backingScriptPath = path.join(root, "gateway.cmd");
       if (present) {
-        await writeFile(backingScriptPath, buildTaskScript({ programArguments }));
+        await writeFile(backingScriptPath, content);
       }
       const inspectedPath = present ? scriptPath : resolveStartupEntryPaths(windowsEnv)[0];
       const readFile = fs.readFile;
@@ -181,7 +224,7 @@ describe("native service command inspection", () => {
           requireLoadedCommand: true,
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
         });
-      return { scriptPath, run, observe };
+      return { scriptPath, run, observe, windowsEnv };
     }
     const registeredTask = (scriptPath: string, state: number) => ({
       status: 0,
@@ -192,6 +235,38 @@ describe("native service command inspection", () => {
         actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
       }),
       stderr: "",
+    });
+    it.each([
+      ['set "TOKEN=%launcher-secret-canary%"', 4, "invalid environment assignment"],
+      ['node "%launcher-secret-canary%"', 4, "dynamic command"],
+      ["node gateway.js & echo launcher-secret-canary", 4, "ambiguous command"],
+      ['cd /d "C:\\launcher-secret-canary" extra', 4, "ambiguous working directory"],
+      ["node gateway.js\r\necho launcher-secret-canary", 5, "multiple commands"],
+    ] as const)("preserves safe physical-line diagnostics for %s", async (body, line, reason) => {
+      const content = `@echo off\r\n\r\nrem fixture header\r\n${body}\r\n`;
+      const { scriptPath, observe, windowsEnv } = await windowsFixture(
+        true,
+        () => undefined,
+        content,
+      );
+      native.scheduler.mockReturnValue(registeredTask(scriptPath, 3));
+      const detail = `Launcher line ${line}: ${reason}.`;
+      const state = await readGatewayServiceState(resolveGatewayService(), { env: windowsEnv });
+      expect(state).toMatchObject({
+        command: null,
+        runtime: {
+          status: "unknown",
+          inspectionFailure: {
+            code: "service-runtime-inspection-failed",
+            detail: expect.stringContaining(detail),
+          },
+        },
+      });
+      const error = await observe().catch((caughtError: unknown) => caughtError);
+      expect(sanitizeServiceInspectionError(error).message).toContain(detail);
+      expect(state.runtime?.inspectionFailure?.detail).toContain("Review the launcher");
+      expect(inspect({ state, error })).not.toContain("launcher-secret-canary");
+      expect(await fs.readFile(path.join(root, "gateway.cmd"), "utf8")).toBe(content);
     });
     it.each([
       ["parallel", "absent", false, false],

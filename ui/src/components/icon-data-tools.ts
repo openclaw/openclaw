@@ -1,5 +1,5 @@
 import { neutralMarkData } from "./icon-data-neutral.ts";
-import { strokeIconData, type IconData, type IconNode } from "./icon-data-types.ts";
+import { strokeIconData, strokePathData, type IconData, type IconNode } from "./icon-data-types.ts";
 
 export const keyboardIconData = {
   "⌘": [["path", { d: "M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3" }]],
@@ -30,77 +30,53 @@ export function hasKeyboardIcon(symbol: string): symbol is KeyboardIconSymbol {
 }
 
 export const toolIconData = {
-  bookOpenText: strokeIconData([
-    ["path", { d: "M12 5v16M16 13h2M16 9h2" }],
-    [
-      "path",
-      {
-        d: "M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z",
-      },
-    ],
-    ["path", { d: "M6 13h2M6 9h2" }],
-  ]),
+  codeXml: strokePathData("m18 16 4-4-4-4", "m6 8-4 4 4 4", "m14.5 4-5 16"),
+  bookOpenText: strokePathData(
+    "M12 5v16M16 13h2M16 9h2",
+    "M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z",
+    "M6 13h2M6 9h2",
+  ),
   mark: neutralMarkData,
-  shieldCheck: strokeIconData([
-    ["path", { d: "M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3zM9 12l2 2 4-4" }],
-  ]),
-  shieldX: strokeIconData([
-    ["path", { d: "M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3zM9.5 9.5l5 5m0-5-5 5" }],
-  ]),
+  shieldCheck: strokePathData("M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3zM9 12l2 2 4-4"),
+  shieldX: strokePathData("M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3zM9.5 9.5l5 5m0-5-5 5"),
   cpu: strokeIconData([
     ["rect", { width: "16", height: "16", x: "4", y: "4", rx: "2" }],
     ["rect", { width: "6", height: "6", x: "9", y: "9", rx: "1" }],
     ["path", { d: "M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" }],
   ]),
-  foldVertical: strokeIconData([
-    ["path", { d: "M12 22v-6M12 8V2M4 12H2M10 12H8M16 12h-2M22 12h-2M19 9l-3 3 3 3M5 15l3-3-3-3" }],
-  ]),
-  wrench: strokeIconData([
-    [
-      "path",
-      {
-        d: "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z",
-      },
-    ],
-  ]),
-  lightbulb: strokeIconData([
-    [
-      "path",
-      {
-        d: "M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5",
-      },
-    ],
-    ["path", { d: "M9 18h6" }],
-    ["path", { d: "M10 22h4" }],
-  ]),
+  foldVertical: strokePathData(
+    "M12 22v-6M12 8V2M4 12H2M10 12H8M16 12h-2M22 12h-2M19 9l-3 3 3 3M5 15l3-3-3-3",
+  ),
+  wrench: strokePathData(
+    "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z",
+  ),
+  lightbulb: strokePathData(
+    "M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5",
+    "M9 18h6",
+    "M10 22h4",
+  ),
   fileCode: strokeIconData([
     ["path", { d: "M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" }],
     ["polyline", { points: "14 2 14 8 20 8" }],
     ["path", { d: "M10 13l-2 2 2 2M14 17l2-2-2-2" }],
   ]),
-  edit: strokeIconData([
-    [
-      "path",
-      {
-        d: "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z",
-      },
-    ],
-  ]),
+  edit: strokePathData(
+    "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z",
+  ),
   home: strokeIconData([
     ["path", { d: "m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" }],
     ["polyline", { points: "9 22 9 12 15 12 15 22" }],
   ]),
-  cloud: strokeIconData([["path", { d: "M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" }]]),
-  penLine: strokeIconData([
-    ["path", { d: "M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" }],
-  ]),
-  paperclip: strokeIconData([
-    [
-      "path",
-      {
-        d: "m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48",
-      },
-    ],
+  cloud: strokePathData("M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"),
+  penLine: strokePathData("M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"),
+  paperclip: strokePathData(
+    "m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48",
+  ),
+  sharingOptions: strokeIconData([
+    ["circle", { cx: "18", cy: "5", r: "3" }],
+    ["circle", { cx: "6", cy: "12", r: "3" }],
+    ["circle", { cx: "18", cy: "19", r: "3" }],
+    ["path", { d: "m8.59 10.49 6.83-3.98m-6.83 6.98 6.83 3.98" }],
   ]),
   globe: strokeIconData([
     ["circle", { cx: "12", cy: "12", r: "10" }],
@@ -127,14 +103,9 @@ export const toolIconData = {
     ],
     ["circle", { cx: "12", cy: "13", r: "3" }],
   ]),
-  cameraOff: strokeIconData([
-    [
-      "path",
-      {
-        d: "M14.564 14.558a3 3 0 1 1-4.122-4.121M2 2l20 20M20 20H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 .819-.175M9.695 4.024A2 2 0 0 1 10.004 4h3.993a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v7.344",
-      },
-    ],
-  ]),
+  cameraOff: strokePathData(
+    "M14.564 14.558a3 3 0 1 1-4.122-4.121M2 2l20 20M20 20H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 .819-.175M9.695 4.024A2 2 0 0 1 10.004 4h3.993a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v7.344",
+  ),
   smartphone: strokeIconData([
     ["rect", { width: "14", height: "20", x: "5", y: "2", rx: "2", ry: "2" }],
     ["path", { d: "M12 18h.01" }],
@@ -143,18 +114,11 @@ export const toolIconData = {
     ["circle", { cx: "12", cy: "12", r: "10" }],
     ["path", { d: "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01" }],
   ]),
-  plug: strokeIconData([
-    ["path", { d: "M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" }],
-  ]),
+  plug: strokePathData("M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"),
   circle: strokeIconData([["circle", { cx: "12", cy: "12", r: "10" }]]),
-  puzzle: strokeIconData([
-    [
-      "path",
-      {
-        d: "M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.076.874.54 1.02 1.02a2.5 2.5 0 1 0 3.237-3.237c-.48-.146-.944-.505-1.02-1.02a.98.98 0 0 1 .303-.917l1.526-1.526A2.402 2.402 0 0 1 11.998 2c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.236 3.236c-.464.18-.894.527-.967 1.02Z",
-      },
-    ],
-  ]),
+  puzzle: strokePathData(
+    "M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.076.874.54 1.02 1.02a2.5 2.5 0 1 0 3.237-3.237c-.48-.146-.944-.505-1.02-1.02a.98.98 0 0 1 .303-.917l1.526-1.526A2.402 2.402 0 0 1 11.998 2c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.236 3.236c-.464.18-.894.527-.967 1.02Z",
+  ),
   panelLeft: strokeIconData([
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }],
     ["path", { d: "M9 3v18" }],
@@ -167,14 +131,14 @@ export const toolIconData = {
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }],
     ["path", { d: "M9 3v18M14 10l3 2-3 2" }],
   ]),
-  chevronDown: strokeIconData([["path", { d: "M6 9l6 6 6-6" }]]),
-  chevronRight: strokeIconData([["path", { d: "M9 18l6-6-6-6" }]]),
-  chevronLeft: strokeIconData([["path", { d: "M15 18l-6-6 6-6" }]]),
-  externalLink: strokeIconData([
-    ["path", { d: "M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" }],
-  ]),
-  send: strokeIconData([["path", { d: "m22 2-7 20-4-9-9-4ZM22 2 11 13" }]]),
-  forward: strokeIconData([["path", { d: "m15 17 5-5-5-5M4 18v-2a4 4 0 0 1 4-4h12" }]]),
+  chevronDown: strokePathData("M6 9l6 6 6-6"),
+  chevronRight: strokePathData("M9 18l6-6-6-6"),
+  chevronLeft: strokePathData("M15 18l-6-6 6-6"),
+  externalLink: strokePathData(
+    "M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3",
+  ),
+  send: strokePathData("m22 2-7 20-4-9-9-4ZM22 2 11 13"),
+  forward: strokePathData("m15 17 5-5-5-5M4 18v-2a4 4 0 0 1 4-4h12"),
   stop: strokeIconData([["rect", { width: "14", height: "14", x: "5", y: "5", rx: "1" }]]),
   pin: strokeIconData([
     ["line", { x1: "12", x2: "12", y1: "17", y2: "22" }],
@@ -200,14 +164,9 @@ export const toolIconData = {
     ["polyline", { points: "7 10 12 15 17 10" }],
     ["line", { x1: "12", x2: "12", y1: "15", y2: "3" }],
   ]),
-  mic: strokeIconData([
-    [
-      "path",
-      {
-        d: "M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM19 10v2a7 7 0 0 1-14 0v-2M12 19v3",
-      },
-    ],
-  ]),
+  mic: strokePathData(
+    "M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM19 10v2a7 7 0 0 1-14 0v-2M12 19v3",
+  ),
   volume2: strokeIconData([
     ["polygon", { points: "11 5 6 9 2 9 2 15 6 15 11 19 11 5" }],
     ["path", { d: "M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14" }],
@@ -217,10 +176,8 @@ export const toolIconData = {
     ["path", { d: "m22 9-6 6" }],
     ["path", { d: "m16 9 6 6" }],
   ]),
-  bookmark: strokeIconData([
-    ["path", { d: "m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" }],
-  ]),
-  plus: strokeIconData([["path", { d: "M5 12h14M12 5v14" }]]),
+  bookmark: strokePathData("m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"),
+  plus: strokePathData("M5 12h14M12 5v14"),
   gitBranch: strokeIconData([
     ["circle", { cx: "6", cy: "5", r: "2" }],
     ["circle", { cx: "18", cy: "6", r: "2" }],
@@ -264,9 +221,9 @@ export const toolIconData = {
     ["path", { d: "m7 11 2-2-2-2M11 13h4" }],
     ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", ry: "2" }],
   ]),
-  listTree: strokeIconData([
-    ["path", { d: "M21 12h-8M21 6H8M21 18h-8M3 6v4c0 1.1.9 2 2 2h3M3 10v6c0 1.1.9 2 2 2h3" }],
-  ]),
+  listTree: strokePathData(
+    "M21 12h-8M21 6H8M21 18h-8M3 6v4c0 1.1.9 2 2 2h3M3 10v6c0 1.1.9 2 2 2h3",
+  ),
   claw: strokeIconData([
     [
       "path",
@@ -282,14 +239,9 @@ export const toolIconData = {
       },
     ],
   ]),
-  spark: strokeIconData([
-    [
-      "path",
-      {
-        d: "M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z",
-      },
-    ],
-  ]),
+  spark: strokePathData(
+    "M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z",
+  ),
   // Theme variables keep the gradient legible in both palettes.
   lobster: {
     attributes: { viewBox: "0 0 120 120", fill: "none" },
@@ -355,14 +307,9 @@ export const toolIconData = {
     ["circle", { cx: "12", cy: "10", r: "4" }],
     ["circle", { cx: "12", cy: "12", r: "10" }],
   ]),
-  bell: strokeIconData([
-    [
-      "path",
-      {
-        d: "M10.268 21a2 2 0 0 0 3.464 0M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326",
-      },
-    ],
-  ]),
+  bell: strokePathData(
+    "M10.268 21a2 2 0 0 0 3.464 0M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326",
+  ),
   palette: strokeIconData([
     [
       "path",
@@ -375,42 +322,23 @@ export const toolIconData = {
     ["circle", { cx: "6.5", cy: "12.5", r: ".5", fill: "currentColor" }],
     ["circle", { cx: "8.5", cy: "7.5", r: ".5", fill: "currentColor" }],
   ]),
-  flaskConical: strokeIconData([
-    [
-      "path",
-      {
-        d: "M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2M6.453 15h11.094M8.5 2h7",
-      },
-    ],
-  ]),
-  badgeCheck: strokeIconData([
-    [
-      "path",
-      {
-        d: "M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z",
-      },
-    ],
-    ["path", { d: "m9 12 2 2 4-4" }],
-  ]),
-  refresh: strokeIconData([
-    ["path", { d: "M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8M21 3v5h-5" }],
-  ]),
-  history: strokeIconData([
-    ["path", { d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" }],
-    ["path", { d: "M3 3v5h5" }],
-    ["path", { d: "M12 7v5l4 2" }],
-  ]),
-  rotateCcw: strokeIconData([
-    ["path", { d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5" }],
-  ]),
-  trash: strokeIconData([
-    [
-      "path",
-      {
-        d: "M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6",
-      },
-    ],
-  ]),
+  flaskConical: strokePathData(
+    "M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2M6.453 15h11.094M8.5 2h7",
+  ),
+  badgeCheck: strokePathData(
+    "M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z",
+    "m9 12 2 2 4-4",
+  ),
+  refresh: strokePathData("M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8M21 3v5h-5"),
+  history: strokePathData(
+    "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
+    "M3 3v5h5",
+    "M12 7v5l4 2",
+  ),
+  rotateCcw: strokePathData("M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5"),
+  trash: strokePathData(
+    "M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6",
+  ),
   eye: strokeIconData([
     [
       "path",
@@ -420,19 +348,48 @@ export const toolIconData = {
     ],
     ["circle", { cx: "12", cy: "12", r: "3" }],
   ]),
-  eyeOff: strokeIconData([
-    [
-      "path",
-      {
-        d: "M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49M14.084 14.158a3 3 0 0 1-4.242-4.242M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143M2 2l20 20",
-      },
-    ],
-  ]),
-  arrowUpDown: strokeIconData([["path", { d: "M21 16l-4 4-4-4M17 20V4M3 8l4-4 4 4M7 4v16" }]]),
+  eyeOff: strokePathData(
+    "M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49M14.084 14.158a3 3 0 0 1-4.242-4.242M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143M2 2l20 20",
+  ),
+  arrowUpDown: strokePathData("M21 16l-4 4-4-4M17 20V4M3 8l4-4 4 4M7 4v16"),
   panelRightOpen: strokeIconData([
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }],
     ["path", { d: "M15 3v18M10 10l-3 2 3 2" }],
   ]),
+  // Session chrome has its own approved silhouettes; generic panel icons stay unchanged.
+  sessionMenu: strokePathData("M4 8h16M4 16h10"),
+  sessionPanels: strokeIconData([
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M15 3v18", "stroke-width": "1.8" }],
+  ]),
+  // Dock is a destination action, so it has no open/close chevron or active fill.
+  sessionPanelDockBottom: strokeIconData([
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M3 15h18", "stroke-width": "1.8" }],
+  ]),
+  sessionPanelsActive: strokeIconData([
+    [
+      "path",
+      {
+        d: "M15 3h3a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-3Z",
+        fill: "currentColor",
+        stroke: "none",
+        style: "fill-opacity:.4",
+      },
+    ],
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M15 3v18", "stroke-width": "1.8" }],
+  ]),
+  sessionSidebarOpen: strokeIconData([
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M9 3v18M14 10l3 2-3 2", "stroke-width": "1.8" }],
+  ]),
+  sessionSidebarClose: strokeIconData([
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M9 3v18M16 10l-3 2 3 2", "stroke-width": "1.8" }],
+  ]),
+  sessionPanelExpand: strokePathData("M12 5h7v7M5 12v7h7"),
+  sessionPanelRestore: strokePathData("M14.121 2.808v7.071h7.071M2.808 14.121h7.071v7.071"),
   panelRightClose: strokeIconData([
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }],
     ["path", { d: "M15 3v18M8 10l3 2-3 2" }],

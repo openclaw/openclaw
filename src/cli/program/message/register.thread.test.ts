@@ -1,34 +1,19 @@
 // Register thread tests cover message thread command registration and option wiring.
-import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
-import type { MessageCliHelpers } from "./helpers.js";
-import { registerMessageThreadCommands } from "./register.thread.js";
+import { createMessageCliProgram, messageCliMocks } from "./command.test-support.js";
 
-function createHelpers(runMessageAction: MessageCliHelpers["runMessageAction"]): MessageCliHelpers {
-  return {
-    withMessageBase: (command, target) => {
-      if (target === "required") {
-        command.requiredOption("-t, --target <dest>", "Target");
-      }
-      return command.option("--channel <channel>", "Channel");
-    },
-    runMessageAction,
-  };
-}
-
-function firstMessageActionCall(runMessageAction: { mock: { calls: unknown[][] } }) {
-  return runMessageAction.mock.calls[0] as [string, Record<string, unknown>] | undefined;
+function firstMessageActionCall() {
+  const options = messageCliMocks.command.mock.calls[0]?.[0];
+  return options ? ([options.action, options] as const) : undefined;
 }
 
 describe("registerMessageThreadCommands", () => {
-  const runMessageAction = vi.fn(
-    async (_action: string, _opts: Record<string, unknown>) => undefined,
-  );
+  const runMessageAction = messageCliMocks.command;
 
   beforeEach(() => {
     setActivePluginRegistry(
@@ -72,11 +57,11 @@ describe("registerMessageThreadCommands", () => {
   });
 
   async function runThreadCreateWithMessage(channel: string, target: string) {
-    const message = new Command().exitOverride();
-    registerMessageThreadCommands(message, createHelpers(runMessageAction));
+    const message = createMessageCliProgram("topic-chat|plain-chat");
 
     await message.parseAsync(
       [
+        "message",
         "thread",
         "create",
         "--channel",
@@ -95,7 +80,7 @@ describe("registerMessageThreadCommands", () => {
   it("routes plugin-remapped thread create actions through channel hooks", async () => {
     await runThreadCreateWithMessage(" topic-chat ", "room-1");
 
-    const remappedCall = firstMessageActionCall(runMessageAction);
+    const remappedCall = firstMessageActionCall();
     expect(remappedCall?.[0]).toBe("topic-create");
     expect(remappedCall?.[1]?.channel).toBe(" topic-chat ");
     expect(remappedCall?.[1]?.target).toBe("room-1");
@@ -130,11 +115,11 @@ describe("registerMessageThreadCommands", () => {
       action: "topic-create",
     },
   ])("$description", async ({ action, channel, target }) => {
-    const message = new Command().exitOverride();
-    registerMessageThreadCommands(message, createHelpers(runMessageAction));
+    const message = createMessageCliProgram("topic-chat|plain-chat");
 
     await message.parseAsync(
       [
+        "message",
         "thread",
         "create",
         ...(channel ? ["--channel", channel] : []),
@@ -146,7 +131,7 @@ describe("registerMessageThreadCommands", () => {
       { from: "user" },
     );
 
-    const call = firstMessageActionCall(runMessageAction);
+    const call = firstMessageActionCall();
     expect(call?.[0]).toBe(action);
     expect(call?.[1]?.channel).toBe(channel);
     expect(call?.[1]?.target).toBe(target);
@@ -157,7 +142,7 @@ describe("registerMessageThreadCommands", () => {
   it("keeps default thread create params when the channel does not remap the action", async () => {
     await runThreadCreateWithMessage("plain-chat", "channel:123");
 
-    const defaultCall = firstMessageActionCall(runMessageAction);
+    const defaultCall = firstMessageActionCall();
     expect(defaultCall?.[0]).toBe("thread-create");
     expect(defaultCall?.[1]?.channel).toBe("plain-chat");
     expect(defaultCall?.[1]?.target).toBe("channel:123");

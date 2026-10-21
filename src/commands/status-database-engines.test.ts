@@ -1,15 +1,53 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
+import type { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
-import { buildStatusJsonPayload } from "./status-json-payload.js";
+import { runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusCommandOverviewRows } from "./status-overview-rows.js";
-import { createStatusCommandOverviewRowsParams } from "./status.test-support.js";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
+import {
+  createStatusCommandOverviewRowsParams,
+  createStatusScanResultFixture,
+} from "./status.test-support.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const mocks = vi.hoisted(() => ({ describe: vi.fn() }));
+type StatusDatabaseJson = {
+  databaseEngines: Awaited<ReturnType<typeof resolveStatusDatabaseEngines>> & {
+    families: ReturnType<typeof describeDatabaseEngineSelection>;
+  };
+};
+const mocks = vi.hoisted(() => ({
+  describe: vi.fn(),
+  scanStatusJsonFast: vi.fn(),
+  writeRuntimeJson: vi.fn((_runtime: RuntimeEnv, _payload: StatusDatabaseJson) => {}),
+}));
+// mock-isolation: Fixed scan facts exercise projection without collecting a live Gateway.
+vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: mocks.scanStatusJsonFast }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  writeRuntimeJson: mocks.writeRuntimeJson,
+}));
+vi.mock("../infra/update-run-status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-run-status.js")>()),
+  readUpdateRunStatus: async () => ({}),
+}));
 
 // mock-isolation: These tests own status projection/target routing, not physical store inspection.
 vi.mock("../infra/database-engine/admitted-diagnostics.js", () => ({
   describeAdmittedDatabaseStores: mocks.describe,
+}));
+
+// mock-isolation: Database projection does not need Gateway, service-manager, or usage probes.
+vi.mock("./status-runtime-shared.js", () => ({
+  resolveStatusRuntimeSnapshot: async () => ({}),
+  resolveStatusUsageSummary: vi.fn(),
+}));
+
+// mock-isolation: Backup-store I/O is unrelated to admitted database diagnostics.
+vi.mock("../state/backup-run-records.js", () => ({
+  readBackupRunFreshness: async () => ({}),
 }));
 
 const store: DatabaseStoreDiagnostic = {
@@ -45,20 +83,15 @@ describe("status database diagnostics", () => {
 
   it("projects the same physical store facts in text and JSON", async () => {
     const config = { database: { engine: "postgres" as const } };
-    const databaseEngines = await resolveStatusDatabaseEngines(config);
-    const params = createStatusCommandOverviewRowsParams();
-    const surface = { ...params.surface, cfg: {}, databaseEngines };
-    const rows = buildStatusCommandOverviewRows({ ...params, surface });
-    const payload = buildStatusJsonPayload({
-      summary: {},
-      surface,
-      osSummary: {},
-      memory: null,
-      memoryPlugin: {},
-      agents: [],
-      configDiagnostics: null,
-      secretDiagnostics: [],
+    mocks.scanStatusJsonFast.mockResolvedValueOnce(createStatusScanResultFixture({ cfg: config }));
+    await runStatusJsonCommand({
+      runtime: createTestRuntime(),
+      opts: createStatusGatewayProbeBudget(),
     });
+    const payload = expectDefined(mocks.writeRuntimeJson.mock.lastCall, "status JSON output")[1];
+    const params = createStatusCommandOverviewRowsParams();
+    const surface = { ...params.surface, cfg: {}, databaseEngines: payload.databaseEngines };
+    const rows = buildStatusCommandOverviewRows({ ...params, surface });
     expect(payload.databaseEngines.source).toBe("admitted");
     expect(payload.databaseEngines.families.find((family) => family.id === "state")).toMatchObject({
       default: "postgres",

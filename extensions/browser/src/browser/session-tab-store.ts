@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
@@ -253,7 +254,7 @@ export async function drainBrowserSessionTabStore(runtime: BrowserStateRuntime):
   while (runtime.sessionTabOperations.size > 0 || runtime.dashboardOperations.size > 0) {
     await Promise.allSettled([
       ...runtime.sessionTabOperations.values(),
-      ...[...runtime.dashboardOperations.values()].map(({ promise }) => promise),
+      ...runtime.dashboardOperations.values(),
     ]);
   }
 }
@@ -289,27 +290,15 @@ export async function withBrowserSessionTabOperation<T>(
   const runtime = authority.runtime ?? getBrowserStateRuntime();
   const store = getBrowserSessionTabStore({ ...authority, runtime });
   const selected = Array.isArray(keys) ? [...new Set(keys)] : [keys];
-  const previous = selected.flatMap((key) => runtime.sessionTabOperations.get(key) ?? []);
-  const pending = Promise.all([...previous, ...dependencies]).then(async () => {
-    assertBrowserSessionTabAuthority({ ...authority, runtime });
-    return await operation(store);
+  return await enqueueKeyedTask({
+    tails: runtime.sessionTabOperations,
+    keys: selected,
+    task: async () => {
+      await Promise.all(dependencies);
+      assertBrowserSessionTabAuthority({ ...authority, runtime });
+      return await operation(store);
+    },
   });
-  const settled = pending.then(
-    () => {},
-    () => {},
-  );
-  for (const key of selected) {
-    runtime.sessionTabOperations.set(key, settled);
-  }
-  try {
-    return await pending;
-  } finally {
-    for (const key of selected) {
-      if (runtime.sessionTabOperations.get(key) === settled) {
-        runtime.sessionTabOperations.delete(key);
-      }
-    }
-  }
 }
 
 /** Hold same-process mutation admission through the fresh read and synchronous effect dispatch. */
@@ -628,20 +617,14 @@ async function withBrowserSessionTabNativeIdentities<T>(
     dashboardTargets.length > 0
       ? withDashboardTabAdmission(dashboardTargets, authority, operation)
       : operation();
-  const identities = [
-    ...new Set(
-      records.flatMap((record) =>
-        record?.interactionTargetKind === "native" ? [browserSessionTabNativeIdentity(record)] : [],
-      ),
-    ),
-  ].toSorted();
-  const run = async (index: number): Promise<T> => {
-    const identity = identities[index];
-    return identity === undefined
-      ? await runOperation()
-      : await withBrowserSessionTabNativeActivity(identity, authority, () => run(index + 1));
-  };
-  return await run(0);
+  const nativeKeys = records.flatMap((record) =>
+    record?.interactionTargetKind === "native"
+      ? [`native:${browserSessionTabNativeIdentity(record)}`]
+      : [],
+  );
+  return nativeKeys.length > 0
+    ? await withBrowserSessionTabOperation(nativeKeys, authority, runOperation)
+    : await runOperation();
 }
 
 async function mutateBrowserSessionTabInOperation(

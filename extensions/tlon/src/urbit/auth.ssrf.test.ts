@@ -1,10 +1,7 @@
 // Tlon tests cover auth.ssrf plugin behavior.
 import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime";
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./auth.js";
-
-const privateLookupFn = (async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
 
 describe("tlon urbit auth ssrf", () => {
   beforeEach(() => {
@@ -35,8 +32,6 @@ describe("tlon urbit auth ssrf", () => {
 
     const cookie = await authenticate("http://127.0.0.1:8080", "code", {
       ssrfPolicy: { allowPrivateNetwork: true },
-      lookupFn: privateLookupFn,
-      fetchImpl: mockFetch as typeof fetch,
     });
     expect(cookie).toContain("urbauth-~zod=123");
     expect(response.bodyUsed).toBe(true);
@@ -65,8 +60,6 @@ describe("tlon urbit auth ssrf", () => {
 
     const cookie = await authenticate("http://127.0.0.1:8080", "code", {
       ssrfPolicy: { allowPrivateNetwork: true },
-      lookupFn: privateLookupFn,
-      fetchImpl: mockFetch as typeof fetch,
     });
     expect(cookie).toContain("urbauth-~zod=789");
     expect(canceled).toBe(true);
@@ -86,12 +79,11 @@ describe("tlon urbit auth ssrf", () => {
       { status: 401 },
     );
     const mockFetch = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal("fetch", mockFetch);
 
     await expect(
       authenticate("http://127.0.0.1:8080", "bad-code", {
         ssrfPolicy: { allowPrivateNetwork: true },
-        lookupFn: privateLookupFn,
-        fetchImpl: mockFetch as typeof fetch,
       }),
     ).rejects.toMatchObject({
       name: "UrbitAuthError",
@@ -111,10 +103,9 @@ describe("tlon urbit auth ssrf", () => {
     );
     const clone = response.clone();
     const mockFetch = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal("fetch", mockFetch);
     const pending = authenticate("http://127.0.0.1:8080", "bad-code", {
       ssrfPolicy: { allowPrivateNetwork: true },
-      lookupFn: privateLookupFn,
-      fetchImpl: mockFetch as typeof fetch,
     });
     let timeout: ReturnType<typeof setTimeout> | undefined;
 

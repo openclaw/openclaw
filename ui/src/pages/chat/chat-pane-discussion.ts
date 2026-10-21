@@ -145,11 +145,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     }
   }
 
-  protected resolveSessionDiscussionAction(): {
-    active: boolean;
-    label: string;
-    onToggle: () => void;
-  } | null {
+  protected resolveSessionDiscussionAction() {
     const state = this.state;
     const sessionKey = state?.sessionKey.trim() ?? "";
     const known = sessionKey ? this.sessionDiscussion.snapshot.states.get(sessionKey) : undefined;

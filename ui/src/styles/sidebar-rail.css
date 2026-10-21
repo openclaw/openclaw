@@ -1,5 +1,6 @@
 .sidebar.sidebar--rail {
   flex-direction: row;
+  overflow: visible;
 }
 
 .sidebar--rail .sidebar-shell {
@@ -174,11 +175,6 @@
   min-width: 36px;
   height: 36px;
   padding: 0;
-}
-
-.sidebar-rail .sidebar-identity-card[data-connection-status] {
-  outline: 1px solid var(--warn);
-  outline-offset: -2px;
 }
 
 .sidebar-rail .sidebar-brand__icon {
@@ -448,6 +444,10 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 
 .sidebar-session-toolbar__collapse {
   margin-inline-start: auto;
+}
+
+.sidebar-session-toolbar .sidebar-session-toolbar__collapse {
+  margin-inline-start: 0;
 }
 
 /* A growing section toggle would cover the row's empty space, which must stay

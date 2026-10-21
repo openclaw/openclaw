@@ -3,6 +3,8 @@ import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   codexNativeSubagentRunId,
+  findCodexNativeSuccessorTurn,
+  readThreadParentThreadId,
   type NativeSubagentAssignment,
 } from "./native-subagent-assignment.js";
 import { readNativeTurnEnd } from "./native-subagent-history-recovery.js";
@@ -24,7 +26,6 @@ import {
   type NativeSubmissionCallDependencies,
   type NativeSubagentSubmissionCall as SubmissionCall,
 } from "./native-subagent-submission-call.js";
-import { readCodexNativeSubmissionTurn } from "./native-subagent-submission-history.js";
 import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
 import { isJsonObject, type JsonObject, type CodexServerNotification } from "./protocol.js";
 
@@ -73,15 +74,10 @@ export class CodexNativeSubagentSubmissionOwner {
 
   constructor(private readonly dependencies: SubmissionDependencies) {
     this.pollDelays = dependencies.recoveryPollDelaysMs ?? DEFAULT_RECOVERY_POLL_DELAYS_MS;
-    this.modelInputs = createNativeSubagentSubmissionCalls(this.calls, dependencies, {
-      isCurrent: (state) => this.isCurrent(state),
-      capture: (state, receipt, owner, persist, completionCustody) =>
-        this.capture(state, receipt, owner, persist, completionCustody),
-      observeKnownChild: (threadId) => this.observeKnownChild(threadId),
-    });
+    this.modelInputs = createNativeSubagentSubmissionCalls(this.calls, dependencies, this);
   }
 
-  private isCurrent(state: ParentState): boolean {
+  isCurrent(state: ParentState): boolean {
     if (this.dependencies.isCurrent(state)) {
       return true;
     }
@@ -271,7 +267,7 @@ export class CodexNativeSubagentSubmissionOwner {
     }
   }
 
-  private capture(
+  capture(
     state: ParentState,
     receipt: CodexNativeSubagentSubmission,
     owner?: ParentOwner,
@@ -423,20 +419,54 @@ export class CodexNativeSubagentSubmissionOwner {
     return this.track(state, settlement());
   }
 
+  private async readSubmissionTurn(
+    state: ParentState,
+    custody: SubmissionCustody,
+  ): Promise<JsonObject | undefined> {
+    const receipt = custody.receipt;
+    const childThreadId = receipt.childThreadId;
+    if (!this.dependencies.prepareReceiver(state, childThreadId)) {
+      return undefined;
+    }
+    const response = await this.dependencies.client.request(
+      "thread/read",
+      { threadId: receipt.childThreadId, includeTurns: true },
+      { timeoutMs: 30_000 },
+    );
+    if (!this.isObserving(state, custody)) {
+      return undefined;
+    }
+    const thread = isJsonObject(response.thread) ? response.thread : undefined;
+    if (
+      readString(thread, "id") !== receipt.childThreadId ||
+      readThreadParentThreadId(thread) !== this.nativeParentThreadId(state, childThreadId)
+    ) {
+      return undefined;
+    }
+    const turns = (Array.isArray(thread?.turns) ? thread.turns : []).flatMap((turn) =>
+      isJsonObject(turn) ? [turn] : [],
+    );
+    const turn = findCodexNativeSuccessorTurn(
+      turns,
+      receipt.predecessorNativeTurnId,
+      receipt.submissionId,
+    );
+    if (!turn) {
+      return undefined;
+    }
+    const previous = this.dependencies.currentChild(childThreadId);
+    if (previous && !previous.terminal && previous.nativeTurnId !== receipt.submissionId) {
+      await this.dependencies.recovery.reconcileRegisteredChild(previous);
+    }
+    return this.isObserving(state, custody) ? turn : undefined;
+  }
+
   private async reconcile(state: ParentState, custody: SubmissionCustody): Promise<void> {
     if (!this.isObserving(state, custody)) {
       return;
     }
     try {
-      const childThreadId = custody.receipt.childThreadId;
-      const turn = await readCodexNativeSubmissionTurn(custody.receipt, {
-        client: this.dependencies.client,
-        recovery: this.dependencies.recovery,
-        prepareReceiver: () => this.dependencies.prepareReceiver(state, childThreadId),
-        isCurrent: () => this.isObserving(state, custody),
-        parentThreadId: () => this.nativeParentThreadId(state, childThreadId),
-        currentChild: () => this.dependencies.currentChild(childThreadId),
-      });
+      const turn = await this.readSubmissionTurn(state, custody);
       if (turn) {
         this.promote(state, custody, turn, true);
       }

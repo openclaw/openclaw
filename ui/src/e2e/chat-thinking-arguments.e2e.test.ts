@@ -154,7 +154,11 @@ suite.define(() => {
         });
 
         const composer = await openComposer(page, gateway);
+        await composer.click();
 
+        const thinking = page.locator('[data-chat-thinking-select="true"]');
+        await thinking.waitFor({ state: "visible" });
+        await expect.poll(() => thinking.getAttribute("data-chat-thinking-disabled")).toBe("false");
         await composer.fill("/think");
         await composer.press("Tab");
 

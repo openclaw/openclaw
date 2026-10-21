@@ -65,6 +65,7 @@ afterEach(() => {
     dispose();
   }
   document.body.replaceChildren();
+  delete document.documentElement.dataset.themeMode;
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -133,6 +134,87 @@ describe("board widget frame terminal failure message", () => {
       expect(message).toContain("authorization failed");
       expect(message).not.toContain("mcp.apps.sandboxOrigin");
     }
+  });
+});
+
+describe("board widget frame themes", () => {
+  it.each(["light", "dark"] as const)(
+    "seeds the sandbox's %s first paint and changes theme without navigating",
+    async (mode) => {
+      document.documentElement.dataset.themeMode = mode;
+      const widget = boardWidget({
+        sandboxUrl: "/mcp-app-sandbox?v=version&csp=policy",
+        sandboxOrigin: "https://sandbox.example",
+        sandboxPort: 18790,
+        viewTicket: "ticket",
+      });
+      const root = document.createElement("div");
+      document.body.append(root);
+      const owner = createBoardWidgetFrame({
+        active: () => true,
+        connected: () => root.isConnected,
+        context: () => gatewayContext(null),
+        refreshFrame: () => undefined,
+        reportContentHeight: () => {},
+        scrollBy: () => {},
+        resolveFrameUrl: () => () => "/widget?bt=ticket",
+        widget: () => widget,
+      });
+      disposers.push(() => owner.disconnect());
+      const update = mountFrame(owner, widget, root);
+      const frame = root.querySelector("iframe")!;
+      const source = frame.src;
+      expect(source).toBe(
+        `https://sandbox.example/mcp-app-sandbox?v=version&csp=policy#theme=${mode}`,
+      );
+      expect(frame.style.colorScheme).toBe(mode);
+      const post = vi.spyOn(frame.contentWindow!, "postMessage");
+      owner.postBoardHostState(frame);
+
+      const next = mode === "light" ? "dark" : "light";
+      document.documentElement.dataset.themeMode = next;
+      await Promise.resolve();
+      update();
+      expect(frame.style.colorScheme).toBe(next);
+      expect(post).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "openclaw:widget-theme", mode: next }),
+        "https://sandbox.example",
+      );
+      expect(frame.src).toBe(source);
+
+      widget.sandboxUrl = "/mcp-app-sandbox?v=next-version&csp=next-policy";
+      update();
+      expect(root.querySelector("iframe")).toBe(frame);
+      expect(frame.src).toBe(
+        `https://sandbox.example/mcp-app-sandbox?v=next-version&csp=next-policy#theme=${next}`,
+      );
+      expect(frame.style.colorScheme).toBe(next);
+    },
+  );
+
+  it("delivers theme changes to its frame until the owner disconnects", async () => {
+    const widget = boardWidget({ name: "theme" });
+    const owner = createTicketRefreshLifecycle(widget, async () => {});
+    disposers.push(() => owner.disconnect());
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    owner.bindFrame(frame);
+    owner.postBoardHostState(frame);
+    post.mockClear();
+
+    document.documentElement.dataset.themeMode = "light";
+    await Promise.resolve();
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "openclaw:widget-theme", mode: "light" }),
+      "*",
+    );
+
+    owner.disconnect();
+    post.mockClear();
+    document.documentElement.dataset.themeMode = "dark";
+    await Promise.resolve();
+    expect(post).not.toHaveBeenCalled();
   });
 });
 
@@ -430,6 +512,26 @@ describe("board widget frame message confirmation", () => {
 });
 
 describe("board widget frame ticket refresh", () => {
+  it("refreshes an already-expired restored ticket", async () => {
+    vi.useFakeTimers();
+    const refreshFrame = vi.fn(async () => undefined);
+    const widget = boardWidget({
+      name: "expired",
+      viewTicket: "expired-ticket",
+      viewTicketTtlMs: 0,
+    });
+    recordBoardWidgetTicketReceipt(widget);
+    const lifecycle = createTicketRefreshLifecycle(widget, refreshFrame);
+    try {
+      await vi.advanceTimersByTimeAsync(999);
+      expect(refreshFrame).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refreshFrame).toHaveBeenCalledExactlyOnceWith("expired");
+    } finally {
+      lifecycle.disconnect();
+    }
+  });
+
   it("pauses ticket refresh while inactive and retains its frame on activation", async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<p>Retained board</p>"));

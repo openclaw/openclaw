@@ -27,15 +27,18 @@ import {
   drainSessionStateForTest,
 } from "../../../test-utils/session-state-cleanup.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   captureSubagentCompletionReply,
   runSubagentAnnounceFlow,
 } from "../announce/subagent-announce.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
-import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 vi.mock("../../../context-engine/registry.js", { spy: true });
@@ -62,6 +65,7 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
   let stateDir = "";
   let caseState: "idle" | "active" | "failed" = "idle";
   let settleRootWork: ReturnType<typeof observeRootWork>;
+  let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
   const settle = (keepObserving = true) =>
     settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
   const worker = vi.mocked(stateWorker.runOpenClawStateWorkerOperation);
@@ -76,6 +80,7 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
     if (options.reuseStateDir && caseState !== "idle") {
       throw new Error("Previous subagent control fixture cleanup is incomplete");
     }
+    schedulerWork = observeSwarmSchedulerWork();
     caseState = "active";
     if (!options.reuseStateDir || !stateDir) {
       stateDir = await realpath(
@@ -110,6 +115,13 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
       return;
     }
     const failures: unknown[] = [];
+    let schedulerClosed = false;
+    try {
+      await schedulerWork.close();
+      schedulerClosed = true;
+    } catch (error) {
+      failures.push(error);
+    }
     try {
       await settle(false);
     } catch (error) {
@@ -118,14 +130,13 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
       vi.restoreAllMocks();
     }
     // Preserve stores and their environment if detached writers have not settled.
-    if (getActiveGatewayRootWorkCount() === 0) {
+    if (schedulerClosed && getActiveGatewayRootWorkCount() === 0) {
       try {
         // Shared fixtures clear durable rows through the registry owner before reusing workers.
         if (options.reuseStateDir) {
           worker.mockReset().mockImplementation(runSubagentStateWorkerOperation);
         }
         await resetSubagentRegistryForTests({ persist: options.reuseStateDir === true });
-        schedulerTesting.reset();
         if (options.reuseStateDir) {
           await drainSessionStateForTest({ stateDir });
           const target = {
@@ -209,6 +220,29 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
       return stateDir;
     },
     worker,
+    rejectRegistryWrites(reject: (row: SubagentRunRecord) => boolean, message: string) {
+      worker.mockImplementation((context, operation, operationOptions) =>
+        runSubagentStateWorkerOperation(
+          context,
+          (scope) =>
+            operation({
+              execute: async (command, executeOptions) => {
+                if (
+                  isSubagentRegistryWriteCommand(command) &&
+                  command.input.values.some((value) => {
+                    const row = rowToSubagentRunRecord(value);
+                    return row !== null && reject(row);
+                  })
+                ) {
+                  throw new Error(message);
+                }
+                return scope.execute(command, executeOptions);
+              },
+            }),
+          operationOptions,
+        ),
+      );
+    },
     gateway,
     announce,
     capture,

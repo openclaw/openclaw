@@ -21,7 +21,10 @@ import {
   hasOpenAICompletionsDeltaContent,
 } from "../providers/openai-completions-tool-calls.js";
 import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
-import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
+import {
+  appendAssistantMessageDiagnostic,
+  recordSuppressedReasoning,
+} from "../utils/diagnostics.js";
 import {
   createToolArgumentPreviewSchedule,
   parseStreamingJson,
@@ -159,6 +162,7 @@ export async function processCompletionsStream(
   const directContent: { block: TextBlock | ThinkingBlock | null } = { block: null };
   let currentTextSource: OpenAICompletionsTextSource | undefined;
   let sawReasoning = false;
+  let suppressedReasoning = false;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
   let pendingPostToolCallBytes = 0;
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
@@ -476,6 +480,10 @@ export async function processCompletionsStream(
       );
       const reasoningDeltas = reasoningBatch.deltas;
       const hasReasoningThinking = reasoningBatch.hasThinking;
+      if (hasReasoningThinking && !model.reasoning && !emitReasoning && !suppressedReasoning) {
+        suppressedReasoning = true;
+        recordSuppressedReasoning(output);
+      }
       // Share the content/refusal owner to avoid duplicate mirrored refusals.
       const contentDeltas = readOpenAICompletionsContentDeltas(
         choiceDelta.content,
@@ -654,6 +662,12 @@ export async function processCompletionsStream(
       timestamp: Date.now(),
       details: { processingMs: providerProcessingMs },
     });
+  }
+  if (suppressedReasoning) {
+    const error = recordSuppressedReasoning(output);
+    if (error) {
+      throw error;
+    }
   }
 }
 

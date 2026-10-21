@@ -3,10 +3,9 @@
 // config form draft so the embedded schema editor below stays in sync.
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { createSignal, onCleanup, untrack } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
@@ -15,7 +14,7 @@ import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { VoiceWakeEditorState } from "./talk-device.tsx";
 import {
-  isTalkGptLiveModel,
+  resolveTalkModelFamilySettings,
   resolveTalkRealtimeSelection,
   talkProviderRejectsTransport,
 } from "./talk-schema.ts";
@@ -43,7 +42,6 @@ type CatalogConnection = {
   gatewayUrl: string;
   client: GatewayClient | null;
   connected: boolean;
-  voiceWake: boolean;
 };
 
 function catalogConnection(gateway: ApplicationContext["gateway"]): CatalogConnection {
@@ -53,9 +51,6 @@ function catalogConnection(gateway: ApplicationContext["gateway"]): CatalogConne
     client: snapshot.client,
     connected:
       snapshot.phase === "connected" && hasOperatorReadAccess(snapshot.hello?.auth ?? null),
-    voiceWake:
-      isGatewayMethodAdvertised(snapshot, "voicewake.get") === true &&
-      isGatewayMethodAdvertised(snapshot, "voicewake.set") === true,
   };
 }
 
@@ -73,10 +68,6 @@ type ModelDefaultResetIntent = {
 /** Transports whose sessions are client-owned (`talk.client.create`). */
 const TALK_CLIENT_OWNED_TRANSPORTS = new Set(["webrtc", "provider-websocket"]);
 
-function gptLiveRejectsTransport(model: string | null, transport: string): boolean {
-  return isTalkGptLiveModel(model) && transport === "provider-websocket";
-}
-
 // Drafts and write ordering belong to the application Gateway, not a route
 // element. Weak ownership retains them across navigation without durable storage.
 const voiceWakeOwners = new WeakMap<ApplicationContext["gateway"], VoiceWakeSettingsOwner>();
@@ -86,7 +77,7 @@ class VoiceWakeSettingsOwner {
   private connection: CatalogConnection | null = null;
   private voiceWakeTimer: ReturnType<typeof setTimeout> | undefined;
   private voiceWakeWrite: VoiceWakeWrite | null = null;
-  private readonly listeners = new Set<() => void>();
+  private render?: () => void;
 
   constructor(private readonly gateway: ApplicationContext["gateway"]) {
     // Retire queued voice-wake writes synchronously, including while this route is absent.
@@ -99,25 +90,22 @@ class VoiceWakeSettingsOwner {
 
   private update(nextState: VoiceWakeEditorState) {
     this.value = nextState;
-    for (const notify of this.listeners) {
-      notify();
-    }
+    this.render?.();
   }
 
   subscribe(notify: () => void) {
-    this.listeners.add(notify);
+    this.render = notify;
     this.sync();
     const connection = this.connection;
     if (
       connection?.connected &&
-      connection.voiceWake &&
       this.state.kind !== "loading" &&
       (this.state.kind !== "ready" || this.state.phase === "saved")
     ) {
       void this.loadVoiceWake(connection);
     }
     return () => {
-      this.listeners.delete(notify);
+      this.render = undefined;
     };
   }
 
@@ -139,12 +127,11 @@ class VoiceWakeSettingsOwner {
 
   private sync() {
     const connection = catalogConnection(this.gateway);
-    const { gatewayUrl, client, connected, voiceWake } = connection;
+    const { gatewayUrl, client, connected } = connection;
     if (
       this.connection?.gatewayUrl === gatewayUrl &&
       this.connection.client === client &&
-      this.connection.connected === connected &&
-      this.connection.voiceWake === voiceWake
+      this.connection.connected === connected
     ) {
       return;
     }
@@ -168,13 +155,13 @@ class VoiceWakeSettingsOwner {
         ? { ...draft, phase: "pending", error: t("configPage.deviceTalk.triggerWordsDisconnected") }
         : { kind: "unavailable" },
     );
-    if (client && connected && voiceWake && !draft && this.listeners.size > 0) {
+    if (client && connected && !draft && this.render) {
       void this.loadVoiceWake(connection);
     }
   }
 
   private async loadVoiceWake(connection: CatalogConnection) {
-    if (!connection.client || !connection.voiceWake) {
+    if (!connection.client || !connection.connected) {
       return;
     }
     this.update({ kind: "loading" });
@@ -220,7 +207,7 @@ class VoiceWakeSettingsOwner {
     if (currentState.kind !== "ready" || currentState.phase === "saved") {
       return;
     }
-    if (!connection?.client || !connection.connected || !connection.voiceWake) {
+    if (!connection?.client || !connection.connected) {
       this.update({
         ...currentState,
         phase: "pending",
@@ -315,9 +302,8 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
   };
 
   function syncCatalog(connection: CatalogConnection) {
-    const { gatewayUrl, client, connected, voiceWake } = connection;
-    // Connection events inspect pending intent without subscribing the caller.
-    const intent = untrack(modelDefaultResetIntent);
+    const { gatewayUrl, client, connected } = connection;
+    const intent = modelDefaultResetIntent();
     if (intent && intent.gatewayUrl !== gatewayUrl) {
       setModelDefaultResetIntent(null);
     }
@@ -326,8 +312,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
     if (
       connectionValue?.gatewayUrl === gatewayUrl &&
       connectionValue.client === client &&
-      connectionValue.connected === connected &&
-      connectionValue.voiceWake === voiceWake
+      connectionValue.connected === connected
     ) {
       return;
     }
@@ -365,7 +350,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
 
   function acknowledgeModelDefaultReset(connection: CatalogConnection) {
     // An async catalog receipt acknowledges the current intent once.
-    const intent = untrack(modelDefaultResetIntent);
+    const intent = modelDefaultResetIntent();
     const configRevision = lastCatalogConfigRevision;
     // Without a public revision token, a ready catalog cannot prove the reset
     // was applied; retain provider-default metadata until an authoritative ack.
@@ -418,17 +403,17 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       const selection = liveSelection();
       const transport = selection.transport;
       const provider = selectedTalkProviderOption(catalog(), selection);
+      const family = resolveTalkModelFamilySettings(provider, model);
       const rejectsTransport =
         transport !== null &&
-        (gptLiveRejectsTransport(model, transport) ||
+        (family?.unsupportedTransports.some((candidate) => candidate === transport) ||
           talkProviderRejectsTransport(provider?.transports, transport));
       // Preserve configured transports unless the selected provider positively
       // advertises that it cannot serve them.
-      if (isTalkGptLiveModel(model) && rejectsTransport) {
+      if (family && rejectsTransport) {
         runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
       } else if (
-        provider?.id === "openai" &&
-        isTalkGptLiveModel(model) &&
+        family?.gatewayRelayHandlesAgentConsult &&
         transport === "gateway-relay" &&
         selection.consultRouting === "force-agent-consult"
       ) {
@@ -513,9 +498,10 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
         { ...selection, provider: providerId, model: null, speakerVoice: null },
         option,
       ).model ?? option?.defaultModel;
+    const family = resolveTalkModelFamilySettings(option, targetModel ?? null);
     const rejectsTransport =
       configuredTransport !== null &&
-      (gptLiveRejectsTransport(targetModel ?? null, configuredTransport) ||
+      (family?.unsupportedTransports.some((candidate) => candidate === configuredTransport) ||
         talkProviderRejectsTransport(option?.transports, configuredTransport));
     if (rejectsTransport) {
       runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
@@ -533,8 +519,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       resultingTransport = "gateway-relay";
     }
     if (
-      option?.id === "openai" &&
-      isTalkGptLiveModel(targetModel ?? null) &&
+      family?.gatewayRelayHandlesAgentConsult &&
       resultingTransport === "gateway-relay" &&
       selection.consultRouting === "force-agent-consult"
     ) {

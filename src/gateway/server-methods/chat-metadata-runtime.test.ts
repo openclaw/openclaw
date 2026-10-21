@@ -11,6 +11,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  chatMetadataCommandFields,
   createChatMetadataHarness as createHarness,
   createChatMetadataOwner,
   createDraftChatMetadataScope,
@@ -169,6 +170,7 @@ describe("gateway chat metadata runtime", () => {
     async (surface) => {
       const harness = await preparedHarness();
       await harness.read();
+      const compact = await harness.read({ includeModels: false });
       const coldReads = [
         harness.getPreparedOwner,
         harness.getPreparedAuthStore,
@@ -189,9 +191,10 @@ describe("gateway chat metadata runtime", () => {
         ]);
         expect(first?.defaultModelCatalog).toBe(first?.sessionModelCatalog);
         expect(first?.metadata).toEqual({
-          commands: [{ name: "command-1-1" }],
+          commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
           swarmEnabled: true,
         });
+        expect(first?.commandsRevision).toBe(compact.revision);
       }
       expect(harness.buildProjection).toHaveBeenCalledTimes(1);
       expect(coldReads.map((mock) => mock.mock.calls)).toEqual([[], [], [], []]);
@@ -220,7 +223,9 @@ describe("gateway chat metadata runtime", () => {
 
     expect(harness.readProjection).not.toHaveBeenCalled();
     const startup = await harness.runtime.readStartup({ agentId: "main" });
-    expect(startup?.metadata).toMatchObject({ commands: [{ name: "command-1-1" }] });
+    expect(startup?.metadata).toMatchObject({
+      commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
+    });
     expect(startup?.metadata).not.toHaveProperty("models");
     expect(harness.readProjection).not.toHaveBeenCalled();
   });
@@ -603,7 +608,10 @@ describe("gateway chat metadata runtime", () => {
       swarmEnabled: true,
     });
     await expect(overriddenStartup).resolves.toMatchObject({
-      metadata: { commands: [{ name: "command-1-1" }], swarmEnabled: true },
+      metadata: {
+        commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
+        swarmEnabled: true,
+      },
       sessionModelCatalog: [{ id: "replacement" }],
     });
     expect(await draftRead).toEqual(draft.error);

@@ -366,7 +366,8 @@ describe("custodian page", () => {
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
     setGatewayToken("new-operator-token");
     setGatewaySnapshot({
-      client: createContext(replacementRequest).context.gateway.snapshot.client,
+      client: createContext(replacementRequest, ["openclaw.chat", "openclaw.chat.history"]).context
+        .gateway.snapshot.client,
     });
     await waitForFast(() => expect(replacementRequest).toHaveBeenCalledTimes(2));
     await waitForFast(() => expect(page.textContent).toContain("Fresh safe welcome."));
@@ -487,7 +488,11 @@ describe("custodian page", () => {
       summary: "Replacement connection history",
     };
     const nextRequest = vi.fn(async (method: string) =>
-      method === "openclaw.changes.list" ? { entries: [entry] } : chatReply("Ready."),
+      method === "openclaw.chat.history"
+        ? { turns: [] }
+        : method === "openclaw.changes.list"
+          ? { entries: [entry] }
+          : chatReply("Ready."),
     );
     harness.setGatewaySnapshot({
       // SAFETY: This fixture supplies the request method used by the mounted page.
@@ -593,6 +598,7 @@ describe("custodian page", () => {
     Object.assign(context, { channels });
     await channels.refresh();
     await channels.refresh();
+    const previousSnapshot = channels.state.channelsSnapshot;
     expect(channels.state.channelsSnapshot).not.toBeNull();
     expect(channels.state.channelsError).toBe("status unavailable");
     const { page } = await mountPage(context, { onboarding: true });
@@ -601,7 +607,7 @@ describe("custodian page", () => {
     setGatewaySnapshot({ phase: "connected" });
 
     await waitForFast(() => expect(statusRequestCount).toBe(3));
-    expect(channels.state.channelsSnapshot).toBeNull();
+    expect(channels.state.channelsSnapshot).toBe(previousSnapshot);
     expect(channels.state.channelsLoading).toBe(true);
     expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();
 
@@ -799,28 +805,6 @@ describe("custodian page", () => {
       }
     },
   );
-
-  it("does not rotate against a replacement gateway without chat support", async () => {
-    const request = vi.fn().mockResolvedValue(chatReply("Existing welcome."));
-    const replacementRequest = vi.fn();
-    const { context, setGatewaySnapshot } = createContext(request);
-    const { page } = await mountPage(context);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    setGatewaySnapshot({
-      client: { request: replacementRequest } as unknown as GatewayBrowserClient,
-      hello: {
-        type: "hello-ok",
-        protocol: 1,
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: [] },
-      },
-    });
-    await waitForFast(() =>
-      expect(page.querySelector('[role="alert"]')?.textContent).toContain("Update the Gateway"),
-    );
-    expect(request).toHaveBeenCalledOnce();
-    expect(replacementRequest).not.toHaveBeenCalled();
-  });
 
   it("hides typed cancel when the Gateway does not advertise it", async () => {
     const request = vi.fn().mockResolvedValue(

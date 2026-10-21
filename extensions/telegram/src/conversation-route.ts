@@ -243,7 +243,7 @@ export function resolveTelegramOutboundDirectBaseSessionKey(params: {
   route: Pick<TelegramResolvedRoute, "agentId" | "accountId" | "sessionKey">;
   chatId: string;
 }): string {
-  const { agentId, matchedBy } = resolveAgentRoute({
+  const resolvedRoute = resolveAgentRoute({
     cfg: params.cfg,
     channel: "telegram",
     // Unbound destinations keep the caller's agent instead of requiring a fleet default.
@@ -251,10 +251,11 @@ export function resolveTelegramOutboundDirectBaseSessionKey(params: {
     accountId: params.route.accountId,
     peer: { kind: "direct", id: params.chatId },
   });
-  const isOwnBinding = normalizeAgentId(agentId) === normalizeAgentId(params.route.agentId);
+  const isOwnBinding =
+    normalizeAgentId(resolvedRoute.agentId) === normalizeAgentId(params.route.agentId);
   return resolveTelegramConversationBaseSessionKey({
     cfg: params.cfg,
-    route: { ...params.route, matchedBy: isOwnBinding ? matchedBy : "default" },
+    route: isOwnBinding ? resolvedRoute : { ...params.route, matchedBy: "default" },
     chatId: params.chatId,
     isGroup: false,
   });

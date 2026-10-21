@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { For, createSignal, onSettled } from "solid-js";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
 import {
   LearnMoreLink,
@@ -16,11 +16,12 @@ import {
 } from "../../lib/config/config-state-model.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
+import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
 import {
   labFeatureMergePatch,
@@ -32,9 +33,7 @@ import {
 
 export function LabsPage() {
   const context = useApplication();
-  // The mounted projection and request lifecycle are seeded once; source replacement is bound below.
-  const config = projectRuntimeConfig(untrack(() => context.runtimeConfig));
-  const lifecycle = createGatewayConnectionLifecycle(untrack(() => context.gateway.snapshot));
+  const config = projectRuntimeConfig(context.runtimeConfig);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   let pending: { featureId: string; value: boolean | string } | null = null;
   let saveError: string | null = null;
@@ -47,42 +46,17 @@ export function LabsPage() {
     revision();
     return saveError;
   };
-  // Config and Gateway replacements retire pending saves before reloading and resubscribing.
-  createEffect(
-    () => context.runtimeConfig,
-    (runtimeConfig) => {
-      config.replaceSource(runtimeConfig);
+  const page = useGatewayPage({
+    getGateway: () => context.gateway,
+    invalidateRequests: () => {
       pending = null;
       saveError = null;
       publish();
-      void runtimeConfig.ensureLoaded();
     },
-  );
-  createEffect(
-    () => context.gateway,
-    (gateway) => {
-      lifecycle.transition(gateway.snapshot);
-      // A same-tick reconnect must retire a save before Solid's next flush.
-      const unsubscribe = gateway.subscribe((snapshot) => {
-        if (context.gateway !== gateway) {
-          return;
-        }
-        if (lifecycle.transition(snapshot)) {
-          pending = null;
-          saveError = null;
-          publish();
-        }
-      });
-      return () => {
-        unsubscribe();
-        lifecycle.invalidate();
-        pending = null;
-        saveError = null;
-        publish();
-      };
-    },
-  );
-  onCleanup(() => lifecycle.dispose());
+  });
+  onSettled(() => {
+    void context.runtimeConfig.ensureLoaded();
+  });
 
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(config.read().state.configSnapshot);
@@ -112,7 +86,7 @@ export function LabsPage() {
     value: boolean | string,
     raw: Record<string, unknown>,
   ) {
-    const scope = lifecycle.capture();
+    const scope = page.capture();
     const gateway = context.gateway;
     const runtimeConfig = context.runtimeConfig;
     if (
@@ -123,7 +97,7 @@ export function LabsPage() {
       return;
     }
     const isCurrent = () =>
-      lifecycle.isCurrent(scope) &&
+      page.isCurrent(scope) &&
       context.gateway === gateway &&
       context.runtimeConfig === runtimeConfig;
     pending = { featureId, value };
@@ -308,52 +282,32 @@ export function LabsPage() {
           />
         )}
         {props.feature.id === "composerPredictions" ? (
-          <SettingsRow
+          <SettingsSelectRow
             nested
             title={t("labsPage.composerPredictions.model")}
             description={t("labsPage.composerPredictions.modelDescription")}
-            control={
-              <select
-                class="settings-select"
-                aria-label={t("labsPage.composerPredictions.model")}
-                value={predictionModel()}
-                disabled={!canToggle()}
-                onChange={(event) => setPredictionModel(event.currentTarget.value)}
-              >
-                <option value="utility" selected={predictionModel() === "utility"}>
-                  {t("labsPage.composerPredictions.utility")}
-                </option>
-                <option value="conversation" selected={predictionModel() === "conversation"}>
-                  {t("labsPage.composerPredictions.conversation")}
-                </option>
-                <option value="default" selected={predictionModel() === "default"}>
-                  {t("labsPage.composerPredictions.default")}
-                </option>
-              </select>
-            }
+            value={predictionModel()}
+            disabled={!canToggle()}
+            onChange={setPredictionModel}
+            options={[
+              { value: "utility", label: t("labsPage.composerPredictions.utility") },
+              { value: "conversation", label: t("labsPage.composerPredictions.conversation") },
+              { value: "default", label: t("labsPage.composerPredictions.default") },
+            ]}
           />
         ) : null}
         {props.feature.id === "codeMode" ? (
-          <SettingsRow
+          <SettingsSelectRow
             nested
             title={t("labsPage.codeMode.executor")}
             description={t("labsPage.codeMode.executorDescription")}
-            control={
-              <select
-                class="settings-select"
-                aria-label={t("labsPage.codeMode.executor")}
-                value={executorValue()}
-                disabled={!canToggle()}
-                onChange={(event) => setCodeModeExecutor(event.currentTarget.value)}
-              >
-                <option value="node" selected={executorValue() === "node"}>
-                  {t("labsPage.codeMode.executorNode")}
-                </option>
-                <option value="quickjs" selected={executorValue() === "quickjs"}>
-                  {t("labsPage.codeMode.executorQuickjs")}
-                </option>
-              </select>
-            }
+            value={executorValue()}
+            disabled={!canToggle()}
+            onChange={setCodeModeExecutor}
+            options={[
+              { value: "node", label: t("labsPage.codeMode.executorNode") },
+              { value: "quickjs", label: t("labsPage.codeMode.executorQuickjs") },
+            ]}
           />
         ) : null}
       </>

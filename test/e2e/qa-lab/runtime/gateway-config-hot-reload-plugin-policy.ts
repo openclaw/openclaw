@@ -98,7 +98,7 @@ export async function proveHotReloadPluginPolicy({
         await setEnabled(false);
         await routeState(false);
         const identity = loadOrCreateDeviceIdentity({
-          path: path.join(temporaryRoot, "state/openclaw.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
           identityKey: "canvas-hot-reload-node",
         });
         const connected = await connectHotReloadClient(gateway, {

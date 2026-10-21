@@ -6,7 +6,10 @@ import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/s
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
@@ -305,6 +308,18 @@ it.each(["header", "compaction"] as const)(
         });
         await waitProjection(scope);
       }
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          database.db
+            .prepare(`UPDATE transcript_events
+            SET navigation_type = NULL, navigation_custom_type = NULL,
+                navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+                navigation_last_custom_type = NULL, navigation_valid = 1
+            WHERE session_id = ?`)
+            .run(scope.sessionId);
+        },
+        { agentId: scope.agentId },
+      );
       const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
       const bytes = acquiredPayloadBytes(db, marker, () => {
         if (kind === "header") {

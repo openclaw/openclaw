@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { createLazyCustomElementRequests } from "../../../app/lazy-custom-element.ts";
 import { MarkdownBlocks } from "../../../components/markdown-blocks-owner.ts";
 import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
@@ -19,23 +19,6 @@ import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import { htmlPreviewElement, isHtmlDocument } from "./chat-html-preview.ts";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
-
-type HtmlPreviewProperties = Pick<
-  HTMLElementTagNameMap["openclaw-chat-html-preview"],
-  "html" | "sourceIdentity" | "sessionFileSource" | "title" | "embedSandboxMode"
->;
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-html-preview": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-chat-html-preview"]
-      > & {
-        [Key in keyof HtmlPreviewProperties as `prop:${Key}`]?: HtmlPreviewProperties[Key];
-      };
-    }
-  }
-}
 
 function MarkdownAttachment(props: { text: string; label: string }) {
   let article!: HTMLElement;
@@ -66,6 +49,7 @@ function MarkdownAttachment(props: { text: string; label: string }) {
 }
 
 type TextAttachmentProps = {
+  mobile: boolean;
   plainText: boolean;
   actions: SolidJSX.Element;
   embedSandboxMode: EmbedSandboxMode;
@@ -75,29 +59,17 @@ type TextAttachmentProps = {
   mimeType: string;
   sizeBytes: number | undefined;
 };
-export function isTextAttachment(rawMimeType: string, filename: string): boolean {
-  const mimeType = rawMimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  if (mimeType.startsWith("text/")) {
-    return true;
-  }
-  if (
-    /^application\/(?:(?:[\w.-]+\+)?(?:json|xml)|javascript|x-javascript|yaml|x-yaml)$/.test(
-      mimeType,
-    )
-  ) {
-    return true;
-  }
-  return (
-    (!mimeType || mimeType === "application/octet-stream") &&
-    /\.(?:txt|md|markdown|html?|log|csv|tsv|json|jsonl|xml|yaml|yml)$/i.test(filename)
-  );
-}
 
 function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<TextAttachmentProps>) {
   host.style.display = "contents";
   const [text, setText] = createSignal<string | null>(null);
   const [failed, setFailed] = createSignal(false);
-  const [source, setSource] = createSignal(false);
+  // A different attachment starts in preview mode; renewed tickets keep the chosen view.
+  const identity = createMemo(() => props.sourceIdentity);
+  const [source, setSource] = createSignal(() => {
+    identity();
+    return false;
+  });
   const [version, setVersion] = createSignal(0);
   const [retry, setRetry] = createSignal(0);
   const htmlPreviewLoader = createLazyCustomElementRequests({
@@ -138,70 +110,64 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
         before.retry === after.retry,
     },
   );
-  createEffect(sourceInput, (current, previous) => {
-    const policyChanged =
-      !previous ||
-      previous.plain !== current.plain ||
-      previous.mime !== current.mime ||
-      previous.label !== current.label;
-    const identityChanged = !previous || previous.identity !== current.identity;
-    const clear =
-      policyChanged ||
-      identityChanged ||
-      previous?.size !== current.size ||
-      previous?.retry !== current.retry ||
-      !current.src ||
-      !current.identity;
-    if (identityChanged) {
-      setSource(false);
-    }
-    if (clear) {
-      setText(null);
-    }
-    setFailed(false);
-    setVersion((value) => value + 1);
-    if (!current.src) {
-      return undefined;
-    }
-    const controller = new AbortController();
-    let active = true;
-    const isCurrent = () =>
-      active &&
-      host.isConnected &&
-      host.src === current.src &&
-      host.sourceIdentity === current.identity &&
-      host.sizeBytes === current.size &&
-      host.plainText === current.plain &&
-      host.mimeType === current.mime &&
-      host.label === current.label;
-    void readAttachmentText(
-      current.src,
-      current.size,
-      controller.signal,
-      current.html ? "html" : "full",
-    ).then(
-      (value) => {
-        if (isCurrent()) {
-          setText(value);
-        }
-      },
-      () => {
-        if (isCurrent()) {
-          setText(null);
-          setFailed(true);
-        }
-      },
-    );
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  });
-  createEffect(
-    () => htmlDocument() && text() !== null && !failed(),
-    (active) => htmlPreviewLoader.requestWhileActive(htmlPreviewElement, active),
-  );
-  onCleanup(() => htmlPreviewLoader.requestWhileActive(htmlPreviewElement, false));
+  let previous: ReturnType<typeof sourceInput> | undefined;
+  const readSource = (current: ReturnType<typeof sourceInput>) => {
+    onSettled(() => {
+      const clear =
+        !previous ||
+        previous.plain !== current.plain ||
+        previous.mime !== current.mime ||
+        previous.label !== current.label ||
+        previous.identity !== current.identity ||
+        previous.size !== current.size ||
+        previous.retry !== current.retry ||
+        !current.src ||
+        !current.identity;
+      if (clear) {
+        setText(null);
+      }
+      previous = current;
+      setFailed(false);
+      setVersion((value) => value + 1);
+      if (!current.src) {
+        return undefined;
+      }
+      const controller = new AbortController();
+      let active = true;
+      const isCurrent = () =>
+        active &&
+        host.isConnected &&
+        host.src === current.src &&
+        host.sourceIdentity === current.identity &&
+        host.sizeBytes === current.size &&
+        host.plainText === current.plain &&
+        host.mimeType === current.mime &&
+        host.label === current.label;
+      void readAttachmentText(
+        current.src,
+        current.size,
+        controller.signal,
+        current.html ? "html" : "full",
+      ).then(
+        (value) => {
+          if (isCurrent()) {
+            setText(value);
+          }
+        },
+        () => {
+          if (isCurrent()) {
+            setText(null);
+            setFailed(true);
+          }
+        },
+      );
+      return () => {
+        active = false;
+        controller.abort();
+      };
+    });
+    return null;
+  };
   const htmlLoadState = () => {
     const state = previewState.read();
     return state?.status === "error" ? (
@@ -223,6 +189,18 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
   );
   return (
     <>
+      <Show when={sourceInput()} keyed>
+        {readSource}
+      </Show>
+      <Show when={htmlDocument() && text() !== null && !failed()}>
+        {(_active) => {
+          onSettled(() => {
+            htmlPreviewLoader.requestWhileActive(htmlPreviewElement, true);
+            return () => htmlPreviewLoader.requestWhileActive(htmlPreviewElement, false);
+          });
+          return null;
+        }}
+      </Show>
       <div class="sidebar-file-toolbar">
         <span class="sidebar-file-toolbar__type" title={props.mimeType}>
           {props.mimeType || props.label.split(".").at(-1)}
@@ -258,16 +236,18 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
                   : t("chat.detailPanel.viewRawText")}
             </button>
           )}
-          <a
-            class="rail-header__action"
-            href={props.src || undefined}
-            download={props.label}
-            target="_blank"
-            rel="noreferrer"
-            aria-label={t("chat.mediaPlayer.download", { filename: props.label })}
-          >
-            <Icon name="download" />
-          </a>
+          <Show when={!props.mobile}>
+            <a
+              class="rail-header__action"
+              href={props.src || undefined}
+              download={props.label}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={t("chat.mediaPlayer.download", { filename: props.label })}
+            >
+              <Icon name="download" />
+            </a>
+          </Show>
         </span>
       </div>
       {failed() ? (
@@ -318,6 +298,7 @@ export const ChatTextAttachment = defineSolidBridge<TextAttachmentProps>(
   TextAttachment,
   {
     properties: {
+      mobile: { default: false },
       plainText: { default: false },
       actions: { default: undefined, attribute: false },
       embedSandboxMode: { default: "scripts" },

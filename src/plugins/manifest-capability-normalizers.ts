@@ -25,6 +25,8 @@ import type {
   PluginManifestMcpServer,
   PluginManifestMediaUnderstandingCapability,
   PluginManifestMediaUnderstandingProviderMetadata,
+  PluginManifestOnboardingScope,
+  PluginManifestProviderAuthChoice,
   PluginManifestProviderBaseUrlGuard,
   PluginManifestSecretInputContracts,
   PluginManifestSecretInputPath,
@@ -32,6 +34,20 @@ import type {
   PluginManifestToolProfile,
   PluginManifestTranscriptSource,
 } from "./manifest-types.js";
+
+export function normalizeProviderAssistantVisibility(
+  value: unknown,
+): PluginManifestProviderAuthChoice["assistantVisibility"] {
+  return value === "visible" || value === "manual-only" || value === "detected-only"
+    ? value
+    : undefined;
+}
+
+export function isPluginManifestOnboardingScope(
+  value: unknown,
+): value is PluginManifestOnboardingScope {
+  return value === "text-inference" || value === "image-generation" || value === "music-generation";
+}
 
 // Accept only bounded declarative facts; unknown or malformed fields never enter tool guidance.
 function normalizeDecisionCapabilities(value: unknown): DecisionProviderCapabilities | undefined {

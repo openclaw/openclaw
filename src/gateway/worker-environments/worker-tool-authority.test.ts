@@ -295,6 +295,37 @@ describe("resolveWorkerToolAuthority", () => {
     expect(await authority({ toolsAllow: [] })).toEqual([]);
   });
 
+  it.each([
+    { senderId: "restricted", expected: ["read"] },
+    { senderId: "authorized", expected: ["read", "write", "apply_patch"] },
+  ])(
+    "projects destination policy for original requester $senderId",
+    async ({ senderId, expected }) => {
+      expect(
+        await authority({
+          senderId: "worker-route-sender",
+          senderIsOwner: true,
+          toolsAllow: ["read", "write"],
+          config: {
+            agents: {
+              entries: {
+                research: { tools: { deny: ["write", "apply_patch"] } },
+                main: {
+                  tools: { toolsBySender: { "id:restricted": { deny: ["write", "apply_patch"] } } },
+                },
+              },
+            },
+          },
+          requesterOrigin: {
+            sessionKey: "agent:research:whatsapp:group:requesters",
+            messageProvider: "whatsapp",
+            senderId,
+          },
+        }),
+      ).toEqual(expected);
+    },
+  );
+
   it("applies current owner policy and the appropriate sender overlays", async () => {
     const denyWrites = { deny: ["write", "apply_patch"] };
     const toolsAllow = ["read", "write", "exec"];

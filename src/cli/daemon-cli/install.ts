@@ -63,6 +63,7 @@ import {
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
+import { omitSecretEgressProxyEnvironment } from "../../secrets/egress-proxy/environment.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
@@ -121,7 +122,9 @@ export function mergeInstallInvocationEnv(params: {
   const platform = params.platform ?? process.platform;
   const normalizeInstallEnvKey = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
   const currentEnv: NodeJS.ProcessEnv = {};
-  for (const [rawKey, rawValue] of Object.entries(params.env)) {
+  for (const [rawKey, rawValue] of Object.entries(
+    omitSecretEgressProxyEnvironment(params.env, platform),
+  )) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (!key || isDangerousHostEnvVarName(key)) {
       continue;

@@ -1,15 +1,29 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
 import { markRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
+import { createRestartRecoveryRequesterSource } from "../agents/requester-run-recovery-source.js";
+import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry-read.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { appendTranscriptMessage, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
+import type { SessionControllerInput } from "../sessions/session-controller.contracts.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import {
+  isRpcSourceExecuting,
+  updateRpcSourceSessionId,
+} from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -23,6 +37,7 @@ import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-supp
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
 import { authorizeGatewayMethod } from "./server-methods/method-authorization.js";
+import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 const startTurn = vi.hoisted(() => vi.fn<ReturnType<typeof createAgentTurnService>["startTurn"]>());
 
@@ -73,12 +88,18 @@ const recoveryRequest = (target: OperatorRecoveryTarget) => ({
   idempotencyKey: target.recoveryRunId,
 });
 function registerRecovery(
-  context: ReturnType<typeof chatContext>,
   target: OperatorRecoveryTarget,
   runId = target.recoveryRunId,
+  sourceInput?: SessionControllerInput,
 ) {
   const registration = registerChatAbortController({
-    chatAbortControllers: context.chatAbortControllers,
+    target: captureSessionTarget({
+      storeScope: target.storePath,
+      sessionKey: target.sessionKey,
+      incarnation: target.sessionId,
+      agentId: target.agentId,
+    }),
+    sourceInput,
     runId,
     agentId: "main",
     sessionKey: target.sessionKey,
@@ -149,7 +170,16 @@ describe("typed restart recovery operator admission", () => {
           await markRestartAbortedMainSessions({
             resolveGatewayContext: () => context,
             stateDir,
-            activeRuns: [{ sessionKey, sessionId, runId, lifecycleGeneration: generation }],
+            activeRuns: [
+              {
+                storePath: target.storePath,
+                agentId: target.agentId,
+                sessionKey,
+                sessionId,
+                runId,
+                lifecycleGeneration: generation,
+              },
+            ],
             isActiveRun: () => true,
           });
           rotateAgentEventLifecycleGeneration();
@@ -159,21 +189,28 @@ describe("typed restart recovery operator admission", () => {
           const runtime = createRuntime(() => context);
           const finish = createDeferred();
           let registration: ReturnType<typeof registerChatAbortController> | undefined;
-          startTurn.mockImplementation(async ({ preflight, principal, io }) => {
-            runId = expectDefined(preflight.request.idempotencyKey, "recovery run");
-            const authority = expectDefined(
-              principal?.internal?.operatorRunAuthority,
-              "restored source authority",
-            );
-            expect(authority.profileId).toBe(profileId);
-            expect(authority.assertCurrent).not.toThrow();
-            registration = registerRecovery(context, target, runId);
-            io.emitStartOwner?.(runId, registration.entry);
-            registration.markExecutionStarted();
-            io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
-            io.emitExecutionStarted?.();
-            await finish.promise;
-            io.emitFinal([true, { runId, status: "ok" }, undefined]);
+          let execution: Promise<void> | undefined;
+          let releaseTurn: (() => void) | undefined;
+          startTurn.mockImplementation(({ controllerInput, preflight, principal, io }) => {
+            execution = (async () => {
+              runId = expectDefined(preflight.request.idempotencyKey, "recovery run");
+              const authority = expectDefined(
+                principal?.internal?.operatorRunAuthority,
+                "restored source authority",
+              );
+              expect(authority.profileId).toBe(profileId);
+              expect(authority.assertCurrent).not.toThrow();
+              registration = registerRecovery(target, runId, controllerInput);
+              io.emitStartOwner?.(runId, registration.entry);
+              registration.initializeTiming();
+              releaseTurn = await claimRpcSourceForTest(registration.entry);
+              expect(registration.markExecutionStarted()).toBe(true);
+              io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
+              io.emitExecutionStarted?.();
+              await finish.promise;
+              io.emitFinal([true, { runId, status: "ok" }, undefined]);
+            })();
+            return execution;
           });
           try {
             const denied = revoked && attempt === 1;
@@ -202,13 +239,120 @@ describe("typed restart recovery operator admission", () => {
           } finally {
             runtime.close();
             finish.resolve();
-            await startTurn.mock.results.at(-1)?.value;
-            registration?.cleanup();
+            try {
+              await execution;
+            } finally {
+              releaseTurn?.();
+              registration?.cleanup();
+              await registration?.entry?.input.settlement.promise;
+            }
           }
         }
       }, true);
     },
   );
+  it("resumes a retained channel requester after its child completion cohort is gone", async () => {
+    await withRecovery(async (fixture) => {
+      const { context, stateDir } = fixture;
+      const target = {
+        ...fixture.target,
+        sourceRunId: "announce:requester-settle:main:parent:completed-child:yield-1",
+      };
+      const requesterOrigin = {
+        sessionKey: "agent:main:slack:channel:original-requester",
+        messageProvider: "slack",
+        senderId: "original-channel-requester",
+      };
+      const entry = {
+        ...fixture.entry,
+        restartRecoveryDeliverySourceRunId: target.sourceRunId,
+        restartRecoveryOperatorSource: undefined,
+      };
+      await replaceSessionEntry(target, {
+        ...entry,
+        restartRecoveryRequesterSource: expectDefined(
+          createRestartRecoveryRequesterSource({ ...target, entry, requesterOrigin }),
+          "retained channel requester",
+        ),
+      });
+      await appendTranscriptMessage(target, {
+        message: {
+          role: "user",
+          content: "Use the completed child's findings to finish my original request.",
+          provenance: {
+            kind: "inter_session",
+            sourceTool: "subagent_settle",
+            sourceSessionKey: "agent:main:subagent:completed-child",
+          },
+        },
+      });
+      await appendTranscriptMessage(target, {
+        message: { role: "assistant", content: [], stopReason: "aborted" },
+      });
+      const marked = await markRestartAbortedMainSessions({
+        resolveGatewayContext: () => context,
+        stateDir,
+        activeRuns: [
+          {
+            storePath: target.storePath,
+            agentId: target.agentId,
+            sessionKey: target.sessionKey,
+            sessionId: target.sessionId,
+            runId: target.recoveryRunId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          },
+        ],
+        isActiveRun: () => true,
+      });
+      expect(marked).toEqual({ marked: 1, skipped: 0 });
+      rotateAgentEventLifecycleGeneration();
+      expect(listSubagentRunsForRequester(target.sessionKey)).toEqual([]);
+      using runtime = createRuntime(() => context);
+      const finish = createDeferred();
+      let registration: ReturnType<typeof registerChatAbortController> | undefined;
+      let releaseTurn: (() => void) | undefined;
+      startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
+        const runId = expectDefined(preflight.request.idempotencyKey, "recovery run");
+        registration = registerRecovery(target, runId, controllerInput);
+        io.emitStartOwner?.(runId, registration.entry);
+        registration.initializeTiming();
+        releaseTurn = await claimRpcSourceForTest(registration.entry);
+        expect(registration.markExecutionStarted()).toBe(true);
+        io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
+        io.emitExecutionStarted?.();
+        await finish.promise;
+        io.emitFinal([true, { runId, status: "ok" }, undefined]);
+      });
+      try {
+        const outcome = await recoverStore({
+          cfg: {},
+          storePath: target.storePath,
+          stateDir,
+          handledSessionKeys: new Set(),
+          expectedTarget: target,
+          gatewayRuntime: runtime.recovery,
+        });
+        expect(outcome).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
+        expect(startTurn).toHaveBeenCalledOnce();
+        const principal = expectDefined(
+          startTurn.mock.calls[0]?.[0].principal,
+          "recovered principal",
+        );
+        expect(principal.internal?.agentToolCaller?.requesterOrigin).toEqual(requesterOrigin);
+        expect(principal.internal?.operatorRunAuthority).toBeUndefined();
+      } finally {
+        finish.resolve();
+        try {
+          await startTurn.mock.results.at(-1)?.value;
+        } finally {
+          releaseTurn?.();
+          registration?.cleanup();
+          await registration?.entry?.input.settlement.promise;
+        }
+      }
+    }, true);
+  });
+
   it.each(["agentId", "sessionKey", "expectedExistingSessionId", "idempotencyKey"] as const)(
     "rejects dispatch before authority restoration when %s differs from the original claim",
     async (field) => {
@@ -220,16 +364,63 @@ describe("typed restart recovery operator admission", () => {
           runtime.recovery.dispatchAgent(request, undefined, {
             restartRecoveryOperatorTarget: target,
           }),
-        ).rejects.toThrow("dispatch does not match its operator claim");
+        ).rejects.toThrow("dispatch does not match its source claim");
         expect(startTurn).not.toHaveBeenCalled();
       });
     },
   );
 
-  it.each(["authenticated operator", "legacy claim"] as const)(
-    "applies the actual admin-method fence to a %s principal",
-    async (source) => {
-      await withRecovery(async ({ target, context }) => {
+  it.each([
+    { source: "authenticated operator", operator: true, requester: "absent", expected: "accepted" },
+    { source: "legacy claim", operator: false, requester: "absent", expected: "scope refusal" },
+    { source: "matching requester", operator: true, requester: "matching", expected: "accepted" },
+    {
+      source: "native queued requester",
+      operator: true,
+      requester: "matching",
+      expected: "accepted",
+    },
+    {
+      source: "native queued mismatched requester",
+      operator: true,
+      requester: "different",
+      expected: "identity refusal",
+    },
+    {
+      source: "mismatched requester",
+      operator: true,
+      requester: "different",
+      expected: "identity refusal",
+    },
+    {
+      source: "requester without operator authority",
+      operator: false,
+      requester: "matching",
+      expected: "identity refusal",
+    },
+  ] as const)(
+    "applies recovery admission and the actual admin-method fence to $source",
+    async ({ source, operator, requester, expected }) => {
+      await withRecovery(async (fixture) => {
+        const { target, context, entry, profileId } = fixture;
+        const queued = source.startsWith("native queued");
+        const requesterOrigin = {
+          sessionKey: target.sessionKey,
+          operatorProfileId: requester === "matching" ? profileId : "another-requester",
+        };
+        if (requester !== "absent" && !queued) {
+          await replaceSessionEntry(target, {
+            ...entry,
+            restartRecoveryRequesterSource: expectDefined(
+              createRestartRecoveryRequesterSource({
+                ...target,
+                entry,
+                requesterOrigin,
+              }),
+              "host-captured requester source",
+            ),
+          });
+        }
         const registry = createGatewayMethodRegistry([
           {
             name: "cron.add",
@@ -253,14 +444,40 @@ describe("typed restart recovery operator admission", () => {
               : [true, { runId: target.recoveryRunId, status: "ok" }, undefined],
           );
         });
-        const options = {
-          restartRecoveryOperatorTarget: source === "authenticated operator" ? target : undefined,
-        };
-        const result = runtime.recovery.dispatchAgent(recoveryRequest(target), undefined, options);
-        if (source === "authenticated operator") {
-          await expect(result).resolves.toMatchObject({ status: "ok" });
-        } else {
-          await expect(result).rejects.toThrow("missing scope: operator.admin");
+        const retained = queued
+          ? expectDefined(await fixture.restore(), "queued source authority")
+          : undefined;
+        const options = queued
+          ? {
+              operatorRunAuthority: retained?.authority,
+              agentToolCaller: {
+                agentId: "main",
+                sessionKey: target.sessionKey,
+                requesterOrigin,
+              },
+            }
+          : {
+              restartRecoveryOperatorTarget: operator ? target : undefined,
+              restartRecoveryRequesterTarget: requester !== "absent" ? target : undefined,
+            };
+        try {
+          const result = runtime.recovery.dispatchAgent(
+            recoveryRequest(target),
+            undefined,
+            options,
+          );
+          if (expected === "accepted") {
+            await expect(result).resolves.toMatchObject({ status: "ok" });
+            expect(startTurn).toHaveBeenCalledOnce();
+          } else if (expected === "identity refusal") {
+            await expect(result).rejects.toThrow("requester has no matching operator authority");
+            expect(startTurn).not.toHaveBeenCalled();
+          } else {
+            await expect(result).rejects.toThrow("missing scope: operator.admin");
+            expect(startTurn).toHaveBeenCalledOnce();
+          }
+        } finally {
+          retained?.release();
         }
       });
     },
@@ -269,26 +486,53 @@ describe("typed restart recovery operator admission", () => {
   it.each([
     "registration replaced",
     "registration aborted",
+    "caller admission revoked",
     "lifecycle rotated",
     "Gateway closed",
     "Gateway context replaced",
   ] as const)("refuses retained operator work after its exact %s", async (boundary) => {
-    await withRecovery(async ({ target, context }) => {
+    await withRecovery(async ({ target, context, entry, profileId }) => {
       let activeContext = context;
-      const registration = registerRecovery(context, target);
+      const registration = registerRecovery(target);
       using runtime = createRuntime(() => activeContext);
       const entered = createDeferred<AgentTurnPrincipal>();
       const finish = createDeferred();
-      startTurn.mockImplementation(async ({ principal, io }) => {
+      let admissionCurrent = true;
+      let executionStarted = false;
+      let cancellationCurrent: (() => void) | undefined;
+      let releaseTurn: (() => void) | undefined;
+      startTurn.mockImplementation(async ({ principal, io, assertCancellationCurrent }) => {
+        cancellationCurrent = assertCancellationCurrent;
         const currentPrincipal = expectDefined(principal, "typed recovery principal");
         const runId = target.recoveryRunId;
         io.emitStartOwner?.(runId, registration.entry);
         io.emitAcceptance([true, { runId, status: "accepted" }, undefined], { runId });
+        if (boundary === "registration replaced") {
+          registration.initializeTiming();
+          releaseTurn = await claimRpcSourceForTest(registration.entry);
+          expect(registration.markExecutionStarted()).toBe(true);
+          io.emitExecutionStarted?.();
+        }
         entered.resolve(currentPrincipal);
         await finish.promise;
         io.emitFinal([true, { runId, status: "ok" }, undefined]);
       });
-      const options = { restartRecoveryOperatorTarget: target, expectFinal: true };
+      const options = {
+        restartRecoveryOperatorTarget: target,
+        expectFinal: true,
+        assertAdmissionCurrent: () => {
+          if (!admissionCurrent) {
+            throw new Error("Recovery admission ended after execution started");
+          }
+        },
+        ...(boundary === "registration replaced"
+          ? {
+              onExecutionStarted: () => {
+                executionStarted = true;
+              },
+            }
+          : {}),
+      };
       const pending = runtime.recovery.dispatchAgent(recoveryRequest(target), undefined, options);
       try {
         const principal = await awaitGateBeforeSettlement(
@@ -302,13 +546,51 @@ describe("typed restart recovery operator admission", () => {
         );
         expect(authority.assertCurrent).not.toThrow();
         if (boundary === "registration replaced") {
-          // Same correlation identity cannot transfer the old registration's authority.
-          context.chatAbortControllers.set(target.recoveryRunId, {
-            ...registration.entry,
-            controller: new AbortController(),
+          expect(executionStarted).toBe(true);
+          expect(isRpcSourceExecuting(registration.entry)).toBe(true);
+          const accepted = await acceptCompactionSuccessor({
+            currentTarget: target,
+            expectedEntry: {
+              sessionId: entry.sessionId,
+              lifecycleRevision: entry.lifecycleRevision,
+              activeWriterRunId: entry.activeWriterRunId,
+            },
+            assertActive: authority.assertCurrent,
+            result: {
+              ok: true,
+              compacted: true,
+              result: { sessionId: "runtime-successor", tokensBefore: 120, tokensAfter: 42 },
+            },
           });
+          // Match the execution owner's onSessionIdChanged on this same registration.
+          updateRpcSourceSessionId(registration.entry, accepted.entry.sessionId);
+          expect(authority.assertCurrent).not.toThrow();
+          admissionCurrent = false;
+          expect(authority.assertCurrent).not.toThrow();
+          // Same correlation identity cannot transfer the old registration's authority.
+          rpcSourceTesting.set(
+            target.recoveryRunId,
+            createRpcSourceForTest(
+              {},
+              {
+                runId: target.recoveryRunId,
+                storeScope: target.storePath,
+                sessionKey: target.sessionKey,
+                sessionId: target.sessionId,
+                agentId: target.agentId,
+              },
+            ),
+          );
         } else if (boundary === "registration aborted") {
           registration.controller.abort(new Error("Recovery aborted"));
+          const assertCancellation = expectDefined(cancellationCurrent, "cancellation authority");
+          expect(assertCancellation).not.toThrow();
+          setUserProfileRole(profileId, "changed-role");
+          expect(assertCancellation).toThrow();
+        } else if (boundary === "caller admission revoked") {
+          admissionCurrent = false;
+          registration.controller.abort(new Error("Recovery caller revoked"));
+          expect(expectDefined(cancellationCurrent, "cancellation authority")).toThrow();
         } else if (boundary === "lifecycle rotated") {
           rotateAgentEventLifecycleGeneration();
         } else if (boundary === "Gateway closed") {
@@ -319,14 +601,22 @@ describe("typed restart recovery operator admission", () => {
         expect(authority.assertCurrent).toThrow();
         if (boundary === "registration replaced") {
           // Once refusal is observed, putting the same old row back cannot revive tools.
-          context.chatAbortControllers.set(target.recoveryRunId, registration.entry);
+          rpcSourceTesting.set(target.recoveryRunId, registration.entry);
           expect(authority.assertCurrent).toThrow();
+          admissionCurrent = true;
+          registration.controller.abort(new Error("Replaced recovery aborted"));
+          expect(expectDefined(cancellationCurrent, "cancellation authority")).toThrow();
         }
       } finally {
         finish.resolve();
-        await pending.catch(() => undefined);
-        await startTurn.mock.results.at(-1)?.value;
-        registration.cleanup();
+        try {
+          await pending.catch(() => undefined);
+          await startTurn.mock.results.at(-1)?.value;
+        } finally {
+          releaseTurn?.();
+          registration.cleanup();
+          await registration.entry.input.settlement.promise;
+        }
       }
     });
   });

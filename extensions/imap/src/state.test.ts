@@ -2,7 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { resolveImapConfig } from "./config.js";
 import { createImapTestRuntime } from "./imap-test-support.js";
-import { countImapSkip, initializeImapCursor, rememberImapMessage } from "./state.js";
+import { initializeImapCursor, rememberImapMessage } from "./state.js";
 
 describe("IMAP cursor initialization", () => {
   const previous = { uidValidity: "1", lastSeenUid: 42, updatedAt: 123 };
@@ -148,12 +148,5 @@ describe("IMAP durable watcher state", () => {
     }
     expect(await rememberImapMessage(state, "account", "<100@example.com>")).toBe(false);
     expect((await state.messageIds.lookup("account"))?.messageIds).toHaveLength(100);
-  });
-
-  it("increments final account skip counters", async () => {
-    const { state } = createImapTestRuntime();
-    await countImapSkip(state, "account", "temperror");
-    await countImapSkip(state, "account", "temperror");
-    expect(await state.skips.lookup("account:temperror")).toEqual({ count: 2 });
   });
 });

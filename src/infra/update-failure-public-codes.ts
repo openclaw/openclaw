@@ -98,6 +98,7 @@ const PUBLIC_CODES = new Set<string>([
   "finalization-timeout",
   "finalization-failed",
   "no-output-timeout",
+  "output-limit",
   "signal",
   "readyz-unhealthy",
   "service-not-running",

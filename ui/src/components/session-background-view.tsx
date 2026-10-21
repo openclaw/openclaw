@@ -1,7 +1,8 @@
-import { createEffect, createMemo } from "solid-js";
+import { createMemo, onSettled, Show, useContext } from "solid-js";
 import type { ApplicationContext } from "../app/context.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
+import { SessionBackgroundLayoutContext } from "./session-background-layout-context.tsx";
 import type { SessionBackground } from "./session-background.tsx";
 
 const renderer = createIdleImport(() => import("./session-background.tsx"));
@@ -14,6 +15,7 @@ type Props = {
 
 /** Unset/None startup needs no image renderer, styles, transport, or geometry work. */
 export function SessionBackgroundView(props: Props) {
+  const layout = useContext(SessionBackgroundLayoutContext);
   const theme = createMemo(() => props.context?.theme);
   const background = createMemo(() => {
     const source = theme();
@@ -29,19 +31,25 @@ export function SessionBackgroundView(props: Props) {
       (props.surface === "new-session" ? preference.showOnNewSession : preference.showInSessions),
     );
   });
-  createEffect(active, (value) => {
-    if (value) {
-      void renderer.load().catch(() => undefined);
-    }
-  });
   return (
-    <openclaw-session-background
-      aria-hidden="true"
-      hidden={!active()}
-      prop:context={props.context}
-      prop:surface={props.surface}
-      prop:presented={props.presented !== false}
-    />
+    <>
+      <Show when={active()}>
+        {(_active) => {
+          onSettled(() => {
+            void renderer.load().catch(() => undefined);
+          });
+          return null;
+        }}
+      </Show>
+      <openclaw-session-background
+        aria-hidden="true"
+        hidden={!active()}
+        prop:context={props.context}
+        prop:surface={props.surface}
+        prop:presented={props.presented !== false}
+        prop:layoutTargets={layout?.targets()}
+      />
+    </>
   );
 }
 
@@ -52,6 +60,7 @@ declare module "@solidjs/web" {
         "prop:context"?: ApplicationContext;
         "prop:surface"?: SessionBackground["surface"];
         "prop:presented"?: boolean;
+        "prop:layoutTargets"?: SessionBackground["layoutTargets"];
       };
     }
   }

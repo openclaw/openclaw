@@ -321,25 +321,6 @@ describe("convertResponsesToolPayload", () => {
       },
     ]);
   });
-
-  it("does not reread an unreadable tool inventory length", () => {
-    const tools = new Proxy([], {
-      get(target, property, receiver) {
-        if (property === "length") {
-          throw new Error("length exploded");
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
-    const params = {} as never;
-
-    applyCommonResponsesParams(params, nativeOpenAIModel, {
-      messages: [{ role: "user", content: "hello", timestamp: 1 }],
-      tools,
-    } as never);
-
-    expect(params).not.toHaveProperty("tools");
-  });
 });
 
 const eventTypes = (events: AssistantMessageEvent[]) => events.map((event) => event.type);
@@ -370,6 +351,21 @@ function replayMessages(
 ) {
   return convertResponsesMessages(model, { messages }, testAllowedToolCallProviders, options);
 }
+
+it.each([
+  [null, null],
+  [undefined, "auto"],
+] as const)("sends common Responses summary %s as %s", (reasoningSummary, expected) => {
+  const params = {} as { reasoning?: unknown };
+  applyCommonResponsesParams(
+    params as never,
+    nativeOpenAIModel,
+    { messages: [] },
+    { reasoningEffort: "medium", reasoningSummary },
+  );
+
+  expect(params.reasoning).toEqual({ effort: "medium", summary: expected });
+});
 
 it("drops Responses temperature for the GPT-5.6 family that rejects it", () => {
   const params = {} as never;

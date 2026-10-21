@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -123,7 +122,7 @@ export function createSessionRowProjectionRevisions(
         !previous ||
         previous.generation !== row.generation ||
         previous.hasBoard !== row.hasBoard ||
-        !isDeepStrictEqual(previous.entry, row.entry);
+        previous.entry !== row.entry;
       invalidate(changed);
       publishFacts(row);
       if (changed) {

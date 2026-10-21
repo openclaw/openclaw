@@ -1,4 +1,4 @@
-import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
+import * as crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import {
@@ -10,15 +10,22 @@ import type { Message, TextContent } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { transformTransportMessages } from "../transport-message-transform.js";
 import { log } from "./logger.js";
 import {
   completePromptCacheObservation,
   declarePromptHistoryRewrite,
+  declarePromptToolPin,
 } from "./prompt-cache-observability.js";
 import { beginOpenAIObservation } from "./prompt-cache-observability.test-support.js";
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
 import type { PromptPreparationResult, PromptPreparationTask } from "./provider-prompt-state.js";
+
+// mock-isolation: Preserve native hashing while observing history work in this process.
+vi.mock("node:crypto", { spy: true });
 
 let testScope = 0;
 
@@ -29,8 +36,59 @@ function scopedKey(value: string): string {
 describe("prompt cache history fingerprints", () => {
   beforeEach(() => {
     testScope += 1;
+    vi.mocked(crypto.hash).mockClear();
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ["model context", "openai-responses"],
+    ["model context", "anthropic-messages"],
+    ["transport", "openai-responses"],
+    ["transport", "anthropic-messages"],
+  ] as const)("keeps repaired %s history stable for %s", async (route, api) => {
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const model = makeProviderModelFixture({
+        api,
+        provider: api === "openai-responses" ? "openai" : "anthropic",
+        id: "test-model",
+        baseUrl: "https://example.test",
+      });
+      const source: Message[] = [
+        makeAgentAssistantMessage({
+          api,
+          provider: model.provider,
+          content: [{ type: "toolCall", id: "missing", name: "read", arguments: {} }],
+          stopReason: "toolUse",
+          timestamp: 7,
+        }),
+      ];
+      const replay = () =>
+        route === "model context"
+          ? convertToLlm(sanitizeToolUseResultPairingForModel(source, api === "openai-responses"))
+          : transformTransportMessages(source, model);
+      const observer = createPromptCacheRequestObserver(
+        { sessionId: scopedKey(`${route}:${api}`), streamStrategy: "test" },
+        () => {},
+      );
+      const first = replay();
+      await observer.onModelRequest(model, { messages: first });
+      observer.onModelUsage({
+        contextUsage: { state: "available", promptTokens: 200, totalTokens: 250 },
+      });
+      clock.mockReturnValue(2_000);
+      source.push({ role: "user", content: "Continue", timestamp: 8 });
+      const next = replay();
+      expect(await observer.onModelRequest(model, { messages: next })).toMatchObject({
+        requestIndex: 2,
+        prefixUnchanged: true,
+        changes: null,
+      });
+      expect(next.slice(0, first.length)).toEqual(first);
+      expect(observer.getContextUsage()).toMatchObject({ requestIndex: 1, contextTokens: 250 });
+      expect(source.map(({ role }) => role)).toEqual(["assistant", "user"]);
+    });
+  });
 
   it("keeps a two-turn tool loop append-only with bounded block hashing", async () => {
     await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
@@ -45,7 +103,7 @@ describe("prompt cache history fingerprints", () => {
           timestamp: 2,
         },
       ];
-      const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+      const hashes = vi.mocked(crypto.hash);
       const observed = vi.fn();
       const observer = createPromptCacheRequestObserver(
         { sessionId, streamStrategy: "test" },
@@ -90,7 +148,9 @@ describe("prompt cache history fingerprints", () => {
       expect(loop[1]?.content).toBe(first[1]?.content);
       for (const text of ["Read the fixture", "Fixture context", "fixture result"]) {
         expect(
-          hashes.mock.calls.filter(([value]) => typeof value === "string" && value.includes(text)),
+          hashes.mock.calls.filter(
+            ([, value]) => typeof value === "string" && value.includes(text),
+          ),
         ).toHaveLength(1);
       }
       expect(observed).toHaveBeenCalledTimes(3);
@@ -118,11 +178,13 @@ describe("prompt cache history fingerprints", () => {
     );
     const message = publish("sealed-history-fixture");
     expect(isOwnedTranscriptPayload(message)).toBe(true);
-    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const hashes = vi.mocked(crypto.hash);
     const messages: Message[] = [message];
     await observer.onModelRequest(model, { messages });
     expect(
-      hashes.mock.calls.some(([text]) => String(text).includes("sealed-history-fixture")),
+      hashes.mock.calls.some(
+        ([, text]) => typeof text === "string" && text.includes("sealed-history-fixture"),
+      ),
     ).toBe(false);
     messages.push({ role: "user", content: "continue", timestamp: 2 });
     expect(await observer.onModelRequest(model, { messages })).toMatchObject({
@@ -143,6 +205,56 @@ describe("prompt cache history fingerprints", () => {
     });
   });
 
+  it.each([false, true])(
+    "ignores internal tool-result envelopes but detects content rewrites (sealed=%s)",
+    async (sealed) => {
+      await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+        const observer = createPromptCacheRequestObserver(
+          { sessionId: scopedKey("tool-result-envelope"), streamStrategy: "test" },
+          () => {},
+        );
+        const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
+        const publish = (text: string, metadata?: Record<string, unknown>) => {
+          const entry = {
+            message: {
+              role: "toolResult" as const,
+              toolCallId: "exec-1",
+              toolName: "exec",
+              content: [{ type: "text" as const, text }],
+              isError: false,
+              timestamp: 1,
+              ...(metadata ? { __openclaw: metadata } : {}),
+            },
+          };
+          if (sealed) {
+            normalizeTranscriptJsonValue(entry, "entry");
+          }
+          return entry.message;
+        };
+        await observer.onModelRequest(model, { messages: [publish("fixture result")] });
+        const metadata = {
+          runId: "fixture-run",
+          codeModeCheckpoint: { status: "completed", replaySafe: true },
+        };
+        const message = publish("fixture result", metadata);
+        expect(await observer.onModelRequest(model, { messages: [message] })).toMatchObject({
+          prefixUnchanged: true,
+          changes: null,
+        });
+        const withoutEnvelope = sealed ? publish("fixture result") : message;
+        if (!sealed) {
+          delete withoutEnvelope["__openclaw"];
+        }
+        expect(await observer.onModelRequest(model, { messages: [withoutEnvelope] })).toMatchObject(
+          { prefixUnchanged: true, changes: null },
+        );
+        await expect(
+          observer.onModelRequest(model, { messages: [publish("rewritten result", metadata)] }),
+        ).rejects.toThrow("changed fields: content[0].text");
+      });
+    },
+  );
+
   it("cancels worker preparation without recording a request or hashing locally", async () => {
     const controller = new AbortController();
     const entry = { message: { role: "user" as const, content: "x".repeat(4096), timestamp: 1 } };
@@ -159,7 +271,7 @@ describe("prompt cache history fingerprints", () => {
     >(Symbol.for("openclaw.providerPromptHashPool"), () => {
       throw new Error("Expected the prompt observer to initialize its worker pool");
     });
-    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const hashes = vi.mocked(crypto.hash);
     const prepare = vi.spyOn(pool, "run").mockImplementation((_input, options) => {
       expect(options.inputBytes).toBeGreaterThanOrEqual(entry.message.content.length * 2);
       const error = new Error("fixture request canceled");
@@ -185,7 +297,7 @@ describe("prompt cache history fingerprints", () => {
       content: [{ type: "text", text: `Synthetic history ${timestamp}` }],
       timestamp,
     }));
-    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const hashes = vi.mocked(crypto.hash);
     beginOpenAIObservation({ sessionId, messages });
     hashes.mockClear();
     messages.push({ role: "user", content: "Next turn", timestamp: 100 });
@@ -310,7 +422,7 @@ describe("prompt cache history fingerprints", () => {
         content: kind === "string" ? text : [{ type: "text", text }],
         timestamp: 1,
       };
-      const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+      const hashes = vi.mocked(crypto.hash);
       for (let index = 0; index < 3; index++) {
         expect(
           beginOpenAIObservation({ sessionId, messages: [{ ...message }] }).changes,
@@ -318,7 +430,7 @@ describe("prompt cache history fingerprints", () => {
       }
       expect(
         hashes.mock.calls.filter(
-          ([value]) => typeof value === "string" && value.includes("large-content-fixture"),
+          ([, value]) => typeof value === "string" && value.includes("large-content-fixture"),
         ),
       ).toHaveLength(1);
     },
@@ -371,7 +483,6 @@ describe("prompt cache history fingerprints", () => {
   it.each([
     { field: "timestamp", value: 2, label: "timestamp" },
     { field: "idempotencyKey", value: "private-value", label: "idempotencyKey" },
-    { field: "__openclaw", value: { senderName: "private-value" }, label: "__openclaw" },
     { field: "usage", value: { input: 42 }, label: "usage" },
     { field: "private-field-name", value: "private-value", label: "other" },
   ])(
@@ -430,6 +541,21 @@ describe("prompt cache history fingerprints", () => {
       }
       expect(() => beginOpenAIObservation({ sessionId, messages: [message] })).toThrow(
         "changed fields: content[0].text, content[1].text, content[2].text, content[3].text, content[4].text, content[5].text, content[6].text, content[7].text, …",
+      );
+    });
+  });
+
+  it("asserts an undeclared tool block change and admits one declared pin change", () => {
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+      const sessionId = scopedKey("tool-pin");
+      beginOpenAIObservation({ sessionId, tools: [{ name: "read" }] });
+      expect(() =>
+        beginOpenAIObservation({ sessionId, tools: [{ name: "read" }, { name: "exec" }] }),
+      ).toThrow("prefix changed within session: tools(");
+      declarePromptToolPin({ sessionId });
+      beginOpenAIObservation({ sessionId, tools: [{ name: "read" }, { name: "gateway" }] });
+      expect(() => beginOpenAIObservation({ sessionId, tools: [{ name: "read" }] })).toThrow(
+        "prefix changed within session: tools(",
       );
     });
   });

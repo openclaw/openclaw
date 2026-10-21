@@ -25,15 +25,21 @@ function pricingConfig(provider: string, models: ModelDefinitionConfig[]): OpenC
   };
 }
 
+const inputRates = (input: number) => ({ input, output: 0, cacheRead: 0, cacheWrite: 0 });
+type SourceModel = { id: string; cost?: Partial<ModelDefinitionConfig["cost"]> };
+function sourceConfig(provider: string, models: SourceModel[]): OpenClawConfig {
+  return { models: { providers: { [provider]: { models } } } } as unknown as OpenClawConfig;
+}
+
 async function writePricing(
   agentDir: string,
   provider: string,
-  models: ModelDefinitionConfig[],
+  models: SourceModel[],
 ): Promise<void> {
   await fs.mkdir(agentDir, { recursive: true });
   await fs.writeFile(
     path.join(agentDir, "models.json"),
-    JSON.stringify(pricingConfig(provider, models).models),
+    JSON.stringify({ providers: { [provider]: { models } } }),
     "utf8",
   );
 }
@@ -61,16 +67,12 @@ describe("usage-format", () => {
   });
 
   it("formats USD values", () => {
-    expect(formatUsd(1.234)).toBe("$1.23");
-    expect(formatUsd(0.5)).toBe("$0.50");
-    expect(formatUsd(0.0042)).toBe("$0.0042");
+    expect([1.234, 0.5, 0.0042].map(formatUsd)).toEqual(["$1.23", "$0.50", "$0.0042"]);
   });
 
   it("uses the sole agent directory from a canonical roster", async () => {
     const opsAgentDir = path.join(stateDir, "custom-ops-agent");
-    await writePricing(opsAgentDir, "demo-roster", [
-      pricingModel("demo-model", { input: 42, output: 0, cacheRead: 0, cacheWrite: 0 }),
-    ]);
+    await writePricing(opsAgentDir, "demo-roster", [pricingModel("demo-model", inputRates(42))]);
     const config = {
       agents: { entries: { ops: { agentDir: opsAgentDir } } },
     } satisfies OpenClawConfig;
@@ -83,17 +85,11 @@ describe("usage-format", () => {
   it("scopes models.json pricing by agent directory before configured and default pricing", async () => {
     const secondAgentDir = path.join(stateDir, "agents", "second", "agent");
     const configuredOnlyAgentDir = path.join(stateDir, "agents", "configured-only", "agent");
-    await writePricing(agentDir, "demo-scoped", [
-      pricingModel("demo-model", { input: 10, output: 0, cacheRead: 0, cacheWrite: 0 }),
-    ]);
-    await writePricing(secondAgentDir, "demo-scoped", [
-      pricingModel("demo-model", { input: 20, output: 0, cacheRead: 0, cacheWrite: 0 }),
-    ]);
+    await writePricing(agentDir, "demo-scoped", [pricingModel("demo-model", inputRates(10))]);
+    await writePricing(secondAgentDir, "demo-scoped", [pricingModel("demo-model", inputRates(20))]);
     await fs.mkdir(configuredOnlyAgentDir, { recursive: true });
 
-    const config = pricingConfig("demo-scoped", [
-      pricingModel("demo-model", { input: 30, output: 0, cacheRead: 0, cacheWrite: 0 }),
-    ]);
+    const config = pricingConfig("demo-scoped", [pricingModel("demo-model", inputRates(30))]);
     const resolveInputPrice = (scopedAgentDir?: string) =>
       resolveModelCostConfig({
         provider: "demo-scoped",
@@ -102,10 +98,9 @@ describe("usage-format", () => {
         agentDir: scopedAgentDir,
       })?.input;
 
-    expect(resolveInputPrice(agentDir)).toBe(10);
-    expect(resolveInputPrice(secondAgentDir)).toBe(20);
-    expect(resolveInputPrice(configuredOnlyAgentDir)).toBe(30);
-    expect(resolveInputPrice()).toBe(10);
+    expect(
+      [agentDir, secondAgentDir, configuredOnlyAgentDir, undefined].map(resolveInputPrice),
+    ).toEqual([10, 20, 30, 10]);
   });
 
   it("skips manifest model normalization for raw cost lookup", () => {
@@ -113,31 +108,13 @@ describe("usage-format", () => {
       manifestModelIdNormalization,
       "resolveManifestModelIdNormalizationPolicies",
     );
-    const config = pricingConfig("demo-raw", [
-      pricingModel("demo-model", { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }),
-    ]);
+    const rates = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 };
+    const config = pricingConfig("demo-raw", [pricingModel("demo-model", { ...rates })]);
 
-    expect(
-      resolveModelCostConfig({
-        provider: "demo-raw",
-        model: "demo-model",
-        config,
-        allowPluginNormalization: false,
-      }),
-    ).toEqual({
-      input: 1,
-      output: 2,
-      cacheRead: 3,
-      cacheWrite: 4,
-    });
-    expect(
-      resolveModelCostConfig({
-        provider: "anthropic",
-        model: "missing-model",
-        config,
-        allowPluginNormalization: false,
-      }),
-    ).toBeUndefined();
+    const resolveRaw = (provider: string, model: string) =>
+      resolveModelCostConfig({ provider, model, config, allowPluginNormalization: false });
+    expect(resolveRaw("demo-raw", "demo-model")).toEqual(rates);
+    expect(resolveRaw("anthropic", "missing-model")).toBeUndefined();
     expect(manifestSpy).not.toHaveBeenCalled();
   });
 
@@ -145,42 +122,26 @@ describe("usage-format", () => {
   const laterRates = { input: 7, output: 8, cacheRead: 0.7, cacheWrite: 0.8 };
 
   it("refreshes duplicate model prices and fingerprints with replacement config snapshots", () => {
-    type SourceModel = { id: string; cost?: Partial<ModelDefinitionConfig["cost"]> };
     const first: SourceModel = { id: "priced-fixture", cost: { ...firstRates } };
     const later: SourceModel = { id: "priced-fixture", cost: { ...laterRates } };
     const models = [first, later];
-    const config = {
-      models: { providers: { venice: { models } } },
-    } as unknown as OpenClawConfig;
+    const config = sourceConfig("venice", models);
     let previousFingerprint: string | undefined;
     const check = (label: string, expected: ModelCostConfig | undefined) => {
       const snapshot = structuredClone(config);
-      expect
-        .soft(
-          resolveModelCostConfig({
-            config: snapshot,
-            agentDir,
-            provider: "venice",
-            model: "priced-fixture",
-          }),
-          label,
-        )
-        .toEqual(expected);
+      const resolve = () =>
+        resolveModelCostConfig({
+          config: snapshot,
+          agentDir,
+          provider: "venice",
+          model: "priced-fixture",
+        });
+      expect.soft(resolve(), label).toEqual(expected);
       const fingerprint = resolveModelCostConfigFingerprint(snapshot, agentDir);
       expect.soft(fingerprint, label).not.toBe(previousFingerprint);
       previousFingerprint = fingerprint;
       // Fingerprinting and direct lookups share this snapshot's prices.
-      expect
-        .soft(
-          resolveModelCostConfig({
-            config: snapshot,
-            agentDir,
-            provider: "venice",
-            model: "priced-fixture",
-          }),
-          label,
-        )
-        .toEqual(expected);
+      expect.soft(resolve(), label).toEqual(expected);
     };
     check("initial duplicates", firstRates);
     first.cost!.input = 9;
@@ -203,67 +164,22 @@ describe("usage-format", () => {
   });
 
   it("skips metadata-only model rows while caching configured pricing", async () => {
-    const metadataOnlyModel = { id: "metadata-only" } as {
-      id: string;
-      cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
-    };
-    const config = {
-      models: {
-        providers: {
-          "demo-metadata-row": {
-            models: [
-              metadataOnlyModel,
-              {
-                id: "priced-model",
-                cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(
-      resolveModelCostConfig({
-        provider: "demo-metadata-row",
-        model: "metadata-only",
-        config,
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveModelCostConfig({
-        provider: "demo-metadata-row",
-        model: "priced-model",
-        config,
-      })?.input,
-    ).toBe(1);
-
+    const metadataOnlyModel: SourceModel = { id: "metadata-only" };
+    const config = sourceConfig("demo-metadata-row", [
+      metadataOnlyModel,
+      { id: "priced-model", cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 } },
+    ]);
+    const resolve = (model: string, snapshot = config) =>
+      resolveModelCostConfig({ provider: "demo-metadata-row", model, config: snapshot });
+    expect(resolve("metadata-only")).toBeUndefined();
+    expect(resolve("priced-model")?.input).toBe(1);
     metadataOnlyModel.cost = { input: 9, output: 8, cacheRead: 7, cacheWrite: 6 };
-    expect(
-      resolveModelCostConfig({
-        provider: "demo-metadata-row",
-        model: "metadata-only",
-        config: structuredClone(config),
-      })?.input,
-    ).toBe(9);
+    expect(resolve("metadata-only", structuredClone(config))?.input).toBe(9);
 
-    await fs.writeFile(
-      path.join(agentDir, "models.json"),
-      JSON.stringify({
-        providers: {
-          "demo-metadata-json": {
-            models: [
-              { id: "metadata-only" },
-              {
-                id: "priced-model",
-                cost: { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 },
-              },
-            ],
-          },
-        },
-      }),
-      "utf8",
-    );
+    await writePricing(agentDir, "demo-metadata-json", [
+      { id: "metadata-only" },
+      { id: "priced-model", cost: { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 } },
+    ]);
 
     expect(
       resolveModelCostConfig({

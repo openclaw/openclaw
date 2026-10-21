@@ -53,10 +53,7 @@ export type AcpLedgerOptions = {
   maxSessions?: number;
   maxEventsPerSession?: number;
   maxSerializedBytes?: number;
-  now?: () => number;
 };
-
-export type AcpMutableLedgerState = ReturnType<typeof normalizeAcpLedgerOptions>;
 
 export function normalizeAcpLedgerOptions(options: AcpLedgerOptions = {}) {
   return {
@@ -71,7 +68,6 @@ export function normalizeAcpLedgerOptions(options: AcpLedgerOptions = {}) {
       DEFAULT_MAX_SERIALIZED_BYTES,
       { min: 1_024 },
     ),
-    now: options.now ?? Date.now,
   };
 }
 

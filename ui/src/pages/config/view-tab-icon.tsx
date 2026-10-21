@@ -46,11 +46,9 @@ export function TabIconSection(props: TabIconViewProps) {
   const defaultSource = createMemo(
     () => controlUiFaviconBaseSvg() ?? inferControlUiPublicAssetPath("favicon.svg"),
   );
-  const lobsterdexEnabled = createMemo(() => props.lobsterdexEnabled !== false);
+  const lobsterdexEnabled = () => props.lobsterdexEnabled !== false;
   const lobsters = createMemo(() => (lobsterdexEnabled() ? (props.tabIconLobsters ?? []) : []));
-  const lobsterMode = createMemo(
-    () => lobsterdexEnabled() && (props.tabIcon?.startsWith("lobster:") ?? false),
-  );
+  const lobsterMode = () => lobsterdexEnabled() && (props.tabIcon?.startsWith("lobster:") ?? false);
   const selectedShape = createMemo(() => agentTabIconShape(props.tabIcon));
   const selected = createMemo(() =>
     lobsters().find((palette) => props.tabIcon === `lobster:${palette.id}`),

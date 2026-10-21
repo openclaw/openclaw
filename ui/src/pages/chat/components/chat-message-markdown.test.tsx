@@ -3,13 +3,16 @@
 // capped projection; pending inputs share assistant expansion without gaining
 // transcript mutation actions.
 import { For } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import * as toolCards from "../../../lib/chat/tool-cards.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import * as thinking from "../../../lib/strip-thinking-tags.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import { prepareGroupedMessage } from "./chat-message-bubble-presentation.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import {
   prepareChatMessageRender,
@@ -20,6 +23,61 @@ import { MessageMarkdown } from "./chat-message-text-view.tsx";
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
 
 describe("message action projections", () => {
+  it("reuses prepared assistant text but sanitizes newly loaded action text", () => {
+    const strip = vi.spyOn(thinking, "stripThinkingTags");
+    onTestFinished(() => strip.mockRestore());
+    const prepared = prepareChatMessageRender({
+      role: "assistant",
+      content: "<think>Private reasoning</think>Visible reply",
+      __openclaw: cappedMeta,
+    });
+    strip.mockClear();
+    const options = {
+      messageId: "msg-1",
+      canFetchFullMessage: true,
+      onReply: () => {},
+      senderLabel: "Assistant",
+    };
+    const details = resolveMessageActionDetails(prepared, options);
+    expect(strip).not.toHaveBeenCalled();
+    expect(details).toMatchObject({
+      markdown: "Visible reply",
+      copyMarkdown: "Visible reply",
+      readAloudText: "Visible reply",
+      replyTarget: { text: "Visible reply" },
+    });
+    const loaded = resolveMessageActionDetails(prepared, {
+      ...options,
+      getAssistantMessageExpansion: () => ({
+        status: "loaded",
+        markdown: "<think>Private expansion</think>Expanded reply",
+        revision: 1,
+      }),
+    });
+    expect(strip).toHaveBeenCalledOnce();
+    expect(loaded).toMatchObject({
+      markdown: "Expanded reply",
+      copyMarkdown: "Expanded reply",
+      readAloudText: "Expanded reply",
+      replyTarget: { text: "Expanded reply" },
+    });
+  });
+
+  it("prepares collapsed previews only for tool message shells", () => {
+    const preview = vi.spyOn(toolCards, "formatCollapsedToolPreviewText");
+    onTestFinished(() => preview.mockRestore());
+    const prepare = (role: string, content: string) =>
+      prepareGroupedMessage(prepareChatMessageRender({ role, content }), "message", {
+        isStreaming: true,
+        showReasoning: false,
+      });
+    prepare("assistant", "A streaming reply");
+    expect(preview).not.toHaveBeenCalled();
+    const tool = prepare("toolResult", "First line\nSecond line");
+    expect(preview).toHaveBeenCalledOnce();
+    expect(tool.toolPreview).toBe("First line Second line");
+  });
+
   const indented = "    *literal*";
   const oversized = "This message is too large to display here.";
   it.each<
@@ -128,11 +186,17 @@ describe("user message disclosure", () => {
     const fonts = Object.assign(new EventTarget(), { ready: Promise.resolve() });
     const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
     Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
+    const pendingObservers = new Set<() => void>();
     vi.stubGlobal(
       "ResizeObserver",
       class {
-        observe() {}
-        disconnect() {}
+        constructor(private readonly notify: () => void) {}
+        observe() {
+          pendingObservers.add(this.notify);
+        }
+        disconnect() {
+          pendingObservers.delete(this.notify);
+        }
       },
     );
     const container = document.body.appendChild(document.createElement("div"));
@@ -171,6 +235,10 @@ describe("user message disclosure", () => {
       view.update(current);
     };
     const settle = async () => {
+      for (const notify of pendingObservers) {
+        notify();
+      }
+      pendingObservers.clear();
       await Promise.resolve();
       await Promise.resolve();
     };

@@ -1,9 +1,13 @@
-import { createEffect, createSignal, Show } from "solid-js";
-import { t } from "../lib/reactive/i18n.ts";
+import { createSignal, Show } from "solid-js";
+import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { EmojiSearchPanel } from "./emoji-search-panel.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
+import { StrokeIcon } from "./solid/stroke-icon.tsx";
 import "../styles/agent-emoji-picker.css";
+
+registerEnglishCatalog(registerSettingsEnglish);
 
 const favorites = [
   "🦞",
@@ -43,14 +47,6 @@ export function AgentEmojiPicker(props: AgentEmojiPickerProps) {
   const id = `agent-emoji-trigger-${generateUUID()}`;
   let popover: PopoverHandle | undefined;
   let searchInput!: HTMLInputElement;
-  createEffect(
-    () => props.disabled,
-    (disabled) => {
-      if (disabled) {
-        popover?.hide();
-      }
-    },
-  );
   return (
     <openclaw-agent-emoji-picker>
       <button
@@ -66,18 +62,11 @@ export function AgentEmojiPicker(props: AgentEmojiPickerProps) {
         onClick={() => popover?.overlay.request(!popover.overlay.open)}
       >
         <span class="agent-emoji-picker__icon" aria-hidden="true">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
+          <StrokeIcon>
             <circle cx="12" cy="12" r="10" />
             <path d="M8 14s1.5 2 4 2 4-2 4-2" />
             <path d="M9 9h.01M15 9h.01" />
-          </svg>
+          </StrokeIcon>
         </span>
       </button>
       <Show when={trigger()}>
@@ -87,14 +76,10 @@ export function AgentEmojiPicker(props: AgentEmojiPickerProps) {
             anchor={anchor()}
             class="agent-emoji-picker__popover"
             placement="bottom-end"
+            disabled={props.disabled}
             label={t("agents.identity.chooseEmoji")}
             ref={(handle) => {
               popover = handle;
-            }}
-            onBeforeShow={(event) => {
-              if (props.disabled) {
-                event.preventDefault();
-              }
             }}
             onOpenChange={(open) => {
               if (open) {

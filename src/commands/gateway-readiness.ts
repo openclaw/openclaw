@@ -105,7 +105,7 @@ export async function ensureDashboardGatewayReady(options: GatewayReadinessOptio
 
   const initialStatus = await gatherStatus();
   if (gatewayIsReady(initialStatus)) {
-    return { ready: true as const, status: initialStatus, recovered: false };
+    return { ready: true as const, recovered: false };
   }
 
   const reason = readinessFailureReason(initialStatus);
@@ -114,7 +114,7 @@ export async function ensureDashboardGatewayReady(options: GatewayReadinessOptio
   const shouldInstall = canStartService && !gatewayServiceIsInstalled(initialStatus);
   if (!canStartService || (shouldInstall && options.allowInstall === false)) {
     printGatewayNotReadyHints(options.runtime, reason, canStartService);
-    return { ready: false as const, status: initialStatus, reason, recoverable: false };
+    return { ready: false as const, reason };
   }
 
   const prompt = shouldInstall
@@ -125,7 +125,7 @@ export async function ensureDashboardGatewayReady(options: GatewayReadinessOptio
     ((options.interactive ?? process.stdin.isTTY) && (await promptYesNo(prompt, true)));
   if (!approved) {
     printGatewayNotReadyHints(options.runtime, reason);
-    return { ready: false as const, status: initialStatus, reason, recoverable: true };
+    return { ready: false as const, reason };
   }
 
   if (shouldInstall) {
@@ -142,7 +142,7 @@ export async function ensureDashboardGatewayReady(options: GatewayReadinessOptio
     recoveredStatus = await gatherStatus();
   }
   if (gatewayIsReady(recoveredStatus)) {
-    return { ready: true as const, status: recoveredStatus, recovered: true };
+    return { ready: true as const, recovered: true };
   }
 
   const recoveredReason = readinessFailureReason(recoveredStatus);
@@ -151,8 +151,6 @@ export async function ensureDashboardGatewayReady(options: GatewayReadinessOptio
   printGatewayNotReadyHints(options.runtime, recoveredReason, recoverable);
   return {
     ready: false as const,
-    status: recoveredStatus,
     reason: recoveredReason,
-    recoverable,
   };
 }

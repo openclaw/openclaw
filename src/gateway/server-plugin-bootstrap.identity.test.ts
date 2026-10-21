@@ -1,13 +1,17 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activatePluginRegistry } from "../plugins/loader-shared.js";
+import { writePlugin } from "../plugins/loader.test-fixtures.js";
+import { updatePluginManifest } from "../plugins/loader.test-harness.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { clearActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
-import { handleGatewayRequest } from "./server-methods.js";
+import {
+  authorizationClient,
+  dispatchAuthorizationRequest,
+} from "./server-methods.authorization.test-support.js";
 import { prepareGatewayPluginLoad } from "./server-plugin-bootstrap.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
@@ -22,26 +26,23 @@ afterEach(async () => {
 it("dispatches mixed-case plugin methods after enablement and a cold start", async () => {
   await withOpenClawTestState({ label: "plugin-identity" }, async (state) => {
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-    const pluginDir = path.join(state.workspaceDir, "fixture");
-    await fs.mkdir(pluginDir, { recursive: true });
-    await fs.writeFile(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "MiXeD-demo",
-        activation: { onStartup: true },
-        configSchema: { type: "object", properties: {} },
-      }),
-    );
-    await fs.writeFile(
-      path.join(pluginDir, "index.js"),
-      `module.exports = {
-        id: "MiXeD-demo",
-        register(api) {
-          api.registerGatewayMethod("MiXeD-demo.probe", ({ respond }) => {
-            respond(true, { registered: true });
-          });
-        }
-      };`,
+    const plugin = writePlugin({
+      dir: path.join(state.workspaceDir, "fixture"),
+      id: "MiXeD-demo",
+      filename: "index.js",
+      configSchema: { type: "object", properties: {} },
+      registration: `api.registerGatewayMethod("MiXeD-demo.probe", ({ respond }) => {
+        respond(true, { registered: true });
+      });`,
+    });
+    updatePluginManifest(plugin, { activation: { onStartup: true } });
+    const client = authorizationClient(
+      "plugin-identity",
+      ["operator.admin"],
+      {},
+      {
+        client: { id: "cli", version: "test", platform: "linux", mode: "cli" },
+      },
     );
     let previous: Awaited<ReturnType<typeof prepareGatewayPluginLoad>> | undefined;
     try {
@@ -56,7 +57,7 @@ it("dispatches mixed-case plugin methods after enablement and a cold start", asy
           plugins: {
             allow: ["mixed-demo"],
             deny: phase === "denied" ? ["MIXED-demo"] : [],
-            load: { paths: [pluginDir] },
+            load: { paths: [plugin.dir] },
             slots: { memory: "none" },
             entries: { "mixed-demo": { enabled: phase !== "disabled" } },
           },
@@ -75,27 +76,19 @@ it("dispatches mixed-case plugin methods after enablement and a cold start", asy
         previous?.retireGatewayRuntimeBindings();
         previous = loaded;
         activatePluginRegistry(loaded.pluginRegistry, null, "gateway-bindable", state.workspaceDir);
-        const respond = vi.fn();
-        await handleGatewayRequest({
-          req: { type: "req", id: phase, method: "MiXeD-demo.probe", params: {} },
-          client: {
-            connId: "plugin-identity",
-            connect: {
-              role: "operator",
-              scopes: ["operator.admin"],
-              client: { id: "cli", version: "test", platform: "linux", mode: "cli" },
-              minProtocol: 1,
-              maxProtocol: 1,
-            },
+        const respond = await dispatchAuthorizationRequest(
+          "MiXeD-demo.probe",
+          {},
+          {
+            client,
+            context: createGatewayRequestContext(makeContextParams()),
+            methodRegistry: createGatewayMethodRegistry(
+              loaded.pluginRegistry.gatewayMethodDescriptors,
+              loaded.pluginRegistry,
+            ),
           },
-          isWebchatConnect: () => false,
-          context: createGatewayRequestContext(makeContextParams()),
-          methodRegistry: createGatewayMethodRegistry(
-            loaded.pluginRegistry.gatewayMethodDescriptors,
-            loaded.pluginRegistry,
-          ),
-          respond,
-        });
+          phase,
+        );
         if (phase === "disabled" || phase === "denied") {
           expect(respond).toHaveBeenCalledWith(
             false,

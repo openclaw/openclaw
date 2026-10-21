@@ -4,6 +4,7 @@ import { beforeEach, expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -187,8 +188,10 @@ suite.define(() => {
     await page.keyboard.press("Tab");
     await page.keyboard.press("Shift+Tab");
     await expect
-      .poll(() => openTooltip.locator(".tooltip-content").textContent())
-      .toContain("Sessions · Expand sidebar");
+      .poll(() =>
+        openTooltip.evaluate((tooltip) => (tooltip as HTMLElement & { content: string }).content),
+      )
+      .toBe("Sessions");
     await page.keyboard.press("Enter");
     await visible(sidebarPanel);
     expect(await openTooltip.count()).toBe(0);
@@ -405,7 +408,9 @@ suite.define(() => {
     const shellControls = page.locator(
       ".macos-titlebar-controls button:visible, .sidebar-rail__bottom button:visible",
     );
-    const panelControls = page.locator(".chat-pane__actions button:visible");
+    const panelControls = page.locator(
+      '[data-region-header="side"] .side-panel__actions button:visible',
+    );
     const shellBoxes = await boxes(shellControls);
     const panelBoxes = await boxes(panelControls);
     expect(shellBoxes.length).toBeGreaterThan(0);
@@ -447,7 +452,7 @@ suite.define(() => {
     });
     const navigation = page.locator(".shell-nav");
     const dialog = page.getByRole("dialog", { name: "Navigation" });
-    const trigger = page.locator(".chat-pane__nav-toggle").first();
+    const trigger = navigationDrawerToggle(page);
     const readFocusLocation = () =>
       page.evaluate(() => {
         // Native dialog tab order may hand focus to browser chrome, but not the inert page.
@@ -590,7 +595,7 @@ suite.define(() => {
       });
       const drawer = page.locator(".shell-nav.nav-drawer");
       const dialog = page.getByRole("dialog", { name: "Navigation" });
-      await page.locator(".chat-pane__nav-toggle").first().click();
+      await navigationDrawerToggle(page).click();
       await visible(dialog);
 
       const catalog = drawer.locator('[data-session-section="catalog:codex"]');
@@ -630,7 +635,14 @@ suite.define(() => {
       await attr(retainedHost, "data-toast-placement", "shell");
       const retainedToast = retainedHost.locator(".app-toast");
       await expect.poll(() => retainedToast.textContent()).toContain("Codex hidden");
-      await expectBelow(retainedToast, page.locator(".chat-pane__header:visible").first(), true);
+      const header = page
+        .locator(
+          finalLayout === "compact"
+            ? ".agent-chat__header--mobile:visible"
+            : ".chat-pane__header:visible",
+        )
+        .first();
+      await expectBelow(retainedToast, header, true);
       await expectBelow(page.locator(".agent-chat__composer-shell"), retainedToast, false);
       await capture(page, TOAST_PROOF_DIR, `handed-off-toast-${finalLayout}-${colorScheme}.png`);
       await retainedToast.getByRole("button", { name: "Dismiss" }).click();

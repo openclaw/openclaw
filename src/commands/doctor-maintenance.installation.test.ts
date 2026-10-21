@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
+import { captureGatewayServiceRebind } from "../daemon/service-rebind.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import type { GatewayService } from "../daemon/service.js";
@@ -14,16 +15,17 @@ import { createMockGatewayService, mockSystemAccountHome } from "../daemon/servi
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
 import { writeDoctorGatewayConfig } from "../flows/doctor-health-contribution-runners.gateway.js";
 import { callGatewayCli } from "../gateway/call.js";
+import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as processAncestry from "../infra/restart-stale-pids.js";
 import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
-import * as sqliteWorkerStores from "../infra/sqlite-worker-store.js";
 import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { readSecretStoreValue } from "../secrets/store/secret-store.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -196,6 +198,7 @@ async function runInstallationCase(params: {
   inspectionScenario?: "slow-admission" | "competing-update";
   invocationPort?: string;
   updateInProgress?: boolean;
+  definitionRepair?: "repaired" | "tampered" | "not-needed";
   consent?: {
     aggressive: boolean;
     approved: boolean;
@@ -228,7 +231,9 @@ async function runInstallationCase(params: {
       ? path.join(home, ".nvm", "versions", "node", "v26.8.1", "bin", "node")
       : path.join(home, "runtime", params.bun ? "bun" : "node");
   const oldRoot = path.join(home, "prefix-a/lib/node_modules/openclaw");
-  mocks.activeRoot = path.join(home, "prefix-b/lib/node_modules/openclaw");
+  mocks.activeRoot = params.definitionRepair
+    ? oldRoot
+    : path.join(home, "prefix-b/lib/node_modules/openclaw");
   for (const [root, version] of [
     [oldRoot, "2026.9.4"],
     [mocks.activeRoot, "2026.9.17"],
@@ -270,6 +275,10 @@ async function runInstallationCase(params: {
       mockSystemAccountHome();
       const sourcePath =
         params.platform === "win32" ? resolveGatewayTaskScriptPath(process.env) : undefined;
+      if (sourcePath) {
+        await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+        await fs.writeFile(sourcePath, "@echo off\nrem Synthetic service launcher\n");
+      }
       if (params.inspectionScenario) {
         openOpenClawStateDatabase();
         closeOpenClawStateDatabaseForTest();
@@ -287,10 +296,23 @@ async function runInstallationCase(params: {
         environment: {
           HOME: home,
           PATH: "/usr/bin:/bin",
+          ...(params.definitionRepair
+            ? { NODE_EXTRA_CA_CERTS: "/state/secret-egress-proxy/gateway-old/trust-bundle.pem" }
+            : {}),
           ...(params.tokenRecovery ? { OPENCLAW_GATEWAY_TOKEN: "maintenance-fixture-token" } : {}),
         },
       };
       const originalCommand = structuredClone(command);
+      if (params.definitionRepair && params.definitionRepair !== "not-needed") {
+        Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+        mocks.confirm.mockResolvedValue(true);
+        mocks.audit.mockImplementation(async () => ({
+          ok: !command.environment?.NODE_EXTRA_CA_CERTS,
+          issues: command.environment?.NODE_EXTRA_CA_CERTS
+            ? [{ code: "gateway-egress-proxy-env-embedded", message: "temporary CA" }]
+            : [],
+        }));
+      }
       let running = !initiallyStopped;
       const pid = mocks.gatewayPid;
       mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
@@ -308,6 +330,9 @@ async function runInstallationCase(params: {
         isLoaded: async () => true,
         readCommand: async () => command,
         readRuntime: async (env, opts) => {
+          if (params.definitionRepair === "tampered" && events.includes("install")) {
+            command.environment = { ...command.environment, FOREIGN_EDIT: "after-repair" };
+          }
           nativeInspectionReads += 1;
           if (
             (params.inspectionFailure === "lost-before-install" && nativeInspectionReads > 1) ||
@@ -364,40 +389,51 @@ async function runInstallationCase(params: {
           running = true;
         },
         install: async (plan) => {
-          expect(getOpenClawDatabaseMaintenanceScope()).toBeUndefined();
-          if (params.pendingRuntimePinMigration) {
-            expect(
-              withDaemonRuntimePinStore(process.env, false, (db) =>
-                db.prepare("SELECT source_state, phase FROM daemon_runtime_pin_migration").get(),
-              ),
-            ).toEqual({
-              source_state: resolveOpenClawStateSqlitePath(process.env),
-              phase: "complete",
-            });
-          }
-          events.push("install");
-          if (params.tokenRecovery) {
-            const ref = JSON.parse(await fs.readFile(configPath!, "utf8")).gateway.auth.token;
-            expect(ref).toMatchObject({ source: "store" });
-            expect(writerContext?.cfgForPersistence.gateway?.auth?.token).toEqual(ref);
-            const stored = await readSecretStoreValue({ scope: { kind: "team" }, name: ref.id });
-            expect(stored.ok && stored.value === "maintenance-fixture-token").toBe(true);
-          }
-          if (params.revoked) {
-            throw new GatewayServiceAuthorityError(
-              new Error("Doctor custody was released"),
-              params.revoked === "unclassified" ? undefined : params.revoked,
-            );
-          }
-          if (installFails) {
-            throw new Error("Synthetic native install rollback");
-          }
-          command = {
-            ...(sourcePath ? { sourcePath } : {}),
-            programArguments: plan.programArguments,
-            environment: { HOME: home },
-          };
-          running = true;
+          return await captureGatewayServiceRebind(
+            async () => command,
+            () => plan.assertCurrent?.(),
+            async () => {
+              expect(getOpenClawDatabaseMaintenanceScope()).toBeUndefined();
+              if (params.pendingRuntimePinMigration) {
+                expect(
+                  withDaemonRuntimePinStore(process.env, false, (db) =>
+                    db
+                      .prepare("SELECT source_state, phase FROM daemon_runtime_pin_migration")
+                      .get(),
+                  ),
+                ).toEqual({
+                  source_state: resolveOpenClawStateSqlitePath(process.env),
+                  phase: "complete",
+                });
+              }
+              events.push("install");
+              if (params.tokenRecovery) {
+                const ref = JSON.parse(await fs.readFile(configPath!, "utf8")).gateway.auth.token;
+                expect(ref).toMatchObject({ source: "store" });
+                expect(writerContext?.cfgForPersistence.gateway?.auth?.token).toEqual(ref);
+                const stored = await readSecretStoreValue({
+                  scope: { kind: "team" },
+                  name: ref.id,
+                });
+                expect(stored.ok && stored.value === "maintenance-fixture-token").toBe(true);
+              }
+              if (params.revoked) {
+                throw new GatewayServiceAuthorityError(
+                  new Error("Doctor custody was released"),
+                  params.revoked === "unclassified" ? undefined : params.revoked,
+                );
+              }
+              if (installFails) {
+                throw new Error("Synthetic native install rollback");
+              }
+              command = {
+                ...(sourcePath ? { sourcePath } : {}),
+                programArguments: plan.programArguments,
+                environment: { HOME: home },
+              };
+              running = true;
+            },
+          );
         },
         restart: async () => {
           events.push("restart");
@@ -477,9 +513,11 @@ async function runInstallationCase(params: {
         writerContext = await prepareWriterContext(configPath);
       }
       let pairedDeviceDatabasePath: string | undefined;
+      let pairedDeviceCredentialPath: string | undefined;
       if (params.stopFailsWithPairedDevice) {
         const identity = loadOrCreateDeviceIdentity();
         pairedDeviceDatabasePath = openOpenClawStateDatabase().path;
+        pairedDeviceCredentialPath = resolveClientCredentialStorePath(process.env);
         await storeDeviceAuthToken({
           deviceId: identity.deviceId,
           role: "operator",
@@ -488,21 +526,34 @@ async function runInstallationCase(params: {
         });
         await closeOpenClawStateDatabaseAsync();
       }
-      const authWorkerOpen = pairedDeviceDatabasePath
-        ? vi.spyOn(sqliteWorkerStores, "openSharedStateSqliteWorkerStore")
+      const authWorkerRun = pairedDeviceDatabasePath
+        ? vi.spyOn(WorkerTaskPool.prototype, "run")
         : undefined;
       const admission = beginDoctorMaintenance({
         root: mocks.activeRoot,
         options: {
           repair: true,
-          nonInteractive: !params.tokenRecovery || params.tokenRecovery === "no-consent",
+          nonInteractive:
+            !params.definitionRepair &&
+            (!params.tokenRecovery || params.tokenRecovery === "no-consent"),
         },
         runtime,
       });
-      if (pairedDeviceDatabasePath && authWorkerOpen) {
-        const openedAuthWorkers = () =>
-          authWorkerOpen.mock.settledResults.flatMap((result) =>
-            result.type === "fulfilled" && result.value ? [result.value] : [],
+      if (pairedDeviceDatabasePath && authWorkerRun) {
+        const usedAuthPools = () =>
+          authWorkerRun.mock.contexts.filter(
+            (pool, index): pool is WorkerTaskPool<unknown, unknown> => {
+              const input = authWorkerRun.mock.calls[index]?.[0];
+              return (
+                pool instanceof WorkerTaskPool &&
+                typeof input === "object" &&
+                input !== null &&
+                "root" in input &&
+                typeof input.root === "string" &&
+                resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: input.root }) ===
+                  pairedDeviceCredentialPath
+              );
+            },
           );
         try {
           await expect(admission).rejects.toThrow("Synthetic native stop failure");
@@ -517,17 +568,15 @@ async function runInstallationCase(params: {
                   request.preparedDeviceAuth?.token === "synthetic-maintenance-device-token",
               ),
           ).toBe(true);
-          const authWorkers = openedAuthWorkers();
-          expect(authWorkers.length).toBeGreaterThan(0);
-          expect(
-            authWorkers.every((worker) => !sqliteWorkerStores.isSqliteWorkerStoreAvailable(worker)),
-          ).toBe(true);
+          const authPools = usedAuthPools();
+          expect(authPools.length).toBeGreaterThan(0);
+          expect(authPools.every((pool) => pool.isClosed)).toBe(true);
           const nextOwner = tryAcquireGatewayStateOwner(pairedDeviceDatabasePath);
           expect(nextOwner).not.toBeNull();
           nextOwner?.release();
         } finally {
           try {
-            await Promise.all(openedAuthWorkers().map((worker) => worker.close()));
+            await Promise.all(usedAuthPools().map((pool) => pool.close()));
           } finally {
             await closeOpenClawStateDatabaseAsync();
           }
@@ -583,7 +632,9 @@ async function runInstallationCase(params: {
                   events.push("write-config");
                   return writeDoctorGatewayConfig(writerContext!, nextConfig);
                 }
-              : undefined,
+              : params.definitionRepair
+                ? async (nextConfig) => nextConfig
+                : undefined,
           );
         } catch (error) {
           finishError = error;
@@ -619,6 +670,32 @@ async function runInstallationCase(params: {
             expect(running).toBe(!installFails);
           }
           expect(bytes.includes("maintenance-fixture-token")).toBe(false);
+          return;
+        }
+        if (params.definitionRepair) {
+          if (params.definitionRepair === "not-needed" || params.revoked) {
+            expect(command).toEqual(originalCommand);
+            expect(events).toContain("restart");
+            expect(finishError).toBeUndefined();
+            expect(running).toBe(true);
+            if (params.revoked) {
+              expect(maintenance?.warnings).toContainEqual(
+                expect.stringContaining("Restoring the previously running service"),
+              );
+            }
+          } else if (params.definitionRepair === "tampered") {
+            expect(command.environment?.NODE_EXTRA_CA_CERTS).toBeUndefined();
+            expect(finishError).toMatchObject({
+              message: expect.stringContaining("changed after its recorded repair"),
+            });
+            expect(mocks.health).not.toHaveBeenCalled();
+          } else {
+            expect(events).toContain("install");
+            expect(command.environment?.NODE_EXTRA_CA_CERTS).toBeUndefined();
+            expect(finishError).toBeUndefined();
+            expect(running).toBe(true);
+            expect(mocks.health).toHaveBeenCalled();
+          }
           return;
         }
         if (params.inspectionScenario === "competing-update") {
@@ -738,6 +815,10 @@ it.skipIf(process.platform !== "linux")(
 );
 
 it.each<InstallationCase>([
+  { platform: "linux", definitionRepair: "repaired" },
+  { platform: "linux", definitionRepair: "tampered" },
+  { platform: "linux", definitionRepair: "not-needed" },
+  { platform: "linux", definitionRepair: "repaired", revoked: "restored" },
   { platform: "linux", tokenRecovery: "success", installFails: false },
   { platform: "linux", tokenRecovery: "writer-unavailable", installFails: false },
   { platform: "linux", tokenRecovery: "no-consent", installFails: false },

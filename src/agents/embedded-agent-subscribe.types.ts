@@ -26,6 +26,7 @@ export type SubscribeEmbeddedAgentSessionParams = Pick<
   | "shouldEmitToolResult"
   | "shouldEmitToolOutput"
   | "sourceReplyDeliveryMode"
+  | "messageToolFinalByDefault"
   | "onToolResult"
   | "onAgentToolResult"
   | "observeToolTerminal"

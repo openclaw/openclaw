@@ -6,10 +6,8 @@ import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-sup
 import { openSidebarPages } from "../../e2e/sidebar-customization.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiElementScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  assertSessionSectionCountAlignment,
-  installMockGateway,
-} from "../../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { assertSessionSectionCountAlignment } from "../../test-helpers/control-ui-session-section-layout.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 
 const suite = createControlUiE2eSuite({ name: "Workboard sidebar layout" });

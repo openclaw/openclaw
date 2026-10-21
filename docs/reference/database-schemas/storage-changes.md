@@ -29,24 +29,36 @@ implements the agent-store portion of the
 [accepted column-promotion design](https://github.com/openclaw/openclaw/issues/169254).
 The JSON remains canonical. Each writer derives its query columns in TypeScript
 and commits them with the JSON in one statement; the session actor reuses that
-derivation. Runtime predicates use columns. No trigger, second persistence owner,
-or read-time backfill is introduced.
+derivation. Session-node and outbox predicates use stored columns. SQLite
+transcript predicates use stored classifications when available and otherwise
+derive them in the existing SQL query before predicate filters, counts, and
+`LIMIT`. Reads do not persist these derived values.
 
-The versioned migration uses SQLite JSON functions only to classify existing rows
-and publishes both schema markers after the complete backfill. It preserves
+The versioned migration eagerly backfills session-node and existing outbox rows,
+but leaves transcript classification lazy. SQLite can still check retained rows
+while adding columns to STRICT tables. It publishes both schema markers after the
+required migration work. Classification preserves
 first-member lookups, legacy last-member transcript navigation, SQLite integer-cast
 semantics, malformed-row handling, payload bytes, and existing retention rules.
 Schema admission and Doctor remain the only migration owners. Optional outbox
-storage stays lazy. Added text and integer fields translate to PostgreSQL text
-with C collation and bigint; supporting engines share the schema version and
-must supply their equivalent forward migration.
+storage stays lazy.
+
+New transcript payload writes and canonical payload rewrites materialize the
+predicate fields; metadata-only updates and byte-preserving copies do not. There
+is no background convergence job or new schema version. Existing beta stores with
+materialized predicates remain valid. SQLite-to-PostgreSQL ports normalize
+unclassified transcript predicates from payloads already being transferred, so
+PostgreSQL reads stored columns. Added text and integer fields translate to
+PostgreSQL text with C collation and bigint; supporting engines share the schema
+version and must supply their equivalent forward migration.
 
 SQL projections that bound large payloads before transfer stay in SQL. Current
-writer-authority comparisons also retain their existing implementation rather
-than weakening a real effect boundary. The migration adds storage proportional
-to retained rows, and first-upgrade proof measures time per database and across
-many-agent hosts. Older binaries refuse the new schema; recovery restores a
-verified pre-migration backup and its matching binary.
+writer-authority comparisons retain their existing implementation. Lazy transcript
+classification removes that eager backfill from candidate-side migration; other
+upgrade work and later transcript queries can still scale with retained data.
+First-upgrade proof measures time per database and across many-agent hosts.
+Older binaries refuse the new schema; recovery restores a verified pre-migration
+backup and its matching binary.
 
 <a id="canonical-writer-validation" />
 
@@ -83,8 +95,8 @@ or result delivery fails; recovery reconciles through its original owner instead
 of repeating the write. See
 [committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness).
 
-SQLite remains the supported default. The experimental PostgreSQL adapter
-supports remote persistence for one Gateway;
+SQLite remains the default. PostgreSQL supports remote persistence for one
+Gateway on the [qualified runtime](/gateway/postgresql#support-matrix);
 multiple active Gateways would require a separate ownership and coordination
 design. A shared database alone does not make process-local writer queues,
 session lifecycles, or host-owned leases safe across Gateway instances.
@@ -213,12 +225,15 @@ SQLite primitive owners listed in `SQLITE_PRIMITIVE_OWNERS` may grow engine-main
 The lexical gate examines `.sql` files minus comments, all static parts of templates whose tag's final identifier ends in `sql` (case-insensitive), strings and untagged templates starting after whitespace and `(` with an uppercase SQL statement keyword, and the `orReplace`/`orIgnore`/`orAbort`/`orFail`/`orRollback` method calls; construct regexes remain case-insensitive, exclude SQL double-quoted text, require `name(` for functions, and require `PRAGMA <name>` or `pragma_<name>(` for `data_version`/`schema_version`/`user_version`.
 Prose, fragments without a statement prefix, and substitutions are ignored, accepting under-counts for assembled SQL; both revisions use identical rules without type, symbol, import, or SQL token-role analysis, and runtime behavior and schemas are unchanged.
 
-### Experimental PostgreSQL engine (workboard pilot)
+<a id="experimental-postgresql-engine-workboard-pilot" />
+
+### PostgreSQL engine
 
 `database.engine: "postgres"` selects PostgreSQL for every store with a registered
-PostgreSQL schema; workboard is currently the only supported store. Doctor
-reports each store's engine and warns about stores that remain on SQLite.
-See [Database engines (experimental)](/reference/database-engines) for SecretRef
+PostgreSQL schema: state, agent, Workboard, Logbook and Team Reports. Doctor
+reports configured and observed engines and warns about mismatches and missing
+capabilities. Local safety stores remain SQLite by design.
+See [Database engines](/reference/database-engines) for SecretRef
 configuration, isolation and durability, matched anchor/schema backups,
 limitations, and engine-boundary observation. Missing secrets, connection failures,
 and admission errors never fall back to SQLite. Existing SQLite workboard data
@@ -777,6 +792,31 @@ outcomes fence affected rows until restoration from the store; they never author
 The digest requires no new column, schema migration, or updater behavior, and also
 detects writes from older processes that cannot maintain a new revision column.
 
+Private requester-settle wakes retain `privateInput` (the dispatch run ID and raw
+prompt) inside their existing `subagent_runs.payload_json` wake state before
+Gateway dispatch. The same row transition owns retries; this adds no table,
+column, index, schema version, or scheduler. Accepted input can be transformed by
+transcript hooks or reduced to a hash/outcome receipt, so it cannot reconstruct
+the original raw request. Later descendant delivery and findings updates must
+not change that request under its existing idempotency key.
+
+The field is optional and needs no backfill. Wakes already dispatched by an older
+build retain their existing strict input comparison: if the original raw prompt
+cannot be reconstructed, a mismatch remains a refusal, never permission to
+replace accepted input. Older builds ignore the field and may discard it when
+writing wake state; rollback therefore loses this retry guarantee without
+changing transcript bytes or requiring reverse migration. Upgrading again
+cannot recover raw bytes already discarded by an older writer.
+
+The prompt has the same private scope as the existing child findings. It is
+retained only with the pending wake, removed when the wake settles or is
+cancelled, and cleared when its retry identity resets. New yield generations
+replace the wake. Each member of a frozen batch retains the shared wake value,
+so temporary storage grows with prompt size times the number of batch members;
+there is no extra payload read or write transaction. Registry deletion removes
+it with the row. Current requester, cohort, store, and execution authority still
+revalidate before dispatch; the saved prompt grants no authority.
+
 An ordinary follow-up to a completed child creates a new task and execution while
 retaining the completed row's pending parent delivery and receipt. The same row
 transaction fences the predecessor's session effects; its exact execution and
@@ -816,13 +856,6 @@ confirmed Stop, or lost database owner prevents a late write from replacing the
 current owner. Unknown writes are not replayed. Cleanup rechecks session ownership
 and retained cancellation claims before changing prepared resources. No separate
 Tasks record or managed flow participates in admission or settlement.
-
-Explicit promotion notice and claim annotations execute in the shared-state
-worker. The CLI awaits their best-effort completion before reporting results;
-storage failures still do not fail a promotion claim. Notice recording retains
-its read-only preflight and atomic sorted slug union, preserving the other feed
-fields. Empty notices leave absent databases absent, and already-recorded notices
-do not open a writer. Claim upserts, stored formats, and retention are unchanged.
 
 Update-check telemetry reads its cached response and retained session-creation
 count through the shared-state worker. Successful responses use the existing
@@ -1778,6 +1811,14 @@ their existing close and revocation paths. Reuse preserves read admission and
 owning-writer invalidation, without changing schemas, stored retention, or update
 behavior. The idle window is an internal constant, not a configuration option.
 
+Agent database handles and executors hold a lease that Doctor maintenance waits
+for, and no owner can tell an idle holder in another process that an update is
+waiting. CLI processes therefore retire an unused agent handle, executor, or
+session reclamation Worker 30 seconds after its last use; the Gateway (including
+the bare `openclaw` TUI entry) and embedders that install no process role keep
+the 30-minute window. Borrowed handles, open transactions, and an executor's
+pinned Worker handle keep their lease until the work settles.
+
 Explicit artifact-preserving inspections, private snapshots, and extension-enabled or nested
 transaction reads retain their isolated connection and cleanup contracts.
 
@@ -2690,6 +2731,23 @@ or deduplication still precedes marker settlement. Failed event recording leaves
 the marker available for the next check. Schemas, stored bytes, retention, provider
 contracts, and update behavior are unchanged; no migration is required.
 
+## Trajectory payload compression
+
+The trajectory writer worker prepares Brotli quality 3 payloads before its
+existing transaction. Values of at least 1 KiB compress only when they save
+at least 64 bytes and 10%; values larger than 256 KiB remain text. New rows store
+a codec marker and exact logical UTF-8 size alongside compressed bytes. Bounded
+decoding preserves original strings without JSON reserialization. Narrow SQL
+projections decode inside SQLite so diagnostics do not transfer full event bodies.
+
+The schema migration keeps old text rows intact and replaces the retention index
+expression with `COALESCE(event_utf8_bytes, octet_length(event_json))`. This keeps
+retention indexed and leaves logical history limits unchanged. There is no eager
+conversion or new worker request. Native PostgreSQL uses raw JSON text and TOAST;
+engine ports decode compressed SQLite rows before copying them. See
+[trajectory payload storage](/reference/database-schemas/agent-schema-history#trajectory-payload-storage)
+for migration and rollback details.
+
 ## Trajectory retention covering index
 
 The accepted trajectory retention design keeps stored runtime events in the
@@ -2877,6 +2935,28 @@ upgrade can report the pending unknown outcome. Rollback does not alter history,
 execute commands, or require a database restore. The maintainer-authorized
 restart-continuity repair accepts this narrowly scoped durability change; owner
 and separate-Gateway-process tests cover lifecycle cleanup and restart handoff.
+
+## Memory index batch revisions
+
+Agent schema 31 removes the six row revision triggers on `memory_index_sources`
+and `memory_index_chunks`. The publication and Forget writers advance
+`memory_index_state.revision` once inside each transaction that changes the
+index, including source refresh, replacement, deletion, reset, shadow publication,
+and purge. Readers cannot observe committed index rows with a previous revision;
+rollback discards both the row changes and the revision advance. Revision values
+identify index changes, not the number of affected rows.
+
+The migration does not rewrite memory content, embeddings, source identities, or
+the current revision. SQLite and PostgreSQL advance together. PostgreSQL also
+retires the two obsolete revision trigger functions, while retaining vector and
+full-text projection triggers. Historical admission and rollback keep the old
+trigger definitions. Fresh and shadow memory stores use the same writer-owned
+revision contract.
+
+The declared SQLite backup covers the source and chunk tables and schema metadata.
+Other retained tables and planner statistics stay unchanged. Older binaries
+require the verified pre-upgrade backup and matching schema; manually lowering
+version markers cannot restore their revision-update contract.
 
 ## Review checkpoint for material changes
 

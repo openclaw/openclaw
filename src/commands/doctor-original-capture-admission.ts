@@ -1,4 +1,5 @@
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
+import { withDoctorProgress } from "../flows/doctor-health-startup.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
@@ -8,7 +9,7 @@ import type { preserveDoctorOriginalState } from "./doctor-original-capture.js";
 export function createDoctorOriginalCaptureHook(
   params: Pick<
     Parameters<typeof preserveDoctorOriginalState>[0],
-    "root" | "runtime" | "writeAuthority"
+    "root" | "runtime" | "writeAuthority" | "fullIntegrityCheck"
   > & {
     rehearsalRoot?: string;
     json?: boolean;
@@ -56,15 +57,21 @@ export function createDoctorOriginalCaptureHook(
         );
       }
     }
-    await measureGatewayBootstrapStep("doctor.maintenance.preserve-original-state", () =>
-      preserveDoctorOriginalState({
-        root: params.root,
-        env,
-        runtime: params.runtime,
-        signal,
-        assertCurrent: () => scope.assertOwnerCurrent(),
-        writeAuthority: params.writeAuthority,
-      }),
+    await withDoctorProgress(
+      "Back up original state",
+      () =>
+        measureGatewayBootstrapStep("doctor.maintenance.preserve-original-state", () =>
+          preserveDoctorOriginalState({
+            root: params.root,
+            env,
+            runtime: params.runtime,
+            signal,
+            assertCurrent: () => scope.assertOwnerCurrent(),
+            writeAuthority: params.writeAuthority,
+            fullIntegrityCheck: params.fullIntegrityCheck,
+          }),
+        ),
+      params.json !== true,
     );
   };
 }

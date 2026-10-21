@@ -305,6 +305,7 @@ describe("chat header session menu", () => {
       }
       const opened = await openNativeSessionMenu({
         pane: menu.parentElement!,
+        getMenu: () => menu,
         signal: abort.signal,
         isCurrent: () => outcome !== "retargeted",
       });
@@ -322,6 +323,7 @@ describe("chat header session menu", () => {
     expect(
       await openNativeSessionMenu({
         pane: menu.parentElement!,
+        getMenu: () => menu,
         signal: abort.signal,
         isCurrent: () => true,
       }),
@@ -683,7 +685,7 @@ describe("chat header session menu", () => {
     expect(stopWorker).not.toHaveBeenCalled();
     if (compact) {
       expect(initialLabels).toEqual([
-        "Open command palette",
+        "Command palette",
         "View",
         "Pin session",
         "Rename…",

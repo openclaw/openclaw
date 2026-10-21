@@ -21,6 +21,23 @@ const tupleSchema = {
 } as unknown as Parameters<typeof lookupConfigSchema>[0];
 
 describe("config schema", () => {
+  it("requires concrete Gateway policy identities and accepts an explicitly empty ceiling", () => {
+    expect(ToolsSchema.safeParse({ gatewayPolicy: { allow: [] } }).success).toBe(true);
+    expect(
+      ToolsSchema.safeParse({
+        gatewayPolicy: { allow: ["sessions"], actions: { sessions: ["list"] } },
+      }).success,
+    ).toBe(true);
+    for (const gatewayPolicy of [
+      {},
+      { allow: ["*"] },
+      { allow: ["group:plugins"] },
+      { allow: ["sessions"], actions: { sessions: ["*"] } },
+    ]) {
+      expect(ToolsSchema.safeParse({ gatewayPolicy }).success).toBe(false);
+    }
+  });
+
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchemaCore>[0]>;
   let baseSchema: ReturnType<typeof buildConfigSchemaCore>;
   let pluginUiHintInput: SchemaInput;

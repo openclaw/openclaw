@@ -8,7 +8,7 @@ import {
 } from "../../accepted-session-spawn.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
-import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
+import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers/error-text.js";
 import { renderAgentHarnessPreflightUserMessage } from "../../embedded-agent-helpers/user-facing-text.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import { isToolAuthoredSourceReplyForAssistant } from "../../embedded-agent-tool-authored-source-reply.js";

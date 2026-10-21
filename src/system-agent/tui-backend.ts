@@ -375,7 +375,7 @@ async function runSetupHandoff(
   }
   const beforePersistentEffect = async () => {
     await requireSystemAgentPersistentApplyInference(
-      { binding: opts?.verifiedInference, runtime, deps: opts.deps },
+      { binding: opts?.verifiedInference, runtime },
       (failures) => {
         if (isSystemAgentInferenceUnavailableError(failures[0])) {
           throw failures[0];
@@ -494,7 +494,7 @@ async function requireTuiVerifiedInference(opts: SystemAgentTuiOptions) {
     throw new SystemAgentInferenceUnavailableError("conversation");
   }
   try {
-    const verified = await resolveSystemAgentVerifiedInferenceState(binding, opts.deps);
+    const verified = await resolveSystemAgentVerifiedInferenceState(binding);
     if (verified) {
       const { config, route } = verified;
       const [{ getPreparedModelCatalogSnapshot }, { resolveThinkingDefault }] = await Promise.all([

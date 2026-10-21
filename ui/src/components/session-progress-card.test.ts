@@ -354,6 +354,35 @@ describe("renderSessionProgressCard", () => {
     },
   );
 
+  it("listens to its owned transcript instead of a closer pane's thread", async () => {
+    const ownedPane = createContainer();
+    const ownedThread = document.createElement("div");
+    ownedThread.className = "chat-thread";
+    ownedPane.append(ownedThread);
+    const ownedTranscript = observeTranscript(ownedPane, transcriptCleanups);
+    const container = createContainer();
+    renderTranscriptCard(container, {
+      readingHistory: true,
+      getTranscriptElement: () => ownedThread,
+    });
+    const decoyTranscript = observeTranscript(container, transcriptCleanups);
+    await Promise.resolve();
+    const card = container.querySelector("details")!;
+    expect(card.open).toBe(true);
+
+    decoyTranscript.wheel(200);
+    advance(201);
+    decoyTranscript.wheel(200);
+    advance(300);
+    expect(card.open).toBe(true);
+
+    ownedTranscript.wheel(200);
+    advance(201);
+    ownedTranscript.wheel(200);
+    advance(300);
+    expect(card.open).toBe(false);
+  });
+
   it("keeps gestures across reading-history renders and late native offsets", async () => {
     const container = createContainer();
     const renderHistory = (readingHistory: boolean) =>
@@ -534,13 +563,24 @@ describe("renderSessionProgressCard", () => {
     ["failed", "Failed"],
     ["timeout", "Failed"],
     ["killed", "Stopped"],
-  ] as const)("shows %s as %s in the closed summary", (status, expected) => {
-    const container = mountCard({
-      sessionStatus: status,
-      ...runWindow,
-    });
+  ] as const)("announces %s as %s in collapsed progress summaries", (status, expected) => {
+    for (const placement of ["composer", "details"] as const) {
+      const container = mountCard({
+        placement,
+        desktopDetails: placement === "details",
+        collapseComposerByDefault: true,
+        sessionStatus: status,
+        ...runWindow,
+      });
 
-    expect(cardPart(container, "summary-count--collapsed")?.textContent).toBe(expected);
+      expect(container.querySelector("details")?.open).toBe(false);
+      expect(container.querySelector("summary")?.getAttribute("aria-label")).toBe(
+        `Wire the checklist. ${status === "running" ? "1 of 3 completed" : expected}`,
+      );
+      if (placement === "composer") {
+        expect(cardPart(container, "summary-count--collapsed")?.textContent).toBe(expected);
+      }
+    }
   });
 
   it("uses a terminal circle-x instead of pausing after the run stops", () => {

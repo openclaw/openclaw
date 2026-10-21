@@ -1,5 +1,6 @@
 // Route CLI tests cover route command registration, channel routing, and output.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
@@ -8,9 +9,6 @@ const ensureConfigReadyMock = vi.hoisted(() =>
 );
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const runRouteMock = vi.hoisted(() => vi.fn(async () => true));
-const runWithLocalStateOwnerMock = vi.hoisted(() =>
-  vi.fn(async ({ runLocal }: { runLocal: () => Promise<void> }) => runLocal()),
-);
 
 vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
@@ -23,11 +21,6 @@ vi.mock("./program/config-guard.js", () => ({
 vi.mock("../plugins/runtime/runtime-registry-loader.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/runtime/runtime-registry-loader.js")>()),
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
-}));
-
-// mock-isolation: Process tests cover state ownership; this suite covers startup and dispatch.
-vi.mock("./local-state-owner.js", () => ({
-  runWithLocalStateOwner: runWithLocalStateOwnerMock,
 }));
 
 // Keep route selection and argument parsing real; replace only command side effects.
@@ -43,8 +36,13 @@ vi.mock("./daemon-cli/status.js", () => ({ runDaemonStatus: runRouteMock }));
 vi.mock("./gateway-cli/health-route.js", () => ({ runGatewayHealthJsonRoute: runRouteMock }));
 vi.mock("./config-cli.js", () => ({ runConfigGet: runRouteMock, runConfigUnset: runRouteMock }));
 vi.mock("../commands/models/list.status-command.js", () => ({ modelsStatusCommand: runRouteMock }));
+vi.mock("../commands/models/list.list-command.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/models/list.list-command.js")>()),
+  modelsListCommand: runRouteMock,
+}));
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: {
     error: vi.fn(),
     log: vi.fn(),
@@ -85,6 +83,216 @@ describe("tryRouteCli", () => {
       loggingState.forceConsoleToStderr = originalForceStderr;
     }
     originalEnv.restore();
+  });
+
+  it.each([
+    {
+      command: "health --json --timeout 5000",
+      expected: { json: true, verbose: false, timeoutMs: 5000 },
+    },
+    {
+      command: "status --json --deep --all --usage --agent beta --timeout 5000",
+      expected: { deep: true, all: true, usage: true, agent: "beta", timeoutMs: 5000 },
+    },
+    {
+      command: "health --timeout nope --timeout 5000",
+      expected: { json: false, verbose: false, timeoutMs: 5000 },
+    },
+    {
+      command: "status --timeout 5000",
+      expected: {
+        json: false,
+        deep: false,
+        all: false,
+        usage: false,
+        verbose: false,
+        timeoutMs: 5000,
+      },
+    },
+    {
+      command: "status --timeout 250",
+      expected: {
+        json: false,
+        deep: false,
+        all: false,
+        usage: false,
+        verbose: false,
+        timeoutMs: 250,
+      },
+    },
+    {
+      command: "status",
+      expected: {
+        json: false,
+        deep: false,
+        all: false,
+        usage: false,
+        verbose: false,
+        timeoutMs: undefined,
+      },
+    },
+    {
+      command: "--profile work status --json",
+      expected: { deep: false, all: false, usage: false, timeoutMs: undefined },
+    },
+    {
+      command: "--profile work health --timeout=5000 --json",
+      expected: { json: true, verbose: false, timeoutMs: 5000 },
+    },
+    {
+      command: "sessions --agent=default --limit=25",
+      expected: {
+        json: false,
+        allAgents: false,
+        agent: "default",
+        store: undefined,
+        active: undefined,
+        limit: "25",
+      },
+    },
+    {
+      command: "--log-level=debug agents list --json",
+      expected: { json: true, bindings: false, tree: false },
+      singleArgument: true,
+    },
+    {
+      command: "agents --json --bindings",
+      expected: { json: true, bindings: true, tree: false },
+      singleArgument: true,
+    },
+    {
+      command:
+        "gateway status --url ws://127.0.0.1:18789 --token abc --password def --timeout 5000 --deep --require-rpc --json",
+      expected: {
+        rpc: { url: "ws://127.0.0.1:18789", token: "abc", password: "def", timeout: "5000" },
+        probe: true,
+        requireRpc: true,
+        deep: true,
+        json: true,
+      },
+      singleArgument: true,
+    },
+    {
+      command:
+        "gateway health --url ws://127.0.0.1:18789 --token abc --password def --timeout 5000 --expect-final --json",
+      expected: {
+        rpc: {
+          url: "ws://127.0.0.1:18789",
+          token: "abc",
+          password: "def",
+          timeout: "5000",
+          expectFinal: true,
+          json: true,
+        },
+        localPortOverride: undefined,
+      },
+    },
+    {
+      command: "gateway --port 19083 health --json",
+      expected: {
+        rpc: {
+          url: undefined,
+          token: undefined,
+          password: undefined,
+          timeout: "10000",
+          expectFinal: false,
+          json: true,
+        },
+        localPortOverride: 19083,
+      },
+    },
+    {
+      command: "--log-level debug config get update.channel --json",
+      expected: { path: "update.channel", json: true },
+      singleArgument: true,
+    },
+    {
+      command: "config unset --profile work update.channel",
+      expected: {
+        path: "update.channel",
+        cliOptions: { dryRun: false, allowExec: false, json: false },
+        localStateOwner: { method: "config unset", target: "update.channel" },
+      },
+      singleArgument: true,
+    },
+    {
+      command: "config unset --dry-run --json --allow-exec update.channel",
+      expected: {
+        path: "update.channel",
+        cliOptions: { dryRun: true, allowExec: true, json: true },
+        localStateOwner: { method: "config unset", target: "update.channel" },
+      },
+      singleArgument: true,
+    },
+    {
+      command: "models list --provider openai --all --local --json --plain",
+      expected: { provider: "openai", all: true, local: true, json: true, plain: true },
+    },
+    {
+      command:
+        "models status --probe-provider openai --probe-timeout 5000 --probe-concurrency 2 --probe-max-tokens 64 --probe-profile fast --probe-profile safe --agent default --json --plain --check --probe",
+      expected: {
+        probeProvider: "openai",
+        probeTimeout: "5000",
+        probeConcurrency: "2",
+        probeMaxTokens: "64",
+        probeProfile: ["fast", "safe"],
+        agent: "default",
+        json: true,
+        plain: true,
+        check: true,
+        probe: true,
+      },
+    },
+  ])("forwards parsed arguments for $command", async ({ command, expected, singleArgument }) => {
+    await expect(tryRouteCli(["node", "openclaw", ...command.split(" ")])).resolves.toBe(true);
+
+    expect(runRouteMock).toHaveBeenCalledExactlyOnceWith(
+      ...(singleArgument ? [expected] : [expected, defaultRuntime]),
+    );
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    [
+      ["status", "--timeout"],
+      ["status", "--agent"],
+      ...["0", "-5", "nope", "5s"].flatMap((value) => [
+        ["status", "--timeout", value],
+        ["health", "--timeout", value],
+      ]),
+      ["status", "--timeout", "5000", "--timeout", "nope"],
+      ["--json", "status"],
+      ["--json", "health"],
+      ["--verbose", "health"],
+      ["--timeout=5000", "health"],
+      ["--timeout", "5000", "health"],
+      ["sessions", "--", "--json"],
+      ["agents", "list", "extra"],
+      ["config", "unset", "gateway.port", "", "--dry-run"],
+      ["gateway", "status", "--ssh", "host"],
+      ["gateway", "status", "--ssh-auto"],
+      ["gateway", "health"],
+      ["gateway", "health", "--url", "ws://127.0.0.1:18789", "--port", "19083", "--json"],
+      ["gateway", "health", "--timeout", "5s", "--json"],
+      ["config", "get", "--json"],
+      ["models", "status", "--probe-profile"],
+      ...[
+        ["gateway", "status"],
+        ["models", "list"],
+        ["channels", "list"],
+        ["channels", "status"],
+      ].map((command) => command.concat("--wat")),
+    ].map((args) => ({ args })),
+  )("defers malformed routed argv $args without observing startup", async ({ args }) => {
+    await expect(tryRouteCli(["node", "openclaw", ...args])).resolves.toBe(false);
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
+    expect(runRouteMock).not.toHaveBeenCalled();
+    expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
   it.each([
@@ -130,35 +338,17 @@ describe("tryRouteCli", () => {
   });
 
   it("defers routed config mutation preparation to its state owner", async () => {
-    const events: string[] = [];
-    runWithLocalStateOwnerMock.mockImplementationOnce(async ({ runLocal }) => {
-      events.push("state-owner");
-      await runLocal();
-    });
-    runRouteMock.mockImplementationOnce(async () => {
-      events.push("action");
-      return true;
-    });
     await expect(
       tryRouteCli(["node", "openclaw", "config", "unset", "gateway.port"]),
     ).resolves.toBe(true);
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-    expect(events).toEqual(["state-owner", "action"]);
-  });
-
-  it("propagates state ownership failure before running the mutation", async () => {
-    const error = new Error("synthetic state ownership refusal");
-    runWithLocalStateOwnerMock.mockRejectedValueOnce(error);
-
-    await expect(tryRouteCli(["node", "openclaw", "config", "unset", "gateway.port"])).rejects.toBe(
-      error,
-    );
-
-    expect(runRouteMock).not.toHaveBeenCalled();
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    expect(runRouteMock).toHaveBeenCalledExactlyOnceWith({
+      path: "gateway.port",
+      cliOptions: { allowExec: false, dryRun: false, json: false },
+      localStateOwner: { method: "config unset", target: "gateway.port" },
+    });
   });
 
   it("routes command-run logs to stderr for config-guard-skipping --json routes", async () => {

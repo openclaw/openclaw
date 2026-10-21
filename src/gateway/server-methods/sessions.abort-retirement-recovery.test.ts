@@ -207,13 +207,14 @@ it.each(["replacement revision", "unknown outcome"] as const)(
   },
 );
 
-it("preserves a newer wake generation instead of reporting its retirement", async () => {
-  const parentBefore = parent();
-  const oldGeneration = child()!.requesterSettleWake!.rearmGeneration ?? 0;
-  const cancel = registry.cancelSubagentRequesterSettleWake;
+it("full-session Stop retires a wake rearmed during retirement preparation", async () => {
+  const oldGeneration = subagentRuns.get(childRunId)!.requesterSettleWake!.rearmGeneration ?? 0;
+  const retire = registry.retireSubagentObligations;
   const gate = vi
-    .spyOn(registry, "cancelSubagentRequesterSettleWake")
-    .mockImplementationOnce(async (entry, assertCurrent) => {
+    .spyOn(registry, "retireSubagentObligations")
+    .mockImplementationOnce(async (entry, assertCurrent, options) => {
+      // Parent pending-input selection already ran; the same completed child's
+      // retirement mutation has not yet selected its current wake.
       await mutateSubagentRuns([entry.runId], (rows) => {
         const current = rows.get(entry.runId)!;
         const next = {
@@ -225,13 +226,31 @@ it("preserves a newer wake generation instead of reporting its retirement", asyn
         };
         return { value: undefined, postimages: new Map([[entry.runId, next]]) };
       });
-      await cancel(entry, assertCurrent);
+      expect(subagentRuns.get(childRunId)?.requesterSettleWake?.rearmGeneration).toBe(
+        oldGeneration + 1,
+      );
+      await retire(entry, assertCurrent, options);
     });
   try {
-    expect((await stopParent())?.[0]).toBe(false);
-    expect(child()?.requesterSettleWake?.rearmGeneration).toBe(oldGeneration + 1);
-    expect(child()?.execution.outcome?.status).toBe("ok");
-    expect(parent()).toEqual(parentBefore);
+    expect((await stopParent())?.slice(0, 2)).toEqual([
+      true,
+      { ok: true, abortedRunId: null, status: "aborted" },
+    ]);
+    expect(gate).toHaveBeenCalledOnce();
+    expect(subagentRuns.get(childRunId)?.requesterSettleWake).toBeUndefined();
+    expect(subagentRuns.get(childRunId)?.execution.outcome?.status).toBe("ok");
+    expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toMatchObject({
+      status: "killed",
+      abortedLastRun: true,
+      lastRunId: parentRunId,
+    });
+    await fixture.settle();
+    expect(
+      await markStartupOrphanedMainSessionsForRecovery({
+        cfg: getRuntimeConfig(),
+        stateDir: fixture.stateDir,
+      }),
+    ).toMatchObject({ marked: 0 });
   } finally {
     gate.mockRestore();
   }

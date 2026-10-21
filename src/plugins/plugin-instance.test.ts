@@ -2,7 +2,9 @@ import { runInNewContext } from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { attachPluginApiFacades, instrumentPluginInstanceApi } from "./api-facades.js";
+import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
+import { instrumentPluginInstanceApi } from "./api-facades.js";
+import { runPluginRegistration } from "./api-lifecycle.js";
 import { registerPluginCommandInRegistry } from "./command-registration.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
@@ -32,7 +34,6 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
-import type { OpenClawPluginApi } from "./types.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -688,30 +689,42 @@ it("preserves prepared caller scope and follows an adopted instance for detached
   await instance.dispose();
 });
 
-it("owns flat and grouped SDK registrations after repeated facade attachment", async () => {
+it("owns grouped SDK registrations through registration closure and instance disposal", async () => {
   const instance = new PluginInstance("facades");
   const registerSessionAction = vi.fn<(entry: PluginSessionActionRegistration) => void>();
   const registerAgentEventSubscription =
     vi.fn<(entry: PluginAgentEventSubscriptionRegistration) => void>();
   const registerRuntimeLifecycle = vi.fn<(entry: PluginRuntimeLifecycleRegistration) => void>();
-  const api = attachPluginApiFacades(
-    instrumentPluginInstanceApi(
-      {
-        registerSessionAction,
-        registerAgentEventSubscription,
-        registerRuntimeLifecycle,
-      } as unknown as OpenClawPluginApi,
-      instance,
-    ),
+  const api = instrumentPluginInstanceApi(
+    buildPluginApi({
+      id: "facades",
+      name: "facades",
+      source: "test",
+      registrationMode: "full",
+      config: {},
+      runtime: createUnavailableRuntime("setup-only"),
+      logger: { info() {}, warn() {}, error() {} },
+      resolvePath: (value) => value,
+      handlers: { registerSessionAction, registerAgentEventSubscription, registerRuntimeLifecycle },
+    }),
+    instance,
   );
   const handler = vi.fn<() => void>();
-  api.registerSessionAction({ id: "flat", handler });
-  api.session.controls.registerSessionAction({ id: "grouped", handler });
-  api.agent.events.registerAgentEventSubscription({ id: "events", handle: handler });
-  api.lifecycle.registerRuntimeLifecycle({ id: "lifecycle", cleanup: () => {} });
+  let lateRegistration: (() => void) | undefined;
+  let registeredLifecycle = api.lifecycle;
+  runPluginRegistration((registeredApi) => {
+    registeredLifecycle = registeredApi.lifecycle;
+    registeredApi.session.controls.registerSessionAction({ id: "grouped", handler });
+    registeredApi.agent.events.registerAgentEventSubscription({ id: "events", handle: handler });
+    registeredApi.lifecycle.registerRuntimeLifecycle({ id: "lifecycle", cleanup: () => {} });
+    lateRegistration = () =>
+      registeredApi.session.controls.registerSessionAction({ id: "late", handler });
+  }, api);
+  lateRegistration?.();
+  expect(registerSessionAction).toHaveBeenCalledOnce();
   const disposed = vi.fn();
-  api.lifecycle.onDispose?.(disposed);
-  expect(api.lifecycle.signal).toBe(instance.controller.signal);
+  registeredLifecycle.onDispose?.(disposed);
+  expect(registeredLifecycle.signal).toBe(instance.controller.signal);
   expect(registerRuntimeLifecycle).toHaveBeenCalledOnce();
   const callbacks = [
     ...registerSessionAction.mock.calls.map(([entry]) => entry.handler),
@@ -720,7 +733,7 @@ it("owns flat and grouped SDK registrations after repeated facade attachment", a
   for (const callback of callbacks) {
     Reflect.apply(callback, undefined, []);
   }
-  expect(handler).toHaveBeenCalledTimes(3);
+  expect(handler).toHaveBeenCalledTimes(2);
   await instance.dispose();
   expect(disposed).toHaveBeenCalledOnce();
   for (const callback of callbacks) {

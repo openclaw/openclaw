@@ -23,7 +23,12 @@ export type SessionTranscriptProjectionFacts = {
   generation: string | undefined;
   updatedAt: number | null;
   hasUnclassified: boolean;
-  latestIndexedReset: { active_position: number; event_type: "reset"; seq: number } | null;
+  latestIndexedReset: {
+    active_position: number;
+    event_id: string;
+    event_type: "reset";
+    seq: number;
+  } | null;
   hasUnindexedPrefix: boolean;
   latestSeq: number | null;
   state?: SessionTranscriptProjectionState;
@@ -31,7 +36,6 @@ export type SessionTranscriptProjectionFacts = {
 };
 
 export type SessionTranscriptProjectionReceipt = {
-  path: string;
   sessionId: string;
   /** The actor snapshot validated this entry independently of transcript-window completeness. */
   entrySessionKey?: string;

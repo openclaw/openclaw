@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
@@ -53,8 +52,94 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
-async function createChatGptImportFixture(prefix: string) {
-  const { rootDir, config } = await createVault({ prefix });
+async function addNotes(pagePath: string, note: string) {
+  const page = (await fs.readFile(pagePath, "utf8")).replace(
+    "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+    () => `<!-- openclaw:human:start -->\n${note}\n<!-- openclaw:human:end -->`,
+  );
+  await fs.writeFile(pagePath, page, "utf8");
+}
+
+function failPageReads(pagePath: string, error: Error, once = false) {
+  const readFile = fs.readFile.bind(fs);
+  let injected = false;
+  vi.spyOn(fs, "readFile").mockImplementation(
+    async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
+      if (args[0] === pagePath && (!once || !injected)) {
+        injected = true;
+        throw error;
+      }
+      return readFile(...args);
+    },
+  );
+  return { readFile, injected: () => injected };
+}
+
+async function createImportedFixture() {
+  const suiteRoot = await createTempDir("memory-wiki-source-page-");
+  const sourcePath = path.join(suiteRoot, "imported.txt");
+  const pagePath = "sources/imported.md";
+  const params: Parameters<typeof writeImportedSourcePage>[0] = {
+    vaultRoot: suiteRoot,
+    sourcePath,
+    pagePath,
+    syncKey: "bridge:imported",
+    sourceUpdatedAtMs: Date.UTC(2026, 4, 1),
+    sourceSize: 10,
+    renderFingerprint: "fp-1",
+    group: "bridge",
+    state: { entries: {}, version: 1 },
+    buildRendered: buildSourcePage,
+  };
+  await fs.writeFile(sourcePath, "first body", "utf8");
+  await writeImportedSourcePage(params);
+  return {
+    pagePath,
+    absPage: path.join(suiteRoot, pagePath),
+    state: params.state,
+    update: async () => {
+      await fs.writeFile(sourcePath, "second body changed", "utf8");
+      return writeImportedSourcePage({
+        ...params,
+        sourceUpdatedAtMs: Date.UTC(2026, 4, 2),
+        sourceSize: 19,
+        renderFingerprint: "fp-2",
+      });
+    },
+  };
+}
+
+async function createIngestFixture() {
+  const rootDir = await createTempDir("memory-wiki-ingest-retry-");
+  const inputPath = path.join(rootDir, "roadmap.txt");
+  const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+  await fs.writeFile(inputPath, "v1 content\n", "utf8");
+  await ingestMemoryWikiSource({ config, inputPath, nowMs: Date.UTC(2026, 3, 5, 12) });
+  return {
+    pagePath: path.join(config.vault.path, "sources", "roadmap.md"),
+    update: () => ingestMemoryWikiSource({ config, inputPath, nowMs: Date.UTC(2026, 3, 6, 12) }),
+    changeSource: () => fs.writeFile(inputPath, "v2 content updated\n", "utf8"),
+  };
+}
+
+async function createSynthesisFixture(initialBody: string) {
+  const { rootDir, config } = await createVault({ prefix: "memory-wiki-synthesis-retry-" });
+  const update = (body: string) =>
+    applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_synthesis",
+        title: "Release Plan",
+        body,
+        sourceIds: ["source.alpha"],
+      },
+    });
+  await update(initialBody);
+  return { pagePath: path.join(rootDir, "syntheses", "release-plan.md"), update };
+}
+
+async function createChatGptImportFixture() {
+  const { rootDir, config } = await createVault({ prefix: "memory-wiki-chatgpt-retry-" });
   const exportDir = path.join(rootDir, "chatgpt-export");
   await fs.mkdir(exportDir, { recursive: true });
   await fs.writeFile(
@@ -68,20 +153,8 @@ async function createChatGptImportFixture(prefix: string) {
         current_node: "assistant-1",
         mapping: {
           root: {},
-          "user-1": {
-            parent: "root",
-            message: {
-              author: { role: "user" },
-              content: { parts: ["I prefer aisle seats."] },
-            },
-          },
-          "assistant-1": {
-            parent: "user-1",
-            message: {
-              author: { role: "assistant" },
-              content: { parts: ["Noted."] },
-            },
-          },
+          "user-1": chatNode("root", "user", "I prefer aisle seats."),
+          "assistant-1": chatNode("user-1", "assistant", "Noted."),
         },
       },
     ])}\n`,
@@ -107,13 +180,15 @@ async function createChatGptImportFixture(prefix: string) {
   };
 }
 
+function chatNode(parent: string, role: string, text: string) {
+  return { parent, message: { author: { role }, content: { parts: [text] } } };
+}
+
 describe("memory-wiki existing-page read retry", () => {
   it.each(["opening", "closing", "both"])(
     "refuses ChatGPT re-import when handwritten Notes are missing the %s marker",
     async (missing) => {
-      const { config, exportDir, pagePath } = await createChatGptImportFixture(
-        "memory-wiki-chatgpt-missing-marker-",
-      );
+      const { config, exportDir, pagePath } = await createChatGptImportFixture();
       let page = (await fs.readFile(pagePath, "utf8")).replace(
         "<!-- openclaw:human:end -->",
         "Keep this handwritten note.\n<!-- openclaw:human:end -->",
@@ -136,14 +211,11 @@ describe("memory-wiki existing-page read retry", () => {
   it.each(["ingest", "source-sync", "chatgpt"] as const)(
     "refuses %s updates when existing human notes contain malformed UTF-8",
     async (kind) => {
-      const rootDir = await createTempDir("memory-wiki-notes-encoding-");
-      const inputPath = path.join(rootDir, "source.txt");
-      await fs.writeFile(inputPath, "original source\n");
       let pagePath: string;
       let update: () => Promise<unknown>;
       let state: Parameters<typeof writeImportedSourcePage>[0]["state"] | undefined;
       if (kind === "chatgpt") {
-        const fixture = await createChatGptImportFixture("memory-wiki-chatgpt-encoding-");
+        const fixture = await createChatGptImportFixture();
         pagePath = fixture.pagePath;
         const exportPath = path.join(fixture.exportDir, "conversations.json");
         await fs.writeFile(
@@ -152,33 +224,18 @@ describe("memory-wiki existing-page read retry", () => {
         );
         update = () =>
           importChatGptConversations({ config: fixture.config, exportPath: fixture.exportDir });
+      } else if (kind === "ingest") {
+        const fixture = await createIngestFixture();
+        pagePath = fixture.pagePath;
+        update = async () => {
+          await fixture.changeSource();
+          return fixture.update();
+        };
       } else {
-        const { config } = await createVault({
-          rootDir: path.join(rootDir, "vault"),
-          initialize: kind === "source-sync",
-        });
-        if (kind === "ingest") {
-          const result = await ingestMemoryWikiSource({ config, inputPath });
-          pagePath = path.join(config.vault.path, result.pagePath);
-          update = () => ingestMemoryWikiSource({ config, inputPath });
-        } else {
-          state = { version: 1, entries: {} };
-          const params: Parameters<typeof writeImportedSourcePage>[0] = {
-            vaultRoot: config.vault.path,
-            syncKey: "encoding-source",
-            sourcePath: inputPath,
-            sourceUpdatedAtMs: 1,
-            sourceSize: 16,
-            renderFingerprint: "encoding",
-            pagePath: "sources/imported.md",
-            group: "bridge",
-            state,
-            buildRendered: buildSourcePage,
-          };
-          await writeImportedSourcePage(params);
-          pagePath = path.join(config.vault.path, params.pagePath);
-          update = () => writeImportedSourcePage({ ...params, sourceUpdatedAtMs: 2 });
-        }
+        const fixture = await createImportedFixture();
+        pagePath = fixture.absPage;
+        state = fixture.state;
+        update = fixture.update;
       }
       const page = await fs.readFile(pagePath, "utf8");
       const end = page.indexOf("<!-- openclaw:human:end -->");
@@ -188,7 +245,6 @@ describe("memory-wiki existing-page read retry", () => {
         Buffer.from(`\n${page.slice(end)}`),
       ]);
       await fs.writeFile(pagePath, malformed);
-      await fs.writeFile(inputPath, "updated source\n");
       const originalState = structuredClone(state);
 
       await expect(update()).rejects.toThrow(/cannot be rewritten safely/);
@@ -236,215 +292,63 @@ describe("memory-wiki existing-page read retry", () => {
   );
 
   it("preserves ingest notes after a transient existing-page read failure", async () => {
-    const rootDir = await createTempDir("memory-wiki-reingest-read-retry-");
-    const inputPath = path.join(rootDir, "roadmap.txt");
-    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
-
-    await fs.writeFile(inputPath, "v1 content\n", "utf8");
-    await ingestMemoryWikiSource({
-      config,
-      inputPath,
-      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
-    });
-
-    const pagePath = path.join(config.vault.path, "sources", "roadmap.md");
+    const { pagePath, changeSource, update } = await createIngestFixture();
     const userNote = "KEY INSIGHT: covers the Q2 roadmap";
-    const edited = (await fs.readFile(pagePath, "utf8")).replace(
-      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-      `<!-- openclaw:human:start -->\n${userNote}\n<!-- openclaw:human:end -->`,
-    );
-    await fs.writeFile(pagePath, edited, "utf8");
+    await addNotes(pagePath, userNote);
+    await changeSource();
+    const error = new Error("transient existing-page read failure");
+    const failure = failPageReads(pagePath, error, true);
 
-    await fs.writeFile(inputPath, "v2 content updated\n", "utf8");
-    const originalReadFile = fs.readFile.bind(fs);
-    let injectedFailure = false;
-    vi.spyOn(fs, "readFile").mockImplementation(
-      async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
-        if (!injectedFailure && args[0] === pagePath) {
-          injectedFailure = true;
-          throw new Error("transient existing-page read failure");
-        }
-        return originalReadFile(...args);
-      },
-    );
+    await update();
 
-    await ingestMemoryWikiSource({
-      config,
-      inputPath,
-      nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
-    });
-
-    const after = await originalReadFile(pagePath, "utf8");
-    expect(injectedFailure).toBe(true);
+    const after = await failure.readFile(pagePath, "utf8");
+    expect(failure.injected()).toBe(true);
     expect(after).toContain("v2 content updated");
     expect(after).toContain(userNote);
   });
 
   it("preserves imported notes after a transient existing-page read failure", async () => {
-    const suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-source-page-"));
-    const sourcePath = path.join(suiteRoot, "imported-retry.txt");
-    const pagePath = "sources/imported-retry.md";
-    const absPage = path.join(suiteRoot, pagePath);
-    const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
-      entries: {},
-      version: 1,
-    };
-
-    try {
-      await fs.writeFile(sourcePath, "first body", "utf8");
-      await writeImportedSourcePage({
-        vaultRoot: suiteRoot,
-        syncKey: "bridge:imported-retry",
-        sourcePath,
-        sourceUpdatedAtMs: Date.UTC(2026, 4, 1),
-        sourceSize: 10,
-        renderFingerprint: "fp-1",
-        pagePath,
-        group: "bridge",
-        state,
-        buildRendered: buildSourcePage,
-      });
-
-      const userNote = "IMPORTED PAGE NOTE FROM HUMAN";
-      const edited = (await fs.readFile(absPage, "utf8")).replace(
-        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-        `<!-- openclaw:human:start -->\n${userNote}\n<!-- openclaw:human:end -->`,
-      );
-      await fs.writeFile(absPage, edited, "utf8");
-
-      securityRuntimeMock.failReadTextOnceFor = pagePath;
-
-      await fs.writeFile(sourcePath, "second body changed", "utf8");
-      const result = await writeImportedSourcePage({
-        vaultRoot: suiteRoot,
-        syncKey: "bridge:imported-retry",
-        sourcePath,
-        sourceUpdatedAtMs: Date.UTC(2026, 4, 2),
-        sourceSize: 19,
-        renderFingerprint: "fp-2",
-        pagePath,
-        group: "bridge",
-        state,
-        buildRendered: buildSourcePage,
-      });
-
-      const after = await fs.readFile(absPage, "utf8");
-      expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
-      expect(result.changed).toBe(true);
-      expect(after).toContain("second body changed");
-      expect(after).toContain(userNote);
-    } finally {
-      await fs.rm(suiteRoot, { recursive: true, force: true });
-    }
+    const { pagePath, absPage, update } = await createImportedFixture();
+    const userNote = "IMPORTED PAGE NOTE FROM HUMAN";
+    await addNotes(absPage, userNote);
+    securityRuntimeMock.failReadTextOnceFor = pagePath;
+    const result = await update();
+    const after = await fs.readFile(absPage, "utf8");
+    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
+    expect(result.changed).toBe(true);
+    expect(after).toContain("second body changed");
+    expect(after).toContain(userNote);
   });
 
   it("leaves imported source pages unchanged after a persistent existing-page read failure", async () => {
-    const suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-source-page-"));
-    const sourcePath = path.join(suiteRoot, "imported-persistent.txt");
-    const pagePath = "sources/imported-persistent.md";
-    const absPage = path.join(suiteRoot, pagePath);
-    const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
-      entries: {},
-      version: 1,
-    };
-
-    try {
-      await fs.writeFile(sourcePath, "first body", "utf8");
-      await writeImportedSourcePage({
-        vaultRoot: suiteRoot,
-        syncKey: "bridge:imported-persistent",
-        sourcePath,
-        sourceUpdatedAtMs: Date.UTC(2026, 4, 1),
-        sourceSize: 10,
-        renderFingerprint: "fp-1",
-        pagePath,
-        group: "bridge",
-        state,
-        buildRendered: buildSourcePage,
-      });
-      const before = await fs.readFile(absPage, "utf8");
-
-      securityRuntimeMock.failReadTextAlwaysFor = pagePath;
-
-      await fs.writeFile(sourcePath, "second body changed", "utf8");
-      await expect(
-        writeImportedSourcePage({
-          vaultRoot: suiteRoot,
-          syncKey: "bridge:imported-persistent",
-          sourcePath,
-          sourceUpdatedAtMs: Date.UTC(2026, 4, 2),
-          sourceSize: 19,
-          renderFingerprint: "fp-2",
-          pagePath,
-          group: "bridge",
-          state,
-          buildRendered: buildSourcePage,
-        }),
-      ).rejects.toThrow("persistent existing-page read failure");
-
-      expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
-      await expect(fs.readFile(absPage, "utf8")).resolves.toBe(before);
-    } finally {
-      await fs.rm(suiteRoot, { recursive: true, force: true });
-    }
+    const { pagePath, absPage, update } = await createImportedFixture();
+    const before = await fs.readFile(absPage, "utf8");
+    securityRuntimeMock.failReadTextAlwaysFor = pagePath;
+    await expect(update()).rejects.toThrow("persistent existing-page read failure");
+    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
+    await expect(fs.readFile(absPage, "utf8")).resolves.toBe(before);
   });
 
   it("leaves ingested source pages unchanged after a persistent existing-page read failure", async () => {
-    const rootDir = await createTempDir("memory-wiki-reingest-persistent-read-");
-    const inputPath = path.join(rootDir, "roadmap.txt");
-    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
-
-    await fs.writeFile(inputPath, "v1 content\n", "utf8");
-    await ingestMemoryWikiSource({
-      config,
-      inputPath,
-      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
-    });
-
-    const pagePath = path.join(config.vault.path, "sources", "roadmap.md");
+    const { pagePath, changeSource, update } = await createIngestFixture();
     const before = await fs.readFile(pagePath, "utf8");
-    await fs.writeFile(inputPath, "v2 content updated\n", "utf8");
-    const originalReadFile = fs.readFile.bind(fs);
-    vi.spyOn(fs, "readFile").mockImplementation(
-      async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
-        if (args[0] === pagePath) {
-          throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
-        }
-        return originalReadFile(...args);
-      },
-    );
+    await changeSource();
+    const error = Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    const failure = failPageReads(pagePath, error);
 
-    await expect(
-      ingestMemoryWikiSource({
-        config,
-        inputPath,
-        nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
-      }),
-    ).rejects.toMatchObject({ code: "EBUSY" });
+    await expect(update()).rejects.toMatchObject({ code: "EBUSY" });
 
-    await expect(originalReadFile(pagePath, "utf8")).resolves.toBe(before);
+    await expect(failure.readFile(pagePath, "utf8")).resolves.toBe(before);
   });
 
   it("preserves synthesis notes and frontmatter after a transient existing-page read failure", async () => {
-    const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-read-retry-" });
-
-    await applyMemoryWikiMutation({
-      config,
-      mutation: {
-        op: "create_synthesis",
-        title: "Release Plan",
-        body: "Initial summary v1.",
-        sourceIds: ["source.alpha"],
-      },
-    });
-
-    const pagePath = path.join(rootDir, "syntheses", "release-plan.md");
+    const { pagePath, update } = await createSynthesisFixture("Initial summary v1.");
     const userNote = "Ship gate: legal sign-off required before GA.";
-    let edited = (await fs.readFile(pagePath, "utf8")).replace(
-      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-      `<!-- openclaw:human:start -->\n${userNote}\n<!-- openclaw:human:end -->`,
+    await addNotes(pagePath, userNote);
+    const edited = (await fs.readFile(pagePath, "utf8")).replace(
+      /^---\n/,
+      "---\nprivacyTier: sensitive\n",
     );
-    edited = edited.replace(/^---\n/, "---\nprivacyTier: sensitive\n");
     await fs.writeFile(pagePath, edited, "utf8");
 
     securityRuntimeMock.failReadTextOnceFor = "syntheses/release-plan.md";
@@ -453,15 +357,7 @@ describe("memory-wiki existing-page read retry", () => {
       "page temporarily missing",
     );
 
-    await applyMemoryWikiMutation({
-      config,
-      mutation: {
-        op: "create_synthesis",
-        title: "Release Plan",
-        body: "Updated summary v2.",
-        sourceIds: ["source.alpha"],
-      },
-    });
+    await update("Updated summary v2.");
 
     const after = await fs.readFile(pagePath, "utf8");
     expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
@@ -471,19 +367,7 @@ describe("memory-wiki existing-page read retry", () => {
   });
 
   it("does not treat a path-alias policy failure as a missing synthesis page", async () => {
-    const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-path-alias-" });
-
-    await applyMemoryWikiMutation({
-      config,
-      mutation: {
-        op: "create_synthesis",
-        title: "Release Plan",
-        body: "Initial summary.",
-        sourceIds: ["source.alpha"],
-      },
-    });
-
-    const pagePath = path.join(rootDir, "syntheses", "release-plan.md");
+    const { pagePath, update } = await createSynthesisFixture("Initial summary.");
     const before = await fs.readFile(pagePath, "utf8");
     securityRuntimeMock.failReadTextAlwaysFor = "syntheses/release-plan.md";
     securityRuntimeMock.readTextError = new FsSafeError(
@@ -491,41 +375,20 @@ describe("memory-wiki existing-page read retry", () => {
       "page resolved outside the vault root",
     );
 
-    await expect(
-      applyMemoryWikiMutation({
-        config,
-        mutation: {
-          op: "create_synthesis",
-          title: "Release Plan",
-          body: "Replacement summary.",
-          sourceIds: ["source.alpha"],
-        },
-      }),
-    ).rejects.toMatchObject({ code: "path-alias" });
+    await expect(update("Replacement summary.")).rejects.toMatchObject({ code: "path-alias" });
 
     expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
     await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(before);
   });
 
   it("preserves chatgpt conversation notes containing dollar sequences and marker examples", async () => {
-    const { config, exportDir, pagePath } = await createChatGptImportFixture(
-      "memory-wiki-chatgpt-dollar-notes-",
-    );
+    const { config, exportDir, pagePath } = await createChatGptImportFixture();
     const userNote = [
       "Energy identity $$E=mc^2$$ and match $& and prefix $` and suffix $' end.",
       "Example marker: <!-- openclaw:human:end -->",
       "Keep this trailing handwritten note.",
     ].join("\n");
-    const noteBlock = [
-      "<!-- openclaw:human:start -->",
-      userNote,
-      "<!-- openclaw:human:end -->",
-    ].join("\n");
-    const edited = (await fs.readFile(pagePath, "utf8")).replace(
-      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-      () => noteBlock,
-    );
-    await fs.writeFile(pagePath, edited, "utf8");
+    await addNotes(pagePath, userNote);
 
     const second = await importChatGptConversations({
       config,
@@ -534,9 +397,7 @@ describe("memory-wiki existing-page read retry", () => {
     });
 
     const after = await fs.readFile(pagePath, "utf8");
-    expect(second.createdCount).toBe(0);
-    expect(second.updatedCount).toBe(0);
-    expect(second.skippedCount).toBe(1);
+    expect(second).toMatchObject({ createdCount: 0, updatedCount: 0, skippedCount: 1 });
     expect(after).toContain(userNote);
   });
 });

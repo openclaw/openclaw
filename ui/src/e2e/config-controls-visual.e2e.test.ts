@@ -427,15 +427,16 @@ suite.define(() => {
           await page.locator("[data-control-ui-browser-handled]").evaluate((link) => link.remove());
           await addProofLink(page, false);
           await page.locator("[data-control-ui-browser-proof]").click();
-          await expect.poll(() => gateway.getRequests("browser.request")).not.toHaveLength(0);
-          expect(
-            (await gateway.getRequests("browser.request")).map((request) => request.params),
-          ).toContainEqual({
-            body: { url: "https://example.com/control-ui-proof" },
-            method: "POST",
-            path: "/tabs/open",
-            tabScope: { sessionKey: "agent:main:main" },
-          });
+          await expect
+            .poll(async () =>
+              (await gateway.getRequests("browser.request")).map((request) => request.params),
+            )
+            .toContainEqual({
+              body: { url: "https://example.com/control-ui-proof" },
+              method: "POST",
+              path: "/tabs/open",
+              tabScope: { sessionKey: "agent:main:main" },
+            });
           const browserPanel = page.locator("openclaw-browser-panel[embedded]");
           await browserPanel.waitFor();
           expect(

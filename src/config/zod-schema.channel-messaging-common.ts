@@ -20,6 +20,15 @@ import {
 export { ChannelBotLoopProtectionSchema } from "./zod-schema.channel-bot-loop.js";
 
 export const UnifiedStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
+/** Shared DM switches; channels can specialize their group identifier validator. */
+export const ChannelGroupDmSchema = z.strictObject({
+  /** If false, ignore incoming DMs. Default: true. */
+  enabled: z.boolean().optional(),
+  /** Allow group DMs. Default: false. */
+  groupEnabled: z.boolean().optional(),
+  /** Optional allowlist for group DM channels (ids or slugs). */
+  groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
+});
 export const ChannelThreadBindingsSchema = z.strictObject({
   enabled: z.boolean().optional(),
   idleHours: z.number().nonnegative().optional(),
@@ -132,7 +141,11 @@ export function buildChannelAccountSchemaParts<
   const accountShape = Object.fromEntries(
     Object.entries(shape).filter(([key]) => !omitted.has(key as CommonChannelAccountField)),
   ) as Omit<typeof shape, TOmit[number]>;
-  return { accountShape, rootPolicyShape: ChannelAccountPolicyDefaults };
+  return {
+    accountShape,
+    rootPolicyShape: ChannelAccountPolicyDefaults,
+    groupDmShape: ChannelGroupDmSchema.shape,
+  };
 }
 
 export const ChannelDangerouslyAllowNameMatchingSchema = z.boolean().optional();

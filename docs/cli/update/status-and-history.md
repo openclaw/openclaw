@@ -271,6 +271,10 @@ catalog-confirmed public check and plugin IDs are included; unknown IDs and code
 remain complete locally and are redacted publicly. Older runs cannot recover facts that their updater did not record. Existing history
 and report size limits still apply.
 
+When shared-state migration finds invalid client socket material, the report
+preserves that classified cause while redacting the database path and private
+exception details. A private path containing spaces does not hide the cause.
+
 Failed updates always retain a reason code and a failure fact, including failures
 before the first command runs. Git failures use codes such as `fetch-failed`,
 `git-root-unresolved`, `unsupported_git_channel`, and
@@ -429,11 +433,13 @@ for the activation Doctor step. These phases record their start and completion;
 the recorded driver identity protects the running update while its last-activity
 timestamp stays unchanged.
 The Gateway checks for
-abandoned runs at startup and while following active updates. When verified
-completion cannot be recovered, more than 30 minutes without step or heartbeat
-activity and verifiably dead recorded drivers allow the Gateway to finish the run as `failed` with reason `abandoned` and a
-`reconcile:abandoned` step naming the rule. A live, unreadable, or foreign-host
-driver prevents reconciliation. Each helper or finalization child records its
+abandoned runs at startup and while following active updates. Status reports
+confirmed driver loss without changing the recorded run, with `openclaw update
+repair` as the next action. Repair or the next update's admission can reconcile
+dead drivers without waiting for the inactivity grace period. The recorded run
+then becomes `failed` with reason `abandoned` and a `reconcile:abandoned` step
+naming the rule. A live, unreadable, or foreign-host driver, or retained recovery,
+prevents this reconciliation. Each helper or finalization child records its
 own identity and retains earlier drivers, because detached children can outlive
 their parent. If process identity recording is unavailable, the update continues
 with one warning and the run requires explicit recovery. Known parent identities

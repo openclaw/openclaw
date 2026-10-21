@@ -12,10 +12,9 @@ import {
 
 afterEach(resetDiscussionPanelTestState);
 
-async function emptyStateText(panel: HTMLElement): Promise<string> {
+function emptyStateText(panel: HTMLElement): string {
   const empty = panel.querySelector("openclaw-panel-empty-state");
   expect(empty).not.toBeNull();
-  await empty!.updateComplete;
   return empty!.textContent ?? "";
 }
 
@@ -42,9 +41,10 @@ describe("session discussion panel", () => {
       loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
       openDiscussion,
       canOpen: false,
+      presentation: "desktop",
     });
     await vi.waitFor(async () => {
-      expect(await emptyStateText(panel)).toContain("Operator write access is required");
+      expect(emptyStateText(panel)).toContain("Operator write access is required");
     });
     expect(openDiscussion).not.toHaveBeenCalled();
     expect(panel.querySelector("button")).toBeNull();
@@ -185,7 +185,7 @@ describe("session discussion panel", () => {
     });
 
     await vi.waitFor(async () => {
-      expect(await emptyStateText(panel)).toContain("cannot be embedded");
+      expect(emptyStateText(panel)).toContain("cannot be embedded");
     });
     expect(panel.querySelector("iframe")).toBeNull();
     expect(panel.querySelector("a")).toBeNull();

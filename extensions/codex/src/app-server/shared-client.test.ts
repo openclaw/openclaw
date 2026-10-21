@@ -134,7 +134,6 @@ import {
   getSharedCodexAppServerClient,
   readCodexAppServerClientDesktopGeneration,
 } from "./shared-client.js";
-import { resolveCodexAppServerSpawnIdentity } from "./spawn-identity.js";
 
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
 let clearSharedCodexAppServerClientAndWait: typeof import("./shared-client.js").clearSharedCodexAppServerClientAndWait;
@@ -434,20 +433,6 @@ describe("shared Codex app-server client", () => {
     startSpy.mockRestore();
   });
 
-  it("fingerprints argv without exposing secret-shaped config overrides", () => {
-    const identity = resolveCodexAppServerSpawnIdentity(
-      createStartOptions({
-        homeScope: "agent",
-        command: "/usr/local/bin/codex",
-        commandSource: "config",
-        args: ["-c", "provider.api_key=super-secret-value", "app-server"],
-      }),
-    );
-
-    expect(identity.argsFingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(JSON.stringify(identity)).not.toContain("super-secret-value");
-  });
-
   it("does not resolve startup context for a pre-aborted acquire", async () => {
     const abortController = new AbortController();
     abortController.abort();
@@ -693,9 +678,7 @@ describe("shared Codex app-server client", () => {
     expect(secondClient).toBe(firstClient);
     expect(desktop.process.stdin.destroyed).toBe(true);
     expect(pluginLocal.process.stdin.destroyed).toBe(false);
-    expect(
-      retireSharedCodexAppServerClientIfCurrent(desktop.client, { failActiveLeases: true }),
-    ).toBeUndefined();
+    expect(retireSharedCodexAppServerClientIfCurrent(desktop.client)).toBeUndefined();
     expect(pluginLocal.process.stdin.destroyed).toBe(false);
     expect(startSpy).toHaveBeenCalledTimes(2);
     const retained = await retainSharedCodexAppServerClientByInstanceId(
@@ -714,12 +697,11 @@ describe("shared Codex app-server client", () => {
     });
     expect(startSpy.mock.calls[1]?.[0]).not.toHaveProperty("managedFallbackCommandPaths");
 
-    expect(
-      retireSharedCodexAppServerClientIfCurrent(pluginLocal.client, { failActiveLeases: true }),
-    ).toEqual({ activeLeases: 0, closed: true });
-    expect(
-      retireSharedCodexAppServerClientIfCurrent(desktop.client, { failActiveLeases: true }),
-    ).toBeUndefined();
+    expect(retireSharedCodexAppServerClientIfCurrent(pluginLocal.client)).toEqual({
+      activeLeases: 0,
+      closed: true,
+    });
+    expect(retireSharedCodexAppServerClientIfCurrent(desktop.client)).toBeUndefined();
     await clearSharedCodexAppServerClientAndWait({ exitTimeoutMs: 25, forceKillDelayMs: 5 });
     expect(pluginLocal.process.stdin.destroyed).toBe(true);
   });
@@ -1721,44 +1703,6 @@ describe("shared Codex app-server client", () => {
     expect(second.process.stdin.destroyed).toBe(true);
   });
 
-  it("closes a retired shared app-server and forces active leases onto the retryable close path", async () => {
-    const first = createClientHarness();
-    const second = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start")
-      .mockResolvedValueOnce(first.client)
-      .mockResolvedValueOnce(second.client);
-
-    const firstList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await completeModelList(first, firstList);
-
-    const releaseFirst = retainSharedCodexAppServerClientIfCurrent(first.client);
-    const releaseSecond = retainSharedCodexAppServerClientIfCurrent(first.client);
-    expect(releaseFirst).toBeTypeOf("function");
-    expect(releaseSecond).toBeTypeOf("function");
-    const activeRequest = first.client.request("test/pending", {});
-    expect(
-      retireSharedCodexAppServerClientIfCurrent(first.client, { failActiveLeases: true }),
-    ).toEqual({
-      activeLeases: 2,
-      closed: true,
-    });
-    expect(first.process.stdin.destroyed).toBe(true);
-    await expect(activeRequest).rejects.toThrow("codex app-server client is closed");
-
-    const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await completeModelList(second, secondList);
-
-    releaseFirst?.();
-    releaseSecond?.();
-    expect(first.process.stdin.destroyed).toBe(true);
-    expect(second.process.kill).not.toHaveBeenCalled();
-    expect(retireSharedCodexAppServerClientIfCurrent(second.client)).toEqual({
-      activeLeases: 0,
-      closed: true,
-    });
-    expect(second.process.stdin.destroyed).toBe(true);
-  });
-
   it("leases shared app-server clients before returning concurrent acquirers", async () => {
     const first = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(first.client);
@@ -1769,21 +1713,18 @@ describe("shared Codex app-server client", () => {
     await expect(firstLease).resolves.toBe(first.client);
     await expect(secondLease).resolves.toBe(first.client);
 
-    expect(
-      retireSharedCodexAppServerClientIfCurrent(first.client, { failActiveLeases: true }),
-    ).toEqual({
-      activeLeases: 2,
-      closed: true,
-    });
-    expect(
-      retireSharedCodexAppServerClientIfCurrent(first.client, { failActiveLeases: true }),
-    ).toEqual({
+    expect(retireSharedCodexAppServerClientIfCurrent(first.client)).toEqual({
       activeLeases: 2,
       closed: false,
     });
-    expect(first.process.stdin.destroyed).toBe(true);
+    expect(retireSharedCodexAppServerClientIfCurrent(first.client)).toEqual({
+      activeLeases: 2,
+      closed: false,
+    });
+    expect(first.process.stdin.destroyed).toBe(false);
 
     expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
+    expect(first.process.stdin.destroyed).toBe(false);
     expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
     expect(first.process.stdin.destroyed).toBe(true);
     expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(false);
@@ -1827,33 +1768,7 @@ describe("shared Codex app-server client", () => {
     expect(first.process.stdin.destroyed).toBe(true);
   });
 
-  it("rejects pending acquires during shared-client retirement", async () => {
-    const first = createClientHarness();
-    const second = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start")
-      .mockResolvedValueOnce(first.client)
-      .mockResolvedValueOnce(second.client);
-
-    const firstLease = getLeasedSharedCodexAppServerClient();
-    const pendingLease = getLeasedSharedCodexAppServerClient();
-    await vi.waitFor(() => expect(first.writes.length).toBeGreaterThanOrEqual(1));
-
-    expect(
-      retireSharedCodexAppServerClientIfCurrent(first.client, { failActiveLeases: true }),
-    ).toEqual({
-      activeLeases: 0,
-      closed: true,
-    });
-    await expect(firstLease).rejects.toThrow("codex app-server client is closed");
-    await expect(pendingLease).rejects.toThrow("codex app-server client is closed");
-
-    const freshLease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
-    await sendInitializeResult(second, "openclaw/0.149.0 (macOS; test)");
-    await expect(freshLease).resolves.toBe(second.client);
-    expect(second.process.stdin.destroyed).toBe(false);
-  });
-
-  it.each(["release", "suspect retirement", "global disposal"])(
+  it.each(["release", "global disposal"])(
     "settles a gracefully detached client through %s",
     async (settlement) => {
       const harness = createClientHarness();
@@ -1885,12 +1800,6 @@ describe("shared Codex app-server client", () => {
       expect(harness.process.stdin.destroyed).toBe(false);
       if (current) {
         expect(current).toThrow("connection changed");
-      }
-      if (settlement === "suspect retirement") {
-        expect(
-          retireSharedCodexAppServerClientIfCurrent(client, { failActiveLeases: true }),
-        ).toEqual({ activeLeases: 1, closed: true });
-        expect(harness.process.stdin.destroyed).toBe(true);
       }
       if (settlement === "global disposal") {
         await clearSharedCodexAppServerClientAndWait({ exitTimeoutMs: 25, forceKillDelayMs: 5 });

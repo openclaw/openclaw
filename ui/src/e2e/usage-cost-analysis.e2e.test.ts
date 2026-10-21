@@ -68,13 +68,6 @@ function dailyEntry(offset: number, totalCost: number, totalTokens: number) {
   };
 }
 
-const daily = [
-  dailyEntry(-89, 5, 500_000),
-  dailyEntry(-29, 7, 700_000),
-  dailyEntry(-6, 9, 900_000),
-  dailyEntry(0, 11, 1_100_000),
-];
-
 const modelUsage = [
   { provider: "openai", model: "gpt-5.5", count: 30, totals: { ...totals, totalCost: 22 } },
   {
@@ -254,13 +247,15 @@ suite.define(() => {
           await page
             .getByRole("combobox", { name: "Time zone", exact: true })
             .selectOption(timeZone);
+          const content = page.locator("main.content");
           await expect
             .poll(() =>
-              page
-                .locator("main.content")
-                .evaluate((content) => getComputedStyle(content).paddingTop),
+              content.evaluate((element) => element.classList.contains("content--hub-header")),
             )
-            .toBe("0px");
+            .toBe(true);
+          expect(await content.evaluate((element) => getComputedStyle(element).paddingTop)).toBe(
+            "16px",
+          );
           const dateInputs = await page.locator(".usage-date-input").all();
           expect(dateInputs).toHaveLength(2);
           for (const input of dateInputs) {
@@ -551,6 +546,12 @@ suite.define(() => {
 
   it("renders cost analysis from Gateway usage data", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
+      const daily = [
+        dailyEntry(-89, 5, 500_000),
+        dailyEntry(-29, 7, 700_000),
+        dailyEntry(-6, 9, 900_000),
+        dailyEntry(0, 11, 1_100_000),
+      ];
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "sessions.usage.timeseries": { points: [] },

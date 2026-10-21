@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it } from "vitest";
 import { inspectDatabaseWorkerBoundaries } from "../../scripts/lib/database-worker-compat.mts";
 
@@ -17,30 +18,60 @@ function inspect(extra: Record<string, string>, source = owner) {
   ).violations;
 }
 
+function expectAllowed(extra: Record<string, string>, source = owner) {
+  expect(inspect(extra, source)).toEqual([]);
+}
+function expectDenied(
+  extra: Record<string, string>,
+  messages: string | string[] = "unreviewed personal credential writer reference",
+  source = owner,
+) {
+  const expected = typeof messages === "string" ? [messages] : messages;
+  expect(inspect(extra, source)).toEqual(
+    expected.map((message) => expect.stringContaining(message)),
+  );
+}
+
+function allowedGraph(sources: Record<string, string>) {
+  expectAllowed(sources);
+  return (
+    file: string,
+    update: string | ((original: string) => string),
+    messages?: string | string[],
+  ) => {
+    let replacement = update;
+    if (typeof replacement === "function") {
+      const original = sources[file];
+      assert(original !== undefined, `Missing fixture source: ${file}`);
+      replacement = replacement(original);
+    }
+    expectDenied({ ...sources, [file]: replacement }, messages);
+  };
+}
+
 it("allows the exact credential worker operations and exclusive Doctor entry", () => {
-  expect(
-    inspect({
-      "src/agents/auth-profiles/store.worker.ts": `
+  expectAllowed({
+    "src/agents/auth-profiles/store.worker.ts": `
       import { updateUserModelAuthProfile as replace } from '../../state/user-model-accounts.js';
       export const operations = {
         'authProfiles.personalReplace': () => replace(),
         'authProfiles.personalUsage': () => replace(),
       };
     `,
-      "src/state/user-profiles.worker.ts": `
+    "src/state/user-profiles.worker.ts": `
       import { connectUserModelAccount } from './user-model-accounts.js';
       export const operations = {
         'userProfiles.modelAccount.connect': wrap(() => connectUserModelAccount()),
       };
     `,
-      "src/commands/doctor-auth-flat-profiles.ts": `
+    "src/commands/doctor-auth-flat-profiles.ts": `
       import { renameUserProfileAuthLinks } from '../state/user-model-accounts.js';
       export function maybeRepairLegacyAuthProfileStores() {
         const migrate = () => renameUserProfileAuthLinks();
         migrate();
       }
     `,
-      "src/gateway/model-account-connect.ts": `
+    "src/gateway/model-account-connect.ts": `
       import * as nativeAccounts from '../state/user-model-accounts.js';
       export function createModelAccountConnectService() {
         const setLinkNative = () => nativeAccounts.setUserProfileAuthLink();
@@ -52,42 +83,25 @@ it("allows the exact credential worker operations and exclusive Doctor entry", (
         };
       }
     `,
-    }),
-  ).toEqual([]);
+  });
 });
 
 it.each([
-  [
-    "direct call",
-    "import { connectUserModelAccount as write } from './state/user-model-accounts.js'; write();",
-  ],
-  [
-    "namespace call",
-    "import * as accounts from './state/user-model-accounts.js'; accounts.connectUserModelAccount();",
-  ],
-  [
-    "computed member",
-    "import * as accounts from './state/user-model-accounts.js'; accounts['connectUserModelAccount']();",
-  ],
-  [
-    "writer escape",
-    "import { connectUserModelAccount } from './state/user-model-accounts.js'; export const write = connectUserModelAccount;",
-  ],
-  [
-    "namespace escape",
-    "import * as accounts from './state/user-model-accounts.js'; export const writers = accounts;",
-  ],
-  [
-    "barrel export",
-    "export { connectUserModelAccount as write } from './state/user-model-accounts.js';",
-  ],
-  [
-    "dynamic import escape",
-    "export const writers = await import('./state/user-model-accounts.js');",
-  ],
-  ["wildcard export", "export * from './state/user-model-accounts.js';"],
-  ["namespace export", "export * as accounts from './state/user-model-accounts.js';"],
-])("rejects an unowned %s", (_name, consumer) => {
+  "import { connectUserModelAccount as write } from './state/user-model-accounts.js'; write();",
+  "import * as accounts from './state/user-model-accounts.js'; accounts.connectUserModelAccount();",
+  "import * as accounts from './state/user-model-accounts.js'; accounts['connectUserModelAccount']();",
+  "import { connectUserModelAccount } from './state/user-model-accounts.js'; export const write = connectUserModelAccount;",
+  "import * as accounts from './state/user-model-accounts.js'; export const writers = accounts;",
+  "export { connectUserModelAccount as write } from './state/user-model-accounts.js';",
+  "export const writers = await import('./state/user-model-accounts.js');",
+  "export * from './state/user-model-accounts.js';",
+  "export * as accounts from './state/user-model-accounts.js';",
+  "const accounts = await import('./state/user-model-accounts.js'); export const escaped = accounts;",
+  "export const [accounts] = await Promise.all([import('./state/user-model-accounts.js')]);",
+  "const { ...accounts } = await import('./state/user-model-accounts.js'); consume(accounts);",
+  "const accounts = await import('./state/user-model-accounts.js'); accounts[unknownKey]();",
+  "const { [unknownKey]: writer } = await import('./state/user-model-accounts.js'); writer();",
+])("rejects an unowned reference: %s", (consumer) => {
   expect(inspect({ "src/consumer.ts": consumer })).toEqual(
     expect.arrayContaining([
       expect.stringContaining("unreviewed personal credential writer reference"),
@@ -118,20 +132,6 @@ it.each([
   ]);
 });
 
-it.each([
-  "const accounts = await import('./state/user-model-accounts.js'); export const escaped = accounts;",
-  "export const [accounts] = await Promise.all([import('./state/user-model-accounts.js')]);",
-  "const { ...accounts } = await import('./state/user-model-accounts.js'); consume(accounts);",
-  "const accounts = await import('./state/user-model-accounts.js'); accounts[unknownKey]();",
-  "const { [unknownKey]: writer } = await import('./state/user-model-accounts.js'); writer();",
-])("rejects an unbounded dynamic namespace or export: %s", (consumer) => {
-  expect(inspect({ "src/consumer.ts": consumer })).toEqual(
-    expect.arrayContaining([
-      expect.stringContaining("unreviewed personal credential writer reference"),
-    ]),
-  );
-});
-
 it("does not mistake worker naming or a sibling Doctor function for an approved entry", () => {
   expect(
     inspect({
@@ -151,21 +151,20 @@ it("does not mistake worker naming or a sibling Doctor function for an approved 
 });
 
 it("checks internal sink helpers instead of exempting the owner file", () => {
-  expect(
-    inspect(
-      {},
-      `
+  expectDenied(
+    {},
+    `from ${accounts}:bypass`,
+    `
     function writeRecord() {}
     function writeProfile() { writeRecord(); }
     export function bypass() { writeRecord(); }
   `,
-    ),
-  ).toEqual([expect.stringContaining(`from ${accounts}:bypass`)]);
+  );
 });
 
 it("rejects a new caller of the profile-merge participant", () => {
-  expect(
-    inspect({
+  expectDenied(
+    {
       "src/state/user-profiles-merge.ts": `
       import { mergeUserModelAccounts } from './user-model-accounts.js';
       export function mergeUserProfiles() { mergeUserModelAccounts(); }
@@ -174,45 +173,45 @@ it("rejects a new caller of the profile-merge participant", () => {
       import { mergeUserProfiles } from './state/user-profiles-merge.js';
       mergeUserProfiles();
     `,
-    }),
-  ).toEqual([expect.stringContaining("user-profiles-merge.ts:mergeUserProfiles")]);
+    },
+    "user-profiles-merge.ts:mergeUserProfiles",
+  );
 });
 
 it("ignores type references and same-named unrelated functions", () => {
-  expect(
-    inspect({
-      "src/consumer.ts": `
+  expectAllowed({
+    "src/consumer.ts": `
       import type { connectUserModelAccount } from './state/user-model-accounts.js';
       export type Connect = typeof connectUserModelAccount;
       export type { updateUserModelAuthProfile } from './state/user-model-accounts.js';
       function run(updateUserModelAuthProfile: () => void) { updateUserModelAuthProfile(); }
     `,
-    }),
-  ).toEqual([]);
+  });
 });
 
 it("permits a named reader re-export without exposing its sibling writers", () => {
-  expect(
-    inspect(
-      {
-        "src/consumer.ts": `
+  expectAllowed(
+    {
+      "src/consumer.ts": `
         export { listUserProfileAuthLinksAsync } from './state/user-model-accounts.js';
       `,
-      },
-      `${owner}\nexport function listUserProfileAuthLinksAsync() {}`,
-    ),
-  ).toEqual([]);
+    },
+    `${owner}\nexport function listUserProfileAuthLinksAsync() {}`,
+  );
 });
 
 it("allows reviewed sinks but rejects added sinks even in their owner function", () => {
   const sink = `db.insertInto('secret_store_entries').values({ name: 'model-account:test' });`;
-  expect(inspect({}, `function writeRecord() { ${sink} }`)).toEqual([]);
-  expect(inspect({}, `function writeRecord() { ${sink} ${sink} }`)).toEqual([
-    expect.stringContaining("unreviewed secret_store_entries writer"),
-  ]);
-  expect(inspect({ "src/new-writer.worker.ts": `function write() { ${sink} }` })).toEqual([
-    expect.stringContaining("unreviewed secret_store_entries writer"),
-  ]);
+  expectAllowed({}, `function writeRecord() { ${sink} }`);
+  expectDenied(
+    {},
+    "unreviewed secret_store_entries writer",
+    `function writeRecord() { ${sink} ${sink} }`,
+  );
+  expectDenied(
+    { "src/new-writer.worker.ts": `function write() { ${sink} }` },
+    "unreviewed secret_store_entries writer",
+  );
 });
 
 it.each([
@@ -231,12 +230,11 @@ it.each([
 it("permits audited nonpersonal cleanup without granting a whole-file exemption", () => {
   const file = "src/secrets/store/secret-store-expiry.kernel.ts";
   const remove = "db.deleteFrom('secret_store_entries').where('deleted_at_ms', '<', cutoff);";
-  expect(
-    inspect({ [file]: `function purgeExpiredSecretStoreEntriesInDatabase() { ${remove} }` }),
-  ).toEqual([]);
-  expect(inspect({ [file]: `function newCleanup() { ${remove} }` })).toEqual([
-    expect.stringContaining("unreviewed secret_store_entries writer"),
-  ]);
+  expectAllowed({ [file]: `function purgeExpiredSecretStoreEntriesInDatabase() { ${remove} }` });
+  expectDenied(
+    { [file]: `function newCleanup() { ${remove} }` },
+    "unreviewed secret_store_entries writer",
+  );
 });
 
 it.each([
@@ -257,9 +255,8 @@ it.each([
 });
 
 it("permits bounded noncredential machine-state writes", () => {
-  expect(
-    inspect({
-      "src/new-writer.worker.ts": `
+  expectAllowed({
+    "src/new-writer.worker.ts": `
       const unrelated = 'authProfiles.state';
       db.insertInto('config_machine_state').values({ state_key: unrelated });
       db.replaceInto('config_machine_state').values({ state_key: unrelated });
@@ -269,8 +266,7 @@ it("permits bounded noncredential machine-state writes", () => {
         .onConflict((conflict) => conflict.column('state_key').doUpdateSet({ state_key: 'other' }));
       db.deleteFrom('config_machine_state').where('state_key', '=', unrelated);
     `,
-    }),
-  ).toEqual([]);
+  });
 });
 
 it("counts canonical auth sinks and transitional generic sinks without file exemptions", () => {
@@ -278,33 +274,30 @@ it("counts canonical auth sinks and transitional generic sinks without file exem
   const machineState = "src/state/config-machine-state-write.ts";
   const write = `db.insertInto('auth_profile_store');
     db.insertInto('config_machine_state').values({ state_key: 'authProfiles.store' });`;
-  const sources = {
+  const reject = allowedGraph({
     [authCells]: `function writeAuthProfileJsonCell() { ${write} }`,
     [machineState]: `function upsertConfigMachineState(key: string) {
       db.insertInto('config_machine_state').values({ state_key: key });
     }`,
-  };
-  expect(inspect(sources)).toEqual([]);
-  expect(
-    inspect({
-      ...sources,
-      [authCells]: `${sources[authCells]} function bypass() { db.deleteFrom('auth_profile_store'); }`,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed auth_profile_store writer")]);
-  expect(
-    inspect({
-      ...sources,
-      [authCells]: `function writeAuthProfileJsonCell() { ${write} db.deleteFrom('auth_profile_store'); }`,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed auth_profile_store writer")]);
-  expect(
-    inspect({
-      ...sources,
-      [machineState]: `${sources[machineState]} function bypass() {
+  });
+
+  reject(
+    authCells,
+    (original) => `${original} function bypass() { db.deleteFrom('auth_profile_store'); }`,
+    "unreviewed auth_profile_store writer",
+  );
+  reject(
+    authCells,
+    `function writeAuthProfileJsonCell() { ${write} db.deleteFrom('auth_profile_store'); }`,
+    "unreviewed auth_profile_store writer",
+  );
+  reject(
+    machineState,
+    (original) => `${original} function bypass() {
       db.deleteFrom('config_machine_state').where('state_key', '=', 'authProfiles.store');
     }`,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed config_machine_state writer")]);
+    "unreviewed config_machine_state writer",
+  );
 });
 
 it("limits offline raw machine-state migration exceptions to their reviewed statements", () => {
@@ -312,11 +305,9 @@ it("limits offline raw machine-state migration exceptions to their reviewed stat
   const statement = "INSERT INTO config_machine_state (state_key) VALUES (?)";
   const source = (sql: string) =>
     `function migrateSingletonStateFoldInV12() { db.exec('${sql}'); }`;
-  expect(inspect({ [file]: source(statement) })).toEqual([]);
+  expectAllowed({ [file]: source(statement) });
   for (const sql of [`${statement}; ${statement}`, "DELETE FROM auth_profile_store"]) {
-    expect(inspect({ [file]: source(sql) })).toEqual([
-      expect.stringContaining("raw authority-table write"),
-    ]);
+    expectDenied({ [file]: source(sql) }, "raw authority-table write");
   }
 });
 
@@ -346,7 +337,7 @@ const sharedPublication = "src/gateway/github-publication-store.worker.ts";
 const publicationWorker = "src/state/github-publication.worker.ts";
 
 it("permits publication inserts only through the reviewed request and lifecycle owners", () => {
-  const sources = {
+  const reject = allowedGraph({
     [lifecycle]: `export function insertGitHubPublicationSessionLifecycle() {
       db.insertInto('github_publication_session_lifecycles');
     }`,
@@ -364,25 +355,21 @@ it("permits publication inserts only through the reviewed request and lifecycle 
         write();
       } };
     `,
-  };
-  expect(inspect(sources)).toEqual([]);
-  expect(
-    inspect({
-      ...sources,
-      "src/state/github-publication-request.worker.ts": sources[
-        "src/state/github-publication-request.worker.ts"
-      ].replace("githubPublications.insert", "githubPublications.bypass"),
-    }),
-  ).toEqual([expect.stringContaining("unreviewed GitHub publication writer reference")]);
-  expect(
-    inspect({
-      ...sources,
-      "src/new-writer.worker.ts": `
+  });
+
+  reject(
+    "src/state/github-publication-request.worker.ts",
+    (original) => original.replace("githubPublications.insert", "githubPublications.bypass"),
+    "unreviewed GitHub publication writer reference",
+  );
+  reject(
+    "src/new-writer.worker.ts",
+    `
         import { insertGitHubPublicationSessionLifecycle as write } from './state/github-publication-session-lifecycles.worker.js';
         write();
       `,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed GitHub publication writer reference")]);
+    "unreviewed GitHub publication writer reference",
+  );
 });
 
 it.each([
@@ -391,23 +378,21 @@ it.each([
   "github_repository_publication_requests",
   "github_publication_session_lifecycles",
 ])("rejects unowned native and raw publication writes to %s", (table) => {
-  expect(
-    inspect({
+  expectDenied(
+    {
       "src/new-writer.worker.ts": `
         const table = '${table}';
         db.updateTable(table);
         db.exec('DELETE FROM ${table} WHERE request_id = ?');
       `,
-    }),
-  ).toEqual([
-    expect.stringContaining(`unreviewed ${table} writer`),
-    expect.stringContaining("raw authority-table write"),
-  ]);
+    },
+    [`unreviewed ${table} writer`, "raw authority-table write"],
+  );
 });
 
 it("guards publication mutation entry paths and the existing repeated factory calls", () => {
   const factory = "createGitHubPublicationExecutionStoreInDatabase";
-  const sources = {
+  const reject = allowedGraph({
     [sharedPublication]: `export function ${factory}() {}`,
     [publicationWorker]: `
       import { ${factory} } from '../gateway/github-publication-store.worker.js';
@@ -417,25 +402,21 @@ it("guards publication mutation entry paths and the existing repeated factory ca
         'githubPublications.maintenance': () => { sharedMutation(); sharedMutation(); },
       };
     `,
-  };
-  expect(inspect(sources)).toEqual([]);
-  expect(
-    inspect({
-      ...sources,
-      [publicationWorker]: `${sources[publicationWorker]}
+  });
+
+  reject(
+    publicationWorker,
+    (original) => `${original}
         function bypass() { sharedMutation(); }
       `,
-    }),
-  ).toEqual([expect.stringContaining(`from ${publicationWorker}:bypass`)]);
-  expect(
-    inspect({
-      ...sources,
-      [publicationWorker]: sources[publicationWorker].replace(
-        `function sharedMutation() {`,
-        `function sharedMutation() { ${factory}();`,
-      ),
-    }),
-  ).toEqual([expect.stringContaining(`from ${publicationWorker}:sharedMutation`)]);
+    `from ${publicationWorker}:bypass`,
+  );
+  reject(
+    publicationWorker,
+    (original) =>
+      original.replace(`function sharedMutation() {`, `function sharedMutation() { ${factory}();`),
+    `from ${publicationWorker}:sharedMutation`,
+  );
 });
 
 it("counts the receipt deletion loop and lifecycle deletion as two reviewed sinks", () => {
@@ -446,9 +427,9 @@ it("counts the receipt deletion loop and lifecycle deletion as two reviewed sink
     for (const table of existing) { db.deleteFrom(table); }
     db.deleteFrom('github_publication_session_lifecycles');
   }`;
-  expect(inspect({ [file]: source })).toEqual([]);
-  expect(
-    inspect({
+  expectAllowed({ [file]: source });
+  expectDenied(
+    {
       [file]:
         source +
         `
@@ -456,23 +437,25 @@ it("counts the receipt deletion loop and lifecycle deletion as two reviewed sink
       db.deleteFrom(table);
     }
   `,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed github_")]);
-  expect(
-    inspect({
+    },
+    "unreviewed github_",
+  );
+  expectDenied(
+    {
       [file]: source.replace(
         "db.deleteFrom(table);",
         "db.deleteFrom(table); db.deleteFrom(table);",
       ),
-    }),
-  ).toEqual([expect.stringContaining("unreviewed github_publication_session_lifecycles writer")]);
+    },
+    "unreviewed github_publication_session_lifecycles writer",
+  );
 });
 
 it("guards generic credential publication and custody helpers against new caller entries", () => {
   const authority = "src/state/user-model-account-authority.ts";
   const custody = "src/agents/auth-profiles/credential-write-custody.ts";
   const machine = "src/state/config-machine-state-write.ts";
-  const sources = {
+  const reject = allowedGraph({
     [custody]: `export function withAuthProfileCredentialWriteCustody() {}`,
     [authority]: `
       import { withAuthProfileCredentialWriteCustody } from '../agents/auth-profiles/credential-write-custody.js';
@@ -483,23 +466,16 @@ it("guards generic credential publication and custody helpers against new caller
       function publishMachineStateWrite() { withAuthProfileCredentialWrite(); }
       function upsertConfigMachineState() { publishMachineStateWrite(); }
     `,
-  };
-  expect(inspect(sources)).toEqual([]);
-  expect(
-    inspect({
-      ...sources,
-      "src/new-writer.worker.ts": `
+  });
+
+  reject(
+    "src/new-writer.worker.ts",
+    `
       import { withAuthProfileCredentialWriteCustody as write } from './agents/auth-profiles/credential-write-custody.js';
       write();
     `,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
-  expect(
-    inspect({
-      ...sources,
-      [machine]: sources[machine] + `function bypass() { publishMachineStateWrite(); }`,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+  );
+  reject(machine, (original) => original + `function bypass() { publishMachineStateWrite(); }`);
 });
 
 it("requires the host publication adapter for direct and aliased machine-state commands", () => {
@@ -507,24 +483,22 @@ it("requires the host publication adapter for direct and aliased machine-state c
     const command = 'machineState.write' as const;
     return scope.execute({ type: command, input: { key: 'authProfiles.store', value: {} } });
   }`;
-  expect(inspect({ "src/state/config-machine-state-async.ts": source })).toEqual([]);
-  expect(inspect({ "src/new-writer.ts": source })).toEqual([
-    expect.stringContaining(
-      "machineState.write credential writes require the host publication adapter",
-    ),
-  ]);
+  expectAllowed({ "src/state/config-machine-state-async.ts": source });
+  expectDenied(
+    { "src/new-writer.ts": source },
+    "machineState.write credential writes require the host publication adapter",
+  );
   for (const command of [
     "'machineState.write'",
     "`machineState.write`",
     "'machineState\\u002ewrite'",
   ]) {
     const direct = source.replace("type: command", `type: ${command}`);
-    expect(inspect({ "src/state/config-machine-state-async.ts": direct })).toEqual([]);
-    expect(inspect({ "src/new-writer.ts": direct })).toEqual([
-      expect.stringContaining(
-        "machineState.write credential writes require the host publication adapter",
-      ),
-    ]);
+    expectAllowed({ "src/state/config-machine-state-async.ts": direct });
+    expectDenied(
+      { "src/new-writer.ts": direct },
+      "machineState.write credential writes require the host publication adapter",
+    );
   }
 });
 
@@ -538,27 +512,22 @@ it("tracks nested native writer declarations and permits only the reviewed facto
     function saveAuthProfileStore() { saveAuthProfileStoreInTransaction(); }
     return { saveAuthProfileStore };
   }`;
-  expect(inspect({ [authStore]: source })).toEqual([]);
-  expect(
-    inspect({
+  expectAllowed({ [authStore]: source });
+  expectDenied(
+    {
       [authStore]: source.replace(
         "return { saveAuthProfileStore };",
         "function bypass() { saveAuthProfileStoreInTransaction(); } return { saveAuthProfileStore };",
       ),
-    }),
-  ).toEqual([
-    expect.stringContaining(
-      "from src/agents/auth-profiles/store.ts:createAuthProfileStoreRuntime/bypass",
+    },
+    "from src/agents/auth-profiles/store.ts:createAuthProfileStoreRuntime/bypass",
+  );
+  expectDenied({
+    [authStore]: source.replace(
+      "return { saveAuthProfileStore };",
+      "const escaped = saveAuthProfileStore; return { saveAuthProfileStore };",
     ),
-  ]);
-  expect(
-    inspect({
-      [authStore]: source.replace(
-        "return { saveAuthProfileStore };",
-        "const escaped = saveAuthProfileStore; return { saveAuthProfileStore };",
-      ),
-    }),
-  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+  });
 });
 
 it.each([
@@ -567,15 +536,13 @@ it.each([
   "import * as sdk from './plugin-sdk/agent-runtime.js'; sdk['saveAuthProfileStore']();",
   "export { saveAuthProfileStore } from './plugin-sdk/agent-runtime.js';",
 ])("rejects a new ordinary worker entry through the released sync SDK: %s", (consumer) => {
-  const sources = {
+  const reject = allowedGraph({
     [authRuntime]: `export const saveAuthProfileStore = () => {};`,
     "src/agents/auth-profiles.ts": `export { saveAuthProfileStore } from './auth-profiles/store-runtime.js';`,
     "src/plugin-sdk/agent-runtime.ts": `export { saveAuthProfileStore } from '../agents/auth-profiles.js';`,
-  };
-  expect(inspect(sources)).toEqual([]);
-  expect(inspect({ ...sources, "src/new-writer.worker.ts": consumer })).toEqual([
-    expect.stringContaining("unreviewed personal credential writer reference"),
-  ]);
+  });
+
+  reject("src/new-writer.worker.ts", consumer);
 });
 
 it("protects destructured facade writers and native readers that can synchronize credentials", () => {
@@ -591,29 +558,21 @@ it("protects destructured facade writers and native readers that can synchronize
       ensureAuthProfileStore();
     `,
   };
-  expect(inspect(sources)).toEqual([
-    expect.stringContaining("saveAuthProfileStoreWithPreparedOwner"),
-    expect.stringContaining("ensureAuthProfileStore"),
-  ]);
+  expectDenied(sources, ["saveAuthProfileStoreWithPreparedOwner", "ensureAuthProfileStore"]);
 });
 
 it("preserves the released provider-auth package barrel without admitting a new facade", () => {
-  const sources = {
+  const reject = allowedGraph({
     [authRuntime]: `export function ensureAuthProfileStore() {}`,
     "src/plugin-sdk/provider-auth.ts": `export { ensureAuthProfileStore } from '../agents/auth-profiles/store-runtime.js';`,
     "packages/plugin-sdk/src/provider-auth.ts": `export * from '../../../src/plugin-sdk/provider-auth.js';`,
-  };
-  expect(inspect(sources)).toEqual([]);
-  expect(
-    inspect({
-      ...sources,
-      "src/new-facade.ts": `export * from './plugin-sdk/provider-auth.js';`,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+  });
+
+  reject("src/new-facade.ts", `export * from './plugin-sdk/provider-auth.js';`);
 });
 
 it("permits the exact native reader dependency forwards without opening sibling callers", () => {
-  const sources = {
+  const reject = allowedGraph({
     [authRuntime]: `export function ensureAuthProfileStore() {} export function loadAuthProfileStoreForRuntime() {}`,
     "extensions/codex/src/app-server/auth-profile.ts": `
       import { ensureAuthProfileStore } from '../../../../src/agents/auth-profiles/store-runtime.js';
@@ -639,17 +598,13 @@ it("permits the exact native reader dependency forwards without opening sibling 
         return (deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime)();
       }
     `,
-  };
-  expect(inspect(sources)).toEqual([]);
-  expect(
-    inspect({
-      ...sources,
-      "src/agents/cli-execution-auth.ts": sources["src/agents/cli-execution-auth.ts"].replace(
-        "resolveCliExecutionAuthProfileId",
-        "newReader",
-      ),
-    }),
-  ).toEqual([expect.stringContaining("from src/agents/cli-execution-auth.ts:newReader")]);
+  });
+
+  reject(
+    "src/agents/cli-execution-auth.ts",
+    (original) => original.replace("resolveCliExecutionAuthProfileId", "newReader"),
+    "from src/agents/cli-execution-auth.ts:newReader",
+  );
 });
 
 it("bounds reviewed lazy imports by loader, declaration scope and selected export", () => {
@@ -660,20 +615,18 @@ it("bounds reviewed lazy imports by loader, declaration scope and selected expor
   };
   const source = `const loadHasAvailableAuthForProvider = createLazyRuntimeNamedExport(
     () => import('../agents/model-auth.js'), 'hasAvailableAuthForProvider');`;
-  expect(inspect({ ...sources, [file]: source })).toEqual([]);
+  expectAllowed({ ...sources, [file]: source });
   for (const changed of [
     source.replace("'hasAvailableAuthForProvider'", "'ensureAuthProfileStore'"),
     source.replace("createLazyRuntimeNamedExport", "newLoader"),
     `function newLoader() { ${source} }`,
   ]) {
-    expect(inspect({ ...sources, [file]: changed })).toEqual([
-      expect.stringContaining("unreviewed personal credential writer reference"),
-    ]);
+    expectDenied({ ...sources, [file]: changed });
   }
 });
 
 it("closes raw-store and worker-kernel entries while preserving the named update dispatchers", () => {
-  const sources = {
+  const reject = allowedGraph({
     [authCells]: `export function writeAuthProfileJsonCell() {}`,
     "src/agents/auth-profiles/store-update.worker.ts": `
       import { writeAuthProfileJsonCell } from './sqlite-json-write.js';
@@ -683,18 +636,26 @@ it("closes raw-store and worker-kernel entries while preserving the named update
       import { updateAuthProfileStoreInDatabase } from './store-update.worker.js';
       export const operations = { 'authProfiles.update': () => updateAuthProfileStoreInDatabase() };
     `,
-  };
-  expect(inspect(sources)).toEqual([]);
-  expect(
-    inspect({
-      ...sources,
-      "src/new-writer.worker.ts": `
+  });
+
+  reject(
+    "src/new-writer.worker.ts",
+    `
         import { updateAuthProfileStoreInDatabase } from './agents/auth-profiles/store-update.worker.js';
         updateAuthProfileStoreInDatabase();
       `,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+  );
 });
+
+function machineStateConsumer(consumer: string) {
+  return {
+    "src/state/config-machine-state-write.ts": `export function writeConfigMachineState() {}`,
+    "src/new-writer.worker.ts": `
+        import { writeConfigMachineState } from './state/config-machine-state-write.js';
+        ${consumer}
+      `,
+  };
+}
 
 it.each([
   "writeConfigMachineState('authProfiles.store', {});",
@@ -702,28 +663,15 @@ it.each([
   "writeConfigMachineState(command.input.key, {});",
   "export const write = writeConfigMachineState;",
 ])("rejects a generic machine-state entry with credential access: %s", (consumer) => {
-  expect(
-    inspect({
-      "src/state/config-machine-state-write.ts": `export function writeConfigMachineState() {}`,
-      "src/new-writer.worker.ts": `
-        import { writeConfigMachineState } from './state/config-machine-state-write.js';
-        ${consumer}
-      `,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+  expectDenied(machineStateConsumer(consumer));
 });
 
 it("permits fixed noncredential generic writer keys without granting a caller exemption", () => {
-  expect(
-    inspect({
-      "src/state/config-machine-state-write.ts": `export function writeConfigMachineState() {}`,
-      "src/new-writer.worker.ts": `
-        import { writeConfigMachineState } from './state/config-machine-state-write.js';
-        const stateKey = 'authProfiles.state';
-        writeConfigMachineState(stateKey, {});
-      `,
-    }),
-  ).toEqual([]);
+  expectAllowed(
+    machineStateConsumer(
+      "const stateKey = 'authProfiles.state';\n        writeConfigMachineState(stateKey, {});",
+    ),
+  );
 });
 
 it.each([
@@ -742,14 +690,15 @@ it.each([
     const type = '${command}' as const;
     await scope.execute({ type, input: {} });
   }`;
-  expect(inspect({ [adapter]: source })).toEqual([]);
-  expect(inspect({ "src/new-writer.worker.ts": source })).toEqual([
-    expect.stringContaining(`${command} credential writes require the host publication adapter`),
-  ]);
+  expectAllowed({ [adapter]: source });
+  expectDenied(
+    { "src/new-writer.worker.ts": source },
+    `${command} credential writes require the host publication adapter`,
+  );
 });
 
 it("restricts authorization enrollment to admitted workers and its offline Doctor owner", () => {
-  const sources = {
+  const reject = allowedGraph({
     "src/agents/auth-profiles/sqlite-json-write.ts": `export function writeAuthProfileJsonCell() {}`,
     "src/agents/auth-profiles/authorization-enrollment.ts": `
       import { writeAuthProfileJsonCell } from './sqlite-json-write.js';
@@ -775,32 +724,28 @@ it("restricts authorization enrollment to admitted workers and its offline Docto
         }
       }
     `,
-  };
-  expect(inspect(sources)).toEqual([]);
+  });
+
   const runtime = "src/agents/auth-profiles/authorization-enrollment-runtime.ts";
-  expect(
-    inspect({
-      ...sources,
-      [runtime]:
-        sources[runtime] +
-        `
+  reject(
+    runtime,
+    (original) =>
+      original +
+      `
         export function unownedSibling() { enrollAuthProfileAuthorizationInDatabase(); }
       `,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
-  expect(
-    inspect({
-      ...sources,
-      "src/new-writer.worker.ts": `
+  );
+  reject(
+    "src/new-writer.worker.ts",
+    `
         import { enrollAuthProfileAuthorizationInDatabase } from './agents/auth-profiles/authorization-enrollment.js';
         enrollAuthProfileAuthorizationInDatabase();
       `,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+  );
 });
 
 it("keeps catalog capture and worker write custody behind the reviewed batch entry", () => {
-  const sources = {
+  const reject = allowedGraph({
     "src/agents/auth-profiles/runtime-scope.ts": `export function withWorkerAuthProfileWrites() {}`,
     "src/state/user-model-account-authority.ts": `export function captureAuthProfileCredentialCommits() {}`,
     "src/agents/prepared-model-catalog.worker.ts": `
@@ -808,17 +753,15 @@ it("keeps catalog capture and worker write custody behind the reviewed batch ent
       import { captureAuthProfileCredentialCommits } from '../state/user-model-account-authority.js';
       captureAuthProfileCredentialCommits(() => withWorkerAuthProfileWrites());
     `,
-  };
-  expect(inspect(sources)).toEqual([]);
-  expect(
-    inspect({
-      ...sources,
-      "src/new-writer.worker.ts": `
+  });
+
+  reject(
+    "src/new-writer.worker.ts",
+    `
         import { withWorkerAuthProfileWrites } from './agents/auth-profiles/runtime-scope.js';
         withWorkerAuthProfileWrites();
       `,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+  );
 });
 
 it("does not expose the onboarding mutation callback outside its bounded-key adapter", () => {
@@ -830,12 +773,10 @@ it("does not expose the onboarding mutation callback outside its bounded-key ada
       'onboardingRecommendations.writeOffer': recommendationOperation(writeOnboardingRecommendationsOffer),
     };
   `;
-  expect(inspect({ [file]: source })).toEqual([]);
-  expect(
-    inspect({
-      [file]: source + `export function bypass() { writeOnboardingRecommendationsOffer(); }`,
-    }),
-  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+  expectAllowed({ [file]: source });
+  expectDenied({
+    [file]: source + `export function bypass() { writeOnboardingRecommendationsOffer(); }`,
+  });
 });
 
 it("permits supplied-database SDK save custody without granting sibling factory access", () => {
@@ -846,20 +787,19 @@ it("permits supplied-database SDK save custody without granting sibling factory 
       return { saveAuthProfileStore };
     }
   `;
-  const sources = {
+  const reject = allowedGraph({
     "src/agents/auth-profiles/credential-write-custody.ts": `export function withAuthProfileCredentialWriteCustody() {}`,
     [authStore]: source,
-  };
-  expect(inspect(sources)).toEqual([]);
-  expect(
-    inspect({
-      ...sources,
-      [authStore]: source.replace(
-        "return { saveAuthProfileStore };",
-        "function bypass() { withAuthProfileCredentialWriteCustody(); } return { saveAuthProfileStore };",
-      ),
-    }),
-  ).toEqual([expect.stringContaining("createAuthProfileStoreRuntime/bypass")]);
+  });
+
+  reject(
+    authStore,
+    source.replace(
+      "return { saveAuthProfileStore };",
+      "function bypass() { withAuthProfileCredentialWriteCustody(); } return { saveAuthProfileStore };",
+    ),
+    "createAuthProfileStoreRuntime/bypass",
+  );
 });
 
 const authStorageSources = {
@@ -879,10 +819,9 @@ const authStorageSources = {
 };
 
 it("preserves the released AuthStorage barrel and nonnative constructors", () => {
-  expect(
-    inspect({
-      ...authStorageSources,
-      "src/new-reader.worker.ts": `
+  expectAllowed({
+    ...authStorageSources,
+    "src/new-reader.worker.ts": `
         import { AuthStorage as Storage } from './plugin-sdk/agent-sessions.js';
         import * as sdk from './plugin-sdk/agent-sessions.js';
         Storage.forAgentAsync();
@@ -891,8 +830,7 @@ it("preserves the released AuthStorage barrel and nonnative constructors", () =>
         const { AuthStorage: DynamicStorage } = await import('./plugin-sdk/agent-sessions.js');
         DynamicStorage.forAgentAsync();
       `,
-    }),
-  ).toEqual([]);
+  });
 });
 
 it.each([
@@ -915,7 +853,7 @@ it.each([
 
 it("keeps session membership writes with the worker and canonical entry owners", () => {
   const members = "src/config/sessions/session-sharing-store.native.ts";
-  const sources = {
+  const reject = allowedGraph({
     [members]: `export function addSessionMember() { db.insertInto('session_members'); }`,
     "src/config/sessions/session-sharing-store.worker.ts": `
       import { addSessionMember } from './session-sharing-store.native.js';
@@ -927,25 +865,24 @@ it("keeps session membership writes with the worker and canonical entry owners",
         for (const table of tables) { db.deleteFrom(table); }
       }
     `,
-    "src/config/sessions/session-accessor.sqlite-entry-store.ts": `
+    "src/config/sessions/session-accessor.sqlite-entry-write.ts": `
       import { clearSessionCollaborationForKey } from './session-accessor.sqlite-node-artifacts.js';
-      function writeSessionEntry() { clearSessionCollaborationForKey(); }
+      function prepareSessionEntryWrite() {
+        const write = () => { clearSessionCollaborationForKey(); };
+        return { write };
+      }
     `,
-  };
-  expect(inspect(sources)).toEqual([]);
-  expect(
-    inspect({
-      ...sources,
-      "src/new-writer.ts": `
+  });
+
+  reject(
+    "src/new-writer.ts",
+    `
         import { addSessionMember } from './config/sessions/session-sharing-store.native.js';
         addSessionMember();
         db.exec('DELETE FROM session_members');
       `,
-    }),
-  ).toEqual([
-    expect.stringContaining("unreviewed session membership writer reference"),
-    expect.stringContaining("raw authority-table write"),
-  ]);
+    ["unreviewed session membership writer reference", "raw authority-table write"],
+  );
 });
 
 it.each([
@@ -954,19 +891,16 @@ it.each([
   "export { default as selected } from './state/user-model-accounts.js';",
   "import * as accounts from './state/user-model-accounts.js'; accounts.default();",
 ])("checks default writer bindings without charging unrelated exports: %s", (consumer) => {
-  expect(
-    inspect(
-      { "src/consumer.ts": consumer },
-      `${owner}\nexport default function listUserProfileAuthLinksAsync() {}`,
+  expectAllowed(
+    { "src/consumer.ts": consumer },
+    `${owner}\nexport default function listUserProfileAuthLinksAsync() {}`,
+  );
+  expectDenied(
+    { "src/consumer.ts": consumer },
+    undefined,
+    owner.replace(
+      "export function connectUserModelAccount",
+      "export default function connectUserModelAccount",
     ),
-  ).toEqual([]);
-  expect(
-    inspect(
-      { "src/consumer.ts": consumer },
-      owner.replace(
-        "export function connectUserModelAccount",
-        "export default function connectUserModelAccount",
-      ),
-    ),
-  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+  );
 });

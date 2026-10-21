@@ -5,7 +5,7 @@ import {
   readSqliteSchemaCookie,
 } from "../infra/sqlite-schema-contract.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   getStateRuntimeSchemaAdmission,
   getStateSchemaVersionAdmission,
@@ -93,7 +93,7 @@ export function assertExistingOpenClawStateRuntimeSchema(
     return;
   }
   let publishIntegrity: (() => void) | undefined;
-  runSqliteDeferredTransactionSync(
+  runSqliteReadSnapshotSync(
     database,
     () => {
       const userVersion = assertExistingOpenClawStateRuntimeMetadata(database, pathname);

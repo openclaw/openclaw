@@ -1,7 +1,7 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -76,7 +76,9 @@ suite.define(() => {
         const composer = pane.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor({ state: "visible" });
         await expect.poll(() => composer.isEnabled()).toBe(true);
-        await expect.poll(() => pane.locator(".loading-skeleton").isVisible()).toBe(true);
+        await expect
+          .poll(() => pane.locator(".loading-skeleton, .chat-conversation-loading").isVisible())
+          .toBe(true);
         expect(await composer.evaluate((el) => el === document.activeElement)).toBe(false);
         await composer.fill(submittedMessage);
         await expect.poll(() => pane.locator(".chat-send-btn--send").isEnabled()).toBe(true);
@@ -88,7 +90,9 @@ suite.define(() => {
         await expect.poll(() => composer.inputValue()).toBe("");
         await pane.locator(".chat-queue").getByText(submittedMessage, { exact: true }).waitFor();
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        expect(await pane.locator(".loading-skeleton").isVisible()).toBe(true);
+        expect(
+          await pane.locator(".loading-skeleton, .chat-conversation-loading").isVisible(),
+        ).toBe(true);
 
         await composer.fill("Next draft before history.");
         const input = await composer.elementHandle();
@@ -122,7 +126,9 @@ suite.define(() => {
           }
         }
         await gateway.resolveDeferred("chat.startup");
-        await expect.poll(() => pane.locator(".loading-skeleton").count()).toBe(0);
+        await expect
+          .poll(() => pane.locator(".loading-skeleton, .chat-conversation-loading").count())
+          .toBe(0);
         await expect.poll(() => pane.textContent()).toContain("Ready.");
         expect(
           await input!.evaluate(

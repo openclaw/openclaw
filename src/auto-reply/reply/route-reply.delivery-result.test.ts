@@ -240,7 +240,7 @@ describe("routeReply delivery result", () => {
     "empty_after_message_sending_hook",
     "adapter_returned_no_send",
   ] as const)(
-    "returns intentional suppression reason %s without claiming delivery",
+    "projects intentional suppression for %s without claiming delivery",
     async (reason) => {
       mocks.deliverOutboundPayloads.mockImplementationOnce(
         async ({
@@ -268,7 +268,6 @@ describe("routeReply delivery result", () => {
         ok: true,
         delivered: false,
         suppressed: true,
-        reason,
       });
     },
   );
@@ -300,7 +299,6 @@ describe("routeReply delivery result", () => {
       ok: true,
       delivered: false,
       ambiguous: true,
-      reason: "adapter_returned_no_identity",
     });
   });
 

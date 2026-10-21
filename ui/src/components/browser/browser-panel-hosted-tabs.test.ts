@@ -8,6 +8,7 @@ import {
   createBrowserPanelTestMetrics,
   createBrowserPanelTestTab,
   stubScreenshotMedia,
+  openBrowserActions,
 } from "./browser-panel-controller-test-support.ts";
 import "./browser-panel.ts";
 
@@ -26,7 +27,7 @@ const nativeTab = {
 describe("Browser panel hosted tabs", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("ResizeObserver", undefined);
+    stubScreenshotMedia();
   });
 
   afterEach(() => {
@@ -102,7 +103,10 @@ describe("Browser panel hosted tabs", () => {
       }
       if (embedded) {
         expect(panel.querySelector(".bp-header [data-new-tab-action]")).toBeNull();
-        expect(panel.querySelector(".bp-toolbar [data-new-tab-action]")).not.toBeNull();
+        const menu = await openBrowserActions(panel);
+        expect(
+          menu.querySelector('[role="menuitem"][aria-label="New browser tab"]'),
+        ).not.toBeNull();
       }
     },
   );

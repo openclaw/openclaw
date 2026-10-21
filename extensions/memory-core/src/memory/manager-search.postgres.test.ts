@@ -154,14 +154,14 @@ function createFixture(
       sourceName: string,
       text: string,
       embedding: number[],
-      options: { model?: string; source?: MemorySource } = {},
+      options: { model?: string; source?: MemorySource; path?: string } = {},
     ) {
       const input: MemorySourceIndexReplacement = {
         ...(options.source === "sessions"
           ? { source: "sessions", agentId: "fixture", sessionId: sourceName }
           : { source: "memory" }),
         entry: {
-          path: `memory/${sourceName}.md`,
+          path: options.path ?? `memory/${sourceName}.md`,
           hash: sourceName,
           mtimeMs: 100,
           size: text.length,
@@ -292,31 +292,194 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     expect((await regular.vector(vectorQuery({ candidateIds: [] }))).rows).toEqual([]);
   });
 
+  it("excludes session paths before keyword, path, and vector limits without excluding ordinary memory", async () => {
+    const fixture = admitted(() => createFixture(root, "session-exclusions", connection!));
+    try {
+      admitted(() => {
+        expect(fixture.ensureVector()).toMatchObject({ ok: true });
+        fixture.publish("recall", "recall", [1, 0, 0], { source: "sessions" });
+        fixture.publish("recall", "recall lunch", [0.8, 0.6, 0]);
+        fixture.publish("ordinary-recall", "recall lunch tomorrow", [0.9, 0.4, 0], {
+          source: "sessions",
+          // Exact filename recall, ordered after the excluded path before LIMIT.
+          path: "memory/z-ordinary/recall.md",
+        });
+      });
+      const excludedSessionPaths = [
+        "memory/recall.md",
+        ...Array.from({ length: 33_000 }, (_, index) => `unused/${index}`),
+      ];
+      const sourceFilter = { sql: "", params: [], excludedSessionPaths };
+      for (const text of ["recall", "recall absentword"]) {
+        const query = keywordQuery(text, { limit: 2 });
+        query.body.sourceFilter = sourceFilter;
+        query.path.sourceFilter = sourceFilter;
+        const result = await fixture.keyword(query);
+        expect(result.body.error).toBeUndefined();
+        expect(result.path.error).toBeUndefined();
+        expect(result.body.rows.map((row) => row.source).toSorted()).toEqual([
+          "memory",
+          "sessions",
+        ]);
+        if (text === "recall") {
+          expect(result.path.rows.map((row) => row.source).toSorted()).toEqual([
+            "memory",
+            "sessions",
+          ]);
+        }
+      }
+      const result = await fixture.vector(vectorQuery({ sourceFilter, limit: 2 }));
+      expect(result.rows.map((row) => row.source).toSorted()).toEqual(["memory", "sessions"]);
+      expect(
+        result.rows.some((row) => row.source === "sessions" && row.path === "memory/recall.md"),
+      ).toBe(false);
+    } finally {
+      admitted(() => fixture.close());
+    }
+  });
+
   it("uses unaccented full text with source filtering and the unchanged 0.7/0.3 hybrid merge", async () => {
     const keyword = await regular.keyword(keywordQuery("cafe", { limit: 1 }));
     expect(keyword.body.error).toBeUndefined();
     expect(keyword.path.error).toBeUndefined();
     expect(keyword.body.rows.map((row) => row.path)).toEqual(["memory/lexical.md"]);
-    expect(keyword.body.rows[0]!.textScore).toBeCloseTo(0.05, 6);
+    expect(keyword.body.rows[0]!.textScore).toBeGreaterThan(0.6);
+    expect(keyword.body.rows[0]!.textScore).toBeLessThan(0.75);
     const vector = await regular.vector();
     const merged = await mergeHybridResults({
       vector: vector.rows.map((row) => Object.assign({}, row, { vectorScore: row.score })),
       keyword: keyword.body.rows,
       vectorWeight: 0.7,
       textWeight: 0.3,
+      mmr: { enabled: false, lambda: 0.7 },
+      temporalDecay: { enabled: false, halfLifeDays: 30 },
     });
     expect(merged.map((row) => row.path)).toEqual([
-      "memory/semantic.md",
       "memory/lexical.md",
+      "memory/semantic.md",
       "memory/orthogonal.md",
     ]);
-    expect(merged[0]!.score).toBeCloseTo(0.56, 6);
-    expect(merged[1]!.score).toBeCloseTo(0.435, 6);
+    expect(merged[0]!.score).toBeCloseTo(0.62, 6);
+    expect(merged[1]!.score).toBeCloseTo(0.56, 6);
     const exact = await regular.keyword(keywordQuery("semantic"));
     expect(exact.path.rows).toMatchObject([
       { path: "memory/semantic.md", exactPathSpecificity: 1 },
     ]);
   });
+
+  it.each([
+    { query: "cafe", trips: 1, body: ["memory/lexical.md"], paths: [] },
+    { query: "semantic", trips: 1, body: [], paths: ["memory/semantic.md"] },
+    { query: "cafe absentword", trips: 2, body: ["memory/lexical.md"], paths: [] },
+    { query: "absentword", trips: 2, body: [], paths: [] },
+    { query: "cafe", trips: 0, body: [], paths: [], disabled: true },
+  ])("bounds keyword round trips for $query (disabled=$disabled)", async (testCase) => {
+    const query = keywordQuery(testCase.query);
+    if (testCase.disabled) {
+      query.body.limit = 0;
+      query.path.limit = 0;
+    }
+    const capture = vi.spyOn(regular.pg(), "query");
+    try {
+      const result = await regular.keyword(query);
+      expect(result.body.error).toBeUndefined();
+      expect(result.path.error).toBeUndefined();
+      expect(result.body.rows.map((row) => row.path)).toEqual(testCase.body);
+      expect(result.path.rows.map((row) => row.path)).toEqual(testCase.paths);
+      expect(capture).toHaveBeenCalledTimes(testCase.trips);
+    } finally {
+      capture.mockRestore();
+    }
+  });
+
+  it("retains each keyword branch's ranking and limit before combining paths", async () => {
+    const fixture = admitted(() => createFixture(root, "branch-limits", connection!));
+    try {
+      admitted(() => {
+        fixture.publish("body", "launch launch", [], { path: "body-hit.md" });
+        fixture.publish("exact", "unrelated", [], { path: "launch" });
+        fixture.publish("basename", "unrelated", [], { path: "b/launch" });
+        fixture.publish("stem", "unrelated", [], { path: "c/launch.md" });
+        fixture.publish("broad-first", "unrelated", [], { path: "a launch note.md" });
+        fixture.publish("broad-second", "unrelated", [], { path: "d launch report.md" });
+      });
+      const query = keywordQuery("launch", { limit: 1 });
+      query.path.exactPathLimit = 2;
+      const capture = vi.spyOn(fixture.pg(), "query");
+      const result = await fixture.keyword(query);
+      const trips = capture.mock.calls.length;
+      capture.mockRestore();
+      expect(result.body.error).toBeUndefined();
+      expect(result.path.error).toBeUndefined();
+      expect(result.body.rows).toMatchObject([
+        {
+          path: "body-hit.md",
+          score: expect.closeTo(2 / 3, 6),
+          textScore: expect.closeTo(2 / 3, 6),
+        },
+      ]);
+      expect(result.path.rows.map((row) => [row.path, row.exactPathSpecificity])).toEqual([
+        ["launch", 3],
+        ["b/launch", 2],
+        ["a launch note.md", 0],
+      ]);
+      expect(result.path.rows).toMatchObject([
+        {
+          score: expect.closeTo(0.5, 6),
+          pathScore: expect.closeTo(0.5, 6),
+          textScore: 0,
+          hasBodyMatch: false,
+        },
+        { score: 0, pathScore: 0, textScore: 0, hasBodyMatch: false },
+        {
+          score: expect.closeTo(0.5, 6),
+          pathScore: expect.closeTo(0.5, 6),
+          textScore: 0,
+          hasBodyMatch: false,
+        },
+      ]);
+      delete query.path.exactPathLimit;
+      expect((await fixture.keyword(query)).path.rows.map((row) => row.path)).toEqual(["launch"]);
+      expect(trips).toBe(1);
+    } finally {
+      admitted(() => fixture.close());
+    }
+  });
+
+  it.each(["body", "path"] as const)(
+    "preserves the other keyword result when the %s search projection fails",
+    async (branch) => {
+      const fixture = admitted(() => createFixture(root, `failed-${branch}`, connection!));
+      try {
+        admitted(() => {
+          fixture.publish("keyword", "café", []);
+          fixture
+            .pg()
+            .exec(
+              branch === "body"
+                ? "ALTER TABLE memory_index_chunks RENAME COLUMN openclaw_search TO damaged_search"
+                : "ALTER TABLE memory_index_sources RENAME TO damaged_sources",
+            );
+        });
+        const query = keywordQuery("cafe");
+        query.path.query = "keyword";
+        const result = await fixture.keyword(query);
+        const failed = result[branch];
+        const retained = result[branch === "body" ? "path" : "body"];
+        expect(failed.error).toMatch(/does not exist/);
+        expect(failed.rows).toEqual([]);
+        expect(retained.error).toBeUndefined();
+        expect(retained.rows.map((row) => row.path)).toEqual(["memory/keyword.md"]);
+        if (branch === "path") {
+          query.body.query = "cafe absentword";
+          // An unavailable path search suppresses match-any relaxation.
+          expect((await fixture.keyword(query)).body.rows).toEqual([]);
+        }
+      } finally {
+        admitted(() => fixture.close());
+      }
+    },
+  );
 
   it("ranks trigram similarity before limits for body and path substring queries", async () => {
     const body = await trigram.keyword(keywordQuery("fragilist", { tokenizer: "trigram" }));

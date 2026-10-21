@@ -26,12 +26,7 @@ import {
   type QaGatewayChildCommand,
 } from "./gateway-child-command.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
-import {
-  createMockJsonlReplayCellRunner,
-  renderJsonlReplayMarkdownReport,
-  runJsonlReplay,
-  type JsonlReplayInput,
-} from "./jsonl-replay.js";
+import { renderJsonlReplayMarkdownReport, runJsonlReplay } from "./jsonl-replay.js";
 import { startQaLabServer } from "./lab-server.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
@@ -607,9 +602,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   }
   // Capture before the suite runs so later taxonomy reads cannot rebind its evidence.
   const taxonomyIdentity = { ...scorecardReport.taxonomy.identity };
-  const proofRequirements = profileReport.proofRequirements
-    ? structuredClone(profileReport.proofRequirements)
-    : undefined;
+  const proofRequirements = profileReport.proofRequirements;
   const evidenceMode = opts.evidenceMode ?? profileReport.evidenceMode;
   const membership = resolveQaRunProfileMembership(
     {
@@ -1064,24 +1057,16 @@ export async function runQaJsonlReplayCommand(opts: {
   const transcriptDir = path.resolve(repoRoot, opts.transcripts ?? "qa/scenarios/jsonl-replay");
   const outputDir = resolveQaCommandOutputDir(repoRoot, opts.outputDir, "jsonl-replay");
   await fs.mkdir(outputDir, { recursive: true });
-  const result = await runJsonlReplay(
-    {
-      directory: transcriptDir,
-      runtimePair: runtimePair as JsonlReplayInput["runtimePair"],
-      providerMode,
-    },
-    { runCell: createMockJsonlReplayCellRunner() },
-  );
-  const reportPayload = {
-    generatedAt: new Date().toISOString(),
-    providerMode,
-    runtimePair: runtimePair as JsonlReplayInput["runtimePair"],
-    transcripts: result.transcripts,
-  };
+  const result = await runJsonlReplay(transcriptDir);
   await writeQaCliReport(
     outputDir,
     "qa-jsonl-replay",
-    renderJsonlReplayMarkdownReport(reportPayload),
+    renderJsonlReplayMarkdownReport({
+      generatedAt: new Date().toISOString(),
+      providerMode,
+      runtimePair: [runtimePair[0], runtimePair[1]],
+      transcripts: result.transcripts,
+    }),
     result,
   );
 }

@@ -2,6 +2,7 @@ import {
   preserveCompactionReplayWindow,
   resolveCompactionReplayEligibility,
 } from "@openclaw/ai/transports";
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
@@ -15,6 +16,8 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
+import { assertSessionControllerOperation } from "../../sessions/session-controller.state.js";
 import {
   consumeCompactionSafeguardCancellation,
   getCompactionSafeguardRuntime,
@@ -27,7 +30,7 @@ import {
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
-import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
+import { pickFallbackThinkingLevel } from "../embedded-agent-helpers/thinking.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
@@ -67,11 +70,7 @@ import { readCompactionAccountingRecorder } from "./run/compaction-accounting-br
 import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
-import {
-  mapThinkingLevel,
-  mapThinkingLevelForProvider,
-  normalizeContextTokenBudget,
-} from "./utils.js";
+import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
 export async function executePreparedCompactionSession(runtime: PreparedCompactionRuntime) {
@@ -99,7 +98,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     effectiveModel,
     runtimePlan,
     runtimePlanModelContext,
-    runAbortController,
     effectiveTools,
     allowedToolNames,
     buildSystemPromptText,
@@ -151,10 +149,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
       missingToolResultText: responsesApi ? "aborted" : undefined,
       allowedToolNames,
-      withCompactionPersistence: params.transcriptByteCompactionPersistence,
       withCompactionPersistenceAsync:
-        params.transcriptByteCompactionPersistenceAsync ??
-        accountingRecorder?.withCompactionPersistenceAsync,
+        params.seedCompaction ?? accountingRecorder?.withCompactionPersistenceAsync,
     });
     compactionSessionManager = sessionManager;
     const recordUsage = accountingRecorder?.recordUsage
@@ -243,6 +239,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       let session: AgentSession | undefined;
       let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
       let resetCompactionTimeout: (() => void) | undefined;
+      // Request/output progress and fallback preparation share the silence watchdog.
+      const refreshCompactionWatchdogs = () => {
+        diagnosticOwner?.watchdogAttempt?.setExecutionDeadline(Date.now() + compactionTimeoutMs);
+        resetCompactionTimeout?.();
+        params.compactionTimeoutReset?.();
+      };
       try {
         const createdSession = await createAgentSession({
           cleanupProviderSessionResourcesOnDispose: false,
@@ -277,7 +279,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           llmRuntime: getModelRegistryRuntime(modelRegistry).llmRuntime,
           providerStreamFn,
           sessionId: params.sessionId,
-          signal: runAbortController.signal,
           resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
           config: params.config,
           thinkLevel,
@@ -288,19 +289,25 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           extraParams: effectiveExtraParams,
           apiKey: transportApiKey,
         });
+        const operation = getCurrentSessionControllerOwner();
         diagnosticOwner = createDiagnosticEmbeddedRunOwner({
+          watchdogAttempt: operation
+            ? operation.watchdog.attachAttempt({
+                assertCurrent: () => {
+                  params.abortSignal?.throwIfAborted();
+                  assertSessionControllerOperation(operation);
+                },
+              })
+            : undefined,
           sessionId: params.sessionId,
           ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
           runId: diagnosticCompactionRunId,
           workKey: diagnosticCompactionRunId,
         });
+        diagnosticOwner.watchdogAttempt?.setExecutionDeadline(Date.now() + compactionTimeoutMs);
         markDiagnosticEmbeddedRunStarted({ ...diagnosticOwner, owner: diagnosticOwner });
         // Each request start and each streamed output delta is progress, so both the
         // native and delegated watchdogs measure silence, not request duration.
-        const refreshCompactionWatchdogs = () => {
-          resetCompactionTimeout?.();
-          params.compactionTimeoutReset?.();
-        };
         session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
           config: params.config,
           runId: diagnosticCompactionRunId,
@@ -378,7 +385,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         const hookRunner = accountingRecorder?.hostOwnsCompactionLifecycle
           ? null
           : getGlobalHookRunner();
-        const observedTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
+        const observedTokenCount = floorPositiveFiniteNumber(params.currentTokenCount);
         const beforeHookMetrics = buildBeforeCompactionHookMetrics({
           originalMessages,
           currentMessages: session.messages,
@@ -430,7 +437,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         }
 
         // Setup completed: give the first provider request a full safety window.
-        params.compactionTimeoutReset?.();
+        refreshCompactionWatchdogs();
         let serverTokensAfter: number | undefined;
         const recordServerCompaction = (tokensBefore: number) => {
           // Endpoint output_tokens omits retained inputs; observe the actual
@@ -457,7 +464,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             compactionKind: "server-endpoint",
           });
         };
-        const serverResult = params.transcriptBytePreflightAuthority
+        const serverResult = params.seedCompaction
           ? undefined
           : await attemptServerEndpointCompaction({
               trigger,
@@ -468,7 +475,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               extraParams: effectiveExtraParams,
               requestBudget: accountingRecorder?.requestBudget,
               customInstructions: params.customInstructions,
-              config: params.config,
               onUsage: recordUsage,
               onCompactionCommitted: recordServerCompaction,
               assertActive,
@@ -528,7 +534,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             );
           try {
             // The client watchdog starts here; refresh the delegated host watchdog with it.
-            params.compactionTimeoutReset?.();
+            refreshCompactionWatchdogs();
             const outcome = await compactClient(
               resolveEffectiveCompactionMode(params.config) === "default" ? undefined : "none",
             ).catch(async (error: unknown) => {
@@ -550,7 +556,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               }
               // The timed-out request consumed the delegated window too. Rearm it
               // synchronously, before its same-window timer fires behind the commit.
-              params.compactionTimeoutReset?.();
+              refreshCompactionWatchdogs();
               // The same summary would time out again next turn (#164220): commit the
               // prepared cut without one.
               log.warn(
@@ -570,7 +576,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           }
         }
         // Compaction succeeded: post-processing gets its own full watchdog window.
-        params.compactionTimeoutReset?.();
+        refreshCompactionWatchdogs();
         const tokensBefore = serverResult?.usage.input_tokens ?? clientResult!.tokensBefore;
         const tokensAfter = serverResult
           ? serverTokensAfter
@@ -657,7 +663,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           thinkLevel = fallbackThinking;
           // The rejected request may have consumed nearly its full window. Rearm the
           // delegated watchdog before rebuilding the session for the fallback attempt.
-          params.compactionTimeoutReset?.();
+          refreshCompactionWatchdogs();
           continue;
         }
         throw err;

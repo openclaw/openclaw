@@ -180,68 +180,120 @@ suite.define(() => {
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
           const pane = page.locator(".chat-pane-cache__pane--active");
+          for (const width of [1728, 1100, 390]) {
+            await page.setViewportSize({ width, height: 1100 });
+            await pane
+              .locator(width === 390 ? ".agent-chat__header--mobile" : ".chat-details-toggle")
+              .waitFor();
+            if (width !== 390) {
+              await expect
+                .poll(() => pane.locator(".chat-details").getAttribute("role"))
+                .toBe(width === 1728 ? "complementary" : "dialog");
+            }
+            const details = await openChatDetails(pane);
+            if (width === 390) {
+              await details
+                .locator(".chat-mobile-host__header")
+                .getByRole("button", {
+                  name: "Expand Side panel",
+                  exact: true,
+                })
+                .click();
+              await pane.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
+            }
+            const subagents = details.locator('[data-details-group="subagents"]');
+            const summary = subagents.getByRole("button", {
+              name: "All subagents. 2 Working, 3 Done, 1 Failed",
+              exact: true,
+            });
+            await summary.waitFor();
+            expect(await subagents.locator("[data-subagent-session-key]").count()).toBe(0);
+            if (width !== 390) {
+              const heading = subagents.locator(":scope > summary");
+              await heading.click();
+              await subagents
+                .getByRole("img", { name: "2 subagents running", exact: true })
+                .waitFor();
+              expect(await summary.isVisible()).toBe(false);
+              await heading.click();
+              await summary.waitFor();
+            }
+            // The whole summary remains a hit target, including its leading inset.
+            await summary.hover({ position: { x: 2, y: 10 } });
+            expect(
+              await summary.evaluate((row) => {
+                const bounds = row.getBoundingClientRect();
+                return row.contains(document.elementFromPoint(bounds.left + 2, bounds.top + 10));
+              }),
+            ).toBe(true);
+            const processGroup = details.locator('[data-details-group="processes"]');
+            if (width === 390) {
+              await processGroup.locator("[data-process-id]").first().waitFor();
+              expect(
+                await processGroup
+                  .locator("[data-process-id]")
+                  .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-process-id"))),
+              ).toEqual(["dev-server", "watch-tests"]);
+              await processGroup.getByRole("button", { name: "Show all", exact: true }).waitFor();
+            } else {
+              expect(await processGroup.count()).toBe(0);
+            }
+            const frame = await takeControlUiScreenshotFrame(page, details, [summary], {
+              animations: "disabled",
+              elements: [subagents, ...(width === 390 ? [processGroup] : [])],
+            });
+            await writeFile(
+              path.join(suite.artifactDir, `details-background-${colorScheme}-${width}.png`),
+              frame.png,
+            );
+            if (width === 390) {
+              await processGroup.getByRole("button", { name: "Show all", exact: true }).click();
+              const panel = pane.locator("openclaw-chat-processes-panel");
+              await panel.getByRole("button", { name: processes[0]!.name, exact: true }).waitFor();
+              await panel.getByRole("button", { name: /Finished/ }).click();
+              await expect.poll(() => panel.locator("[data-process-id]").count()).toBe(4);
+              await pane
+                .locator(".chat-mobile-host__header")
+                .getByRole("button", {
+                  name: "Close",
+                  exact: true,
+                })
+                .click();
+              await openChatDetails(pane);
+              await summary.click();
+              const collection = pane.locator("openclaw-chat-subagents-panel");
+              await collection
+                .locator(
+                  '[data-session-key="agent:main:subagent:ui-review"] .chat-subagents-mobile__open',
+                )
+                .waitFor();
+              expect(
+                await collection
+                  .locator(".chat-subagents-mobile__disclosure")
+                  .getAttribute("aria-expanded"),
+              ).toBe("true");
+              await expect.poll(() => collection.locator("[data-session-key]").count()).toBe(6);
+            }
+          }
+          await page.setViewportSize({ width: 1728, height: 1100 });
+          await pane.locator(".chat-details-toggle").waitFor();
           const details = await openChatDetails(pane);
-          const subagents = details.locator('[data-details-group="subagents"]');
-          const processGroup = details.locator('[data-details-group="processes"]');
-          await expect
-            .poll(() =>
-              details
-                .locator("[data-details-group] > summary .chat-details__tally-summary")
-                .allTextContents(),
-            )
-            .toEqual(["2 running · 3 done · 1 failed", "2 running · 1 done · 1 failed"]);
-          // Live work leads, failures follow, and the rest waits behind Show more.
-          expect(
-            await subagents.locator(".chat-subagent-activity__status").allTextContents(),
-          ).toEqual(["Comparing light and dark Details", "Reading the process owner", "Failed"]);
-          expect(
-            await processGroup
-              .locator("[data-process-id]")
-              .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-process-id"))),
-          ).toEqual(["dev-server", "watch-tests", "typecheck"]);
-          // Session rows omit plan steps; the live observer stream reports them.
-          await gateway.emitGatewayEvent("session.observer", {
-            sessionKey: "agent:main:subagent:ui-review",
-            sessionId: "ui-review",
-            runId: "run-ui",
-            revision: 2,
-            updatedAt: now,
-            health: "on-track",
-            headline: "Comparing light and dark Details",
-            planProgress: { completed: 2, total: 4 },
-          });
-          await expect
-            .poll(() => subagents.locator(".chat-subagent-activity__steps").textContent())
-            .toBe("2/4");
-
-          const frame = await takeControlUiScreenshotFrame(page, details, [details], {
-            animations: "disabled",
-            elements: [details],
-          });
-          await writeFile(
-            path.join(suite.artifactDir, `details-background-${colorScheme}.png`),
-            frame.elements[0]!.png,
+          await details.getByRole("button", { name: /All subagents\. 2 Working/ }).click();
+          const collection = pane.locator("openclaw-chat-subagents-panel");
+          const runningRow = collection.locator(
+            '[data-session-key="agent:main:subagent:ui-review"]',
           );
-          await subagents.getByRole("button", { name: "Show 3 more" }).click();
-          await expect.poll(() => subagents.locator("[data-subagent-session-key]").count()).toBe(6);
-          // A collapsed group keeps its counts and bar in the heading.
-          await processGroup.locator("summary").click();
+          await runningRow.waitFor();
           await expect
-            .poll(() => processGroup.evaluate((group) => (group as HTMLDetailsElement).open))
-            .toBe(false);
-          expect(await processGroup.locator("summary .chat-details__tally").isVisible()).toBe(true);
-          const expanded = await takeControlUiScreenshotFrame(page, details, [details], {
-            animations: "disabled",
-            elements: [details],
-          });
-          await writeFile(
-            path.join(suite.artifactDir, `details-background-${colorScheme}-expanded.png`),
-            expanded.elements[0]!.png,
-          );
-          await processGroup.locator("summary").click();
-          await processGroup.getByRole("button", { name: "All processes" }).click();
-          await page.locator("openclaw-chat-processes-panel").first().waitFor();
-          expect(gateway).toBeDefined();
+            .poll(() => runningRow.textContent())
+            .toContain("Comparing light and dark Details");
+          expect(
+            await collection
+              .locator(".subagents-desktop__disclosure")
+              .getAttribute("aria-expanded"),
+          ).toBe("true");
+          await expect.poll(() => collection.locator("[data-session-key]").count()).toBe(6);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         },
       );
     }

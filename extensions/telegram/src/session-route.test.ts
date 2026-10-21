@@ -95,38 +95,54 @@ describe("telegram session route", () => {
     channels: { telegram: { accounts: { default: {}, drafts: {} } } },
   };
 
-  it("routes sends from an explicitly bound named account to the inbound DM topic session", async () => {
-    const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: boundNamedAccountCfg,
-      agentId: "drafts",
-      accountId: "drafts",
-      target: "12345",
-      threadId: 21,
-      currentSessionKey: "agent:drafts:telegram:direct:12345:thread:12345:10",
-    });
-    const { route: inboundRoute } = await resolveTelegramConversationRoute({
-      cfg: boundNamedAccountCfg,
-      accountId: "drafts",
-      chatId: 12345,
-      isGroup: false,
-      threadSpec: { id: 21, scope: "dm" },
-      senderId: 12345,
-    });
-    const inboundSessionKey = resolveTelegramTargetSession({
-      cfg: boundNamedAccountCfg,
-      route: inboundRoute,
-      chatId: 12345,
-      isGroup: false,
-      senderId: 12345,
-      dmThreadId: 21,
-      botHasTopicsEnabled: true,
-    });
+  it.each([
+    { dmScope: undefined, baseSessionKey: "agent:drafts:telegram:direct:12345" },
+    {
+      dmScope: "per-account-channel-peer" as const,
+      baseSessionKey: "agent:drafts:telegram:drafts:direct:12345",
+    },
+  ])(
+    "aligns explicitly bound DM topics with binding scope $dmScope",
+    async ({ dmScope, baseSessionKey }) => {
+      const cfg = {
+        ...boundNamedAccountCfg,
+        bindings: boundNamedAccountCfg.bindings.map((binding) => ({
+          ...binding,
+          ...(binding.agentId === "drafts" ? { session: { dmScope } } : {}),
+        })),
+      };
+      const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+        cfg,
+        agentId: "drafts",
+        accountId: "drafts",
+        target: "12345",
+        threadId: 21,
+        currentSessionKey: "agent:drafts:telegram:direct:12345:thread:12345:10",
+      });
+      const { route: inboundRoute } = await resolveTelegramConversationRoute({
+        cfg,
+        accountId: "drafts",
+        chatId: 12345,
+        isGroup: false,
+        threadSpec: { id: 21, scope: "dm" },
+        senderId: 12345,
+      });
+      const inboundSessionKey = resolveTelegramTargetSession({
+        cfg,
+        route: inboundRoute,
+        chatId: 12345,
+        isGroup: false,
+        senderId: 12345,
+        dmThreadId: 21,
+        botHasTopicsEnabled: true,
+      });
 
-    expect(inboundSessionKey).toBe("agent:drafts:telegram:direct:12345:thread:12345:21");
-    expect(route?.sessionKey).toBe(inboundSessionKey);
-    expect(route?.baseSessionKey).toBe("agent:drafts:telegram:direct:12345");
-    expect(route?.threadId).toBe(21);
-  });
+      expect(inboundSessionKey).toBe(`${baseSessionKey}:thread:12345:21`);
+      expect(route?.sessionKey).toBe(inboundSessionKey);
+      expect(route?.baseSessionKey).toBe(baseSessionKey);
+      expect(route?.threadId).toBe(21);
+    },
+  );
 
   it("keeps fallback isolation when the named account is bound to another agent", async () => {
     const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({

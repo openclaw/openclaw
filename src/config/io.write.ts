@@ -33,6 +33,7 @@ import {
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
+import { applyMessageQueueDefaults } from "./defaults.js";
 import {
   readConfigWriteMigrationFacts,
   preserveDeferredPluginMigrationConfig,
@@ -118,6 +119,7 @@ export async function writeConfigFileFromContext(
   const sourceGuard = captureConfigWriteLockGuard(configPath);
   const doctorAuthority = getUpdateDoctorConfigWriteAuthority(configPath);
   let options = bindConfigWriteLockGuard(writeOptions, sourceGuard);
+  const databaseAccessAllowed = options.databaseAccess !== "none";
   options.assertConfigPathForWrite?.();
   assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
   const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
@@ -128,7 +130,9 @@ export async function writeConfigFileFromContext(
       }
     : await readSnapshot();
   const snapshot = snapshotRead.snapshot;
-  const pendingMigrations = await readConfigWriteMigrationFacts(snapshot, deps.env, ioOptions);
+  const pendingMigrations = databaseAccessAllowed
+    ? await readConfigWriteMigrationFacts(snapshot, deps.env, ioOptions)
+    : undefined;
   const configForWrite = preserveDeferredPluginMigrationConfig({
     sourceConfig: snapshot.sourceConfig,
     nextConfig: cfg,
@@ -182,8 +186,7 @@ export async function writeConfigFileFromContext(
     ...(options.unsetPaths ?? []),
   ]);
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
-  // Doctor repairs need the same authored projection so roster moves preserve nested includes.
-  // Missing snapshots also use this owner; exact bootstrap rosters carry explicitSetPaths.
+  // Preserve roster includes during Doctor repairs; bootstrap rosters use explicitSetPaths.
   if (snapshot.valid || (snapshot.exists && hasAuthoredIncludes)) {
     const webhookMigration = hasAuthoredIncludes
       ? projectWebhookMigrationIncludeWrite(authoredSourceConfig, authoredConfig)
@@ -271,7 +274,7 @@ export async function writeConfigFileFromContext(
   const materialized = stampConfigWriteMetadata(
     snapshot.exists
       ? validatedCandidate
-      : initializeNativeSessionCatalogPreferences(validatedCandidate),
+      : applyMessageQueueDefaults(initializeNativeSessionCatalogPreferences(validatedCandidate)),
     options.lastTouchedVersionOverride,
     snapshot.exists ? previousSource : null,
     deps.env,
@@ -285,8 +288,9 @@ export async function writeConfigFileFromContext(
   const previousWarningFingerprint = loggedConfigWarningFingerprints.get(configPath);
   // Capture before commit so rollback cannot restore a watcher-updated slot.
   options.assertConfigPathForWrite?.();
-  // Repairing an unresolved database setting must remain a config-file operation.
-  let stateSelection = await resolveConfigWriteStateSelection(snapshot.sourceConfig, deps.env);
+  let stateSelection = databaseAccessAllowed
+    ? await resolveConfigWriteStateSelection(snapshot.sourceConfig, deps.env)
+    : undefined;
   const priorSnapshotAuditRecord = await withConfigWriteState(stateSelection, () =>
     readLatestConfigSnapshotAuditRecordAsync(stateContext, options.assertConfigPathForWrite),
   );
@@ -314,7 +318,6 @@ export async function writeConfigFileFromContext(
   const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
   const nextHash = hashConfigRaw(json);
   const previousHash = hashConfigRaw(snapshot.raw);
-  const changedPathCount = changedPaths.size;
   const previousBytes =
     typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
   const sizeBaselineBytes = resolveConfigSizeBaselineBytes({
@@ -353,14 +356,10 @@ export async function writeConfigFileFromContext(
 
   const readTestLogFlag = (name: string) => isVitestRuntimeEnv(deps.env) && deps.env[name] === "1";
   const logConfigOverwrite = () => {
-    if (
-      !snapshot.exists ||
-      options.skipOutputLogs ||
-      (isVitestRuntimeEnv(deps.env) && !readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG"))
-    ) {
+    const testLog = readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG");
+    if (!snapshot.exists || options.skipOutputLogs || (isVitestRuntimeEnv(deps.env) && !testLog)) {
       return;
     }
-    const testLog = readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG");
     if (!isVerbose() && deps.env.OPENCLAW_CONFIG_OVERWRITE_LOG !== "1" && !testLog) {
       return;
     }
@@ -369,7 +368,7 @@ export async function writeConfigFileFromContext(
         configPath,
         previousHash: previousHash ?? null,
         nextHash,
-        changedPathCount,
+        changedPathCount: changedPaths.size,
       }),
     );
   };
@@ -401,7 +400,7 @@ export async function writeConfigFileFromContext(
     previousBytes,
     nextBytes,
     previousMetadata: resolveConfigStatMetadata(previousStat),
-    changedPathCount,
+    changedPathCount: changedPaths.size,
     changedPaths: [...changedPaths],
     origin: options.auditOrigin,
     hasMetaBefore,
@@ -519,11 +518,13 @@ export async function writeConfigFileFromContext(
         stateDirectory,
         ...writeGuard.captureRollbackProof(assertCurrent),
         withPublication: (publish, didMutate) =>
-          withDeferredPluginConfigRollback(
-            { configPath, env: deps.env, assertCurrent },
-            publish,
-            didMutate,
-          ),
+          databaseAccessAllowed
+            ? withDeferredPluginConfigRollback(
+                { configPath, env: deps.env, assertCurrent },
+                publish,
+                didMutate,
+              )
+            : publish(),
       });
     await using preparedFile = await prepareConfigFileWrite({
       configPath,
@@ -537,22 +538,24 @@ export async function writeConfigFileFromContext(
     });
     await assertAgentDeletionTargetsUnchanged(snapshot.config, sourceConfigForPreflight, deps.env);
     await options.beforeCommit?.();
-    const result = withDeferredPluginMigrationsCurrent(
-      { env: deps.env, configPath, expectedPending: pendingMigrations },
-      () => {
-        options.assertBeforePublish?.();
-        const published = preparedFile.publish();
-        publication.phase = "published";
-        return published;
-      },
-    );
+    const publish = () => {
+      options.assertBeforePublish?.();
+      const published = preparedFile.publish();
+      publication.phase = "published";
+      return published;
+    };
+    const result = databaseAccessAllowed
+      ? withDeferredPluginMigrationsCurrent(
+          { env: deps.env, configPath, expectedPending: pendingMigrations },
+          publish,
+        )
+      : publish();
     options.assertConfigPathForWrite?.();
     publication.phase = "accepted";
     recordUpdateDoctorConfigWrite(configPath, previousHash, nextHash, snapshot.parsed, json);
-    const acceptedStateSelection = await resolveConfigWriteStateSelection(
-      sourceConfigForPreflight,
-      deps.env,
-    );
+    const acceptedStateSelection = databaseAccessAllowed
+      ? await resolveConfigWriteStateSelection(sourceConfigForPreflight, deps.env)
+      : undefined;
     stateSelection = acceptedStateSelection;
     options.assertConfigPathForWrite?.();
     await recordConfigWriteMetadata(deps, acceptedStateSelection);
@@ -565,7 +568,7 @@ export async function writeConfigFileFromContext(
     );
     options.assertConfigPathForWrite?.();
     if (
-      acceptedStateSelection.ok &&
+      acceptedStateSelection?.ok &&
       configSnapshotAuditRecordMatchesPath(priorSnapshotAuditRecord, configPath) &&
       priorSnapshotAuditRecord.rawHash !== previousHash
     ) {

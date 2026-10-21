@@ -1,5 +1,5 @@
 // Filterable select list tests cover keyboard filtering and cursor behavior.
-import { type SelectItem, visibleWidth } from "@earendil-works/pi-tui";
+import { renderFakeCursor, type SelectItem, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { FilterableSelectList, type FilterableSelectItem } from "./filterable-select-list.js";
@@ -14,6 +14,9 @@ const mockTheme: FilterableSelectListTheme = {
   noMatch: (t) => `!${t}!`,
   filterLabel: (t) => `>${t}<`,
 };
+
+// Input emits cursor metadata; the TUI renderer resolves it before terminal output.
+const cursorCell = renderFakeCursor(" ");
 
 const testItems: FilterableSelectItem[] = [
   {
@@ -81,7 +84,7 @@ describe("FilterableSelectList", () => {
 
     list.handleInput("k");
 
-    expect(stripAnsi(list.render(80)[0] ?? "").trimEnd()).toBe(">Filter: <> k");
+    expect(stripAnsi(list.render(80)[0] ?? "").trimEnd()).toBe(`>Filter: <> k${cursorCell}`);
     expect(selectByEnter(list)?.value).toBe("kilo");
   });
 
@@ -110,13 +113,13 @@ describe("FilterableSelectList", () => {
     };
 
     typeInput(list, "beta");
-    expect(stripAnsi(list.render(80)[0] ?? "").trimEnd()).toBe(">Filter: <> beta");
+    expect(stripAnsi(list.render(80)[0] ?? "").trimEnd()).toBe(`>Filter: <> beta${cursorCell}`);
     expect(selectByEnter(list)?.value).toBe("session-2");
 
     list.handleInput(key);
 
     expect(cancelled).toBe(false);
-    expect(stripAnsi(list.render(80)[0] ?? "").trimEnd()).toBe(">Filter: <>");
+    expect(stripAnsi(list.render(80)[0] ?? "").trimEnd()).toBe(`>Filter: <> ${cursorCell}`);
     expect(selectByEnter(list)?.value).toBe("session-1");
     expect(list.render(80).join("\n")).toContain("first session");
     expect(list.render(80).join("\n")).toContain("second session");

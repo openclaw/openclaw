@@ -35,7 +35,6 @@ export type GatewayReloadPlan = {
     waitForDrain?: boolean;
     drainSignal?: AbortSignal;
     expectedSourceDigests?: Readonly<Record<string, string>>;
-    expectedInstallHashes?: Readonly<Record<string, string>>;
   };
   restartChannels: Set<ChannelKind>;
   restartServices?: Set<string>;
@@ -155,6 +154,8 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     prefixes: [...AUTH_CREDENTIAL_PATHS, "mcp.apps", "secrets.egressProxy", "gateway.portals"],
     kind: "restart",
   },
+  // Gateway tools capture this deployment policy when they are assembled.
+  { prefixes: ["tools.gatewayPolicy"], kind: "restart" },
   {
     // These policies use the published snapshot or an existing committed owner;
     // listener and service replacement requires an explicit action below.

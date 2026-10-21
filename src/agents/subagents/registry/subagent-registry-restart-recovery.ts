@@ -1,11 +1,10 @@
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
 import type { SessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
-import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import * as agentEvents from "../../../infra/agent-events.js";
 import { listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { isSessionWorkAdmissionActive } from "../../../sessions/session-lifecycle-admission.js";
+import { isSessionControllerWorkActive } from "../../../sessions/session-controller.lifecycle.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { isQuietSubagentRestartContinuation } from "./subagent-recovery-state.js";
@@ -20,7 +19,10 @@ import {
   isRestartRecoveryLifecycleCurrent,
   ownsSubagentSessionExecution,
 } from "./subagent-registry-restart-recovery-helpers.js";
-import { loadSubagentRecoverySession } from "./subagent-registry-restart-recovery-session.js";
+import {
+  loadSubagentRecoverySession,
+  markSubagentRecoverySessionInterrupted,
+} from "./subagent-registry-restart-recovery-session.js";
 import type {
   RestartRecoveryParams,
   RestartRecoveryResult,
@@ -61,6 +63,7 @@ function findRequesterSettleWakeRecoveryBatch(
     const wake = child.requesterSettleWake;
     if (
       !(wake?.status === "dispatching" || (allowPending && wake?.status === "pending")) ||
+      wake.attemptCount < 1 ||
       !(hasRequesterCompletionCohort(child) || isQuietSubagentRestartContinuation(child)) ||
       !isRequesterSettleWakeForRun({
         entry: child,
@@ -128,8 +131,7 @@ export async function captureRequesterSettleWakeRecoverySource(
 > {
   assertSubagentRegistryWriteSourceCurrent(params.context);
   const lifecycleGeneration = agentEvents.getAgentEventLifecycleGeneration();
-  // Observing the admitted recovery can put its wake into backoff. That progress
-  // transition does not revoke the still-executing input's source custody.
+  // A retry can return the wake to pending without revoking its admitted source.
   const batch = findRequesterSettleWakeRecoveryBatch(params, true, true);
   if (!batch) {
     if (findRequesterSettleWakeRecoveryBatch(params, false, true)) {
@@ -251,7 +253,7 @@ export async function recoverInterruptedSubagentRow(
     return { status: "ignored" };
   }
   try {
-    const session = await loadSubagentRecoverySession({ entry, isOwnerCurrent: isCurrent }).catch(
+    let session = await loadSubagentRecoverySession({ entry, isOwnerCurrent: isCurrent }).catch(
       (error: unknown) => {
         if (!replayTerminal) {
           throw error;
@@ -286,23 +288,10 @@ export async function recoverInterruptedSubagentRow(
     if (!replayTerminal && session?.retained?.isCurrent()) {
       return { status: "handled", retained: session.retained };
     }
-    // Registry custody stores the physical locator; session configuration may
-    // still name its logical sessions.json alias. Let the store owner resolve it.
-    const physicalStorePath =
-      session && !replayTerminal && !entry.execution.restartRecovery
-        ? (
-            await prepareSqliteTargetFromSessionStorePath(session.storePath, {
-              agentId: session.agentId,
-            })
-          ).path
-        : undefined;
-    if (!isCurrent()) {
-      return { status: "deferred" };
-    }
-    const sessionEntry = session?.sessionEntry;
-    const sessionId = sessionEntry?.sessionId;
-    const lifecycleRevision = sessionEntry?.lifecycleRevision;
-    const lifecycleRunId = sessionEntry?.lifecycleRunId;
+    const physicalStorePath = session?.currentRead.source?.path;
+    const sessionId = session?.sessionEntry?.sessionId;
+    const lifecycleRevision = session?.sessionEntry?.lifecycleRevision;
+    const lifecycleRunId = session?.sessionEntry?.lifecycleRunId;
     const sessionAgentId = session?.agentId;
     const target = { sessionKey: childSessionKey, sessionId };
     // A requester can itself be a subagent. Its incoming continuation batch,
@@ -335,6 +324,17 @@ export async function recoverInterruptedSubagentRow(
     if (!replayTerminal && hasPendingRequesterSettleWake()) {
       return { status: "handled" };
     }
+    if (session && !legacy && !replayTerminal) {
+      session = await markSubagentRecoverySessionInterrupted({
+        entry,
+        session,
+        isOwnerCurrent: () => isCurrent() && !hasPendingRequesterSettleWake(),
+      });
+      if (!session || !isCurrent()) {
+        return { status: "deferred" };
+      }
+    }
+    const sessionEntry = session?.sessionEntry;
     const currentRead = session?.currentRead;
     const storePath = session?.storePath;
     const matches = (current: SessionEntryCurrentFacts | undefined) =>
@@ -348,7 +348,7 @@ export async function recoverInterruptedSubagentRow(
         !storePath ||
         !isGatewayCurrent() ||
         listAgentRunsForSession(target).length !== 0 ||
-        isSessionWorkAdmissionActive(storePath, [childSessionKey, sessionId])
+        isSessionControllerWorkActive(storePath, [childSessionKey, sessionId])
       ) {
         throw new Error("Subagent child session effects owner changed");
       }

@@ -56,7 +56,14 @@ vi.mock("../../daemon/gateway-entrypoint.js", () => ({
   resolveGatewayInstallEntrypoint: mocks.entrypoint,
 }));
 vi.mock("./update-command-plugins.js", () => ({ updatePluginsAfterCoreUpdate: mocks.plugins }));
-vi.mock("./progress.js", () => ({ printResult: mocks.print }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: mocks.print,
+  prepareResult:
+    async (...args: Parameters<typeof import("./progress.js").printResult>) =>
+    () =>
+      mocks.print(...args.slice(0, 3)),
+}));
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   resolveUpdateRoot: mocks.root,
@@ -863,6 +870,7 @@ describe("update orchestration lifecycle ownership", () => {
 
     expect(reportedResult("repair")).toMatchObject({
       status: "warning",
+      coreUpdate: "completed",
       reconciledRuns: [recovery.runId],
     });
     expectRecoveredRun(recoveredAtOutput);
@@ -950,6 +958,7 @@ describe("update orchestration lifecycle ownership", () => {
 
     expect(reportedResult(lane)).toMatchObject({
       status: failure === "finding" ? "error" : lane === "repair" ? "warning" : "ok",
+      ...(lane === "repair" ? { coreUpdate: failure === "finding" ? "pending" : "completed" } : {}),
       postUpdate: { plugins: { status: failure === "finding" ? "error" : "warning", reason } },
     });
     expect(mocks.restart).toHaveBeenCalledTimes(

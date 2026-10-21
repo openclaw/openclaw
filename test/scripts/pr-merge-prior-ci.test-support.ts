@@ -29,6 +29,7 @@ export function createPriorCiFixtureState(head: string) {
     runHead: head,
     runConclusion: "success",
     latestAttempt: 2,
+    jobPageFault: "",
     omitPullRequests: false,
     sourceRepository: { id: 1103012935, full_name: "fixture/repo" },
     runRepository: undefined as { id: number; full_name: string } | undefined,
@@ -76,6 +77,17 @@ export function createPriorCiFixtureState(head: string) {
     evidencePath: "",
     mutateEvidence: false,
     otherCheck: "",
+    nativeChecks: [] as Array<{
+      name: string;
+      kind: "check" | "status";
+      required: boolean;
+      state: "success" | "failure" | "pending";
+      previousFailure?: boolean;
+    }>,
+    nativeOptionalCount: 0,
+    nativeMissingResult: false,
+    nativeResultApp: 15368,
+    nativePageFault: "",
     security: {
       enabled: false,
       fault: "",
@@ -142,7 +154,7 @@ const securityResponse=()=>{
     const earlier={...statuses.find(status=>status.context==="openclaw/security-sensitive-review"),id:701,context:"openclaw/security-sensitive-review",state:"failure",created_at:"2026-09-19T00:00:00Z",updated_at:"2026-09-19T00:00:00Z"};
     reply(config.fault==="missing-guard"?statuses:[...statuses,earlier]);
   } else if(endpoint.includes("/status?")) {
-    const statuses=securityStatuses().map(({creator,...status})=>status);
+    const statuses=[...securityStatuses().map(({creator,...status})=>status),...nativeChecks().filter(check=>check.kind==="status").map((check,index)=>({id:900+index,context:check.name,state:check.state}))];
     const state=statuses.some(status=>["failure","error"].includes(status.state))?"failure":statuses.some(status=>status.state==="pending")?"pending":"success";
     reply({total_count:statuses.length,sha:s.pr.headRefOid,state,statuses});
   } else if(endpoint.startsWith("repos/fixture/repo/actions/runs/901")&&endpoint.includes("/jobs?")) {

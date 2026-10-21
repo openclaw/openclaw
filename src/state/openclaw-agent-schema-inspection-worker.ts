@@ -352,7 +352,12 @@ export function createAgentSchemaInspectionWorker() {
             {
               type: kind === "state" ? "inspect-state" : "inspect",
               requestId,
-              input: postgresAgentId ? { ...input, agentId: postgresAgentId } : input,
+              input: {
+                ...input,
+                ...(postgresAgentId ? { agentId: postgresAgentId } : {}),
+                // Advanced IPC cannot clone the Windows case-insensitive env Proxy.
+                ...("env" in input && input.env ? { env: { ...input.env } } : {}),
+              },
               snapshot,
               ...(kind === "agent" && postgresAgent ? { databaseEngineSelection: selection } : {}),
             },

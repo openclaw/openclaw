@@ -8,12 +8,11 @@ import type { ResolvedDiscordAccount } from "./accounts.js";
 export function resolveDiscordProxyFetchForAccount(
   account: Pick<ResolvedDiscordAccount, "config">,
   cfg: OpenClawConfig,
-  runtime?: Pick<RuntimeEnv, "error">,
 ): typeof fetch | undefined {
   return withValidatedDiscordProxy(
     normalizeOptionalString(account.config.proxy) ??
       normalizeOptionalString(cfg?.channels?.discord?.proxy),
-    runtime,
+    undefined,
     makeProxyFetch,
   );
 }

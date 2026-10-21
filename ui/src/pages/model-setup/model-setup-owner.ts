@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, onSettled, untrack } from "solid-js";
+import { createEffect, onCleanup, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupActivateParams,
@@ -9,7 +9,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
+import { observeState } from "../../lib/reactive/observe-state.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { createModelProviderLogin } from "../model-providers/login-controller.ts";
 import {
@@ -39,7 +39,6 @@ import {
   mapActivationResult,
   type ModelSetupActivationState,
 } from "./state.ts";
-import type { ModelSetupViewProps } from "./view.tsx";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
 
 export type ModelSetupPageProps = {
@@ -54,16 +53,16 @@ export function createModelSetup(
   props: ModelSetupPageProps & { host: HTMLElement },
   context: ApplicationContext,
 ) {
-  const listeners = new Set<() => void>();
+  const projection = observeState(createModelSetupState());
+  const state = projection.state;
   let connected = false;
   let disposed = false;
   const notify = () => {
     if (!disposed) {
-      for (const listener of listeners) {
-        listener();
-      }
+      projection.invalidate();
     }
   };
+  const stopAfterRender = projection.subscribe(() => onSettled(afterRender));
   const actionsDisabled = (): boolean =>
     login.busy ||
     nativeModels.saving ||
@@ -73,15 +72,6 @@ export function createModelSetup(
     (state.wizardState.phase !== "idle" &&
       state.wizardState.phase !== "error" &&
       state.wizardState.phase !== "cancelled");
-
-  const state = createModelSetupState();
-
-  function setState<K extends keyof typeof state>(key: K, value: (typeof state)[K]) {
-    if (!Object.is(state[key], value)) {
-      state[key] = value;
-      notify();
-    }
-  }
 
   function agentSelection() {
     return modelSetupAgentSelection(context, props.routeData?.firstRun === true);
@@ -105,9 +95,9 @@ export function createModelSetup(
     canUseSetup: (client) => canUseSetup(client),
     canVerify: (client) => canVerify(client),
     verify: (modelTarget) => verifyConnection(modelTarget),
-    setVerifyState: (next) => setState("verifyState", next),
-    setActivationState: (next) => setState("activationState", next),
-    setRefreshWarning: (warning) => setState("setupRefreshWarning", warning),
+    setVerifyState: (next) => (state.verifyState = next),
+    setActivationState: (next) => (state.activationState = next),
+    setRefreshWarning: (warning) => (state.setupRefreshWarning = warning),
     resumeWizard: (recovery, observer) => {
       wizard.restore(recovery, observer);
       void runWizardMutation(() => wizard.resume());
@@ -128,7 +118,7 @@ export function createModelSetup(
   const iconLoader = createModelSetupIconLoader(
     () => context,
     () => state.pageState,
-    (urls) => setState("iconUrls", urls),
+    (urls) => (state.iconUrls = urls),
   );
   const login = createModelProviderLogin({
     getScope: () => ({ context, agentId: agentSelection().state.selectedId }),
@@ -148,15 +138,13 @@ export function createModelSetup(
     getAgentId: () => agentSelection().state.selectedId ?? null,
     onChange: (next) => {
       if (next.phase !== "starting" && next.phase !== "done") {
-        setState("activationState", { phase: "idle" });
+        state.activationState = { phase: "idle" };
       }
-      setState(
-        "wizardState",
-        next.phase === "step" && wizardMutationActive ? { ...next, busy: true } : next,
-      );
-      setState("wizardDraft", updateModelSetupWizardDraft(state.wizardDraft, next));
+      state.wizardState =
+        next.phase === "step" && wizardMutationActive ? { ...next, busy: true } : next;
+      state.wizardDraft = updateModelSetupWizardDraft(state.wizardDraft, next);
       if (next.phase === "idle") {
-        setState("cancellationNotice", null);
+        state.cancellationNotice = null;
       }
     },
     onStart: (method, intent) =>
@@ -186,29 +174,29 @@ export function createModelSetup(
       ) {
         return;
       }
-      setState("detectionRequest", null);
+      state.detectionRequest = null;
       if ("error" in outcome) {
         const message = formatModelSetupError(outcome.error);
         if (state.pageState.phase === "ready") {
-          setState("detectionError", message);
+          state.detectionError = message;
         } else {
           firstRun.setReadyConnection(null);
-          setState("pageState", { phase: "detect-error", message });
+          state.pageState = { phase: "detect-error", message };
         }
         return;
       }
-      setState("detectionError", null);
+      state.detectionError = null;
       firstRun.setReadyConnection({
         client: outcome.client,
         hello: outcome.hello,
         agentId: outcome.agentId,
       });
-      setState("pageState", { phase: "ready", result: outcome.value });
+      state.pageState = { phase: "ready", result: outcome.value };
       firstRun.reconcileMissingWizard(outcome.value);
       if (
         !outcome.value.manualProviders.some((provider) => provider.id === state.manualProviderId)
       ) {
-        setState("manualProviderId", "");
+        state.manualProviderId = "";
       }
     },
   });
@@ -261,7 +249,7 @@ export function createModelSetup(
         : undefined;
     if (observation.kind === "pending") {
       if (!wizard.hasAdmittedSession) {
-        setState("pageState", { phase: "loading" });
+        state.pageState = { phase: "loading" };
       }
       wizard.suspend(suspendedNotice);
       return;
@@ -275,10 +263,10 @@ export function createModelSetup(
       wizard.close({ retireOwner: true });
     }
     if (ownerChanged) {
-      setState("nativeSessionCatalogsEnabled", false);
-      setState("manualProviderId", "");
-      setState("manualApiKey", "");
-      setState("manualError", null);
+      state.nativeSessionCatalogsEnabled = false;
+      state.manualProviderId = "";
+      state.manualApiKey = "";
+      state.manualError = null;
     }
     const sameWizardOwner = previous && Boolean(connection.recoveryScope) && !ownerChanged;
     if (sameWizardOwner && wizard.hasAdmittedSession) {
@@ -298,7 +286,7 @@ export function createModelSetup(
       firstRun.connectionChanged(connection);
     }
     resetActivity();
-    setState("pageState", { phase: "loading" });
+    state.pageState = { phase: "loading" };
     if (canUseSetup(connection.client)) {
       void detect();
     }
@@ -307,11 +295,11 @@ export function createModelSetup(
   function resetActivity(): void {
     manualProviderRevealPending = false;
     login.reset();
-    setState("detectionRequest", null);
-    setState("detectionError", null);
+    state.detectionRequest = null;
+    state.detectionError = null;
     retireWizardMutation();
     void runDetection([null, null, null]);
-    setState("activationState", { phase: "idle" });
+    state.activationState = { phase: "idle" };
     resetVerify();
     iconLoader.reset();
     pendingPrepareOption = null;
@@ -335,14 +323,14 @@ export function createModelSetup(
       return null;
     }
     resetVerify();
-    setState("detectionError", null);
+    state.detectionError = null;
     // Only a cold load replaces the content. Same-owner rescans keep forms and
     // focus mounted; a changed connection clears them in synchronizeGateway.
     if (state.pageState.phase !== "ready") {
-      setState("pageState", { phase: "loading" });
+      state.pageState = { phase: "loading" };
     }
     const token = {};
-    setState("detectionRequest", token);
+    state.detectionRequest = token;
     const outcome = await runDetection([client, agentSelection().state.selectedId, token]);
     return outcome?.token === token && "value" in outcome ? outcome.value : null;
   }
@@ -355,7 +343,7 @@ export function createModelSetup(
   }
 
   function resetVerify(): void {
-    setState("verifyState", { phase: "idle" });
+    state.verifyState = { phase: "idle" };
     void runVerification([null, null, undefined]);
   }
 
@@ -364,7 +352,7 @@ export function createModelSetup(
     if (!canVerify(client) || actionsDisabled() || state.detectionRequest) {
       return undefined;
     }
-    setState("verifyState", { phase: "checking" });
+    state.verifyState = { phase: "checking" };
     return runVerification([client, agentSelection().state.selectedId, modelTarget]);
   }
 
@@ -377,10 +365,10 @@ export function createModelSetup(
     if (!canUseSetup(client) || activationBlocked()) {
       return;
     }
-    setState("manualError", null);
-    setState("activationState", { phase: "testing", targetId });
+    state.manualError = null;
+    state.activationState = { phase: "testing", targetId };
     pendingPrepareOption = null;
-    setState("wizardMode", "activate");
+    state.wizardMode = "activate";
     await runWizardMutation(() =>
       wizard.activate({ ...params, ...nativeSessionCatalogPreference() }, targetId),
     );
@@ -400,7 +388,7 @@ export function createModelSetup(
       state.manualApiKey,
     );
     if (!activation) {
-      setState("manualError", t("modelSetup.manual.required"));
+      state.manualError = t("modelSetup.manual.required");
       return;
     }
     void activate(activation, `manual:${state.manualProviderId}`);
@@ -408,10 +396,10 @@ export function createModelSetup(
 
   function selectManualProvider(providerId: string): void {
     if (providerId !== state.manualProviderId) {
-      setState("manualApiKey", "");
+      state.manualApiKey = "";
     }
-    setState("manualProviderId", providerId);
-    setState("manualError", null);
+    state.manualProviderId = providerId;
+    state.manualError = null;
   }
 
   async function handleWizardDone({
@@ -443,18 +431,15 @@ export function createModelSetup(
       wizard.close();
       const result: SystemAgentSetupActivateResult = { ok: true, ...modelActivation };
       const activationTarget = targetId ?? "provider-auth";
-      setState(
-        "activationState",
-        mapActivationResult({
-          result,
-          targetId: activationTarget,
-          fallbackError: t("modelSetup.errors.activationFailed"),
-          restartWarning: t("labsPage.restartRequired"),
-          refreshWarning: state.setupRefreshWarning,
-        }),
-      );
+      state.activationState = mapActivationResult({
+        result,
+        targetId: activationTarget,
+        fallbackError: t("modelSetup.errors.activationFailed"),
+        restartWarning: t("labsPage.restartRequired"),
+        refreshWarning: state.setupRefreshWarning,
+      });
       if (state.activationState.phase === "success") {
-        setState("manualApiKey", "");
+        state.manualApiKey = "";
       }
       firstRun.finishActivation(result, activationTarget, state.setupRefreshWarning);
       return;
@@ -469,7 +454,7 @@ export function createModelSetup(
         return;
       }
       if (prepareOption) {
-        setState("pageState", preparedModelPageState(result, prepareOption.modelTarget));
+        state.pageState = preparedModelPageState(result, prepareOption.modelTarget);
         const candidate = findPreparedModelCandidate(result, prepareOption.id);
         if (!candidate) {
           wizard.fail(t("modelSetup.prepare.providerNotReady", { provider: prepareOption.label }));
@@ -537,7 +522,7 @@ export function createModelSetup(
       );
       if (generation !== wizardMutationGeneration) {
         if (mutation.ok && !mutation.refresh.ok && connected) {
-          setState("setupRefreshWarning", mutation.refresh.error);
+          state.setupRefreshWarning = mutation.refresh.error;
         }
         if (connected && canUseSetup(context.gateway.snapshot.client)) {
           void detect();
@@ -548,7 +533,7 @@ export function createModelSetup(
         wizard.fail(mutation.error);
         return;
       }
-      setState("setupRefreshWarning", mutation.refresh.ok ? null : mutation.refresh.error);
+      state.setupRefreshWarning = mutation.refresh.ok ? null : mutation.refresh.error;
       const completion = mutation.value;
       if (completion) {
         // The coordinated wizard action has settled; follow-up activation owns
@@ -556,7 +541,7 @@ export function createModelSetup(
         wizardMutationActive = false;
         await handleWizardDone(completion);
       } else if (state.wizardState.phase === "step" && state.wizardState.busy) {
-        setState("wizardState", { ...state.wizardState, busy: false });
+        state.wizardState = { ...state.wizardState, busy: false };
       }
     } catch (error) {
       if (generation === wizardMutationGeneration) {
@@ -572,14 +557,14 @@ export function createModelSetup(
 
   async function cancelWizard(): Promise<void> {
     const generation = wizardMutationGeneration;
-    setState("cancellationNotice", null);
+    state.cancellationNotice = null;
     try {
       const outcome = await wizard.requestCancellation();
       if (generation !== wizardMutationGeneration) {
         return;
       }
       if (outcome === "running") {
-        setState("cancellationNotice", t("modelSetup.wizard.finishingStep"));
+        state.cancellationNotice = t("modelSetup.wizard.finishingStep");
         return;
       }
       if (outcome !== "cancelled") {
@@ -587,36 +572,35 @@ export function createModelSetup(
       }
       retireWizardMutation();
       pendingPrepareOption = null;
-      setState("activationState", { phase: "idle" });
+      state.activationState = { phase: "idle" };
     } catch (error) {
       if (
         generation === wizardMutationGeneration &&
         (state.wizardState.phase === "starting" || state.wizardState.phase === "step")
       ) {
-        setState(
-          "cancellationNotice",
-          t("modelSetup.wizard.cancelFailed", {
-            error: formatModelSetupError(error),
-          }),
-        );
+        state.cancellationNotice = t("modelSetup.wizard.cancelFailed", {
+          error: formatModelSetupError(error),
+        });
       }
     }
   }
 
-  function viewProps(): ModelSetupViewProps {
+  const view = () => {
+    i18nRevision();
+    projection.read();
     const snapshot = context.gateway.snapshot;
     const canAdmin = hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
     const gatewayTooOld =
       snapshot.phase === "connected" &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
     return {
-      onManualInput: (element) => {
+      onManualInput: (element: HTMLInputElement) => {
         manualInput = element;
       },
-      onFeedback: (element) => {
+      onFeedback: (element: HTMLDivElement) => {
         feedback = element;
       },
-      onWizardDialog: (element) => {
+      onWizardDialog: (element: import("../../components/modal-dialog.ts").OpenClawModalDialog) => {
         wizardDialog = element;
       },
       detecting: state.detectionRequest !== null,
@@ -651,7 +635,7 @@ export function createModelSetup(
       cancellationNotice: state.cancellationNotice,
       activationUnresolved: firstRun.unresolved,
       onUseCurrentModel: firstRun.canUseCurrentModel
-        ? () => void firstRun.useCurrentModel()
+        ? (): void => void firstRun.useCurrentModel()
         : undefined,
       actionsDisabled: actionsDisabled(),
       manualProviderId: state.manualProviderId,
@@ -660,7 +644,9 @@ export function createModelSetup(
       moreSignInOpen: state.moreSignInOpen,
       nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled,
       nativeModels,
-      onNativeSessionCatalogsChange: (enabled) => setState("nativeSessionCatalogsEnabled", enabled),
+      onNativeSessionCatalogsChange: (enabled: boolean) => {
+        state.nativeSessionCatalogsEnabled = enabled;
+      },
       firstRun: props.routeData?.firstRun === true,
       iconUrls: state.iconUrls,
       onDetect: () => {
@@ -668,16 +654,16 @@ export function createModelSetup(
           void detect();
         }
       },
-      onVerify: () => void firstRun.verify(),
-      onActivateCandidate: (candidate) =>
+      onVerify: (): void => void firstRun.verify(),
+      onActivateCandidate: (candidate: SystemAgentSetupDetectResult["candidates"][number]): void =>
         void activate(
           candidateActivation(candidate),
           activationTargetId(candidate.kind, candidate.modelRef),
         ),
-      onStartAuth: (option) => {
+      onStartAuth: (option: NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number]) => {
         wizard.prepareSignIn(option.kind, option.label);
         pendingPrepareOption = null;
-        setState("wizardMode", "auth");
+        state.wizardMode = "auth";
         void runWizardMutation(() =>
           wizard.start(
             option.id,
@@ -689,17 +675,19 @@ export function createModelSetup(
       },
       onStartPrepare: (option: ModelSetupPrepareOption) => {
         pendingPrepareOption = option;
-        setState("wizardMode", "prepare");
+        state.wizardMode = "prepare";
         void runWizardMutation(() => wizard.start(option.id, "openclaw.setup.prepare.start"));
       },
-      onManualProviderChange: (providerId) => selectManualProvider(providerId),
-      onManualApiKeyChange: (apiKey) => {
-        setState("manualApiKey", apiKey);
-        setState("manualError", null);
+      onManualProviderChange: (providerId: string) => selectManualProvider(providerId),
+      onManualApiKeyChange: (apiKey: string) => {
+        state.manualApiKey = apiKey;
+        state.manualError = null;
       },
       onManualConnect: () => connectManual(),
-      onMoreSignInToggle: (open) => setState("moreSignInOpen", open),
-      onIconError: (iconUrl) => iconLoader.invalidate(iconUrl),
+      onMoreSignInToggle: (open: boolean) => {
+        state.moreSignInOpen = open;
+      },
+      onIconError: (iconUrl: string) => iconLoader.invalidate(iconUrl),
       onOpenChat: () => (props.embedded ? props.onClose?.() : firstRun.continueSetup()),
       onOpenSetupAssistant: () => firstRun.continueSetup("utility"),
       onSuccessClose: () => {
@@ -707,48 +695,31 @@ export function createModelSetup(
           props.onClose?.();
           return;
         }
-        setState("activationState", { phase: "idle" });
+        state.activationState = { phase: "idle" };
         void detect();
       },
-      onWizardValueChange: (value) => setState("wizardDraft", { ...state.wizardDraft, value }),
-      onWizardAnswer: (value, includeValue) =>
+      onWizardValueChange: (value: unknown) => {
+        state.wizardDraft = { ...state.wizardDraft, value };
+      },
+      onWizardAnswer: (value: unknown, includeValue?: boolean): void =>
         void runWizardMutation(() => wizard.answer(value, includeValue)),
-      onWizardCancel: () => void cancelWizard(),
+      onWizardCancel: (): void => void cancelWizard(),
       onWizardClose: () => closeWizard(),
     };
-  }
-
-  const projection = projectOwner(
-    {
-      subscribe(listener: () => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
-    () => state,
-  );
-  const view = () => {
-    i18nRevision();
-    projection.read();
-    return viewProps();
   };
   createEffect(
     () => [props.routeData, agentSelection()],
     ([, selection]) => {
-      return untrack(() => {
-        // Selection receipts retire wizard ownership before another setup action can run.
-        const stop = selection.subscribe(() => {
-          synchronizeGateway(context.gateway.snapshot);
-          notify();
-        });
+      // Selection receipts retire wizard ownership before another setup action can run.
+      const stop = selection.subscribe(() => {
         synchronizeGateway(context.gateway.snapshot);
         notify();
-        return stop;
       });
+      synchronizeGateway(context.gateway.snapshot);
+      notify();
+      return stop;
     },
   );
-  // DOM settlement starts imperative first-run work; view() owns its dependencies.
-  createEffect(view, () => untrack(afterRender));
   onSettled(() => {
     connected = true;
     // Connection authority changes synchronously suspend or retire the admitted wizard.
@@ -767,6 +738,7 @@ export function createModelSetup(
   });
   onCleanup(() => {
     disposed = true;
+    stopAfterRender();
     connected = false;
     firstRun.dispose();
     retireWizardMutation();

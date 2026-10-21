@@ -17,7 +17,7 @@ import { listDatabaseEngineStores } from "../infra/database-engine/registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
-import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
+import { pluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
 import { resolvePluginControlPlaneWorkspace } from "./control-plane-workspace.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
@@ -34,7 +34,7 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import {
   buildPluginRuntimeLoadOptions,
-  createPluginRuntimeLoaderLogger,
+  pluginRuntimeLoaderLogger,
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
@@ -157,7 +157,7 @@ export function createPluginCliLoadSession(
           env: preparedEnv,
           workspaceDir,
           metadataSnapshot,
-          logger: params.logger ?? createPluginRuntimeLoaderLogger(),
+          logger: params.logger ?? pluginRuntimeLoaderLogger,
         });
         const prepared: PreparedPluginCliLoad = {
           context,
@@ -295,7 +295,7 @@ async function loadPluginCliCommandRegistryWithContext(params: {
     ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
     cache: false,
     channelPluginLoadIntent: "full",
-    runtimeOptions: { nodes: createPluginCliGatewayNodesRuntime() },
+    runtimeOptions: { nodes: pluginCliGatewayNodesRuntime },
   });
   const resources = params.prepared.resources;
   return params.prepared.withCache(() =>

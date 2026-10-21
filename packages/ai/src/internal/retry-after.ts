@@ -245,23 +245,8 @@ function parseHttpDateCalendarMs(
   components: Omit<HttpDateComponents, "weekday">,
 ): number | undefined {
   const { year, month, day, hours, minutes, seconds } = components;
-  if (
-    month === undefined ||
-    !Number.isInteger(year) ||
-    year < 1900 ||
-    !Number.isInteger(day) ||
-    day < 1 ||
-    day > 31 ||
-    !Number.isInteger(hours) ||
-    hours < 0 ||
-    hours > 23 ||
-    !Number.isInteger(minutes) ||
-    minutes < 0 ||
-    minutes > 59 ||
-    !Number.isInteger(seconds) ||
-    seconds < 0 ||
-    seconds > 60
-  ) {
+  // Grammar supplies decimal integers; the UTC round trip rejects calendar overflow.
+  if (month === undefined || year < 1900 || seconds > 60) {
     return undefined;
   }
 

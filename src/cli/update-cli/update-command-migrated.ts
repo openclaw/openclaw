@@ -21,6 +21,7 @@ import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import { createUpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
+import { runUtf8CommandBuffersWithTimeout } from "../../process/exec-runner.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -45,7 +46,10 @@ import {
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
-import { recordUpdatePackageCompletion } from "./update-command-terminal.js";
+import {
+  deferMigratedUpdateCommandTerminalResult,
+  recordUpdatePackageCompletion,
+} from "./update-command-terminal.js";
 
 /** Inspect private state copies without reopening migrated state through the previous runtime. */
 export async function inspectActivatedUpdateState(
@@ -162,6 +166,7 @@ export async function continueMigratedUpdateInFreshProcess(
 ): Promise<
   Pick<MigratedUpdateFinalizationResult, "result" | "exitCode" | "candidateStartAttempted"> & {
     databaseRollbackAvailable?: true;
+    preparedFailure?: UpdateCommandFailure;
   }
 > {
   if (params.opts.recovery) {
@@ -311,11 +316,12 @@ export async function continueMigratedUpdateInFreshProcess(
       ...(windowsRecovery ? { windowsTaskAutoStartSuspended: true } : {}),
       resultPath,
     };
+    let forwardedStderrBytes = 0;
     const runChild = (
       grant?: UpdateCommandChildGrant,
       bindChild?: (pid: number, argv?: readonly string[]) => void,
     ) =>
-      runUtf8CommandWithTimeout(workerCommand, {
+      runUtf8CommandBuffersWithTimeout(workerCommand, {
         ...workerOptions,
         input: JSON.stringify({ ...input, ...(grant ? { executor: grant } : {}) }),
         beforeInput: bindChild,
@@ -323,13 +329,24 @@ export async function continueMigratedUpdateInFreshProcess(
         // cancellation settlement keep their separate finite allowances.
         timeoutMs: run.deadline?.remainingMs() ?? run.activationTimeoutMs,
         maxOutputBytes: 1024 * 1024,
+        onOutputChunk(chunk, stream) {
+          if (stream === "stderr") {
+            process.stderr.write(chunk);
+            forwardedStderrBytes += chunk.byteLength;
+          }
+        },
       });
     await releaseLegacySourceLock(root, run.sourceArtifactLock);
     const child = executorFence
       ? await withUpdateCommandExecutorChild(executorFence, root, runChild)
       : await runChild();
-    if (child.stderr) {
-      process.stderr.write(child.stderr);
+    // Cancellation stops the observer before the runner finishes draining output.
+    // Flush only the retained bytes not already forwarded; stdout stays terminal-owned.
+    const pendingStderr = child.stderr.subarray(
+      Math.max(0, forwardedStderrBytes - (child.stderrTruncatedBytes ?? 0)),
+    );
+    if (pendingStderr.byteLength > 0) {
+      process.stderr.write(pendingStderr);
     }
     const response = JSON.parse(
       await fs.readFile(resultPath, "utf8"),
@@ -368,9 +385,11 @@ export async function continueMigratedUpdateInFreshProcess(
       // lifecycle. Its database restoration and rollback publish the final result.
       return { ...finalization, databaseRollbackAvailable: true };
     }
-    if (child.stdout) {
-      process.stdout.write(child.stdout);
-    }
+    const preparedFailure = deferMigratedUpdateCommandTerminalResult(
+      run,
+      response,
+      child.stdout.toString("utf8"),
+    );
     try {
       await windowsRecovery?.complete(
         response.result.status === "ok" ||
@@ -394,7 +413,7 @@ export async function continueMigratedUpdateInFreshProcess(
     if (cleanupFailure) {
       throw cleanupFailure;
     }
-    return finalization;
+    return { ...finalization, preparedFailure };
   } catch (error) {
     if (error instanceof UpdateCommandRecoveryPendingError) {
       // A refused compatibility/admission check is not delegated completion and

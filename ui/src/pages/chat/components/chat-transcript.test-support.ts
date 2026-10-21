@@ -27,9 +27,8 @@ class RecordingResizeObserver implements ResizeObserver {
 
   disconnect(): void {
     for (const target of this.targets) {
-      observedElements.delete(target);
+      this.unobserve(target);
     }
-    this.targets.clear();
     resizeObservers.delete(this);
   }
 
@@ -100,10 +99,7 @@ export function transcriptRows(container: HTMLElement): HTMLElement[] {
 }
 
 export function transcriptSize(container: ParentNode): number {
-  const extent = expectDefined(
-    container.querySelector<HTMLElement>(".chat-thread-inner--virtual"),
-    "transcript extent",
-  );
+  const extent = requireElement(container, ".chat-thread-inner--virtual");
   return Number.parseFloat(extent.style.height);
 }
 
@@ -119,6 +115,8 @@ export function installTranscriptDomMocks(): void {
   transcriptDomState.measuredRowHeight = 100;
   transcriptDomState.detachedRowHeight = 100;
   vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
+  // These geometry fixtures publish native offsets and observer receipts explicitly.
+  vi.spyOn(Element.prototype, "scrollTo").mockImplementation(() => {});
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
     this: HTMLElement,
   ) {
@@ -126,17 +124,7 @@ export function installTranscriptDomMocks(): void {
       ? transcriptDomState.measuredRowHeight
       : transcriptDomState.detachedRowHeight;
   });
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
-    x: 0,
-    y: 0,
-    top: 0,
-    left: 0,
-    right: 800,
-    bottom: 600,
-    width: 800,
-    height: 600,
-    toJSON: () => ({}),
-  } as DOMRect);
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 800, 600));
 }
 
 export function resetTranscriptTestDom(): void {

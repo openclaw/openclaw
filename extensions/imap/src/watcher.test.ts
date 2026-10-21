@@ -1,6 +1,7 @@
 import { EventEmitter, once } from "node:events";
 import { createServer, type Server, type Socket } from "node:net";
 import { ImapFlow } from "imapflow";
+import { authenticate } from "mailauth";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createGatewaySchedulerClock,
@@ -13,6 +14,11 @@ import { resolveImapConfig, type ImapAccountConfig } from "./config.js";
 import { createImapAuthResult, createImapTestRuntime } from "./imap-test-support.js";
 import type { ImapCursor } from "./state.js";
 import { ImapAccountWatcher } from "./watcher.js";
+
+vi.mock("mailauth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("mailauth")>();
+  return { ...actual, authenticate: vi.fn(actual.authenticate) };
+});
 
 type MailFixture = { uid: number; raw: string };
 
@@ -204,6 +210,7 @@ afterEach(async () => {
   await Promise.all(activeWatchers.splice(0).map((watcher) => watcher.stop()));
   await Promise.all(activeServers.splice(0).map((server) => server.close()));
   vi.restoreAllMocks();
+  vi.mocked(authenticate).mockReset();
 });
 
 async function startWatcher(
@@ -290,14 +297,13 @@ async function startWatcher(
     },
     serviceHealth: { clearFailure: vi.fn(), reportFailure: vi.fn(resolveFailure) },
   };
-  const authenticator = vi.fn(async () => createImapAuthResult("pass"));
+  const authenticator = vi.mocked(authenticate).mockResolvedValue(createImapAuthResult("pass"));
   const watcher = new ImapAccountWatcher({
     accountId: "inbox",
     account,
     runtime,
     state,
     context,
-    authenticator,
     // Exercise real reconnects without waiting through production backoff intervals.
     reconnectBaseMs: 5,
   });
@@ -581,7 +587,7 @@ describe("IMAP watcher protocol boundary", () => {
   });
 
   it("resumes a failed middle batch before later UIDs and skips disallowed senders", async () => {
-    const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
+    const { server, state, context, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
       account: { watch: { mode: "auto", pollSeconds: 0.02 } },
     });
     const admitted: number[] = [];
@@ -609,8 +615,12 @@ describe("IMAP watcher protocol boundary", () => {
       Number(params.sessionKey.split(":").at(-1)),
     );
     expect(attempts).toEqual(expected.flatMap((uid) => (uid === 25 ? [uid, uid] : [uid])));
-    expect(await state.skips.lookup("inbox:sender-not-allowed")).toEqual({ count: 1 });
-    expect(await state.skips.lookup("inbox:duplicate-uid")).toBeUndefined();
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      "imap: account=inbox uid=30 domain=evil.example gate=sender-not-allowed",
+    );
+    expect(context.logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("gate=duplicate-uid"),
+    );
   }, 15_000);
 
   it.each([
@@ -626,7 +636,7 @@ describe("IMAP watcher protocol boundary", () => {
   ] as const)(
     "dispatches %s mail with the actual admission evidence",
     async (gate, dmarc, headers, log, contentType) => {
-      const { server, state, context, authenticator, dispatchHookAgentTurn, waitForCursor } =
+      const { server, context, authenticator, dispatchHookAgentTurn, waitForCursor } =
         await startWatcher({
           account: {
             senderAuth: {
@@ -659,7 +669,9 @@ describe("IMAP watcher protocol boundary", () => {
       expect(context.logger.info).toHaveBeenCalledWith(
         `imap: account=inbox uid=2 domain=example.com ${log} run=mail-run`,
       );
-      expect(await state.skips.lookup("inbox:dmarc-none")).toBeUndefined();
+      expect(context.logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("gate=dmarc-none"),
+      );
     },
   );
 
@@ -721,7 +733,6 @@ describe("IMAP watcher protocol boundary", () => {
       expect(context.logger.warn).toHaveBeenCalledWith(
         `imap: account=inbox uid=2 domain=${domain} gate=${reason}`,
       );
-      expect(await state.skips.lookup(`inbox:${reason}`)).toEqual({ count: 1 });
       expect(await state.claims.lookup("attempt:inbox:17:2")).toBeUndefined();
     },
   );
@@ -729,7 +740,7 @@ describe("IMAP watcher protocol boundary", () => {
   it.each(["rejected admission", "throwing admission", "transient authentication"] as const)(
     "retries %s without waiting for another email",
     async (failure) => {
-      const { server, state, authenticator, dispatchHookAgentTurn, waitForCursor } =
+      const { server, context, authenticator, dispatchHookAgentTurn, waitForCursor } =
         await startWatcher({
           account: { watch: { mode: "auto", pollSeconds: 0.02 } },
         });
@@ -752,18 +763,22 @@ describe("IMAP watcher protocol boundary", () => {
             params.idempotencyKey === params.sessionKey,
         ),
       ).toBe(true);
-      expect(await state.skips.lookup("inbox:duplicate-uid")).toBeUndefined();
+      expect(context.logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("gate=duplicate-uid"),
+      );
     },
   );
 
   it("records exhausted admission retries and continues with the next email", async () => {
-    const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
+    const { server, state, context, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
       account: { watch: { mode: "auto", pollSeconds: 0.02 } },
     });
     dispatchHookAgentTurn.mockRejectedValue(new Error("Gateway unavailable"));
     server.append("From: trusted@example.com\r\nSubject: Exhausted\r\n\r\nNo admission");
     await waitForCursor(2);
-    expect(await state.skips.lookup("inbox:dispatch-rejected")).toEqual({ count: 1 });
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      "imap: account=inbox uid=2 domain=example.com gate=dispatch-rejected",
+    );
     expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(3);
     expect(await state.claims.lookup("attempt:inbox:17:2")).toEqual({
       count: 3,
@@ -776,7 +791,7 @@ describe("IMAP watcher protocol boundary", () => {
   });
 
   it("skips a message the parser rejects without UIDNEXT and dispatches the next email", async () => {
-    const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
+    const { server, context, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
       omitUidNext: true,
     });
     dispatchHookAgentTurn.mockResolvedValue({ ok: true, runId: "mail-run" });
@@ -787,13 +802,15 @@ describe("IMAP watcher protocol boundary", () => {
     );
     server.append("From: trusted@example.com\r\nSubject: After\r\n\r\nAdmitted");
     await waitForCursor(3, 5_000);
-    expect(await state.skips.lookup("inbox:message-parse-failed")).toEqual({ count: 1 });
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      "imap: account=inbox uid=2 domain=unknown gate=message-parse-failed",
+    );
     expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(1);
     expect(dispatchHookAgentTurn.mock.calls[0]?.[0].sessionKey).toBe("hook:imap:inbox:17:3");
   });
 
   it("serializes reconnect admission with later mailbox wakeups", async () => {
-    const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
+    const { server, context, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
       account: { watch: { mode: "auto", pollSeconds: 0.02 } },
     });
     dispatchHookAgentTurn.mockImplementationOnce(async () => {
@@ -815,7 +832,9 @@ describe("IMAP watcher protocol boundary", () => {
       "hook:imap:inbox:17:2",
       "hook:imap:inbox:17:3",
     ]);
-    expect(await state.skips.lookup("inbox:duplicate-uid")).toBeUndefined();
+    expect(context.logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("gate=duplicate-uid"),
+    );
   });
 
   it("stops pending admission retries when the watcher is stopped", async () => {

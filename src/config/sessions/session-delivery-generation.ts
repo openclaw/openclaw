@@ -8,8 +8,8 @@ import {
   registerSqliteSchemaMutationListener,
 } from "../../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { isSessionMutationActive } from "../../sessions/session-controller.lifecycle.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../../sessions/session-key-utils.js";
-import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
 import {
   isSessionStoreTopologyChange,
   sessionChanges,
@@ -407,7 +407,7 @@ async function prepareSessionGenerationLease(
         if (
           delivery &&
           [...paths].some((scope) =>
-            isSessionLifecycleMutationActive(
+            isSessionMutationActive(
               scope,
               generation.sessionId
                 ? [generation.sessionKey, generation.sessionId]

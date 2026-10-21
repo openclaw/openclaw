@@ -36,11 +36,7 @@ import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-wor
 import { collectAgentRosterFindings } from "./audit-agent-roster.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
-import {
-  formatPermissionDetail,
-  formatPermissionRemediation,
-  inspectPathPermissions,
-} from "./audit-fs.js";
+import { createPermissionAuditor } from "./audit-fs.js";
 import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
 import {
   readBoundedMcporterRegistry,
@@ -290,14 +286,9 @@ async function collectFilesystemFindings(params: {
   execIcacls?: ExecFn;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
+  const auditPermissions = createPermissionAuditor(findings, params);
 
-  const stateDirPerms = await inspectPathPermissions(params.stateDir, {
-    env: params.env,
-    platform: params.platform,
-    exec: params.execIcacls,
-  });
-  if (stateDirPerms.ok) {
-    let permissionFinding: SecurityAuditFinding | undefined;
+  await auditPermissions(params.stateDir, true, (stateDirPerms) => {
     if (stateDirPerms.isSymlink) {
       findings.push({
         checkId: "fs.state_dir.symlink",
@@ -307,48 +298,31 @@ async function collectFilesystemFindings(params: {
       });
     }
     if (stateDirPerms.worldWritable) {
-      permissionFinding = {
+      return {
         checkId: "fs.state_dir.perms_world_writable",
         severity: "critical",
         title: "State dir is world-writable",
-        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; other users can write into your OpenClaw state.`,
+        detail: "other users can write into your OpenClaw state.",
       };
     } else if (stateDirPerms.groupWritable) {
-      permissionFinding = {
+      return {
         checkId: "fs.state_dir.perms_group_writable",
         severity: "warn",
         title: "State dir is group-writable",
-        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; group users can write into your OpenClaw state.`,
+        detail: "group users can write into your OpenClaw state.",
       };
     } else if (stateDirPerms.groupReadable || stateDirPerms.worldReadable) {
-      permissionFinding = {
+      return {
         checkId: "fs.state_dir.perms_readable",
         severity: "warn",
         title: "State dir is readable by others",
-        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; consider restricting to 700.`,
+        detail: "consider restricting to 700.",
       };
     }
-    if (permissionFinding) {
-      findings.push({
-        ...permissionFinding,
-        remediation: formatPermissionRemediation({
-          targetPath: params.stateDir,
-          perms: stateDirPerms,
-          isDir: true,
-          posixMode: 0o700,
-          env: params.env,
-        }),
-      });
-    }
-  }
-
-  const configPerms = await inspectPathPermissions(params.configPath, {
-    env: params.env,
-    platform: params.platform,
-    exec: params.execIcacls,
+    return undefined;
   });
-  if (configPerms.ok) {
-    let permissionFinding: SecurityAuditFinding | undefined;
+
+  await auditPermissions(params.configPath, false, (configPerms) => {
     const skipReadablePermWarnings = configPerms.isSymlink;
     if (configPerms.isSymlink) {
       findings.push({
@@ -359,40 +333,29 @@ async function collectFilesystemFindings(params: {
       });
     }
     if (configPerms.worldWritable || configPerms.groupWritable) {
-      permissionFinding = {
+      return {
         checkId: "fs.config.perms_writable",
         severity: "critical",
         title: "Config file is writable by others",
-        detail: `${formatPermissionDetail(params.configPath, configPerms)}; another user could change gateway/auth/tool policies.`,
+        detail: "another user could change gateway/auth/tool policies.",
       };
     } else if (!skipReadablePermWarnings && configPerms.worldReadable) {
-      permissionFinding = {
+      return {
         checkId: "fs.config.perms_world_readable",
         severity: "critical",
         title: "Config file is world-readable",
-        detail: `${formatPermissionDetail(params.configPath, configPerms)}; config can contain tokens and private settings.`,
+        detail: "config can contain tokens and private settings.",
       };
     } else if (!skipReadablePermWarnings && configPerms.groupReadable) {
-      permissionFinding = {
+      return {
         checkId: "fs.config.perms_group_readable",
         severity: "warn",
         title: "Config file is group-readable",
-        detail: `${formatPermissionDetail(params.configPath, configPerms)}; config can contain tokens and private settings.`,
+        detail: "config can contain tokens and private settings.",
       };
     }
-    if (permissionFinding) {
-      findings.push({
-        ...permissionFinding,
-        remediation: formatPermissionRemediation({
-          targetPath: params.configPath,
-          perms: configPerms,
-          isDir: false,
-          posixMode: 0o600,
-          env: params.env,
-        }),
-      });
-    }
-  }
+    return undefined;
+  });
 
   return findings;
 }
