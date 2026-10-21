@@ -1,6 +1,6 @@
 import "../../../test-utils/prepare-compiled-subprocesses.js";
-import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { createInterface } from "node:readline";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, test, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
@@ -14,30 +14,15 @@ import { createEventBus } from "../event-bus.js";
 import type { ExecResult } from "../exec.js";
 import { createExtensionRuntime, loadExtensionFromFactory } from "./loader.js";
 
-const spawnCommand = commands.spawnCommand;
 const nativeKill = process.kill.bind(process);
 
 test.skipIf(process.platform !== "linux").for([false, true])(
   "extension exec preserves real cleanup classification with denied forced stop=%s",
   async (denyStop, { signal }) => {
-    const ready = createDeferredCore<{ rootPid: number; descendantPid: number }>();
     const forcedStop = createDeferredCore();
-    let child: ChildProcess | undefined;
     let apiResult: ExecResult | undefined;
     let denied = 0;
-    vi.spyOn(commands, "spawnCommand").mockImplementation((argv, options) => {
-      const spawned = spawnCommand(argv, options);
-      child = spawned.nodeChildProcess;
-      let output = "";
-      child.stdout?.on("data", (data: Buffer) => {
-        output += data.toString("utf8");
-        const match = output.match(/NATIVE_EXEC_READY:(\d+)\n/);
-        if (match && child?.pid) {
-          ready.resolve({ rootPid: child.pid, descendantPid: Number(match[1]) });
-        }
-      });
-      return spawned;
-    });
+    const spawn = vi.spyOn(commands, "spawnCommand");
     const descendant =
       'process.on("SIGTERM", () => {}); process.stdout.write("ready"); setInterval(() => {}, 1000);';
     const source = [
@@ -59,13 +44,18 @@ test.skipIf(process.platform !== "linux").for([false, true])(
       () => apiResult,
       (error: unknown) => error,
     );
+    const spawned = expectDefined(spawn.mock.results.find((call) => call.type === "return"));
+    const child = spawned.value.nodeChildProcess;
+    const lines = createInterface({ input: expectDefined(child.stdout) });
+    const ready = once(lines, "line");
     try {
-      const identity = await withinTest(ready.promise, signal);
-      const command = expectDefined(child, "real command child");
-      expect(nativeKill(identity.descendantPid, 0)).toBe(true);
-      expect(isChildProcessTreeAlive(command)).toBe(true);
+      const [line]: string[] = await withinTest(ready, signal);
+      const descendantPid = Number(expectDefined(line?.match(/^NATIVE_EXEC_READY:(\d+)$/))[1]);
+      const rootPid = expectDefined(child.pid);
+      expect(nativeKill(descendantPid, 0)).toBe(true);
+      expect(isChildProcessTreeAlive(child)).toBe(true);
       vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
-        if (pid === -identity.rootPid && requestedSignal === "SIGKILL") {
+        if (pid === -rootPid && requestedSignal === "SIGKILL") {
           forcedStop.resolve();
           if (denyStop) {
             denied++;
@@ -74,7 +64,7 @@ test.skipIf(process.platform !== "linux").for([false, true])(
         }
         return nativeKill(pid, requestedSignal);
       });
-      const exited = once(command, "exit");
+      const exited = once(child, "exit");
       vi.useFakeTimers({ toFake: ["Date"] });
       controller.abort();
       await withinTest(exited, signal);
@@ -84,9 +74,9 @@ test.skipIf(process.platform !== "linux").for([false, true])(
       const observed = await withinTest(outcome, signal);
       expect(denied).toBe(denyStop ? 1 : 0);
       if (denyStop) {
-        expect(nativeKill(identity.descendantPid, 0)).toBe(true);
+        expect(nativeKill(descendantPid, 0)).toBe(true);
       }
-      expect(isChildProcessTreeAlive(command)).toBe(denyStop);
+      expect(isChildProcessTreeAlive(child)).toBe(denyStop);
       const result = {
         stdout: expect.stringContaining("NATIVE_EXEC_READY:"),
         stderr: "",
@@ -98,21 +88,20 @@ test.skipIf(process.platform !== "linux").for([false, true])(
       );
       expect(hasCommandProcessCleanupError(observed)).toBe(denyStop);
     } finally {
+      lines.close();
       vi.restoreAllMocks();
       vi.useRealTimers();
-      if (child?.pid) {
-        const cleanup = createCommandTerminationController({
-          child,
-          cancelController: new AbortController(),
-          processTree: { mode: "force" },
-          killGraceMs: 0,
-          isChildExited: () => child?.exitCode != null || child?.signalCode != null,
-          isCommandSettled: () => true,
-        });
-        cleanup.terminate();
-        expect(await cleanup.settle()).not.toBe("uncertain");
-        expect(isChildProcessTreeAlive(child)).toBe(false);
-      }
+      const cleanup = createCommandTerminationController({
+        child,
+        cancelController: new AbortController(),
+        processTree: { mode: "force" },
+        killGraceMs: 0,
+        isChildExited: () => child.exitCode != null || child.signalCode != null,
+        isCommandSettled: () => true,
+      });
+      cleanup.terminate();
+      expect(await cleanup.settle()).not.toBe("uncertain");
+      expect(isChildProcessTreeAlive(child)).toBe(false);
       await withinTest(outcome, signal);
     }
   },
