@@ -126,8 +126,8 @@
   border: 0;
   border-radius: 50%;
   corner-shape: round;
-  background: color-mix(in srgb, var(--text) 6%, var(--details-surface, var(--card)));
-  color: var(--muted);
+  background: color-mix(in srgb, var(--danger) 8%, var(--details-surface, var(--card)));
+  color: var(--danger);
   opacity: 0;
   pointer-events: none;
   transform: translateY(-50%);
@@ -147,8 +147,7 @@
 }
 
 .chat-details-processes__stop:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--text) 10%, var(--details-surface, var(--card)));
+  background: color-mix(in srgb, var(--danger) 12%, var(--details-surface, var(--card)));
 }
 
 .chat-details-processes__error {
