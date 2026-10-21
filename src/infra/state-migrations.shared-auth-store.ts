@@ -601,17 +601,6 @@ export async function migrateSharedAuthStore(params: {
       }
     },
     run: async (env) => {
-      // The source agent can be deleted with its database retained after detection;
-      // never move a retired store.
-      if (
-        isRetainedSharedAuthSource(
-          env,
-          params.detected.sourcePath,
-          params.detected.ownerId ?? LEGACY_IMPLICIT_AGENT_ID,
-        )
-      ) {
-        return heldSharedAuthSourceMessages(params.detected);
-      }
       const sourceAgentId =
         params.detected.ownerId ??
         resolveAuthProfileDatabaseOwnerId(path.dirname(params.detected.sourcePath));
