@@ -1,39 +1,22 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { captureSessionControllerSourceSettlement as settleSource } from "../../../sessions/session-controller.mailbox.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
-import { createQueueTestRun } from "../queue.test-helpers.js";
-import { enqueueFollowupRun } from "./enqueue.js";
 import {
   admitFollowupRunLifecycle as admit,
   completeFollowupRunLifecycle as complete,
   markFollowupRunEnqueued as markEnqueued,
 } from "./lifecycle.js";
+import { queueFixture } from "./lifecycle.test-support.js";
 import { clearFollowupQueue } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
 let run: FollowupRun;
-const releases: Array<() => void> = [];
-function gate() {
-  const entered = createDeferredCore();
-  const deferred = createDeferredCore();
-  releases.push(() => deferred.resolve());
-  return {
-    entered: entered.promise,
-    resolve: () => deferred.resolve(),
-    wait: async () => {
-      entered.resolve();
-      await deferred.promise;
-    },
-  };
-}
+const queue = queueFixture("followup");
 beforeEach(() => {
-  run = createQueueTestRun({ prompt: "lifecycle" });
+  run = queue.source("lifecycle");
 });
 afterEach(async () => {
-  for (const release of releases.splice(0)) {
-    release();
-  }
+  queue.release();
   try {
     complete(run);
     await settleSource(run.controllerInput!);
@@ -52,7 +35,7 @@ it("keeps the public deferral callback free of internal observation arguments", 
 it.each(["abandonment", "publication failure", "adoption"] as const)(
   "retains source custody during pending %s",
   async (phase) => {
-    const release = gate();
+    const release = queue.gate();
     const failure = new Error("deferral publication failed");
     const onAbandoned = vi.fn();
     const onSettled = vi.fn(phase === "publication failure" ? release.wait : undefined);
@@ -67,20 +50,16 @@ it.each(["abandonment", "publication failure", "adoption"] as const)(
       admission = admit(run);
       await release.entered;
       complete(run);
+    } else if (phase === "publication failure") {
+      run.turnAdoptionLifecycle.onDeferred = () => {
+        throw failure;
+      };
+      expect(() => queue.enqueue(run)).toThrow(failure);
     } else {
-      const key = "agent:main:pending-custody";
-      if (phase === "publication failure") {
-        run.turnAdoptionLifecycle.onDeferred = () => {
-          throw failure;
-        };
-        expect(() => enqueueFollowupRun(key, run, { mode: "followup" })).toThrow(failure);
-      } else {
-        run.messageId = "source-1";
-        Object.assign(run.run, { agentId: "main", sessionKey: key });
-        enqueueFollowupRun(key, run, { mode: "followup" }, "message-id");
-        clearFollowupQueue(key, run.controllerInput!.mailbox);
-        await release.entered;
-      }
+      run.messageId = "source-1";
+      queue.enqueue(run);
+      clearFollowupQueue(queue.key, run.controllerInput!.mailbox);
+      await release.entered;
     }
     expect(onSettled).toHaveBeenCalledTimes(phase === "publication failure" ? 1 : 0);
     const settled = vi.fn();

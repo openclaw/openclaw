@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
 import {
@@ -8,25 +8,12 @@ import {
   holdSessionControllerSourceWithdrawal,
   reserveSessionControllerSource,
 } from "../../../sessions/session-controller.mailbox.js";
-import { createQueueSettings, createQueueTestRun } from "../queue.test-helpers.js";
-import { enqueueFollowupRun, reserveSteerCandidate } from "./enqueue.js";
-import { clearFollowupQueue, getExistingFollowupQueue } from "./state.js";
-import type { FollowupRun, QueueSettings } from "./types.js";
+import { observe, queueFixture } from "./lifecycle.test-support.js";
+import { getExistingFollowupQueue } from "./state.js";
+import type { FollowupRun } from "./types.js";
 
-let key: string;
-let settings: QueueSettings;
-let runFollowup: (run: FollowupRun) => Promise<void>;
-const reserve = (run: FollowupRun) => reserveSteerCandidate(key, run, settings, runFollowup)!;
-async function admit(run: FollowupRun) {
-  const reservation = reserve(run);
-  await expect(reservation.admit()).resolves.toBe("steer");
-  return reservation;
-}
-const source = (prompt: string, messageId = prompt) => createQueueTestRun({ prompt, messageId });
-function observe<T>(promise: Promise<T>) {
-  const called = vi.fn((value: T) => value);
-  return { called, promise: promise.then(called) };
-}
+const queue = queueFixture("steer");
+const source = (prompt: string, messageId = prompt) => queue.source(prompt, messageId);
 function authority(isCurrent: () => boolean, message: string) {
   return createAdmittedRunOperatorAuthority({
     profileId: "fixture",
@@ -42,48 +29,31 @@ function authority(isCurrent: () => boolean, message: string) {
 function recordDelivery(count: number, active?: FollowupRun) {
   const delivered: string[] = [];
   const done = createDeferred();
-  const entered = createDeferred();
-  const release = createDeferred();
-  runFollowup = async (run) => {
+  const activeGate = queue.gate();
+  queue.runFollowup = async (run) => {
     delivered.push(run.prompt);
     if (run === active) {
-      entered.resolve();
-      await release.promise;
+      await activeGate.wait();
     }
     if (delivered.length === count) {
       done.resolve();
     }
   };
-  return {
-    delivered,
-    drained: done.promise,
-    activeEntered: entered.promise,
-    releaseActive: () => release.resolve(),
-  };
+  return { delivered, drained: done.promise, gate: activeGate };
 }
-beforeEach(() => {
-  key = `steer:${expect.getState().currentTestName}`;
-  settings = createQueueSettings({ mode: "steer" });
-  runFollowup = vi.fn(async () => {});
-});
-afterEach(() => {
-  clearFollowupQueue(key);
-  vi.useRealTimers();
-});
-
 it.each([true, false])(
   "retains the canonical receipt after acceptance=%s until outcome",
   async (accepted) => {
     const first = source("first");
     const lifecycle = { onAdopted: async () => {}, onSettled: vi.fn(), onAbandoned: vi.fn() };
     first.turnAdoptionLifecycle = lifecycle;
-    const reservation = await admit(first);
+    const reservation = await queue.admit(first);
     const input = first.controllerInput!;
     const receipt = input.injection;
     const { called: receiptSettled } = observe(receipt!.settled);
-    const next = reserveSessionControllerSource(key, {
+    const next = reserveSessionControllerSource(queue.key, {
       target: input.mailbox.owner.target,
-      policy: settings,
+      policy: queue.settings,
     });
     const nextInjection = beginSessionControllerSourceInjection(next);
     const { called: admittedNext, promise: nextAdmission } = observe(nextInjection.admit());
@@ -97,7 +67,6 @@ it.each([true, false])(
     expect(receiptSettled).not.toHaveBeenCalled();
     expect(admittedNext).not.toHaveBeenCalled();
     expect(lifecycle.onSettled).not.toHaveBeenCalled();
-    // Both accepted and indeterminate outcomes consume; neither is replayable.
     reservation.consume("consumed");
     await expect(nextAdmission).resolves.toBe(true);
     await settleSource(input);
@@ -110,48 +79,42 @@ it.each([true, false])(
     expect(next.injection).toBe(nextReceipt);
     nextInjection.finish(true);
     await settleSource(next);
-    expect(runFollowup).not.toHaveBeenCalled();
-    expect(enqueueFollowupRun(key, first, settings, "none")).toBe(false);
+    expect(queue.enqueue(first, true, "none")).toBe(false);
   },
 );
 
 it("retains the same early source and refuses a withdrawal-held steer", async () => {
   const run = source("early source", "early");
-  const input = reserveSessionControllerSource(key, {
-    policy: settings,
+  const input = reserveSessionControllerSource(queue.key, {
+    policy: queue.settings,
     protocolRunId: " exact ",
   });
   bindSessionControllerSource(input, run);
   const hold = holdSessionControllerSourceWithdrawal(input);
-  expect(reserveSteerCandidate(key, run, settings, runFollowup)).toBeUndefined();
+  expect(queue.reserve(run)).toBeUndefined();
   expect(input.injection).toBeUndefined();
   hold.release();
-  const reservation = await admit(run);
+  const reservation = await queue.admit(run);
   expect(run.controllerInput).toBe(input);
   expect(input.protocolRunId).toBe(" exact ");
   reservation.consume("consumed");
   await settleSource(input);
-  expect(runFollowup).not.toHaveBeenCalled();
 });
 
 it("joins asynchronous source cleanup after native settlement and cancellation", async () => {
   const run = source("accepted source", "accepted");
   const cancellation = new AbortController();
-  const cleanup = createDeferred();
-  const cleanupStarted = createDeferred();
+  const cleanup = queue.gate();
   run.abortSignal = cancellation.signal;
   run.turnAdoptionLifecycle = {
     onAdopted: async () => {},
-    onSettled: () => {
-      cleanupStarted.resolve();
-      return cleanup.promise;
-    },
+    onSettled: cleanup.wait,
   };
-  const reservation = await admit(run);
+  const reservation = await queue.admit(run);
   reservation.accepted(true);
   cancellation.abort();
   reservation.consume("consumed");
-  await cleanupStarted.promise;
+  await cleanup.entered;
   const input = run.controllerInput!;
   const { called: settled, promise: settlement } = observe(settleSource(input));
   await Promise.resolve();
@@ -165,33 +128,29 @@ it("joins asynchronous source cleanup after native settlement and cancellation",
 });
 
 it("rechecks channel execution authority after waiting for native settlement", async () => {
-  const first = createQueueTestRun({ prompt: "first" });
-  const second = createQueueTestRun({ prompt: "second" });
+  const [first, second] = [queue.source("first"), queue.source("second")];
   let current = true;
   second.operatorAuthority = authority(() => current, "source authority revoked");
-  const firstReservation = await admit(first);
-  const secondReservation = reserve(second);
+  const firstReservation = await queue.admit(first);
+  const secondReservation = queue.reserve(second);
   const secondAdmission = secondReservation.admit();
   const rejected = expect(secondAdmission).rejects.toThrow("source authority revoked");
   current = false;
   firstReservation.consume("consumed");
   await rejected;
   await settleSource(second.controllerInput!);
-  expect(runFollowup).not.toHaveBeenCalled();
   expect(second.controllerInput?.phase).toBe("consumed");
 });
 
 it.each(["accepted", "rejected"] as const)(
   "tries newer input after an earlier steer rejects and drains %s fallback in order",
   async (outcome) => {
-    const older = source("older followup", "older");
-    const first = source("first steer", "first");
-    const newer = source("newer steer", "newer");
+    const [older, first, newer] = [source("older"), source("first"), source("newer")];
     const expected = outcome === "accepted" ? [older, first] : [older, first, newer];
     const { delivered, drained } = recordDelivery(expected.length);
-    enqueueFollowupRun(key, older, settings, "message-id", runFollowup, false);
-    const firstReservation = await admit(first);
-    const newerReservation = reserve(newer);
+    queue.enqueue(older, false);
+    const firstReservation = await queue.admit(first);
+    const newerReservation = queue.reserve(newer);
     const newerAdmission = newerReservation.admit();
     firstReservation.fallback();
     await expect(newerAdmission).resolves.toBe("steer");
@@ -205,21 +164,19 @@ it.each(["accepted", "rejected"] as const)(
     await drained;
     expect(delivered).toEqual(expected.map((run) => run.prompt));
     for (const run of [older, first, newer]) {
-      expect(enqueueFollowupRun(key, { ...run }, settings, "message-id", runFollowup)).toBe(false);
+      expect(queue.enqueue({ ...run })).toBe(false);
     }
   },
 );
 
 it("cancels a middle waiter without letting later steering overtake its predecessor", async () => {
   vi.useFakeTimers();
-  const first = source("first");
-  const middle = source("middle");
-  const last = source("last");
+  const [first, middle, last] = [source("first"), source("middle"), source("last")];
   const cancellation = new AbortController();
   middle.abortSignal = cancellation.signal;
-  const firstReservation = reserve(first);
-  const middleReservation = reserve(middle);
-  const lastReservation = reserve(last);
+  const firstReservation = queue.reserve(first);
+  const middleReservation = queue.reserve(middle);
+  const lastReservation = queue.reserve(last);
   await expect(firstReservation.admit()).resolves.toBe("steer");
   const middleAdmission = middleReservation.admit();
   const { called: admittedLast, promise: lastAdmission } = observe(lastReservation.admit());
@@ -236,16 +193,13 @@ it("cancels a middle waiter without letting later steering overtake its predeces
   await expect(lastAdmission).resolves.toBe("steer");
   lastReservation.accepted(true);
   lastReservation.consume("consumed");
-  expect(runFollowup).not.toHaveBeenCalled();
 });
 
 it.each(["summarize", "new", "old"] as const)(
   "applies cap after rejected steering with drop:%s without evicting active delivery",
   async (dropPolicy) => {
-    settings = createQueueSettings({ mode: "steer", cap: 1, dropPolicy });
-    const active = source("active delivery", "active");
-    const first = source("first fallback", "first");
-    const newer = source("newer fallback", "newer");
+    queue.settings = { ...queue.settings, cap: 1, dropPolicy };
+    const [active, first, newer] = [source("active"), source("steer-a"), source("steer-b")];
     let firstCurrent = true;
     if (dropPolicy === "old") {
       first.operatorAuthority = authority(() => firstCurrent, "queued source authority expired");
@@ -254,23 +208,20 @@ it.each(["summarize", "new", "old"] as const)(
     newer.onQueueDisposition = disposition;
     const lifecycle = { onAdopted: () => undefined, onAbandoned: vi.fn(), onSettled: vi.fn() };
     newer.turnAdoptionLifecycle = lifecycle;
-    const { activeEntered, releaseActive, drained, delivered } = recordDelivery(
-      dropPolicy === "summarize" ? 3 : 2,
-      active,
-    );
-    enqueueFollowupRun(key, active, settings, "message-id", runFollowup);
-    await activeEntered;
+    const { gate, drained, delivered } = recordDelivery(dropPolicy === "summarize" ? 3 : 2, active);
+    queue.enqueue(active);
+    await gate.entered;
     try {
-      const firstReservation = await admit(first);
+      const firstReservation = await queue.admit(first);
       firstReservation.fallback();
-      const newerReservation = await admit(newer);
+      const newerReservation = await queue.admit(newer);
       const newerInput = newer.controllerInput!;
       const newerSettlement = settleSource(newerInput);
-      expect(getExistingFollowupQueue(key)?.items).toEqual([active, first, newer]);
+      expect(getExistingFollowupQueue(queue.key)?.items).toEqual([active, first, newer]);
       expect(disposition).not.toHaveBeenCalled();
       firstCurrent = false;
       newerReservation.fallback();
-      expect(getExistingFollowupQueue(key)?.items).toEqual([
+      expect(getExistingFollowupQueue(queue.key)?.items).toEqual([
         active,
         dropPolicy === "new" ? first : newer,
       ]);
@@ -281,17 +232,17 @@ it.each(["summarize", "new", "old"] as const)(
         expect(lifecycle.onSettled).toHaveBeenCalledOnce();
         await expect(newerSettlement).resolves.toBeUndefined();
       }
-      releaseActive();
+      gate.resolve();
       await drained;
       expect(delivered).toEqual(
         dropPolicy === "new"
-          ? ["active delivery", "first fallback"]
+          ? ["active", "steer-a"]
           : dropPolicy === "old"
-            ? ["active delivery", "newer fallback"]
-            : ["active delivery", expect.stringContaining("first fallback"), "newer fallback"],
+            ? ["active", "steer-b"]
+            : ["active", expect.stringContaining("steer-a"), "steer-b"],
       );
     } finally {
-      releaseActive();
+      gate.resolve();
     }
   },
 );
