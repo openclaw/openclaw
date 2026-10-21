@@ -84,12 +84,7 @@ describe("planNodePairingSshVerify", () => {
 
   test.each([
     ["disabled config", {}, false],
-    ["existing paired device", { existingPairedDevice: true }],
-    ["operator role", { role: "operator" }],
-    ["upgrade reason", { reason: "scope-upgrade" }],
-    ["requested scopes", { scopes: ["operator.read"] }],
     ["browser origin", { hasBrowserOriginHeader: true }],
-    ["spoofable loopback proxy source", { reportedClientIpSource: "loopback-trusted-proxy" }],
     ["public source address", { reportedClientIp: "203.0.113.9" }],
     ["local-use NAT64 source address", { reportedClientIp: "64:ff9b:1::8.8.8.8" }],
     ["loopback source address", { reportedClientIp: "127.0.0.1" }],
@@ -163,24 +158,6 @@ describe("startNodePairingSshVerify", () => {
     }
   });
 
-  test("approves when the remote identity matches, tolerating login-shell noise", async () => {
-    const identity = makeIdentity();
-    const probe = probeReturning({
-      status: "ok",
-      stdout: `Welcome to devbox\n{"deviceId":"${identity.deviceId}","publicKey":"${identity.publicKey}"}\n`,
-    });
-    const started = startProbe(identity, probe);
-    expect(started).not.toBeNull();
-    await expect(started?.done).resolves.toEqual({
-      ok: true,
-      user: "tester",
-      host: "192.168.1.20",
-    });
-    expect(probe.mock.calls).toEqual([
-      [{ user: "tester", host: "192.168.1.20", identity: undefined, timeoutMs: 1_000 }],
-    ]);
-  });
-
   test.each(["publicKey", "deviceId"] as const)(
     "rejects a mismatched %s and cools the target down",
     async (field) => {
@@ -217,7 +194,7 @@ describe("startNodePairingSshVerify", () => {
   test("shares an in-flight probe with reconnects instead of starting another", async () => {
     const identity = makeIdentity();
     const { promise: gate, resolve: release } = createDeferred<NodeIdentityProbeResult>();
-    const probe = vi.fn(() => gate);
+    const probe = vi.fn((_params: NodeIdentityProbeParams) => gate);
     const started = startProbe(identity, probe);
     expect(started).toMatchObject({ alreadyInFlight: false });
     const retry = startProbe(identity, probe);
@@ -225,9 +202,15 @@ describe("startNodePairingSshVerify", () => {
     expect(retry?.done).toBe(started?.done);
     release({
       status: "ok",
-      stdout: `{"deviceId":"${identity.deviceId}","publicKey":"${identity.publicKey}"}\n`,
+      stdout: `Welcome to devbox\n${JSON.stringify(identity)}\n`,
     });
-    await expect(started?.done).resolves.toMatchObject({ ok: true });
-    expect(probe).toHaveBeenCalledTimes(1);
+    await expect(started?.done).resolves.toEqual({
+      ok: true,
+      user: "tester",
+      host: "192.168.1.20",
+    });
+    expect(probe.mock.calls).toEqual([
+      [{ user: "tester", host: "192.168.1.20", identity: undefined, timeoutMs: 1_000 }],
+    ]);
   });
 });

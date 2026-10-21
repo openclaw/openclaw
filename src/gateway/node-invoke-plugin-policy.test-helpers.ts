@@ -23,7 +23,7 @@ export const DEMO_PLUGIN_ID = "demo";
 export const DEMO_COMMAND = "demo.read";
 export const DEMO_PARAMS = { path: "/tmp/x" };
 
-export const createNodeSession = (): NodeSession => ({
+export const createNodeSession = (overrides: Partial<NodeSession> = {}): NodeSession => ({
   nodeId: "node-1",
   connId: "conn-1",
   client: {} as NodeSession["client"],
@@ -35,6 +35,7 @@ export const createNodeSession = (): NodeSession => ({
   nodePluginTools: [],
   nodeSkills: [],
   connectedAtMs: 0,
+  ...overrides,
 });
 
 export const nodeCommandsConfig = (commands: { allow?: string[]; deny?: string[] }) => ({
@@ -113,6 +114,7 @@ export function createPolicyApprovalFixture(
     NonNullable<Parameters<typeof createTestApprovalFixture<PluginApprovalRequestPayload>>[1]>,
     "approvalKind"
   > = {},
+  contextOptions: ContextOptions = {},
 ) {
   const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(test, {
     approvalKind: "plugin",
@@ -123,14 +125,18 @@ export function createPolicyApprovalFixture(
     getApprovalClientConnIds: createApprovalClientLookup([
       createOperatorClient("conn-owner-approval"),
     ]),
+    ...contextOptions,
   });
   return {
     ...fixture,
     context,
     invoke,
-    request: () =>
+    request: (
+      client: GatewayClient | null = createOperatorClient(),
+      overrides: Partial<Parameters<typeof applyPluginNodeInvokePolicy>[0]> = {},
+    ) =>
       expectSinglePendingApproval(fixture.manager, context, () =>
-        fixture.track(invokeDemoPolicy(context, createOperatorClient())),
+        fixture.track(invokeDemoPolicy(context, client, overrides)),
       ),
   };
 }

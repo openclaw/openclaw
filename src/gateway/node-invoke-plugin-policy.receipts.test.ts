@@ -9,7 +9,10 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
-import { createRuntimeClient } from "./node-invoke-plugin-policy.test-helpers.js";
+import {
+  createNodeSession,
+  createRuntimeClient,
+} from "./node-invoke-plugin-policy.test-helpers.js";
 import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
@@ -17,19 +20,11 @@ const PLUGIN_ID = "secret-demo-plugin";
 const COMMAND = "secret.demo.read";
 
 function createNode(commands = [COMMAND]): NodeSession {
-  return {
+  return createNodeSession({
     nodeId: "secret-node-id",
-    connId: "conn-1",
-    client: {} as NodeSession["client"],
-    declaredCaps: [],
-    caps: [],
     declaredCommands: commands,
     commands,
-    declaredNodePluginTools: [],
-    nodePluginTools: [],
-    nodeSkills: [],
-    connectedAtMs: 0,
-  };
+  });
 }
 
 function createClient(runId: string): GatewayClient {
@@ -166,14 +161,11 @@ describe("plugin node action receipts", () => {
   it.each(["allowed", "denied", "throws"] as const)(
     "does not attribute a late %s policy result after runtime authority closes",
     async (outcome) => {
-      let releasePolicy: (() => void) | undefined;
       const { promise: policyStarted, resolve: markPolicyStarted } = createDeferred();
-      const policyWait = new Promise<void>((resolve) => {
-        releasePolicy = resolve;
-      });
+      const policyWait = createDeferred();
       registerPolicy(async () => {
-        markPolicyStarted?.();
-        await policyWait;
+        markPolicyStarted();
+        await policyWait.promise;
         if (outcome === "throws") {
           throw new Error("late policy failure");
         }
@@ -200,7 +192,7 @@ describe("plugin node action receipts", () => {
         });
         await policyStarted;
         authorityActive = false;
-        releasePolicy?.();
+        policyWait.resolve();
 
         if (outcome === "throws") {
           await expect(resultPromise).rejects.toThrow("late policy failure");

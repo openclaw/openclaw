@@ -82,6 +82,21 @@ afterEach(() => {
   setActiveNodeContexts([]);
 });
 
+function useElapsedClock(now: number) {
+  vi.useFakeTimers();
+  const clock = { now };
+  vi.spyOn(performance, "now").mockImplementation(() => clock.now);
+  return clock;
+}
+
+function observeSettlement<T>(promise: Promise<T>) {
+  let value: T | undefined;
+  void promise.then((result) => {
+    value = result;
+  });
+  return () => value;
+}
+
 function readRequest(frames: string[], index = 0) {
   const frame: { payload: ReturnType<typeof buildNodeInvokeRequest> } = JSON.parse(
     frames[index] ?? "{}",
@@ -898,10 +913,7 @@ describe("gateway/node-registry", () => {
         },
       });
       const invokeId = readRequest(frames).id;
-      let result: Awaited<typeof invoke> | undefined;
-      void invoke.then((value) => {
-        result = value;
-      });
+      const result = observeSettlement(invoke);
       try {
         authorityActive = false;
         const identity = { invokeId, nodeId: "node-1", connId: "conn-1" };
@@ -931,7 +943,7 @@ describe("gateway/node-registry", () => {
           expect(registry.isInvokeCurrent(invokeId, identity.nodeId, identity.connId)).toBe(false);
         }
         await vi.advanceTimersByTimeAsync(0);
-        expect(result).toEqual({
+        expect(result()).toEqual({
           ok: false,
           error: {
             code: "APPROVAL_AUTHORITY_CLOSED",
@@ -948,7 +960,6 @@ describe("gateway/node-registry", () => {
       } finally {
         registry.unregister("conn-1");
         await invoke;
-        vi.useRealTimers();
       }
     },
   );
@@ -1252,9 +1263,7 @@ describe("gateway/node-registry", () => {
   );
 
   it("shares the invoke budget across pairing, serialization, and the pending response", async () => {
-    vi.useFakeTimers();
-    let now = 1_000;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const clock = useElapsedClock(1_000);
     const { registry, frames, release } = registerPairingWait();
     const onDispatchReady = vi.fn();
     const runParams = { runId: "run-budget", timeoutMs: 5_000 };
@@ -1266,14 +1275,14 @@ describe("gateway/node-registry", () => {
         params: {
           ...runParams,
           toJSON() {
-            now += 10.5;
+            clock.now += 10.5;
             return runParams;
           },
         },
         onDispatchReady,
       });
       await vi.advanceTimersByTimeAsync(60);
-      now = 1_060;
+      clock.now = 1_060;
       release();
       await vi.advanceTimersByTimeAsync(0);
       const request = readRequest(frames);
@@ -1282,7 +1291,7 @@ describe("gateway/node-registry", () => {
         5_000,
       );
       expect(onDispatchReady).toHaveBeenCalledExactlyOnceWith(request.id, 1_100);
-      now = 1_100;
+      clock.now = 1_100;
       await vi.advanceTimersByTimeAsync(30);
       await expect(invoke).resolves.toMatchObject({ ok: false, error: { code: "TIMEOUT" } });
       expect(finish(registry, request.id, { ok: true })).toBe(false);
@@ -1290,15 +1299,11 @@ describe("gateway/node-registry", () => {
     } finally {
       release();
       registry.unregister("conn-1");
-
-      vi.useRealTimers();
     }
   });
 
   it("bounds stalled pairing by an inherited positive fractional budget", async () => {
-    vi.useFakeTimers();
-    let now = 1_099.5;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const clock = useElapsedClock(1_099.5);
     const { registry, frames, release } = registerPairingWait();
     const invoke = registry.invoke({
       nodeId: "node-1",
@@ -1306,14 +1311,11 @@ describe("gateway/node-registry", () => {
       timeoutMs: 0.5,
       deadlineAtMs: 1_100,
     });
-    let result: Awaited<typeof invoke> | undefined;
-    void invoke.then((value) => {
-      result = value;
-    });
+    const result = observeSettlement(invoke);
     try {
-      now = 1_100;
+      clock.now = 1_100;
       await vi.advanceTimersByTimeAsync(1);
-      expect(result).toMatchObject({ ok: false, error: { code: "TIMEOUT" } });
+      expect(result()).toMatchObject({ ok: false, error: { code: "TIMEOUT" } });
       expect(frames).toEqual([]);
       release();
       await vi.advanceTimersByTimeAsync(0);
@@ -1324,51 +1326,41 @@ describe("gateway/node-registry", () => {
       await vi.advanceTimersByTimeAsync(0);
       registry.unregister("conn-1");
       await invoke;
-
-      vi.useRealTimers();
     }
   });
 
   it("keeps a fractional deadline open when the hard timer fires early", async () => {
-    vi.useFakeTimers();
-    let now = 1_000;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const clock = useElapsedClock(1_000);
     const { registry, request, invoke } = invokeFixture({
       command: "debug.ping",
       timeoutMs: 101,
       params: {
         toJSON() {
-          now += 0.5;
+          clock.now += 0.5;
           return {};
         },
       },
     });
-    let result: Awaited<typeof invoke> | undefined;
-    void invoke.then((value) => {
-      result = value;
-    });
+    const result = observeSettlement(invoke);
     try {
       expect(request.timeoutMs).toBe(101);
       // Deliver the timer callback while the elapsed clock is still before expiry.
-      now = 1_100.75;
+      clock.now = 1_100.75;
       await vi.advanceTimersByTimeAsync(101);
-      expect(result).toBeUndefined();
+      expect(result()).toBeUndefined();
       expect(finish(registry, request.id, { ok: true, payload: { value: "in time" } })).toBe(true);
       await expect(invoke).resolves.toMatchObject({ ok: true, payload: { value: "in time" } });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       registry.unregister("conn-1");
       await invoke;
-      vi.useRealTimers();
     }
   });
 
   it.each(["deadline", "authority", "abort"])(
     "does not dispatch when serialization closes the %s",
     async (closed) => {
-      vi.useFakeTimers();
-      let now = 1_000;
-      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const clock = useElapsedClock(1_000);
       const registry = createNodeRegistry();
       const frames = registerNode(registry);
       const controller = new AbortController();
@@ -1386,7 +1378,7 @@ describe("gateway/node-registry", () => {
           params: {
             toJSON() {
               if (closed === "deadline") {
-                now += 100;
+                clock.now += 100;
               }
               if (closed === "authority") {
                 authorityActive = false;
@@ -1398,12 +1390,9 @@ describe("gateway/node-registry", () => {
             },
           },
         });
-        let result: Awaited<typeof invoke> | undefined;
-        void invoke.then((value) => {
-          result = value;
-        });
+        const result = observeSettlement(invoke);
         await vi.advanceTimersByTimeAsync(0);
-        expect(result).toMatchObject({
+        expect(result()).toMatchObject({
           ok: false,
           error: {
             code:
@@ -1421,7 +1410,6 @@ describe("gateway/node-registry", () => {
         controller.abort();
         registry.unregister("conn-1");
         await invoke;
-        vi.useRealTimers();
       }
     },
   );
@@ -1448,7 +1436,6 @@ describe("gateway/node-registry", () => {
         expect(vi.getTimerCount()).toBe(0);
       } finally {
         release();
-        vi.useRealTimers();
       }
     },
   );
@@ -1456,9 +1443,7 @@ describe("gateway/node-registry", () => {
   it.each(["disconnect", "abort"])(
     "prefers an elapsed hard deadline when %s beats the timer callback",
     async (termination) => {
-      vi.useFakeTimers();
-      let now = 1_000;
-      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const clock = useElapsedClock(1_000);
       const registry = createNodeRegistry();
       registerNode(registry);
 
@@ -1470,12 +1455,12 @@ describe("gateway/node-registry", () => {
           timeoutMs: 100,
           signal: beforeDeadlineController.signal,
         });
-        now = 1_099;
+        clock.now = 1_099;
         beforeDeadlineController.abort();
         await expect(beforeDeadline).resolves.toEqual(aborted);
       }
 
-      now = 2_000;
+      clock.now = 2_000;
       const atDeadlineController = new AbortController();
       const atDeadline = registry.invoke({
         nodeId: "node-1",
@@ -1483,7 +1468,7 @@ describe("gateway/node-registry", () => {
         timeoutMs: 100,
         signal: atDeadlineController.signal,
       });
-      now = 2_100;
+      clock.now = 2_100;
       if (termination === "abort") {
         atDeadlineController.abort();
       } else {
@@ -1494,9 +1479,7 @@ describe("gateway/node-registry", () => {
   );
 
   it("rejects streamed input at the hard deadline before its timer callback runs", async () => {
-    vi.useFakeTimers();
-    let now = 1_000;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const clock = useElapsedClock(1_000);
     const registry = createNodeRegistry();
     const { frames, invoke, invokeId } = startStreamingNodeInvoke(registry, {
       timeoutMs: 100,
@@ -1504,10 +1487,10 @@ describe("gateway/node-registry", () => {
       onProgress: () => {},
     });
 
-    now = 1_099;
+    clock.now = 1_099;
     registry.sendInvokeInput(invokeId, { kind: "data", data: "before" });
 
-    now = 1_100;
+    clock.now = 1_100;
     expect(() => registry.sendInvokeInput(invokeId, { kind: "data", data: "expired" })).toThrow(
       "node invoke is not pending",
     );
@@ -1527,9 +1510,7 @@ describe("gateway/node-registry", () => {
   it.each(["deadline", "abort", "consumer failure"])(
     "stops buffered progress when its consumer triggers %s",
     async (termination) => {
-      vi.useFakeTimers();
-      let now = 1_000;
-      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const clock = useElapsedClock(1_000);
       const controller = new AbortController();
       const chunks: string[] = [];
       const { registry, frames, invoke, invokeId } = invokeFixture({
@@ -1540,7 +1521,7 @@ describe("gateway/node-registry", () => {
         onProgress: (chunk) => {
           chunks.push(chunk);
           if (termination === "deadline") {
-            now = 1_100;
+            clock.now = 1_100;
           } else if (termination === "abort") {
             controller.abort(Symbol("nodeInvokePairingChanged"));
           } else {
@@ -1552,7 +1533,7 @@ describe("gateway/node-registry", () => {
       expect(progress(registry, invokeId, 1, "buffered-after-deadline")).toBe(true);
       expect(chunks).toEqual([]);
 
-      now = 1_050;
+      clock.now = 1_050;
       expect(progress(registry, invokeId, 0, "first")).toBe(true);
       expect(chunks).toEqual(["first"]);
       if (termination === "consumer failure") {
