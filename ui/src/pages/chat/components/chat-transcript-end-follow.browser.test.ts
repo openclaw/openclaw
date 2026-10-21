@@ -358,13 +358,14 @@ it("does not turn a resize-clamped reader into permission to follow", async () =
 it("preserves compensation provenance for later native scroll listeners", async () => {
   const { host, thread, extent, distance } = await mountFollowingFixture();
   const readerIdle = new Promise<void>((resolve) => {
-    let moved = false;
+    let sawScrolling = false;
     const unsubscribe = subscribeTranscriptScroll(thread, (observation) => {
       if (observation.type !== "offset") {
         return;
       }
-      moved ||= observation.scrolling && observation.delta !== 0;
-      if (moved && !observation.scrolling) {
+      // The clamp receipt can consume the delta before the native observation.
+      sawScrolling ||= observation.scrolling;
+      if (sawScrolling && !observation.scrolling) {
         unsubscribe();
         resolve();
       }

@@ -597,6 +597,14 @@ const GatewayToolPolicySchema = z.strictObject({
   allow: z.array(GatewayToolPolicyNameSchema),
   /** Action-bearing tools require an explicit list, including tools with a default action. */
   actions: z.record(GatewayToolPolicyNameSchema, z.array(GatewayToolPolicyNameSchema)).optional(),
+  automations: z
+    .strictObject({
+      /** Model calls keep ordinary caller scope, even in administrator-started turns. */
+      scope: z.literal("caller").optional(),
+      /** Restricts model calls; direct human automation administration is unchanged. */
+      allowCommandJobs: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 export const ToolsSchema = z

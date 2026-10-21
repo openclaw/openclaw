@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/auth-wizard.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveGatewaySshRemotePort } from "../gateway/connection-details.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -119,28 +120,84 @@ describe("promptRemoteGatewayConfig", () => {
   });
 
   it.each([
-    { name: "trimmed URL", auth: "token", url: " wss://gateway.example/rpc " },
-    { name: "changed path", auth: "token", url: "wss://gateway.example/other" },
+    ["ws://127.0.0.1:80", "ws://127.0.0.1", 80],
+    ["ws://127.0.0.1", "ws://127.0.0.1:80", 18789],
+  ] as const)(
+    "preserves the SSH destination when editing %s to %s",
+    async (originalUrl, url, port) => {
+      const { next } = await runRemotePrompt({
+        cfg: {
+          gateway: {
+            port: 18789,
+            remote: {
+              url: originalUrl,
+              transport: "ssh",
+              sshTarget: "operator@gateway.example",
+              token: "existing-token",
+            },
+          },
+        },
+        text: urlText(url),
+      });
+
+      expect(next.gateway?.remote).toMatchObject({
+        url,
+        sshTarget: "operator@gateway.example",
+        token: "existing-token",
+      });
+      expect(resolveGatewaySshRemotePort(next)).toBe(port);
+    },
+  );
+
+  it.each([
+    {
+      name: "trimmed URL",
+      url: " wss://gateway.example/rpc ",
+      keepSettings: true,
+      keepEdgeAuth: true,
+    },
+    {
+      name: "equivalent trailing slash",
+      url: "wss://GATEWAY.example:443/rpc/",
+      keepSettings: true,
+      keepEdgeAuth: true,
+    },
+    {
+      name: "changed path",
+      url: "wss://gateway.example/other",
+      keepSettings: false,
+      keepEdgeAuth: false,
+    },
+    {
+      name: "changed query",
+      url: "wss://gateway.example/rpc?account=work",
+      keepSettings: false,
+      keepEdgeAuth: true,
+    },
     {
       name: "changed URL seeded by onboarding",
-      auth: "token",
       url: "wss://other.example/rpc",
       seededUrl: "wss://other.example/rpc",
+      keepSettings: false,
+      keepEdgeAuth: false,
     },
     {
       name: "seeded URL edited back to the original endpoint",
-      auth: "token",
       url: "wss://gateway.example/rpc",
       seededUrl: "wss://other.example/rpc",
+      keepSettings: true,
+      keepEdgeAuth: true,
     },
     {
       name: "seeded URL without a previously configured endpoint",
-      auth: "token",
       url: "wss://other.example/rpc",
       seededUrl: "wss://other.example/rpc",
       noOriginalUrl: true,
+      keepSettings: false,
+      keepEdgeAuth: false,
     },
-  ])("scopes saved remote settings for $name", async ({ auth, url, seededUrl, noOriginalUrl }) => {
+  ])("scopes saved remote settings for $name", async (testCase) => {
+    const { url, seededUrl, noOriginalUrl, keepSettings, keepEdgeAuth } = testCase;
     const remote = {
       url: noOriginalUrl ? undefined : " wss://gateway.example/rpc ",
       transport: "direct" as const,
@@ -161,7 +218,7 @@ describe("promptRemoteGatewayConfig", () => {
       confirm: vi.fn(async ({ message }) => message === "Continue without a Gateway secret?"),
       select: createSelectPrompter({}),
       text: vi.fn(async ({ message }) =>
-        message === "Gateway WebSocket URL" ? url : auth === "token" ? "entered-secret" : "",
+        message === "Gateway WebSocket URL" ? url : "entered-secret",
       ),
     });
 
@@ -170,11 +227,11 @@ describe("promptRemoteGatewayConfig", () => {
       ...(seededUrl ? { remoteOriginUrl: remote.url } : {}),
     });
 
-    const unchanged = url.trim() === remote.url?.trim();
     expect(next.gateway?.remote).toEqual({
-      ...(unchanged ? remote : {}),
+      ...(keepSettings ? remote : {}),
       url: url.trim(),
-      token: auth === "token" ? "entered-secret" : undefined,
+      edgeAuth: keepEdgeAuth ? remote.edgeAuth : undefined,
+      token: "entered-secret",
       password: undefined,
     });
     expect(cfg.gateway?.remote).toEqual({ ...remote, url: seededUrl ?? remote.url });
@@ -234,11 +291,11 @@ describe("promptRemoteGatewayConfig", () => {
   });
 
   it.each([
-    { port: 18789, sshPort: undefined },
-    { port: 29443, sshPort: 2222 },
+    { port: 18789, sshPort: undefined, url: "ws://127.0.0.1:18789" },
+    { port: 29443, sshPort: 2222, url: "ws://127.0.0.1:18789/" },
   ])(
     "uses discovered Gateway port $port and SSH port $sshPort without retaining an old route",
-    async ({ port, sshPort }) => {
+    async ({ port, sshPort, url }) => {
       const { next, prompter } = await runRemotePrompt({
         beacons: [createGatewayDiscoveryBeacon({ port, gatewayPort: 41111, sshPort })],
         connection: "ssh",
@@ -255,10 +312,10 @@ describe("promptRemoteGatewayConfig", () => {
             },
           },
         },
-        text: urlText((params) => String(params.initialValue)),
+        text: urlText(() => url),
       });
 
-      expect(next.gateway?.remote).toEqual({ url: "ws://127.0.0.1:18789" });
+      expect(next.gateway?.remote).toEqual({ url });
       expect(prompter.note).toHaveBeenCalledWith(
         expect.stringContaining(
           `ssh -N -L 18789:127.0.0.1:${port} <user>@gateway.tailnet.ts.net${sshPort ? ` -p ${sshPort}` : ""}`,
@@ -438,23 +495,32 @@ describe("promptRemoteGatewayConfig", () => {
     });
   });
 
-  it("keeps an existing plaintext password as the remote token after blank input and confirmation", async () => {
-    const url = "wss://remote.example.com:18789";
-    const text = urlText(url);
-    const { next, prompter } = await runRemotePrompt({
-      cfg: { gateway: { remote: { url, password: "existing-password" } } },
-      text,
-    });
+  it.each(["wss://remote.example.com:18789", "wss://REMOTE.example.com:18789/"])(
+    "keeps an existing password after blank input at %s",
+    async (url) => {
+      const text = urlText(url);
+      const { next, prompter } = await runRemotePrompt({
+        cfg: {
+          gateway: {
+            remote: { url: "wss://remote.example.com:18789", password: "existing-password" },
+          },
+        },
+        text,
+      });
 
-    expect(next.gateway?.remote).toMatchObject({ token: "existing-password", password: undefined });
-    expect(prompter.confirm).toHaveBeenCalledExactlyOnceWith({
-      message: "Keep the existing Gateway secret?",
-      initialValue: true,
-    });
-    expect(text).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Gateway secret", sensitive: true }),
-    );
-  });
+      expect(next.gateway?.remote).toMatchObject({
+        token: "existing-password",
+        password: undefined,
+      });
+      expect(prompter.confirm).toHaveBeenCalledExactlyOnceWith({
+        message: "Keep the existing Gateway secret?",
+        initialValue: true,
+      });
+      expect(text).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Gateway secret", sensitive: true }),
+      );
+    },
+  );
 
   it("requires explicit no-auth confirmation after declining to keep an existing credential", async () => {
     const remote = { url: "wss://remote.example.com:18789", token: "old-secret" };

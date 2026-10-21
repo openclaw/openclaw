@@ -25,7 +25,11 @@ describe("config schema", () => {
     expect(ToolsSchema.safeParse({ gatewayPolicy: { allow: [] } }).success).toBe(true);
     expect(
       ToolsSchema.safeParse({
-        gatewayPolicy: { allow: ["sessions"], actions: { sessions: ["list"] } },
+        gatewayPolicy: {
+          allow: ["sessions"],
+          actions: { sessions: ["list"] },
+          automations: { scope: "caller", allowCommandJobs: false },
+        },
       }).success,
     ).toBe(true);
     for (const gatewayPolicy of [
@@ -33,6 +37,9 @@ describe("config schema", () => {
       { allow: ["*"] },
       { allow: ["group:plugins"] },
       { allow: ["sessions"], actions: { sessions: ["*"] } },
+      { allow: [], automations: { scope: "admin" } },
+      { allow: [], automations: { allowCommandJobs: "false" } },
+      { allow: [], automations: { unknown: true } },
     ]) {
       expect(ToolsSchema.safeParse({ gatewayPolicy }).success).toBe(false);
     }

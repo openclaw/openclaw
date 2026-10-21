@@ -23,6 +23,22 @@ const tool = createCronTool();
 const schema = tool.parameters;
 
 describe("cron model schema regressions", () => {
+  it("omits command edits when management is retained but command jobs are prohibited", () => {
+    const restricted = createCronToolSchema({ management: "also", allowCommandJobs: false });
+    expect(propertyAt(restricted, "job.payload.kind")?.enum).not.toContain("command");
+    expect(propertyAt(restricted, "job.schedule.kind")?.enum).not.toContain("on-exit");
+    expect(propertyAt(restricted, "job.payload.argv")).toBeUndefined();
+    expect(propertyAt(restricted, "job.schedule.kind")?.enum).toContain("stream");
+    expect(propertyAt(restricted, "job.schedule.command")).toBeDefined();
+    expect(
+      Value.Check(restricted, {
+        action: "update",
+        jobId: "agent-job",
+        job: { payload: { kind: "agentTurn", message: "updated" } },
+      }),
+    ).toBe(true);
+  });
+
   it("reuses policy-equivalent schemas across sessions and refreshes changed policy", () => {
     const first = createCronToolSchema({ agentSessionKey: "agent:one:main" });
     expect(createCronToolSchema({ agentSessionKey: "agent:two:main" })).toBe(first);

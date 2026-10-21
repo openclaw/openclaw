@@ -387,14 +387,8 @@ it("transfers a Windows-normalized environment through inventory and evidence wo
       }),
     );
     expect(() => structuredClone(normalized)).toThrow();
-    const clone = vi
-      .spyOn(configEnv, "cloneEnvWithPlatformSemantics")
-      .mockReturnValueOnce(normalized);
-    try {
-      expect(await resolveEvidence(subject)).toBe("current");
-    } finally {
-      clone.mockRestore();
-    }
+    using _ = vi.spyOn(configEnv, "cloneEnvWithPlatformSemantics").mockReturnValueOnce(normalized);
+    expect(await resolveEvidence(subject)).toBe("current");
   }));
 
 it("reads memory evidence after an in-process write completes during disk work", () =>

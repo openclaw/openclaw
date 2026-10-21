@@ -68,7 +68,6 @@ extensions/google-meet/index.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
 extensions/google/transport-stream.test.ts
-extensions/google/transport-stream.ts
 extensions/imessage/src/actions.ts
 extensions/imessage/src/monitor.last-route.test.ts
 extensions/imessage/src/monitor/inbound-processing.ts

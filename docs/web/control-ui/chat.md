@@ -190,8 +190,13 @@ Tap an image to open the zoomable viewer. The existing preview stays visible
 while a sharper, screen-sized rendition loads. If that request fails, **Retry**
 loads it again without replacing the preview or opening another tab. Swiping to
 a gallery image loads that selection, not the rest of the gallery in advance.
-**Download image** fetches the original only when selected. Copy and download
-also remain available from the image's action menu when a preview cannot load.
+Hover over a managed image, or focus it with the keyboard, to reveal **Copy image**
+and **Download image** inside its lower-right corner. Devices without hover keep
+these controls visible. Selecting the image itself still opens the viewer.
+**Download image** fetches the original only when selected. A failed preview can
+still have an accessible original, so its action menu retains copy and download.
+When the Gateway confirms that the source is unavailable, the card omits these
+file actions and keeps its applicable recovery action, such as **Retry**.
 Third-party image URLs retain a secondary browser link because their servers
 may allow image display but block cross-origin downloads; this is not a recovery
 action for uploaded or managed previews.

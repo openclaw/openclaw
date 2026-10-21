@@ -283,6 +283,13 @@ export function Menu(props: BranchProps): JSX.Element {
         ? "left-start"
         : "right-start"
       : "bottom-start");
+  // Anchor setup reads this from onSettled; JSX must not create a conditional memo there.
+  const childPlacement = (): OverlayPlacement | undefined =>
+    placement() === "left-end" || placement() === "right-end"
+      ? direction() === "rtl"
+        ? "left-end"
+        : "right-end"
+      : undefined;
   const activate = (value: string) => {
     const item = findItem(props.items, value);
     if (!item || item.disabled || item.children) {
@@ -545,6 +552,7 @@ export function Menu(props: BranchProps): JSX.Element {
                         prewarm={props.prewarm && item().prewarm}
                         items={childEntries()}
                         controls={props.controls}
+                        placement={childPlacement()}
                         trigger={
                           item().trigger ?? (
                             <>

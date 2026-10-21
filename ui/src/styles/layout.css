@@ -3571,31 +3571,32 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .gateway-status__retry {
   flex: none;
   padding: 3px 8px;
-  border: 1px solid currentColor;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: inherit;
+  color: var(--text);
   font: inherit;
   cursor: var(--cursor-action);
 }
 
-.gateway-status__retry:hover:not(:disabled) {
-  background: color-mix(in srgb, currentColor 12%, transparent);
+.gateway-status__retry:hover {
+  background: var(--bg-hover);
 }
 
-.gateway-status__retry:disabled {
-  cursor: default;
-}
-
-.gateway-status__spinner {
+.gateway-status__icon {
   display: inline-flex;
-  animation: btn-spinner-spin 1s linear infinite;
+  flex: none;
+  width: calc(12px * var(--control-ui-text-scale));
+  height: calc(12px * var(--control-ui-text-scale));
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .gateway-status__spinner {
-    animation: none;
-  }
+.gateway-status__icon > :is(svg, .session-run-spinner) {
+  width: 100%;
+  height: 100%;
+}
+
+.gateway-status__icon > .session-run-spinner {
+  --accent: currentColor;
 }
 
 .gateway-status__retry:focus-visible {
@@ -3605,9 +3606,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .session-menu__color-swatch svg,
 .sidebar-gateway-check svg,
-.sidebar-build-hover-card__copy svg,
-.gateway-status__icon svg,
-.gateway-status__spinner svg {
+.sidebar-build-hover-card__copy svg {
   width: 12px;
   height: 12px;
 }

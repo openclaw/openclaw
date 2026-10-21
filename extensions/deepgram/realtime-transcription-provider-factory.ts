@@ -149,7 +149,6 @@ export function buildDeepgramRealtimeTranscriptionProvider({
       };
       let speechStarted = false;
       let finalizedTranscript = "";
-      let pendingPartial = "";
       let finalizeFallbackFired = false;
       let finalizeFallbackTimer: ReturnType<typeof setTimeout> | undefined;
       let openedOnce = false;
@@ -165,7 +164,6 @@ export function buildDeepgramRealtimeTranscriptionProvider({
       const clearTurn = () => {
         clearFinalizeFallback();
         finalizedTranscript = "";
-        pendingPartial = "";
         speechStarted = false;
       };
 
@@ -187,12 +185,11 @@ export function buildDeepgramRealtimeTranscriptionProvider({
           return false;
         }
         finalizedTranscript = nextFinalized;
-        pendingPartial = nextPartial;
         return true;
       };
 
-      const flushTurn = (includePartial = true) => {
-        const full = joinTranscript(finalizedTranscript, includePartial ? pendingPartial : "");
+      const flushTurn = () => {
+        const full = finalizedTranscript;
         clearTurn();
         if (full) {
           config.onTranscript?.(full);
@@ -284,7 +281,7 @@ export function buildDeepgramRealtimeTranscriptionProvider({
           if (openedOnce) {
             // The replacement stream cannot replay confirmed text from the old
             // connection. Emit it as an interrupted turn, but discard its partial tail.
-            flushTurn(false);
+            flushTurn();
           } else {
             openedOnce = true;
             clearTurn();
@@ -302,7 +299,7 @@ export function buildDeepgramRealtimeTranscriptionProvider({
               finalizeFallbackTimer = undefined;
               finalizeFallbackFired = true;
               try {
-                flushTurn(false);
+                flushTurn();
               } catch (error) {
                 try {
                   config.onError?.(error instanceof Error ? error : new Error(String(error)));

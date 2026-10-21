@@ -1,6 +1,6 @@
 import "../../styles/logs.css";
 import type { LogsTailResult } from "@openclaw/gateway-protocol";
-import { createSignal, onSettled } from "solid-js";
+import { createSignal, createStore, onSettled } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
   beginPanelRefresh,
@@ -44,7 +44,7 @@ export function LogsPage() {
   const [file, setFile] = createSignal<string | null>(null, { ownedWrite: true });
   const [entries, setEntries] = createSignal<LogEntry[]>([], { ownedWrite: true });
   const [filterText, setFilterText] = createSignal("");
-  const [levelFilters, setLevelFilters] = createSignal<Record<LogLevel, boolean>>({
+  const [levelFilters, setLevelFilters] = createStore<Record<LogLevel, boolean>>({
     ...DEFAULT_LOG_LEVEL_FILTERS,
   });
   const [autoFollow, setAutoFollow] = createSignal(true);
@@ -211,13 +211,15 @@ export function LogsPage() {
             file={file()}
             entries={entries()}
             filterText={filterText()}
-            levelFilters={levelFilters()}
+            levelFilters={levelFilters}
             autoFollow={autoFollow()}
             truncated={truncated()}
             onStreamRef={(element) => (stream = element)}
             onFilterTextChange={setFilterText}
             onLevelToggle={(level, enabled) =>
-              setLevelFilters((previous) => ({ ...previous, [level]: enabled }))
+              setLevelFilters((draft) => {
+                draft[level] = enabled;
+              })
             }
             onToggleAutoFollow={(enabled) => {
               setAutoFollow(enabled);

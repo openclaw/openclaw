@@ -133,7 +133,8 @@ export function prepareToolTerminalPresentation({
   }
   let project: ToolTerminalPresentationProjector | undefined;
   if (formatter) {
-    // Retain isolated formatter inputs, not the executable tool or its hook context.
+    // Formatters observe post-execution mutations, then stay isolated from later middleware.
+    // The pre-execution custody snapshot intentionally cannot replace this capture.
     const formatterParams = observer ? structuredClone(toolParams) : toolParams;
     project = (result) => {
       try {

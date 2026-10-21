@@ -44,7 +44,6 @@ import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
 import { collectDoctorFindings, runDoctorLintCliInProcess } from "./doctor-lint-runner.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { verifyDoctorLintOAuthStateIsolation } from "./doctor-lint.oauth-isolation.test-support.js";
@@ -209,6 +208,7 @@ describe("doctor lint state isolation", () => {
         const config: OpenClawConfig = {
           agents: {
             ownership: "explicit",
+            defaults: { heartbeat: { every: "15m" } },
             entries: { main: {} },
           },
           plugins: { enabled: false },
@@ -216,13 +216,6 @@ describe("doctor lint state isolation", () => {
         };
         await state.writeConfig(config);
         const storePath = resolveCronJobsStorePathFromConfig(config, state.env);
-        // Lint requires current config. Keep the pending migration in source state
-        // through the real Doctor owner, rather than persisting the retired key.
-        await ensureHeartbeatMonitorJobs(
-          { ...config, agents: { ...config.agents, defaults: { heartbeat: { every: "15m" } } } },
-          storePath,
-          state.env,
-        );
         writeConfigMachineState("doctorLint.source", "unchanged");
         await closeOpenClawStateDatabaseAsync();
         const sourcePath = resolveOpenClawStateSqlitePath(state.env);
@@ -243,7 +236,8 @@ describe("doctor lint state isolation", () => {
             id: "core/doctor/project-clone-shape",
             kind: "core",
             description: "inspects mutable plugin state after the source-bound check",
-            async detect() {
+            async detect(ctx: HealthCheckContext) {
+              expect(ctx.cfg.agents?.defaults).not.toHaveProperty("heartbeat");
               expect(process.env.OPENCLAW_STATE_DIR).not.toBe(state.stateDir);
               writeConfigMachineState("doctorLint.private", "private only");
               privateDatabase = openOpenClawStateDatabase();
@@ -272,6 +266,7 @@ describe("doctor lint state isolation", () => {
                   severity: "warning",
                   requirement: "heartbeat-retirement",
                   path: storePath,
+                  fixHint: expect.stringContaining("openclaw doctor --fix"),
                 }),
               ]);
               expect(exitCode).toBe(1);
@@ -291,6 +286,57 @@ describe("doctor lint state isolation", () => {
       });
     },
   );
+
+  it("rejects malformed retired heartbeat before running health checks", async () => {
+    await withOpenClawTestState({ prefix: "doctor-lint-heartbeat-invalid-" }, async (state) => {
+      await state.writeConfig({
+        agents: {
+          ownership: "explicit",
+          defaults: { heartbeat: { every: "not-a-duration" } },
+          entries: { main: {} },
+        },
+        plugins: { enabled: false },
+        memory: { search: { enabled: false } },
+      });
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        const exitCode = await runDoctorLintCli(runtime, { json: true });
+        const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+        expect(exitCode).toBe(1);
+        expect(report.findings).toEqual([
+          expect.objectContaining({
+            checkId: "core/doctor/final-config-validation",
+            severity: "error",
+            path: "agents.defaults",
+          }),
+        ]);
+        expect(mocks.resolveDoctorContributionHealthChecks).not.toHaveBeenCalled();
+      } finally {
+        stdout.mockRestore();
+      }
+    });
+  });
+
+  it("rejects config syntax errors before running health checks", async () => {
+    await withOpenClawTestState({ prefix: "doctor-lint-config-syntax-" }, async (state) => {
+      fs.writeFileSync(state.configPath, "{ malformed");
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        const exitCode = await runDoctorLintCli(runtime, { json: true });
+        const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+        expect(exitCode).toBe(1);
+        expect(report.findings).toEqual([
+          expect.objectContaining({
+            checkId: "core/doctor/final-config-validation",
+            severity: "error",
+          }),
+        ]);
+        expect(mocks.resolveDoctorContributionHealthChecks).not.toHaveBeenCalled();
+      } finally {
+        stdout.mockRestore();
+      }
+    });
+  });
 
   it("retains auth findings and source paths when mixed lint uses legacy-main shared auth", async () => {
     await withOpenClawTestState({ prefix: "openclaw-doctor-lint-auth-" }, async (state) => {

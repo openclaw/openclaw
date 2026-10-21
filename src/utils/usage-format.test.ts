@@ -8,6 +8,7 @@ import type { ModelDefinitionConfig } from "../config/types.models.js";
 import * as manifestModelIdNormalization from "../plugins/manifest-model-id-normalization.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  formatCostUsageCachePrefix,
   formatUsd,
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
@@ -68,6 +69,25 @@ describe("usage-format", () => {
 
   it("formats USD values", () => {
     expect([1.234, 0.5, 0.0042].map(formatUsd)).toEqual(["$1.23", "$0.50", "$0.0042"]);
+  });
+
+  it("formats the refreshing cache notice", () => {
+    expect(
+      formatCostUsageCachePrefix({
+        status: "refreshing",
+        cachedFiles: 0,
+        pendingFiles: 1,
+        staleFiles: 0,
+      }),
+    ).toBe("Usage totals may be incomplete (refreshing). Run this command again later.\n");
+    expect(
+      formatCostUsageCachePrefix({
+        status: "fresh",
+        cachedFiles: 1,
+        pendingFiles: 0,
+        staleFiles: 0,
+      }),
+    ).toBe("");
   });
 
   it("uses the sole agent directory from a canonical roster", async () => {

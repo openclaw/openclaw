@@ -118,6 +118,7 @@ export async function readBoundedSessionCatalogHistory(params: {
   limits: { maxItems: number; maxBytes: number };
 }): Promise<SessionCatalogHistory> {
   const items: SessionCatalogTranscriptItem[] = [];
+  const seenCursors = new Set<string>();
   let cursor: string | undefined;
   let bytes = 0;
   let totalItems = 0;
@@ -127,7 +128,8 @@ export async function readBoundedSessionCatalogHistory(params: {
     totalItems,
     complete: complete && retainedAll,
   });
-  while (items.length < params.limits.maxItems) {
+  // Bound empty and sparse pages without shrinking larger transcript imports.
+  for (let requests = 0; requests < params.limits.maxItems; requests += 1) {
     const page = await params.read({
       limit: Math.min(
         SESSION_CATALOG_HISTORY_IMPORT_PAGE_LIMIT,
@@ -165,9 +167,10 @@ export async function readBoundedSessionCatalogHistory(params: {
     if (!page.nextCursor) {
       return result(true);
     }
-    if (page.nextCursor === cursor) {
+    if (seenCursors.has(page.nextCursor)) {
       return result(false);
     }
+    seenCursors.add(page.nextCursor);
     cursor = page.nextCursor;
   }
   return result(false);

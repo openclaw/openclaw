@@ -1,9 +1,5 @@
 import type { WebClient } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getOrCreateWeakOwnerMap } from "../lru-map-cache.js";
 
@@ -43,13 +39,8 @@ async function readSlackSubteamUsers(params: {
   const bySubteam = getOrCreateWeakOwnerMap(subteamMemberCache, params.client);
   const cacheKey = `${normalizeSlackId(params.teamId) ?? ""}:${params.subteamId}`;
   const cached = bySubteam.get(cacheKey);
-  const now = asDateTimestampMs(params.now);
   if (cached) {
-    if (
-      now !== undefined &&
-      asDateTimestampMs(cached.expiresAt) !== undefined &&
-      cached.expiresAt > now
-    ) {
+    if (cached.expiresAt > params.now) {
       return cached.users;
     }
     bySubteam.delete(cacheKey);
@@ -69,15 +60,10 @@ async function readSlackSubteamUsers(params: {
     const users = new Set(
       (response.users ?? []).map(normalizeSlackId).filter((userId) => userId !== undefined),
     );
-    const expiresAt = resolveExpiresAtMsFromDurationMs(SUBTEAM_MEMBER_CACHE_TTL_MS, {
-      nowMs: params.now,
+    bySubteam.set(cacheKey, {
+      expiresAt: params.now + SUBTEAM_MEMBER_CACHE_TTL_MS,
+      users,
     });
-    if (expiresAt !== undefined) {
-      bySubteam.set(cacheKey, {
-        expiresAt,
-        users,
-      });
-    }
     return users;
   } catch (err) {
     params.log?.(
