@@ -61,15 +61,12 @@ describe("authenticated request completion", { concurrent: false }, () => {
         throw new Error("synthetic preparation failure");
       },
     }));
-    const { createDispatchTestHarness, createOperatorWsClient } =
+    const { createDispatchTestHarness, createOperatorWsClient, requestFrame } =
       await import("./authenticated-request-dispatch.test-support.js");
     const harness = createDispatchTestHarness();
     const client = createOperatorWsClient();
     const calls = Array.from({ length: 8 }, (_, index) =>
-      harness.dispatcher.dispatch(
-        { type: "req", id: String(index), method: "sessions.subscribe", params: {} },
-        client,
-      ),
+      harness.dispatcher.dispatch(requestFrame(String(index), "sessions.subscribe"), client),
     );
     try {
       await full.promise;
@@ -88,7 +85,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
       const grant = new AbortController();
       const handleGatewayRequest = vi.fn(async () => {});
       mockDispatchStage(stage, gate.wait, handleGatewayRequest);
-      const { createDispatchTestHarness, createOperatorWsClient } =
+      const { createDispatchTestHarness, createOperatorWsClient, requestFrame } =
         await import("./authenticated-request-dispatch.test-support.js");
       const harness = createDispatchTestHarness();
       const client = createOperatorWsClient({ socket: new EventEmitter() });
@@ -99,7 +96,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
         },
       };
       const dispatch = harness.dispatcher.dispatch(
-        { type: "req", id: "revoked", method: "test.lifetime", params: {} },
+        requestFrame("revoked", "test.lifetime"),
         client,
       );
       try {
@@ -166,7 +163,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
           isSyntheticGatewayCaller: () => false,
         }));
       }
-      const { createDispatchTestHarness, createOperatorWsClient } =
+      const { createDispatchTestHarness, createOperatorWsClient, dispatchProfile, requestFrame } =
         await import("./authenticated-request-dispatch.test-support.js");
       const harness = createDispatchTestHarness({
         extraHandlers: { "test.lifetime": handleGatewayRequest },
@@ -176,18 +173,15 @@ describe("authenticated request completion", { concurrent: false }, () => {
       if (stage === "profile authorization") {
         client.authenticatedGitHubIdentitySync = async () => {
           await gate.wait();
-          client.authenticatedUserProfile = {
-            profileId: "lifetime-profile",
+          client.authenticatedUserProfile = dispatchProfile("lifetime-profile", {
             displayName: "Lifetime fixture",
             avatarRevision: "lifetime-avatar",
-            hasAvatar: false,
-            updatedAt: 1,
-          };
+          });
           return { profileId: "lifetime-profile", updatedAt: 1 };
         };
       }
       const dispatch = harness.dispatcher
-        .dispatch({ type: "req", id: "held", method: "test.lifetime", params: {} }, client)
+        .dispatch(requestFrame("held", "test.lifetime"), client)
         .then(() => {
           dispatched = true;
           selection.OPENCLAW_STATE_DIR = restoredRoot;

@@ -12,6 +12,8 @@ import type { GatewayWsClient } from "../ws-types.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
+  dispatchProfile,
+  requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 
 const handleGatewayRequest = vi.hoisted(() => vi.fn());
@@ -94,14 +96,8 @@ function createPairedNode(withError = false) {
   return { registry, frames, waitForFrameCount, complete };
 }
 
-function nodeRequest(id: string) {
-  return {
-    type: "req",
-    id,
-    method: "node.invoke",
-    params: { ...nodeParams, idempotencyKey: id },
-  };
-}
+const nodeRequest = (id: string) =>
+  requestFrame(id, "node.invoke", { ...nodeParams, idempotencyKey: id });
 
 function createDispatcher(
   clientInfo: Pick<GatewayWsClient["connect"]["client"], "id" | "mode"> = cli,
@@ -134,10 +130,7 @@ describe("authenticated WebSocket request cancellation", () => {
         entered.resolve();
         await release.promise;
       });
-      const dispatch = dispatcher.dispatch(
-        { type: "req", id: "disconnect-work", method, params },
-        client,
-      );
+      const dispatch = dispatcher.dispatch(requestFrame("disconnect-work", method, params), client);
       try {
         await entered.promise;
         socket.emit("close", 1000, Buffer.alloc(0));
@@ -158,13 +151,7 @@ describe("authenticated WebSocket request cancellation", () => {
     const { registry, frames, waitForFrameCount, complete } = createPairedNode();
     const guest = createDispatcher(controlUi);
     const staff = createDispatcher(controlUi);
-    const profile = {
-      profileId: "same-person",
-      displayName: null,
-      avatarRevision: "1",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
+    const profile = dispatchProfile("same-person");
     guest.client.authenticatedUserProfile = profile;
     staff.client.authenticatedUserProfile = profile;
     const grant = new AbortController();
@@ -174,12 +161,8 @@ describe("authenticated WebSocket request cancellation", () => {
         assertCurrent: () => grant.signal.throwIfAborted(),
       },
     };
-    const request = (id: string) => ({
-      type: "req",
-      id,
-      method: "test.access-lifetime",
-      params: { sessionKey: "agent:main:shared" },
-    });
+    const request = (id: string) =>
+      requestFrame(id, "test.access-lifetime", { sessionKey: "agent:main:shared" });
     const guestDispatch = guest.dispatcher.dispatch(request("guest"), guest.client);
     await waitForFrameCount(1);
     const staffDispatch = staff.dispatcher.dispatch(request("staff"), staff.client);

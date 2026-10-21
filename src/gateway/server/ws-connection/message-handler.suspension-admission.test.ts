@@ -13,6 +13,7 @@ import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { GatewayClientRegistry } from "../client-registry.js";
 import { gatewayTestTextTransport } from "../connection-transport.test-support.js";
+import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const { loadConfigMock, upsertPresenceMock } = vi.hoisted(() => ({
@@ -54,15 +55,6 @@ vi.mock("../../../state/user-profile-list.js", async (importOriginal) => ({
 }));
 
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
-
-function createLogger() {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
-}
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -264,37 +256,32 @@ describe("WebSocket connect suspension admission", () => {
     },
   );
 
-  it("keeps the old draining server closed to an exact startup node shape", async () => {
-    markGatewayRestartDraining();
-    const harness = attachHarness({ startupPending: false });
-
-    harness.sendStartupNodeConnect();
-
-    await vi.waitFor(() => expect(harness.socketSend).toHaveBeenCalledOnce());
-    expect(JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}").error?.details).toMatchObject({
-      method: "connect",
-      reason: "gateway-restarting",
-    });
-    expect(harness.setClient).not.toHaveBeenCalled();
-    await vi.waitFor(() =>
-      expect(harness.close).toHaveBeenCalledWith(1013, "gateway restart in progress"),
-    );
-  });
-
-  it("keeps suspension closed to an exact startup node shape", async () => {
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
-    const harness = attachHarness({ startupPending: true });
-
-    harness.sendStartupNodeConnect();
-
-    await vi.waitFor(() => expect(harness.socketSend).toHaveBeenCalledOnce());
-    expect(harness.setClient).not.toHaveBeenCalled();
-    await vi.waitFor(() =>
-      expect(harness.close).toHaveBeenCalledWith(1013, "gateway suspension in progress"),
-    );
-    suspension?.release();
-  });
+  it.each(["restart", "suspension"] as const)(
+    "keeps %s closed to an exact startup node shape",
+    async (operation) => {
+      const suspension =
+        operation === "suspension" ? tryBeginGatewaySuspendAdmission(() => {}) : null;
+      if (suspension) {
+        expect(suspension.commit()).toBe(true);
+      } else {
+        markGatewayRestartDraining();
+      }
+      const harness = attachHarness({ startupPending: operation === "suspension" });
+      harness.sendStartupNodeConnect();
+      await vi.waitFor(() => expect(harness.socketSend).toHaveBeenCalledOnce());
+      expect(
+        JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}").error?.details,
+      ).toMatchObject({
+        method: "connect",
+        reason: operation === "restart" ? "gateway-restarting" : "gateway-suspending",
+      });
+      expect(harness.setClient).not.toHaveBeenCalled();
+      await vi.waitFor(() =>
+        expect(harness.close).toHaveBeenCalledWith(1013, `gateway ${operation} in progress`),
+      );
+      suspension?.release();
+    },
+  );
 
   it("keeps an accepted handshake visible as root work until hello is sent", async () => {
     const harness = attachHarness({ deferSocketSend: true });

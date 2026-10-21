@@ -49,6 +49,8 @@ import { createRequestGate } from "./authenticated-request-dispatch.fixtures.tes
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
+  dispatchProfile,
+  requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 
 type Capture = NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>;
@@ -107,7 +109,7 @@ function createCaptureFixture(params: {
     extraHandlers: { [params.method]: handler },
   });
   const dispatch = (id: string) =>
-    harness.dispatcher.dispatch({ type: "req", id, method: params.method, params: {} }, client);
+    harness.dispatcher.dispatch(requestFrame(id, params.method), client);
   return { client, context, captures, handler, harness, dispatch, guard: () => guard };
 }
 
@@ -155,7 +157,7 @@ describe("authenticated request mutation custody", () => {
     });
     try {
       await harness.dispatcher.dispatch(
-        { type: "req", id: "accepted-remote", method: "test.accepted-remote", params: {} },
+        requestFrame("accepted-remote", "test.accepted-remote"),
         client,
       );
       expect(source?.()).toBe(true);
@@ -454,13 +456,7 @@ describe("authenticated request mutation custody", () => {
     setRuntimeConfigSnapshot({});
     client.authPolicy = captureGatewayAuthPolicy({}, null);
     client.connectionSignal = connection.signal;
-    client.authenticatedUserProfile = {
-      profileId: "profile-owner",
-      displayName: null,
-      avatarRevision: "1",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
+    client.authenticatedUserProfile = dispatchProfile("profile-owner");
     const gate = createRequestGate();
     const persisted = vi.fn();
     const grantProfileReads = vi.fn();
@@ -547,11 +543,8 @@ describe("authenticated request mutation custody", () => {
     });
     const dispatch = harness.dispatcher.dispatch(
       {
-        type: "req",
-        id: "mutation-custody",
-        method: "test.mutation-custody",
+        ...requestFrame("mutation-custody", "test.mutation-custody"),
         expectedProfileId: "profile-owner",
-        params: {},
       },
       client,
     );

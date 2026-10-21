@@ -37,6 +37,7 @@ import { createRequestGate } from "./authenticated-request-dispatch.fixtures.tes
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
+  requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 
@@ -54,10 +55,7 @@ type TraceObservation = {
 };
 type Handler = NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]>;
 const traceRequest = (id: string, traceparent?: string, method = "test.trace") => ({
-  type: "req",
-  id,
-  method,
-  params: {},
+  ...requestFrame(id, method),
   ...(traceparent ? { traceparent } : {}),
 });
 

@@ -20,6 +20,8 @@ import { createRequestGate } from "./authenticated-request-dispatch.fixtures.tes
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
+  dispatchProfile,
+  requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 
 const runtime = vi.hoisted(() => ({
@@ -37,7 +39,7 @@ function createFixture() {
   const harness = createDispatchTestHarness();
   const dispatch = async (id: string, method = "secrets.reload", expectedProfileId?: string) =>
     await harness.dispatcher.dispatch(
-      { type: "req", id, method, params: {}, ...(expectedProfileId ? { expectedProfileId } : {}) },
+      { ...requestFrame(id, method), ...(expectedProfileId ? { expectedProfileId } : {}) },
       client,
     );
   const invalidate = () =>
@@ -45,13 +47,8 @@ function createFixture() {
   return { client, harness, dispatch, socketClose, closed, invalidate };
 }
 
-const profileBinding = (profile: { id: string; updatedAt: number }) => ({
-  profileId: profile.id,
-  displayName: null,
-  avatarRevision: "1",
-  hasAvatar: false,
-  updatedAt: profile.updatedAt,
-});
+const profileBinding = (profile: { id: string; updatedAt: number }) =>
+  dispatchProfile(profile.id, { updatedAt: profile.updatedAt });
 const device = (id: string, publicKey: string) => ({
   id,
   publicKey,
@@ -125,10 +122,7 @@ describe("policy writer response ownership", () => {
       const mutate = (id: string, method: string, expectedProfileId?: string) =>
         harness.dispatcher.dispatch(
           {
-            type: "req",
-            id,
-            method,
-            params: { deviceId: targetDeviceId, role: "operator" },
+            ...requestFrame(id, method, { deviceId: targetDeviceId, role: "operator" }),
             ...(expectedProfileId ? { expectedProfileId } : {}),
           },
           client,
@@ -141,7 +135,7 @@ describe("policy writer response ownership", () => {
         ).rejects.toThrow("middle profile preparation failed");
         dispatched.push(mutate("final-revoke", "device.token.revoke"));
         await checkpoint.dispatcher.dispatch(
-          { type: "req", id: "checkpoint", method: "test.credential-checkpoint", params: {} },
+          requestFrame("checkpoint", "test.credential-checkpoint"),
           client,
         );
         preparation.release();

@@ -13,6 +13,7 @@ type DeviceTokenResult = Awaited<ReturnType<VerifyDeviceTokenFn>>;
 type BootstrapTokenResult = Awaited<ReturnType<VerifyBootstrapTokenFn>>;
 type ConnectAuthRole = Parameters<typeof resolveConnectAuthDecision>[0]["role"];
 type TokenBucketScope = "bootstrap-token" | "device-token" | "shared-secret";
+type StateParams = Parameters<typeof resolveConnectAuthState>[0];
 
 const CLIENT_IP = "203.0.113.20";
 const BOOTSTRAP_TOKEN = "bootstrap-token";
@@ -24,7 +25,7 @@ function createTokenBucketRateLimiter(
   const configured: Record<string, { allowed: boolean; retryAfterMs?: number }> = scopes;
   const check = vi.fn((_ip: string | undefined, scope?: string) => {
     const cfg = configured[scope ?? ""] ?? { allowed: true };
-    return { allowed: cfg.allowed, retryAfterMs: cfg.retryAfterMs ?? 5_000 };
+    return { allowed: cfg.allowed, remaining: 10, retryAfterMs: cfg.retryAfterMs ?? 5_000 };
   });
   const reset = vi.fn();
   const recordFailure = vi.fn();
@@ -33,13 +34,105 @@ function createTokenBucketRateLimiter(
       recordFailure(ip, scope);
     },
   );
+  const limiter: AuthRateLimiter = {
+    check,
+    reset,
+    recordFailure,
+    recordFailureAndDelay,
+    size: vi.fn(() => 0),
+    prune: vi.fn(),
+    dispose: vi.fn(),
+  };
   return {
-    limiter: { check, reset, recordFailure, recordFailureAndDelay } as unknown as AuthRateLimiter,
+    limiter,
     check,
     reset,
     recordFailure,
   };
 }
+
+function resolveTokenAuthState(params: Partial<StateParams>) {
+  return resolveConnectAuthState({
+    resolvedAuth: { mode: "token", token: "correct-secret", allowTailscale: false },
+    connectAuth: {},
+    hasDeviceIdentity: true,
+    req: { headers: {}, socket: { remoteAddress: CLIENT_IP } } as never,
+    trustedProxies: [],
+    allowRealIpFallback: false,
+    rateLimiter: createTokenBucketRateLimiter().limiter,
+    clientIp: CLIENT_IP,
+    ...params,
+  });
+}
+
+describe("resolveConnectAuthState", () => {
+  it("defers shared-secret failures when an explicit device token is also present", async () => {
+    const { limiter, recordFailure } = createTokenBucketRateLimiter();
+    const state = await resolveTokenAuthState({
+      connectAuth: { token: "wrong-secret", deviceToken: "fake-device-token" },
+      rateLimiter: limiter,
+    });
+    expect(state).toMatchObject({
+      authOk: false,
+      authResult: { reason: "token_mismatch" },
+      pendingSharedAuthFailure: true,
+    });
+    expect(recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not apply shared-secret lockouts to explicit device-token-only handshakes", async () => {
+    const { limiter, check } = createTokenBucketRateLimiter({
+      "shared-secret": { allowed: false },
+    });
+    const state = await resolveTokenAuthState({
+      connectAuth: { deviceToken: "device-token-only" },
+      rateLimiter: limiter,
+    });
+    expect(state.authOk).toBe(false);
+    expect(state.authResult.rateLimited).not.toBe(true);
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it("sets sharedAuthOk false when auth mode is none (no shared secret provided)", async () => {
+    expect(
+      await resolveTokenAuthState({
+        resolvedAuth: { mode: "none", allowTailscale: false },
+        hasDeviceIdentity: false,
+        req: { headers: {}, socket: { remoteAddress: "127.0.0.1" } } as never,
+        clientIp: "127.0.0.1",
+      }),
+    ).toMatchObject({ authOk: true, authMethod: "none", sharedAuthOk: false });
+  });
+
+  it("does not let valid device reconnects consume remote shared-secret attempts", async () => {
+    const rateLimiter = createGatewayAuthRateLimiter(
+      { maxAttempts: 2, windowMs: 60_000, lockoutMs: 60_000, pruneIntervalMs: 0 },
+      { scheduler: createTestGatewayScheduler() },
+    );
+    try {
+      rateLimiter.recordFailure(CLIENT_IP, "shared-secret");
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const state = await resolveTokenAuthState({
+          connectAuth: { token: "device", deviceToken: "device" },
+          rateLimiter,
+        });
+        const decision = await resolveDeviceTokenDecision({
+          stateOverrides: state,
+          verifyDeviceToken: createVerifyDeviceToken({ ok: true }),
+          rateLimiter,
+          clientIp: CLIENT_IP,
+        });
+        expect(decision.authOk).toBe(true);
+      }
+      expect(rateLimiter.check(CLIENT_IP, "shared-secret")).toMatchObject({
+        allowed: true,
+        remaining: 1,
+      });
+    } finally {
+      rateLimiter.dispose();
+    }
+  });
+});
 
 function createBootstrapOnlyState(): Partial<ConnectAuthState> {
   return {
@@ -174,10 +267,15 @@ describe("resolveConnectAuthDecision", () => {
       verifyDeviceToken,
       rateLimiter: rateLimiter.limiter,
       clientIp: CLIENT_IP,
+      stateOverrides: {
+        pendingSharedAuthFailure: true,
+        deviceTokenCandidateSource: "explicit-device-token",
+      },
     });
     expect(decision).toMatchObject({ authOk: true, authMethod: "device-token" });
     expect(verifyDeviceToken).toHaveBeenCalledOnce();
     expect(rateLimiter.reset).toHaveBeenCalledWith(CLIENT_IP, "device-token");
+    expect(rateLimiter.reset).not.toHaveBeenCalledWith(CLIENT_IP, "shared-secret");
   });
 
   it("returns rate-limited auth result without verifying device token", async () => {

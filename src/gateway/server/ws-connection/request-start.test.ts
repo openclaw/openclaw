@@ -11,6 +11,15 @@ import { GatewayRequestStartTimeoutError, scheduleGatewayRequestStart } from "./
 const permissions: Promise<void>[] = [];
 const workRequest = { method: "chat.send" };
 const subscribeRequest = { method: "sessions.messages.subscribe", params: { key: "session" } };
+const independentReads = [
+  "chat.history",
+  "sessions.list",
+  "cron.list",
+  "push.web.vapidPublicKey",
+  "sessions.github.options",
+  "workboard.cards.list",
+  "github.preview",
+];
 function requestStart(
   bytes = 1,
   request: Parameters<typeof scheduleGatewayRequestStart>[1] = workRequest,
@@ -109,25 +118,12 @@ describe("Gateway request start fairness", () => {
       });
       const unsubscribe = start("sessions.messages.unsubscribe", "viewer", { key: "main" });
       const mutation = start("chat.send", "viewer");
-      void start("chat.history", "viewer");
-      void start("sessions.list", "viewer");
-      void start("cron.list", "viewer");
-      void start("push.web.vapidPublicKey", "viewer");
-      void start("sessions.github.options", "viewer");
-      void start("workboard.cards.list", "viewer");
-      void start("github.preview", "viewer");
+      for (const method of independentReads) {
+        void start(method, "viewer");
+      }
       void start("sessions.create", "another-viewer");
       await nextTurn();
-      expect([...starts]).toEqual([
-        "chat.history",
-        "sessions.list",
-        "cron.list",
-        "push.web.vapidPublicKey",
-        "sessions.github.options",
-        "workboard.cards.list",
-        "github.preview",
-        "sessions.create",
-      ]);
+      expect(starts).toEqual([...independentReads, "sessions.create"]);
       held[0]!.resolve();
       await Promise.all([subscription, unsubscribe, mutation]);
       expect(starts.slice(8)).toEqual([
@@ -400,14 +396,7 @@ function receiverSocket(readonly = false): WebSocket {
 }
 
 function payloadLimit(socket: WebSocket): number {
-  const receiver = (
-    socket as unknown as {
-      _receiver: {
-        _maxPayload: number;
-      };
-    }
-  )["_receiver"];
-  return receiver["_maxPayload"];
+  return (socket as unknown as { _receiver: { _maxPayload: number } })["_receiver"]["_maxPayload"];
 }
 
 describe("authenticated receiver payload limits", () => {

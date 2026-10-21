@@ -19,6 +19,7 @@ import { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { GatewayClientRegistry } from "../client-registry.js";
 import { gatewayTestTextTransport } from "../connection-transport.test-support.js";
+import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
@@ -144,10 +145,6 @@ async function prepareSignedControlUiDevice(nonce: string) {
   };
 }
 
-function createLogger() {
-  return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-}
-
 function withDeadline<T>(promise: Promise<T>, label: string): Promise<T> {
   return Promise.race([
     promise,
@@ -169,17 +166,7 @@ afterEach(() => {
 });
 
 describe("Control UI build admission over WebSocket", () => {
-  it.each([
-    {
-      name: "legacy same-origin document",
-      clientBuildId: undefined,
-    },
-    {
-      name: "explicit stale same-origin document",
-      clientBuildId: "stale-build",
-    },
-  ])("rejects a $name before registration or RPC dispatch", async (testCase) => {
-    const { clientBuildId } = testCase;
+  it.each([undefined, "stale-build"])("rejects build %s before admission", async (buildId) => {
     const connectionWork = new GatewayConnectionWork();
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await withDeadline(
@@ -274,11 +261,7 @@ describe("Control UI build admission over WebSocket", () => {
     });
 
     const device = await prepareSignedControlUiDevice("legacy-build-nonce");
-    const ws = new WebSocket(`ws://127.0.0.1:${address.port}`, {
-      headers: {
-        origin,
-      },
-    });
+    const ws = new WebSocket(`ws://127.0.0.1:${address.port}`, { headers: { origin } });
     try {
       await withDeadline(
         new Promise<void>((resolve) => {
@@ -310,7 +293,7 @@ describe("Control UI build admission over WebSocket", () => {
               version: "2026.8.1",
               platform: "web",
               mode: "webchat",
-              ...(clientBuildId ? { buildId: clientBuildId } : {}),
+              ...(buildId ? { buildId } : {}),
             },
             role: "operator",
             caps: [],

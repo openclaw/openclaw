@@ -44,6 +44,15 @@ async function settled(events: RpcEvent[], count = 1) {
   await waitForDiagnosticEventsDrained();
 }
 
+async function connect(options: Parameters<typeof attachHarness>[0] = {}) {
+  const events = observeRequests();
+  const harness = attachHarness({ identity: ATTACHED_IDENTITY, ...options });
+  await admit(harness);
+  return { events, harness };
+}
+
+const computerRequest = { command: "screen.snapshot", paramsJson: "{}" };
+
 describe("dedicated worker RPC", () => {
   setupWorkerProtocolTestState();
   beforeEach(() => resetDiagnosticEventsForTest());
@@ -55,7 +64,7 @@ describe("dedicated worker RPC", () => {
   it.each([true, false])(
     "gates session computer RPC and preserves image responses (supported: %s)",
     async (supported) => {
-      const harness = attachHarness({
+      const { harness } = await connect({
         identity: {
           ...ATTACHED_IDENTITY,
           protocolFeatures: ATTACHED_IDENTITY.protocolFeatures.filter(
@@ -63,14 +72,12 @@ describe("dedicated worker RPC", () => {
           ),
         },
       });
-      await admit(harness);
-      const request = { command: "screen.snapshot", paramsJson: "{}" };
-      harness.sendRequest("worker.computer", request);
+      harness.sendRequest("worker.computer", computerRequest);
       await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
       if (supported) {
         expect(harness.service.executeComputer).toHaveBeenCalledWith(
           expect.objectContaining({ sessionId: ATTACHED_IDENTITY.sessionId }),
-          request,
+          computerRequest,
           expect.any(AbortSignal),
         );
         expect(harness.responses[1]).toMatchObject({
@@ -88,11 +95,9 @@ describe("dedicated worker RPC", () => {
   );
 
   it("measures FIFO admission separately from inference acceptance without delaying its ACK", async () => {
-    const events = observeRequests();
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    const harness = attachHarness({
-      identity: ATTACHED_IDENTITY,
+    const { events, harness } = await connect({
       onInferenceLaunch: (sink) => {
         expect(harness.responses.at(-1)).toMatchObject({
           id: "inference-request",
@@ -103,7 +108,6 @@ describe("dedicated worker RPC", () => {
         sink.send(INFERENCE_EVENT);
       },
     });
-    await admit(harness);
     expect(events).toEqual([]);
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -152,9 +156,7 @@ describe("dedicated worker RPC", () => {
   });
 
   it("releases the FIFO while computer timing stays open across connection close", async () => {
-    const events = observeRequests();
-    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
-    await admit(harness);
+    const { events, harness } = await connect();
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     const entered = createDeferredCore();
@@ -168,11 +170,7 @@ describe("dedicated worker RPC", () => {
         return { ok: true, result: { resultJson: "{}" } };
       },
     );
-    harness.sendRequest(
-      "worker.computer",
-      { command: "screen.snapshot", paramsJson: "{}" },
-      "computer",
-    );
+    harness.sendRequest("worker.computer", computerRequest, "computer");
     try {
       await entered.promise;
       now = 120;
@@ -188,18 +186,12 @@ describe("dedicated worker RPC", () => {
       release.resolve();
       await settled(events, 2);
       const computer = events.filter((event) => event.method === "worker.computer");
-      expect(computer.filter((event) => event.phase === "response")).toMatchObject([
-        { outcome: "suppressed", durationMs: 100 },
+      expect(computer).toMatchObject([
+        { phase: "received" },
+        { phase: "response", outcome: "suppressed", durationMs: 100 },
+        { phase: "handler", admissionMs: 0, durationMs: 100 },
+        { phase: "dispatch", outcome: "returned", queueWaitMs: 0 },
       ]);
-      expect(computer.find((event) => event.phase === "handler")).toMatchObject({
-        admissionMs: 0,
-        durationMs: 100,
-      });
-      expect(computer.at(-1)).toMatchObject({
-        phase: "dispatch",
-        outcome: "returned",
-        queueWaitMs: 0,
-      });
       expect(
         harness.responses.filter((frame) => (frame as { id?: string }).id === "computer"),
       ).toHaveLength(0);
@@ -209,14 +201,12 @@ describe("dedicated worker RPC", () => {
   });
 
   it("does not turn a completed computer handler into cancellation when its send closes", async () => {
-    const events = observeRequests();
-    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
-    await admit(harness);
+    const { events, harness } = await connect();
     harness.sendResponse.mockImplementationOnce(() => {
       harness.close();
       return { kind: "unavailable" };
     });
-    harness.sendRequest("worker.computer", { command: "screen.snapshot", paramsJson: "{}" });
+    harness.sendRequest("worker.computer", computerRequest);
     await settled(events);
     expect(events.find((event) => event.phase === "handler")).toMatchObject({
       outcome: "returned",
@@ -229,9 +219,7 @@ describe("dedicated worker RPC", () => {
   });
 
   it("records serialization sender failure without a sent response", async () => {
-    const events = observeRequests();
-    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
-    await admit(harness);
+    const { events, harness } = await connect();
     harness.sendResponse.mockReturnValueOnce({
       kind: "serialization",
       error: new Error("synthetic encoding fault"),
@@ -245,9 +233,7 @@ describe("dedicated worker RPC", () => {
   });
 
   it("records a throwing transcript service once and measures its error response", async () => {
-    const events = observeRequests();
-    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
-    await admit(harness);
+    const { events, harness } = await connect();
     harness.service.commitTranscript.mockRejectedValueOnce(new Error("synthetic service fault"));
     harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
     await settled(events);
@@ -262,9 +248,7 @@ describe("dedicated worker RPC", () => {
   });
 
   it("buckets arbitrary methods without leaking caller values", async () => {
-    const events = observeRequests();
-    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
-    await admit(harness);
+    const { events, harness } = await connect();
     harness.sendRequest(
       "private-method-value",
       { private: "private-payload-value" },

@@ -34,11 +34,10 @@ import { GATEWAY_PER_MESSAGE_DEFLATE, registerDeflatedSegment } from "../ws-comp
 installGatewayTestHooks({ scope: "suite" });
 
 async function openOperatorSocket(
-  port: number,
-  token: string,
+  open: (options?: WebSocket.ClientOptions) => WebSocket,
   headers?: Record<string, string>,
 ): Promise<WebSocket> {
-  const socket = new WebSocket(`ws://127.0.0.1:${port}`, { headers });
+  const socket = open({ headers });
   trackConnectChallengeNonce(socket);
   await once(socket, "open");
   try {
@@ -59,27 +58,43 @@ async function sendTraceRequest(socket: WebSocket, id: string): Promise<{ ok: bo
   return await response;
 }
 
-async function startServer(token: string) {
+const token = "gateway-request-start-test-token";
+
+async function withServer(
+  run: (fixture: {
+    port: number;
+    capture: ReturnType<typeof captureGatewayConnection>;
+    open: (options?: WebSocket.ClientOptions) => WebSocket;
+  }) => Promise<void>,
+) {
   const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
   const server = await startTestGatewayServer(portClaim, {
     auth: { mode: "token", token },
     bind: "loopback",
     controlUiEnabled: false,
   });
-  return { server, portClaim, capture: captureGatewayConnection(portClaim.port) };
-}
-
-async function closeServer(
-  ws?: WebSocket,
-  server?: Awaited<ReturnType<typeof startTestGatewayServer>>,
-  capture?: ReturnType<typeof captureGatewayConnection>,
-) {
-  ws?.terminate();
+  const capture = captureGatewayConnection(portClaim.port);
+  const sockets: WebSocket[] = [];
   try {
-    await server?.close();
+    await run({
+      port: portClaim.port,
+      capture,
+      open: (options) => {
+        const socket = new WebSocket(`ws://127.0.0.1:${portClaim.port}`, options);
+        sockets.push(socket);
+        return socket;
+      },
+    });
   } finally {
-    capture?.restore();
-    resetTestPluginRegistry();
+    for (const socket of sockets) {
+      socket.terminate();
+    }
+    try {
+      await server.close();
+    } finally {
+      capture.restore();
+      resetTestPluginRegistry();
+    }
   }
 }
 
@@ -193,68 +208,62 @@ describe("authenticated operator request starts", () => {
     };
     registerMethods(registry);
     setTestPluginRegistry(registry);
-    const token = "gateway-operator-start-fairness-test-token";
-    let capture: ReturnType<typeof captureGatewayConnection> | undefined;
-    let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
-    let ws: WebSocket | undefined;
     let restoreClock: (() => void) | undefined;
     let allResponses: Promise<unknown> | undefined;
-    try {
-      const fixture = await startServer(token);
-      const { portClaim } = fixture;
-      ({ server, capture } = fixture);
-      ws = await openOperatorSocket(portClaim.port, token, {
-        "x-forwarded-for": "198.51.100.10",
-      });
-      await expect(sendTraceRequest(ws, "warmup")).resolves.toMatchObject({ ok: true });
-      const { stream } = capture.get();
-      expect(ws.extensions).toContain("permessage-deflate");
-      // This case isolates cheap-start batching. Other owner cases advance the
-      // work clock to prove the elapsed-work fairness boundary independently.
-      const now = performance.now();
-      const clock = vi.spyOn(performance, "now").mockReturnValue(now);
-      restoreClock = () => clock.mockRestore();
-      const responsesById = new Map<string, boolean>();
-      allResponses = onceMessage(ws, (value) => {
-        if (value.type === "res" && typeof value.id === "string" && ids.includes(value.id)) {
-          responsesById.set(value.id, value.ok === true);
-        }
-        return responsesById.size === ids.length;
-      });
-      // Cleanup below still awaits this promise; attach a rejection observer now
-      // so a fixture failure cannot produce an unrelated unhandled rejection.
-      void allResponses.catch(() => {});
-      const markerResponse = onceMessage(
-        ws,
-        (value) => value.type === "res" && value.id === ids.at(-1),
-      );
-      injectReceiveChunk(
-        stream,
-        ids.map((id) =>
-          maskedFrame(
-            0x81,
-            rpc(id),
-            // Chrome compresses small requests whenever the extension is negotiated;
-            // the server's outbound threshold cannot keep these frames raw.
-            true,
+    await withServer(async ({ capture, open }) => {
+      try {
+        const ws = await openOperatorSocket(open, {
+          "x-forwarded-for": "198.51.100.10",
+        });
+        await expect(sendTraceRequest(ws, "warmup")).resolves.toMatchObject({ ok: true });
+        const { stream } = capture.get();
+        expect(ws.extensions).toContain("permessage-deflate");
+        // This case isolates cheap-start batching. Other owner cases advance the
+        // work clock to prove the elapsed-work fairness boundary independently.
+        const now = performance.now();
+        const clock = vi.spyOn(performance, "now").mockReturnValue(now);
+        restoreClock = () => clock.mockRestore();
+        const responsesById = new Map<string, boolean>();
+        allResponses = onceMessage(ws, (value) => {
+          if (value.type === "res" && typeof value.id === "string" && ids.includes(value.id)) {
+            responsesById.set(value.id, value.ok === true);
+          }
+          return responsesById.size === ids.length;
+        });
+        // Cleanup below still awaits this promise; attach a rejection observer now
+        // so a fixture failure cannot produce an unrelated unhandled rejection.
+        void allResponses.catch(() => {});
+        const markerResponse = onceMessage(
+          ws,
+          (value) => value.type === "res" && value.id === ids.at(-1),
+        );
+        injectReceiveChunk(
+          stream,
+          ids.map((id) =>
+            maskedFrame(
+              0x81,
+              rpc(id),
+              // Chrome compresses small requests whenever the extension is negotiated;
+              // the server's outbound threshold cannot keep these frames raw.
+              true,
+            ),
           ),
-        ),
-      );
+        );
 
-      await expect(markerResponse).resolves.toMatchObject({ ok: true });
-      expect(starts).toEqual(ids);
-      expect(completed).toEqual([ids.at(-1)]);
-      expect(await observedAtYield.promise).toEqual(ids);
-      held.resolve();
-      await allResponses;
-      expect(responsesById).toEqual(new Map(ids.map((id) => [id, true])));
-    } finally {
-      held.resolve();
-      await allResponses?.catch(() => {});
-      clearImmediate(sentinel);
-      restoreClock?.();
-      await closeServer(ws, server, capture);
-    }
+        await expect(markerResponse).resolves.toMatchObject({ ok: true });
+        expect(starts).toEqual(ids);
+        expect(completed).toEqual([ids.at(-1)]);
+        expect(await observedAtYield.promise).toEqual(ids);
+        held.resolve();
+        await allResponses;
+        expect(responsesById).toEqual(new Map(ids.map((id) => [id, true])));
+      } finally {
+        held.resolve();
+        await allResponses?.catch(() => {});
+        clearImmediate(sentinel);
+        restoreClock?.();
+      }
+    });
   });
 
   it("delivers operator control frames while ordinary request completions overlap", async () => {
@@ -270,11 +279,8 @@ describe("authenticated operator request starts", () => {
     };
     registerMethods(registry);
     setTestPluginRegistry(registry);
-    const token = "gateway-operator-control-test-token";
-    const { portClaim, server, capture } = await startServer(token);
-    let ws: WebSocket | undefined;
-    try {
-      ws = await openOperatorSocket(portClaim.port, token);
+    await withServer(async ({ capture, open }) => {
+      const ws = await openOperatorSocket(open);
       await sendTraceRequest(ws, "warmup");
       const { socket, stream } = capture.get();
       const signal = AbortSignal.timeout(2_000);
@@ -306,10 +312,7 @@ describe("authenticated operator request starts", () => {
         await peerPongs.return?.();
         await serverPongs.return?.();
       }
-    } finally {
-      held.resolve();
-      await closeServer(ws, server, capture);
-    }
+    });
   });
 
   it("completes an ordinary operator request after a coalesced native close", async () => {
@@ -325,92 +328,84 @@ describe("authenticated operator request starts", () => {
     };
     registerMethods(registry);
     setTestPluginRegistry(registry);
-    const token = "gateway-operator-close-test-token";
-    const { portClaim, server, capture } = await startServer(token);
-    let ws: WebSocket | undefined;
-    try {
-      ws = await openOperatorSocket(portClaim.port, token);
-      await sendTraceRequest(ws, "warmup");
-      const { socket, stream } = capture.get();
-      const signal = AbortSignal.timeout(2_000);
-      const closed = Promise.all([
-        once(socket, "close", { signal }),
-        once(ws, "close", { signal }),
-      ]);
-      const responses: unknown[] = [];
-      ws.on("message", (data) => {
-        const frame = JSON.parse(rawDataToString(data));
-        if (frame.type === "res" && frame.id === "held") {
-          responses.push(frame);
-        }
-      });
-      injectReceiveChunk(stream, [
-        maskedFrame(0x81, JSON.stringify({ type: "req", id: "held", method: "test.trace" })),
-        maskedFrame(0x88, ""),
-      ]);
-      await closed;
-      expect(socket.readyState).toBe(WebSocket.CLOSED);
-      held.resolve();
-      await completed.promise;
-      expect(responses).toEqual([]);
-    } finally {
-      held.resolve();
-      await closeServer(ws, server, capture);
-    }
+    await withServer(async ({ capture, open }) => {
+      try {
+        const ws = await openOperatorSocket(open);
+        await sendTraceRequest(ws, "warmup");
+        const { socket, stream } = capture.get();
+        const signal = AbortSignal.timeout(2_000);
+        const closed = Promise.all([
+          once(socket, "close", { signal }),
+          once(ws, "close", { signal }),
+        ]);
+        const responses: unknown[] = [];
+        ws.on("message", (data) => {
+          const frame = JSON.parse(rawDataToString(data));
+          if (frame.type === "res" && frame.id === "held") {
+            responses.push(frame);
+          }
+        });
+        injectReceiveChunk(stream, [
+          maskedFrame(0x81, JSON.stringify({ type: "req", id: "held", method: "test.trace" })),
+          maskedFrame(0x88, ""),
+        ]);
+        await closed;
+        expect(socket.readyState).toBe(WebSocket.CLOSED);
+        held.resolve();
+        await completed.promise;
+        expect(responses).toEqual([]);
+      } finally {
+        held.resolve();
+      }
+    });
   });
 
   it.each(["preauth", "node"] as const)(
     "retains native control-frame yielding for %s sockets",
     async (role) => {
-      const token = "gateway-native-control-fairness-test-token";
-      let capture: ReturnType<typeof captureGatewayConnection> | undefined;
-      let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
-      let ws: WebSocket | undefined;
       let sentinel: ReturnType<typeof setImmediate> | undefined;
       let removePingObserver: (() => void) | undefined;
-      try {
-        const fixture = await startServer(token);
-        const { portClaim } = fixture;
-        ({ server, capture } = fixture);
-        ws = new WebSocket(`ws://127.0.0.1:${portClaim.port}`);
-        trackConnectChallengeNonce(ws);
-        await once(ws, "open");
-        if (role === "node") {
-          await connectOk(ws, {
-            token,
-            role: "node",
-            prePairDevice: true,
-            client: { id: "node-host", version: "dev", platform: "test", mode: "node" },
-            scopes: [],
-            caps: [],
-            commands: [],
-          });
-        }
-        const { socket, stream } = capture.get();
-        const events: string[] = [];
-        const recordPing = (data: Buffer) => {
-          const value = data.toString();
-          events.push(value);
-          if (value === "first") {
-            sentinel = setImmediate(() => events.push("yield"));
-          }
-        };
-        socket.on("ping", recordPing);
-        removePingObserver = () => socket.off("ping", recordPing);
-        const pings = on(socket, "ping", { signal: AbortSignal.timeout(2_000) });
+      await withServer(async ({ capture, open }) => {
         try {
-          injectReceiveChunk(stream, [maskedFrame(0x89, "first"), maskedFrame(0x89, "second")]);
-          await pings.next();
-          await pings.next();
-          expect(events).toEqual(["first", "yield", "second"]);
+          const ws = open();
+          trackConnectChallengeNonce(ws);
+          await once(ws, "open");
+          if (role === "node") {
+            await connectOk(ws, {
+              token,
+              role: "node",
+              prePairDevice: true,
+              client: { id: "node-host", version: "dev", platform: "test", mode: "node" },
+              scopes: [],
+              caps: [],
+              commands: [],
+            });
+          }
+          const { socket, stream } = capture.get();
+          const events: string[] = [];
+          const recordPing = (data: Buffer) => {
+            const value = data.toString();
+            events.push(value);
+            if (value === "first") {
+              sentinel = setImmediate(() => events.push("yield"));
+            }
+          };
+          socket.on("ping", recordPing);
+          removePingObserver = () => socket.off("ping", recordPing);
+          const pings = on(socket, "ping", { signal: AbortSignal.timeout(2_000) });
+          try {
+            injectReceiveChunk(stream, [maskedFrame(0x89, "first"), maskedFrame(0x89, "second")]);
+            await pings.next();
+            await pings.next();
+            expect(events).toEqual(["first", "yield", "second"]);
+          } finally {
+            await pings.return?.();
+          }
         } finally {
-          await pings.return?.();
+          clearImmediate(sentinel);
+          removePingObserver?.();
         }
-      } finally {
-        clearImmediate(sentinel);
-        removePingObserver?.();
-        await closeServer(ws, server, capture);
-      }
+      });
     },
   );
 
@@ -447,23 +442,15 @@ describe("authenticated operator request starts", () => {
       );
     }
     setTestPluginRegistry(registry);
-    const token = "gateway-compression-test-token";
-    let capture: ReturnType<typeof captureGatewayConnection> | undefined;
-    let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
-    let ws: WebSocket | undefined;
-    try {
-      const fixture = await startServer(token);
-      const { portClaim } = fixture;
-      ({ server, capture } = fixture);
-      const local = new WebSocket(`ws://127.0.0.1:${portClaim.port}`);
-      ws = local;
+    await withServer(async ({ capture, open }) => {
+      const local = open();
       await once(local, "open");
       expect(local.extensions).toBe("");
       const localClosed = once(local, "close");
       local.close();
       await localClosed;
       for (const perMessageDeflate of [false, {}]) {
-        const peer = new WebSocket(`ws://127.0.0.1:${portClaim.port}`, {
+        const peer = open({
           perMessageDeflate,
           headers: { "x-forwarded-for": "198.51.100.10" },
         });
@@ -482,11 +469,10 @@ describe("authenticated operator request starts", () => {
         }
       }
       // Peers may cap the server window; its inflater rejects farther back-references.
-      const socket = new WebSocket(`ws://127.0.0.1:${portClaim.port}`, {
+      const socket = open({
         perMessageDeflate: { serverMaxWindowBits: 10 },
         headers: { "x-forwarded-for": "198.51.100.10" },
       });
-      ws = socket;
       trackConnectChallengeNonce(socket);
       const upgraded = once(socket, "upgrade");
       await once(socket, "open");
@@ -564,21 +550,12 @@ describe("authenticated operator request starts", () => {
       const closed = once(socket, "close");
       socket.send(request("bomb", "x".repeat(MAX_PAYLOAD_BYTES)));
       expect((await closed)[0]).toBe(1009);
-    } finally {
-      await closeServer(ws, server, capture);
-    }
+    });
   });
 
   it("rejects an operator handshake visibly when the receiver handoff field is not writable", async () => {
-    const token = "gateway-receiver-contract-test-token";
-    let capture: ReturnType<typeof captureGatewayConnection> | undefined;
-    let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
-    let ws: WebSocket | undefined;
-    try {
-      const fixture = await startServer(token);
-      const { portClaim } = fixture;
-      ({ server, capture } = fixture);
-      ws = new WebSocket(`ws://127.0.0.1:${portClaim.port}`);
+    await withServer(async ({ capture, open }) => {
+      const ws = open();
       trackConnectChallengeNonce(ws);
       await once(ws, "open");
       const { socket } = capture.get();
@@ -598,8 +575,6 @@ describe("authenticated operator request starts", () => {
         error: { code: "UNAVAILABLE", message: "unsupported Gateway WebSocket receiver" },
       });
       expect((await closed)[0]).toBe(1011);
-    } finally {
-      await closeServer(ws, server, capture);
-    }
+    });
   });
 });
