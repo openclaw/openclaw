@@ -215,10 +215,7 @@ export async function confirmAndStartUpdateRuntime(
         const [view, setView] = createStore(snapshot, { shallow: true });
         let cancelButton!: HTMLButtonElement;
         let closeButton: HTMLButtonElement | undefined;
-        updateView = (next) =>
-          setView((draft) => {
-            Object.assign(draft, next);
-          });
+        updateView = (next) => setView(() => next);
         return (
           <openclaw-modal-dialog
             prop:initialFocus={() => (closeButton?.isConnected ? closeButton : cancelButton)}
