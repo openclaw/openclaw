@@ -31,6 +31,7 @@ import type { AgentInternalEvent } from "../../internal-events.js";
 import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
 import type { ReplyDeliveryObserver } from "../../reply-completion.js";
+import type { ResolvedToolPromptFinalizer } from "../../resolved-tool-prompt.types.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { PromptMode } from "../../system-prompt.types.js";
@@ -39,11 +40,6 @@ import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 export type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
-
-export type ResolvedToolPromptFinalizer = (params: {
-  prompt: string;
-  messageToolAvailable: boolean;
-}) => string;
 
 export type RunEmbeddedAgentParams = Pick<
   QueuedAgentRunParams,
@@ -76,8 +72,6 @@ export type RunEmbeddedAgentParams = Pick<
   sessionTarget?: AgentRunSessionTarget;
   /** Provider prompt-cache affinity key; distinct from transcript/session identity. */
   promptCacheKey?: string;
-  /** The persistent caller consumes maintenance requests after successful reply settlement. */
-  postTurnMaintenance?: true;
   /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
   /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */

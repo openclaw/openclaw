@@ -1,16 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { identityFixture } from "./session-identity.test-support.ts";
 import {
-  captureUiProofEnabled,
-  controlUiSessionUrl,
   createSessionManagementE2eSuite,
-  installMockGateway,
   requireRecord,
-  sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
@@ -20,60 +13,13 @@ suite.define(() => {
   it.each(["sessions", "sidebar", "header"] as const)(
     "keeps a replacement session unchanged after a stale %s rename",
     async (surface) => {
-      const viewport = { width: 1280, height: 900 };
-      const context = await suite.browser.newContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport,
-        recordVideo: captureUiProofEnabled
-          ? { dir: path.join(suite.artifactDir, "session-identity-20260827"), size: viewport }
-          : undefined,
-      });
-      const page = await context.newPage();
-      const video = page.video();
-      const original = sessionRow(
-        "agent:main:rename-identity",
-        "Original session",
-        Date.parse("2026-08-27T12:00:00.000Z"),
-      );
-      const replacement = {
-        ...original,
-        sessionId: "replacement-session",
-        label: "Replacement session",
-        displayName: "Replacement session",
-        updatedAt: original.updatedAt + 1_000,
-      };
-      const gateway = await installMockGateway(page, {
-        deferredMethods: ["sessions.patch"],
-        methodResponses: { "sessions.list": sessionsListResponse([original]) },
-        sessionKey: original.key,
-      });
-      const capture = async (stage: string, proofSurface: Locator, content: readonly Locator[]) => {
-        if (captureUiProofEnabled) {
-          await mkdir(path.join(suite.artifactDir, "session-identity-20260827"), {
-            recursive: true,
-          });
-          await writeFile(
-            path.join(
-              path.join(suite.artifactDir, "session-identity-20260827"),
-              `${surface}-${stage}.png`,
-            ),
-            await takeControlUiViewportScreenshot(page, proofSurface, content),
-          );
-        }
-      };
-
-      try {
-        await page.goto(
-          surface === "sessions"
-            ? `${suite.server.baseUrl}sessions`
-            : controlUiSessionUrl(suite.server.baseUrl, original.key),
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const { original, replacement, gateway, row, replace } = await identityFixture(
+          page,
+          suite.server.baseUrl,
+          surface,
+          "rename",
         );
-        const row =
-          surface === "sessions"
-            ? page.locator(".sessions-table tbody tr", { hasText: original.key })
-            : page.locator(`.sidebar-recent-session[data-session-key="${original.key}"]`);
-        await row.waitFor({ state: "visible" });
         const openRename = async () => {
           if (surface === "header") {
             await page.locator(".chat-pane__session-title-button").click();
@@ -91,19 +37,8 @@ suite.define(() => {
         );
         await expect.poll(() => input.inputValue()).toBe(original.label);
         await input.fill("Stale rename");
-        await capture(
-          "editing",
-          surface === "header" ? input : page.locator("openclaw-modal-dialog dialog"),
-          [input],
-        );
 
-        await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
-        await gateway.emitGatewayEvent("sessions.changed", {
-          ...replacement,
-          sessionKey: original.key,
-          reason: "create",
-        });
-        await expect.poll(() => row.textContent()).toContain(replacement.label);
+        await replace();
         await input.press("Enter");
         const request = await waitForPatch(gateway, (params) => params.label === "Stale rename");
         const params = requireRecord(request.params);
@@ -127,11 +62,6 @@ suite.define(() => {
           await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
         }
         await input.waitFor({ state: "detached" });
-        const outcome = page.getByText(/changed before patch\. Retry\.|Stale rename/, {
-          exact: false,
-        });
-        await outcome.first().waitFor({ state: "visible" });
-        await capture("outcome", page.locator(".shell"), [outcome.first()]);
         await expect
           .poll(() => page.getByText(/changed before patch\. Retry\./).count())
           .toBeGreaterThan(0);
@@ -154,15 +84,7 @@ suite.define(() => {
           label: "Fresh rename",
         });
         await expect.poll(() => row.textContent()).toContain("Fresh rename");
-        await capture("recovered", page.locator(".shell"), [row]);
-      } finally {
-        await context.close();
-        if (video) {
-          await video.saveAs(
-            path.join(path.join(suite.artifactDir, "session-identity-20260827"), `${surface}.webm`),
-          );
-        }
-      }
+      });
     },
   );
 });

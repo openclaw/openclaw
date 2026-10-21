@@ -383,21 +383,6 @@ describe("managed Crabbox", () => {
     await expect(test.ensure()).resolves.toEqual(test.installed);
   });
 
-  it("uses another process's verified installation when it wins publication", async () => {
-    const test = await fixture();
-    const rename = fs.rename;
-    vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-      if (destination === test.directory && typeof source === "string") {
-        await fs.cp(source, destination, { recursive: true });
-        await fs.writeFile(test.binary, CRABBOX_MIN_VERSION);
-        throw Object.assign(new Error("destination exists"), { code: "EEXIST" });
-      }
-      await rename(source, destination);
-    });
-    await expect(test.ensure()).resolves.toEqual(test.installed);
-    expect(await test.read("companion-helper")).toBe("keep me");
-  });
-
   it.each(["missing", "corrupt"])(
     "repairs a %s managed executable while preserving the previous directory",
     async (damage) => {
@@ -420,11 +405,11 @@ describe("managed Crabbox", () => {
     },
   );
 
-  it("restores a damaged installation when verified publication fails", async () => {
+  it("preserves a damaged distribution for recovery when publication fails", async () => {
     const test = await fixture();
     await test.damage("corrupt");
     const rename = fs.rename;
-    vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+    const publish = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
       if (
         target === test.directory &&
         typeof source === "string" &&
@@ -434,9 +419,28 @@ describe("managed Crabbox", () => {
       }
       await rename(source, target);
     });
-    await expect(test.ensure()).rejects.toThrow("publication blocked");
-    await test.expectFiles({ [test.executable]: "corrupt", "operator-note": "preserve this" });
-    expect(await test.entries()).toEqual([path.basename(test.directory)]);
+    const pending = test.ensure();
+    await expect(pending).rejects.toMatchObject({
+      message: expect.stringContaining("previous installation is preserved at"),
+      cause: expect.objectContaining({ message: "publication blocked", code: "EACCES" }),
+    });
+    const [backup] = await test.recoveries();
+    expect(backup).toBeDefined();
+    const recovery = path.join(test.parent, backup!);
+    await expect(pending).rejects.toThrow(recovery);
+    await test.expectFiles(
+      { [test.executable]: "corrupt", "operator-note": "preserve this" },
+      recovery,
+    );
+    await expect(fs.access(test.directory)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await test.entries()).toEqual([backup]);
+    publish.mockRestore();
+    await expect(test.ensure()).resolves.toEqual(test.installed);
+    await test.expectFiles(
+      { [test.executable]: "corrupt", "operator-note": "preserve this" },
+      recovery,
+    );
+    expect(await test.read()).toBe(CRABBOX_MIN_VERSION);
   });
 
   it("preserves the recovered directory and published binary if staging cleanup fails", async () => {

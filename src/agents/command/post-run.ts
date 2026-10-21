@@ -37,7 +37,6 @@ import {
   persistPendingFinalDeliveryMarker,
 } from "../pending-final-delivery-marker.js";
 import type { PendingFinalRecoverySource } from "../pending-final-recovery-source.js";
-import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import {
   createAgentRunRestartAbortError,
   throwAgentRunRestartAbortReason,
@@ -82,7 +81,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
     runOwnedSessionId: string;
     sessionReboundDuringRun: boolean;
   };
-  trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
   onSessionOwnershipChanged: (
     ownership: { runOwnedSessionId: string; sessionReboundDuringRun: boolean },
     committedCompactionSessionId?: string,
@@ -396,16 +394,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
             oneShotCliRun: params.opts.oneShotCliRun,
             agentHarnessId: agentMeta?.agentHarnessId,
             compactionRequestBudget: params.attempt.compactionRequestBudget,
-            requestedCompaction: agentMeta?.requestedCompaction,
-            cacheExpiry: agentMeta?.cacheExpiry,
-            expectedCompactionCount: sessionEntry.compactionCount,
-            expectedSelection: {
-              model: sessionEntry.model,
-              modelProvider: sessionEntry.modelProvider,
-              modelOverride: sessionEntry.modelOverride,
-              providerOverride: sessionEntry.providerOverride,
-              authProfileOverride: sessionEntry.authProfileOverride,
-            },
           }
         : undefined;
 

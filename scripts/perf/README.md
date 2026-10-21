@@ -1,5 +1,39 @@
 # Team-shaped synthetic state
 
+## Workboard dashboard reads
+
+`workboard-read-measure.ts` exercises the real source Gateway and Workboard SQLite
+owner over signed synthetic WebSocket connections. Run it on an approved benchmark
+host. Prepare each fixture outside the measurement CPU allocation:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/workboard-read-measure.ts \
+  --root /path/to/new-fixture --port 41510 --prepare --boards 24 --cards 50
+node --import ./scripts/tsx.mjs scripts/perf/workboard-read-measure.ts \
+  --root /path/to/new-fixture --port 41510 --clients 12 --waves 80 \
+  --interval-ms 250 --start-at <future-epoch-ms> --output /path/to/result.json
+```
+
+Preparation creates 1,200 synthetic cards through public RPCs; their example PR
+URLs cause no GitHub requests. Measurements warm all board pages, then replay
+concurrent `workboard.boards.list` and `workboard.cards.list` calls, first without
+writes and then after one card status change per wave. Every response verifies
+card counts, board status aggregates, and changed card status. Reuse an untouched
+prepared fixture for each sample; measured status writes remain in its state.
+
+Reports include calls, errors, round-trip and handler p50/p99, response JSON bytes,
+Gateway process CPU, worker request classes, and observed board aggregate/metadata
+read commands on the existing worker transport. Handler seconds per 15 minutes
+are extrapolated from this replay's request rate, not a production forecast.
+Diagnostic loss, missing handler observations, stale data, and missed scheduled
+phase starts fail the run. This measures server RPCs, not browser rendering.
+
+For A/B comparisons use separate identical fixtures, ports, and source checkouts.
+Hold the host's exclusive measurement lock around each concurrent pair, use the
+same `--start-at` on both sides, and swap CPU halves for the next pair. Both warm
+and mutation phases have independent shared start times. Compare paired
+differences across at least two pairs; record outside load for context.
+
 ## Usage metadata bursts
 
 `chat-metadata-burst-measure.ts` requests `sessions.usage` on a cold 5,000-session
@@ -100,6 +134,44 @@ the next pair, and compare each pair's candidate-minus-baseline difference.
 Build and seed outside the measurement CPU allocation. Keep every root and
 temporary directory inside the task-owned sandbox and remove them after use.
 
+## Startup with interrupted subagent runs
+
+The `interruptedRegistry` case starts a real Gateway against 86 retained runs:
+78 completed rows and eight unfinished rows across eight synthetic child agents.
+Four unfinished rows remain `running`, and four are already `interrupted` with
+aborted session state. All rows retain completion expectations and requester-turn
+claims, including the delivered, cleanup-complete rows: all 86 are activation
+obligations, not cold history. They share eight requester cohorts; the unfinished
+rows share two of those cohorts, four per requester. The seed command
+commits the fixture in a child writer, then sends that writer `SIGKILL` while its
+SQLite handles remain open. This preserves actual unclean-close/WAL residue;
+the run/session records are synthetic, not captured from a predecessor Gateway
+or model execution. No models, credentials, or external channels are used.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
+  --case interruptedRegistry --fixture-root /path/to/new-fixture --seed-only
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
+  --case interruptedRegistry --fixture-root /path/to/new-fixture \
+  --runs 1 --warmup 0 --timeout-ms 90000 --output /path/to/result.json
+```
+
+The output includes spawn-to-`/readyz`, spawn-to-Gateway-ready, all activation
+trace spans, per-run recovery times, and database bytes. The driver waits for all
+eight recovery events and verifies exactly one event per unfinished run, eight
+durable terminal error outcomes, all 86 retained rows, and unchanged execution
+outcomes for the 78 completed rows after shutdown. Requester claim metadata may
+change during settlement. The synthetic rows have no saved operator source, so
+this proves orphan and missing-source settlement; it does not exercise successful
+operator authority restoration, resuming a model, or external delivery.
+Activation subspans can overlap or sum concurrent groups, so compare the outer
+activation elapsed time separately from the component totals.
+
+Prepare fresh roots sequentially for each side of every pair; recovery mutates
+the fixture. Use the same `--start-at <epoch-ms>` for concurrent A/B starts under
+the benchmark host's exclusive measurement lock, and swap the assigned CPU
+halves for the next pair. Build and seed outside the measurement allocation.
+
 ## Startup with one checking agent
 
 The startup benchmark has an opt-in `slowAgentDatabase` case. Prepare each side
@@ -194,6 +266,24 @@ also includes transcript projections and SQLite overhead: use the reported
 `agentDatabaseBytes`, not the requested MiB, when comparing fixtures. Memory is
 bounded by transcript batches rather than total payload size. For tens of GB,
 raise this option and verify free disk space first.
+
+For deep histories, add `--long-transcript-entries 2000 --long-transcript-sessions 4`.
+This appends the requested number of alternating user/assistant messages to the
+first selected retained sessions, in addition to the weighted transcript text.
+Each message contains 1 KiB of synthetic text; each assistant message also carries
+a distinct deterministic 16 KiB thinking signature. The selected session count
+defaults to four and is capped by `--sessions`. The combined logical payload,
+including conservative signature/envelope allowance, must fit within 1 GiB when
+this stress shape is enabled.
+
+`--worktree-files 270000 --nested-repository` adds an unchanged tracked inventory
+of empty files and an untracked committed nested Git repository to the first
+registered linked worktree. Other project worktrees retain their small fixture
+shape. These flags require `--projects` greater than zero; the tracked inventory
+is capped at 500,000 files. Writes are sequential. On Linux, generation checks
+dirty memory every 1,000 files and every 2 MiB transcript batch, pauses at 1 GiB,
+and fails at 2 GiB. Generate on the authorized benchmark host and record actual
+database size and dirty-memory observations.
 
 The default seed is 967 and the default reference time is 2026-10-13 12:00 UTC.
 Pass the same `--seed` and `--now` to reproduce logical data. Set `--now` near the
@@ -318,6 +408,40 @@ chat Details. Optional `--request-stacks` adds caller stacks for diagnosis;
 leave it off for paired timing. Use only synthetic requests:
 parameters, stacks, and model rows are retained; authentication and other response
 payloads are omitted.
+
+Add `--reload-census` to count every RPC during that load window. This mode keeps
+parameter keys and opaque query IDs instead of parameter values; matching query
+IDs identify exact duplicates within one document. It also records native Long
+Animation Frame blocking and timestamps of changed sidebar row inventories.
+With `--request-stacks`, `--asset-dir /path/to/control-ui/assets` maps callers
+through the matching build's source maps.
+The first nonempty inventory and the last inventory change are DOM milestones,
+not paint times. Keep caller-stack diagnostics separate from untraced paired
+timing, and use matching fixture state, seeds, and observation windows.
+`--storage-state` accepts a synthetic Playwright storage-state file; use
+`--min-sidebar-rows` to reject captures with an empty or collapsed fixture roster.
+
+`control-ui-reload-fixture.ts` prepares a real Gateway fixture with 5,000 sessions,
+6,000 retained runs, 120 sessions assigned to the synthetic viewer, eight personal
+pins, seven browser plugins, and a synthetic model catalog. It seeds a dashboard
+widget through RPC and writes a Playwright preference file with Coding expanded.
+Run preparation sequentially on the benchmark host, with built runtime and UI assets:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/control-ui-reload-fixture.ts \
+  --state-dir /path/to/fixture --ui-root /path/to/control-ui --prepare
+node --import ./scripts/tsx.mjs scripts/perf/control-ui-reload-fixture.ts \
+  --state-dir /path/to/fixture --ui-root /path/to/control-ui
+```
+
+The default ports are 41514 (Gateway), 41515 (widget sandbox), and 41516 (proxy).
+Use distinct ports and state directories for concurrent sides. Once each fixture
+has been seeded, `--skip-seed` preserves its state on subsequent launches;
+`--runtime-entry` selects a separately built baseline or candidate runtime.
+Use the printed route with `--storage-state /path/to/fixture/browser-storage.json`,
+`--reload-census --min-sidebar-rows 10 --duration 15`. No provider credentials or
+model inference are needed. The fixture uses 8 MiB of transcript content rather
+than a multi-gigabyte database; this workload measures reload acquisition and rows.
 
 To isolate session activity from model selection, use
 `--activity-patch-sessions <key-a>,<key-b>` with `--load-runs 1` against existing
@@ -773,6 +897,80 @@ Post-GC Gateway heap samples follow every completed cohort, and the optional
 final `settled.heapsnapshot` permits retainer inspection. Session resets exclude
 intentionally retained live histories from the trend.
 
+For loaded-session retention after real turns settle, use:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --scenario session-idle-retention \
+  --sessions 100 --runs 10 --chunks 1 --chunk-interval-ms 0 --prompt-kib 128 \
+  --duration-ms 360000 --memory-interval-ms 30000 --diagnostics --trace-gc
+```
+
+This warms the runtime with one parent turn, captures a post-GC baseline, and
+touches 100 distinct sessions in cohorts of at most ten concurrent turns. Each
+turn includes a synthetic prompt, one real `read` tool, and the reasoning-signature
+replay check. The driver keeps one roster-only client and no exact-message
+subscriptions. It then idles for `--duration-ms` without model work or polling,
+captures post-idle resources, and reopens every measured session once. `--rounds`
+is ignored. The final partial cohort has its own barrier size.
+
+The report includes post-GC resources after initial work and after reopening,
+periodic natural-GC idle samples, idle GC diagnostics/promotion, and each cohort's
+first-turn or reopened-turn latency. Reopened timings include the real agent
+turn and tool round trip, so they are end-to-end reload cost rather than a
+storage-only timer. After reopening, the pre-idle history digest must match the
+retained prefix, with a second exact synthetic answer appended. No history reads
+warm the workers between the idle wait and the measured reopen.
+Each cohort also reports request-to-provider arrival, time held at the synthetic
+provider's cohort barrier, and request-to-first assistant text in the Gateway.
+The last timestamp comes from the benchmark-only IPC preload, without a message
+subscription or retained message payload. It includes the read-tool round trip
+and excludes subsequent client delivery. Missing samples remain visible as a
+lower count, rather than being counted as zero latency.
+The provider barrier waits for the entire cohort: one slow preparation can delay
+all of its full-turn timings. These synthetic SSE results do not measure external
+provider latency, WebSocket reconnection, or prompt-cache hits. Add `--prep-trace`
+in a separate diagnostic run to capture the existing per-stage preparation logs;
+`--diagnostics` also separates hydration and model-context database reservations.
+
+For long-history reopen measurements, first seed the measured sessions offline:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/fresh-team-shape --scenario session-idle-retention \
+  --sessions 100 --runs 10 --history-turns 163 --seed-history
+```
+
+Run the measurement command above against that fixture with `--history-turns 163`.
+Seeding appends 163 user/tool-call/tool-result/answer cycles through SessionManager,
+plus a header and two settings entries: 655 entries per session. It runs separately
+from measurement, refuses an existing seed, and writes sessions sequentially.
+The measurement preserves these histories and paginates the final integrity checks.
+Without `--history-turns`, measured sessions start empty; the background roster's
+history size does not determine the measured sessions' history depth.
+
+Add `--entry src/entry.ts --session-census` to count live `SessionManager`,
+`AgentSession`, and runtime `Agent` instances at the four forced-GC checkpoints
+without writing snapshots. The source-only census imports the same constructors
+as the Gateway and uses V8's count-only object query; it retains no instance
+references. Bundled entries are rejected because their constructor identity
+differs. Counts cover the main isolate only, and the queries force additional
+collections, so omit the census from latency/GC acceptance runs.
+Add `--entry src/entry.ts --fingerprint-retention` to attribute retained prompt-cache
+diagnostics after the measured reopen. It waits one more idle interval, collects
+garbage, verifies that no session runtime objects remain reachable, then reports heap, external,
+and array-buffer deltas after clearing the diagnostic owner. This preserves the
+diagnostic baseline throughout the measured reopen and keeps attribution's extra
+collections outside latency and GC windows. External memory includes array buffers;
+do not add those two deltas together.
+Add `--heap-snapshot` in a separate diagnostic pass for `initial.heapsnapshot`,
+`post-work.heapsnapshot`, `post-idle.heapsnapshot`, and `post-reopen.heapsnapshot`
+to count retained managers, sessions, agents, and their transcript retainers.
+Snapshot capture and forced GC can affect eviction timing; use the recorded
+timestamps and unprofiled paired runs for acceptance comparisons. Set the idle
+duration beyond the lifecycle's eviction window. Fixtures and all output stay
+inside the supplied synthetic state directory.
+
 For a steady memory soak with real tool execution and attached viewers, use:
 
 ```sh
@@ -784,6 +982,52 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
   --reset-every-rounds 20 --list-interval-ms 2000 --heap-snapshot
 ```
 
+To retain long active histories during a memory soak, seed with
+`--scenario memory-soak --runs 8 --history-turns 512 --history-last-turns 2500
+--history-payload-kib 16 --reset-every-rounds 0 --seed-history`, then run with
+the same options without `--seed-history`. The last session contains the larger
+turn count. Each seeded turn has a separate deterministic synthetic reasoning
+signature and tool result of the requested KiB each; the default zero preserves
+the smaller reopen fixture. In this mode, `--mixed-rpc` history polls select the
+active seeded sessions, including the larger last session. Keep fixture writes sequential and record actual
+database bytes before choosing the shape on a shared filesystem.
+
+Add `--worker-memory` in a separate diagnostic pass to record bounded task-kind
+memory under `transcript-worker-<thread>.jsonl`. The private preload observes
+the real transcript worker's task transport and samples after JSON parses of at
+least 1 KiB, capturing the raw-row plus decoded-object high water. It records
+task-start/end heap, peak observed heap, parsed bytes, heap limit, and the count
+and final old-generation bytes of major collections during each task. Tasks with
+no major collection keep that value absent. Periodic samples separately label
+the last observed post-GC baseline. It does not force GC, retain payloads,
+or change production worker limits. These are sampled lower bounds, not an exact
+allocation total; per-parse sampling adds overhead, so compare equally instrumented
+pairs and keep uninstrumented RPC acceptance timing separate.
+
+For a focused cold-process bounded-hydration diagnostic on that same fixture:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-hydration-headroom.ts \
+  --state-dir /path/to/seeded-fixture --output /path/to/hydration-result \
+  --revision <measured-commit-sha> --max-mib 64 --rounds 4
+```
+
+This uses the normal hydration owner and actual transcript task worker, checks
+that repeated reads return identical results, and leaves a three-second idle
+observation after the task burst. It does not establish Gateway throughput.
+Use separate matching fixtures, a shared `--start-at`, the measurement lock,
+and swapped CPU halves for baseline/candidate pairs. Follow it with the actual
+Gateway swarm and history/list latency comparison.
+
+For a comparison in one source checkout, `--baseline-owners` substitutes sibling
+`.baseline.ts` copies of `session-transcript.worker`,
+`session-accessor.sqlite-history-query`, `session-memory-entry.worker`, and
+`session-accessor.sqlite-active-context` under `src/config/sessions`. Create those
+four copies from the recorded baseline commit before applying the candidate;
+they are temporary sandbox artifacts. Both sides otherwise use the same import
+graph, dependencies, and driver. Omit `--worker-memory` for the uninstrumented
+Gateway latency pairs; the baseline loader still selects the pinned owners.
+
 This runs paced cohorts after five minutes of warmup, with one real `read` tool
 and a streamed completion per turn, including the same synthetic reasoning
 signature and replay check as `attempt-retention`. Diagnostics and the Prometheus plugin are
@@ -793,8 +1037,67 @@ instead. The report records resets and completed cohorts. It does not exercise
 the image/output-limit recovery of `attempt-retention`. `--rounds` is ignored;
 an admitted cohort drains before the duration ends, so a slow cohort may overrun.
 
+To replay deep foreground histories throughout the soak and across a restart,
+seed the existing offline fixture once, then run with the same `--runs`,
+`--history-turns`, `--verify-history-replay`, and `--mock-port`:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --scenario memory-soak \
+  --runs 16 --history-turns 500 --verify-history-replay --stress-tools \
+  --reset-every-rounds 0 --seed-history \
+  --port 45107 --mock-port 45109
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --scenario memory-soak \
+  --clients 40 --exact-clients 4 --runs 16 --history-turns 500 --verify-history-replay \
+  --chunks 100 --chunk-interval-ms 50 --warmup-ms 0 --duration-ms 1500000 \
+  --round-interval-ms 120000 --memory-interval-ms 15000 --retained-profile-ms 0 \
+  --reset-every-rounds 0 --stress-tools --stress-subagents --mixed-rpc --dashboard-rpc \
+  --list-interval-ms 5000 --poll-seed deep-history --diagnostics --trace-gc \
+  --port 45107 --mock-port 45109
+```
+
+Repeat the run command, without seeding again, to restart the owned Gateway with
+the same foreground history. Deep soaks use a separate `memory-soak-history`
+session namespace and marker, so earlier short-session measurements can coexist.
+Each seed turn appends user, assistant/tool-call, tool-result, and assistant/answer
+messages through `SessionManager`: 500 turns produce 2,003 entries per session,
+including its header and settings. Both assistant messages carry distinct
+deterministic 4 KiB encrypted reasoning items in valid JSON thinking signatures,
+with owner-generated replay metadata bound to the model, mock endpoint, and session.
+Every foreground provider request must replay all seeded reasoning items intact,
+verified by their deterministic ciphertext hashes rather than optional provider IDs;
+each measured cohort reports `historicalReplayRequests`, and the result records
+`historyTurns` and `verifyHistoryReplay`. Missing or compacted history fails the run.
+This mode rejects `--history-last-turns` and `--history-payload-kib`; those options
+remain available for the separate bounded-history stress shape above.
+
+This opt-in shape gives the synthetic model a 2,097,152-token context window and
+a 2,000,000-token input budget. The existing model-context reader allows eight
+serialized bytes per context token, giving the fixture a 16 MB hydration budget.
+This leaves room for continued turns across the two 25-minute commands above;
+it does not change production limits or exercise a real provider's context capacity.
+Repeated campaigns eventually exhaust this finite budget. Keep the replay assertion
+and generate a fresh synthetic fixture when that happens; do not count a failed run
+as a completed soak. The previous 8 MB fixture budget was exhausted by accumulated
+output during an interrupted campaign and its replacement, despite all seeded rows
+remaining in durable storage.
+Retained background histories and live response signatures keep their independent
+sizes. Its mock request-size limit covers the estimated
+seeded history plus 64 MiB for continued turns. Seeding rejects an estimate above
+1 GiB and checks the existing Linux dirty-memory budget at least every 50 history
+turns (2 MiB estimated writes), using sequential appends. Run with
+`--reset-every-rounds 0`; other reset intervals are rejected for deep-history
+soaks. Use matching tool options while seeding and running to retain the fixture
+worktree as the foreground workspace. The existing idle-retention seed format and
+behavior are unchanged.
+
 `memory-samples.jsonl` records Gateway heap, external, ArrayBuffer and RSS memory
 after completed cohorts at the requested interval, including exact timestamps.
+It also records main-isolate heap spaces and explicitly requests the existing worker
+registry's per-thread memory samples, sample ages, and missing workers. Other benchmark
+resource reads omit worker data unless they request it; native preload startup does not
+load the Gateway worker registry. Worker samples do not force GC.
 Periodic samples use natural GC; initial and final settled samples explicitly
 collect garbage. Allocation-churn soaks keep the warmed heap at the initial
 sample (`initialMemoryCollected: false`) instead of forcing a collection before
@@ -859,6 +1162,109 @@ cleanup restores the fixture file. Connect latency includes WebSocket opening
 and the protocol handshake. The report keeps per-method p50/p95/p99/max and raw
 latencies in `rpcLatencyMs`, plus each cohort's foreground end-to-end
 `streamStart.turnLatencyMs` from admission through successful `agent.wait`.
+
+Add `--dashboard-rpc` to a memory soak with `--mixed-rpc` to include `board.get`,
+`workboard.boards.list`, `workboard.cards.list`, `sessions.github.options`,
+`github.preview`, `models.list`, `models.authStatus`, `sessions.describe`, and
+`controlUi.sessionPullRequests.subscribe` in the same viewer polling rotation.
+Setup enables the bundled GitHub and Workboard plugins, writes one synthetic HTML
+board widget, and creates a synthetic workboard with one card per viewer. Reusing
+the fixture paginates its cards, removes surplus cards, and creates missing cards
+to preserve that count when the viewer count changes. The GitHub preview uses the real plugin with a
+benchmark-only in-process HTTP transport serving one synthetic public issue;
+other non-loopback fetches fail. By default no GitHub account is connected, so options and
+PR subscriptions exercise disconnected-account reads and subscription admission,
+not remote PR discovery or credential refresh. The model catalog uses the local
+synthetic provider configuration. Board widgets are read through RPC, without a
+browser or renderer.
+Dashboard widgets reserve Gateway port + 1 for their sandbox listener, so this
+mode defaults the synthetic model to Gateway port + 2. An explicit `--mock-port`
+must avoid both Gateway listeners.
+Dashboard polling and its measurements continue between foreground cohorts until
+`--round-interval-ms`, so turn bursts can be paced independently of viewer RPCs.
+Memory samples continue during those intervals without forcing collection.
+
+Dashboard mode also creates a dedicated diff session for every additional
+registered fixture worktree and rotates `sessions.diff` polls across them and the
+existing parent worktree. Setup runs one real synthetic turn per target to capture
+its baseline, then appends a known README line; every poll must return that edit
+from the expected root. `dashboardRpc.diffWorktrees` maps sessions to fixture
+paths, and raw polling requests include `diffSessionKey` for per-checkout latency
+attribution in each sample's `rpcRequests`. `coldSetupRpc` retains initial connection,
+dashboard preflight, and diff-baseline RPC durations separately under the
+`setup/preflight` phase; these precede the main measurement window.
+All paths must be linked worktrees inside the fixture. Cleanup restores
+every README; the existing final edit-visibility control still uses the first
+worktree. Combine this with the fixture's `--worktree-files` and
+`--nested-repository` options to compare the large/nested checkout with small ones.
+
+Every method must return a successful validated response in each measured cohort;
+boards, cards, models, and the described session must be populated. The existing
+`rpcLatencyMs`, RPC response-byte totals, and event frame/byte counters include
+these methods and their emitted events. `dashboardRpc.dashboardFixtureRequests`
+proves that GitHub preview reached the synthetic transport. With forty viewers,
+`--chunks 500 --chunk-interval-ms 10 --list-interval-ms 5000` leaves enough streaming
+time for every method's initial staggered poll. Shorter cohorts may require a
+shorter polling interval. This option does not add automatic mid-soak restarts;
+separate invocations against the same retained fixture start separate Gateways,
+and normal setup still resets the foreground sessions.
+
+To measure connected GitHub options, generate the fixture and run the dashboard
+soak with `--github-options-connected`. Generation registers the synthetic
+`openclaw-fixture/soak` origin before recording each repository fingerprint;
+existing disconnected fixtures cannot be reused for this mode. The harness gives
+the isolated Gateway a synthetic native GitHub token, serves `/user`, repository
+metadata, an empty PR list, and the preview issue entirely in process. Account
+verification (`/user`) cycles through deterministic 300, 600, and 900 ms delays;
+other routes retain the existing preview fixture's immediate responses. Delaying
+every preview request would exceed its shared two-second budget across serial
+visibility checks and item reads. No request reaches GitHub.
+This measures shared-account verification and discovery, not personal OAuth refresh.
+Setup creates session-owned managed worktrees through `sessions.create` and uses
+their returned roots for the foreground and diff sessions. This mode requires
+fresh foreground sessions (`--history-turns` is unsupported); the fixture's
+retained session histories remain part of the dashboard load.
+
+For either account mode, add `--entry src/entry.ts --github-options-observe` to
+record handler, admission, shared identity, native token lookup, credential
+verification, target discovery, receipt-read, and response-serialization durations in
+`dashboardRpc.githubObservation.stages`. A benchmark-only loader wraps the source
+owners and refuses missing source shapes; production imports remain unchanged.
+The nested `session-preparation` stage covers options admission's session reader,
+while `publication-session` records durable session preparation inside the
+publication owner. Use these stages to distinguish admission work from repeated
+session reads during target qualification.
+These durations overlap, and stale refresh work may finish after its originating
+handler. Use request IDs and timestamps to distinguish the critical path from
+background work; never add stage totals together. Gateway diagnostics separately
+record response bytes and dispatch work.
+For simultaneous comparisons using one checkout, place the baseline receipt
+owner beside `src/gateway/github-publication-shared-read.ts` and the baseline
+availability owner beside `src/gateway/github-publication-availability.ts`.
+Pass `--github-observation-owner <baseline-receipt-file>` and
+`--github-availability-owner <baseline-availability-file>` only on A. The result
+records their loaded paths and override flags in `githubObservation.owner` and
+`githubObservation.availabilityOwner`, and rejects a run unless both owners loaded
+and the handler was observed. Both sides must
+enable identical observation and use separate fixtures, ports, and CPU sets.
+
+Connected options use one additional socket per viewer granted only
+`operator.sessions.read`: broad dashboard grants skip repository qualification.
+The connected soak authenticates its synthetic operator through loopback
+trusted-proxy handshakes so the normal profile owner supplies a verified identity.
+An initial concurrent batch is retained in `coldSetupRpc`, before preview preflight;
+warm polls rotate over every session in `dashboardRpc.diffWorktrees`. Each polling
+record includes `githubOptionsSessionKey`. Every options response must expose the
+synthetic shared account without an unsupported-workspace reason.
+`dashboardRpc.githubOptionsConnected` records the additional socket count,
+every upstream route/sequence/delay/elapsed time/status, totals per route, and
+options observations by phase, session, latency, stale flag, and account login.
+The synthetic account changes login after sixty seconds from its first `/user`
+request; `accountRenameObserved` reports whether normal refresh made that change
+visible. Use a long enough soak to observe it; a short smoke is not freshness proof.
+The upstream elapsed times include the injected wait and fetch header resolution;
+they are not additive handler self-time. Use Gateway diagnostics for handler time
+and the existing RPC byte counts for serialization volume.
 
 Each allocation profile includes collected objects and reports decimal
 `allocatedMbPerTurn`. Allocation soaks keep one continuous sampling window and
@@ -1204,6 +1610,62 @@ contention acceptance rule is at least a 60% paired RPC p99 reduction with no
 agent Git regression. Inspect command counts and queue waits to distinguish
 scheduling changes from reduced Git work.
 
+Add `--cold --tabs 40 --poll-ms 5000` to measure reconnect polls against a fresh Gateway process
+without warming diff targets or Git workers. Connections are prepared concurrently;
+the first 40 diff requests start at `--start-at` alongside the existing load loops.
+Use repeated `--poll-state-dir <seeded-fixture>` arguments for distinct checkout
+roots; each tab stays on `tab % checkoutCount`, with one outstanding request.
+Cold mode requires a positive `--poll-ms` and at least one tab per checkout.
+Each client independently retries `computing` after 500 ms and waits `--poll-ms`
+after receiving content. Omit `--summary` for full diffs. For large nested fixtures, seed each
+with `--boundary rpc --tracked 267000 --untracked 5 --nested-repository` sequentially
+under the host's preparation CPU allocation. This measures cold process caches,
+not cold disk or the WebSocket handshake.
+
+For the reconnect workload, distribute 40 clients across 14 roots: two large
+nested fixtures and twelve small fixtures. A five-second interval approaches
+480 full-diff requests per minute, plus temporary computing retries; request
+latency lowers the steady rate. The observed production rate of about 500 requests
+per minute includes all RPCs, so this is a conservative diff stress workload,
+not a replay of the production request mix. The UI's full-diff reader retries
+computing results; recurring five-second polling belongs to active-run summaries.
+Use the report's actual `rpcPerMinute` and completed counts when comparing sides.
+
+Use `--scope uncommitted` for working-tree-only polls (the default is `all`). Add
+`--poll` in cold mode to opt into the nonblocking RPC contract on supporting revisions. When
+comparing that contract against an older blocking baseline, pass `--poll` only
+to the candidate and record the mode difference alongside the results.
+
+For a cache-owner-only comparison with one source checkout and dependency install,
+place the baseline beside `src/infra/git-read-cache.ts` and pass its path through
+`--read-cache-owner` on the baseline process only. A benchmark resolver redirects
+the production owner's import before Gateway loading; the adjacent location
+preserves its relative imports. The report records the override and load count,
+and fails if the selected owner was never loaded. Keep state directories and ports
+separate even when both processes share source.
+
+Cold mode prohibits `--mutate` and `--missing-cwd`. It verifies fixture contents
+and all materialized response hashes after measurement instead of prewarming
+them. `firstRequestLatencyMs` includes the initial response for each assigned tab;
+`firstContentLatencyMs` also includes polling until any `computing: true` response
+becomes materialized. The `phases.cold` and `phases.steady` fields separately report
+RPC latency, computing-response counts, and summed `sessions.diff` handler seconds.
+Their `refreshLatencyMs` includes all computing retries and actual timer delays from
+each refresh's first request to usable content, excluding the recurring poll cadence.
+`measurementStartedAtUnixMs`, `contentReadyAtMs`, and each refresh's `startedAtMs`
+allow paired runs to use a common steady window: refreshes starting after both sides
+received their final initial content, before either nominal deadline. Include the
+full completion latency for those refreshes, even when they finish after that window.
+Refreshes are tagged by their start phase; individual RPCs are tagged on completion.
+Completions are tagged cold until every client has received content and their
+diagnostics have drained, then tagged steady. Clients that finish early keep their
+own cadence. Cold samples use a per-client `sequence`; `rpcPollSequenceMaxLatencyMs`
+groups matching ordinals, not synchronized rounds. Warm mode retains its cross-product
+polling and synchronized round metrics. A run fails
+if any client never receives content or no steady refresh completes; increase
+`--duration-ms` when needed. Compare both first-response and first-content tails,
+then the steady distribution, in concurrent pairs with swapped CPU halves.
+
 ### Large-worktree revision validation
 
 Seed separate fixtures with `--boundary rpc --tracked 267000 --untracked 4` to
@@ -1256,6 +1718,18 @@ hit rate on the repaired path, without a material paired latency regression.
 Native Git status used to validate a revision still counts as Git work; cache
 hits do not imply zero subprocesses.
 
+Use `--missing-cwd` with RPC mode and a small fixture to measure a disappeared
+session directory. The driver renames the synthetic `new/` directory after
+session creation, requires `not_git` on every measured response, restores the
+directory, and requires recovery within two seconds. Do not combine it with
+mutation, churn, or extra polling fixtures. The report includes
+`missingRecoveryMs`; both revisions must return identical absent-checkout
+responses. Compare at least two simultaneous pairs with swapped CPU halves.
+RPC reports also include `processCpuMsPerRpc`, the Gateway process's CPU during
+the measured window divided by completed requests. This includes its worker
+threads but excludes child Git processes; compare it with command counts and
+latency, not as total system CPU.
+
 Add `--nested-cwd` to launch each session from the fixture's `new/` subdirectory.
 This exercises checkout discovery through a session's working directory instead
 of supplying the repository root. Compare full diffs under `--churn-ms 1000`
@@ -1306,6 +1780,82 @@ Use loopback ports at least 40000. Never read/copy production databases or touch
 production services. Stop your own Gateway, then remove your sandbox after
 recording results. Local validation is limited to changed-file format/lint and
 focused tests; PR CI owns broad gates.
+
+## Operator authority allocations
+
+`operator-authority-measure.ts` isolates five real synchronous authority owners:
+`auth-policy`, `retained-grant`, `model-execution`, `admitted-run`, and
+`transcript-guard`. Its synthetic non-owner operator has an explicitly required
+access-policy plugin, registered
+through `createApi(...).registerGatewayAccessPolicy(...)` with the normal plugin
+instance invocation wrappers. Setup authorizes and resumes the grant once;
+rechecks use the retained authority, as the recovery owner does. The fixture
+exposes no other plugin runtime capabilities and starts no Gateway or services.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/operator-authority-measure.ts \
+  --scenario model-execution --iterations 20000 --warmup 5000 \
+  --revision <commit-sha> --output /path/to/authority.json
+```
+
+The JSON records estimated allocated bytes per check, elapsed and main-thread CPU
+nanoseconds per check, and auth-policy, resume-owner, plugin-authorize,
+plugin-resume, and plugin-assert counts. Setup and warmup are excluded. Allocation
+uses V8 sampling at 32 KiB with both collected-object flags enabled; the report
+is allocation churn, not retained-heap delta. Raw profiles accompany `--output`,
+and the report includes the fifteen largest allocation sites with eight-frame
+stacks. A post-capture positive control requires grant revocation to fail the
+very next retained-authority check.
+
+Use at least five simultaneous baseline/candidate pairs on the approved
+benchmark host, with one `--scenario` and the same future `--start-at <epoch-ms>`
+per pair. Alternate the assigned CPU halves under the exclusive measurement
+lock. Compare median paired differences with spread; warm both sides identically.
+Builds belong outside the measurement window. The source can also be bundled
+with esbuild for the host, preserving Node built-ins and installed dependencies;
+use the same bundler options and dependency tree for both revisions.
+
+These are owner-check denominators. `model-execution` calls the real bound model
+assertion; `admitted-run` uses `prepareSystemAgentRunAdmission`, admission, and the
+real admitted-run active assertion. `transcript-guard` captures the real owned
+transcript assertion with that admitted run as its commit guard, without writing
+storage. None is a model turn, tool step, transcript append, or measured production
+frequency. Derive those counts from an instrumented
+Gateway turn separately. This probe does not include profile-database access,
+other access policies, contextual-ingress callbacks, or transport allocation.
+
+For real turn counts, add `--operator-access-policy` to the existing streaming
+driver's `chat.send --stress-tools` scenario. A small isolated fixture is enough
+to exercise this path before the larger deployment-shaped comparison:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
+  --state-dir /path/to/new-authority-state --sessions 1 --runs 0 --approvals 0 \
+  --cron 0 --projects 1 --transcript-mib 1 --port 41481
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/new-authority-state --entry src/entry.ts \
+  --port 41481 --mock-port 41482 --scenario chat.send --stress-tools \
+  --operator-access-policy --rounds 1 --chunks 10 --chunk-interval-ms 1
+```
+
+This option enables a synthetic required access-policy plugin and authenticates
+a non-owner operator through a loopback trusted proxy. The plugin rejects owner
+identity, checks the synthetic email, and records live authorize, resume, and
+assert callbacks. The normal code-mode tool runs `read` and `exec` against the
+fixture. Each measured round reports plugin assertions per completed turn, per
+`after_tool_call` completion, and per unique committed message sequence observed
+through `onSessionTranscriptUpdate`. Raw transcript-update counts are separate:
+they are not all transcript writes or synchronous precommit checks. These ratios
+normalize the full turn window; they do not attribute each check to one tool or
+append. Standalone host auth-policy invocations are not counted by the plugin.
+
+The mode permits only `chat.send --stress-tools`, with its one client and one
+active turn, and rejects background RPC polling. Counter start/stop uses private
+child IPC outside allocation capture. Add `--allocations` for whole-workload
+sampled bytes divided by policy assertions; this includes normal turn work and
+counter hooks, and is not isolated bytes allocated by one assertion. Use matched
+instrumentation and the same paired host procedure for comparisons. The tiny
+fixture proves the path, not deployment capacity or production recheck rates.
 
 ## Allocated bytes per RPC or turn
 

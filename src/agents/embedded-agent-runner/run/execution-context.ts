@@ -19,9 +19,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type PreparedEmbeddedRunInput = {
   modelCallSequence?: { value: number };
-  compactionRequest?: ReturnType<
-    typeof import("../../session-maintenance/request.js").createSessionCompactionRequest
-  >;
   /** Retain lazy-writer cleanup with this prepared runtime after its logical result. */
   onInitialWriterPrepared: (resource: AsyncDisposable) => void;
   preReplyGeneration?: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;

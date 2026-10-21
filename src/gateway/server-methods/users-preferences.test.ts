@@ -77,7 +77,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-test("users.prefs returns updated preferences when a write commits before read delivery", async () => {
+test("users.prefs returns its captured snapshot when a write commits before read delivery", async () => {
   const state = await createOpenClawTestState({
     layout: "state-only",
     prefix: "prefs-publication-",
@@ -97,7 +97,7 @@ test("users.prefs returns updated preferences when a write commits before read d
       await invokePreferenceMethod("users.prefs.get", { keys: ["ui.accent"] }, profileId),
     ).toEqual({
       ok: true,
-      payload: { status: "ok", entries: { "ui.accent": "#aabbcc" } },
+      payload: { status: "ok", entries: { "ui.accent": "#112233" } },
       error: undefined,
     });
   } finally {

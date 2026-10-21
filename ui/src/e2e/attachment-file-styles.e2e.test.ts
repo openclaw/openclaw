@@ -1,9 +1,18 @@
 import { expect, it } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { computedStyles as styles } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectStyles } from "./style-contract.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Attachment file styles" });
+
+function attachment(kind: string, label: string, mimeType: string) {
+  return {
+    type: "attachment",
+    attachment: { kind, label, mimeType, url: new URL(label, suite.server.baseUrl).href },
+  };
+}
 
 suite.define(() => {
   it("preserves large, preview, and unavailable file visuals in both themes", async () => {
@@ -16,31 +25,11 @@ suite.define(() => {
           {
             role: "assistant",
             content: [
-              {
-                type: "attachment",
-                attachment: {
-                  kind: "document",
-                  label: "report.pdf",
-                  mimeType: "application/pdf",
-                  url: new URL("report.pdf", suite.server.baseUrl).href,
-                },
-              },
-              {
-                type: "attachment",
-                attachment: {
-                  kind: "audio",
-                  label: "style-proof.mp3",
-                  mimeType: "audio/mpeg",
-                  url: new URL("style-proof.mp3", suite.server.baseUrl).href,
-                },
-              },
+              attachment("document", "report.pdf", "application/pdf"),
+              attachment("audio", "style-proof.mp3", "audio/mpeg"),
               {
                 type: "attachment_error",
-                attachment: {
-                  code: "file-not-found",
-                  kind: "document",
-                  label: "missing.pdf",
-                },
+                attachment: { code: "file-not-found", kind: "document", label: "missing.pdf" },
               },
             ],
             timestamp: 1,
@@ -63,76 +52,49 @@ suite.define(() => {
           document.documentElement.dataset.themeMode = mode;
         }, theme);
         const large = documentCard.locator(".chat-attachment-file-icon");
-        const largeStyle = await large.evaluate((icon) => {
-          const style = getComputedStyle(icon);
-          const overlay = icon.querySelector(".chat-attachment-file-icon__overlay")!;
-          const glyph = getComputedStyle(overlay);
-          return {
-            width: style.width,
-            height: style.height,
-            background: style.backgroundImage,
-            glyphWidth: glyph.width,
-            glyphHeight: glyph.height,
-            mask: glyph.maskImage,
-            webkitMask: glyph.webkitMaskImage,
-          };
-        });
-        expect(largeStyle).toMatchObject({
+        await expectStyles(large, {
           width: "44px",
           height: "44px",
-          glyphWidth: "14px",
-          glyphHeight: "14px",
+          "background-image": expect.stringContaining(`large/shell-${theme}.svg`),
         });
-        expect(largeStyle.background).toContain(`large/shell-${theme}.svg`);
-        expect(largeStyle.mask).toContain("overlays/pdf.svg");
-        expect(largeStyle.webkitMask).toBe(largeStyle.mask);
-        const previewStyle = await compact.evaluate((icon) => {
-          const style = getComputedStyle(icon);
-          return { width: style.width, height: style.height, background: style.backgroundImage };
+        const glyph = await styles(large.locator(".chat-attachment-file-icon__overlay"), [
+          "width",
+          "height",
+          "mask-image",
+          "-webkit-mask-image",
+        ]);
+        expect(glyph).toEqual({
+          width: "14px",
+          height: "14px",
+          "mask-image": expect.stringContaining("overlays/pdf.svg"),
+          "-webkit-mask-image": glyph["mask-image"],
         });
-        expect(previewStyle).toMatchObject({ width: "20px", height: "20px" });
-        expect(previewStyle.background).toContain(`compact/${theme}/mp3.svg`);
-        expect(
-          await documentCard.evaluate((card) => {
-            const style = getComputedStyle(card);
-            return [style.display, style.padding];
-          }),
-        ).toEqual(["block", "0px"]);
-        const failedStyle = await unavailable.evaluate((card) => {
-          const icon = card.querySelector(".chat-attachment-file-icon")!;
-          const metadata = card.querySelector(".chat-assistant-attachment-card__status-meta")!;
-          const title = card.querySelector(".chat-assistant-attachment-card__title")!;
-          return {
-            color: getComputedStyle(card).color,
-            danger: getComputedStyle(card).getPropertyValue("--danger").trim(),
-            iconColor: getComputedStyle(icon).color,
-            statusColor: getComputedStyle(metadata).color,
-            opacity: getComputedStyle(icon).opacity,
-            decoration: getComputedStyle(title).textDecorationLine,
-            thickness: getComputedStyle(title).textDecorationThickness,
-            display: getComputedStyle(card).display,
-            padding: getComputedStyle(card).padding,
-          };
+        await expectStyles(compact, {
+          width: "20px",
+          height: "20px",
+          "background-image": expect.stringContaining(`compact/${theme}/mp3.svg`),
         });
-        expect(failedStyle).toMatchObject({
-          iconColor: failedStyle.color,
-          statusColor: failedStyle.color,
+        await expectStyles(documentCard, { display: "block", padding: "0px" });
+        const danger = await unavailable.evaluate((card) => {
+          const sample = document.createElement("span");
+          sample.style.color = getComputedStyle(card).getPropertyValue("--danger").trim();
+          document.body.append(sample);
+          const resolved = getComputedStyle(sample).color;
+          sample.remove();
+          return resolved;
+        });
+        await expectStyles(unavailable, { color: danger, display: "block", padding: "0px" });
+        await expectStyles(unavailable.locator(".chat-attachment-file-icon"), {
+          color: danger,
           opacity: "0.42",
-          decoration: "line-through",
-          thickness: "1px",
-          display: "block",
-          padding: "0px",
         });
-        expect(failedStyle.color).toBe(
-          await page.evaluate((color) => {
-            const sample = document.createElement("span");
-            sample.style.color = color;
-            document.body.append(sample);
-            const resolved = getComputedStyle(sample).color;
-            sample.remove();
-            return resolved;
-          }, failedStyle.danger),
-        );
+        await expectStyles(unavailable.locator(".chat-assistant-attachment-card__status-meta"), {
+          color: danger,
+        });
+        await expectStyles(unavailable.locator(".chat-assistant-attachment-card__title"), {
+          "text-decoration-line": "line-through",
+          "text-decoration-thickness": "1px",
+        });
       }
     });
   });

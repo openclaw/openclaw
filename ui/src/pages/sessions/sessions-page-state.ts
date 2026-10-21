@@ -1121,10 +1121,9 @@ export function createSessionsPage(
       state.sessionMenuWork = null;
       return;
     }
-    state.sessionMenuWork = { loading: true, pullRequestUrl: null, worktreePath: null };
+    state.sessionMenuWork = { pullRequestUrl: null, worktreePath: null };
     const scope = captureRequestScope();
     if (!scope) {
-      state.sessionMenuWork = { loading: false, pullRequestUrl: null, worktreePath: null };
       return;
     }
     const store = sessionPullRequestsForGateway(scope.context.gateway);
@@ -1145,7 +1144,7 @@ export function createSessionsPage(
       execNode: row.execNode,
     }).then((work) => {
       if (state.sessionMenu === menu) {
-        state.sessionMenuWork = { loading: false, ...work };
+        state.sessionMenuWork = work;
       }
     });
   }

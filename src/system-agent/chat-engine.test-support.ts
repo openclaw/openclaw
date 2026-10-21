@@ -297,10 +297,6 @@ export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
     super({
       ...opts,
       verifiedInference: explicitBinding ?? sharedFixture.binding,
-      deps: {
-        readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-        ...opts.deps,
-      },
     });
   }
 }

@@ -27,6 +27,8 @@ import {
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import {
   expectEnqueuedRunPayload,
+  installCronSystemEventConsumer,
+  makeCronJob,
   runCronJobAndWaitForFinished,
   waitForCronEvent,
 } from "./server-cron.events.test-support.js";
@@ -109,6 +111,7 @@ async function cleanupCronTestRun(params: {
 }
 
 let activeCronRun: Parameters<typeof cleanupCronTestRun>[0] | undefined;
+let disposeCronEventConsumer: (() => void) | undefined;
 
 async function startCronClient() {
   const { server, ws } = await startServerWithClient();
@@ -293,18 +296,6 @@ async function addWebhookCronJob(params: {
   return expectCronJobIdFromResponse(response);
 }
 
-function makeCronJob(name: string, overrides: Partial<CronJobCreate> = {}): CronJobCreate {
-  return {
-    name,
-    enabled: true,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "main",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: "hello" },
-    ...overrides,
-  };
-}
-
 function expectWebhook(index: number, url: string, jobId: string, summary: string) {
   const call = getWebhookCall(index);
   expect(call).toMatchObject({ url, method: "POST" });
@@ -351,6 +342,8 @@ describe("gateway server cron", () => {
   });
 
   afterEach(async () => {
+    disposeCronEventConsumer?.();
+    disposeCronEventConsumer = undefined;
     const run = activeCronRun;
     activeCronRun = undefined;
     if (run) {
@@ -370,6 +363,7 @@ describe("gateway server cron", () => {
 
   test("broadcasts cron attention state without repeating job definitions", async () => {
     const { ws, request, run } = await startCronClient();
+    disposeCronEventConsumer = await installCronSystemEventConsumer();
     const text = "Synthetic scheduled inspection. ".repeat(512).trim();
     const addedEvent = waitForCronEvent(ws, (event) => event?.action === "added");
     const response = await request(
@@ -553,6 +547,8 @@ describe("gateway server cron", () => {
     const events = createCronEventCollector(signal);
     const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
 
+    disposeCronEventConsumer = await installCronSystemEventConsumer();
+
     const addRes = await cronState.addJob("log test");
     const jobId = expectCronJobIdFromResponse(addRes);
 
@@ -649,6 +645,7 @@ describe("gateway server cron", () => {
     testState.cronEnabled = true;
     const events = createCronEventCollector(signal);
     const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
+    disposeCronEventConsumer = await installCronSystemEventConsumer();
 
     const addRes = await cronState.addJob("plugin runtime nudge", {
       schedule: { kind: "cron", expr: "0 3 1 1 *", tz: "America/Los_Angeles" },
@@ -797,6 +794,8 @@ describe("gateway server cron", () => {
     fetchWithSsrFGuardMock.mockClear();
 
     const { request, add, run } = await startCronClient();
+
+    disposeCronEventConsumer = await installCronSystemEventConsumer();
 
     const notifyJobId = await add("webhook enabled", {
       delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },

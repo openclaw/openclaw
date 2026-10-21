@@ -210,6 +210,84 @@ it.each(["client", "account", "recovery"] as const)(
   },
 );
 
+it("refreshes the embedded frame and keeps Portal actions scoped across desktop and mobile", async () => {
+  let listed: PortalSummary[] = [portal];
+  const methods = ["portal.list", "portal.close"];
+  const source = createContext(methods, async (method) => {
+    if (method === "portal.close") {
+      listed = [];
+      return { closed: true };
+    }
+    return { portals: listed };
+  });
+  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  const writeText = vi.fn<Clipboard["writeText"]>().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  try {
+    const { page } = await mountPage(source.context, portal.id);
+    await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
+    const original = page.querySelector("iframe")!;
+    expect(page.querySelector(".portals-embedded__origin")?.textContent).toBe(
+      "https://preview.example.test:8443",
+    );
+    const pending = createDeferred<"reachable" | "unreachable" | "blocked">();
+    probePortalReachable.mockReturnValueOnce(pending.promise);
+    const refresh = page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!;
+    refresh.click();
+    await waitForSolid(() => expect(page.querySelector("iframe")).toBeNull());
+    expect(refresh.disabled).toBe(true);
+    pending.resolve("reachable");
+    await pending.promise;
+    await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
+    const replacement = page.querySelector("iframe")!;
+    expect(replacement).not.toBe(original);
+    expect(replacement.src).toBe(portal.url);
+    expect(replacement.getAttribute("sandbox")).toBe(original.getAttribute("sandbox"));
+    expect(probePortalReachable).toHaveBeenCalledTimes(2);
+    const openOptions = async () => {
+      page.querySelector<HTMLButtonElement>('button[aria-label="Portal options"]')!.click();
+      await waitForSolid(() =>
+        expect(page.querySelector('[role="menu"]')?.getAttribute("data-state")).toBe("open"),
+      );
+    };
+    await openOptions();
+    page.querySelector<HTMLButtonElement>('[role="menuitem"][aria-label="Copy link"]')!.click();
+    await waitForSolid(() => expect(writeText).toHaveBeenCalledExactlyOnceWith(portal.publicUrl));
+    expect(writeText.mock.calls[0]?.[0]).not.toContain("openclaw_portal");
+    page.mobile = true;
+    await page.updateComplete;
+    expect(page.querySelector('button[aria-label="Refresh"]')).toBeNull();
+    await openOptions();
+    expect(page.querySelector('[role="menuitem"][aria-label="Copy link"]')).toBeNull();
+    expect(
+      page.querySelector('[role="menuitem"][aria-label="Open in browser"]')?.getAttribute("href"),
+    ).toBe(portal.url);
+    source.updateSnapshot({ hello: gatewayHelloForMethods(methods, ["operator.read"]) });
+    await page.updateComplete;
+    const denied = page.querySelector<HTMLButtonElement>(
+      '[role="menuitem"][aria-label="Close portal"]',
+    )!;
+    expect(denied.getAttribute("aria-disabled")).toBe("true");
+    denied.click();
+    expect(source.request.mock.calls.filter(([method]) => method === "portal.close")).toHaveLength(
+      0,
+    );
+    source.updateSnapshot({ hello: gatewayHelloForMethods(methods, ["operator.write"]) });
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>('[role="menuitem"][aria-label="Close portal"]')!.click();
+    await waitForSolid(() =>
+      expect(source.request).toHaveBeenCalledWith("portal.close", { id: portal.id }),
+    );
+    await waitForSolid(() => expect(page.querySelector("iframe")).toBeNull());
+  } finally {
+    if (clipboard) {
+      Object.defineProperty(navigator, "clipboard", clipboard);
+    } else {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
+  }
+});
+
 it.each([undefined, "pending-machine"])(
   "drops portal state and stops reads after reconnect without read scope (environment: %s)",
   async (environmentId) => {

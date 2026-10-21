@@ -19,8 +19,8 @@ import { writeResidentEntries } from "./session-utils.perf.test-support.js";
 
 test.skipIf(process.env.OPENCLAW_BENCH_SESSION_COLD !== "1")(
   "measures three simultaneous first lists against a cold 5000-row catalog",
-  async () => {
-    await withStateDirEnv("openclaw-list-cold-", async () => {
+  () =>
+    withStateDirEnv("openclaw-list-cold-", async () => {
       resetPluginRuntimeStateForTest();
       setActivePluginRegistry(createEmptyPluginRegistry());
       resetConfigRuntimeState();
@@ -49,8 +49,7 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_COLD !== "1")(
       const startupMs = performance.now() - startup;
       const startupLoopMaxMs = delay.max / 1e6;
       delay.reset();
-      const context = requestContext(cfg);
-      bindSessionRowProjection(context, () => projection);
+      const context = bindSessionRowProjection(requestContext(cfg), () => projection);
       const diagnostics = channel("openclaw.session.list");
       const messages: unknown[] = [];
       const record = (message: unknown) => messages.push(message);
@@ -62,8 +61,8 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_COLD !== "1")(
       const counts: number[] = [];
       try {
         await Promise.all(
-          Array.from({ length: 3 }, async (_, index) => {
-            await sessionReadHandlers["sessions.list"]!({
+          Array.from({ length: 3 }, async (_, index) =>
+            sessionReadHandlers["sessions.list"]!({
               req: { type: "req", id: `cold-${index}`, method: "sessions.list" },
               params: { limit: 60 },
               client: null,
@@ -75,8 +74,8 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_COLD !== "1")(
                 JSON.stringify(result);
                 counts.push(projection.materializedCount - before);
               },
-            });
-          }),
+            }),
+          ),
         );
         const used = process.threadCpuUsage(cpu);
         const elapsedMs = performance.now() - started;
@@ -108,7 +107,6 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_COLD !== "1")(
         projection.dispose();
         release();
       }
-    });
-  },
+    }),
   120_000,
 );

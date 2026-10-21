@@ -1,54 +1,38 @@
 import { OpenClaw } from "./client.js";
 import { EventHub } from "./event-hub.js";
-import type {
-  GatewayEvent,
-  GatewayRequestOptions,
-  OpenClawEvent,
-  OpenClawTransport,
-} from "./types.js";
+import type * as SDK from "./types.js";
 
 export type RequestCall = {
   method: string;
   params?: unknown;
-  options?: GatewayRequestOptions;
+  options?: SDK.GatewayRequestOptions;
 };
 
 type FakeResponseValue = null | boolean | number | string | Record<string, unknown> | unknown[];
-type FakeResponseHandler = (
-  params: unknown,
-  transport: FakeTransport,
-) => Promise<FakeResponseValue> | FakeResponseValue;
-type FakeResponse = FakeResponseValue | FakeResponseHandler;
+type FakeResponse =
+  | FakeResponseValue
+  | ((params: unknown, transport: FakeTransport) => Promise<FakeResponseValue> | FakeResponseValue);
 
-export class FakeTransport implements OpenClawTransport {
+export class FakeTransport implements SDK.OpenClawTransport {
   readonly calls: RequestCall[] = [];
-  private readonly eventHub = new EventHub<GatewayEvent>({ replayLimit: 100 });
+  private readonly eventHub = new EventHub<SDK.GatewayEvent>({ replayLimit: 100 });
+  emit = (event: SDK.GatewayEvent): void => this.eventHub.publish(event);
+  close = (): void => this.eventHub.close();
 
   constructor(private readonly responses: Record<string, FakeResponse>) {}
 
   async request<T = unknown>(
     method: string,
     params?: unknown,
-    options?: GatewayRequestOptions,
+    options?: SDK.GatewayRequestOptions,
   ): Promise<T> {
     this.calls.push({ method, params, options });
     const response = this.responses[method];
-    if (typeof response === "function") {
-      return (await response(params, this)) as T;
-    }
-    return response as T;
+    return (typeof response === "function" ? await response(params, this) : response) as T;
   }
 
-  events(filter?: (event: GatewayEvent) => boolean): AsyncIterable<GatewayEvent> {
+  events(filter?: (event: SDK.GatewayEvent) => boolean): AsyncIterable<SDK.GatewayEvent> {
     return this.eventHub.stream(filter, { replay: true });
-  }
-
-  emit(event: GatewayEvent): void {
-    this.eventHub.publish(event);
-  }
-
-  close(): void {
-    this.eventHub.close();
   }
 }
 
@@ -57,22 +41,20 @@ export function createClientFixture(responses: Record<string, FakeResponse> = {}
   return { transport, oc: new OpenClaw({ transport }) };
 }
 
-export async function observeGatewaySequence(oc: OpenClaw, seq: number): Promise<OpenClawEvent> {
+export async function observeGatewaySequence(oc: OpenClaw, seq: number) {
   for await (const event of oc.events((eventLocal) => eventLocal.raw?.seq === seq)) {
     return event;
   }
   throw new Error(`event stream ended before sequence ${seq}`);
 }
 
-export function createAgentEvent(
+export const createAgentEvent = (
   runId: string,
   seq: number,
   ts: number,
   stream: string,
   data: Record<string, unknown>,
-): GatewayEvent {
-  return { event: "agent", seq, payload: { runId, stream, ts, data } };
-}
+): SDK.GatewayEvent => ({ event: "agent", seq, payload: { runId, stream, ts, data } });
 
 export function createChatEvent(
   runId: string,
@@ -82,33 +64,22 @@ export function createChatEvent(
   text: string | undefined,
   timestamp: number,
   options: { deltaText?: string; replace?: true } = {},
-): GatewayEvent {
-  return {
-    event: "chat",
-    seq,
-    payload: {
-      runId,
-      sessionKey,
-      state,
-      ...options,
-      ...(text === undefined
-        ? {}
-        : { message: { role: "assistant", content: [{ type: "text", text }], timestamp } }),
-    },
-  };
+): SDK.GatewayEvent {
+  const message =
+    text === undefined
+      ? {}
+      : { message: { role: "assistant", content: [{ type: "text", text }], timestamp } };
+  return { event: "chat", seq, payload: { runId, sessionKey, state, ...options, ...message } };
 }
 
-export function createRunEventFixture(
+export const createRunEventFixture = (
   runId: string,
   sessionKey: string,
-  events: readonly GatewayEvent[],
-) {
-  return createClientFixture({
+  events: readonly SDK.GatewayEvent[],
+) =>
+  createClientFixture({
     agent: (_params, transport) => {
-      for (const event of events) {
-        transport.emit(event);
-      }
+      events.forEach(transport.emit);
       return { status: "accepted", runId, sessionKey };
     },
   });
-}

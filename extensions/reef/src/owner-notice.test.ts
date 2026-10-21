@@ -161,22 +161,21 @@ describe("ReefReceiptNotifier", () => {
     const notices = createNoticeStore();
     const notify = vi.fn(consumeNotice);
     const onError = vi.fn();
-    const clock = { now: 10_000 };
     const start = (sink = notify) => {
       const scheduler = createTestPluginServiceScheduler();
       schedulers.push(scheduler);
       const notifier = new ReefReceiptNotifier(sink, notices.store, {
         scheduler,
-        now: () => clock.now,
         onError,
       });
       return { notifier, scheduler };
     };
-    return { notices, notify, onError, clock, start, ...start() };
+    return { notices, notify, onError, start, ...start() };
   }
   let f: ReturnType<typeof fixture>;
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.setSystemTime(10_000);
     f = fixture();
   });
   afterEach(async () => {
@@ -206,13 +205,13 @@ describe("ReefReceiptNotifier", () => {
       messageId: first.id,
       allowResend: true,
     });
-    f.clock.now += 14 * 60_000;
+    vi.setSystemTime(Date.now() + 14 * 60_000);
     await f.notifier.notifyRejections([rejection(107)]);
     expectStopOnly(1);
-    f.clock.now += 2 * 60_000;
+    vi.setSystemTime(Date.now() + 2 * 60_000);
     await f.notifier.notifyRejections([rejection(108)]);
     expect(f.notify.mock.calls[2]![0]).toMatchObject({ allowResend: false });
-    f.clock.now += 15 * 60_000;
+    vi.setSystemTime(Date.now() + 15 * 60_000);
     await f.notifier.notifyRejections([rejection(109)]);
     expect(f.notify.mock.calls[3]![0]).toMatchObject({ allowResend: true });
   });
@@ -238,7 +237,7 @@ describe("ReefReceiptNotifier", () => {
         throw loadError;
       });
     }
-    f.clock.now = now;
+    vi.setSystemTime(now);
     await f.notifier.notifyRejections([rejection(112), { ...recovered, reservedNotice }]);
     if (loadFails) {
       expect(f.onError).toHaveBeenCalledWith(loadError, recovered.id);
@@ -257,7 +256,7 @@ describe("ReefReceiptNotifier", () => {
       loadStarted.resolve();
       return loadFinished.promise;
     });
-    f.clock.now = 1_000_000;
+    vi.setSystemTime(1_000_000);
     const fresh = rejection(132);
     const later = rejection(133);
     const freshNotification = f.notifier.notifyRejections([fresh]);
@@ -265,7 +264,7 @@ describe("ReefReceiptNotifier", () => {
     const recoveredNotification = f.notifier.notifyRejections([{ ...recovered, reservedNotice }]);
     loadFinished.resolve(captured);
     await Promise.all([freshNotification, recoveredNotification]);
-    f.clock.now += 1;
+    vi.setSystemTime(Date.now() + 1);
     await f.notifier.notifyRejections([later]);
     expect(f.notify.mock.calls.map(([notice]) => [notice.messageId, notice.allowResend])).toEqual([
       [fresh.id, true],
@@ -278,9 +277,9 @@ describe("ReefReceiptNotifier", () => {
     const previous = rejection(113, "deterministic_deny");
     await f.notices.store.reserve(previous, { lastRejectionAt: 1_000_000 });
     await f.notices.store.complete(previous, { lastRejectionAt: 1_000_000 });
-    f.clock.now = 900_000;
+    vi.setSystemTime(900_000);
     await f.notifier.notifyRejections([rejection(114)]);
-    f.clock.now = 1_800_000;
+    vi.setSystemTime(1_800_000);
     await f.notifier.notifyRejections([rejection(115)]);
     expectResends(false, false);
   });
@@ -332,7 +331,7 @@ describe("ReefReceiptNotifier", () => {
     expect(phase(pending)).toBe("reserved");
     complete.mockRestore();
     const restartedNotify = vi.fn(consumeNotice);
-    f.clock.now = 11_000;
+    vi.setSystemTime(11_000);
     const { notifier: restarted } = f.start(restartedNotify);
     const reservedNotice = await f.notices.store.loadState(pending);
     expect(reservedNotice).toBeDefined();

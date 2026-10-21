@@ -18,8 +18,11 @@ import {
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
+import { formatRestartRecoveryAdmission } from "../agents/main-session-recovery/main-session-recovery-presentation.js";
 import { captureRequesterOrigin } from "../agents/requester-origin.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../agents/restart-recovery-prompt.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
@@ -34,6 +37,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
 import { waitForSessionParticipantRecording } from "../sessions/session-participant-recording.js";
+import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -104,6 +108,8 @@ it.for(["steer", "followup"] as const)(
       }
     });
     const providerErrors: unknown[] = [];
+    const recoveryAdmission = formatRestartRecoveryAdmission();
+    const recoveryResumePrefix = formatSystemTurnPrompt(RESTART_RECOVERY_INTERRUPTION_NOTE);
     const reply = (response: Parameters<typeof writeOpenAiResponsesText>[0], text: string) =>
       writeOpenAiResponsesText(response, {
         text,
@@ -124,17 +130,22 @@ it.for(["steer", "followup"] as const)(
             content?: string | Array<{ text?: string }>;
           }>;
         };
-        // Historical interrupted-input notices may quote future queued messages.
+        // Ignore standalone recovery controls, but retain merged prompts carrying the input.
         const activeInput = payload.input
           .filter((item) => item.role === "user")
           .map((item) =>
-            stripInternalRuntimeContext(
-              typeof item.content === "string"
-                ? item.content
-                : (item.content ?? []).map((part) => part.text ?? "").join("\n"),
+            stripInboundMetadata(
+              stripInternalRuntimeContext(
+                typeof item.content === "string"
+                  ? item.content
+                  : (item.content ?? []).map((part) => part.text ?? "").join("\n"),
+              ),
             ),
           )
-          .findLast((text) => text.trim());
+          .findLast(
+            (text) =>
+              text.trim() && text !== recoveryAdmission && !text.startsWith(recoveryResumePrefix),
+          );
         if (activeInput?.includes("PEER_INPUT")) {
           replayOrder.push("peer");
           reply(response, "Peer completed.");

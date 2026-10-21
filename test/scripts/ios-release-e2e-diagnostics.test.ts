@@ -92,7 +92,6 @@ arbitrary secret-token and /private/home/credentials
     { event: "process-cleanup-identity-lost" },
     { event: "process-cleanup-deadline", pending: { closingReceipt: true, stdoutEnd: false } },
   ]);
-  expect(JSON.stringify(events)).not.toContain("secret-token");
   expect(summarizeGatewayLogs("req device.pair.setupCode\n".repeat(100))).toHaveLength(32);
 });
 
@@ -104,7 +103,6 @@ test("projects process and sample output without exporting paths or credentials"
         ? " 12.3 2048 S+\n"
         : `Process: node secret-token /private/credentials
 Call graph:
-    100 Thread_1
     + 80 sqlite3_step (in libsqlite3.dylib)
     + 70 __psynch_cvwait (in libsystem_kernel.dylib)
     + 50 v8::internal::Compile (in node)

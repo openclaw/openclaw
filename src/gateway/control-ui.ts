@@ -71,6 +71,7 @@ import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
   isControlUiFileUnmodified,
   isControlUiStaticAssetExtension,
+  resolveControlUiAssetEncodings,
   resolveControlUiHtmlEncoding,
   resolveControlUiRepresentation,
   respondControlUiNotAcceptable,
@@ -813,7 +814,12 @@ export async function handleControlUiHttpRequest(
     req.method !== "HEAD" &&
     req.headers?.["if-none-match"] === undefined &&
     req.headers?.["if-modified-since"] === undefined;
-  let asset = await readControlUiRootAsset(rootState, fileRel, readBody);
+  const encodings = resolveControlUiAssetEncodings({
+    req,
+    contentPath: fileRel,
+    precompressed: fingerprintedAsset,
+  });
+  let asset = await readControlUiRootAsset(rootState, fileRel, readBody, encodings);
   if (!asset) {
     // Missing assets stay 404; dotted routes can still use the SPA document.
     if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
@@ -823,10 +829,9 @@ export async function handleControlUiHttpRequest(
     if (!route.spaFallback) {
       return false;
     }
-    const indexPath = path.resolve(root, "index.html");
-    if (filePath !== indexPath) {
+    if (filePath !== path.resolve(root, "index.html")) {
       fileRel = "index.html";
-      asset = await readControlUiRootAsset(rootState, fileRel, readBody);
+      asset = await readControlUiRootAsset(rootState, fileRel, readBody, encodings);
     }
   }
 
@@ -848,6 +853,7 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (!asset.file.body) {
+        // Document aliases need the source HTML before dynamic preparation/compression.
         asset = await readControlUiRootAsset(rootState, fileRel, true);
         continue;
       }
@@ -874,12 +880,7 @@ export async function handleControlUiHttpRequest(
     }
     const originatedAtMs = Date.now();
     const lastModifiedMs = Math.floor(Math.min(asset.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
-    const representation = resolveControlUiRepresentation({
-      req,
-      asset,
-      contentPath: fileRel,
-      precompressed: fingerprintedAsset,
-    });
+    const representation = resolveControlUiRepresentation(asset, encodings);
     if (!representation) {
       respondControlUiNotAcceptable(res);
       return true;
@@ -901,7 +902,7 @@ export async function handleControlUiHttpRequest(
     } else if (representation.file.body) {
       serveControlUiAsset(res, fileRel, representation.file.body, headers);
     } else {
-      asset = await readControlUiRootAsset(rootState, fileRel, true);
+      asset = await readControlUiRootAsset(rootState, fileRel, true, encodings);
       continue;
     }
     return true;

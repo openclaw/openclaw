@@ -4,20 +4,17 @@
 // Everything here is real (SQLite queue, monitor, drain, approval-reaction
 // resolution) except the one true external boundary: the Gateway
 // approval-resolution call.
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearIMessageApprovalReactionTargetsForTest,
-  handleIMessageApprovalReaction,
-  registerIMessageApprovalReactionTarget,
-} from "./approval-reactions.js";
-import { createIMessageDurableIngress } from "./monitor/ingress.js";
 import type { IMessagePayload } from "./monitor/types.js";
-import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
+import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
+
+let closeOpenClawStateDatabaseForTest: typeof import("openclaw/plugin-sdk/plugin-state-test-runtime").closeOpenClawStateDatabaseForTest;
+let createChannelIngressQueueForTests: typeof import("openclaw/plugin-sdk/plugin-state-test-runtime").createChannelIngressQueueForTests;
+let handleIMessageApprovalReaction: typeof import("./approval-reactions.js").handleIMessageApprovalReaction;
+let registerIMessageApprovalReactionTarget: typeof import("./approval-reactions.js").registerIMessageApprovalReactionTarget;
+let createIMessageDurableIngress: typeof import("./monitor/ingress.js").createIMessageDurableIngress;
 
 const resolverMocks = vi.hoisted(() => ({
   resolveApprovalOverGateway: vi.fn(),
@@ -44,9 +41,13 @@ type IMessageIngressQueue = NonNullable<
 >;
 type IMessageIngressPayload = Parameters<IMessageIngressQueue["enqueue"]>[1];
 
-beforeEach(() => {
-  clearIMessageApprovalReactionTargetsForTest();
-  installIMessageStateRuntimeForTest();
+beforeEach(async () => {
+  await loadFreshIMessageReplyCacheForTest();
+  ({ closeOpenClawStateDatabaseForTest, createChannelIngressQueueForTests } =
+    await import("openclaw/plugin-sdk/plugin-state-test-runtime"));
+  ({ handleIMessageApprovalReaction, registerIMessageApprovalReactionTarget } =
+    await import("./approval-reactions.js"));
+  ({ createIMessageDurableIngress } = await import("./monitor/ingress.js"));
   resolverMocks.resolveApprovalOverGateway.mockReset();
   resolverMocks.isApprovalNotFoundError.mockReset();
   resolverMocks.isApprovalNotFoundError.mockReturnValue(false);

@@ -5,7 +5,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
-import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-look.ts";
+import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
 import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import "../../components/tooltip.ts";

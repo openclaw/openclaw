@@ -2,10 +2,12 @@ import { expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
 import {
   createChatFlowE2eSuite,
+  chatMessage,
   installMockGateway,
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
+import { recordedToolCall } from "./recorded-tool.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -22,24 +24,12 @@ suite.define(() => {
         const childArgs = { command: "printf '\n--- workspace ---\n'\nls" };
         const gateway = await installMockGateway(page, {
           historyMessages: [
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "toolCall",
-                  id: "history-check",
-                  name: "exec",
-                  arguments: { command, title: "Check the test suite" },
-                },
-              ],
-            },
-            {
-              role: "toolResult",
+            recordedToolCall("history-check", "exec", { command, title: "Check the test suite" }),
+            chatMessage("toolResult", "All tests passed.", {
               toolCallId: "history-check",
               toolName: "exec",
-              content: [{ type: "text", text: "All tests passed." }],
-            },
-            { role: "assistant", content: [{ type: "text", text: "The checks are complete." }] },
+            }),
+            chatMessage("assistant", "The checks are complete."),
           ],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -55,64 +45,37 @@ suite.define(() => {
         const params = requireRecord(send.params);
         const runId = requireString(params.idempotencyKey, "chat run id");
         const sessionKey = requireString(params.sessionKey, "chat session key");
-        await gateway.emitGatewayEvent("agent", {
-          runId,
-          sessionKey,
-          seq: 1,
-          ts: Date.now(),
-          stream: "item",
-          data: projectAgentToolActivity({
-            phase: "start",
-            toolCallId: "live-check",
-            name: "exec",
-            args: parentArgs,
-          }),
-        });
-        await gateway.emitGatewayEvent("agent", {
-          runId,
-          sessionKey,
-          seq: 2,
-          ts: Date.now(),
-          stream: "tool",
-          data: {
-            phase: "start",
-            toolCallId: "live-check",
-            name: "exec",
-            args: parentArgs,
-          },
-        });
+        let seq = 0;
+        const emit = (stream: "item" | "tool", data: unknown) =>
+          gateway.emitGatewayEvent("agent", {
+            runId,
+            sessionKey,
+            seq: ++seq,
+            ts: Date.now(),
+            stream,
+            data,
+          });
+        const parent = {
+          phase: "start",
+          toolCallId: "live-check",
+          name: "exec",
+          args: parentArgs,
+        } as const;
+        const child = {
+          phase: "start",
+          toolCallId: "live-child",
+          name: "exec",
+          args: childArgs,
+        } as const;
+        await emit("item", projectAgentToolActivity(parent));
+        await emit("tool", parent);
         await page
           .locator(".chat-tool-row--running .chat-tool-row__title", {
             hasText: "Inspect the workspace guide",
           })
           .waitFor();
-        await gateway.emitGatewayEvent("agent", {
-          runId,
-          sessionKey,
-          seq: 3,
-          ts: Date.now(),
-          stream: "item",
-          data: projectAgentToolActivity({
-            phase: "start",
-            toolCallId: "live-child",
-            name: "exec",
-            args: childArgs,
-          }),
-        });
-        await gateway.emitGatewayEvent("agent", {
-          runId,
-          sessionKey,
-          seq: 4,
-          ts: Date.now(),
-          stream: "tool",
-          data: {
-            phase: "start",
-            toolCallId: "live-child",
-            parentToolCallId: "live-check",
-            name: "exec",
-            args: childArgs,
-          },
-        });
+        await emit("item", projectAgentToolActivity(child));
+        await emit("tool", { ...child, parentToolCallId: "live-check" });
         const activity = page.locator(".chat-activity-group", {
           hasText: "Inspect the workspace guide",
         });
@@ -127,34 +90,14 @@ suite.define(() => {
         expect(await activity.locator(".chat-tool-row").count()).toBe(1);
         await operation.click();
         await activity.locator(".chat-tool-children .chat-tool-row--running").waitFor();
-        await gateway.emitGatewayEvent("agent", {
-          runId,
-          sessionKey,
-          seq: 5,
-          ts: Date.now(),
-          stream: "tool",
-          data: {
-            phase: "result",
-            toolCallId: "live-child",
-            parentToolCallId: "live-check",
-            name: "exec",
-            result: { content: [{ type: "text", text: "README.md" }] },
-          },
+        await emit("tool", {
+          phase: "result",
+          toolCallId: "live-child",
+          parentToolCallId: "live-check",
+          name: "exec",
+          result: { content: [{ type: "text", text: "README.md" }] },
         });
-        await gateway.emitGatewayEvent("agent", {
-          runId,
-          sessionKey,
-          seq: 6,
-          ts: Date.now(),
-          stream: "item",
-          data: projectAgentToolActivity({
-            phase: "result",
-            toolCallId: "live-child",
-            name: "exec",
-            args: childArgs,
-            isError: false,
-          }),
-        });
+        await emit("item", projectAgentToolActivity({ ...child, phase: "result", isError: false }));
         await expect
           .poll(() => activity.locator(".chat-tool-children .chat-tool-row--running").count())
           .toBe(0);

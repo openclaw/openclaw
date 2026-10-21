@@ -4,12 +4,16 @@ import { createMemo, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { SidebarPanel } from "./chat-pane-embedded-view.tsx";
 import { closeSlot, openSlot, promoteSidebarPanel } from "./sidebar-layout.ts";
 
 const lazyMocks = vi.hoisted(() => ({
   boardImportAttempts: 0,
   boardRegistered: false,
+  workspaceImportAttempts: 0,
+  workspaceRegistered: false,
   importAttempts: 0,
   retryDocument: vi.fn(async () => true),
 }));
@@ -18,6 +22,13 @@ const lazyMocks = vi.hoisted(() => ({
 vi.mock("../../components/board/board-view.ts", () => {
   lazyMocks.boardImportAttempts += 1;
   lazyMocks.boardRegistered = true;
+  return {};
+});
+
+// mock-isolation: exercise Files registration at the existing panel loader boundary.
+vi.mock("./components/chat-files-panel.tsx", () => {
+  lazyMocks.workspaceImportAttempts += 1;
+  lazyMocks.workspaceRegistered = true;
   return {};
 });
 
@@ -44,56 +55,66 @@ afterEach(() => {
 });
 
 describe("chat pane lazy sidebar failures", () => {
-  it("keeps a saved hidden dashboard cold and publishes its first visible load", async () => {
-    vi.stubGlobal("customElements", {
-      get: (tag: string) =>
-        tag === "openclaw-board-view" && !lazyMocks.boardRegistered ? undefined : HTMLElement,
-    });
-    const hidden = openSlot(openSlot({ columns: [] }, "dashboard"), "detail");
-    let showDashboard = () => {};
-    const mounted = mountSolid(() => {
-      const [layout, setLayout] = createSignal(hidden);
-      showDashboard = () => setLayout(openSlot(hidden, "dashboard"));
-      const elements = projectOwner(lazySidebarElements, (owner) => owner.snapshot);
-      const content = createMemo(() => {
-        elements.read();
-        return renderSidebarRegion({
-          presentationId: "dashboard-loader-fixture",
-          availableWidth: 1_400,
-          callbacks: {
-            activatePanel: vi.fn(),
-            togglePanelExpanded: vi.fn(),
-            closeSlot: vi.fn(),
-            openSlot: vi.fn(),
-            reorderPanel: vi.fn(),
-            resizePanel: vi.fn(),
-            setOpen: vi.fn(),
-          },
-          layout: layout(),
-          narrow: false,
-        });
+  it.each(["dashboard", "workspace"] as const)(
+    "keeps a saved hidden %s cold and publishes its first visible load",
+    async (slot) => {
+      vi.stubGlobal("customElements", {
+        get: (tag: string) => {
+          const registered =
+            slot === "dashboard" ? lazyMocks.boardRegistered : lazyMocks.workspaceRegistered;
+          const targetTag =
+            slot === "dashboard" ? "openclaw-board-view" : "openclaw-chat-files-panel";
+          return tag === targetTag && !registered ? undefined : HTMLElement;
+        },
       });
-      return (
-        <output>
-          {content().panelDefinitions.find((panel) => panel.slot === "dashboard")?.loadState ===
-          null
-            ? "loading"
-            : "ready"}
-        </output>
-      );
-    });
-    flush();
-    expect(lazyMocks.boardImportAttempts).toBe(0);
-    expect(lazySidebarElements.snapshot.has("dashboard")).toBe(false);
+      const attempts = () =>
+        slot === "dashboard" ? lazyMocks.boardImportAttempts : lazyMocks.workspaceImportAttempts;
+      const hidden = openSlot(openSlot({ columns: [] }, slot), "detail");
+      let showPanel = () => {};
+      const mounted = mountSolid(() => {
+        const [layout, setLayout] = createSignal(hidden);
+        showPanel = () => setLayout(openSlot(hidden, slot));
+        const elements = projectOwner(lazySidebarElements, (owner) => owner.snapshot);
+        const content = createMemo(() => {
+          elements.read();
+          return renderSidebarRegion({
+            presentationId: "panel-loader-fixture",
+            availableWidth: 1_400,
+            callbacks: {
+              activatePanel: vi.fn(),
+              togglePanelExpanded: vi.fn(),
+              setDock: vi.fn(),
+              closeSlot: vi.fn(),
+              openSlot: vi.fn(),
+              reorderPanel: vi.fn(),
+              resizePanel: vi.fn(),
+              setOpen: vi.fn(),
+            },
+            layout: layout(),
+            narrow: false,
+          });
+        });
+        return (
+          <output>
+            {content().panelDefinitions.find((panel) => panel.slot === slot)?.loadState === null
+              ? "loading"
+              : "ready"}
+          </output>
+        );
+      });
+      flush();
+      expect(attempts()).toBe(0);
+      expect(lazySidebarElements.snapshot.has(slot)).toBe(false);
 
-    showDashboard();
-    flush();
-    expect(mounted.container.textContent).toBe("loading");
-    await vi.waitFor(() => expect(mounted.container.textContent).toBe("ready"));
-    showDashboard();
-    flush();
-    expect(lazyMocks.boardImportAttempts).toBe(1);
-  });
+      showPanel();
+      flush();
+      expect(mounted.container.textContent).toBe("loading");
+      await vi.waitFor(() => expect(mounted.container.textContent).toBe("ready"));
+      showPanel();
+      flush();
+      expect(attempts()).toBe(1);
+    },
+  );
 
   it("keeps failed panels dismissible in their final regions without losing the conversation", async () => {
     vi.stubGlobal("customElements", { get: vi.fn(() => undefined) });
@@ -120,6 +141,7 @@ describe("chat pane lazy sidebar failures", () => {
             callbacks: {
               activatePanel: vi.fn(),
               togglePanelExpanded: vi.fn(),
+              setDock: vi.fn(),
               closeSlot: (slot) => setLayout((current) => closeSlot(current, slot)),
               openSlot: vi.fn(),
               reorderPanel: vi.fn(),
@@ -187,5 +209,53 @@ describe("chat pane lazy sidebar failures", () => {
     flush();
     expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
     expect(container.querySelector("[data-primary]")).toBe(primary);
+  });
+  it("shows a failed Files import through the pane loader and its reload action", async () => {
+    lazyMocks.retryDocument.mockClear();
+    // mock-isolation: fail the real module boundary before its element registers.
+    vi.doMock("./components/chat-files-panel.tsx", () => {
+      throw new Error("Failed to fetch dynamically imported module: chat-files-panel.js");
+    });
+    vi.stubGlobal("customElements", {
+      get: (tag: string) => (tag === "openclaw-chat-files-panel" ? undefined : HTMLElement),
+    });
+    try {
+      const mounted = mountSolid(() => {
+        const elements = projectOwner(lazySidebarElements, (owner) => owner.snapshot);
+        const content = createMemo(() => {
+          elements.read();
+          return renderSidebarRegion({
+            presentationId: "files-loader-failure",
+            availableWidth: 1_400,
+            callbacks: {
+              activatePanel: vi.fn(),
+              togglePanelExpanded: vi.fn(),
+              setDock: vi.fn(),
+              closeSlot: vi.fn(),
+              openSlot: vi.fn(),
+              reorderPanel: vi.fn(),
+              resizePanel: vi.fn(),
+              setOpen: vi.fn(),
+            },
+            layout: openSlot({ columns: [] }, "workspace"),
+            narrow: false,
+          });
+        });
+        return (
+          <SidebarPanel
+            definition={content().panelDefinitions.find((panel) => panel.slot === "workspace")!}
+          />
+        );
+      });
+      await waitForSolid(() =>
+        expect(mounted.container.querySelector('[role="alert"]')).not.toBeNull(),
+      );
+      expect(mounted.container.textContent).toContain("chat-files-panel.js");
+      const reload = mounted.getByRole("button", { name: "Reload" });
+      reload.click();
+      await waitForSolid(() => expect(lazyMocks.retryDocument).toHaveBeenCalledOnce());
+    } finally {
+      vi.doUnmock("./components/chat-files-panel.tsx");
+    }
   });
 });

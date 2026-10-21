@@ -13,7 +13,7 @@ import { takeGraphemes } from "../lib/graphemes.ts";
 import { formatRelativeTimestamp } from "../lib/reactive/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatGitHubItemReference, parseGitHubLinkTarget } from "./github-link-target.ts";
-import { createPreviewRenderer } from "./link-reader-preview-root.ts";
+import { createPreviewRenderer } from "./link-reader-preview-root.tsx";
 import { linkReaderAuthorHref, linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
 import { linkReaderTargetKey, type LinkReaderTarget } from "./link-reader-target.ts";
 import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
@@ -168,19 +168,6 @@ export async function requestReaderPreview(
       throw error;
     }
     return { ...cached.preview, stale: true };
-  }
-  if (preview.stale && isCurrent()) {
-    // One awaited refresh joins the server's stale-while-revalidate work; no polling.
-    try {
-      preview = parsePreviewResponse(
-        target,
-        await client.request(method, { ...params, refresh: true }, { signal }),
-      );
-    } catch (error) {
-      if (signal.aborted) {
-        throw error;
-      }
-    }
   }
   // A reader-first entry owns newer header facts, not the plugin's compact projection.
   const header = cached?.enrichment ? cached.preview : undefined;

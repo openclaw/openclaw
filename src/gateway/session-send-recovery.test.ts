@@ -1,14 +1,18 @@
+import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { SessionPendingInput } from "../config/sessions/session-pending-input.types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -22,10 +26,10 @@ import {
 import { withAgentDatabasePreparationContext } from "../state/agent-database-preparation-context.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test-support.js";
-import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import type { SessionSendDelivery } from "./session-send-delivery.js";
 import { readSessionSendDeliveryAdmission } from "./session-send-delivery.js";
 import { recoverSessionSendDeliveries } from "./session-send-recovery.js";
+import { config, delivery, input, sourceSnapshot } from "./session-send-recovery.test-support.js";
 import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 
 const io = vi.hoisted(() => ({
@@ -89,42 +93,6 @@ vi.mock(import("./session-utils-store-worker.js"), async (importOriginal) => ({
   resolveGatewaySessionStoreTargetInWorker: io.load,
 }));
 
-const delivery: SessionSendDelivery = {
-  version: 1,
-  runId: "saved-delivery",
-  source: {
-    agentId: "main",
-    sessionKey: "agent:main:source",
-    sessionId: "source-id",
-    lifecycleRevision: "source-before-reset",
-  },
-  target: { agentId: "main", sessionKey: "agent:main:target", sessionId: "target-id" },
-  sandboxed: false,
-  message: "Saved peer update",
-};
-const input: SessionPendingInput = {
-  id: "saved-input",
-  runId: delivery.runId,
-  acceptedAt: 1,
-  state: "interrupted",
-  message: {
-    role: "user",
-    content: delivery.message,
-    timestamp: 1,
-    idempotencyKey: `${delivery.runId}:user`,
-    provenance: {
-      kind: "inter_session",
-      sourceTool: "sessions_send",
-      sourceSessionKey: delivery.source.sessionKey,
-    },
-    __openclaw: { sessionSendDelivery: { ...delivery, operatorSource: null } },
-  },
-};
-const config: OpenClawConfig = {
-  agents: { entries: { main: {} } },
-  tools: { sessions: { visibility: "all" } },
-  session: { communication: { send: "always", receive: "always" } },
-};
 let sourceEntry: {
   sessionId: string;
   updatedAt: number;
@@ -151,26 +119,8 @@ const context = createDirectChatContext({
   }),
 });
 context.logGateway.warn = warn;
-const sourceSnapshot = (
-  pending = input,
-  state = "interrupted",
-  consumed_event_id: string | null = null,
-) => ({
-  snapshot: {
-    current: true,
-    pending: {
-      input_id: pending.id,
-      run_id: pending.runId,
-      request_hash: "request:original-request-fingerprint",
-      state,
-      consumed_event_id,
-      message_json: JSON.stringify(pending.message),
-    },
-  },
-  assertCurrent() {},
-});
 const storeTarget = (key: string) => ({
-  agentId: "main",
+  agentId: key.split(":")[1]!,
   canonicalKey: key,
   storePath: "/fixture/sessions.json",
   store: { [key]: key === delivery.source.sessionKey ? sourceEntry : targetEntry },
@@ -220,6 +170,7 @@ afterEach(() => {
 });
 
 it("retains queued peers when the interrupted predecessor is paused", async () => {
+  const debug = vi.spyOn(context.logGateway, "debug");
   io.entries.mockResolvedValue([
     {
       sessionKey: delivery.target.sessionKey,
@@ -232,6 +183,15 @@ it("retains queued peers when the interrupted predecessor is paused", async () =
 
   expect(io.resumeMain).toHaveBeenCalledOnce();
   expectNoCalls(dispatch, resumeChat, io.withdraw, io.report);
+  expect(debug).toHaveBeenCalledWith(
+    `Pending input replay: ${JSON.stringify({
+      inputHash: createHash("sha256").update(input.id).digest("hex").slice(0, 16),
+      kind: "peer",
+      outcome: "skipped",
+      state: "interrupted",
+      skipReason: "predecessor-not-ready",
+    })}`,
+  );
 });
 
 it("recovers a logical agent's saved input from its shared physical store", async () => {
@@ -249,10 +209,6 @@ it("recovers a logical agent's saved input from its shared physical store", asyn
   ]);
   io.pending.mockResolvedValue({ items: [sharedInput], total: 1 });
   io.source.mockResolvedValue(sourceSnapshot(sharedInput));
-  io.load.mockImplementation(async ({ key }: { key: string }) => ({
-    ...storeTarget(key),
-    agentId: key === sharedDelivery.target.sessionKey ? "secondary" : "main",
-  }));
   await recover();
   expect(dispatch).toHaveBeenCalledOnce();
   expect(dispatch.mock.calls[0]![0]).toMatchObject({
@@ -411,9 +367,10 @@ it.each([
     resumeChat.mockImplementation(async ({ runId }) => attempt(runId));
     dispatch.mockImplementation(async ({ idempotencyKey }) => attempt(idempotencyKey));
     await recoverWithTimers();
-    expect(attempts).toEqual(
-      failure === "transient" ? ["first", "first", "first", "other"] : ["first", "next", "other"],
+    expect(attempts.filter((runId) => runId !== "other")).toEqual(
+      failure === "transient" ? ["first", "first", "first"] : ["first", "next"],
     );
+    expect(attempts.filter((runId) => runId === "other")).toEqual(["other"]);
     expectNoCalls(io.withdraw);
     if (inputKind === "chat") {
       expectNoCalls(dispatch, io.report);
@@ -424,6 +381,8 @@ it.each([
 );
 
 it("resumes chat inputs in acceptance order across pages, excluding expired and withdrawn inputs", async () => {
+  const debug = vi.spyOn(context.logGateway, "debug");
+  const info = vi.spyOn(context.logGateway, "info");
   const chat = (id: string, ageMs = 0, state: SessionPendingInput["state"] = "interrupted") => ({
     ...input,
     id,
@@ -475,6 +434,30 @@ it("resumes chat inputs in acceptance order across pages, excluding expired and 
   await recovering;
   expect(resumeChat.mock.calls.map(([target]) => target.runId)).toEqual(["first", "second"]);
   expectNoCalls(dispatch, io.report, io.withdraw);
+  const decisions = [...debug.mock.calls, ...info.mock.calls]
+    .map(([message]) => JSON.parse(message.slice("Pending input replay: ".length)))
+    .map(({ inputHash, outcome, skipReason, staleReason }) => ({
+      inputHash,
+      outcome,
+      skipReason,
+      staleReason,
+    }));
+  expect(decisions).toEqual(
+    [
+      ["expired", "skipped", "expired", undefined],
+      ["cancelled", "skipped", "state-not-interrupted", undefined],
+      ["live", "skipped", "state-not-interrupted", undefined],
+      ["withdrawn", "stale", undefined, "state-not-interrupted"],
+      ["consumed", "stale", undefined, "consumed"],
+      ["first", "accepted", undefined, undefined],
+      ["second", "accepted", undefined, undefined],
+    ].map(([id, outcome, skipReason, staleReason]) => ({
+      inputHash: createHash("sha256").update(id!).digest("hex").slice(0, 16),
+      outcome,
+      skipReason,
+      staleReason,
+    })),
+  );
 });
 
 it.each(["replaced", "archived-source", "archived-target"] as const)(
@@ -552,12 +535,91 @@ it.each(["replaced", "archived-source", "archived-target"] as const)(
   },
 );
 
-it("partitions delivery recovery work and retry backoff in the startup summary", async () => {
-  vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
+it("replays sessions across stores concurrently while preserving each saved input order", async ({
+  signal,
+}) => {
+  const agents = ["main", "secondary"];
+  const sessions = Array.from(
+    { length: 6 },
+    (_, index) => `agent:${agents[Math.floor(index / 3)]}:target-${index}`,
+  );
+  const inputs = sessions.map((sessionKey, index) =>
+    Array.from({ length: 2 }, (_, sequence) => {
+      const runId = `delivery-${index}-${sequence}`;
+      return {
+        ...input,
+        id: `input-${index}-${sequence}`,
+        runId,
+        message: {
+          ...input.message,
+          idempotencyKey: `${runId}:user`,
+          __openclaw: {
+            sessionSendDelivery: {
+              ...delivery,
+              runId,
+              operatorSource: null,
+              target: { ...delivery.target, sessionKey, agentId: sessionKey.split(":")[1]! },
+            },
+          },
+        },
+      };
+    }),
+  );
+  io.discover.mockResolvedValue(
+    agents.map((agentId) => ({ agentId, storePath: `/fixture/${agentId}/sessions.json` })),
+  );
+  io.entries.mockImplementation(async ({ agentId }) =>
+    sessions
+      .filter((sessionKey) => sessionKey.startsWith(`agent:${agentId}:`))
+      .map((sessionKey) => ({ sessionKey, entry: targetEntry })),
+  );
+  io.pending.mockImplementation(async ({ sessionKey }) => ({
+    items: inputs[sessions.indexOf(sessionKey)],
+  }));
+  io.source.mockImplementation(async (_scope, key) =>
+    sourceSnapshot(inputs.flat().find((saved) => saved.message.idempotencyKey === key)!),
+  );
+  const release = createDeferred();
+  const saturated = createDeferred();
+  const accepted: string[] = [];
+  let active = 0;
+  let maximum = 0;
+  dispatch.mockImplementation(async (request) => {
+    active++;
+    maximum = Math.max(maximum, active);
+    if (active === 4) {
+      saturated.resolve();
+    }
+    await release.promise;
+    accepted.push(request.idempotencyKey);
+    active--;
+  });
+  const recovery = recover();
+  try {
+    await withinTest(saturated.promise, signal);
+    expect(dispatch).toHaveBeenCalledTimes(4);
+    expect(accepted).toEqual([]);
+    release.resolve();
+    await recovery;
+    expect(maximum).toBe(4);
+    expect(accepted).toHaveLength(12);
+    expect(new Set(accepted).size).toBe(12);
+    for (let index = 0; index < sessions.length; index++) {
+      expect(accepted.filter((runId) => runId.startsWith(`delivery-${index}-`))).toEqual([
+        `delivery-${index}-0`,
+        `delivery-${index}-1`,
+      ]);
+    }
+  } finally {
+    release.resolve();
+    await recovery;
+  }
+});
+
+it("reports each input replay phase and retry backoff without raw input identity", async () => {
   const startedAt = Date.now();
   vi.spyOn(performance, "now").mockImplementation(() => Date.now() - startedAt);
   const info = vi.spyOn(context.logGateway, "info").mockImplementation(() => {});
-  const trace = createGatewayStartupTrace(context.logGateway, 0);
   io.discover.mockImplementation(
     timed(10, () => [{ agentId: "main", storePath: "/fixture/sessions.json" }]),
   );
@@ -576,20 +638,25 @@ it("partitions delivery recovery work and retry backoff in the startup summary",
   });
   sourceEntry.sessionId = "replaced-source";
   io.report.mockImplementation(timed(250, () => ({ ok: true })));
-  try {
-    const recovery = trace.measure("sidecars.subagent-recovery", () =>
-      trace.measure("sidecars.delivery-recovery", () =>
-        recoverSessionSendDeliveries(context, controller().signal, trace),
-      ),
-    );
-    await Promise.all([recovery, vi.runAllTimersAsync()]);
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(info.mock.calls.at(-1)?.[0]).toContain(
-      "deliveryMs=5450.0 deliveryDiscoveryMs=10.0 deliveryEntriesMs=20.0 deliveryHistoryMs=30.0 deliveryReplayMs=140.0 deliveryNoticesMs=250.0 retryWaitMs=5000.0",
-    );
-  } finally {
-    trace.close();
-  }
+  await recoverWithTimers();
+  expect(dispatch).not.toHaveBeenCalled();
+  const replay = info.mock.calls.find(([message]) =>
+    message.startsWith("Pending input replay: "),
+  )?.[0];
+  expect(JSON.parse(replay!.slice("Pending input replay: ".length))).toMatchObject({
+    inputHash: createHash("sha256").update(input.id).digest("hex").slice(0, 16),
+    kind: "peer",
+    outcome: "blocked",
+    waitReason: "endpoint-replaced",
+    attempts: 2,
+    sourceLoadMs: 40,
+    sessionLoadMs: 100,
+    retryWaitMs: 5000,
+    totalMs: 5140,
+  });
+  expect(replay).not.toContain(input.id);
+  expect(replay).not.toContain(delivery.source.sessionKey);
+  expect(replay).not.toContain(delivery.message);
 });
 
 it("retries transient admission with the saved input and delivery identity, in order", async () => {

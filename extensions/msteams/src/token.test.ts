@@ -174,7 +174,6 @@ describe("token – federated credentials (certificate)", () => {
       appId: "app-id",
       tenantId: "tenant-id",
       certificatePath: "  /env/cert.pem  ",
-      certificateThumbprint: "  configured-thumbprint  ",
       useManagedIdentity: undefined,
       managedIdentityClientId: "  configured-managed-identity  ",
     });
@@ -232,7 +231,6 @@ describe("token – federated credentials (certificate)", () => {
       appId: "app-id",
       tenantId: "tenant-id",
       certificatePath: undefined,
-      certificateThumbprint: undefined,
       useManagedIdentity: true,
       managedIdentityClientId: "  configured-managed-identity  ",
     });
@@ -250,7 +248,6 @@ describe("token – federated credentials (certificate)", () => {
       appId: "env-app-id",
       tenantId: "env-tenant-id",
       certificatePath: "/env/cert.pem",
-      certificateThumbprint: "EEFF0011",
       useManagedIdentity: undefined,
       managedIdentityClientId: undefined,
     });
@@ -271,7 +268,6 @@ describe("token – federated credentials (managed identity)", () => {
       appId: "app-id",
       tenantId: "tenant-id",
       certificatePath: undefined,
-      certificateThumbprint: undefined,
       useManagedIdentity: true,
       managedIdentityClientId: undefined,
     });
@@ -300,7 +296,6 @@ describe("token – federated credentials (managed identity)", () => {
       appId: "app-id",
       tenantId: "tenant-id",
       certificatePath: "/cert.pem",
-      certificateThumbprint: undefined,
       useManagedIdentity: undefined,
       managedIdentityClientId: undefined,
     });

@@ -238,4 +238,40 @@ describe("system-event routing", () => {
     const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
     expect(entry?.lastInputSeconds).toBeUndefined();
   });
+
+  it.each([
+    { kind: "macOS beacon", clientId: "openclaw-macos", text: "Node: Operator Mac", own: true },
+    {
+      kind: "explicit device",
+      clientId: "openclaw-macos",
+      text: "Node: Other Mac",
+      explicit: true,
+    },
+    { kind: "ordinary event", clientId: "openclaw-macos", text: "Update complete" },
+    { kind: "other client", clientId: "cli", text: "Node: Other Mac" },
+    {
+      kind: "device-less client",
+      clientId: "openclaw-macos",
+      text: "Node: Operator Mac",
+      noDevice: true,
+    },
+  ] as const)("preserves the intended presence identity for $kind", async (scenario) => {
+    const instanceId = `presence-device-${randomUUID()}`;
+    const deviceId = `device-${randomUUID()}`;
+    const explicitDeviceId = "explicit" in scenario ? `remote-${randomUUID()}` : undefined;
+    const request = eventRequest({ text: scenario.text, instanceId, deviceId: explicitDeviceId });
+    request.client = {
+      connect: {
+        client: { id: scenario.clientId },
+        ...("noDevice" in scenario ? {} : { device: { id: deviceId } }),
+      },
+    } as NonNullable<GatewayRequestHandlerOptions["client"]>;
+    await eventHandler(request);
+
+    const entry = expectDefined(
+      listSystemPresence().find((candidate) => candidate.instanceId === instanceId),
+      "system-event presence entry",
+    );
+    expect(entry.deviceId).toBe(explicitDeviceId ?? ("own" in scenario ? deviceId : undefined));
+  });
 });

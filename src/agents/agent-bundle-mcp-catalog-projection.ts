@@ -48,6 +48,7 @@ export function projectBundleMcpServerCatalog({
   capabilities,
   serverVersion,
   serverCapabilities,
+  instructions,
   pluginId,
   connection,
 }: {
@@ -61,6 +62,7 @@ export function projectBundleMcpServerCatalog({
   capabilities: ReturnType<typeof summarizeServerCapabilities>;
   serverVersion: ReturnType<Client["getServerVersion"]>;
   serverCapabilities: ReturnType<Client["getServerCapabilities"]>;
+  instructions?: string;
   pluginId?: string;
   connection: { requestTimeoutMs: number; supportsParallelToolCalls: boolean };
 }): { catalog: McpToolCatalog; metadata: ReturnType<typeof normalizeMcpToolCatalog>["metadata"] } {
@@ -82,6 +84,7 @@ export function projectBundleMcpServerCatalog({
     pluginId,
     title: serverVersion?.title,
     icons: readMcpAppIcons(serverVersion?.icons),
+    ...(instructions ? { instructions } : {}),
     settings: readMcpAppSettingsCapability(serverCapabilities),
     toolCount: exposedTools.length,
     requestTimeoutMs: connection.requestTimeoutMs,

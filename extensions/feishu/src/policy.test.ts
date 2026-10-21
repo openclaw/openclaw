@@ -1,4 +1,3 @@
-// Feishu tests cover policy plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -10,59 +9,31 @@ import {
   resolveFeishuReplyPolicy,
 } from "./policy.js";
 import { setFeishuRuntime } from "./runtime.js";
-import type { FeishuConfig } from "./types.js";
 
 beforeEach(() => {
   setFeishuRuntime(createPluginRuntimeMock());
 });
 
 function createCfg(feishu: Record<string, unknown>): OpenClawConfig {
-  return {
-    channels: {
-      feishu,
-    },
-  } as OpenClawConfig;
+  return { channels: { feishu } } as OpenClawConfig;
 }
 
-function createFeishuConfig(overrides: Partial<FeishuConfig>): FeishuConfig {
-  return FeishuConfigSchema.parse(overrides);
+function replyPolicy(feishu: Record<string, unknown>) {
+  return resolveFeishuReplyPolicy({
+    isDirectMessage: false,
+    cfg: createCfg({ groupPolicy: "open", ...feishu }),
+    groupPolicy: "open",
+    groupId: "oc_1",
+  });
 }
 
 describe("resolveFeishuReplyPolicy", () => {
-  it("defaults open groups to no mention when unset", () => {
-    expect(
-      resolveFeishuReplyPolicy({
-        isDirectMessage: false,
-        cfg: createCfg({ groupPolicy: "open" }),
-        groupPolicy: "open",
-        groupId: "oc_1",
-      }),
-    ).toEqual({ requireMention: false });
-  });
-
-  it("keeps explicit top-level mention gating in open groups", () => {
-    expect(
-      resolveFeishuReplyPolicy({
-        isDirectMessage: false,
-        cfg: createCfg({ groupPolicy: "open", requireMention: true }),
-        groupPolicy: "open",
-        groupId: "oc_1",
-      }),
-    ).toEqual({ requireMention: true });
-  });
-
-  it("keeps explicit per-group mention gating in open groups", () => {
-    expect(
-      resolveFeishuReplyPolicy({
-        isDirectMessage: false,
-        cfg: createCfg({
-          groupPolicy: "open",
-          groups: { oc_1: { requireMention: true } },
-        }),
-        groupPolicy: "open",
-        groupId: "oc_1",
-      }),
-    ).toEqual({ requireMention: true });
+  it.each([
+    [{}, false],
+    [{ requireMention: true }, true],
+    [{ groups: { oc_1: { requireMention: true } } }, true],
+  ])("resolves open-group mention policy %j", (config, requireMention) => {
+    expect(replyPolicy(config)).toEqual({ requireMention });
   });
 });
 
@@ -75,12 +46,7 @@ describe("resolveFeishuGroupToolPolicy", () => {
       },
     });
 
-    expect(
-      resolveFeishuGroupToolPolicy({
-        cfg,
-        groupId: "oc_exact",
-      }),
-    ).toBeUndefined();
+    expect(resolveFeishuGroupToolPolicy({ cfg, groupId: "oc_exact" })).toBeUndefined();
     expect(resolveFeishuGroupToolPolicy({ cfg, groupId: "oc_missing" })).toEqual({
       allow: ["wildcard"],
     });
@@ -89,11 +55,7 @@ describe("resolveFeishuGroupToolPolicy", () => {
 
 describe("hasExplicitFeishuGroupConfig", () => {
   it("matches direct and case-insensitive group ids", () => {
-    const cfg = createFeishuConfig({
-      groups: {
-        OC_UPPER: { requireMention: true },
-      },
-    });
+    const cfg = FeishuConfigSchema.parse({ groups: { OC_UPPER: { requireMention: true } } });
 
     expect(hasExplicitFeishuGroupConfig({ cfg, groupId: "OC_UPPER" })).toBe(true);
     expect(hasExplicitFeishuGroupConfig({ cfg, groupId: "oc_upper" })).toBe(true);
@@ -101,19 +63,15 @@ describe("hasExplicitFeishuGroupConfig", () => {
 });
 
 describe("resolveFeishuGroupSenderActivationIngressAccess", () => {
-  async function senderDecision(params: {
-    allowFrom: Array<string | number>;
-    senderOpenId: string;
-    senderUserId?: string;
-  }) {
+  async function senderDecision(allowFrom: string[], senderOpenId: string, senderUserId?: string) {
     return (
       await resolveFeishuGroupSenderActivationIngressAccess({
         cfg: createCfg({}),
         accountId: "default",
         chatId: "oc_group",
-        allowFrom: params.allowFrom,
-        senderOpenId: params.senderOpenId,
-        senderUserId: params.senderUserId,
+        allowFrom,
+        senderOpenId,
+        senderUserId,
         requireMention: false,
         mentionedBot: true,
       })
@@ -121,21 +79,10 @@ describe("resolveFeishuGroupSenderActivationIngressAccess", () => {
   }
 
   it("keeps user and chat allowlist namespaces distinct", async () => {
-    await expect(
-      senderDecision({
-        allowFrom: ["user:oc_group_123"],
-        senderOpenId: "oc_group_123",
-      }),
-    ).resolves.toBe("block");
+    await expect(senderDecision(["user:oc_group_123"], "oc_group_123")).resolves.toBe("block");
   });
 
   it("supports user_id as an additional immutable sender candidate", async () => {
-    await expect(
-      senderDecision({
-        allowFrom: ["on_user_123"],
-        senderOpenId: "ou_other",
-        senderUserId: "on_user_123",
-      }),
-    ).resolves.toBe("allow");
+    await expect(senderDecision(["on_user_123"], "ou_other", "on_user_123")).resolves.toBe("allow");
   });
 });

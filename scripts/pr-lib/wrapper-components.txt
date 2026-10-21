@@ -428,6 +428,9 @@ src/auto-reply/commands-args.ts
 src/auto-reply/commands-registry.data.ts
 src/auto-reply/commands-registry.shared.ts
 src/auto-reply/group-activation.ts
+src/auto-reply/heartbeat-filter.ts
+src/auto-reply/heartbeat-tool-response.ts
+src/auto-reply/heartbeat.ts
 src/auto-reply/reply/commands-slash-parse.ts
 src/auto-reply/reply/delivery-hints.ts
 src/auto-reply/reply/display-text-sanitize.ts
@@ -815,6 +818,7 @@ src/cron/completion-status.ts
 src/cron/execution-error-constants.ts
 src/cron/run-diagnostics-normalize.ts
 src/cron/run-history-detail.ts
+src/cron/scratch-contract.ts
 src/daemon/arg-split.ts
 src/daemon/constants.ts
 src/daemon/runtime-binary.ts
@@ -1255,6 +1259,7 @@ src/infra/update-doctor-config-schema.ts
 src/infra/update-doctor-lint-schema.ts
 src/infra/update-doctor-migration-attribution.ts
 src/infra/update-doctor-result.ts
+src/infra/update-doctor-scan-receipts.ts
 src/infra/update-failure-facts-format.ts
 src/infra/update-failure-facts.ts
 src/infra/update-failure-public-codes.ts
@@ -1411,14 +1416,11 @@ src/plugins/compat/channel-prepared-tool-policy-record.ts
 src/plugins/compat/cron-store-path-record.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
-src/plugins/compat/mention-inbox-record.ts
-src/plugins/compat/model-account-connect-record.ts
 src/plugins/compat/native-exec-approval-record.ts
 src/plugins/compat/plugin-sdk-private-runtime-export-record.ts
 src/plugins/compat/plugin-sdk-removed-export-records.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/progress-receipt-handoff-record.ts
-src/plugins/compat/runtime-config-record.ts
 src/plugins/compat/sqlite-runtime-records.ts
 src/plugins/compat/binding-persistence-records.ts
 src/plugins/compat/registry-records.ts
@@ -1427,11 +1429,7 @@ src/plugins/compat/registry.ts
 src/plugins/compat/reply-tool-authority-record.ts
 src/plugins/compat/session-persistence-records.ts
 src/plugins/compat/session-transcript-view-record.ts
-src/plugins/compat/skill-command-discovery-record.ts
-src/plugins/compat/skill-proposal-hooks-record.ts
-src/plugins/compat/tts-preferences-record.ts
 src/plugins/compat/transcript-stats-record.ts
-src/plugins/compat/watched-sessions.ts
 src/plugins/compat/web-search-provider-list-record.ts
 src/plugins/compat/workspace-mutation-guard.ts
 src/plugins/config-activation-shared.ts
@@ -1601,6 +1599,7 @@ src/plugins/plugin-registry-contributions.ts
 src/plugins/plugin-registry-id-normalizer.ts
 src/plugins/plugin-registry-snapshot.ts
 src/plugins/plugin-registry.ts
+src/plugins/plugin-retention-diagnostics.ts
 src/plugins/plugin-return-value.ts
 src/plugins/plugin-tool-execution.ts
 src/plugins/plugin-runtime-artifact-identity.ts
@@ -1773,6 +1772,7 @@ src/sessions/transcript-terminal-model.ts
 src/sessions/user-turn-transcript-admission.ts
 src/secrets/store/secret-store-validation-error.ts
 src/shared/assistant-error-format.ts
+src/shared/async-store.ts
 src/shared/async-work-scope.ts
 src/shared/avatar-limits.ts
 src/shared/avatar-policy.ts
@@ -1808,6 +1808,7 @@ src/shared/sandbox-workspace-paths.ts
 src/shared/settle-within.ts
 src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts
+src/shared/tool-block-contract.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/chat-command-invocation.ts
@@ -2168,6 +2169,7 @@ src/config/sessions/session-cold-storage-read.ts
 src/config/sessions/session-entry-read-errors.ts
 src/config/sessions/session-transcript-append-postimage.ts
 src/config/sessions/session-transcript-fts.ts
+src/config/sessions/session-transcript-index-postgres.ts
 src/config/sessions/session-transcript-index.ts
 src/config/sessions/session-transcript-projection-append.ts
 src/config/sessions/session-transcript-projection-rebuild.ts
@@ -2371,7 +2373,6 @@ packages/tool-call-repair/src/protection-fast-path.ts
 packages/tool-call-repair/src/stream-normalizer-snapshot.ts
 packages/tool-call-repair/src/stream-normalizer-suppression.ts
 packages/tool-call-repair/src/stream-normalizer.ts
-src/agents/auth-profiles/oauth-refresh-error-format.ts
 src/agents/auth-profiles/oauth-refresh-failure.ts
 src/agents/bash-tools.exec-output.ts
 src/agents/embedded-agent-helpers/image-errors.ts
@@ -2648,3 +2649,17 @@ src/infra/session-sqlite-migration-manifest.ts
 src/infra/sqlite-integrity-operation.ts
 src/infra/sqlite-migration-scoped-snapshot.ts
 src/infra/update-candidate-plugin-code-links.ts
+src/agents/cli-backends.ts
+src/agents/plugin-text-transforms.ts
+src/agents/stream-iterator-wrapper.ts
+src/llm/utils/stream-wrapper.ts
+src/plugins/api-builder.ts
+src/plugins/api-facades.ts
+src/plugins/api-lifecycle.ts
+src/plugins/cli-backend-registration.ts
+src/plugins/cli-backends.runtime.ts
+src/plugins/cli-callback-binding.ts
+src/plugins/service-scheduler-binding.ts
+src/plugins/setup-registry.ts
+src/shared/map-nested-strings.ts
+src/status/utility-model-warnings.ts

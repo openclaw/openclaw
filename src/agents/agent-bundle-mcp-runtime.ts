@@ -17,6 +17,7 @@ import {
 import {
   getSessionMcpRequestSignal,
   runWithSessionMcpRequestSignal,
+  withSessionMcpCallerAuthority,
 } from "./agent-bundle-mcp-request-context.js";
 import type { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import { createSessionMcpRuntimeParts } from "./agent-bundle-mcp-runtime-parts.js";
@@ -41,7 +42,7 @@ import {
 import { applyMcpConnectionOverride } from "./mcp-connection-resolver.js";
 import { isMcpMethodNotFoundError, redactMcpDiagnosticError } from "./mcp-error.js";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
-import { buildMcpClientCapabilities, summarizeServerCapabilities } from "./mcp-metadata.js";
+import { prepareMcpCaps, summarizeServerCapabilities } from "./mcp-metadata.js";
 import {
   mcpCallToolResultSchema,
   mcpGetPromptResultSchema,
@@ -302,14 +303,20 @@ function createServerMcpRuntime(
     session: BundleMcpSession,
     request: (signal: AbortSignal, holdForHumanInput: () => () => void) => Promise<T>,
     options?: McpRequestOptions,
-  ) => runGuardedServerRequest(session, () => requests.run(session, request), options);
+  ) =>
+    runGuardedServerRequest(
+      session,
+      () => requests.run(session, withSessionMcpCallerAuthority(request)),
+      options,
+    );
   const collectServerItems = (session: BundleMcpSession, kind: "prompts" | "resources") =>
     listMcpServerItems(kind, {
       client: session.client,
       timeoutMs: session.requestTimeoutMs,
       signal: lifecycleAbortController.signal,
       callerSignal: getSessionMcpRequestSignal(),
-      runRequest: (request, signal) => requests.run(session, request, signal),
+      runRequest: (request, signal) =>
+        requests.run(session, withSessionMcpCallerAuthority(request), signal),
     });
 
   const loadCatalog = async (
@@ -361,7 +368,7 @@ function createServerMcpRuntime(
             version: "0.0.0",
           },
           {
-            capabilities: nativeContext?.capabilities ?? buildMcpClientCapabilities(mcpAppsEnabled),
+            capabilities: prepareMcpCaps(transport, nativeContext?.capabilities, mcpAppsEnabled),
             versionNegotiation: { mode: nativeContext && !legacy ? "auto" : "legacy" },
             ...(nativeContext ? { inputRequired: { autoFulfill: false } } : {}),
             jsonSchemaValidator: schemaValidator,
@@ -585,6 +592,8 @@ function createServerMcpRuntime(
           capabilities,
           serverVersion: session.client.getServerVersion(),
           serverCapabilities: session.client.getServerCapabilities(),
+          // Served whole, as Claude's native connection received them.
+          instructions: session.client.getInstructions()?.trim() || undefined,
           pluginId: loaded.pluginIdsByServer?.[serverName],
           connection: resolved,
         });

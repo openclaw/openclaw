@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -9,9 +9,7 @@ import {
   type UtilityCompletionRuntimeParams,
 } from "./utility-completion.js";
 
-function prepared(utilityModelEntry?: {
-  agentRuntime: { id: string };
-}): UtilityCompletionRuntimeParams {
+function prepared(runtimeId?: string): UtilityCompletionRuntimeParams {
   const pluginRegistry = createEmptyPluginRegistry();
   pluginRegistry.cliBackends.push({
     pluginId: "anthropic",
@@ -38,8 +36,8 @@ function prepared(utilityModelEntry?: {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-6" },
           utilityModel: "anthropic/claude-haiku-4-5",
-          ...(utilityModelEntry
-            ? { models: { "anthropic/claude-haiku-4-5": utilityModelEntry } }
+          ...(runtimeId
+            ? { models: { "anthropic/claude-haiku-4-5": { agentRuntime: { id: runtimeId } } } }
             : {}),
         },
       },
@@ -65,91 +63,84 @@ function prepared(utilityModelEntry?: {
   };
 }
 
-describe("resolveUtilityCompletionRuntimeForAgent", () => {
-  it.each([
-    {
-      pin: { agentRuntime: { id: "claude-cli" } },
-      expected: { id: "claude-cli", kind: "cli", label: "Claude CLI" },
-    },
-    { pin: undefined, expected: { id: "openclaw", kind: "api", label: "OpenClaw Default" } },
-  ])("reports the selected $expected.kind owner", async ({ pin, expected }) => {
-    await expect(resolveUtilityCompletionRuntimeForAgent(prepared(pin))).resolves.toEqual(expected);
-  });
+it.each([
+  ["claude-cli", { id: "claude-cli", kind: "cli", label: "Claude CLI" }],
+  [undefined, { id: "openclaw", kind: "api", label: "OpenClaw Default" }],
+] as const)("reports the selected owner for pin %s", async (pin, expected) => {
+  await expect(resolveUtilityCompletionRuntimeForAgent(prepared(pin))).resolves.toEqual(expected);
+});
 
-  it.each([true, false])(
-    "reports a plugin harness only when it supports isolated completions (%s)",
-    async (isolated) => {
-      const params = prepared({ agentRuntime: { id: "route-test" } });
-      params.pluginRegistry!.agentHarnesses.push({
-        pluginId: "route-test",
-        source: "runtime",
-        harness: {
-          id: "route-test",
-          label: "Route Test",
-          supports: () => ({ supported: true }),
-          runAttempt: vi.fn(),
-          ...(isolated ? { runIsolatedCompletionV2: vi.fn() } : {}),
-        },
-      });
-      await expect(resolveUtilityCompletionRuntimeForAgent(params)).resolves.toEqual(
-        isolated ? { id: "route-test", kind: "harness", label: "Route Test" } : undefined,
-      );
-    },
-  );
-
-  it.each(["missing credentials", "retired owner"])("omits a route with %s", async (reason) => {
-    const params = prepared();
-    if (reason === "missing credentials") {
-      params.cfg.models = undefined;
-    } else {
-      params.isCurrent = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
-    }
-    await withEnvAsync(
-      { ANTHROPIC_API_KEY: undefined, ANTHROPIC_OAUTH_TOKEN: undefined },
-      async () => {
-        await expect(resolveUtilityCompletionRuntimeForAgent(params)).resolves.toBeUndefined();
+it.each([true, false])(
+  "reports a plugin harness only when it supports isolated completions (%s)",
+  async (isolated) => {
+    const params = prepared("route-test");
+    params.pluginRegistry!.agentHarnesses.push({
+      pluginId: "route-test",
+      source: "runtime",
+      harness: {
+        id: "route-test",
+        label: "Route Test",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        ...(isolated ? { runIsolatedCompletionV2: vi.fn() } : {}),
       },
+    });
+    await expect(resolveUtilityCompletionRuntimeForAgent(params)).resolves.toEqual(
+      isolated ? { id: "route-test", kind: "harness", label: "Route Test" } : undefined,
     );
-  });
-});
+  },
+);
 
-describe("automatic utility runtime prepared-generation composition", () => {
-  it.each([false, true])(
-    "keeps the primary runtime regardless of prepared API credentials (%s)",
-    async (hasApiCredential) => {
-      const params = prepared();
-      params.cfg.models = undefined;
-      params.cfg.agents!.defaults!.utilityModel = undefined;
-      params.cfg.agents!.defaults!.models = {
-        "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
-      };
-      const plugin = params.metadataSnapshot.plugins[0];
-      if (!plugin) {
-        throw new Error("Expected the Anthropic metadata fixture.");
-      }
-      plugin.modelCatalog = {
-        providers: {
-          anthropic: {
-            defaultUtilityModel: "claude-haiku-4-5",
-            models: [{ id: "claude-haiku-4-5" }, { id: "claude-opus-4-6" }],
-          },
-        },
-      };
-      if (hasApiCredential) {
-        params.preparedAuthStore.profiles["anthropic:test"] = {
-          type: "api_key",
-          provider: "anthropic",
-          key: "synthetic-prepared-key",
-        };
-      }
-      const credentialLookup = vi.spyOn(modelAuth, "hasAvailableAuthForProvider");
-      try {
-        const runtime = await resolveUtilityCompletionRuntimeForAgent(params);
-        expect(runtime).toEqual({ id: "claude-cli", kind: "cli", label: "Claude CLI" });
-        expect(credentialLookup).not.toHaveBeenCalled();
-      } finally {
-        credentialLookup.mockRestore();
-      }
+it.each(["missing credentials", "retired owner"])("omits a route with %s", async (reason) => {
+  const params = prepared();
+  if (reason === "missing credentials") {
+    params.cfg.models = undefined;
+  } else {
+    params.isCurrent = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+  }
+  await withEnvAsync(
+    { ANTHROPIC_API_KEY: undefined, ANTHROPIC_OAUTH_TOKEN: undefined },
+    async () => {
+      await expect(resolveUtilityCompletionRuntimeForAgent(params)).resolves.toBeUndefined();
     },
   );
 });
+
+it.each([false, true])(
+  "keeps the primary runtime regardless of prepared API credentials (%s)",
+  async (hasApiCredential) => {
+    const params = prepared();
+    params.cfg.models = undefined;
+    params.cfg.agents!.defaults!.utilityModel = undefined;
+    params.cfg.agents!.defaults!.models = {
+      "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+    };
+    const plugin = params.metadataSnapshot.plugins[0];
+    if (!plugin) {
+      throw new Error("Expected the Anthropic metadata fixture.");
+    }
+    plugin.modelCatalog = {
+      providers: {
+        anthropic: {
+          defaultUtilityModel: "claude-haiku-4-5",
+          models: [{ id: "claude-haiku-4-5" }, { id: "claude-opus-4-6" }],
+        },
+      },
+    };
+    if (hasApiCredential) {
+      params.preparedAuthStore.profiles["anthropic:test"] = {
+        type: "api_key",
+        provider: "anthropic",
+        key: "synthetic-prepared-key",
+      };
+    }
+    const credentialLookup = vi.spyOn(modelAuth, "hasAvailableAuthForProvider");
+    try {
+      const runtime = await resolveUtilityCompletionRuntimeForAgent(params);
+      expect(runtime).toEqual({ id: "claude-cli", kind: "cli", label: "Claude CLI" });
+      expect(credentialLookup).not.toHaveBeenCalled();
+    } finally {
+      credentialLookup.mockRestore();
+    }
+  },
+);

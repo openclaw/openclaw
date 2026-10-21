@@ -1,5 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { Loading, Show, createMemo, createSignal, onCleanup } from "solid-js";
+import { Errored, Loading, Show, createMemo, createSignal, isPending, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { Icon } from "../components/solid/icon.tsx";
@@ -32,17 +32,7 @@ function PluginSessionDashboardContent(
 ) {
   const context = useOptionalApplication();
   const gateway = context ? projectGateway(context.gateway) : undefined;
-  const [viewAttempt, setViewAttempt] = createSignal(0);
-  const boardView = createMemo(() => {
-    viewAttempt();
-    return import("../components/board/board-view.tsx").then(
-      (module) => ({ view: module.BoardView, error: null }),
-      (error: unknown) => ({
-        view: null,
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    );
-  });
+  const boardView = createMemo(() => import("../components/board/board-view.tsx"));
   const scope = createMemo(
     () => {
       gateway?.revision();
@@ -181,24 +171,32 @@ function PluginSessionDashboardContent(
         </span>
       </button>
       <div class="plugin-session-dashboard__body" hidden={!presentation().expanded}>
-        <Loading>
-          {boardView().error ? (
-            <>
-              <p role="alert">{boardView().error}</p>
-              <button type="button" onClick={() => setViewAttempt((value) => value + 1)}>
-                {t("common.retry")}
-              </button>
-            </>
-          ) : (
-            <Show
-              when={board()}
-              fallback={
-                <p class="plugin-session-dashboard__empty">{t("pluginUi.dashboardEmpty")}</p>
-              }
-            >
-              {(current) => (
-                <Show when={boardView().view} keyed>
-                  {(BoardView) => (
+        <Errored
+          fallback={(error, reset) => {
+            const message = () => {
+              const failure = error();
+              return failure instanceof Error ? failure.message : String(failure);
+            };
+            return (
+              <Show when={!isPending(() => boardView())}>
+                <p role="alert">{message()}</p>
+                <button type="button" onClick={reset}>
+                  {t("common.retry")}
+                </button>
+              </Show>
+            );
+          }}
+        >
+          <Loading>
+            <Show when={boardView().BoardView} keyed>
+              {(BoardView) => (
+                <Show
+                  when={board()}
+                  fallback={
+                    <p class="plugin-session-dashboard__empty">{t("pluginUi.dashboardEmpty")}</p>
+                  }
+                >
+                  {(current) => (
                     <BoardView
                       active={presentation().expanded && props.presented}
                       session={current().session}
@@ -215,8 +213,8 @@ function PluginSessionDashboardContent(
                 </Show>
               )}
             </Show>
-          )}
-        </Loading>
+          </Loading>
+        </Errored>
       </div>
       <Show when={!presentation().expanded && presentation().initialized && !board()}>
         <p class="plugin-session-dashboard__collapsed-empty">{t("pluginUi.dashboardEmpty")}</p>

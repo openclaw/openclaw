@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
+import {
+  GatewayDrainingError,
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import { createInboundDebouncer, type InboundDebounceCreateParams } from "./inbound-debounce.js";
 
 describe("createInboundDebouncer", () => {
@@ -11,6 +20,7 @@ describe("createInboundDebouncer", () => {
 
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+  afterEach(resetGatewayWorkAdmission);
 
   type Message = { key: string; id: string };
   type RecordingOptions<T> = Omit<
@@ -306,6 +316,56 @@ describe("createInboundDebouncer", () => {
     await drain;
     expect(completed).toEqual(["2", "1"]);
   });
+
+  it.each(["accepting", "suspended", "restarting"] as const)(
+    "keeps adopted immediate dispatch owned after HTTP request release (%s)",
+    async (phase) => {
+      const execute = createDeferred();
+      const reply = vi.fn(async () => {});
+      const onError = vi.fn();
+      const debouncer = lifecycleDebouncer(
+        async (_id, lifecycle) => {
+          await lifecycle.onAdopted();
+          await execute.promise;
+          await enqueueCommandInLane("inbound-adopted-turn", reply);
+        },
+        { onError },
+      );
+      const request = tryBeginGatewayRootWorkAdmission("http:request");
+      if (!request) {
+        throw new Error("Expected HTTP request admission");
+      }
+      try {
+        await request.run(() => debouncer.enqueue({ key: "a", id: "1" }));
+        request.release();
+        expect(reply).not.toHaveBeenCalled();
+        if (phase === "suspended") {
+          const suspension = tryBeginGatewaySuspendAdmission(() => {});
+          expect(suspension).not.toBeNull();
+          // New requests are refused while this already-adopted turn finishes.
+          expect(tryBeginGatewayRootWorkAdmission("http:request")).toBeNull();
+        } else if (phase === "restarting") {
+          markGatewayRestartDraining();
+        }
+        execute.resolve();
+        await debouncer.drain();
+        if (phase === "restarting") {
+          expect(reply).not.toHaveBeenCalled();
+          expect(onError).toHaveBeenCalledExactlyOnceWith(expect.any(GatewayDrainingError), [
+            { key: "a", id: "1" },
+          ]);
+        } else {
+          expect(onError).not.toHaveBeenCalled();
+          expect(reply).toHaveBeenCalledOnce();
+        }
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        request.release();
+        execute.resolve();
+        await debouncer.drain();
+      }
+    },
+  );
 
   it("hands pre-admission completion failures to the source lifecycle once", async () => {
     const sessionError = new Error("Session changed while starting work. Retry.");

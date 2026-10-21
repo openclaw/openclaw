@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { observeMediaGenerationSettlement } from "../media-generation-activity.observer.test-support.js";
 import {
   admitMediaHandle,
   resetGeneratedMediaTaskActivityForTests,
@@ -69,19 +70,25 @@ export function admitTask(
   lifecycle: typeof imageGenerationTaskLifecycle,
   requesterSessionKey: string,
 ) {
-  vi.spyOn(lifecycle, "createTaskRun").mockImplementation(async () =>
+  let admitted = 0;
+  const created = vi.spyOn(lifecycle, "createTaskRun").mockImplementation(async () =>
     admitMediaHandle({
-      taskId: "resource-task",
-      runId: "resource-run",
+      taskId: `resource-task-${++admitted}`,
+      runId: `resource-run-${admitted}`,
       detach: true,
       requesterSessionKey,
       requesterAgentId: "main",
       taskLabel: "Synthetic resource proof",
     }),
   );
-  vi.spyOn(lifecycle, "recordTaskProgress").mockImplementation(() => {});
-  const completed = vi.spyOn(lifecycle, "completeTaskRun").mockImplementation(() => {});
-  const failed = vi.spyOn(lifecycle, "failTaskRun").mockImplementation(() => {});
-  vi.spyOn(lifecycle, "wakeTaskCompletion").mockResolvedValue({ status: "delivered" });
-  return { completed, failed };
+  const completeTaskRun = lifecycle.completeTaskRun.bind(lifecycle);
+  const failTaskRun = lifecycle.failTaskRun.bind(lifecycle);
+  const completed = vi.spyOn(lifecycle, "completeTaskRun").mockImplementation(completeTaskRun);
+  const failed = vi.spyOn(lifecycle, "failTaskRun").mockImplementation(failTaskRun);
+  const settlement = observeMediaGenerationSettlement({
+    completeOperation: completed,
+    failOperation: failed,
+  });
+  const wake = vi.spyOn(lifecycle, "wakeTaskCompletion").mockResolvedValue({ status: "delivered" });
+  return { created, completed, failed, wake, settlement };
 }

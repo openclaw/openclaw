@@ -24,12 +24,6 @@ const LOBSTER_ARTS: readonly string[] = [
 
 let bannerEmitted = false;
 
-const hasJsonFlag = (argv: string[]) =>
-  argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
-
-const hasVersionFlag = (argv: string[]) =>
-  argv.some((arg) => arg === "--version" || arg === "-V") || hasRootVersionAlias(argv);
-
 export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
   const commit =
     options.commit ?? resolveCommitHash({ env: options.env, moduleUrl: import.meta.url });
@@ -85,10 +79,10 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
   if (!process.stdout.isTTY) {
     return;
   }
-  if (hasJsonFlag(argv)) {
+  if (argv.some((arg) => arg === "--json" || arg.startsWith("--json="))) {
     return;
   }
-  if (hasVersionFlag(argv)) {
+  if (argv.some((arg) => arg === "--version" || arg === "-V") || hasRootVersionAlias(argv)) {
     return;
   }
   const line = formatCliBannerLine(version, options);

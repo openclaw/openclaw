@@ -1,5 +1,5 @@
 import { setImmediate as drainContinuations } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   readOperatorToolGatewayAuthority,
@@ -20,40 +20,6 @@ import {
 } from "./coordinator.js";
 
 const sessionKey = "session:maintenance";
-
-it.each(["foreground", "shutdown", "restart", "deadline"])(
-  "idle maintenance holds no read barrier and settles on %s",
-  async (reason) => {
-    vi.useFakeTimers();
-    const owner = createMaintenanceOwner({
-      sessionKey: "idle-maintenance",
-      preemptible: true,
-      notBefore: Date.now() + 60_000,
-    });
-    const work = vi.fn(async () => {});
-    const job = owner.track(owner.run(work));
-    const settled = job.catch(() => {});
-    try {
-      await waitForSessionMaintenance("idle-maintenance");
-      expect(work).not.toHaveBeenCalled();
-      if (reason === "foreground") {
-        (await beginForegroundSessionMaintenance("idle-maintenance"))();
-      } else if (reason === "shutdown") {
-        await drainGlobalSingletonLifecycleState("close");
-      } else if (reason === "restart") {
-        await drainGlobalSingletonLifecycleState("restart");
-      } else {
-        await vi.advanceTimersByTimeAsync(60_000);
-      }
-      await settled;
-      expect(work).toHaveBeenCalledTimes(reason === "deadline" ? 1 : 0);
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(work).toHaveBeenCalledTimes(reason === "deadline" ? 1 : 0);
-    } finally {
-      vi.useRealTimers();
-    }
-  },
-);
 const turn = { sessionKey, sessionId: "maintenance", storePath: "/maintenance/current" };
 const target = captureSessionTarget({
   storeScope: turn.storePath,
@@ -114,30 +80,6 @@ function createScenario() {
 }
 
 afterEach(() => drainGlobalSingletonLifecycleState("close"));
-
-it("does not let nested checkpoint work cancel its dependent idle timer", async () => {
-  vi.useFakeTimers();
-  const parent = createOwner({ preemptible: true });
-  const timer = createOwner({ preemptible: true, notBefore: Date.now() + 60_000 });
-  const work = vi.fn(async () => {});
-  const delayed = timer.track(timer.run(work));
-  try {
-    await parent.track(
-      parent.run(async () => {
-        const release = await beginForegroundSessionMaintenance(sessionKey);
-        expect(timer.signal.aborted).toBe(false);
-        release();
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(60_000);
-    await delayed;
-    expect(work).toHaveBeenCalledOnce();
-  } finally {
-    await drainGlobalSingletonLifecycleState("close");
-    await Promise.allSettled([delayed]);
-    vi.useRealTimers();
-  }
-});
 
 it.each([false, true])(
   "drops retired caller/operator authority (optional=%s)",

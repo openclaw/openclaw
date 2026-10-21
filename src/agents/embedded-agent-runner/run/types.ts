@@ -147,9 +147,6 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Transport hooks follow the current endpoint without changing admitted request policy. */
   transportConfig?: RunEmbeddedAgentParams["config"];
   modelCallSequence?: { value: number };
-  compactionRequest?: ReturnType<
-    typeof import("../../session-maintenance/request.js").createSessionCompactionRequest
-  >;
   /** Recomputed by the host for this attempt; never inherited from the requesting turn. */
   githubPublicationAvailable?: boolean;
   disableToolSearch?: true;
@@ -315,7 +312,6 @@ export type EmbeddedRunAttemptResult = {
   contextEngineTerminalAnchor?: import("../../../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
   preflightRecovery?: {
     route: Exclude<PreemptiveCompactionRoute, "fits">;
-    requestedCompaction?: import("../../session-maintenance/request.js").SessionCompactionRequest;
     source?: "mid-turn";
     estimatedPromptTokens?: number;
     promptBudgetBeforeReserve?: number;
@@ -457,8 +453,6 @@ export type EmbeddedRunAttemptResult = {
   contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
   attemptUsage?: NormalizedUsage;
   promptCache?: ContextEnginePromptCacheInfo;
-  requestedCompaction?: import("../../session-maintenance/request.js").SessionCompactionRequest;
-  cacheExpiry?: import("../prompt-cache-expiry.js").PromptCacheExpiryEstimate;
   contextBudgetStatus?: SessionContextBudgetStatus;
   compactionCount?: number;
   compactionTokensAfter?: number;

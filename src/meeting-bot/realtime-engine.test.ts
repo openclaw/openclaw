@@ -11,6 +11,21 @@ import {
   startMeetingRealtimeEngine,
   type MeetingRealtimeToolCallParams,
 } from "./realtime-engine.js";
+import { createMeetingRealtimeOutputOwner } from "./realtime-output-owner.js";
+
+it("retains the latest sixteen stale output responses and clears them on reset", () => {
+  const owner = createMeetingRealtimeOutputOwner();
+  for (let index = 0; index < 17; index++) {
+    const responseId = `response-${index}`;
+    expect(owner.accept(responseId)).toBe(true);
+    owner.block();
+    owner.terminal(responseId);
+  }
+  expect(owner.accept("response-1")).toBe(false);
+  expect(owner.accept("response-0")).toBe(true);
+  owner.reset();
+  expect(owner.accept("response-1")).toBe(true);
+});
 
 type PendingWrite = {
   resolve: () => void;

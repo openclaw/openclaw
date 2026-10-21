@@ -70,7 +70,6 @@ export type SystemAgentChatTurnOptions = {
 };
 
 export type SystemAgentChatEngineOptions = {
-  planGreeting?: SystemAgentGreetingPlanner;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   yes?: boolean;
   deps?: SystemAgentCommandDeps;
@@ -269,17 +268,13 @@ export class SystemAgentChatEngine {
   async planGreeting(
     params: Parameters<SystemAgentGreetingPlanner>[0],
   ): ReturnType<SystemAgentGreetingPlanner> {
-    const runPlanner = async () => {
-      const planner = this.options.planGreeting;
-      return planner
-        ? await planner(params)
-        : await import("./assistant.js").then(({ planSystemAgentGreetingWithConfiguredModel }) =>
-            planSystemAgentGreetingWithConfiguredModel({
-              ...params,
-              verifiedInference: this.verifiedInference,
-            }),
-          );
-    };
+    const runPlanner = async () =>
+      await import("./assistant.js").then(({ planSystemAgentGreetingWithConfiguredModel }) =>
+        planSystemAgentGreetingWithConfiguredModel({
+          ...params,
+          verifiedInference: this.verifiedInference,
+        }),
+      );
     const requesterAgentId = this.options.requesterAgentId?.trim();
     const plan =
       requesterAgentId && requesterAgentId !== this.verifiedInference.execution.agentId
@@ -296,11 +291,8 @@ export class SystemAgentChatEngine {
     if (this.agentSession.verifiedInference !== binding) {
       return this.throwInferenceUnavailable();
     }
-    return await requireSystemAgentInferenceRoute(
-      binding,
-      this.options.deps,
-      "conversation",
-      (failures) => this.throwInferenceUnavailable(failures),
+    return await requireSystemAgentInferenceRoute(binding, "conversation", (failures) =>
+      this.throwInferenceUnavailable(failures),
     );
   }
 

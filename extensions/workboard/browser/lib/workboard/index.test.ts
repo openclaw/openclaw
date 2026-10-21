@@ -1,6 +1,6 @@
 // @vitest-environment node
 import "../../test/host.setup.ts";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { describe, expect, it } from "vitest";
 import { getWorkboardDependencyState } from "./card-state.ts";
 import { getWorkboardLifecycle } from "./lifecycle.ts";

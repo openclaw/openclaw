@@ -12,6 +12,7 @@ import {
   readProviderJsonObjectResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderApiKeyHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   isRecord,
@@ -134,12 +135,13 @@ const RUNWAY_RATIO_SIZES = new Map([
 ]);
 
 function resolveRunwayRatio(req: VideoGenerationRequest): string {
-  const hasImageInput = (req.inputImages?.length ?? 0) > 0;
+  const hasReferenceInput =
+    (req.inputImages?.length ?? 0) > 0 || (req.inputVideos?.length ?? 0) > 0;
   const requested =
     normalizeOptionalString(req.size) ||
     RUNWAY_RATIO_SIZES.get(normalizeOptionalString(req.aspectRatio) ?? "");
   if (requested) {
-    if (!hasImageInput && requested !== "1280:720" && requested !== "720:1280") {
+    if (!hasReferenceInput && requested !== "1280:720" && requested !== "720:1280") {
       throw new Error("Runway text-to-video currently supports only 16:9 or 9:16 output ratios.");
     }
     return requested;
@@ -253,6 +255,9 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
           missingApiKeyMessage: "Runway API key missing",
           baseUrl: req.cfg?.models?.providers?.runway?.baseUrl,
           defaultBaseUrl: DEFAULT_RUNWAY_BASE_URL,
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.runway?.request,
+          ),
           defaultHeaders: {
             "X-Runway-Version": RUNWAY_API_VERSION,
           },
@@ -297,6 +302,8 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
               : { ...deadline, label: `Runway video generation task ${taskId}` },
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           fetchFn,
+          ssrfPolicy: { allowPrivateNetwork },
+          dispatcherPolicy,
           maxAttempts: MAX_POLL_ATTEMPTS,
           pollIntervalMs: POLL_INTERVAL_MS,
           requestFailedMessage: "Runway video status request failed",

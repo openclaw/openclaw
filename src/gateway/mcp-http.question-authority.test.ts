@@ -20,7 +20,6 @@ import {
 import { claimPendingAgentQuestionAnswerFromCaller } from "../agents/harness/gateway-question.js";
 import { withQuestionGateway } from "../agents/harness/gateway-question.test-support.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
-import { resetPendingAskUserQuestionsForTest } from "../agents/tools/ask-user-tool.test-support.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -112,7 +111,6 @@ beforeEach(({ signal }) => {
 afterEach(async () => {
   // A timed-out fixture must finish before shared state belongs to the next test.
   await Promise.allSettled(fixtureRuns);
-  resetPendingAskUserQuestionsForTest();
   resetCliRunnerPrepareTestDeps();
   cliBackendsTesting.resetDepsForTest();
   vi.restoreAllMocks();

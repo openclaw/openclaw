@@ -44,9 +44,14 @@ export function forEachMarkdownCodeRange(
   visit(fromMarkdown(markdown));
 }
 
-function maskMarkdownCode(markdown: string): string {
+export function maskMarkdownCode(markdown: string, keepUnclosedFences = false): string {
   const masked = markdown.split("");
-  forEachMarkdownCodeRange(markdown, (start, end) => {
+  // An extra heading exposes fences that would swallow a local Notes slot.
+  const source = keepUnclosedFences ? `${markdown}\n\n#` : markdown;
+  forEachMarkdownCodeRange(source, (start, end) => {
+    if (end > markdown.length) {
+      return;
+    }
     for (let index = start; index < end; index++) {
       if (masked[index] !== "\n" && masked[index] !== "\r") {
         masked[index] = " ";

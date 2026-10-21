@@ -37,20 +37,16 @@ import {
   resolveChatHistoryPagination,
   type ChatHistoryResult,
 } from "./chat-history-snapshot.ts";
-import {
-  chatHistoryRequests,
-  getChatHistoryLoadState,
-  type InitialChatSnapshotHydration,
-} from "./chat-history-state.ts";
+import { chatHistoryRequests, getChatHistoryLoadState } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
 import {
   CHAT_HISTORY_PREFETCH_EDGE_PX,
   CHAT_HISTORY_INTENT_IDLE_MS,
   clearPaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
+import { ChatPaneSnapshotHydration } from "./chat-pane-snapshot-hydration.ts";
 import { TranscriptHistoryInput } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
@@ -67,15 +63,10 @@ import {
   saveChatSessionScrollPosition,
   scheduleChatScroll,
 } from "./scroll.ts";
-import {
-  applyChatCacheSnapshot,
-  cacheChatSessionSnapshot,
-  readChatSessionSnapshot,
-  resolveChatSnapshotKey,
-} from "./session-message-cache.ts";
+import { applyChatCacheSnapshot } from "./session-message-cache.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
-export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
+export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
   private activeCatalogContinuation: symbol | null = null;
   private activeOlderLoad: Promise<boolean> | null = null;
   private historyViewportFillAttempted = false;
@@ -90,61 +81,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     page: StagedOlderHistoryPage | null;
     load: Promise<void> | null;
   } = { page: null, load: null };
-
-  protected hydrateStoredChatSnapshot(
-    state: NonNullable<ChatPaneHistory["state"]>,
-    sessionKey: string,
-  ): void {
-    const store = this.sessionSnapshotStore;
-    if (!store) {
-      return;
-    }
-    const cacheKey = resolveChatSnapshotKey(state, { sessionKey });
-    const requests = chatHistoryRequests(state);
-    const reading = store.read(cacheKey);
-    const hydration: InitialChatSnapshotHydration = {
-      sessionKey,
-      connected: this.context.gateway.snapshot.phase === "connected",
-      promise: reading
-        .then((storedSnapshot) => {
-          if (
-            requests.initialSnapshotHydration !== hydration ||
-            requests.acceptedHistory ||
-            this.state !== state ||
-            !this.ownsChatSnapshot({ sessionKey }) ||
-            !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-            resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey
-          ) {
-            return hydration.complete?.();
-          }
-          // A sibling can fill the shared cache while this pane still needs its
-          // own transcript. Adopt those messages before revalidating their cursor.
-          const cache = state.chatMessagesBySession;
-          const snapshot = readChatSessionSnapshot(cache, state, { sessionKey }) ?? storedSnapshot;
-          if (!snapshot) {
-            return hydration.complete?.();
-          }
-          applyChatCacheSnapshot(state, snapshot);
-          const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-          cacheChatSessionSnapshot(cache, state, { sessionKey }, mergedSnapshot);
-          if (snapshot.progressCard !== undefined) {
-            const target = this.resolveChatReadTarget();
-            if (target) {
-              this.progressCards.hydrate(target, snapshot.progressCard);
-            }
-          }
-          // Release the history response before publishing the cached transcript.
-          hydration.complete?.();
-        })
-        .catch(() => hydration.complete?.())
-        .finally(() => {
-          if (requests.initialSnapshotHydration === hydration && !hydration.wait) {
-            delete requests.initialSnapshotHydration;
-          }
-        }),
-    };
-    requests.initialSnapshotHydration = hydration;
-  }
 
   protected readonly refreshHistory = () => {
     const state = this.state;

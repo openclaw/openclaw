@@ -595,6 +595,39 @@ it("parks after one hour and resumes only on explicit stop", async () => {
   expect(service.get(attachment.environmentId)?.error).toBeUndefined();
 });
 
+it("keeps the cleanup deadline across restart while allowing recovery and explicit stop", async () => {
+  const failure =
+    "Crabbox stop failed with exit code 4: lease_id_conflict: fixed Machine0 lease lease-1 has an unresolved create attempt";
+  const destroy = vi.fn().mockRejectedValue(new Error(failure));
+  const warn = vi.fn<(message: string) => void>();
+  makeService({ id: "crabbox", destroy }, { logger: { warn } });
+  support.getDevelopmentProfile().provider = "crabbox";
+  const { attachment } = await create();
+  await expect(stop()).rejects.toThrow(failure);
+  state.nowMs += 3_600_000;
+  await service.reconcileSessionAttachments();
+  expect(service.get(attachment.environmentId)?.error).toContain("cleanup parked");
+
+  await support.reopenWorkerEnvironmentStore();
+  makeService({ id: "crabbox", destroy }, { logger: { warn } });
+  for (let sweep = 0; sweep < 3; sweep += 1) {
+    await service.reconcileSessionAttachments();
+    state.nowMs += 300_000;
+  }
+  expect(destroy).toHaveBeenCalledTimes(2);
+  expect(service.get(attachment.environmentId)).toMatchObject({
+    state: "destroying",
+    leaseId: "lease-1",
+    error: expect.stringContaining("cleanup parked"),
+  });
+  expect(service.get(attachment.environmentId)?.error).toContain(failure);
+
+  destroy.mockResolvedValue(undefined);
+  await stop();
+  expect(service.get(attachment.environmentId)).toMatchObject({ state: "destroyed" });
+  expect(service.get(attachment.environmentId)?.error).toBeUndefined();
+});
+
 it("keeps an unconfirmed orphaned lease parked across status reads and sweeps", async () => {
   const warn = vi.fn<(message: string) => void>();
   makeService({}, { logger: { warn } });

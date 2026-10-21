@@ -115,7 +115,6 @@ export function startMatrixQaOpenClawCli(params: {
     child,
     settlementFailureMessage: `${formatMatrixQaCliCommand(params.args)} settlement failed`,
     forceKillAfterMs: MATRIX_QA_CLI_TIMEOUT_KILL_GRACE_MS,
-    initialSignal: "SIGTERM",
     ...(isWindows
       ? {
           windowsCleanup: {

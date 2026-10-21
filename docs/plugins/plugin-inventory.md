@@ -78,6 +78,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[beam](/plugins/reference/beam)** (`@openclaw/beam`) - included in OpenClaw. Read-only coding-session Beam receiver.
 
+- **[bifrost](/plugins/reference/bifrost)** (`@openclaw/bifrost-provider`) - included in OpenClaw. Adds Bifrost model provider support to OpenClaw.
+
 - **[bonjour](/plugins/reference/bonjour)** (`@openclaw/bonjour`) - included in OpenClaw. Advertise the local OpenClaw gateway over Bonjour/mDNS.
 
 - **[browser](/plugins/reference/browser)** (`@openclaw/browser-plugin`) - included in OpenClaw. Adds agent-callable tools.
@@ -173,8 +175,6 @@ Each entry lists the package, distribution route, and description.
 - **[runway](/plugins/reference/runway)** (`@openclaw/runway-provider`) - included in OpenClaw. Adds video generation provider support.
 
 - **[senseaudio](/plugins/reference/senseaudio)** (`@openclaw/senseaudio-provider`) - included in OpenClaw. Adds media understanding provider support.
-
-- **[session-compaction](/plugins/reference/session-compaction)** (`@openclaw/session-compaction`) - included in OpenClaw. Let the model request host-owned compaction at useful conversation boundaries.
 
 - **[session-share](/plugins/reference/session-share)** (`@openclaw/session-share`) - included in OpenClaw. Read-only OpenClaw sessions on paired gateways.
 

@@ -7,14 +7,13 @@ import {
 } from "../infra/heartbeat-wake.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
-import { CronService } from "./service.js";
+import { cronTestInput, cronTestJob } from "./service.fixture-builders.test-support.js";
 import {
   createStartedCronServiceWithFinishedBarrier,
   setupCronServiceSuite,
 } from "./service.test-harness.js";
 import { getSuspensionVisibleCronTaskRunCount } from "./service/active-run-cancellation.js";
 import { loadCronStore, saveCronStore } from "./store.js";
-import type { CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-startup-heartbeat-",
@@ -39,16 +38,13 @@ describe("heartbeat startup catch-up", () => {
     });
     await cron.start();
     const added = await cron.add(
-      {
+      cronTestInput({
         declarationKey: "heartbeat:main",
         name: "early heartbeat",
         agentId: "main",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
         payload: { kind: "heartbeat" },
-      },
+      }),
       { enabledExplicit: true, systemOwned: true },
     );
     const job = "job" in added ? added.job : added;
@@ -88,12 +84,11 @@ describe("heartbeat startup catch-up", () => {
     const store = await makeStorePath();
     const scheduler = createTestGatewayScheduler();
     const now = scheduler.now();
-    const job: CronJob = {
+    const job = cronTestJob({
       id: "overdue-heartbeat",
       name: testCase.name,
       ...("declarationKey" in testCase ? { declarationKey: testCase.declarationKey } : {}),
       agentId: "main",
-      enabled: true,
       createdAtMs: now - 120_000,
       updatedAtMs: now - 120_000,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: now - 120_000 },
@@ -101,7 +96,7 @@ describe("heartbeat startup catch-up", () => {
       wakeMode: testCase.name === "immediate event" ? "now" : "next-heartbeat",
       payload: testCase.payload,
       state: { nextRunAtMs: now - 60_000 },
-    };
+    });
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
     const entered = createDeferred<"heartbeat">();
     const release = createDeferred<HeartbeatRunResult>();
@@ -109,16 +104,12 @@ describe("heartbeat startup catch-up", () => {
       entered.resolve("heartbeat");
       return await release.promise;
     });
-    const cron = new CronService({
+    const { cron } = createStartedCronServiceWithFinishedBarrier({
       scheduler,
       storePath: store.storePath,
-      cronEnabled: true,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      logger,
       requestHeartbeatAndWait,
       resolveHeartbeatTimeoutMs: () => undefined,
-      runIsolatedAgentJob: async () => ({ status: "ok" }),
     });
     const starting = cron.start();
     try {

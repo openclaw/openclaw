@@ -2,12 +2,10 @@ import type { AgentMessage } from "../../runtime/index.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
 /**
- * Captures a safe-boundary compaction request and its measured prompt pressure
- * before the attempt submits another model call.
+ * Captures the token-pressure snapshot that made the mid-turn tool-result guard
+ * stop the attempt before another model call.
  */
 export type MidTurnPrecheckRequest = {
-  /** Voluntary compaction is an explicit host request, not fabricated token pressure. */
-  requestedCompaction?: import("../../session-maintenance/request.js").SessionCompactionRequest;
   route: Exclude<PreemptiveCompactionRoute, "fits">;
   estimatedPromptTokens: number;
   promptBudgetBeforeReserve: number;
@@ -19,23 +17,17 @@ export type MidTurnPrecheckRequest = {
 /** Stable message used to identify synthetic mid-turn overflow errors in session cleanup. */
 const MID_TURN_PRECHECK_ERROR_MESSAGE =
   "Context overflow: prompt too large for the model (mid-turn precheck).";
-const MODEL_REQUESTED_COMPACTION_MESSAGE =
-  "Session compaction requested at a settled tool boundary.";
 
 /**
- * Internal control-flow signal for pressure-driven or model-requested compaction.
- * The attempt releases its tools before the existing run owner compacts and
- * continues; this is never an ordinary provider failure.
+ * Internal control-flow signal thrown after a tool result makes the next prompt
+ * exceed budget. The attempt runner catches it and routes through the overflow
+ * recovery path instead of treating it as an ordinary provider failure.
  */
 export class MidTurnPrecheckSignal extends Error {
   readonly request: MidTurnPrecheckRequest;
 
   constructor(request: MidTurnPrecheckRequest) {
-    super(
-      request.requestedCompaction
-        ? MODEL_REQUESTED_COMPACTION_MESSAGE
-        : MID_TURN_PRECHECK_ERROR_MESSAGE,
-    );
+    super(MID_TURN_PRECHECK_ERROR_MESSAGE);
     this.name = "MidTurnPrecheckSignal";
     this.request = request;
   }
@@ -50,7 +42,6 @@ export function isMidTurnPrecheckAssistantError(message: AgentMessage | undefine
   return (
     message?.role === "assistant" &&
     message.stopReason === "error" &&
-    (message.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE ||
-      message.errorMessage === MODEL_REQUESTED_COMPACTION_MESSAGE)
+    message.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE
   );
 }

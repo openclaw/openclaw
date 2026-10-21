@@ -39,12 +39,15 @@ export function createOkIsolatedCronStateFactory(log: CronServiceDeps["log"]) {
 type RegressionParams = Parameters<typeof createCronRegressionState>[0];
 type Runner = RegressionParams["runIsolatedAgentJob"];
 
-export function createHeldCronRunner() {
+export function createHeldCronRunner(expectedStarts = 1) {
   const started = createDeferred();
   const release = createDeferred<CronJobExecutionResult>();
-  const runner = vi.fn<Runner>(async () => {
-    started.resolve();
-    return await release.promise;
+  let starts = 0;
+  const runner = vi.fn<Runner>(() => {
+    if (++starts === expectedStarts) {
+      started.resolve();
+    }
+    return release.promise;
   });
   return { started: started.promise, release, runner };
 }
@@ -92,20 +95,11 @@ export async function createBlockedCronRun(
     }),
   );
   await saveCronStore(storePath, { version: 1, jobs: [...blockers, job] });
-  const started = createDeferred();
-  const releaseActive = createDeferred<Awaited<ReturnType<Runner>>>();
-  let count = 0;
-  const runIsolatedAgentJob = vi.fn<Runner>(async (input) => {
-    if (blockers.some((blocker) => blocker.id === input.job.id)) {
-      if (++count === blockers.length) {
-        started.resolve();
-      }
-      return await releaseActive.promise;
-    }
-    return overrides.runIsolatedAgentJob
-      ? await overrides.runIsolatedAgentJob(input)
-      : { status: "ok" };
-  });
+  const held = createHeldCronRunner(blockers.length);
+  const runTarget = overrides.runIsolatedAgentJob ?? (async () => ({ status: "ok" as const }));
+  const runIsolatedAgentJob = vi.fn<Runner>((input) =>
+    blockers.some((blocker) => blocker.id === input.job.id) ? held.runner(input) : runTarget(input),
+  );
   const state = createCronRegressionState({
     ...overrides,
     storePath,
@@ -113,7 +107,7 @@ export async function createBlockedCronRun(
     runIsolatedAgentJob,
   });
   const activeRun = Promise.all(blockers.map((blocker) => run(state, blocker.id, "force")));
-  await started.promise;
+  await held.started;
   const queued = createDeferred();
   observeCronJobCommits(job.id, ({ queuedAtMs }) => {
     if (queuedAtMs !== undefined) {
@@ -125,13 +119,13 @@ export async function createBlockedCronRun(
     state,
     runIsolatedAgentJob,
     activeRun,
-    releaseActive,
+    releaseActive: held.release,
     queued: queued.promise,
     readJob: async () => (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id),
     readReceipt: () => inspectActiveCronRunReceipt({ storePath, jobId: job.id }),
     targetCalls: () => runIsolatedAgentJob.mock.calls.filter(([input]) => input.job.id === job.id),
     finishActive: async (result: Awaited<ReturnType<Runner>> = { status: "ok" }) => {
-      releaseActive.resolve(result);
+      held.release.resolve(result);
       await activeRun;
     },
   };

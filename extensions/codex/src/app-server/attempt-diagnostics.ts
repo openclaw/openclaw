@@ -44,10 +44,8 @@ export function createCodexModelCallDiagnosticEmitter(params: {
   tools: readonly CodexModelCallDiagnosticTool[];
   buildInputMessages: () => unknown;
   buildSystemPrompt: () => string | undefined;
-  now?: () => number;
   onErrorDiagnostic?: (error: unknown) => void;
 }) {
-  const now = params.now ?? (() => Date.now());
   const toolDefinitions = params.capture.toolDefinitions
     ? params.tools.map((tool) => ({
         name: tool.name,
@@ -55,7 +53,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
         parameters: tool.inputSchema ?? tool.parameters,
       }))
     : undefined;
-  let startedAt = now();
+  let startedAt = Date.now();
   let started = false;
   let terminalEmitted = false;
   let requestPayloadBytes: number | undefined;
@@ -82,7 +80,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
     terminalEmitted = true;
     const event = {
       ...params.baseFields,
-      durationMs: Math.max(0, now() - startedAt),
+      durationMs: Math.max(0, Date.now() - startedAt),
       ...fields,
       ...(requestPayloadBytes !== undefined ? { requestPayloadBytes } : {}),
     };
@@ -100,7 +98,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
       requestPayloadBytes = bytes;
     },
     emitStarted(): void {
-      startedAt = now();
+      startedAt = Date.now();
       started = true;
       emitTrustedDiagnosticEventWithPrivateData(
         {

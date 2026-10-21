@@ -19,6 +19,7 @@ import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
 } from "../../agents/session-runtime-compat.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
@@ -28,6 +29,7 @@ import {
 } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveMaxActiveTranscriptBytes,
   refreshTranscriptByteCompactionLatch,
@@ -41,6 +43,7 @@ import { isMemoryFlushPlanNativeProviderOwned } from "../../plugins/memory-state
 import { CommandLane } from "../../process/lanes.js";
 import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { acknowledgeReplySessionTransition } from "../../sessions/session-controller.state.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ReplyPayload } from "../types.js";
@@ -59,7 +62,6 @@ import type {
   MemoryFlushOutcome,
   MemoryFlushResult,
   MemoryFlushRunParams,
-  SessionCompactionRunParams,
 } from "./agent-runner-memory.types.js";
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
@@ -92,7 +94,7 @@ import {
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
-import { refreshQueuedFollowupSession } from "./queue.js";
+import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -112,9 +114,30 @@ const memoryFlushPreparationLoader = createLazyImportLoader(
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 
 /** Compacts session context before a reply or after a completed direct command. */
-export async function runSessionCompactionIfNeeded(
-  params: SessionCompactionRunParams,
-): Promise<SessionEntry | undefined> {
+export async function runSessionCompactionIfNeeded(params: {
+  replyOperation?: ReplyOperation;
+  pendingUserEntryId?: string;
+  compactionRequestBudget?: CompactionRequestBudget;
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  promptForEstimate?: string;
+  defaultModel: string;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+  storePath?: string;
+  isHeartbeat: boolean;
+  /** Completed commands carry the actual harness, not the originally requested runtime. */
+  agentHarnessId?: string;
+  abortSignal?: AbortSignal;
+  authorize?: () => boolean;
+  beforeCompaction?: (entry: SessionEntry) => Promise<SessionEntry | undefined>;
+  onCompactionStart?: () => void;
+  onCompactionCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
+  onSessionIdChanged?: (sessionId: string) => void;
+  onCompactionNotice?: (phase: CompactionNoticePhase, text?: string) => Promise<void> | void;
+}): Promise<SessionEntry | undefined> {
   const operatorAuthority = params.followupRun.operatorAuthority;
   const assertActive = () => {
     params.abortSignal?.throwIfAborted();
@@ -123,10 +146,7 @@ export async function runSessionCompactionIfNeeded(
       throw new Error("Session compaction maintenance is no longer active");
     }
   };
-  if (
-    !params.sessionKey ||
-    (params.requestedCompaction && params.cfg.agents?.defaults?.compaction?.enabled === false)
-  ) {
+  if (!params.sessionKey) {
     return params.sessionEntry;
   }
 
@@ -276,7 +296,7 @@ export async function runSessionCompactionIfNeeded(
       tokenCount: tokenCountForCompaction,
       threshold,
     });
-  if (!params.requestedCompaction && !shouldCompactByTokens && !shouldCompactByTranscriptBytes) {
+  if (!shouldCompactByTokens && !shouldCompactByTranscriptBytes) {
     return entry;
   }
 
@@ -294,7 +314,6 @@ export async function runSessionCompactionIfNeeded(
   if (
     shouldCompactByTokens &&
     !shouldCompactByTranscriptBytes &&
-    !params.requestedCompaction &&
     (await defersTokenCompactionToChatGPTBoundary(params.followupRun.run))
   ) {
     assertActive();
@@ -404,16 +423,15 @@ export async function runSessionCompactionIfNeeded(
         thinkLevel: params.followupRun.run.thinkLevel,
         bashElevated: params.followupRun.run.bashElevated,
         trigger: "budget",
-        customInstructions: params.requestedCompaction?.focus,
         modelCallUrgency: resolveModelCallUrgency({
           ...params.followupRun.run,
           trigger: params.isHeartbeat ? "heartbeat" : "user",
           currentInboundEventKind: params.followupRun.currentInboundEventKind,
         }),
         force: true,
-        forcePreflight: !params.requestedCompaction,
-        preflightRequired: !params.requestedCompaction,
-        preflightCompactionTrigger: params.requestedCompaction ? undefined : compactionTrigger,
+        forcePreflight: true,
+        preflightRequired: true,
+        preflightCompactionTrigger: compactionTrigger,
         deferOwningContextEngineCompaction: false,
         contextTokenBudget: contextWindowTokens,
         currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
@@ -712,7 +730,7 @@ export async function runMemoryFlushIfNeeded(
       tokenCount: tokenCountForFlush,
       threshold: flushThreshold,
     }) ||
-    ((params.force || shouldForceFlushByTranscriptSize) &&
+    (shouldForceFlushByTranscriptSize &&
       entry != null &&
       !hasAlreadyFlushedForCurrentCompaction(entry));
 

@@ -105,7 +105,6 @@ function createResultFixture(params: ResultInput = {}) {
     setup: { sessionAgentId: "main" },
     lifecycle: { readYieldState: () => ({ yieldDetected: false }) },
     prepared: {
-      toolBase: { requestedCompaction: undefined },
       toolCatalog: {
         toolSearchRunPlan: { liveAllowedToolNames: new Set(params?.allowedToolNames) },
       },

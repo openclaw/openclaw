@@ -328,6 +328,53 @@ describe("llama.cpp provider plugin", () => {
     },
   );
 
+  it.each([
+    { dimensions: undefined, expected: [3 / 13, 4 / 13, 12 / 13] },
+    { dimensions: 2, expected: [0.6, 0.8] },
+    { dimensions: 3, expected: [3 / 13, 4 / 13, 12 / 13] },
+  ])(
+    "projects and normalizes local vectors with dimensions=$dimensions",
+    async ({ dimensions, expected }) => {
+      mocks.genericCreate.mockResolvedValueOnce({
+        provider: {
+          embed: async () => [3, 4, 12],
+          embedBatch: async () => [
+            [3, 4, 12],
+            [3, 4, 12],
+          ],
+        },
+      });
+      const result = await createEmbedding({ ...fixture.options, dimensions });
+      const provider = expectDefined(result.provider, "local embedding provider");
+
+      await expect(provider.embed("query")).resolves.toEqual(expected);
+      await expect(provider.embedBatch(["first", "second"])).resolves.toEqual([expected, expected]);
+      expect(provider.dimensions).toBe(dimensions);
+      expectCall(mocks.genericCreate, { dimensions: undefined });
+      expect(result.runtime?.cacheKeyData).toEqual({
+        provider: "local",
+        model: DEFAULT_MODEL,
+        ...(dimensions === undefined ? {} : { outputDimensionality: dimensions }),
+      });
+    },
+  );
+
+  it("rejects local vectors shorter than the requested dimensions", async () => {
+    const result = await createEmbedding({ ...fixture.options, dimensions: 3 });
+    const provider = expectDefined(result.provider, "local embedding provider");
+    for (const operation of [
+      () => provider.embed("query"),
+      () => provider.embedBatch(["document"]),
+    ]) {
+      await expect(operation()).rejects.toMatchObject({
+        code: "INVALID_EMBEDDING_RESPONSE",
+        expectedDimensions: 3,
+        actualDimensions: 2,
+        message: expect.stringContaining("reduce or remove memory.search.outputDimensionality"),
+      });
+    }
+  });
+
   it("keeps media preset sections and residency when refreshing embeddings", async () => {
     const { options, providerConfig: provider } = fixture;
     provider.params = { mediaModels: { ocr: "ocr", vision: "vision" } };

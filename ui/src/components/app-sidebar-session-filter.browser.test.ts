@@ -246,23 +246,23 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
 
   it("opens display submenus on mouse hover and leaves touch on click", async () => {
     const { role, query, userEvent } = await mountFilters(1440);
-    const settle = () =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, 300);
-      });
     await role("button", "Filter & sort").click();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const settle = () => vi.advanceTimersByTimeAsync(300);
     const sort = role("button", "Sort by: Created");
     const sortRow = query("#sidebar-sessions-sort")!.parentElement!;
     sortRow.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "touch" }));
     await settle();
     await expect.element(sort).toHaveAttribute("aria-expanded", "false");
     await userEvent.hover(sort);
+    await settle();
     await expect.element(sort).toHaveAttribute("aria-expanded", "true");
     await userEvent.hover(role("option", "Last updated"));
     await settle();
     await sort.click();
     await expect.element(sort).toHaveAttribute("aria-expanded", "true");
     await userEvent.hover(role("heading", "Filters"));
+    await settle();
     await expect.element(sort).toHaveAttribute("aria-expanded", "false");
     await sort.click();
     await expect.element(sort).toHaveAttribute("aria-expanded", "true");

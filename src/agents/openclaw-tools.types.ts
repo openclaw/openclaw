@@ -27,7 +27,6 @@ import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factor
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
-  sessionCompaction?: import("../plugins/tool-types.js").OpenClawPluginToolContext["sessionCompaction"];
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   skillsSnapshot?: SkillSnapshot;

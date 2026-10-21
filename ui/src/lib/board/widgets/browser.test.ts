@@ -3,6 +3,7 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import {
   createBrowserClient,
+  openBrowserActions,
   type BrowserRequestEnvelope,
 } from "../../../components/browser/browser-panel-controller-test-support.ts";
 import {
@@ -132,12 +133,13 @@ describe("Browser dashboard presentation", () => {
       { timeoutMs: 150_000 },
     );
     expect(panel.dashboardTarget?.sessionScoped).toBe(admin ? undefined : true);
-    const download = panel.querySelector('[aria-label="Download file"]');
+    const menu = await openBrowserActions(panel);
+    const download = menu.querySelector('[role="menuitem"][aria-label="Download file"]');
     if (admin) {
       expect(download).not.toBeNull();
     } else {
       expect(download).toBeNull();
-      expect(panel.querySelector('[aria-label="New tab"]')).toBeNull();
+      expect(menu.querySelector('[role="menuitem"][aria-label="New tab"]')).toBeNull();
       expect(h.element.textContent).toContain("isolated session browser");
     }
   });

@@ -59,6 +59,8 @@ export const BrowserPanelHost = defineSolidBridge<BrowserPanelInputs, BrowserPan
       authToken: { default: null, attribute: false },
       embedded: { default: false, type: Boolean, reflect: true },
       tabsInHeader: { default: false, type: Boolean },
+      mobilePresentation: { default: false, type: Boolean },
+      fetchFavicon: { default: undefined, attribute: false },
       presented: { default: false, type: Boolean },
       refreshOnPresentation: { default: true, type: Boolean },
       sessionKey: { default: "", attribute: false },
@@ -119,6 +121,8 @@ function browserPanelContent(owner: BrowserPanelPresentation) {
           }
           embedded={panel().inputs.embedded}
           tabsInHeader={panel().inputs.tabsInHeader}
+          mobilePresentation={panel().inputs.mobilePresentation}
+          fetchFavicon={panel().inputs.fetchFavicon}
         />
       ) : null}
     </>

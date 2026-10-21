@@ -1983,6 +1983,24 @@ openclaw-settings-save-indicator:empty {
   outline-offset: -2px;
 }
 
+/* A single selected owner's sessions sit directly under the owner picker:
+   titles start at the picker's leading edge, so the link inset only offsets
+   the list's negative inline margin and an empty status slot takes no room.
+   Running and draft rows keep their leading indicator. */
+.sidebar-recent-sessions__group--inline-owner
+  .sidebar-recent-session:not(.sidebar-recent-session--child)
+  > .sidebar-recent-session__link
+  > .sidebar-session-indicator:empty {
+  display: none;
+}
+
+.shell:not(.shell--mobile-nav)
+  .sidebar-recent-sessions__group--inline-owner
+  .sidebar-recent-session:not(.sidebar-recent-session--child)
+  > .sidebar-recent-session__link {
+  padding-inline-start: 6px;
+}
+
 .sidebar-child-session-toggle {
   display: inline-flex;
   align-items: center;

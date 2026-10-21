@@ -857,13 +857,6 @@ current owner. Unknown writes are not replayed. Cleanup rechecks session ownersh
 and retained cancellation claims before changing prepared resources. No separate
 Tasks record or managed flow participates in admission or settlement.
 
-Explicit promotion notice and claim annotations execute in the shared-state
-worker. The CLI awaits their best-effort completion before reporting results;
-storage failures still do not fail a promotion claim. Notice recording retains
-its read-only preflight and atomic sorted slug union, preserving the other feed
-fields. Empty notices leave absent databases absent, and already-recorded notices
-do not open a writer. Claim upserts, stored formats, and retention are unchanged.
-
 Update-check telemetry reads its cached response and retained session-creation
 count through the shared-state worker. Successful responses use the existing
 machine-state transaction, which preserves a newer persisted response. The CLI

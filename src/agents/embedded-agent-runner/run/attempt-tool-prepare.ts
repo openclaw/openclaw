@@ -20,7 +20,6 @@ import {
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
 import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
-import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
@@ -89,7 +88,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
-  const compactionRequest = attempt.compactionRequest;
   const pluginExecutionAuthority = readAdmittedRunOperatorAuthority(attempt.admittedRunContext);
   const pluginExecutionSkillsSnapshot = attempt.skillsSnapshot;
   const workspaceReadiness = captureAgentWorkspaceReadiness(attempt.sessionKey);
@@ -199,9 +197,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
-  const inheritedPublicationToolRef: NonNullable<
-    OpenClawCodingToolsOptions["inheritedPublicationToolRef"]
-  > = {};
+  const additionalInheritedToolNamesRef: string[] = [];
   const generationCleanups: Array<(reason: string) => Promise<void>> = [];
   const retiringGenerations = new Set<Promise<void>>();
   let retiredCleanupFailed = false;
@@ -310,7 +306,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     abortSignal: AbortSignal,
   ) => {
     webSearchUnconfigured = false;
-    inheritedPublicationToolRef.current = undefined;
+    additionalInheritedToolNamesRef.length = 0;
     let constructedToolsRaw: Awaited<ReturnType<typeof createOpenClawCodingToolsInternalAsync>> =
       [];
     if (shouldConstructTools) {
@@ -323,22 +319,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         pluginExecutionAuthority,
         pluginExecutionSkillsSnapshot,
         assertInvocationCurrent: assertActive,
-        sessionCompaction:
-          assertActive &&
-          compactionRequest &&
-          attempt.postTurnMaintenance &&
-          attempt.sessionKey &&
-          !attempt.oneShotCliRun &&
-          attempt.sessionPersistence !== "detached" &&
-          !attempt.modelRun &&
-          attempt.promptMode !== "none" &&
-          attempt.trigger !== "memory" &&
-          attempt.trigger !== "heartbeat" &&
-          !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind) &&
-          attempt.config?.agents?.defaults?.compaction?.enabled !== false &&
-          !attempt.contextEngine?.info.ownsCompaction
-            ? compactionRequest.bind(assertActive)
-            : undefined,
         agentId: params.setup.sessionAgentId,
         ...buildConversationContext(),
         forceRestartSafeTools: attempt.forceRestartSafeTools,
@@ -414,7 +394,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         enableHeartbeatTool: attempt.enableHeartbeatTool,
         forceHeartbeatTool: attempt.forceHeartbeatTool,
         inheritedToolAllowlistRef: inheritedToolAllowlist,
-        inheritedPublicationToolRef,
+        additionalInheritedToolNamesRef,
         cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
         cronCreatorToolAllowlistCaptureRef,
         authProfileStore: attempt.authProfileStore,
@@ -515,9 +495,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       get toolAbortSignal() {
         return toolAbortSignal;
       },
-      get requestedCompaction() {
-        return compactionRequest?.pending;
-      },
       refreshPermissionMode: async (
         mode: SessionPermissionMode | null,
         revokeApprovals: () => void,
@@ -552,7 +529,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       forceDirectMessageTool,
       requireExplicitMessageTarget,
       inheritedToolAllowlist,
-      inheritedPublicationToolRef,
+      additionalInheritedToolNamesRef,
       localModelLeanEnabled,
       localModelLeanPreserveToolNames,
       replaySafetyOptions,

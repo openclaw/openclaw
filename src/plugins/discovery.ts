@@ -86,10 +86,7 @@ function currentUid(overrideUid?: number | null): number | null {
   if (overrideUid !== undefined) {
     return overrideUid;
   }
-  if (process.platform === "win32") {
-    return null;
-  }
-  if (typeof process.getuid !== "function") {
+  if (process.platform === "win32" || typeof process.getuid !== "function") {
     return null;
   }
   return process.getuid();
@@ -1190,11 +1187,11 @@ export function discoverOpenClawPlugins(params: {
       "discovery scan",
       () => {
         scanner.discoverConfiguredPaths(params.extraPaths ?? [], workspaceDir);
-        const workspaceMatchesBundledRoot = resolvesToSameDirectory(workspaceRoot, roots.stock);
-        if (roots.workspace && workspaceRoot && !workspaceMatchesBundledRoot) {
-          // Keep workspace auto-discovery constrained to the OpenClaw extensions root.
-          // Recursively scanning the full workspace treats arbitrary project folders as
-          // plugin candidates and causes noisy "plugin manifest not found" validation failures.
+        const workspaceMatchesSharedRoot =
+          resolvesToSameDirectory(workspaceRoot, roots.stock) ||
+          resolvesToSameDirectory(roots.workspace, roots.global);
+        if (roots.workspace && workspaceRoot && !workspaceMatchesSharedRoot) {
+          // Scan only workspace extensions; shared roots retain their installed provenance.
           discoverInDirectory({
             dir: roots.workspace,
             origin: "workspace",

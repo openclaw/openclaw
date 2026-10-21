@@ -85,18 +85,131 @@ function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
 }
 
 describe("candidate-owned publish consumer chain", () => {
-  it.each(["same qualification", "changed candidate", "changed input", "changed P", "revoked P"])(
-    "selects a direct admitted root across transport refs only for %s",
+  it.each([
+    "same qualification",
+    "changelog descendant",
+    "execution-plan descendant",
+    "changed candidate",
+    "changed input",
+    "changed P",
+    "revoked P",
+  ])("selects a direct admitted root across transport refs only for %s", async (scenario) => {
+    const root = candidatePublicationFixture();
+    const descendant =
+      scenario === "changelog descendant" || scenario === "execution-plan descendant";
+    const candidateSha = scenario === "changed candidate" || descendant ? "d".repeat(40) : root.q;
+    const targetSha = descendant ? "d".repeat(40) : root.q;
+    const workflowRef = "release-ci/" + candidateSha.slice(0, 12) + "-456";
+    const inputs = structuredClone(root.plan.qualificationInputs);
+    inputs.ref = candidateSha;
+    inputs.expected_sha = candidateSha;
+    if (scenario === "changed input") {
+      inputs.fail_fast = inputs.fail_fast === "true" ? "false" : "true";
+    }
+    assert(inputs.trusted_workflow_json);
+    const envelope = JSON.parse(inputs.trusted_workflow_json);
+    envelope.trustedWorkflow = {
+      ref: workflowRef,
+      fullRef: "refs/heads/" + workflowRef,
+      sha: candidateSha,
+    };
+    inputs.trusted_workflow_json = JSON.stringify(envelope);
+    const current = admissionFixture(true, {
+      inputs,
+      candidateSha,
+      transportRef: workflowRef,
+      candidateVersion: "2026.8.28-beta.1",
+      policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
+      workflowSource: readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
+    });
+    envelope.qualificationAdmission = current.descriptor;
+    inputs.trusted_workflow_json = JSON.stringify(envelope);
+    if (scenario === "revoked P") {
+      current.authority.permission = "read";
+    }
+    const client = {
+      ...root.client,
+      compareCommits: descendant
+        ? () => ({
+            status: "ahead",
+            merge_base_commit: { sha: root.q },
+            files: [
+              { filename: "CHANGELOG/2026.8.28.md", status: "modified" },
+              { filename: "CHANGELOG/records/2026.8.28.md", status: "modified" },
+            ],
+          })
+        : root.client.compareCommits,
+      verifyQualificationAdmission: (
+        request: Parameters<typeof root.client.verifyQualificationAdmission>[0],
+      ) =>
+        request.workflowRef === workflowRef
+          ? verifyQualificationAdmission({
+              ...request,
+              runGh: current.runGh,
+              downloadArchive: current.archive,
+            })
+          : root.client.verifyQualificationAdmission(request),
+    };
+    const result = validateReleaseRunEvidence(
+      {
+        ...verifier(root),
+        verifierSourceSha: scenario === "changed P" ? "e".repeat(40) : root.p,
+        ...(scenario === "execution-plan descendant"
+          ? {
+              expectedChangedPaths: ["CHANGELOG/2026.8.28.md", "CHANGELOG/records/2026.8.28.md"],
+              expectedEvidencePolicy: "split-changelog-release-v1",
+              expectedEvidenceSha: root.q,
+              expectedRootRunId: root.runId,
+              expectedSelectedRunId: root.runId,
+              expectedTargetSha: targetSha,
+            }
+          : {
+              reuseRequest: {
+                targetSha,
+                releaseProfile: root.manifest.releaseProfile,
+                runReleaseSoak: root.manifest.runReleaseSoak,
+                validationInputs: root.manifest.validationInputs,
+              },
+            }),
+        qualificationReuse: {
+          candidateSha,
+          qualificationSha: candidateSha,
+          workflowRef,
+          descriptor: current.descriptor,
+          inputs,
+        },
+      },
+      client,
+    );
+    if (scenario === "same qualification" || descendant) {
+      const evidence = await result;
+      expect(evidence).toMatchObject({
+        valid: true,
+        directRoot: true,
+        root: { runId: root.runId, workflowRefProof: "candidate-owned-admission-v1" },
+        conclusions: { allRequiredSucceeded: true },
+      });
+      expect(evidence.manifest.publicationArtifacts).toEqual(root.manifest.publicationArtifacts);
+      expect(evidence.children.map((child) => child.runId)).toEqual(
+        root.plan.children.map((child) => child.runId),
+      );
+    } else {
+      await expect(result).rejects.toThrow(
+        scenario === "revoked P" ? "qualification authority" : "exact admitted C/Q/P",
+      );
+    }
+  });
+
+  it.each(["newer main P", "diverged main P"])(
+    "admits a changelog descendant through a %s only on main lineage",
     async (scenario) => {
-      const root = candidatePublicationFixture();
-      const candidateSha = scenario === "changed candidate" ? "d".repeat(40) : root.q;
+      const root = candidatePublicationFixture({ protectedTag: false });
+      const newerP = "c".repeat(40);
+      const candidateSha = "d".repeat(40);
       const workflowRef = "release-ci/" + candidateSha.slice(0, 12) + "-456";
       const inputs = structuredClone(root.plan.qualificationInputs);
       inputs.ref = candidateSha;
       inputs.expected_sha = candidateSha;
-      if (scenario === "changed input") {
-        inputs.fail_fast = inputs.fail_fast === "true" ? "false" : "true";
-      }
       assert(inputs.trusted_workflow_json);
       const envelope = JSON.parse(inputs.trusted_workflow_json);
       envelope.trustedWorkflow = {
@@ -105,21 +218,35 @@ describe("candidate-owned publish consumer chain", () => {
         sha: candidateSha,
       };
       inputs.trusted_workflow_json = JSON.stringify(envelope);
-      const current = admissionFixture(true, {
+      const current = admissionFixture(false, {
         inputs,
         candidateSha,
         transportRef: workflowRef,
         candidateVersion: "2026.8.28-beta.1",
         policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
         workflowSource: readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
+        publisherSha: newerP,
       });
       envelope.qualificationAdmission = current.descriptor;
       inputs.trusted_workflow_json = JSON.stringify(envelope);
-      if (scenario === "revoked P") {
-        current.authority.permission = "read";
-      }
       const client = {
         ...root.client,
+        compareCommits: () => ({
+          status: "ahead",
+          merge_base_commit: { sha: root.q },
+          files: [
+            { filename: "CHANGELOG/2026.8.28.md", status: "modified" },
+            { filename: "CHANGELOG/records/2026.8.28.md", status: "modified" },
+          ],
+        }),
+        compareCommitLineage: (base: string, head: string) => {
+          if (base !== root.p || head !== newerP) {
+            throw new Error("Unexpected lineage comparison");
+          }
+          return scenario === "newer main P"
+            ? { status: "ahead", merge_base_commit: { sha: root.p } }
+            : { status: "diverged", merge_base_commit: { sha: "a".repeat(40) } };
+        },
         verifyQualificationAdmission: (
           request: Parameters<typeof root.client.verifyQualificationAdmission>[0],
         ) =>
@@ -133,10 +260,15 @@ describe("candidate-owned publish consumer chain", () => {
       };
       const result = validateReleaseRunEvidence(
         {
-          ...verifier(root),
-          verifierSourceSha: scenario === "changed P" ? "e".repeat(40) : root.p,
+          repository: root.repository,
+          runId: root.runId,
+          trustedWorkflowRef: "main",
+          trustedWorkflowFullRef: "refs/heads/main",
+          trustedWorkflowSha: newerP,
+          verifierSourceSha: newerP,
+          verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
           reuseRequest: {
-            targetSha: root.q,
+            targetSha: candidateSha,
             releaseProfile: root.manifest.releaseProfile,
             runReleaseSoak: root.manifest.runReleaseSoak,
             validationInputs: root.manifest.validationInputs,
@@ -151,22 +283,14 @@ describe("candidate-owned publish consumer chain", () => {
         },
         client,
       );
-      if (scenario === "same qualification") {
-        const evidence = await result;
-        expect(evidence).toMatchObject({
+      if (scenario === "newer main P") {
+        await expect(result).resolves.toMatchObject({
           valid: true,
           directRoot: true,
           root: { runId: root.runId, workflowRefProof: "candidate-owned-admission-v1" },
-          conclusions: { allRequiredSucceeded: true },
         });
-        expect(evidence.manifest.publicationArtifacts).toEqual(root.manifest.publicationArtifacts);
-        expect(evidence.children.map((child) => child.runId)).toEqual(
-          root.plan.children.map((child) => child.runId),
-        );
       } else {
-        await expect(result).rejects.toThrow(
-          scenario === "revoked P" ? "qualification authority" : "exact admitted C/Q/P",
-        );
+        await expect(result).rejects.toThrow("exact admitted C/Q/P");
       }
     },
   );

@@ -12,7 +12,7 @@ import {
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
-import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
@@ -67,12 +67,6 @@ export async function handleEmbeddedAttemptMidTurnPrecheck(input: {
     source: "mid-turn" as const,
     ...buildPreflightRecoveryBudgetSnapshot(request),
   };
-  if (request.requestedCompaction) {
-    return {
-      preflightRecovery: { ...preflightRecovery, requestedCompaction: request.requestedCompaction },
-      promptError: new MidTurnPrecheckSignal(request),
-    };
-  }
   const logMidTurnPrecheck = (route: string, extra?: string) => {
     log.warn(
       `[context-overflow-midturn-precheck] sessionKey=${attempt.sessionKey ?? attempt.sessionId} ` +

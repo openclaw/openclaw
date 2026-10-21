@@ -143,7 +143,6 @@ it.each(["cancelled", "cleanup-failure"] as const)(
     const supervisor = createNodeWorkerSupervisor({
       env: { OPENCLAW_STATE_DIR: "/synthetic/state" },
       capacity: 1,
-      capacityWaitMs: 0,
       onCapacityChanged: (snapshot) => snapshots.push(snapshot.available),
     });
     const launching = supervisor.launch(input, TEST_WORKER_ENDPOINT, controller.signal);

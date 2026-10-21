@@ -361,7 +361,7 @@ async function* resolveAutoAudioEntries(
       yield { entry };
     }
   }
-  const localAudio = await inspectLocalAudioSelection({ language: params.language });
+  const localAudio = await inspectLocalAudioSelection(params.language);
   for (const entry of localAudio.entries) {
     yield { entry };
   }

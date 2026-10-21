@@ -113,7 +113,7 @@ it.each(["same", "other-client", "other-agent", "other-session"])(
 );
 
 it.each([false, true])(
-  "refreshes an explicitly stale response once (session scoped: %s)",
+  "shows stale metadata immediately and reads fresh facts after backoff (session scoped: %s)",
   async (sessionScoped) => {
     const request = vi
       .fn()
@@ -124,11 +124,29 @@ it.each([false, true])(
     host.sessionKey = "agent:main:pane-one";
     host.readers = [{ ...reader, linkReader: { ...reader.linkReader, sessionScoped } }];
     await hover(anchor);
+    expect(badge()).toBe("Open");
+    expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
+      "true",
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+    anchor.dispatchEvent(
+      new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+    );
+    await vi.advanceTimersByTimeAsync(120);
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(1);
+    anchor.dispatchEvent(
+      new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    await hover(anchor);
     expect(badge()).toBe("Merged");
+    expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
+      "false",
+    );
     expect(request).toHaveBeenCalledTimes(2);
     expect(request.mock.calls[1]?.[1]).toEqual({
       url,
-      refresh: true,
       ...(sessionScoped ? { sessionKey: "agent:main:pane-one" } : {}),
     });
   },
@@ -143,19 +161,19 @@ it("labels still-stale metadata and retries only after short backoff", async () 
   expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
     "true",
   );
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledTimes(1);
   anchor.dispatchEvent(
     new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
   );
   await vi.advanceTimersByTimeAsync(120);
   await hover(anchor);
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledTimes(1);
   anchor.dispatchEvent(
     new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
   );
   await vi.advanceTimersByTimeAsync(30_000);
   await hover(anchor);
-  expect(request).toHaveBeenCalledTimes(4);
+  expect(request).toHaveBeenCalledTimes(2);
 });
 
 it("does not let an older pending preview overwrite committed reader details", async () => {

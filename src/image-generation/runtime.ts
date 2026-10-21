@@ -155,6 +155,7 @@ async function runImageGeneration(
           cfg: params.cfg,
           agentDir: params.agentDir,
           authStore: params.authStore,
+          signal: params.signal,
           count: params.count,
           size: sanitized.size,
           aspectRatio: sanitized.aspectRatio,

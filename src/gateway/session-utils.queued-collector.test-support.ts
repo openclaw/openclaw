@@ -8,8 +8,8 @@ import type { SpawnSubagentContext } from "../agents/subagents/spawn/subagent-sp
 import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { spawnSubagentDirect } from "../agents/subagents/spawn/subagent-spawn.js";
 import { testing as spawnTesting } from "../agents/subagents/spawn/subagent-spawn.test-support.js";
-import { closeSwarmScheduler, reserveSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
-import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
+import { reserveSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
+import { observeSwarmSchedulerWork } from "../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../config/config.js";
 import { resolveSessionResetPolicy } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -83,6 +83,7 @@ export function useQueuedCollectorFixture() {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let projection: SessionRowProjection;
   let cachedContext: Context | undefined;
+  let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
   const launchedRunIds: string[] = [];
   const launchSignals = new Map<string, ReturnType<typeof createDeferred<void>>>();
   const parentOperations: Array<{
@@ -101,10 +102,10 @@ export function useQueuedCollectorFixture() {
   }
 
   beforeEach(async () => {
+    schedulerWork = observeSwarmSchedulerWork();
     lifecycleRequests.controller = new AbortController();
     cachedContext = undefined;
     resetGatewayWorkAdmission();
-    schedulerTesting.reset();
     await registry.resetSubagentRegistryForTests({ persist: false });
     resetAgentEventsForTest({ preserveListeners: true });
     state = await createOpenClawTestState({ label: "queued-collector-projection" });
@@ -162,9 +163,8 @@ export function useQueuedCollectorFixture() {
     // Settle synthetic lifecycle requests before cleanup joins their producers.
     lifecycleRequests.controller.abort(new Error("Queued collector fixture closed"));
     // Keep dispatch dependencies and session state alive until owned launch cleanup settles.
-    await closeSwarmScheduler();
+    await schedulerWork.close();
     await flushPendingSessionsChangedEvents();
-    schedulerTesting.reset();
     launchedRunIds.splice(0).forEach((runId) => clearAgentRunContext(runId));
     launchSignals.clear();
     for (const parent of parentOperations.splice(0)) {

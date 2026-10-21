@@ -4,7 +4,9 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob, CronJobsListResult } from "../api/types.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -59,7 +61,7 @@ function inventory(jobs: CronJob[], overrides: Partial<CronJobsListResult> = {})
     ...overrides,
   });
 }
-async function fixture(page: Page, jobs: CronJob[], width = 1440, deferred = false) {
+async function installSessionFixture(page: Page, jobs: CronJob[], deferred = false) {
   await page.clock.setFixedTime(NOW);
   const gateway = await installMockGateway(page, {
     sessionKey: key,
@@ -68,6 +70,7 @@ async function fixture(page: Page, jobs: CronJob[], width = 1440, deferred = fal
     methodResponses: {
       "progressCard.get": { card: null },
       "cron.list": inventory(jobs),
+      "cron.get": { cases: jobs.map((value) => ({ match: { id: value.id }, response: value })) },
       "sessions.list": chatSessionListResponse([
         {
           key,
@@ -80,11 +83,12 @@ async function fixture(page: Page, jobs: CronJob[], width = 1440, deferred = fal
     },
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+  return gateway;
+}
+async function fixture(page: Page, jobs: CronJob[], width = 1440, deferred = false) {
+  const gateway = await installSessionFixture(page, jobs, deferred);
   if (width < 560) {
-    await page
-      .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-      .first()
-      .click();
+    await navigationDrawerToggle(page).click();
   }
   const link = page.locator(
     '.sidebar-recent-session[data-session-key="' + key + '"] .sidebar-recent-session__link',
@@ -102,6 +106,41 @@ async function fixture(page: Page, jobs: CronJob[], width = 1440, deferred = fal
   };
 }
 suite.define(() => {
+  it.each([
+    { width: 1440, entry: "desktop" },
+    { width: 390, entry: "single" },
+    { width: 390, entry: "list" },
+  ])("opens the selected automation page from $entry Details", async ({ width, entry }) => {
+    await withPage(async ({ page }) => {
+      const selected = job("release + review", { name: "Release review" });
+      const jobs = entry === "single" ? [selected] : [job(), selected];
+      const gateway = await installSessionFixture(page, jobs);
+      const details = await openChatDetails(page);
+      const automations = details.locator('[data-details-group="automations"]');
+      if (entry === "desktop") {
+        await automations.getByRole("link", { name: /Release review/ }).click();
+      } else if (entry === "single") {
+        await automations.getByRole("button", { name: /Release review/ }).click();
+      } else {
+        await automations.locator('[data-details-destination="automations"]').click();
+        await details.getByRole("link", { name: /Release review/ }).click();
+      }
+      await page.waitForURL((url) => url.pathname === "/automations");
+      expect(new URL(page.url()).searchParams.get("job")).toBe(selected.id);
+      await page.locator(".cron-detail-title").getByText(selected.name, { exact: true }).waitFor();
+      expect((await gateway.getRequests("cron.get")).map(({ params }) => params)).toContainEqual({
+        id: selected.id,
+      });
+      expect(await page.locator(".chat-mobile-host").filter({ visible: true }).count()).toBe(0);
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "details-automation-" + entry + ".png"),
+          animations: "disabled",
+          fullPage: true,
+        });
+      }
+    }, width);
+  });
   it.each([1440, 390])("inspects and opens a named automation at %i pixels", async (width) => {
     await withPage(async ({ page }) => {
       const { gateway, card, trigger, flyout } = await fixture(page, [job()], width);

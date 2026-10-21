@@ -86,7 +86,6 @@ export async function runStartupChannelMaintenanceHealth(
     await import("./doctor-startup-channel-maintenance.js");
   await maybeRunDoctorStartupChannelMaintenance({
     cfg: ctx.cfg,
-    env: process.env,
     runtime: ctx.runtime,
     shouldRepair: ctx.prompter.shouldRepair,
   });
