@@ -27,7 +27,7 @@ type DiscordMessageRunQueueParams = {
 };
 
 type DiscordMessageRunQueue = {
-  enqueue: (job: DiscordInboundJob) => void;
+  enqueue: (job: DiscordInboundJob) => Promise<void>;
   deactivate: () => Promise<void>;
 };
 
@@ -134,7 +134,7 @@ export function createDiscordMessageRunQueue(
       };
       if (!lifecycleActive) {
         void cleanupSkipped();
-        return;
+        return pending;
       }
       skippedCleanup.add(cleanupSkipped);
       // Core reply admission owns session serialization. A transport event key
@@ -153,6 +153,7 @@ export function createDiscordMessageRunQueue(
           settlePending();
         }
       });
+      return pending;
     },
     async deactivate() {
       runQueue.deactivate();

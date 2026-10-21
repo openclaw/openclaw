@@ -98,8 +98,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
     const handler = createDiscordMessageHandler(
       createDiscordHandlerParams({ abortSignal: handlerAbort.signal }),
     );
+    const handling = handler(data as never, {} as never);
     try {
-      await handler(data as never, {} as never);
       const received = await started.promise;
       expect(received.message.content).toBe("hello");
       expect(received.data.message.content).toBe("hello");
@@ -113,6 +113,58 @@ describe("createDiscordMessageHandler queue behavior", () => {
       expect(signal?.reason).toBe(reason);
     } finally {
       finish.resolve();
+      await handling;
+      await handler.deactivate();
+    }
+  });
+
+  it("keeps queued dispatch pending until adoption without blocking later steering", async () => {
+    const started = createDeferred<void>();
+    const adopt = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const followerStarted = createDeferred<void>();
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: {
+        data: ReturnType<typeof createMessageData>;
+        turnAdoptionLifecycle?: DiscordIngressLifecycle;
+      }) => ({
+        ...createDiscordQueuePreflightContextForMessage(params.data),
+        turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+      }),
+    );
+    processDiscordMessageMock.mockImplementation(async (ctx: DiscordMessagePreflightContext) => {
+      if (ctx.message.id === "m-held") {
+        started.resolve();
+        await adopt.promise;
+        await ctx.turnAdoptionLifecycle?.onAdopted();
+        await finish.promise;
+      } else {
+        followerStarted.resolve();
+        await ctx.turnAdoptionLifecycle?.onAdopted();
+      }
+    });
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+    let admitted = false;
+    const handling = handler(createMessageData("m-held") as never, {} as never, {
+      turnAdoptionLifecycle: createIngressLifecycle(),
+    }).then(() => {
+      admitted = true;
+    });
+    try {
+      await started.promise;
+      await flushQueueWork();
+      expect(admitted).toBe(false);
+      adopt.resolve();
+      await handling;
+      await handler(createMessageData("m-follower") as never, {} as never, {
+        turnAdoptionLifecycle: createIngressLifecycle(),
+      });
+      await followerStarted.promise;
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    } finally {
+      adopt.resolve();
+      finish.resolve();
+      await handling;
       await handler.deactivate();
     }
   });
@@ -277,14 +329,20 @@ describe("createDiscordMessageHandler queue behavior", () => {
   it("reports a concurrent run failure without leaving busy state stuck", async () => {
     const firstRun = createDeferred<void>();
     processDiscordMessageMock
-      .mockImplementationOnce(async () => {
+      .mockImplementationOnce(async (ctx: DiscordMessagePreflightContext) => {
+        await ctx.turnAdoptionLifecycle?.onAdopted();
         await firstRun.promise;
         throw new Error("simulated run failure");
       })
       .mockImplementationOnce(async () => undefined);
     preflightDiscordMessageMock.mockImplementation(
-      async (params: { data: ReturnType<typeof createMessageData> }) =>
-        createDiscordQueuePreflightContextForMessage(params.data),
+      async (params: {
+        data: ReturnType<typeof createMessageData>;
+        turnAdoptionLifecycle?: DiscordIngressLifecycle;
+      }) => ({
+        ...createDiscordQueuePreflightContextForMessage(params.data),
+        turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+      }),
     );
 
     const setStatus = vi.fn();
