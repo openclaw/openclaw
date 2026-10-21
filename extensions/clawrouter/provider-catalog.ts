@@ -64,6 +64,7 @@ type CatalogModel = {
   displayName?: string;
   upstream: string;
   capabilities: string[];
+  input?: Array<"text" | "image">;
   supportedReasoningEfforts?: CatalogReasoningEffort[];
   pricing?: CatalogPricing;
 };
@@ -160,9 +161,26 @@ function parseCatalogModel(value: unknown): CatalogModel | undefined {
     displayName: normalizeOptionalString(row?.displayName),
     upstream,
     capabilities: normalizeTrimmedStringList(row?.capabilities),
+    input: parseCatalogInput(row?.input),
     supportedReasoningEfforts: normalizeClawRouterReasoningEfforts(row?.supportedReasoningEfforts),
     pricing: parseCatalogPricing(row?.pricing),
   };
+}
+
+function parseCatalogInput(value: unknown): CatalogModel["input"] {
+  if (value === undefined) {
+    return undefined;
+  }
+  // A present but unusable declaration must not regain vision through a name heuristic.
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > 2 ||
+    !value.every((modality) => modality === "text" || modality === "image")
+  ) {
+    return ["text"];
+  }
+  return value;
 }
 
 function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
@@ -217,8 +235,22 @@ function inferReasoning(providerId: string, modelId: string): boolean {
   return /(?:claude-|gemini-|gpt-5|gpt-oss|deepseek-v|reasoner|glm-5|grok-4|minimax-m)/u.test(id);
 }
 
-function inferInput(providerId: string, modelId: string): Array<"text" | "image"> {
-  const id = `${providerId}/${modelId}`.toLowerCase();
+// Older router catalogs omit input. Match exact native OpenAI identities, not a
+// GPT generation prefix: unknown siblings can have different modality contracts.
+const OPENAI_NATIVE_IMAGE_MODEL_IDS = new Set([
+  "gpt-6.1-sol",
+  "gpt-6-sol",
+  "gpt-6-astra",
+  "gpt-4.1",
+  "gpt-4.1-mini",
+  "gpt-4.1-nano",
+]);
+
+function inferInput(providerId: string, model: CatalogModel): Array<"text" | "image"> {
+  if (providerId === "openai" && OPENAI_NATIVE_IMAGE_MODEL_IDS.has(model.upstream)) {
+    return ["text", "image"];
+  }
+  const id = `${providerId}/${model.id}`.toLowerCase();
   return /(?:claude-|gemini-|gpt-4o|gpt-5)/u.test(id) ? ["text", "image"] : ["text"];
 }
 
@@ -314,7 +346,7 @@ function buildRoutedModel(
           },
         }
       : {}),
-    input: inferInput(provider.id, model.id),
+    input: model.input ?? inferInput(provider.id, model),
     cost: modelCost(model.pricing),
     contextWindow: model.pricing?.maxInputTokens ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: model.pricing?.defaultMaxOutputTokens ?? DEFAULT_MAX_TOKENS,

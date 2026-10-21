@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
@@ -531,6 +532,10 @@ suite.define(() => {
       await page.setViewportSize({ width: 1280, height: 900 });
       // Details releases its reserved column after the resize reaches its layout owner.
       await page.locator(".chat-details--docked").waitFor({ state: "detached" });
+      await waitForLayoutSettled(
+        page,
+        ".chat-pane-cache__pane--active :is(.chat-main__conversation, .agent-chat__composer-shell)",
+      );
       const [compactChatMainBox, compactComposerShellBox] = await Promise.all([
         layoutBox(chatMain),
         layoutBox(composerShell),

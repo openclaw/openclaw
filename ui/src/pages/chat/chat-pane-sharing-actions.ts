@@ -27,15 +27,15 @@ import {
 const SESSION_MEMBERS_LIST_METHOD = "session.members.listEvidence";
 
 export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
-  protected readonly clearSessionCompanion = async () => {
+  protected readonly clearSessionCompanion = async (): Promise<boolean> => {
     const scope = this.captureConnectionScope();
     const key = scope?.state.sessionKey;
     if (!scope || !key) {
-      return;
+      return false;
     }
     const agentId = resolveChatAgentId(scope.state);
-    await this.sessionCompanionThreads
-      .reset(
+    try {
+      await this.sessionCompanionThreads.reset(
         key,
         (sessionKey) =>
           scope.client.request<SessionsCompanionResetResult>("sessions.companion.reset", {
@@ -43,16 +43,23 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
             ...(agentId ? { agentId } : {}),
           }),
         agentId,
-      )
-      .catch((error: unknown) => {
-        if (
-          this.presented &&
-          this.isConnectionScopeCurrent(scope) &&
-          scope.state.sessionKey === key
-        ) {
-          this.publishHeaderError(error);
-        }
-      });
+      );
+      // A tab close may follow only the confirmed reset of its initiating session.
+      return (
+        this.isConnectionScopeCurrent(scope) &&
+        scope.state.sessionKey === key &&
+        resolveChatAgentId(scope.state) === agentId
+      );
+    } catch (error: unknown) {
+      if (
+        this.presented &&
+        this.isConnectionScopeCurrent(scope) &&
+        scope.state.sessionKey === key
+      ) {
+        this.publishHeaderError(error);
+      }
+      return false;
+    }
   };
 
   protected setSessionSharingState(cacheKey: string, state: ChatSessionSharingState): void {

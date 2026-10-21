@@ -28,6 +28,7 @@ function observeDetailsSubmit(page: Page) {
       );
       const bounds = current?.getBoundingClientRect();
       const input = composer.getBoundingClientRect();
+      const panel = details.getBoundingClientRect();
       return {
         source,
         height: bounds?.height ?? 0,
@@ -35,7 +36,7 @@ function observeDetailsSubmit(page: Page) {
         open: current?.open ?? null,
         reveal: current?.dataset.reveal ?? null,
         retained: current === card && card.isConnected && details.isConnected,
-        detailsOpen: details.matches(":popover-open"),
+        detailsOpen: panel.height > 0,
         composerHeight: input.height,
         composerTop: input.top,
         queueRows: pane.querySelectorAll(".chat-queue__item").length,
@@ -108,7 +109,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const card = page.locator('[data-progress-card-placement="details"]');
         await card.waitFor({ state: "attached" });
-        expect(await page.locator(".chat-details:popover-open").count()).toBe(0);
+        expect(await page.locator(".chat-details:visible").count()).toBe(0);
         expect(await page.locator('[data-progress-card-placement="composer"]').count()).toBe(0);
         const detailsOpen = name !== "Details-closed desktop" && name !== "active run default mode";
         if (detailsOpen) {
@@ -217,9 +218,7 @@ suite.define(() => {
             revision: 4,
           });
           await card.waitFor({ state: "attached" });
-          expect(await page.locator(".chat-details:popover-open").count()).toBe(
-            detailsOpen ? 1 : 0,
-          );
+          expect(await page.locator(".chat-details:visible").count()).toBe(detailsOpen ? 1 : 0);
           await openChatDetails(page);
           await card.waitFor();
           expect(await card.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(true);

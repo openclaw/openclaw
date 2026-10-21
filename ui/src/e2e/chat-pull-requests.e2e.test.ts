@@ -9,6 +9,7 @@ import {
 } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -19,7 +20,7 @@ import {
   type ControlUiMockGatewayScenario,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
+import { openChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
 import {
   sharedPublisher,
   waitForWatchedSessionKey,
@@ -301,7 +302,13 @@ suite.define(() => {
           rateLimited: false,
           status: "ready",
         });
+        await openDetailsPullRequests(page);
         await pollCount(chips).toBe(count);
+        const host = page.locator(".chat-mobile-host");
+        if ((await host.isVisible()) && (await host.getAttribute("data-mode")) === "dock") {
+          await selectChatLayoutAction(page, "Expand Side panel");
+          await expect.poll(() => host.getAttribute("data-mode")).toBe("expanded");
+        }
         await page.locator(".chat").evaluate(finishElementAnimations);
         const bounds = await stack.evaluate((element) => {
           const detailsBounds = element.closest(".chat-details")!.getBoundingClientRect();
@@ -333,6 +340,9 @@ suite.define(() => {
           );
         }
         for (const [index, chip] of (await chips.all()).entries()) {
+          await pollAttr(chip.locator(".chat-pr__link"), "href").toBe(
+            `https://github.com/openclaw/openclaw/pull/${index + 1}`,
+          );
           await chip.locator(".chat-pr__link").click({ trial: true });
           await chip
             .getByRole("button", {
@@ -392,6 +402,7 @@ suite.define(() => {
       await expect.poll(() => dismiss.isEnabled()).toBe(true);
 
       await page.setViewportSize(viewport);
+      await openDetailsPullRequests(page);
       await page.locator(".chat").evaluate(finishElementAnimations);
       if (captureUiProof) {
         await page.screenshot({

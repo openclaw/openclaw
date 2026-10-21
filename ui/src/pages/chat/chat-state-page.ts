@@ -404,6 +404,14 @@ export function createPageState(
       transientResourceScope = scope;
     }
     const normalized = normalizeSidebarLayout(layout);
+    // New tab is a live layout fact, not a saved resource or settings schema.
+    // The persistence normalizer deliberately strips it again below.
+    if (layout.newTab && normalized.columns[0]) {
+      normalized.newTab = { ...layout.newTab };
+      if (layout.columns[0]?.activePanelId === layout.newTab.id) {
+        normalized.columns[0].activePanelId = layout.newTab.id;
+      }
+    }
     const previous = state.sidebarLayout;
     const includesResource = (value: SidebarLayout, slot: "desktop" | "browser") =>
       value.columns.some((column) => column.panels.some((panel) => panel.slot === slot));
@@ -480,6 +488,9 @@ export function createPageState(
     if (!normalizedPanelId) {
       return;
     }
+    if (state.sidebarLayout.newTab?.id === normalizedPanelId) {
+      return;
+    }
     const selected = state.sidebarLayout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.id === normalizedPanelId)?.slot;
@@ -505,6 +516,22 @@ export function createPageState(
         : content?.kind === "file"
           ? { id: `file:${content.path}`, label: content.name }
           : null);
+    if (fileTab && content) {
+      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
+        // A second app link changes host context on the retained instance.
+        preview.content = content;
+        preview.label = fileTab.label;
+        const workspace = getSessionWorkspace(state);
+        workspace.previews = [...workspace.previews];
+      }
+    } else {
+      state.sidebarContent = content;
+    }
+    // Internal catalog navigation updates the retained reader, never the panel selection.
+    if (content?.fileTab?.intent === "navigate") {
+      return;
+    }
     const targetSlot = fileTab ? "workspace" : "detail";
     let opened = openSlot(state.sidebarLayout, targetSlot);
     const targetPanel = opened.columns
@@ -518,18 +545,6 @@ export function createPageState(
       availableWidth > 0 && availableWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
-    if (fileTab && content) {
-      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
-      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
-        // A second app link changes host context on the retained instance.
-        preview.content = content;
-        preview.label = fileTab.label;
-        const workspace = getSessionWorkspace(state);
-        workspace.previews = [...workspace.previews];
-      }
-    } else {
-      state.sidebarContent = content;
-    }
     state.updateSidebarLayout(fitted);
     if (targetPanel) {
       state.updateSidebarActivePanel(targetPanel.id);
@@ -567,7 +582,7 @@ export function createPageState(
   state.handleCloseImage = () => {
     invalidateImageLightbox(state);
   };
-  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
+  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory", "branchQuery"]);
   {
     let value = state.chatQueue;
     const queue = projectSource(state, {

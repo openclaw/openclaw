@@ -35,7 +35,6 @@ import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import {
-  chatHistoryRequests,
   getChatHistoryLoadState,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
@@ -65,7 +64,7 @@ import {
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
 import { cancelChatScroll } from "./scroll.ts";
-import { currentSessionApprovalReplay } from "./session-approval-projection.ts";
+import { currentInlineSessionApproval } from "./session-approval-projection.ts";
 import {
   clearChatMessagesFromCache,
   readChatSessionSnapshot,
@@ -342,9 +341,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const questions = visible
       ? listQuestionPrompts(this.questionPromptState).filter(matchesConversation)
       : [];
-    const approvalReplay = visible ? currentSessionApprovalReplay(state, agentId) : undefined;
-    const pendingReplay = chatHistoryRequests(state).pendingApprovalReplay;
-    const isPending = (id: string) => pendingReplay?.events.get(id)?.phase !== "terminal";
     // Question records mutate in place; their revisions own transcript-cache invalidation.
     if (
       questions.length !== this.questionProjection.prompts.length ||
@@ -360,16 +356,13 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       };
     }
     const overlays = this.context.overlays;
-    // Only a complete pending replay supersedes the global queue. Live
-    // events and partial pending reads cannot prove another request absent.
     const inlineApproval = visible
-      ? (state.chatSessionApprovalQueue?.find((approval) => isPending(approval.id)) ??
-        (approvalReplay?.complete
-          ? null
-          : overlays?.snapshot?.approvalQueue?.find(
-              (approval) => isPending(approval.id) && matchesConversation(approval.request),
-            )) ??
-        null)
+      ? currentInlineSessionApproval(
+          state,
+          agentId,
+          overlays?.snapshot?.approvalQueue,
+          matchesConversation,
+        )
       : null;
     return {
       gatewayQuestionPrompts: this.questionProjection.prompts,

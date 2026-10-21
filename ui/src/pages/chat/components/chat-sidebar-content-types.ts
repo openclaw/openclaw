@@ -1,4 +1,5 @@
-import type { JSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
+import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import type { ChatMessageGetResult } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionFileDownload } from "../../../api/session-file-download.ts";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
@@ -10,11 +11,6 @@ import type {
   ImageRenderOptions,
   ArtifactDownloadResolver,
 } from "./chat-message-media.ts";
-import type {
-  SessionDiffFileTextLoader,
-  SessionDiffLoader,
-  SessionDiffOwner,
-} from "./session-diff-panel.tsx";
 
 export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
@@ -84,6 +80,51 @@ export type TranscriptAttachments = {
   omittedMedia: boolean;
 };
 
+export type MobileFileBack = { label: string; onBack: () => void };
+
+export type SessionDiffScope =
+  | { scope: "all" | "uncommitted" }
+  | { scope: "commit"; commit: string };
+
+type SessionDiffLoader = (params: SessionDiffScope) => Promise<SessionsDiffResult>;
+
+type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;
+
+export type SessionDiffOwner = { agentId: string; sessionKey: string };
+
+export type SessionDiffFileView = "reading" | "highlighted" | "plain" | "edit";
+
+type SessionDiffMobilePageRequest = {
+  key: "session-diff-sync";
+  title: string;
+  /** Invoke in the native page outlet; dispose on Back, retain only while hidden. */
+  render: () => SolidJSX.Element;
+};
+
+export type SessionDiffProps = {
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
+  /** Native host presentation, not the width of the panel. Unknown retains the native UI. */
+  mobile?: boolean | null;
+  active?: boolean;
+  /** A new object requests a scope on the same native checkout, including on a retained tab. */
+  scopeRequest?: { owner: SessionDiffOwner; scope: SessionDiffScope } | null;
+  onResult?:
+    | ((value: {
+        owner: SessionDiffOwner | null;
+        scope: SessionDiffScope;
+        result: SessionsDiffResult;
+      }) => void)
+    | null;
+  owner: SessionDiffOwner | null;
+  execNode: string | null;
+  loader: SessionDiffLoader | null;
+  loadFileText: SessionDiffFileTextLoader | null;
+  openFile: ((path: string) => void | Promise<SessionWorkspacePreview | undefined>) | null;
+  revealFile: ((path: string) => void) | null;
+  openFileView?: ((path: string, view: SessionDiffFileView) => void) | null;
+  onOpenMobilePage?: ((page: SessionDiffMobilePageRequest, source: HTMLElement) => void) | null;
+};
+
 type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
@@ -128,7 +169,7 @@ export type FilePreviewSource = {
   download: (signal: AbortSignal) => Promise<FileReaderDownload | null>;
 };
 
-type ImageSidebarContent = {
+export type ImageSidebarContent = {
   file?: FilePreviewSource;
   kind: "image";
   title: string;
@@ -163,7 +204,7 @@ export type AttachmentSidebarRuntime = {
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
 
-type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
+export type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
   kind: "attachment";
   file?: FilePreviewSource;
   attachmentKind?: "audio" | "video" | "document" | "image";
@@ -174,7 +215,7 @@ type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
   sourceIdentity?: string;
   voiceNote?: boolean;
   plainText?: boolean;
-  renderActions?: () => JSX.Element;
+  renderActions?: () => SolidJSX.Element;
   /** Authorize and read fresh bytes for each explicit download. */
   download?: (signal: AbortSignal) => Promise<Blob | null>;
   resolveSource?: (
@@ -188,8 +229,18 @@ type SessionDiffSidebarContent = {
   kind: "session-diff";
   owner: SessionDiffOwner;
   load: SessionDiffLoader;
+  /** Last accepted native Uncommitted result for this exact diff loader. */
+  uncommitted?: SessionsDiffResult;
+  /** Visible Environment demand shares this content's native diff loader. */
+  requestUncommitted?: () => void;
+  onResult?: SessionDiffProps["onResult"];
   loadFileText?: SessionDiffFileTextLoader;
-  openFile?: (path: string) => void;
+  openFile?: (path: string) => void | Promise<SessionWorkspacePreview | undefined>;
+  /** Native host/reader inputs, memoized by the caller for this retained content. */
+  presentation?: Pick<
+    SessionDiffProps,
+    "mobile" | "active" | "openFileView" | "onOpenMobilePage" | "scopeRequest"
+  >;
   rawText?: string | null;
 };
 
@@ -213,7 +264,9 @@ export type FileReaderViewRequest = {
   view: FileReaderView;
 };
 
-export type FileSidebarNavigation = { line: number };
+export type FileSidebarNavigation =
+  | { line: number; view?: FileReaderViewRequest }
+  | { line?: number; view: FileReaderViewRequest };
 
 export type SessionFileSource = { sessionKey: string; agentId?: string; path: string };
 
@@ -227,7 +280,7 @@ export type FileSidebarContent = {
   absolutePath?: string;
   name: string;
   content: string;
-  download?: (signal: AbortSignal) => Promise<SessionFileDownload | null>;
+  download?: (signal: AbortSignal) => Promise<FileReaderDownload | null>;
   sessionFileSource?: SessionFileSource;
   /** Stable per-session identity used to retain an unsaved in-memory draft. */
   draftKey?: string;
@@ -237,7 +290,7 @@ export type FileSidebarContent = {
   mimeType?: string;
   language?: string;
   line?: number | null;
-  /** New identity for an explicit line request; ordinary tab selection retains it. */
+  /** Explicit line/view request; ordinary tab selection retains its identity. */
   navigation?: FileSidebarNavigation;
   rawText?: string | null;
   edit?: FileSidebarEdit;
@@ -275,7 +328,9 @@ export type SidebarSelection = (
   // Keep failed opens attached to their selected surface instead of falling back
   // to unrelated content.
   | { kind: "unavailable"; message: string }
-) & { fileTab?: { id: string; label: string; disposition?: "pinned" | "preview" } };
+) & {
+  fileTab?: { id: string; label: string; disposition?: "pinned" | "preview"; intent?: "navigate" };
+};
 
 export type FileReaderInteraction = "selection" | "copy" | "link" | "edit";
 

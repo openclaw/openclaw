@@ -411,6 +411,8 @@ suite.define(() => {
         );
         await activeSubagentsTab.focus();
         await page.keyboard.press("Enter");
+        expect(await activePane.locator(".sidebar-region--expanded-side").isVisible()).toBe(true);
+        await selectChatLayoutAction(activePane, "Restore split");
         await activePane.locator(".sidebar-region--expanded-side").waitFor({ state: "hidden" });
         expect(await mountedPanel?.evaluate((element) => element.isConnected)).toBe(true);
         await mountedPanel?.dispose();

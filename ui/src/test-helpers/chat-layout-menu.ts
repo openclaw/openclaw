@@ -1,6 +1,24 @@
 import type { ElementHandle, Locator, Page } from "playwright";
 import { expect } from "vitest";
 
+export async function openChatDashboardMenu(scope: Page | Locator): Promise<Locator> {
+  const menu = nativePane(scope).locator(".chat-dashboard-menu").filter({ visible: true });
+  const trigger = menu.getByRole("button", { name: "Dashboard options", exact: true });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click();
+  }
+  await menu.getByRole("menu", { name: "Dashboard options", exact: true }).waitFor();
+  return menu;
+}
+
+export async function closeChatDashboardMenu(scope: Page | Locator): Promise<void> {
+  const menu = nativePane(scope).locator(".chat-dashboard-menu").filter({ visible: true });
+  await menu.getByRole("button", { name: "Dashboard options", exact: true }).click();
+  await menu.getByRole("menu", { name: "Dashboard options", exact: true }).waitFor({
+    state: "hidden",
+  });
+}
+
 type DomChatLayoutScope = {
   container: ParentNode;
   click: (element: HTMLElement) => Promise<void>;
@@ -101,6 +119,38 @@ export async function closeChatLayoutMenu(
   }
 }
 
+export function nativePane(scope: Page | Locator): Locator {
+  return "mainFrame" in scope
+    ? scope
+        .locator(
+          ".chat-pane-cache__pane--active, .chat-split-view__cell--active openclaw-chat-pane.chat-split-view__pane",
+        )
+        .filter({ visible: true })
+        .first()
+    : scope
+        .locator("xpath=ancestor-or-self::openclaw-chat-pane[1]")
+        .or(scope.locator("openclaw-chat-pane").filter({ visible: true }))
+        .first();
+}
+
+function nativePanelControl(scope: Page | Locator, name: string | RegExp): Locator | null {
+  if (name !== "Focus" && name !== "Restore split" && name !== "Expand Side panel") {
+    return null;
+  }
+  const pane = nativePane(scope);
+  const restore = name === "Restore split";
+  return pane
+    .locator('.sidebar-region--desktop [data-region-header="side"]')
+    .getByRole("button", { name: restore ? "Restore split" : "Expand Side panel", exact: true })
+    .or(
+      pane
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", { name: restore ? "Restore" : "Expand Side panel", exact: true }),
+    )
+    .filter({ visible: true })
+    .first();
+}
+
 export async function selectChatLayoutAction(
   scope: Page | Locator | DomChatLayoutScope,
   name: string | RegExp,
@@ -116,6 +166,46 @@ export async function selectChatLayoutAction(
     }
     await scope.click(action);
     await waitForMenuClose(menu);
+    return;
+  }
+  if (name === "Use current view as default") {
+    const menu = await openChatDashboardMenu(scope);
+    await menu
+      .getByRole("menuitem", { name, exact: true })
+      .or(menu.getByRole("menuitemcheckbox", { name, exact: true }))
+      .click();
+    await menu.getByRole("menu", { name: "Dashboard options", exact: true }).waitFor({
+      state: "hidden",
+    });
+    return;
+  }
+  const host = nativePane(scope).locator(".chat-mobile-host");
+  const closeHost = host
+    .locator(".chat-mobile-host__header")
+    .getByRole("button", { name: "Close", exact: true });
+  const togglesPanel = ["Side panel", "Minimize side panel"].some((label) =>
+    typeof name === "string" ? name === label : name.test(label),
+  );
+  if (
+    togglesPanel &&
+    (await host.locator(".chat-mobile-host__panels").isVisible()) &&
+    (await closeHost.isVisible())
+  ) {
+    await closeHost.click();
+    return;
+  }
+  const nativeControl = nativePanelControl(scope, name);
+  if (
+    nativeControl &&
+    // Expanded mobile panels restore within their modal host; desktop main
+    // Focus and Restore retain Layout while that entry is available.
+    (name === "Expand Side panel" ||
+      (name === "Restore split" &&
+        (await host.isVisible()) &&
+        (await host.getAttribute("data-mode")) === "expanded") ||
+      !(await scope.locator("button.chat-pane__layout-trigger:not([inert] *)").first().isVisible()))
+  ) {
+    await nativeControl.click();
     return;
   }
   const menu = await openChatLayoutMenu(scope);

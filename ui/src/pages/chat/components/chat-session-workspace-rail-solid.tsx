@@ -13,6 +13,7 @@ import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import { DesktopWorkspaceContents } from "./chat-session-workspace-desktop.tsx";
+import { MobileWorkspaceContents } from "./chat-session-workspace-mobile-adapter.tsx";
 import type { SessionWorkspaceFilter } from "./chat-sidebar-content-types.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 
@@ -487,6 +488,9 @@ export function SessionWorkspaceRail(props: { workspace?: SessionWorkspaceProps 
         <Switch fallback={<WorkspaceContents workspace={workspace()} />}>
           <Match when={workspace().presentation === "desktop"}>
             <DesktopWorkspaceContents workspace={workspace()} />
+          </Match>
+          <Match when={workspace().presentation === "mobile"}>
+            <MobileWorkspaceContents workspace={workspace()} />
           </Match>
         </Switch>
       )}

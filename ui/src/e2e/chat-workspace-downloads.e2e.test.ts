@@ -4,6 +4,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
+import { selectFileAction } from "./chat-file-actions.test-support.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -164,8 +165,16 @@ suite.define(() => {
           .locator(".chat-files-panel__page:visible")
           .filter({ has: downloadButton(page) });
         await preview.waitFor();
-        await save(downloadButton(preview));
-        await preview.getByRole("button", { name: "Show in Files", exact: true }).click();
+        // Oversized files expose the primary action in their unavailable-preview state.
+        const previewDownload = downloadButton(
+          file === files[0]
+            ? preview.locator(".sidebar-file-view__path-bar")
+            : preview.locator("openclaw-panel-empty-state"),
+        );
+        await save(previewDownload);
+        if (file === files[0]) {
+          await selectFileAction(preview, "Show in Files");
+        }
       }
       expect(await gateway.getRequests("sessions.files.download")).toHaveLength(5);
       expect(page.url()).toBe(originalUrl);

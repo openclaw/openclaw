@@ -52,6 +52,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     runtime.boardPresentation,
     runtime.pendingPanelToggles,
     runtime.workspaceConflicts,
+    runtime.mobilePresentation,
   ]) {
     projectChatFields(owner);
   }
@@ -59,6 +60,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     ...chatPanePropertyKeys,
     "paneWidth",
     "desktopFocus",
+    "dashboardControls",
     "replyNavigationSessionKey",
     "replyNavigationId",
   ]);

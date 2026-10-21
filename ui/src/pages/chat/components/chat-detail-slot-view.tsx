@@ -55,6 +55,7 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
         <openclaw-chat-detail-panel
           class="chat-sidebar"
           prop:content={props.content}
+          prop:onScrollPortRef={props.chat.onScrollPortRef}
           prop:fileNavigation={
             props.content.kind === "file" ? (props.content.navigation ?? null) : null
           }
@@ -80,7 +81,7 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
             githubRepositories: props.chat.githubRepositories,
           }}
           prop:onOpenWorkspaceFile={(target: MarkdownFileLinkTarget) =>
-            openSessionWorkspaceFile(props.host, target)
+            void openSessionWorkspaceFile(props.host, target)
           }
           prop:onOpenSessionLink={props.chat.onOpenSessionLink}
           prop:onRevealInWorkspace={(path: string) => {

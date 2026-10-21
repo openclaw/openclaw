@@ -3,8 +3,8 @@ import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { UiSettings } from "../app/settings.ts";
 import {
-  closeChatLayoutMenu,
-  openChatLayoutMenu as openLayoutMenu,
+  closeChatDashboardMenu,
+  openChatDashboardMenu,
   selectChatLayoutAction,
 } from "../test-helpers/chat-layout-menu.ts";
 import {
@@ -27,7 +27,7 @@ const withDesktop = (run: Parameters<typeof suite.withPage>[1]) =>
   suite.withPage({ viewport: { width: 1440, height: 1000 } }, run);
 
 async function expectDefaultStatus(page: Page) {
-  const status = (await openLayoutMenu(page)).locator(defaultStatus);
+  const status = (await openChatDashboardMenu(page)).locator(defaultStatus);
   await status.waitFor({ state: "visible" });
   expect(await status.textContent()).toContain("This is the default view");
   return status;
@@ -107,7 +107,7 @@ async function openDashboard(
 }
 
 async function openDefaultAction(page: Page) {
-  const menu = await openLayoutMenu(page);
+  const menu = await openChatDashboardMenu(page);
   const action = menu.locator(defaultAction);
   await action.waitFor({ state: "visible" });
   return action;
@@ -163,15 +163,15 @@ suite.define(() => {
       await page.locator("openclaw-board-view").waitFor({ state: "visible" });
       const chat = page.locator('openclaw-chat-pane[aria-hidden="false"] .sidebar-region__primary');
       await chat.waitFor({ state: "hidden" });
-      const menu = await openLayoutMenu(page);
+      const menu = await openChatDashboardMenu(page);
       await menu.locator(`${defaultAction}, ${defaultStatus}`).waitFor({ state: "visible" });
       expect(await menu.locator(defaultStatus).count()).toBe(0);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       await saveDefault(page, gateway, true);
       await expect.poll(() => sidebarLink.getAttribute("href")).toContain("/dashboard/main/");
-      const savedMenu = await openLayoutMenu(page);
+      const savedMenu = await openChatDashboardMenu(page);
       await savedMenu.locator(defaultStatus).waitFor({ state: "visible" });
-      await closeChatLayoutMenu(page);
+      await closeChatDashboardMenu(page);
       // This fixture can read Sessions but does not advertise Home or session creation.
       await page.locator('[data-navigation-view="pages"]').click();
       await page
@@ -256,7 +256,7 @@ suite.define(() => {
         "Used when anyone opens this dashboard. Personal layout choices still apply.",
       );
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-      await closeChatLayoutMenu(page);
+      await closeChatDashboardMenu(page);
 
       await focusChatSidePanel(page);
       await chat.waitFor({ state: "hidden" });
@@ -266,7 +266,7 @@ suite.define(() => {
       await saveDefault(page, gateway);
       await expect.poll(() => page.locator(defaultAction).count()).toBe(0);
       await expectDefaultStatus(page);
-      await closeChatLayoutMenu(page);
+      await closeChatDashboardMenu(page);
 
       await withDesktop(async ({ page: reader }) => {
         const readerGateway = await openDashboard(reader, "expanded", { readOnly: true });
@@ -277,7 +277,7 @@ suite.define(() => {
         await expectLayout(reader, "expanded");
         await expectDefaultStatus(reader);
         expect(await reader.locator(defaultAction).count()).toBe(0);
-        await closeChatLayoutMenu(reader);
+        await closeChatDashboardMenu(reader);
         await selectChatLayoutAction(reader, "Restore split");
         await readerChat.waitFor({ state: "visible" });
         expect(await presentationOverride(reader)).toBe("split");
@@ -293,7 +293,7 @@ suite.define(() => {
 
       await selectChatLayoutAction(page, "Restore split");
       await chat.waitFor({ state: "visible" });
-      await selectChatLayoutAction(page, "Focus");
+      await focusChatSidePanel(page);
       await chat.waitFor({ state: "hidden" });
       expect(await presentationOverride(page)).toBeNull();
       // The server changes while this browser still has the old roster cached.
@@ -313,7 +313,8 @@ suite.define(() => {
   it("offers the same conditional action in the compact menu without persisting deep-link intent", async () => {
     await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
       const gateway = await openDashboard(page, "split", { expandedLink: true });
-      await page.locator(".sidebar-region__primary").waitFor({ state: "hidden" });
+      await page.locator(".sidebar-region__primary").waitFor({ state: "visible" });
+      await page.locator(".chat-mobile-host openclaw-board-view").waitFor();
       expect(await presentationOverride(page)).toBeUndefined();
       await openDefaultAction(page);
       const savedMessage = await saveDefault(page, gateway);

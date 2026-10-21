@@ -1,20 +1,27 @@
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import { nativePane } from "../test-helpers/chat-layout-menu.ts";
 
 /** Pass a pane locator when more than one chat is presented. */
 export async function openChatDetails(page: Page | Locator): Promise<Locator> {
-  const details = page
+  const pane = nativePane(page);
+  await waitForLayoutSettled(
+    pane.page(),
+    "openclaw-chat-pane :is(.agent-chat__header--mobile, .sidebar-region__header, [data-region-header])",
+  );
+  const details = pane
     .getByRole("dialog", { name: "Details", exact: true })
-    .or(page.getByRole("complementary", { name: "Details", exact: true }));
+    .or(pane.getByRole("complementary", { name: "Details", exact: true }));
   if (!(await details.isVisible())) {
-    const trigger = page.getByRole("button", { name: "Details", exact: true });
+    const trigger = pane.getByRole("button", { name: "Details", exact: true });
     // Role lookup excludes aria-hidden cached panes; CSS visibility alone includes them.
-    const sessionMenu = page
+    const sessionMenu = pane
       .getByRole("button")
-      .and(page.locator(".chat-header-session-menu__trigger"));
+      .and(pane.locator(".chat-header-session-menu__trigger"));
     // Startup can replace the offline button with the session menu during actionability checks.
     await trigger.or(sessionMenu).filter({ visible: true }).first().click();
-    const menuItem = page.getByRole("menuitem", { name: "Session details", exact: true });
+    const menuItem = pane.getByRole("menuitem", { name: "Session details", exact: true });
     await details.or(menuItem).filter({ visible: true }).first().waitFor();
     if (await menuItem.isVisible()) {
       await menuItem.click();
@@ -26,12 +33,22 @@ export async function openChatDetails(page: Page | Locator): Promise<Locator> {
 
 /** Dismiss through the visible control in both desktop and mobile presentations. */
 export async function closeChatDetails(page: Page | Locator): Promise<void> {
-  const details = page
+  const pane = nativePane(page);
+  await waitForLayoutSettled(
+    pane.page(),
+    "openclaw-chat-pane :is(.agent-chat__header--mobile, .sidebar-region__header, [data-region-header])",
+  );
+  const details = pane
     .getByRole("dialog", { name: "Details", exact: true })
-    .or(page.getByRole("complementary", { name: "Details", exact: true }));
+    .or(pane.getByRole("complementary", { name: "Details", exact: true }));
   await details.waitFor();
-  const trigger = page.getByRole("button", { name: "Details", exact: true });
-  if (await trigger.isVisible()) {
+  const trigger = pane.getByRole("button", { name: "Details", exact: true });
+  const nativeClose = pane
+    .locator(".chat-mobile-host__header")
+    .getByRole("button", { name: "Close", exact: true });
+  if (await nativeClose.isVisible()) {
+    await nativeClose.click();
+  } else if (await trigger.isVisible()) {
     await trigger.click();
   } else {
     await details.getByRole("button", { name: "Close details", exact: true }).click();

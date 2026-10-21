@@ -67,7 +67,7 @@ async function fixture({ loadInitialListing = true } = {}) {
   const settled = () => vi.waitFor(() => expect(props().loading).toBe(false));
   const reload = () => loadSessionWorkspace(state, getSessionWorkspace(state), true);
   const openFile = async () => {
-    openSessionWorkspaceFile(state, { path: "reports/inventory.csv" });
+    await openSessionWorkspaceFile(state, { path: "reports/inventory.csv" });
     await vi.waitFor(() =>
       expect(state.sessionWorkspaceState?.previews[0]?.content.kind).toBe("file"),
     );

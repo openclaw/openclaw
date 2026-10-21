@@ -40,8 +40,13 @@ suite.define(() => {
   it("opens Details when its offline trigger retires during the click", async () => {
     await suite.withPage({ viewport: { width: 560, height: 900 } }, async ({ page }) => {
       page.setDefaultTimeout(1_000);
-      await page.setContent("<button id=offline>Details</button>");
+      await page.setContent(`
+        <openclaw-chat-pane class="chat-pane-cache__pane--active">
+          <div class="sidebar-region__header"><button id="offline">Details</button></div>
+        </openclaw-chat-pane>
+      `);
       await page.evaluate(() => {
+        const pane = document.querySelector("openclaw-chat-pane")!;
         const offline = document.getElementById("offline")!;
         offline.addEventListener(
           "pointerover",
@@ -58,10 +63,10 @@ suite.define(() => {
                 details.setAttribute("role", "complementary");
                 details.setAttribute("aria-label", "Details");
                 details.textContent = "Session details content";
-                document.body.append(details);
+                pane.append(details);
                 item.remove();
               });
-              document.body.append(item);
+              pane.append(item);
             });
             offline.replaceWith(menu);
           },
@@ -167,9 +172,13 @@ suite.define(() => {
             .first()
             .waitFor();
           expect((await files.boundingBox())!.width).toBeGreaterThanOrEqual(viewport.width - 24);
+          const filesRoot = await files.elementHandle();
           await showDetails();
-          expect(await files.isVisible()).toBe(true);
-          await hideDetails();
+          expect(await files.isVisible()).toBe(false);
+          expect(await filesRoot?.evaluate((element) => element.isConnected)).toBe(true);
+          const host = page.locator(".chat-pane-cache__pane--active .chat-mobile-host");
+          await host.getByRole("button", { name: "Panels", exact: true }).click();
+          await files.waitFor();
           await page.setViewportSize({ width: 1280, height: 900 });
           await header.getByRole("button", { name: "Layout", exact: true }).waitFor();
           await expect.poll(async () => (await files.boundingBox())!.width).toBeLessThan(800);
@@ -178,6 +187,8 @@ suite.define(() => {
           await expect
             .poll(async () => (await files.boundingBox())!.width)
             .toBeGreaterThanOrEqual(viewport.width - 24);
+          expect(await filesRoot?.evaluate((element) => element.isConnected)).toBe(true);
+          await filesRoot?.dispose();
           await page.getByRole("button", { name: "Close Files", exact: true }).click();
 
           await header.getByRole("button", { name: "Actions for " + title, exact: true }).click();

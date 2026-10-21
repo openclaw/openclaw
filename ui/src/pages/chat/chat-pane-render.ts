@@ -1,13 +1,8 @@
-import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
-import {
-  markdownSessionPublicOrigin,
-  navigateMarkdownSession,
-} from "../../components/markdown-session-links.ts";
+import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
@@ -30,6 +25,7 @@ import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
+import { chatPaneResourceProps } from "./chat-pane-resource-presentation.ts";
 import {
   createChatPaneQueuedEditProps,
   createChatPaneSessionActionCallbacks,
@@ -62,7 +58,6 @@ import {
 } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
-import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { createChatWidgetLayout } from "./session-message-cache.ts";
@@ -212,6 +207,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       gatewaySnapshot,
       setObserverVisibility: this.setSessionObserverVisibility,
       updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
+      onOpenPanel: this.onSidebarPanelOpened,
     });
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
@@ -371,6 +367,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onHistorySentinelRef: this.registerHistorySentinel,
       onTranscriptAnnouncementRef: this.registerTranscriptAnnouncement,
       onComposerShellRef: this.registerComposerShell,
+      onComposerFloatRef: this.registerComposerFloat,
+      onScrollPortRef: this.mobileScrollFades.register,
       paneId: this.presentationId,
       sessionKey: state.sessionKey,
       announceTranscript: this.active && this.presented,
@@ -564,7 +562,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
 
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
       githubPublication: this.publication.binding?.view(),
-      onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
+      onOpenWorkspaceFile: (target) => void openSessionWorkspaceFile(state, target),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onNavigate: (routeId, options) => this.context.navigate(routeId, options),
       onRefresh: this.refreshHistory,
@@ -657,11 +655,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       mainKey,
       ...userPresentation,
       personActivity: personActivityRouting(this.context),
-      mediaPolicyEpoch: state.mediaPolicyEpoch,
-      connectionEpoch: state.connectionEpoch,
-      embedSandboxMode: state.embedSandboxMode,
-      allowExternalEmbedUrls: state.allowExternalEmbedUrls,
-      fetchLinkFavicon: resolveChatLinkFaviconFetcher(state),
+      ...chatPaneResourceProps(state, this.context),
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       chatBubbleMode: isChatBubbleMode(
         state.settings,
@@ -670,12 +664,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         mainKey,
       ),
       branding: this.context?.theme.branding,
-      assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
-      resolveArtifactDownload: (params, signal) =>
-        resolveArtifactDownloadSource(state, params, signal),
-      basePath: state.basePath,
-      sessionPublicOrigin: markdownSessionPublicOrigin(this.context),
-      resourceBasePath: state.resourceBasePath,
     };
     return {
       providerReviewSource: { state, canWrite: canWriteProgressCard && !selectedSessionArchived },

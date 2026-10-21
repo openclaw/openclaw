@@ -122,18 +122,25 @@ function SharingIcon(props: { visibility: SessionVisibility }) {
   );
 }
 
-export function ChatSessionPublicIndicator(props: ChatSessionSharingProps) {
+export function ChatSessionPublicIndicator(
+  props: Pick<ChatSessionSharingProps, "state"> & { mobile?: boolean },
+) {
   return (
     <Show when={props.state?.result?.publicShare}>
       <span
-        class="chat-pane__public-share-indicator"
+        class={[
+          "chat-pane__public-share-indicator",
+          { "chat-pane__public-share-indicator--mobile": props.mobile },
+        ]}
         role="status"
         aria-label={t("chat.sessionSharing.worldReadable")}
         title={t("chat.sessionSharing.worldReadable")}
       >
-        <span aria-hidden="true">
-          <Icon name="globe" />
-        </span>
+        <Show when={!props.mobile}>
+          <span aria-hidden="true">
+            <Icon name="globe" />
+          </span>
+        </Show>
         <span>{t("chat.sessionSharing.publicIndicator")}</span>
       </span>
     </Show>

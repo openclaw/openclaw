@@ -3,6 +3,7 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
@@ -590,4 +591,86 @@ it("desktop folder falls back from a saved session-only filter without mutating 
   } finally {
     mounted.unmount();
   }
+});
+
+it("mobile restores folder search and root groups without mixing global search results", async () => {
+  setupDesktopLayout();
+  vi.useFakeTimers();
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const listFiles = vi.fn(async (_key: string, options?: { path?: string; search?: string }) => ({
+    sessionKey: "agent:main:workspace",
+    root: "/workspace",
+    files: [file("notes.md", "read")],
+    browser: {
+      path: options?.path ?? "",
+      ...(options?.search ? { search: options.search } : {}),
+      entries: options?.search
+        ? [
+            { path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 },
+            { path: "outside/report.txt", name: "report.txt", kind: "file" as const },
+          ]
+        : options?.path === "docs"
+          ? [{ path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 }]
+          : [{ path: "docs", name: "docs", kind: "directory" as const }],
+    },
+  }));
+  const state: SessionWorkspaceHost = {
+    sessionKey: "agent:main:workspace",
+    connected: true,
+    connectionEpoch: 1,
+    hello: null,
+    agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+    client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
+    sessions: createSessionCapabilityFixture({ listFiles }),
+    sidebarContent: null,
+    handleOpenSidebar: () => {},
+  };
+  const props = () =>
+    createSessionWorkspaceProps(state, { expanded: true, presentation: "mobile" });
+  const mounted = mountWorkspace(props());
+  const unsubscribe = sessionWorkspaceForHost(state).subscribe(() => mounted.update(props()));
+  onTestFinished(() => {
+    unsubscribe();
+    mounted.unmount();
+  });
+  const ready = () =>
+    waitForSolid(() => {
+      expect(mounted.container.querySelector('[aria-busy="false"]')).not.toBeNull();
+    });
+  await ready();
+  expect(button(mounted.container, "notes.md")).toBeNull();
+  const readGroup = [
+    ...mounted.container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]"),
+  ].find((entry) => entry.textContent?.includes("Read"));
+  assert(readGroup);
+  readGroup.click();
+  flush();
+  expect(button(mounted.container, "notes.md")).not.toBeNull();
+  readGroup.click();
+  flush();
+  expect(button(mounted.container, "notes.md")).toBeNull();
+  const scroll = mounted.container.querySelector<HTMLElement>(".chat-workspace-mobile__scroll")!;
+  scroll.scrollTop = 37;
+  scroll.dispatchEvent(new Event("scroll"));
+  button(mounted.container, "docs")!.click();
+  await ready();
+  expect(button(mounted.container, "notes.md")).toBeNull();
+  expect(mounted.container.textContent).toContain("1.5 KB");
+  search(mounted.container, "report");
+  await vi.advanceTimersByTimeAsync(160);
+  await ready();
+  expect(button(mounted.container, "docs/report.txt")).not.toBeNull();
+  expect(button(mounted.container, "outside/report.txt")).toBeNull();
+  button(mounted.container, "Parent folder")!.click();
+  await ready();
+  expect(searchInput(mounted.container).value).toBe("");
+  expect(button(mounted.container, "notes.md")).toBeNull();
+  expect(scroll.scrollTop).toBe(37);
+  button(mounted.container, "docs")!.click();
+  await ready();
+  expect(searchInput(mounted.container).value).toBe("report");
+  expect(button(mounted.container, "docs/report.txt")).not.toBeNull();
+  expect(button(mounted.container, "outside/report.txt")).toBeNull();
 });

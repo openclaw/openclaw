@@ -51,13 +51,13 @@ type ColdOpenOutcome = {
 };
 
 const offeredSlotLabels = [
+  "Side chat",
+  "Files",
+  "Browser",
+  "Review",
   "Subagents",
   "Processes",
-  "Review",
   "Terminal",
-  "Browser",
-  "Files",
-  "Side chat",
   "Desktop",
   "Discussion",
 ] as const;
@@ -223,7 +223,7 @@ async function openColdSidebar(page: Page, scenario = coldOpenScenario()) {
   await gateway.waitForRequest("sessions.companion.state");
   expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
   await selectChatLayoutAction(page, "Side panel");
-  const choices = page.locator(".side-panel-empty__type");
+  const choices = page.locator(".side-panel-launcher button");
   await choices.first().waitFor();
   expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
   return choices;
@@ -392,7 +392,7 @@ suite.define(() => {
       await waitForControlUiGatewayReady(page);
 
       const panel = page.locator(".sidebar-region__right-runtime .side-panel");
-      const selector = panel.locator(".side-panel-empty--selector");
+      const selector = panel.locator(".side-panel-launcher");
       await selectChatLayoutAction(page, "Side panel");
       await selector.waitFor();
       expect(await panel.locator(".tabstrip-tab").count()).toBe(0);
@@ -782,13 +782,17 @@ suite.define(() => {
           trailing: rtl ? trailing.left - closeBounds.left : closeBounds.right - trailing.right,
           labelInsets: [label.top - clipper.top, clipper.bottom - label.bottom],
           tabRadii: radii(node),
-          closeRadii: radii(close),
+          closeContained:
+            closeBounds.left >= tabBounds.left - 1 &&
+            closeBounds.right <= tabBounds.right + 1 &&
+            closeBounds.top >= tabBounds.top - 1 &&
+            closeBounds.bottom <= tabBounds.bottom + 1,
         };
       }, direction);
       expect(tabPadding.trailing).toBeCloseTo(tabPadding.leading, 0);
       expect(Math.min(...tabPadding.labelInsets)).toBeGreaterThanOrEqual(0);
-      expect([tabPadding.tabRadii[1], tabPadding.closeRadii[0]]).toEqual([0, 0]);
-      expect(Math.min(tabPadding.tabRadii[0]!, tabPadding.closeRadii[1]!)).toBeGreaterThan(0);
+      expect(Math.min(...tabPadding.tabRadii)).toBeGreaterThan(0);
+      expect(tabPadding.closeContained).toBe(true);
     }
     await tab.evaluate((node) => node.closest(".side-panel")!.removeAttribute("dir"));
 

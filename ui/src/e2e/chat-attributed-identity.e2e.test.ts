@@ -144,8 +144,8 @@ suite.define(() => {
               const rect = element.getBoundingClientRect();
               return { left: rect.left, right: rect.right };
             });
-            expect(bounds.left).toBeGreaterThanOrEqual(44 + 20);
-            expect(bounds.right).toBeLessThanOrEqual(932 - 20);
+            expect(bounds.left).toBeGreaterThanOrEqual(44 + 16);
+            expect(bounds.right).toBeLessThanOrEqual(932 - 16);
             expect(bounds.left - 44).toBeCloseTo(932 - bounds.right, 0);
           }
         }
@@ -205,8 +205,8 @@ suite.define(() => {
             }, direction);
             await expectColumn(page.locator(".agent-chat__composer-shell"));
             const frame = await transcript.boundingBox();
-            expect(frame!.x).toBeGreaterThanOrEqual(safeAreaLeft + 20);
-            expect(frame!.x + frame!.width).toBeLessThanOrEqual(width - 20);
+            expect(frame!.x).toBeGreaterThanOrEqual(safeAreaLeft + 16);
+            expect(frame!.x + frame!.width).toBeLessThanOrEqual(width - 16);
             expect(frame!.x - safeAreaLeft).toBeCloseTo(width - frame!.x - frame!.width, 0);
             await expectColumn(page.locator(".chat-group.assistant > .chat-group-messages"));
             await expect(page.locator(".chat-group .chat-avatar:visible")).toHaveCount(0);

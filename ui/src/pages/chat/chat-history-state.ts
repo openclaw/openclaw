@@ -13,6 +13,16 @@ import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 
+export type ChatBranchesQueryState =
+  | { readonly status: "idle" }
+  | { readonly status: "loading" | "ready" }
+  | { readonly status: "error"; readonly message: string };
+
+type ChatBranchesQueryReceipt = {
+  readonly isCurrent: () => boolean;
+  readonly query: ChatBranchesQueryState;
+};
+
 type ChatHistoryLoadRequest = {
   sessionKey: string;
   requestAgentId: string | undefined;
@@ -51,6 +61,7 @@ type ChatHistoryLoadState =
 type ChatHistoryPaneRequests = {
   historyVersion: number;
   branchVersion: number;
+  branchQuery: ChatBranchesQueryReceipt | undefined;
   subscriptionGeneration: number;
   pendingApprovalReplay?: { generation: number; events: Map<string, SessionApprovalEvent> };
   subscriptionReady?: Promise<boolean>;
@@ -91,6 +102,7 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
     requests = {
       historyVersion: 0,
       branchVersion: 0,
+      branchQuery: undefined,
       subscriptionGeneration: 0,
       syncRetries: new Map(),
       historyLoad: { phase: "idle" },

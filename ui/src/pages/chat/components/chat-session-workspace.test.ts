@@ -112,7 +112,7 @@ function createFileHost(
 
 function readPreview(file: SessionWorkspaceGetResult["file"], hello = gatewayHelloForMethods([])) {
   const state = createFileHost(file, hello);
-  openSessionWorkspaceFile(state, { path: file.path });
+  void openSessionWorkspaceFile(state, { path: file.path });
   return loadedSidebarContent(state);
 }
 
@@ -246,7 +246,7 @@ describe("session workspace state", () => {
     expect(oldDiff?.kind).toBe("session-diff");
     workspaceProps(state, { expanded: true }).onOpenDiff?.();
     expect(state.sidebarContent).toBe(oldDiff);
-    openSessionWorkspaceFile(state, { path: "README.md" });
+    void openSessionWorkspaceFile(state, { path: "README.md" });
     expect(handleOpenSidebar).toHaveBeenLastCalledWith(
       expect.objectContaining({ kind: "loading" }),
     );
@@ -410,7 +410,7 @@ describe("openSessionWorkspaceFile", () => {
       );
     };
     let completed = nextWorkspaceUpdate(state, fileReady);
-    openSessionWorkspaceFile(state, { path, sessionKey: owner });
+    void openSessionWorkspaceFile(state, { path, sessionKey: owner });
     await completed;
     const workspace = state.sessionWorkspaceState;
     const file = workspace?.previews[0]?.content;
@@ -429,7 +429,7 @@ describe("openSessionWorkspaceFile", () => {
     });
 
     completed = nextWorkspaceUpdate(state, fileReady);
-    openSessionWorkspaceFile(state, { path });
+    void openSessionWorkspaceFile(state, { path });
     await completed;
     expect(workspace?.previews).toHaveLength(2);
     const viewerFile = workspace?.previews[1]?.content;
@@ -470,7 +470,7 @@ describe("openSessionWorkspaceFile", () => {
           hello: gatewayHelloForMethods(["sessions.files.set"]),
         },
       );
-      openSessionWorkspaceFile(state, { path: "notes.md" });
+      void openSessionWorkspaceFile(state, { path: "notes.md" });
       const file = await loadedSidebarContent(state);
       if (file?.kind !== "file" || !file.edit) {
         throw new Error("Expected an editable file");
@@ -494,7 +494,7 @@ describe("openSessionWorkspaceFile", () => {
         state,
         () => state.sessionWorkspaceState?.previews[0]?.content !== file,
       );
-      openSessionWorkspaceFile(state, { path: "notes.md" });
+      void openSessionWorkspaceFile(state, { path: "notes.md" });
       await reopened;
       const fresh = await loadedSidebarContent(state);
       if (fresh.kind !== "file" || !fresh.edit) {
@@ -553,7 +553,7 @@ describe("openSessionWorkspaceFile", () => {
       const workspace = getSessionWorkspace(state);
       workspace.list = workspaceList(oldSource.root);
       if (view === "forwarded") {
-        openSessionWorkspaceFile(state, { path: "notes.md", sessionKey: key });
+        void openSessionWorkspaceFile(state, { path: "notes.md", sessionKey: key });
       } else {
         workspaceProps(state).onOpenFile("notes.md", "workspace");
       }
@@ -604,7 +604,7 @@ describe("openSessionWorkspaceFile", () => {
       sessions: { getFile },
     }) as unknown as SessionWorkspaceHost;
 
-    openSessionWorkspaceFile(state, { path: "README.md" });
+    void openSessionWorkspaceFile(state, { path: "README.md" });
 
     expect(getFile).not.toHaveBeenCalled();
     expect(handleOpenSidebar).not.toHaveBeenCalled();
@@ -631,7 +631,7 @@ describe("openSessionWorkspaceFile", () => {
       sessions: { getFile },
     }) as unknown as SessionWorkspaceHost;
 
-    openSessionWorkspaceFile(state, { path: "readme.md" });
+    void openSessionWorkspaceFile(state, { path: "readme.md" });
     state.sessionWorkspaceDraftContext = {
       sessionTitle: "Later selection",
       paneLabel: "Column 2, row 1",
@@ -685,7 +685,7 @@ describe("openSessionWorkspaceFile", () => {
         state,
         () => state.sessionWorkspaceState?.previews[0]?.content.kind === "file",
       );
-      openSessionWorkspaceFile(state, { path: "notes.md" });
+      void openSessionWorkspaceFile(state, { path: "notes.md" });
       await opened;
       const file = await loadedSidebarContent(state);
       if (file.kind !== "file" || !file.edit) {
@@ -828,7 +828,7 @@ describe("openSessionWorkspaceFile", () => {
   ] as const)("validates %s previews", async (kind, file) => {
     const methods = kind === "unencoded text" ? ["sessions.files.get", "sessions.diff"] : [];
     const state = createFileHost(file, gatewayHelloForMethods(methods));
-    openSessionWorkspaceFile(state, { path: file.path });
+    void openSessionWorkspaceFile(state, { path: file.path });
     if (kind === "image") {
       expect(await loadedSidebarContent(state)).toMatchObject({
         kind: "image",
@@ -874,7 +874,7 @@ describe("openSessionWorkspaceFile", () => {
       () => state.sessionWorkspaceState?.previews.at(-1)?.content.kind === "unavailable",
     );
 
-    openSessionWorkspaceFile(state, {
+    void openSessionWorkspaceFile(state, {
       path: "/outside/workspace/chat.md",
       sessionKey: "agent:research:main",
     });
