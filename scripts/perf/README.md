@@ -1,5 +1,57 @@
 # Team-shaped synthetic state
 
+## Diagnostic heap profile sanitization
+
+`diagnostic-profile-measure.ts` measures the production diagnostics owners on an
+approved benchmark host. It does not start a Gateway or exercise RPC admission.
+Run the same script against separate baseline and candidate source roots:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/diagnostic-profile-measure.ts \
+  --source-root /path/to/checkout --mode sanitize --iterations 5 \
+  --start-at <future-epoch-ms> --output /path/to/result.json
+```
+
+The sanitizer workload has 65,535 distinct frames in a depth-16 binary tree and
+131,072 allocation samples representing exactly 4 GiB. This is sampled allocation
+volume, not a 4 GiB JSON document or resident heap. It reports output bytes and a
+SHA-256 digest so baseline and candidate redaction can be compared exactly. Timing
+and CPU measurements exclude source imports and synthetic tree preparation.
+
+The native heap capture requests 600,000 ms with both collected-object flags and
+allocates 4 GiB of synthetic array payload over 28 seconds, exercising the owner's
+30-second cap. The native CPU capture retains the production stall flight recorder
+while requesting its fixed five-second, 10 ms capture; this models the overlapping
+native profiler used by a running Gateway. Repeat with `--mode heap` and
+`--mode cpu`, each in a fresh process, so sanitizer fixture garbage cannot affect
+native capture memory and GC. `--mode all` is convenient for exploratory runs.
+`--mode record` writes a small native synthetic heap profile and
+its sanitized golden output for an equivalence fixture.
+
+Each result includes operation wall time, process CPU, peak RSS, total GC duration
+and count, major GC duration and count, the maximum measured asynchronous callback
+and its callback count, and the event-loop delay maximum and sample count. Native
+heap capture also records V8 node/sample counts, sampled bytes, and inspector stop
+time by observing the owner's inspector result. Response JSON serialization is
+included in the measured operation. Callback
+timing includes GC and host preemption; it is not a profiler-derived CPU duration.
+No latency percentiles are inferred from the five sanitizer iterations. Major GC
+remains context-only below 50 collections per side.
+
+Peak RSS is the operating system's process-lifetime high-water mark, including
+setup and earlier iterations. Compare the last value from each fresh process.
+It does not use a main-thread timer, which would miss the synchronous baseline's
+peak while sampling the yielding candidate. The event-loop histogram is primed
+before timed work so it also observes the first synchronous task.
+
+For acceptance, hold one exclusive quiet-slot lock around concurrent baseline and
+candidate processes and use identical `--start-at` values. Use interleaved physical
+cores within that slot, then swap placements for a second pair. Evaluate the mean
+of the paired percentage deltas; reject a mean at least 20% adverse or a metric at
+least 10% adverse in both pairs. Follow the host's production load, dirty-page, and
+event-loop guard before and during every pair. Keep fixture recording and all
+preparation outside the measurement CPU allocation.
+
 ## Async context allocation
 
 `async-store-measure.mjs` compares Node's native runner, the shared single-copy

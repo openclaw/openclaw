@@ -1,4 +1,5 @@
 import type { HeapProfiler, Runtime } from "node:inspector";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import type { HeapSpaceInfo } from "node:v8";
 import type { DiagnosticsHeapProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
@@ -26,6 +27,10 @@ type AllocationSummary = {
 };
 type Metadata = {
   durationMs: number;
+  requestedDurationMs: number;
+  effectiveDurationMs: number;
+  actualDurationMs: number;
+  durationLimitReason: "collected-samples" | "maximum-duration" | null;
   samplingIntervalBytes: number;
   includeObjectsCollectedByMajorGC: boolean;
   includeObjectsCollectedByMinorGC: boolean;
@@ -43,17 +48,68 @@ type HeapProfileResult = Metadata & {
   truncated: boolean;
 } & ({ profile: SamplingProfile } | { summary: AllocationSummary[] });
 
-export function sanitizeDiagnosticHeapProfile(
+async function sortAllocationSummaries(groups: Iterable<AllocationSummary>) {
+  const compare = (a: AllocationSummary, b: AllocationSummary) =>
+    b.totalBytes - a.totalBytes || b.selfBytes - a.selfBytes;
+  let runs: AllocationSummary[][] = [];
+  let batch: AllocationSummary[] = [];
+  for (const row of groups) {
+    batch.push(row);
+    if (batch.length === 2048) {
+      runs.push(batch.toSorted(compare));
+      batch = [];
+      await nextTurn();
+    }
+  }
+  if (batch.length) {
+    runs.push(batch.toSorted(compare));
+  }
+  // Stable merges preserve the original insertion order for equal-sized stacks.
+  while (runs.length > 1) {
+    const mergedRuns: AllocationSummary[][] = [];
+    for (let index = 0; index < runs.length; index += 2) {
+      const left = runs[index]!;
+      const right = runs[index + 1];
+      if (!right) {
+        mergedRuns.push(left);
+        continue;
+      }
+      const merged: AllocationSummary[] = [];
+      let a = 0;
+      let b = 0;
+      while (a < left.length || b < right.length) {
+        merged.push(
+          b === right.length || (a < left.length && compare(left[a]!, right[b]!) <= 0)
+            ? left[a++]!
+            : right[b++]!,
+        );
+        if (merged.length % 2048 === 0) {
+          await nextTurn();
+        }
+      }
+      mergedRuns.push(merged);
+    }
+    runs = mergedRuns;
+  }
+  return runs[0] ?? [];
+}
+
+export async function sanitizeDiagnosticHeapProfile(
   profile: SamplingProfile,
   packageRoot: string | null,
   metadata: Metadata,
-): HeapProfileResult {
+): Promise<HeapProfileResult> {
   const samples = profile.samples;
-  type Row = AllocationSummary & { node: SamplingNode; parent?: Row };
+  type Row = { node: SamplingNode; parent?: Row; totalBytes: number; count: number };
   const rows = new Map<number, Row>();
   const pending: Array<{ source: SamplingNode; parent?: Row }> = [{ source: profile.head }];
   let redactedNodeCount = 0;
+  // Bound uninterrupted work without cloning the raw profile into another isolate.
+  let work = 0;
   for (const { source, parent } of pending) {
+    if (++work % 256 === 0) {
+      await nextTurn();
+    }
     const { callFrame, redacted } = sanitizeDiagnosticProfileFrame(source.callFrame, packageRoot);
     redactedNodeCount += Number(redacted);
     const node: SamplingNode = {
@@ -65,8 +121,6 @@ export function sanitizeDiagnosticHeapProfile(
     const row: Row = {
       node,
       parent,
-      stack: [callFrame, ...(parent?.stack.slice(0, 7) ?? [])],
-      selfBytes: node.selfSize,
       totalBytes: node.selfSize,
       count: 0,
     };
@@ -74,12 +128,18 @@ export function sanitizeDiagnosticHeapProfile(
     parent?.node.children.push(node);
     for (const child of source.children) {
       pending.push({ source: child, parent: row });
+      if (++work % 256 === 0) {
+        await nextTurn();
+      }
     }
   }
   const safeSamples: SamplingProfile["samples"] = [];
   let unattributedSampleCount = 0;
   let unattributedSampleBytes = 0;
   for (const sample of samples) {
+    if (++work % 256 === 0) {
+      await nextTurn();
+    }
     const row = rows.get(sample.nodeId);
     if (!row) {
       // V8 can sample profile construction after a call site was translated.
@@ -92,7 +152,11 @@ export function sanitizeDiagnosticHeapProfile(
     safeSamples.push({ size: sample.size, nodeId: sample.nodeId, ordinal: sample.ordinal });
   }
   const ordered = [...rows.values()];
-  for (const row of ordered.toReversed()) {
+  for (let index = ordered.length - 1; index >= 0; index--) {
+    if (++work % 256 === 0) {
+      await nextTurn();
+    }
+    const row = ordered[index]!;
     if (row.parent) {
       row.parent.totalBytes += row.totalBytes;
     }
@@ -114,9 +178,18 @@ export function sanitizeDiagnosticHeapProfile(
 
   // Collapse repeated leaf-first call stacks, retaining eight frames per entry.
   const groups = new Map<string, AllocationSummary>();
-  for (const { stack, selfBytes, totalBytes, count } of ordered) {
+  for (const row of ordered) {
+    if (++work % 256 === 0) {
+      await nextTurn();
+    }
+    const { totalBytes, count } = row;
     if (totalBytes === 0) {
       continue;
+    }
+    const selfBytes = row.node.selfSize;
+    const stack: AllocationSummary["stack"] = [row.node.callFrame];
+    for (let parent = row.parent; parent && stack.length < 8; parent = parent.parent) {
+      stack.push(parent.node.callFrame);
     }
     const key = JSON.stringify(stack);
     const group = groups.get(key);
@@ -130,9 +203,10 @@ export function sanitizeDiagnosticHeapProfile(
   }
   const result: HeapProfileResult = { ...common, truncated: true, summary: [] };
   let bytes = Buffer.byteLength(JSON.stringify(result));
-  for (const row of [...groups.values()].toSorted(
-    (a, b) => b.totalBytes - a.totalBytes || b.selfBytes - a.selfBytes,
-  )) {
+  for (const row of await sortAllocationSummaries(groups.values())) {
+    if (++work % 256 === 0) {
+      await nextTurn();
+    }
     const extra = Buffer.byteLength(JSON.stringify(row)) + Number(result.summary.length > 0);
     if (bytes + extra > DIAGNOSTIC_PROFILE_MAX_BYTES) {
       break;
@@ -162,7 +236,8 @@ export function captureDiagnosticHeapProfile(
     collectionOptions.includeObjectsCollectedByMinorGC
       ? 30_000
       : 900_000;
-  const durationMs = Math.min(maxDurationMs, Math.max(1, options.durationMs ?? 5_000));
+  const requestedDurationMs = options.durationMs ?? 5_000;
+  const durationMs = Math.min(maxDurationMs, Math.max(1, requestedDurationMs));
   return captureDiagnosticProfile({
     signal: options.signal,
     hasAuthority: options.hasAuthority,
@@ -182,6 +257,15 @@ export function captureDiagnosticHeapProfile(
       // SAFETY: The native protocol includes IDs and samples omitted by Node's declarations.
       sanitizeDiagnosticHeapProfile(profile as SamplingProfile, packageRoot, {
         durationMs: measurement.durationMs,
+        requestedDurationMs,
+        effectiveDurationMs: durationMs,
+        actualDurationMs: measurement.durationMs,
+        durationLimitReason:
+          requestedDurationMs <= maxDurationMs
+            ? null
+            : maxDurationMs === 30_000
+              ? "collected-samples"
+              : "maximum-duration",
         samplingIntervalBytes,
         ...collectionOptions,
         heapUsedBefore: measurement.before.heapUsed,
