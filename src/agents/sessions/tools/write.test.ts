@@ -69,11 +69,58 @@ describe("write tool", () => {
     };
   }
 
-  it("recovers success after a post-write abort when readback matches requested content", async () => {
+  it.each([
+    {
+      name: "launch.cmd",
+      content: "@echo off\necho ready\n",
+      expected: "@echo off\r\necho ready\r\n",
+    },
+    {
+      name: "launch.BAT",
+      content: "@echo off\r\necho first\recho second\necho done",
+      expected: "@echo off\r\necho first\r\necho second\r\necho done",
+    },
+  ])(
+    "creates $name with CMD-compatible line endings and an accurate receipt",
+    async ({ name, content, expected }) => {
+      const filePath = await createTempPath(name);
+      const result = await createWriteTool(tmpDir).execute("create-batch", { path: name, content });
+
+      expect(await fs.readFile(filePath, "utf8")).toBe(expected);
+      expect(result.content[0]).toEqual({
+        type: "text",
+        text: `Successfully wrote ${Buffer.byteLength(expected, "utf8")} bytes to ${name}`,
+      });
+      expectApplicablePatch(result.details, "", expected);
+    },
+  );
+
+  it.each(["@echo off\necho before\n", "@echo off\r\necho before\r\n"])(
+    "preserves existing batch bytes on exact writes and overwrites: %j",
+    async (content) => {
+      const filePath = await createTempPath("existing.cmd");
+      await fs.writeFile(filePath, content);
+      const tool = createWriteTool(tmpDir);
+
+      const noOp = await tool.execute("same-batch", { path: filePath, content });
+      expect(noOp.details).toEqual({ changed: false });
+      expect(await fs.readFile(filePath, "utf8")).toBe(content);
+
+      const replacement = "@echo off\necho after\n";
+      const result = await tool.execute("overwrite-batch", {
+        path: filePath,
+        content: replacement,
+      });
+      expect(await fs.readFile(filePath, "utf8")).toBe(replacement);
+      expectApplicablePatch(result.details, content, replacement);
+    },
+  );
+
+  it("recovers success after a post-write abort when readback matches normalized batch content", async () => {
     // Remote transports can report cancellation after the write landed; verify
     // by readback before surfacing a false failure to the model.
-    const filePath = await createTempPath();
-    const expectedContent = "finished 😀\n";
+    const filePath = await createTempPath("finished.cmd");
+    const expectedContent = "echo finished 😀\r\n";
     const controller = new AbortController();
     const tool = createWriteTool(tmpDir, {
       operations: createRecoverableOperations(async (absolutePath, content) => {
@@ -85,7 +132,7 @@ describe("write tool", () => {
 
     const result = await tool.execute(
       "call-1",
-      { path: filePath, content: expectedContent },
+      { path: filePath, content: "echo finished 😀\n" },
       controller.signal,
     );
 
@@ -93,6 +140,8 @@ describe("write tool", () => {
       type: "text",
       text: `Successfully wrote ${Buffer.byteLength(expectedContent, "utf8")} bytes to ${filePath}`,
     });
+    expect(await fs.readFile(filePath, "utf8")).toBe(expectedContent);
+    expectApplicablePatch(result.details, "", expectedContent);
   });
 
   it("keeps the original abort when the file already matched before execution", async () => {

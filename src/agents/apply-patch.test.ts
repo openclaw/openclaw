@@ -72,6 +72,48 @@ async function expectMissingPath(operation: Promise<unknown>) {
 
 describe("applyPatch", () => {
   it.each([
+    { name: "launch.cmd", content: "@echo off\n+echo ready", envelope: "\n" },
+    { name: "launch.BAT", content: "@echo off\n+echo ready", envelope: "\r\n" },
+    { name: "legacy.cmd", content: "@echo off\recho ready", envelope: "\n" },
+  ])("creates $name with CMD-compatible line endings", async ({ name, content, envelope }) => {
+    const dir = makeDir();
+    const input = buildAddFilePatch(name, content).replace(/\n/g, envelope);
+
+    await createApplyPatchTool({ cwd: dir }).execute("create-batch", { input });
+
+    expect(await fs.readFile(path.join(dir, name), "utf8")).toBe("@echo off\r\necho ready\r\n");
+  });
+
+  it("keeps new batch line endings through a later update in the same sandbox patch", async () => {
+    const memory = createMemoryPatchSandbox();
+    await applyPatch(
+      `*** Begin Patch
+*** Add File: launch.cmd
++@echo off
++echo before
+*** Update File: launch.cmd
+@@
+-echo before
++echo after
+*** End Patch`,
+      memory.options,
+    );
+
+    expect(memory.files.get("/sandbox/launch.cmd")).toBe("@echo off\r\necho after\r\n");
+  });
+
+  it("preserves existing LF batch content when updating and moving", async () => {
+    const memory = createMemoryPatchSandbox({ "source.cmd": "@echo off\necho before\n" });
+    await applyPatch(
+      buildUpdatePatch("source.cmd", "-echo before\n+echo after", "dest.bat"),
+      memory.options,
+    );
+
+    expect(memory.files.get("/sandbox/dest.bat")).toBe("@echo off\necho after\n");
+    expect(memory.files.has("/sandbox/source.cmd")).toBe(false);
+  });
+
+  it.each([
     { name: "empty", input: "", message: "Provide a patch input." },
     { name: "syntax", input: "bad patch", message: "The first line of the patch" },
     {

@@ -9,6 +9,7 @@ import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
 } from "../../agent-tool-source-execution-guard.js";
+import { normalizeNewFileLineEndings } from "../../line-endings.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
 import { WRITE_DIFF_MAX_BYTES } from "./file-diff.js";
@@ -207,7 +208,7 @@ export function createWriteTool(
     description: "Write/overwrite file; creates parent directories.",
     parameters: writeSchema,
     outputSchema: WriteToolOutputSchema,
-    async execute(_toolCallId, { path, content }, signal, _onUpdate, _ctx) {
+    async execute(_toolCallId, { path, content: requestedContent }, signal, _onUpdate, _ctx) {
       const assertCurrent = captureAgentToolSourceExecutionGuard();
       const absolutePath = resolvePath(path, cwd);
       const dir = dirname(absolutePath);
@@ -215,7 +216,7 @@ export function createWriteTool(
       return withFileMutationQueueKeyResolution(queueKey, async () => {
         const precheck = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
           assertCurrent();
-          return readOriginalWriteState(absolutePath, content, ops);
+          return readOriginalWriteState(absolutePath, requestedContent, ops);
         });
         assertFileToolNotAborted(signal);
         // No-op: file already has identical content. Not terminal — the model
@@ -225,6 +226,10 @@ export function createWriteTool(
             changed: false,
           } satisfies WriteToolDetails);
         }
+        const content =
+          precheck.beforeStat === null
+            ? normalizeNewFileLineEndings(absolutePath, requestedContent)
+            : requestedContent;
         const details = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
           assertCurrent();
           return resolveWriteDetails({
