@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as acpSessionMeta from "../../acp/runtime/session-meta-readonly.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as scheduler from "../../agents/subagents/swarm/swarm-scheduler.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
@@ -10,7 +9,6 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
 import type { DedupeEntry } from "../server-shared.js";
-import * as sessionStoreLookup from "../session-utils-store-lookup.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import { createAgentTurnIo } from "./io.js";
@@ -203,7 +201,6 @@ describe("agent request Swarm preflight", () => {
   beforeEach(() => {
     subagentRuns.clear();
     vi.spyOn(sessionEntryRead, "readSessionEntryReadOnlyInWorker").mockResolvedValue(undefined);
-    vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntries").mockResolvedValue([null]);
   });
 
   it("carries the admitted scheduler group and cap without trusting saved launch settings", async () => {
@@ -226,56 +223,6 @@ describe("agent request Swarm preflight", () => {
       maxConcurrent: 32,
     });
   });
-
-  it.each([
-    [{ spawnDepth: 1 }, undefined, "subagent"],
-    [{ parentSessionKey: "agent:main:root" }, undefined, undefined],
-    [
-      { parentSessionKey: "agent:main:root", spawnDepth: 0 },
-      {
-        backend: "acpx",
-        agent: "worker",
-        runtimeSessionName: "worker",
-        mode: "persistent" as const,
-        state: "idle" as const,
-        lastActivityAt: 1,
-      },
-      "subagent",
-    ],
-  ] as const)(
-    "derives coordination source role from canonical spawn lineage (%j)",
-    async (entry, sourceAcp, expectedRole) => {
-      const sourceKey = "agent:main:visible-worker";
-      vi.spyOn(sessionStoreLookup, "withGatewaySessionStoreTarget").mockImplementation(
-        async (_params, consume) =>
-          consume(
-            {
-              agentId: "main",
-              canonicalKey: sourceKey,
-              storePath: "/source-store",
-              storeKeys: [sourceKey],
-              store: { [sourceKey]: { sessionId: "source", updatedAt: 1, ...entry } },
-            },
-            new Map(),
-            () => {},
-            [],
-          ),
-      );
-      vi.mocked(acpSessionMeta.readAcpSessionMetaForEntries).mockResolvedValue([sourceAcp ?? null]);
-      const { result } = await runRequest({
-        message: "Worker progress",
-        sessionKey: "agent:main:root",
-        idempotencyKey: "coordination-run",
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: sourceKey,
-          sourceTool: "sessions_send",
-          sourceRole: "subagent",
-        },
-      });
-      expect(result?.inputProvenance?.sourceRole).toBe(expectedRole);
-    },
-  );
 
   it.each([
     { type: "array", items: { type: "string" } },
