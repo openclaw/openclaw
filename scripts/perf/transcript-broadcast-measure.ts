@@ -1019,6 +1019,7 @@ let outputLimitResponses = 0;
 let recoveredResponses = 0;
 let imageRequests = 0;
 let reasoningResponses = 0;
+let reasoningResponseSequence = 0;
 let reasoningReplayRequests = 0;
 let historicalReplayRequests = 0;
 const sessionStoreValues = new Map<string, string>();
@@ -1086,7 +1087,8 @@ let cohort:
       toolCallIds: Set<string>;
       completedToolCallIds: Set<string>;
       outputLimited: Set<string>;
-      reasoningSignatures: Map<string, string>;
+      requestPhases: Map<string, string>;
+      reasoningSignatures: Map<string, Set<string>>;
       incompleteReasoningSignatures: Map<string, string>;
       phases: StreamStartPhases;
       beforeRelease?: () => Promise<void>;
@@ -1161,14 +1163,32 @@ const mock = createServer((req, res) => {
         : [];
     const toolOutput = toolOutputs.at(-1);
     const continuation = toolScenario && toolOutput !== undefined;
+    const primary =
+      cohort &&
+      facts.purpose === "benchmark-turn" &&
+      !facts.hasToolOutput &&
+      !continuation &&
+      index !== undefined &&
+      index >= 1 &&
+      index <= runCount &&
+      lastUser !== undefined &&
+      stripInboundMetadata(lastUser).trim().split("\n")[0] ===
+        `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`;
+    const requestPhase = primary
+      ? `primary:${index}`
+      : continuation
+        ? `${retentionScenario && !cohort?.outputLimited.has(toolOutput.call_id) ? "limit" : "answer"}:${toolOutput.call_id}`
+        : undefined;
+    const firstRequestPhase =
+      requestPhase !== undefined && !cohort?.requestPhases.has(requestPhase);
     if (continuation) {
       if (reasoningScenario) {
-        const expectedSignature = cohort?.reasoningSignatures.get(toolOutput.call_id);
+        const expectedSignatures = cohort?.reasoningSignatures.get(toolOutput.call_id);
         if (
-          expectedSignature === undefined ||
+          expectedSignatures === undefined ||
           !Array.isArray(input) ||
           !input.some(
-            (item) => item?.type === "reasoning" && item.encrypted_content === expectedSignature,
+            (item) => item?.type === "reasoning" && expectedSignatures.has(item.encrypted_content),
           )
         ) {
           throw new Error("synthetic reasoning signature did not survive the provider request");
@@ -1182,7 +1202,9 @@ const mock = createServer((req, res) => {
         ) {
           throw new Error("reasoning-only output-limit signature was replayed during recovery");
         }
-        reasoningReplayRequests++;
+        if (firstRequestPhase) {
+          reasoningReplayRequests++;
+        }
       }
       if (
         toolOutputs.some(
@@ -1206,17 +1228,6 @@ const mock = createServer((req, res) => {
         }
       }
     }
-    const primary =
-      cohort &&
-      facts.purpose === "benchmark-turn" &&
-      !facts.hasToolOutput &&
-      !continuation &&
-      index !== undefined &&
-      index >= 1 &&
-      index <= runCount &&
-      lastUser !== undefined &&
-      stripInboundMetadata(lastUser).trim().split("\n")[0] ===
-        `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`;
     if (verifyHistoryReplay && primary) {
       const expected = expectedHistoricalReasoning[index - 1]!;
       const replayed = new Set(
@@ -1257,7 +1268,13 @@ const mock = createServer((req, res) => {
       if (!hasImage) {
         throw new Error("synthetic inline image did not survive the provider request");
       }
-      imageRequests++;
+      if (firstRequestPhase) {
+        imageRequests++;
+      }
+    }
+    if (firstRequestPhase && requestPhase !== undefined) {
+      // Histories can repeat a completed call; count and sign each logical phase once.
+      cohort?.requestPhases.set(requestPhase, "");
     }
     activeStreams++;
     peakStreams = Math.max(peakStreams, activeStreams);
@@ -1378,7 +1395,7 @@ const mock = createServer((req, res) => {
             },
           ];
           answer = outputLimitAnswer;
-        } else {
+        } else if (firstRequestPhase) {
           recoveredResponses++;
         }
       }
@@ -1395,20 +1412,32 @@ const mock = createServer((req, res) => {
           "response" in event &&
           event.response !== undefined
         ) {
+          const encryptedContent =
+            (requestPhase !== undefined && cohort?.requestPhases.get(requestPhase)) ||
+            promptContent.update(Buffer.alloc(8192)).toString("hex");
+          if (firstRequestPhase && requestPhase !== undefined) {
+            reasoningResponses++;
+            cohort?.requestPhases.set(requestPhase, encryptedContent);
+          }
           const reasoning = {
             type: "reasoning",
-            id: `rs_${cohort?.id}_${index}_${reasoningResponses++}`,
+            id: `rs_${cohort?.id}_${index}_${reasoningResponseSequence++}`,
             status: "completed",
             summary: [],
-            encrypted_content: promptContent.update(Buffer.alloc(8192)).toString("hex"),
+            encrypted_content: encryptedContent,
           };
-          if (reasoningReplayKey) {
-            // Replay keeps completed reasoning and drops reasoning-only length stops.
-            const signatures =
-              event.type === "response.completed"
-                ? cohort?.reasoningSignatures
-                : cohort?.incompleteReasoningSignatures;
-            signatures?.set(reasoningReplayKey, reasoning.encrypted_content);
+          if (firstRequestPhase && reasoningReplayKey && cohort) {
+            // Accept any completed signature already issued for this call, never a length stop.
+            if (event.type === "response.completed") {
+              let signatures = cohort.reasoningSignatures.get(reasoningReplayKey);
+              if (!signatures) {
+                signatures = new Set();
+                cohort.reasoningSignatures.set(reasoningReplayKey, signatures);
+              }
+              signatures.add(encryptedContent);
+            } else {
+              cohort.incompleteReasoningSignatures.set(reasoningReplayKey, encryptedContent);
+            }
           }
           const output_index = event.response.output.length;
           for (const type of ["response.output_item.added", "response.output_item.done"]) {
@@ -2481,6 +2510,7 @@ async function runRound(
     toolCallIds: new Set(),
     completedToolCallIds: new Set(),
     outputLimited: new Set(),
+    requestPhases: new Map(),
     reasoningSignatures: new Map(),
     incompleteReasoningSignatures: new Map(),
     phases: { admissionStartedAtEpochMs: epochNow() },
@@ -3591,6 +3621,7 @@ try {
     recoveredResponses = 0;
     imageRequests = 0;
     reasoningResponses = 0;
+    reasoningResponseSequence = 0;
     reasoningReplayRequests = 0;
     historicalReplayRequests = 0;
     recapRequests = 0;
