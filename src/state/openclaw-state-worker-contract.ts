@@ -66,7 +66,10 @@ import type {
   GitHubSessionReceiptIdentities,
 } from "./github-publication-read.types.js";
 import type { GitHubPublicationSourceOperations } from "./github-publication-source-contract.js";
-import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
+import type {
+  OpenClawAgentDatabaseWorkerLeaseReceipt,
+  releaseExitedOpenClawAgentDatabaseLeaseInDatabase,
+} from "./openclaw-agent-db-lease.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
 import type { StateSchemaPublicationBlocker } from "./openclaw-state-schema-publication.js";
 import type { RegisteredStateWorkerOperations } from "./openclaw-state-worker-registry.js";
@@ -212,7 +215,9 @@ export type OpenClawStateWorkerCleanupOperations = Pick<
   Pick<SkillUploadWorkerOperations, "skillUploads.release"> &
   SandboxRegistryCleanupOperations & {
     "agentDatabases.releaseExitedLease": {
-      input: OpenClawAgentDatabaseWorkerLeaseReceipt;
+      input: OpenClawAgentDatabaseWorkerLeaseReceipt & {
+        outcome: Parameters<typeof releaseExitedOpenClawAgentDatabaseLeaseInDatabase>[2];
+      };
       output: void;
     };
   };
