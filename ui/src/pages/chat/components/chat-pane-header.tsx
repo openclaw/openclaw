@@ -1,4 +1,4 @@
-import { Show, onSettled, type Element } from "solid-js";
+import { Show, createMemo, merge, onSettled, type Element } from "solid-js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
@@ -76,37 +76,42 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
   const Details = (detailsProps: {
     placement: Parameters<typeof ChatPanePlacement>[0];
     onOpenMachine: () => void;
-  }) => (
-    <Show when={props.detailsControl !== undefined}>
-      <ChatDetails
-        {...props.detailsControl!}
-        chat={
-          props.detailsControl!.chat
-            ? {
-                ...props.detailsControl!.chat,
-                environment: {
-                  ...props.detailsControl!.chat.environment,
-                  placement: detailsProps.placement,
-                  onOpenMachine:
-                    props.detailsControl?.nativePresentation === "mobile"
-                      ? detailsProps.onOpenMachine
-                      : undefined,
-                },
-              }
-            : undefined
-        }
-        triggerContent={!props.mergedChrome ? detailsGlyph : undefined}
-        mobileBindings={
-          props.detailsControl?.mobileBindings
-            ? {
-                ...props.detailsControl.mobileBindings,
-                versions: props.mobileVersions,
-              }
-            : undefined
-        }
-      />
-    </Show>
-  );
+  }) => {
+    const chat = createMemo(() => {
+      const source = props.detailsControl?.chat;
+      return source
+        ? merge(source, {
+            environment: merge(
+              () => source.environment ?? {},
+              () => ({
+                placement: detailsProps.placement,
+                onOpenMachine:
+                  props.detailsControl?.nativePresentation === "mobile"
+                    ? detailsProps.onOpenMachine
+                    : undefined,
+              }),
+            ),
+          })
+        : undefined;
+    });
+    return (
+      <Show when={props.detailsControl !== undefined}>
+        <ChatDetails
+          {...props.detailsControl!}
+          chat={chat()}
+          triggerContent={!props.mergedChrome ? detailsGlyph : undefined}
+          mobileBindings={
+            props.detailsControl?.mobileBindings
+              ? {
+                  ...props.detailsControl.mobileBindings,
+                  versions: props.mobileVersions,
+                }
+              : undefined
+          }
+        />
+      </Show>
+    );
+  };
   const notice = (
     <Show when={incognito()}>
       <aside class="chat-pane__incognito-notice" aria-label={t("sessionsView.incognitoLabel")}>

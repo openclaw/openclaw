@@ -411,13 +411,6 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       manualChange = false;
       panel.toggleAttribute("data-restoring", isDesktop && !manual);
       if (
-        isDesktop &&
-        presented &&
-        (!previous || identity !== previous[0] || presented !== previous[9])
-      ) {
-        position(layout);
-      }
-      if (
         !open ||
         (previous &&
           (identity !== previous[0] ||

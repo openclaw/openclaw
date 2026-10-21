@@ -4,7 +4,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-l
 import { t } from "../../lib/reactive/i18n.ts";
 import { ModelSetupWizard } from "../model-setup/wizard-view-solid.tsx";
 import type { ModelProviderLogin } from "./login-controller.ts";
-import { renderProviderAccountSummary } from "./profiles-view.tsx";
+import { ProviderAccountSummary } from "./profiles-view.tsx";
 
 export function ModelProviderLoginView(props: { controller: ModelProviderLogin }) {
   let searchInput: HTMLInputElement | undefined;
@@ -107,16 +107,20 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
                     <>
                       <Show
                         when={current().unavailable}
-                        fallback={renderProviderAccountSummary(
-                          current().accounts,
-                          current().recovery
-                            ? {
-                                authProvider: current().recovery!.authProvider,
-                                disabled: current().disabled || !current().canStart,
-                                onUse: (profileId) => current().onUseProfile(profileId),
-                              }
-                            : undefined,
-                        )}
+                        fallback={
+                          <ProviderAccountSummary
+                            cards={current().accounts}
+                            recovery={
+                              current().recovery
+                                ? {
+                                    authProvider: current().recovery!.authProvider,
+                                    disabled: current().disabled || !current().canStart,
+                                    onUse: (profileId) => current().onUseProfile(profileId),
+                                  }
+                                : undefined
+                            }
+                          />
+                        }
                       >
                         {(unavailable) => <p role="status">{unavailable().message}</p>}
                       </Show>
