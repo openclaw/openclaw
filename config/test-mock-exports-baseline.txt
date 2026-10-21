@@ -2598,7 +2598,6 @@
 ["src/agents/tools/openclaw-tools.spawn-session-key.test.ts","./sessions-yield-tool.js","e4b370bd5917c5079164c219359cca74c2d9232f2cfa3f0292d4f600ddef645e",1]
 ["src/agents/tools/openclaw-tools.spawn-session-key.test.ts","./transcripts-tool.js","39aa39443d2c9e8f65e4e5c997726ce47290d9f77282f57e94fb5b1e2f9671c3",1]
 ["src/agents/tools/openclaw-tools.spawn-session-key.test.ts","./web-tools.js","c90510f19406b12f65820c052ced96abfc0bcef7be95f8ce33242e23b2f000e2",1]
-["src/agents/tools/pdf-native-providers.test.ts","../../plugins/provider-runtime.js","2dbb712979706fa79a5212ff3643acfad5d566128905c5fa51103b5ac9f444eb",1]
 ["src/agents/tools/plugins-tool.test.ts","./in-process-gateway.js","0169f9349f3eeaa5b8d4228890fc7da15d9058cc6aaef9a41ee193787e28e0c4",1]
 ["src/agents/tools/question-prompt-send.test.ts","../../channels/message/runtime.js","41aedb76b5ae12aa7d3d82ace07412da4c3ed149f1e6f35f4c7cc83f4b54ce53",1]
 ["src/agents/tools/sessions-send-followup.test.ts","../../config/config.js","c8c918904dbc7a10f55f189c48c2de3c30d502f8a8a4cc2f3a87bc1b693f6a01",1]
