@@ -23,13 +23,10 @@ afterEach(() => {
   transports.clear();
 });
 
-function managedConfig(harness: ConfigHarness, suspend = false) {
-  capabilities.set(harness.runtimeConfig, suspend);
-  return { ...harness, state: harness.runtimeConfig.state };
-}
-
 export function configHarness(request: ConfigRequest, suspend = false) {
-  return managedConfig(createConfigCapabilityHarness(request), suspend);
+  const harness = createConfigCapabilityHarness(request);
+  capabilities.set(harness.runtimeConfig, suspend);
+  return harness;
 }
 
 export function expectFeedback(
