@@ -11,12 +11,12 @@ type PullRequest = Pick<
   "host" | "number" | "author" | "state" | "base" | "head"
 >;
 
-/** Recheck the selected original head at the effect owner; this creates no durable grant. */
+/** Recheck eligibility and return the observed PR for the caller's remaining effect preconditions. */
 export async function assertExistingPullRequestWriteAccess(params: {
   pullRequest: PullRequest;
   identity: PreparedGitHubPublicationIdentity;
   assertCurrent: () => void;
-}): Promise<void> {
+}): Promise<unknown> {
   const { pullRequest: pr, identity, assertCurrent } = params;
   assertCurrent();
   if ((identity.host ?? "github.com") !== pr.host) {
@@ -136,4 +136,5 @@ export async function assertExistingPullRequestWriteAccess(params: {
     );
   }
   assertCurrent();
+  return current;
 }

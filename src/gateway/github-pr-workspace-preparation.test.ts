@@ -487,7 +487,7 @@ describe("existing PR preparation through the registered agent action", () => {
           requestId: randomUUID(),
           expectedHeadCommit: f.headCommit,
         }),
-      ).rejects.toThrow("PR actions are not available");
+      ).rejects.toThrow("without a publication requestId");
       f.pr.number = 8;
       f.pr.html_url = "https://github.com/openclaw/openclaw/pull/8";
       await expect(f.invoke()).rejects.toThrow("already continues another PR");

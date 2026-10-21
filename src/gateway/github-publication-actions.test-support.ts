@@ -159,7 +159,36 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
     }
     return response;
   });
-  const invoke = async (
+  const invoke = createPublicationActionInvoker(f, writerSource);
+  const expected = { requestId: publication.requestId, expectedHeadCommit: publication.headCommit };
+  return {
+    ...f,
+    publication,
+    state,
+    writes,
+    invoke,
+    expected,
+    onRead: (callback: () => Promise<void>) => void (beforeRead = callback),
+    rejectMerge(
+      result: ReturnType<typeof commandResult> | Error = commandResult(
+        '{"message":"Required checks have not passed"}',
+        1,
+      ),
+    ) {
+      rejectMerge = result;
+    },
+    rejectEdit: () => void (rejectEdit = true),
+    rejectClose: () => void (rejectClose = true),
+    reviewResponse: (result: ReturnType<typeof commandResult>) => void (reviewResponse = result),
+    loseResponse: () => void (loseResponse = true),
+  };
+}
+
+export function createPublicationActionInvoker(
+  f: Awaited<ReturnType<typeof createRequesterPublicationFixture>>,
+  writerSource = f.maintainerSource,
+) {
+  return async (
     actor: "guest" | "admin" | "writer",
     args: Record<string, unknown>,
     source = SESSION_KEY,
@@ -206,27 +235,5 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
             }).execute("publication-action", args),
       ),
     );
-  };
-  const expected = { requestId: publication.requestId, expectedHeadCommit: publication.headCommit };
-  return {
-    ...f,
-    publication,
-    state,
-    writes,
-    invoke,
-    expected,
-    onRead: (callback: () => Promise<void>) => void (beforeRead = callback),
-    rejectMerge(
-      result: ReturnType<typeof commandResult> | Error = commandResult(
-        '{"message":"Required checks have not passed"}',
-        1,
-      ),
-    ) {
-      rejectMerge = result;
-    },
-    rejectEdit: () => void (rejectEdit = true),
-    rejectClose: () => void (rejectClose = true),
-    reviewResponse: (result: ReturnType<typeof commandResult>) => void (reviewResponse = result),
-    loseResponse: () => void (loseResponse = true),
   };
 }
