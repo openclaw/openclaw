@@ -36,6 +36,10 @@ function readConfig(root: string, value: Parameters<typeof testing.writeConfig>[
   return JSON.parse(fs.readFileSync(testing.writeConfig(root, value), "utf8")) as OpenClawConfig;
 }
 
+function readPlugin(root: string, file: string, id = "bench-plugin-01") {
+  return fs.readFileSync(path.join(root, "plugins", id, file), "utf8");
+}
+
 function runStartup(root: string, signal: AbortSignal, args: string[], preload?: string) {
   return runNodeScript(
     [
@@ -510,11 +514,15 @@ server.listen(port, "127.0.0.1", () => {
     ]);
   });
 
-  it("flags samples that become ready and then exit nonzero", () => {
+  it.each([
+    { exitCode: 1, signal: null, reason: "child exited 1" },
+    { exitCode: null, signal: "SIGSEGV" as const, reason: "child exited by SIGSEGV" },
+  ])("flags samples that become ready and then fail: $reason", ({ exitCode, signal, reason }) => {
     const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
       gatewaySample({
         exitedBeforeTeardown: true,
-        exitCode: 1,
+        exitCode,
+        signal,
         outputTail: "ready\\nError: startup sidecar crashed",
       }),
     ]);
@@ -523,11 +531,7 @@ server.listen(port, "127.0.0.1", () => {
     expect(result.summary.gatewayReadyLogMs?.p50).toBe(20);
     expect("readyLogMs" in result.summary).toBe(false);
     expect(testing.collectResultFailures([result])).toEqual([
-      {
-        id: "demo",
-        reason: "child exited 1",
-        sampleIndex: 1,
-      },
+      { id: "demo", reason, sampleIndex: 1 },
     ]);
   });
 
@@ -580,24 +584,6 @@ server.listen(port, "127.0.0.1", () => {
         id: "incidentCombined",
         reason: "/readyz p95 60000.0ms must be under 60000.0ms",
         sampleIndex: 0,
-      },
-    ]);
-  });
-
-  it("flags samples that become ready and then die from a signal", () => {
-    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
-      gatewaySample({
-        exitedBeforeTeardown: true,
-        outputTail: "ready\\nsegmentation fault",
-        signal: "SIGSEGV",
-      }),
-    ]);
-
-    expect(testing.collectResultFailures([result])).toEqual([
-      {
-        id: "demo",
-        reason: "child exited by SIGSEGV",
-        sampleIndex: 1,
       },
     ]);
   });
@@ -665,27 +651,6 @@ server.listen(port, "127.0.0.1", () => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
-  });
-
-  it("writes 50-plugin fixtures as a parent load path with explicit startup activation", () => {
-    const root = tempDirs.make("openclaw-bench-config-test-");
-    const config = readConfig(root, {
-      config: {},
-      id: "fiftyPlugins",
-      name: "gateway, 50 manifest plugins",
-      pluginActivationOnStartup: true,
-      pluginCount: 2,
-    });
-
-    expect(config.plugins?.load?.paths).toEqual([path.join(root, "plugins")]);
-    expect(config.plugins?.allow).toEqual(["bench-plugin-01", "bench-plugin-02"]);
-    const manifest = JSON.parse(
-      fs.readFileSync(
-        path.join(root, "plugins", "bench-plugin-01", "openclaw.plugin.json"),
-        "utf8",
-      ),
-    ) as { activation?: { onStartup?: boolean } };
-    expect(manifest.activation?.onStartup).toBe(true);
   });
 
   it("builds a bounded incident fixture before the startup timer begins", async () => {
@@ -772,11 +737,12 @@ server.listen(port, "127.0.0.1", () => {
     expect(validateConfigObject(config)).toMatchObject({ ok: true });
     const pluginId = config.plugins?.allow?.[0];
     expect(pluginId).toBe("bench-plugin-01");
-    const pluginDir = path.join(root, "plugins", pluginId ?? "missing");
     const manifest = JSON.parse(
-      fs.readFileSync(path.join(pluginDir, "openclaw.plugin.json"), "utf8"),
-    ) as { providers?: string[] };
-    const source = fs.readFileSync(path.join(pluginDir, "index.cjs"), "utf8");
+      readPlugin(root, "openclaw.plugin.json", pluginId ?? "missing"),
+    ) as {
+      providers?: string[];
+    };
+    const source = readPlugin(root, "index.cjs", pluginId ?? "missing");
 
     expect(manifest.providers).toEqual(["bench-catalog-stall"]);
     expect(source).toContain("api.registerProvider");
@@ -840,6 +806,7 @@ server.listen(port, "127.0.0.1", () => {
       expect(validateConfigObject(config)).toMatchObject({ ok: true });
       expect(Object.keys(config.agents?.entries ?? {})).toHaveLength(8);
       expect(config.plugins?.allow).toHaveLength(44);
+      expect(config.plugins?.load?.paths).toEqual([path.join(root, "plugins")]);
       expect(config.cron?.enabled).toBe(false);
       expect(config.gateway?.auth).toEqual({
         mode: "token",
@@ -861,9 +828,7 @@ server.listen(port, "127.0.0.1", () => {
           expect(fs.existsSync(path.join(root, "plugins", pluginId))).toBe(false);
           continue;
         }
-        const manifest = JSON.parse(
-          fs.readFileSync(path.join(root, "plugins", pluginId, "openclaw.plugin.json"), "utf8"),
-        );
+        const manifest = JSON.parse(readPlugin(root, "openclaw.plugin.json", pluginId));
         expect(manifest.activation).toEqual({ onStartup: true });
       }
       expect(fs.readdirSync(path.join(root, "plugins"))).toHaveLength(44 - bundledPluginIds.length);
@@ -953,20 +918,18 @@ server.listen(port, "127.0.0.1", () => {
       }
       const pluginId = config.plugins?.allow?.[0];
       const manifest = JSON.parse(
-        fs.readFileSync(
-          path.join(root, "plugins", pluginId ?? "missing", "openclaw.plugin.json"),
-          "utf8",
-        ),
-      ) as { modelCatalog?: unknown; providerCatalogEntry?: string; providers?: string[] };
+        readPlugin(root, "openclaw.plugin.json", pluginId ?? "missing"),
+      ) as {
+        modelCatalog?: unknown;
+        providerCatalogEntry?: string;
+        providers?: string[];
+      };
       expect(manifest.providers).toEqual(["bench-catalog-stall"]);
       expect(manifest.providerCatalogEntry).toBe("./provider-discovery.cjs");
       expect(manifest.modelCatalog).toBeUndefined();
-      expect(
-        fs.readFileSync(
-          path.join(root, "plugins", "bench-plugin-01", "provider-discovery.cjs"),
-          "utf8",
-        ),
-      ).toContain("preparedRuntimeStaticCatalogCallCount");
+      expect(readPlugin(root, "provider-discovery.cjs")).toContain(
+        "preparedRuntimeStaticCatalogCallCount",
+      );
     },
   );
 });

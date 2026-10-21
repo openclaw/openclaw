@@ -184,8 +184,6 @@ describe("install.ps1 failure handling", () => {
     "portable-git-layout",
     "portable-node-tar-fallback",
     "package-manager-node-command-failures",
-    "package-manager-node-next-manager-success",
-    "package-manager-node-entrypoint-refusal",
   ];
   const batchedPowerShellResults = new Map<string, { error: string; ok: boolean }>();
 
@@ -704,31 +702,46 @@ foreach ($script:nodeCapabilityCase in $cases) {
 function Get-Command {
     [CmdletBinding()]
     param([string]$Name)
-    if ($Name -eq $script:manager) { return $true }
+    if ($Name -eq $script:manager -or ($script:manager -eq 'all' -and $Name -in @('winget', 'choco', 'scoop'))) { return $true }
     return $null
 }
 filter Out-Host { }
 function Invoke-FixtureManager {
+    param([string]$Name)
     $script:attempts += 1
+    $script:events.Add($Name)
     Write-Output 'package-manager output must not become a success result'
+    if ($script:manager -eq 'all') {
+        if ($Name -eq 'scoop') { throw 'Scoop must not run after supported Node is found' }
+        $script:portableReady = $Name -eq 'choco'
+        $global:LASTEXITCODE = if ($script:portableReady) { 0 } else { 17 }
+        return
+    }
     if ($script:failure -eq 'throw') { throw 'fixture package-manager failure' }
     $global:LASTEXITCODE = if ($script:failure -eq 'exit') { 17 } else { 0 }
 }
-function winget { Invoke-FixtureManager }
-function choco { Invoke-FixtureManager }
-function scoop { Invoke-FixtureManager }
-function Refresh-ProcessPath { $script:refreshes += 1 }
-function Add-InstalledNodeToProcessPath { $script:discoveries += 1; return $true }
-function Check-Node { return $script:portableReady }
-function Install-PortableNode { $script:portableCalls += 1; $script:portableReady = $true }
+function winget { Invoke-FixtureManager 'winget' }
+function choco { Invoke-FixtureManager 'choco' }
+function scoop { Invoke-FixtureManager 'scoop' }
+function Refresh-ProcessPath { $script:refreshes += 1; $script:events.Add('refresh') }
+function Add-InstalledNodeToProcessPath { $script:discoveries += 1; $script:events.Add('discover'); return ($script:manager -ne 'all') }
+function Check-Node { $script:events.Add('check'); return $script:portableReady }
+function Install-PortableNode {
+    $script:portableCalls += 1
+    if ($script:manager -eq 'all') { throw 'portable fallback must not run after supported Node is found' }
+    if ($script:portableFailure -eq 'throw') { throw 'fixture portable failure' }
+    $script:portableReady = $script:portableFailure -ne 'unsupported'
+}
+function Reset-ManagerFixture {
+    $script:events = New-Object System.Collections.Generic.List[string]
+    $script:attempts = $script:refreshes = $script:discoveries = $script:portableCalls = 0
+    $script:portableReady = $false
+    $script:portableFailure = ''
+    $script:InstallExitCode = $global:LASTEXITCODE = 0
+}
 foreach ($script:manager in @('winget', 'choco', 'scoop')) {
     foreach ($script:failure in @('exit', 'throw', 'unsupported')) {
-        $script:attempts = 0
-        $script:refreshes = 0
-        $script:discoveries = 0
-        $script:portableCalls = 0
-        $script:portableReady = $false
-        $global:LASTEXITCODE = 0
+        Reset-ManagerFixture
         $result = @(Install-Node)
         if ($result.Count -ne 1 -or $result[0] -isnot [bool] -or -not $result[0]) {
             throw "manager=$script:manager failure=$script:failure result=$result"
@@ -741,55 +754,23 @@ foreach ($script:manager in @('winget', 'choco', 'scoop')) {
         if ($ErrorActionPreference -ne 'Stop') { throw 'caller error policy changed' }
     }
 }
-`,
-    ),
-    "package-manager-node-next-manager-success": installerFixture(
-      String.raw`
-$script:events = New-Object System.Collections.Generic.List[string]
-$script:ready = $false
-function Get-Command {
-    [CmdletBinding()]
-    param([string]$Name)
-    if ($Name -in @('winget', 'choco', 'scoop')) { return $true }
-    return $null
-}
-filter Out-Host { }
-function winget { $script:events.Add('winget'); $global:LASTEXITCODE = 17; Write-Output 'winget failed' }
-function choco { $script:events.Add('choco'); $global:LASTEXITCODE = 0; $script:ready = $true; Write-Output 'choco success' }
-function scoop { throw 'Scoop must not run after supported Node is found' }
-function Refresh-ProcessPath { $script:events.Add('refresh') }
-function Add-InstalledNodeToProcessPath { $script:events.Add('discover'); return $false }
-function Check-Node { $script:events.Add('check'); return $script:ready }
-function Install-PortableNode { throw 'portable fallback must not run after supported Node is found' }
+Reset-ManagerFixture
+$script:manager = 'all'
 $result = @(Install-Node)
 if ($result.Count -ne 1 -or $result[0] -isnot [bool] -or -not $result[0]) { throw "result=$result" }
 if (($script:events -join '|') -ne 'winget|refresh|discover|check|choco|refresh|check') {
     throw "events=$($script:events -join '|')"
 }
-`,
-    ),
-    "package-manager-node-entrypoint-refusal": installerFixture(
-      String.raw`
+${installerFunctions(["Add-InstalledNodeToProcessPath"])}
+Reset-ManagerFixture
+$script:manager = 'choco'
+$script:failure = 'exit'
 $NodeOnly = $false
 $NodePrefix = ''
 $DryRun = $false
 $InstallMethod = 'npm'
 $NoOnboard = $true
 function Check-ExistingOpenClaw { return $false }
-function Get-Command {
-    [CmdletBinding()]
-    param([string]$Name)
-    if ($Name -eq 'choco') { return $true }
-    return $null
-}
-filter Out-Host { }
-function choco { $global:LASTEXITCODE = 17; Write-Output 'fixture choco failure' }
-function Refresh-ProcessPath { }
-function Check-Node { return $false }
-function Install-PortableNode {
-    $script:portableCalls += 1
-    if ($script:portableFailure -eq 'throw') { throw 'fixture portable failure' }
-}
 function Install-OpenClaw { throw 'package install must not run without a supported Node' }
 foreach ($script:portableFailure in @('throw', 'unsupported')) {
     $script:InstallExitCode = 0
@@ -1213,28 +1194,18 @@ try {
     }
   });
 
-  const fixtureGroups: Record<string, string[]> = {
-    "package-manager-node-command-failures": [
-      "package-manager-node-command-failures",
-      "package-manager-node-next-manager-success",
-      "package-manager-node-entrypoint-refusal",
-    ],
-  };
-  const groupedNames = new Set(Object.values(fixtureGroups).flatMap((names) => names.slice(1)));
-  for (const name of Object.keys(cases).filter((fixtureName) => !groupedNames.has(fixtureName))) {
+  for (const name of Object.keys(cases)) {
     const test =
       windowsOnlyFixtures.has(name) && process.platform !== "win32" ? it.skip : runIfPowerShell;
     test(name, () => {
-      for (const fixtureName of fixtureGroups[name] ?? [name]) {
-        expect(batchedPowerShellResults.get(fixtureName)).toEqual({ error: "", ok: true });
-        if (legacyFixtureNames.includes(fixtureName) && process.platform === "win32") {
-          expect(bootstrapShells).toContain("powershell");
-          for (const engine of bootstrapShells.filter((candidate) => candidate !== powershell)) {
-            expect(batchedPowerShellResults.get(`${fixtureName}:${engine}`)).toEqual({
-              error: "",
-              ok: true,
-            });
-          }
+      expect(batchedPowerShellResults.get(name)).toEqual({ error: "", ok: true });
+      if (legacyFixtureNames.includes(name) && process.platform === "win32") {
+        expect(bootstrapShells).toContain("powershell");
+        for (const engine of bootstrapShells.filter((candidate) => candidate !== powershell)) {
+          expect(batchedPowerShellResults.get(`${name}:${engine}`)).toEqual({
+            error: "",
+            ok: true,
+          });
         }
       }
     });
