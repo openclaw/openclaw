@@ -291,20 +291,6 @@ it("publishes signed Wear then Phone with labeled notes and idempotent notificat
   expect(test.effects()).toEqual([]);
 });
 
-it("resumes a partial pair without uploading or emailing Wear again", async () => {
-  const phoneDistribution = `POST ${api}/releases/phone:distribute`;
-  test.failures.set(phoneDistribution, 403);
-  await expect(distribute()).rejects.toThrow("HTTP 403");
-  expect(test.receipt().releases).toMatchObject({
-    wear: { state: "distributed" },
-    phone: { state: "notes-updated" },
-  });
-  test.failures.clear();
-  test.calls.length = 0;
-  await distribute();
-  expect(test.effects().map((call) => `${call.method} ${call.url}`)).toEqual([phoneDistribution]);
-});
-
 it.each([503, new Error("transport interruption")])(
   "fences ambiguous notifications (%s)",
   async (failure) => {

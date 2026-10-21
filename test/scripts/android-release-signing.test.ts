@@ -86,12 +86,7 @@ function writeManifest(tempRoot: string, signingRepo: string): string {
       gradlePropertiesEncryptedFile: "gradle.properties.enc",
       apkCertificateSha256: APK_CERTIFICATE_SHA256,
       materializedRoot: "unused-by-test",
-      gradlePropertyNames: [
-        "OPENCLAW_ANDROID_STORE_FILE",
-        "OPENCLAW_ANDROID_STORE_PASSWORD",
-        "OPENCLAW_ANDROID_KEY_ALIAS",
-        "OPENCLAW_ANDROID_KEY_PASSWORD",
-      ],
+      gradlePropertyNames: ["OPENCLAW_ANDROID_STORE_FILE", ...Object.keys(sourceProperties)],
     }),
   );
   return manifestPath;

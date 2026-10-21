@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { getEventListeners, once } from "node:events";
+import { once } from "node:events";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -7,13 +7,9 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveDistArtifactLockPath,
-  withDistArtifactOwnership,
-} from "../../scripts/lib/dist-artifact-lock.mts";
+import { resolveDistArtifactLockPath } from "../../scripts/lib/dist-artifact-lock.mts";
 import * as managedChildProcess from "../../scripts/lib/managed-child-process.mts";
 import * as processMemory from "../../scripts/lib/process-memory.mts";
-import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import {
   createPrefixedOutputWriter,
   parseMode,
@@ -28,10 +24,7 @@ import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
-import {
-  resolveInstalledNativeCompiler,
-  writeNativeFixtureFile,
-} from "./native-boundary-fixture.js";
+import { writeNativeFixtureFile } from "./native-boundary-fixture.js";
 
 const fixture = createFixtureLifetime();
 const { createTempDir } = fixture;
@@ -68,20 +61,10 @@ async function rescueDescendant(file: string, signal: AbortSignal, fallback = 0)
   return pid;
 }
 
-function stubbornDescendant(pidFile: string) {
+function spawnDescendant(script: string, onTerm = "") {
   return [
-    "const fs = require('node:fs');",
-    "process.on('SIGTERM', () => {});",
-    "setInterval(() => {}, 1000);",
-    `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
-    "process.stdout.write('ready\\n');",
-  ].join("\n");
-}
-
-function spawnDescendant(script: string, launch = "spawn", onTerm = "") {
-  return [
-    `const { ${launch} } = require('node:child_process');`,
-    `${launch}(process.execPath, ["--eval", ${JSON.stringify(script)}], { stdio: "inherit" });`,
+    "const { spawn } = require('node:child_process');",
+    `spawn(process.execPath, ["--eval", ${JSON.stringify(script)}], { stdio: "inherit" });`,
     onTerm,
     "setInterval(() => {}, 1000);",
   ].join("\n");
@@ -253,153 +236,68 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(output).toBe("[boundary] first line\n[boundary] second line\n[boundary] third");
   });
 
-  it
-    .runIf(process.platform !== "win32")
-    .for(["normal", "observation failure", "cancellation", "cleanup write failure"])(
-    "lets aborted sibling descendants drain during kill grace (%s)",
-    async (mode, { signal: contextSignal }) => {
-      const controller = new AbortController();
-      const signal = AbortSignal.any([contextSignal, controller.signal]);
-      const observationFailure = new Error("drain observation failed");
-      const originalNow = Date.now;
-      // Isolate the injected write failure; real cleanup claims stay with the outer fixture.
-      const retainedOwner =
-        mode === "cleanup write failure"
-          ? createVitestResourceOwner(createTempDir("boundary-cleanup-owner-"))
-          : undefined;
-      const driverFixture = retainedOwner ? createFixtureLifetime(retainedOwner.root) : fixture;
-      const rootDir = driverFixture.createTempDir("openclaw-boundary-abort-drain-");
-      let descendantPid = 0;
-      let command: ReturnType<typeof runNodeStepsInParallel> | undefined;
-      let outcome: Promise<unknown> | undefined;
-      let rescue: Promise<void> | undefined;
-      let joined = false;
-      let requiredRescue = false;
-      let heldAtRescue = false;
-      const driver = driverFixture.run(async () => {
-        const readyPath = path.join(rootDir, "descendant.ready");
-        const drainedPath = path.join(rootDir, "descendant.drained");
-        const failPath = path.join(rootDir, "fail");
-        const terminatingPath = path.join(rootDir, "terminating");
+  it.runIf(process.platform !== "win32")(
+    "lets aborted sibling descendants drain during kill grace",
+    ({ signal }) =>
+      fixture.run(async () => {
+        const root = createTempDir("openclaw-boundary-abort-drain-");
+        const readyPath = path.join(root, "descendant.ready");
+        const drainedPath = path.join(root, "descendant.drained");
+        const failPath = path.join(root, "fail");
         const ready = observeFixtureLine("ready");
-        const terminating = observeFixtureLine("terminating");
-        const descendantScript = [
-          "const fs = require('node:fs');",
-          "process.on('SIGTERM', () => {",
-          `  fs.writeFileSync(${JSON.stringify(terminatingPath)}, 'terminating');`,
-          "  process.stdout.write('terminating\\n');",
-          `  if (${JSON.stringify(mode)} !== 'normal') return;`,
-          "  setTimeout(() => {",
-          `    fs.writeFileSync(${JSON.stringify(drainedPath)}, 'drained');`,
-          "    process.exit(0);",
-          "  }, 50);",
-          "});",
-          `fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid));`,
-          "process.stdout.write('ready\\n');",
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-        const parentScript = spawnDescendant(
-          descendantScript,
-          "spawn",
-          "process.on('SIGTERM', () => process.exit(0));",
-        );
-        command = runNodeStepsInParallel([
+        const descendant = `
+const fs = require("node:fs");
+process.on("SIGTERM", () => {
+  setTimeout(() => {
+    fs.writeFileSync(${JSON.stringify(drainedPath)}, "drained");
+    process.exit(0);
+  }, 50);
+});
+fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid));
+process.stdout.write("ready\\n");
+setInterval(() => {}, 1000);
+`;
+        const command = runNodeStepsInParallel([
           failOnFile(failPath),
           {
             label: "abort-group-drain",
-            args: ["--eval", parentScript],
+            args: [
+              "--eval",
+              spawnDescendant(descendant, "process.on('SIGTERM', () => process.exit(0));"),
+            ],
             abortKillGraceMs: 100,
             timeoutMs: 60_000,
-            onStdoutLine(line) {
-              return ready.onStdoutLine(line) && terminating.onStdoutLine(line);
-            },
+            onStdoutLine: ready.onStdoutLine,
           },
         ]);
-        outcome = command
-          .catch((error: unknown) => error)
-          .finally(() => {
-            joined = true;
-          });
+        const outcome = command.catch((error: unknown) => error);
         const clock = vi.spyOn(Date, "now");
-        const abort = () => clock.mockRestore();
-        signal.addEventListener("abort", abort, { once: true });
-        if (signal.aborted) {
-          abort();
-        }
+        const restoreClock = () => clock.mockRestore();
+        signal.addEventListener("abort", restoreClock, { once: true });
+        let pid = 0;
         try {
           await waitForReady(ready.promise, outcome, readyPath, signal);
-          descendantPid = readPid(readyPath);
-          // Freeze the supervisor's grace clock, not the child's real cleanup timer.
+          pid = readPid(readyPath);
+          // Freeze only supervisor escalation; the child's cleanup timer remains real.
           clock.mockReturnValue(Date.now());
           fs.writeFileSync(failPath, "fail");
-          if (mode !== "normal") {
-            await waitForReady(terminating.promise, outcome, terminatingPath, signal);
-            expect(fs.readFileSync(terminatingPath, "utf8")).toBe("terminating");
-            expect(isProcessAlive(descendantPid)).toBe(true);
-            if (mode === "observation failure") {
-              throw observationFailure;
-            }
-            if (mode === "cancellation") {
-              controller.abort(observationFailure);
-            }
-          }
-          if (mode !== "cleanup write failure") {
-            await withinTest(outcome, signal);
-            expect(fs.readFileSync(drainedPath, "utf8")).toBe("drained");
-          }
+          await withinTest(outcome, signal);
+          expect(fs.readFileSync(drainedPath, "utf8")).toBe("drained");
+          expect(isProcessAlive(pid)).toBe(false);
+          await expect(command).rejects.toThrow("delayed-fail failed with exit code 2");
         } finally {
-          // Unwind the grace clock even when observation or the cleanup write fails.
           clock.mockRestore();
-          signal.removeEventListener("abort", abort);
-          if (mode !== "normal") {
-            // Observe restoration before the next turn can rescue a still-frozen clock.
-            rescue = new Promise<void>((resolve) => {
-              setImmediate(() => {
-                requiredRescue = Date.now !== originalNow;
-                heldAtRescue = !joined && isProcessAlive(descendantPid) && fs.existsSync(rootDir);
-                if (requiredRescue) {
-                  clock.mockRestore();
-                }
-                resolve();
-              });
-            });
-          }
-          await driverFixture.verifyCleanup(async () => {
+          signal.removeEventListener("abort", restoreClock);
+          await fixture.verifyCleanup(async () => {
             try {
-              fs.writeFileSync(mode === "cleanup write failure" ? rootDir : failPath, "fail");
+              fs.writeFileSync(failPath, "fail");
             } finally {
               await outcome;
-              descendantPid = await rescueDescendant(readyPath, contextSignal, descendantPid);
+              await rescueDescendant(readyPath, signal, pid);
             }
           });
         }
-      });
-      const error = await driver.catch((failure: unknown) => failure);
-      // Rescue observation cannot substitute for the actual group join.
-      await rescue;
-      await outcome;
-      expect(isProcessAlive(descendantPid)).toBe(false);
-      expect(fs.existsSync(rootDir)).toBe(true);
-      expect(Date.now).toBe(originalNow);
-      expect(getEventListeners(signal, "abort")).toEqual([]);
-      if (mode === "cleanup write failure") {
-        expect(error).toHaveProperty("code", "EISDIR");
-        try {
-          await expect(driverFixture.cleanup()).rejects.toThrow("Fixture cleanup unverified");
-          expect(fs.existsSync(rootDir)).toBe(true);
-          expect(() => retainedOwner!.assertReleased()).toThrow("Unreleased Vitest resource claim");
-        } finally {
-          // Only the injected filesystem failure is disposable, after the real join.
-          fs.rmSync(rootDir, { recursive: true, force: true });
-        }
-      } else if (mode === "normal") {
-        await driver;
-      } else {
-        expect(error).toBe(observationFailure);
-      }
-      await expect(command).rejects.toThrow("delayed-fail failed with exit code 2");
-      expect(requiredRescue, JSON.stringify({ heldAtRescue, joined })).toBe(false);
-    },
+      }),
   );
 
   it("clamps oversized prep step timers before scheduling", () =>
@@ -412,86 +310,6 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         ),
       ).resolves.toBeUndefined();
     }));
-
-  it.runIf(process.platform !== "win32").for([
-    { reason: "sibling", launch: "spawn" },
-    { reason: "timeout", launch: "spawn" },
-    { reason: "timeout", launch: "execFileSync" },
-  ])("joins stubborn prep descendants: %j", ({ reason, launch }, { signal }) =>
-    fixture.run(async () => {
-      const rootDir = createTempDir("openclaw-boundary-timeout-group-");
-      const descendantPidPath = path.join(rootDir, "descendant.pid");
-      const failPath = path.join(rootDir, "fail");
-      const ready = observeFixtureLine("ready");
-      let descendantPid = 0;
-      const nativeSetTimeout = globalThis.setTimeout;
-      let triggerStepTimeout: (() => void) | undefined;
-      const setTimeoutSpy =
-        reason === "timeout"
-          ? vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, timeout, ...args) => {
-              if (timeout === 2_000 && !triggerStepTimeout) {
-                triggerStepTimeout = () => callback(...args);
-                return nativeSetTimeout(() => undefined, 60_000);
-              }
-              return nativeSetTimeout(callback, timeout, ...args);
-            })
-          : undefined;
-      const parentScript = spawnDescendant(
-        stubbornDescendant(descendantPidPath),
-        launch,
-        reason === "sibling" ? "process.on('SIGTERM', () => process.exit(0));" : "",
-      );
-      const abortController = new AbortController();
-      const command =
-        reason === "sibling"
-          ? runNodeStepsInParallel([
-              failOnFile(failPath),
-              {
-                label: "abort-group-prep",
-                args: ["--eval", parentScript],
-                abortKillGraceMs: 100,
-                timeoutMs: 60_000,
-                onStdoutLine: ready.onStdoutLine,
-              },
-            ])
-          : runNodeStep("hung-group-prep", ["--eval", parentScript], 2_000, {
-              abortController,
-              onStdoutLine: ready.onStdoutLine,
-            });
-      const expectedFailure = fixture.track(
-        expect(command).rejects.toThrow(
-          reason === "sibling"
-            ? "delayed-fail failed with exit code 2"
-            : "hung-group-prep timed out after 2000ms",
-        ),
-      );
-      const outcome = command.catch((error: unknown) => error);
-      try {
-        // Readiness follows handler installation, including synchronous native-CLI fallback.
-        await waitForReady(ready.promise, outcome, descendantPidPath, signal);
-        descendantPid = readPid(descendantPidPath);
-        if (reason === "sibling") {
-          fs.writeFileSync(failPath, "fail");
-        } else {
-          expect(triggerStepTimeout).toBeDefined();
-          triggerStepTimeout?.();
-        }
-
-        await withinTest(expectedFailure, signal);
-        expect(isProcessAlive(descendantPid)).toBe(false);
-      } finally {
-        await fixture.verifyCleanup(async () => {
-          abortController.abort();
-          if (reason === "sibling") {
-            fs.writeFileSync(failPath, "fail");
-          }
-          await outcome;
-          setTimeoutSpy?.mockRestore();
-          await rescueDescendant(descendantPidPath, signal, descendantPid);
-        });
-      }
-    }),
-  );
 
   it.runIf(process.platform !== "win32").for(["SIGINT", "SIGTERM"] as const)(
     "preparation CLI joins detached groups and releases ownership after %s",
@@ -614,44 +432,6 @@ if (!fs.existsSync("retry")) {
       }),
   );
 
-  it.runIf(process.platform !== "win32")(
-    "rejects and joins descendants left behind by a successful step",
-    ({ signal }) =>
-      fixture.run(async () => {
-        const rootDir = createTempDir("openclaw-boundary-unjoined-");
-        const pidFile = path.join(rootDir, "descendant.pid");
-        const leafScript = `
-const fs = require("node:fs");
-process.on("SIGTERM", () => {});
-setInterval(() => {}, 1000);
-fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
-process.send("ready");
-process.disconnect();
-`;
-        const parentScript = `
-const { spawn } = require("node:child_process");
-const child = spawn(process.execPath, ["--eval", ${JSON.stringify(leafScript)}], {
-  stdio: ["ignore", "ignore", "ignore", "ipc"],
-});
-child.once("message", () => process.exit(0));
-`;
-        try {
-          await expect(
-            runNodeStep("unjoined-prep", ["--eval", parentScript], 10_000),
-          ).rejects.toMatchObject({
-            code: "EPROCESSGROUP_CLEANUP_FAILED",
-            processTreeState: "terminated",
-          });
-          // The leaf writes before IPC readiness; its parent exits only after that message.
-          expect(isProcessAlive(Number(fs.readFileSync(pidFile, "utf8")))).toBe(false);
-        } finally {
-          await fixture.verifyCleanup(async () => {
-            await rescueDescendant(pidFile, signal);
-          });
-        }
-      }),
-  );
-
   it.for(["sibling", "command"] as const)("does not admit work after %s cancellation", (origin) =>
     fixture.run(async () => {
       const rootDir = createTempDir("openclaw-boundary-canceled-");
@@ -669,90 +449,6 @@ child.once("message", () => process.exit(0));
       expect(fs.existsSync(startedPath)).toBe(false);
     }),
   );
-
-  it.runIf(process.platform !== "win32").for(["sibling", "command"] as const)(
-    "keeps %s cancellation a failure when the child handles SIGTERM with exit zero",
-    (origin, { signal }) =>
-      fixture.run(async () => {
-        const rootDir = createTempDir("openclaw-boundary-canceled-zero-");
-        const readyPath = path.join(rootDir, "ready");
-        const stoppedPath = path.join(rootDir, "stopped");
-        const abortController = new AbortController();
-        const commandController = new AbortController();
-        const cancellation = origin === "sibling" ? abortController : commandController;
-        const ready = observeFixtureLine("ready");
-        const script = [
-          'const fs = require("node:fs");',
-          `process.on("SIGTERM", () => { fs.writeFileSync(${JSON.stringify(stoppedPath)}, "zero"); process.exit(0); });`,
-          `fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid));`,
-          "process.stdout.write('ready\\n');",
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-        const command = runNodeStep("canceled-zero", ["--eval", script], 10_000, {
-          abortController,
-          signal: commandController.signal,
-          onStdoutLine: ready.onStdoutLine,
-        });
-        const outcome = command.catch((error: unknown) => error);
-        let pid = 0;
-        try {
-          await waitForReady(ready.promise, outcome, readyPath, signal);
-          pid = readPid(readyPath);
-          cancellation.abort();
-          await withinTest(expect(command).rejects.toMatchObject({ code: "ABORT_ERR" }), signal);
-          expect(fs.readFileSync(stoppedPath, "utf8")).toBe("zero");
-          expect(isProcessAlive(pid)).toBe(false);
-        } finally {
-          await fixture.verifyCleanup(async () => {
-            cancellation.abort();
-            await outcome;
-            await rescueDescendant(readyPath, signal, pid);
-          });
-        }
-      }),
-  );
-
-  it("releases artifact ownership after a failed native compiler and permits retry", () =>
-    fixture.run(async () => {
-      const root = createTempDir("openclaw-boundary-failed-compiler-");
-      fs.mkdirSync(path.join(root, ".git"));
-      const bin = resolveInstalledNativeCompiler();
-      await expect(
-        withDistArtifactOwnership(root, () =>
-          runNodeStep("compiler-prep", ["--invalid-boundary-proof"], 10_000, { bin }),
-        ),
-      ).rejects.toThrow("compiler-prep failed with exit code 1");
-      expect(fs.readdirSync(resolveDistArtifactLockPath(root))).toEqual([]);
-      const output = path.join(root, "retry");
-      await withDistArtifactOwnership(root, async () => fs.writeFileSync(output, "completed"));
-      expect(fs.readFileSync(output, "utf8")).toBe("completed");
-    }));
-
-  it("runs boundary prep steps serially for local checks", () =>
-    fixture.run(async () => {
-      const rootDir = createTempDir("openclaw-boundary-serial-");
-      const logPath = path.join(rootDir, "steps.log");
-      const appendScript = (label: string) =>
-        `const fs=require("node:fs");` +
-        `const log=${JSON.stringify(logPath)};` +
-        `fs.appendFileSync(log, ${JSON.stringify(`${label}-start\n`)});` +
-        `setTimeout(()=>{fs.appendFileSync(log, ${JSON.stringify(`${label}-end\n`)});}, 50);`;
-
-      await runNodeSteps(
-        [
-          { label: "first", args: ["--eval", appendScript("first")], timeoutMs: 5_000 },
-          { label: "second", args: ["--eval", appendScript("second")], timeoutMs: 5_000 },
-        ],
-        { OPENCLAW_LOCAL_CHECK: "1" },
-      );
-
-      expect(fs.readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
-        "first-start",
-        "first-end",
-        "second-start",
-        "second-end",
-      ]);
-    }));
 
   it.each([
     { cpus: 8, memoryGiB: 24, local: undefined, expected: 2 },

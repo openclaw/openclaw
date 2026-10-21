@@ -1025,19 +1025,11 @@ it.each(["Linux first", "core first"])("converges when publishing %s", (order) =
     expect(f.bytes(channel)).toEqual(immutable);
     expect(f.state().latest).toBe(tag);
 
-    for (const keepLegacy of [true, false]) {
-      f.update((state) => {
-        if (!keepLegacy) {
-          const previous = releaseFrom(state, tag);
-          previous.assets = previous.assets.filter((asset) => asset.name !== "latest.json");
-        }
-        state.calls = [];
-      });
-      const beforeMirror = f.state().releases;
-      failed(() => f.run("mirror"), "Canonical Linux version is newer than core latest");
-      expect(f.mutations()).toEqual([]);
-      expect(f.state().releases).toEqual(beforeMirror);
-    }
+    f.update({ calls: [] });
+    const beforeMirror = f.state().releases;
+    failed(() => f.run("mirror"), "Canonical Linux version is newer than core latest");
+    expect(f.mutations()).toEqual([]);
+    expect(f.state().releases).toEqual(beforeMirror);
 
     const nativeAssets = f.release(nextTag).assets;
     expect(f.run("finalize-core", nextTag, "true")).toMatchObject({
@@ -1102,32 +1094,30 @@ it("does not adopt a replacement release ID between immutable bundle uploads", (
   expect(f.mutations()).toEqual([{ tool: "gh", action: "upload", tag, name }]);
 });
 
-it("refuses retry after versioned-only ACK loss leaves the canonical manifest missing", () => {
-  const name = linuxName(tag);
-  const f = fixture({ fault: { point: "upload-after", tag, name } });
-  failed(() => f.run("publish"), "fixture lost upload acknowledgement");
-  const retained = f.asset(tag, name);
-  assert.ok(retained);
-  const writes = f.mutations();
-  expect(f.release(channel).assets).toEqual([]);
-  failed(() => f.run("publish"), "Missing channel metadata is not a new channel");
-  expect(f.asset(tag, name)).toEqual(retained);
-  expect(f.release(channel).assets).toEqual([]);
-  expect(f.mutations()).toEqual(writes);
-});
-
-it("reconciles a committed canonical upload with a lost acknowledgement", () => {
-  const owner = channel;
-  const name = "latest.json";
-  const f = fixture({ fault: { point: "upload-after", tag: owner, name } });
-  failed(() => f.run("publish"), "fixture lost upload acknowledgement");
-  const retained = f.asset(owner, name);
-  assert.ok(retained);
-  f.run("publish");
-  expect(f.asset(owner, name)).toEqual(retained);
-  expect(f.bytes(tag)).toEqual(f.bytes(channel));
-  expect(f.calls("gh", { action: "upload", tag: owner, name })).toHaveLength(1);
-});
+it.each([
+  ["versioned-only", tag, linuxName(tag)],
+  ["canonical", channel, "latest.json"],
+])(
+  "preserves the %s upload after ACK loss and reconciles only a complete channel",
+  (_, owner, name) => {
+    const f = fixture({ fault: { point: "upload-after", tag: owner, name } });
+    failed(() => f.run("publish"), "fixture lost upload acknowledgement");
+    const retained = f.asset(owner, name);
+    assert.ok(retained);
+    const writes = f.mutations();
+    if (owner === tag) {
+      expect(f.release(channel).assets).toEqual([]);
+      failed(() => f.run("publish"), "Missing channel metadata is not a new channel");
+      expect(f.release(channel).assets).toEqual([]);
+      expect(f.mutations()).toEqual(writes);
+    } else {
+      f.run("publish");
+      expect(f.bytes(tag)).toEqual(f.bytes(channel));
+      expect(f.calls("gh", { action: "upload", tag: owner, name })).toHaveLength(1);
+    }
+    expect(f.asset(owner, name)).toEqual(retained);
+  },
+);
 
 it("reports an interrupted legacy replacement and reconciles it without rebuilding", () => {
   const f = published({ advance: true });

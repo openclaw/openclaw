@@ -172,6 +172,10 @@ function flags(values: Record<string, string>) {
   return Object.entries(values).flatMap(([key, value]) => [`--${key}`, value]);
 }
 
+function writeJson(path: string, value: unknown) {
+  writeFileSync(path, JSON.stringify(value));
+}
+
 function expectOutcome(
   remote: ReturnType<typeof fixture>,
   result: { status: number | null; stderr: string; evidence: { state: string } },
@@ -202,7 +206,7 @@ function fixture(initial: Partial<Remote> = {}, mutate?: (state: Remote) => void
     ...initial,
   };
   mutate?.(initialState);
-  writeFileSync(statePath, JSON.stringify(initialState));
+  writeJson(statePath, initialState);
   writeFileSync(
     join(bin, "gh"),
     `#!/usr/bin/env node
@@ -319,7 +323,7 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
   const update = (change: (remote: Remote) => void) => {
     const remote = read();
     change(remote);
-    writeFileSync(statePath, JSON.stringify(remote));
+    writeJson(statePath, remote);
   };
   let runNumber = 0;
   const env = {
@@ -329,8 +333,8 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
     GITHUB_REF_NAME: "main",
     GITHUB_WORKFLOW_SHA: toolingSha,
   };
-  const runNode = (args: string[], extraEnv: NodeJS.ProcessEnv = {}) =>
-    spawnSync(process.execPath, args, {
+  const runProcess = (binary: string, args: string[], extraEnv: NodeJS.ProcessEnv = {}) =>
+    spawnSync(binary, args, {
       encoding: "utf8",
       timeout: 20_000,
       env: { ...env, ...extraEnv },
@@ -347,7 +351,7 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
     read,
     identity(writerArguments: string[]) {
       prepareRun(true);
-      return runNode([
+      return runProcess(process.execPath, [
         resolve("scripts/release-tooling-identity.mjs"),
         "verify",
         ...flags({
@@ -369,24 +373,21 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
       const requestPath = join(root, "publication-request.json");
       const eventPath = join(root, `event-${runNumber}.json`);
       prepareRun(prepared);
-      writeFileSync(
-        eventPath,
-        JSON.stringify({ inputs: { tag, npm_dist_tag: "latest", ...read().eventInputOverrides } }),
-      );
+      writeJson(eventPath, {
+        inputs: { tag, npm_dist_tag: "latest", ...read().eventInputOverrides },
+      });
       if (prepared) {
-        writeFileSync(
-          requestPath,
-          JSON.stringify({
-            repository,
-            inputs: { tag },
-            sourceSha,
-            releaseRunId: 123,
-            releaseRunAttempt: 1,
-            tooling: { ref: "main", fullRef: "refs/heads/main", sha: toolingSha },
-          }),
-        );
+        writeJson(requestPath, {
+          repository,
+          inputs: { tag },
+          sourceSha,
+          releaseRunId: 123,
+          releaseRunAttempt: 1,
+          tooling: { ref: "main", fullRef: "refs/heads/main", sha: toolingSha },
+        });
       }
-      const result = runNode(
+      const result = runProcess(
+        process.execPath,
         [
           resolve("scripts/linux-updater-manifest.mjs"),
           command,
@@ -400,7 +401,7 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
     },
     inspect(carrierTag: string) {
       const module = pathToFileURL(resolve("scripts/linux-updater-manifest.mjs")).href;
-      return runNode([
+      return runProcess(process.execPath, [
         "--input-type=module",
         "-e",
         `import { inspectLinuxUpdaterManifest } from ${JSON.stringify(module)};
@@ -410,26 +411,20 @@ console.log(JSON.stringify(inspectLinuxUpdaterManifest(${JSON.stringify({ reposi
     dispatch(targetSha = sourceSha) {
       const output = join(root, `dispatch-${++runNumber}`);
       mkdirSync(output);
-      const result = spawnSync(
+      const result = runProcess(
         "bash",
         [
           "-c",
           'source scripts/lib/release-publish-children.sh; sleep() { :; }; result=0; dispatch_linux_release_assets || result=$?; exit "$result"',
         ],
         {
-          cwd: resolve("."),
-          encoding: "utf8",
-          timeout: 20_000,
-          env: {
-            ...env,
-            RUNNER_TEMP: output,
-            GITHUB_STEP_SUMMARY: join(output, "summary.md"),
-            GITHUB_REPOSITORY: repository,
-            TARGET_SHA: targetSha,
-            PARENT_WORKFLOW_SHA: toolingSha,
-            RELEASE_TAG: sourceTag,
-            RELEASE_NPM_DIST_TAG: "latest",
-          },
+          RUNNER_TEMP: output,
+          GITHUB_STEP_SUMMARY: join(output, "summary.md"),
+          GITHUB_REPOSITORY: repository,
+          TARGET_SHA: targetSha,
+          PARENT_WORKFLOW_SHA: toolingSha,
+          RELEASE_TAG: sourceTag,
+          RELEASE_NPM_DIST_TAG: "latest",
         },
       );
       return {

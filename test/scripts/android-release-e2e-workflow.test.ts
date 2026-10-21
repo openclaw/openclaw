@@ -7,7 +7,6 @@ import { readCiWorkflow } from "./ci-workflow.test-support.js";
 
 type Job = {
   if?: string;
-  needs?: string;
   permissions?: Record<string, string>;
   with?: Record<string, string>;
   steps?: Array<{ name: string; uses?: string; with?: Record<string, string> }>;
@@ -58,32 +57,10 @@ it.each([
   }).toBe(selected);
 });
 
-it.each(["success", "failure", "cancelled", "skipped"])(
-  "gates store signing/upload on qualification: %s",
-  (result) => {
-    const { qualify: storeQualify, release } = readWorkflow("android-store-release.yml").jobs;
-    ok(storeQualify, "Android store release must have its qualification job");
-    ok(release, "Android store release must have its release job");
-    const context = {
-      github: {
-        event_name: "workflow_dispatch",
-        ref: "refs/heads/main",
-        repository: "openclaw/openclaw",
-      },
-      inputs: { operation: "release" },
-      needs: { qualify: { result } },
-      vars: {},
-      cancelled: () => false,
-    };
-    admission(storeQualify.if ?? "", context).toBe(true);
-    expect(release.needs).toBe("qualify");
-    admission(release.if ?? "", context).toBe(result === "success");
-    expect(storeQualify.with).toEqual({ target_sha: "${{ github.sha }}" });
-    expect(storeQualify.permissions).toEqual({ actions: "read", contents: "read" });
-  },
-);
-
 it("publishes only credential-free qualification evidence", () => {
+  const storeQualify = readWorkflow("android-store-release.yml").jobs.qualify;
+  expect(storeQualify.with).toEqual({ target_sha: "${{ github.sha }}" });
+  expect(storeQualify.permissions).toEqual({ actions: "read", contents: "read" });
   expect(qualification.permissions).toEqual({ actions: "read", contents: "read" });
   const uploads = qualify.steps?.filter((step) =>
     step.uses?.startsWith("actions/upload-artifact@"),

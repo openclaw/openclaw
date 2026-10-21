@@ -5,9 +5,7 @@ import {
   canonicalAndroidVersionCode,
   normalizePinnedAndroidVersion as normalizePinned,
   renderAndroidReleaseNotes,
-  renderAndroidVersionProperties,
   resolveAndroidVersion,
-  resolveGatewayVersionForAndroidRelease,
   syncAndroidVersioning,
 } from "../../scripts/lib/android-version.ts";
 import { extractChangelogSection } from "../../scripts/lib/mobile-changelog.ts";
@@ -85,24 +83,6 @@ describe("Android versioning", () => {
     },
   );
 
-  it("reads and normalizes the root package version for Android releases", () => {
-    const rootDir = writeAndroidFixture({ packageVersion: "2026.6.5-beta.3" });
-
-    expect(resolveGatewayVersionForAndroidRelease(rootDir)).toEqual({
-      packageVersion: "2026.6.5-beta.3",
-      pinnedAndroidVersion: "2026.6.5",
-      versionCode: 2026060501,
-    });
-  });
-  it("renders checked-in defaults from the pinned Android version", () => {
-    const properties = renderAndroidVersionProperties({
-      canonicalVersion: "2026.6.2",
-      versionCode: 2026060201,
-    });
-
-    expect(properties).toContain("OPENCLAW_ANDROID_VERSION_NAME=2026.6.2");
-    expect(properties).toContain("OPENCLAW_ANDROID_VERSION_CODE=2026060201");
-  });
   it("rejects changelogs without exact-version or Unreleased notes", () => {
     expect(() =>
       renderAndroidReleaseNotes(
@@ -124,6 +104,12 @@ describe("Android versioning", () => {
       releaseNotes: "APK notes.\n",
     });
     syncAndroidVersioning({ rootDir });
+    const properties = fs.readFileSync(
+      resolveAndroidVersion(rootDir).versionPropertiesPath,
+      "utf8",
+    );
+    expect(properties).toContain("OPENCLAW_ANDROID_VERSION_NAME=2026.6.2");
+    expect(properties).toContain("OPENCLAW_ANDROID_VERSION_CODE=2026060201");
     expect(syncAndroidVersioning({ mode: "check", rootDir }).updatedPaths).toEqual([]);
     fs.writeFileSync(resolveAndroidVersion(rootDir).releaseNotesPath, "Store notes.\n");
     expect(() => syncAndroidVersioning({ mode: "check", rootDir })).toThrow(

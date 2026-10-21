@@ -713,6 +713,7 @@ describe("native declaration preparation", () => {
           write("src/renamed.ts", invalid);
           await expect(run()).rejects.toThrow("failed with exit code 1");
           signal.throwIfAborted();
+          expect(fs.readdirSync(path.join(root, ".artifacts/dist-artifacts.lock"))).toEqual([]);
           expect(has(recordPath)).toBe(false);
           expect(has(`${output}/src/renamed.d.ts`)).toBe(false);
           expect(has(`${output}/.inputs.json`)).toBe(false);

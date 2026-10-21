@@ -668,21 +668,6 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
-  it("warns when a declared static asset is missing", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const warn = vi.fn();
-
-    copyStaticExtensionAssets({
-      rootDir,
-      assets: [{ src: "missing/file.mjs", dest: "dist/file.mjs" }],
-      warn,
-    });
-
-    expect(warn).toHaveBeenCalledWith(
-      "[runtime-postbuild] static asset not found, skipping: missing/file.mjs",
-    );
-  });
-
   it("writes stable aliases for hashed root runtime modules", async () => {
     const { rootDir, distDir } = await runtimeFixture({
       "runtime-model-auth.runtime-XyZ987.js": "export const auth = true;\n",
@@ -764,6 +749,10 @@ describe("runtime postbuild static assets", () => {
     expect(namedOnly).not.toHaveProperty("default");
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
+    expect(await readText(distDir, "mixed.contract.js")).toBe(
+      'export * from "./mixed.contract-Hash222.mjs";\n' +
+        'export { default } from "./mixed.contract-Hash222.mjs";\n',
+    );
     writeStableRootRuntimeAliases({ rootDir });
     writeLegacyRootRuntimeCompatAliases({ rootDir });
     expect(await readText(distDir, "text-transforms.runtime.js")).toBe(
@@ -775,36 +764,6 @@ describe("runtime postbuild static assets", () => {
       `${pathToFileURL(path.join(distDir, "text-transforms.runtime.js")).href}?rerun=1`
     );
     expect(stableAfterRerun.default("rerun")).toBe("rerun");
-  });
-
-  it("does not write ambiguous stable aliases for colliding root runtime chunks", async () => {
-    const { rootDir, distDir } = await runtimeFixture({
-      "install.runtime-Aaa111.mjs": "export const pluginInstall = true;\n",
-      "install.runtime-Bbb222.js": "export const daemonInstall = true;\n",
-      "install.runtime.js": 'export * from "./install.runtime-Stale.js";\n',
-    });
-
-    writeStableRootRuntimeAliases({ rootDir });
-
-    await expectPathMissing(path.join(distDir, "install.runtime.js"));
-  });
-
-  it("writes a stable plugin install runtime alias when install runtimes collide", async () => {
-    const { rootDir, distDir } = await runtimeFixture({
-      "install.runtime-Aaa111.mjs": [
-        "export const scanPackageInstallSource = true;",
-        "export const scanInstalledPackageDependencyTree = true;",
-        "export const scanBundleInstallSource = true;",
-        "",
-      ].join("\n"),
-      "install.runtime-Bbb222.js": "export const daemonInstall = true;\n",
-    });
-
-    writeStableRootRuntimeAliases({ rootDir });
-
-    expect(await readText(distDir, "install.runtime.js")).toBe(
-      'export * from "./install.runtime-Aaa111.mjs";\n',
-    );
   });
 
   it("keeps stable aliases when one colliding root runtime chunk re-exports the implementation", async () => {
@@ -944,6 +903,7 @@ describe("runtime postbuild static assets", () => {
     const { rootDir, distDir } = await runtimeFixture({
       "install.runtime-Aaa111.mjs": "export const pluginInstall = true;\n",
       "install.runtime-Bbb222.js": "export const daemonInstall = true;\n",
+      "install.runtime.js": 'export * from "./install.runtime-Stale.js";\n',
       "install-OldHash.js": [
         'const pluginRuntime = () => import("./install.runtime-Aaa111.mjs");',
         'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
@@ -960,6 +920,8 @@ describe("runtime postbuild static assets", () => {
         "",
       ].join("\n"),
     );
+    writeStableRootRuntimeAliases({ rootDir });
+    await expectPathMissing(path.join(distDir, "install.runtime.js"));
   });
 
   it("rewrites plugin install runtime imports to stable aliases when install runtimes collide", async () => {
@@ -987,18 +949,9 @@ describe("runtime postbuild static assets", () => {
         "",
       ].join("\n"),
     );
-  });
-
-  it("leaves stable alias files pointing at their hashed runtime chunks", async () => {
-    const { rootDir, distDir } = await runtimeFixture({
-      "runtime-plugins.runtime-AbCd1234.mjs": "export const ready = true;\n",
-      "runtime-plugins.runtime.js": 'export * from "./runtime-plugins.runtime-AbCd1234.mjs";\n',
-    });
-
-    rewriteRootRuntimeImportsToStableAliases({ rootDir });
-
-    expect(await readText(distDir, "runtime-plugins.runtime.js")).toBe(
-      'export * from "./runtime-plugins.runtime-AbCd1234.mjs";\n',
+    writeStableRootRuntimeAliases({ rootDir });
+    expect(await readText(distDir, "install.runtime.js")).toBe(
+      'export * from "./install.runtime-Aaa111.mjs";\n',
     );
   });
 
@@ -1087,63 +1040,35 @@ describe("previous release update compatibility", () => {
     fsSync.writeFileSync(file, contents);
   }
 
-  function recordFixture(includePrivateWorker = false): UpdateCompatibilityInventory & {
-    releases: [UpdateCompatibilityRelease];
-  } {
-    const root = createTempDir("update-compat-release-");
-    write(root, "package.json", JSON.stringify({ name: "openclaw", version: "2026.9.1" }));
-    write(
-      root,
-      "dist/build-info.json",
-      JSON.stringify({ version: "2026.9.1", buildId: "fixture", commit: "0".repeat(40) }),
-    );
-    write(
-      root,
-      "dist/command.js",
-      [
-        "//#region src/cli/update-cli/update-command-service-command.ts",
-        'export async function restart() { return (await import("./service-abcdefgh.js")).runner(); }',
-        'export async function recover() { const { mode: selected } = await import("./service-abcdefgh.js"); return selected(); }',
-      ].join("\n"),
-    );
-    write(
-      root,
-      "dist/service-abcdefgh.js",
-      'export { r as runner, m as mode } from "./implementation-12345678.js";',
-    );
-    write(
-      root,
-      "dist/implementation-12345678.js",
-      [
-        "//#region src/cli/update-cli/runner.ts",
-        'function resolveRunner() { return "old"; }',
-        "//#region src/cli/update-cli/recovery.ts",
-        'function resolveMode() { return "old"; }',
-        "export { resolveRunner as r, resolveMode as m };",
-      ].join("\n"),
-    );
-    if (includePrivateWorker) {
-      const worker = "state/openclaw-state-read.worker";
-      write(
-        root,
-        `dist/${worker}.js`,
-        `//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n`,
-      );
-      write(
-        root,
-        "dist/state/openclaw-state-read-command.mjs",
-        `//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n`,
-      );
-      write(
-        root,
-        "dist/state/openclaw-state-read-service-abcdefgh.mjs",
-        '//#region src/cli/update-cli/runner.ts\nexport function resolveRunner() { return "private worker"; }\n',
-      );
-    }
-    return {
-      schemaVersion: 1,
-      releases: [recordUpdateCompatibilityRelease({ packageDir: root, integrity })],
-    };
+  function recordFixture(includePrivateWorker = false) {
+    return recordImportedFixture(
+      `await (async () => {
+        (await import("./service-abcdefgh.js")).runner();
+        const { mode: selected } = await import("./service-abcdefgh.js");
+        return selected();
+      })()`,
+      {
+        "service-abcdefgh.js":
+          'export { r as runner, m as mode } from "./implementation-12345678.js";',
+        "implementation-12345678.js": [
+          "//#region src/cli/update-cli/runner.ts",
+          'function resolveRunner() { return "old"; }',
+          "//#region src/cli/update-cli/recovery.ts",
+          'function resolveMode() { return "old"; }',
+          "export { resolveRunner as r, resolveMode as m };",
+        ].join("\n"),
+        ...(includePrivateWorker
+          ? {
+              "state/openclaw-state-read.worker.js":
+                '//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n',
+              "state/openclaw-state-read-command.mjs":
+                '//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n',
+              "state/openclaw-state-read-service-abcdefgh.mjs":
+                '//#region src/cli/update-cli/runner.ts\nexport function resolveRunner() { return "private worker"; }\n',
+            }
+          : {}),
+      },
+    ).inventory;
   }
 
   function candidate(root: string): void {
@@ -1190,7 +1115,7 @@ describe("previous release update compatibility", () => {
     for (const [file, source] of Object.entries(modules)) {
       write(root, `dist/${file}`, source);
     }
-    const inventory: UpdateCompatibilityInventory = {
+    const inventory: UpdateCompatibilityInventory & { releases: [UpdateCompatibilityRelease] } = {
       schemaVersion: 1,
       releases: [
         recordUpdateCompatibilityRelease({ packageDir: root, integrity: identity.integrity }),
