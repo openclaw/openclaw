@@ -1379,6 +1379,22 @@ openclaw-toast-host[data-toast-placement="shell"]
   color: var(--text-strong);
 }
 
+.app-toast--error {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+  background: color-mix(in srgb, var(--danger) 12%, var(--popover));
+  color: var(--danger);
+}
+
+.app-toast--error :is(.app-toast__icon, .app-toast__action, .app-toast__dismiss) {
+  color: inherit;
+}
+
+.app-toast--error .app-toast__action,
+.app-toast--error :is(.app-toast__action, .app-toast__dismiss):is(:hover, :focus-visible) {
+  background: var(--danger-subtle);
+  color: inherit;
+}
+
 .btn--icon {
   padding: 8px;
   min-width: 36px;

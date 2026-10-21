@@ -2,28 +2,71 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { attachmentImage } from "./chat-attachment-menu.test-support.ts";
+import { expectAttachmentErrorToast } from "./chat-attachment-toast.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { themeConfigResponse } from "./theme-typography.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Attachment errors" });
 
 suite.define(() => {
   it.each([
-    { route: "chat", device: "desktop", viewport: { width: 1280, height: 900 }, mobile: false },
-    { route: "chat", device: "mobile", viewport: { width: 390, height: 844 }, mobile: true },
-    { route: "new", device: "mobile", viewport: { width: 390, height: 844 }, mobile: true },
-  ])(
+    {
+      route: "chat",
+      device: "desktop",
+      viewport: { width: 1280, height: 900 },
+      mobile: false,
+      theme: "claw",
+      mode: "dark",
+    },
+    {
+      route: "chat",
+      device: "mobile",
+      viewport: { width: 390, height: 844 },
+      mobile: true,
+      theme: "claw",
+      mode: "dark",
+    },
+    {
+      route: "new",
+      device: "mobile",
+      viewport: { width: 390, height: 844 },
+      mobile: true,
+      theme: "claw",
+      mode: "dark",
+    },
+    {
+      route: "chat",
+      device: "desktop-light",
+      viewport: { width: 1280, height: 900 },
+      mobile: false,
+      theme: "claw",
+      mode: "light",
+    },
+    {
+      route: "chat",
+      device: "mobile-beacon",
+      viewport: { width: 390, height: 844 },
+      mobile: true,
+      theme: "beacon",
+      mode: "dark",
+    },
+  ] as const)(
     "rejects oversized files with a centered toast and preserves the $route composer on $device",
-    ({ route, device, viewport, mobile }) =>
+    ({ route, device, viewport, mobile, theme, mode }) =>
       suite.withPage(
-        { viewport, isMobile: mobile, hasTouch: mobile, colorScheme: "dark" },
+        { viewport, isMobile: mobile, hasTouch: mobile, colorScheme: mode },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
             attachmentMaxBytes: 1024,
+            methodResponses: { "config.get": themeConfigResponse(theme, mode) },
             agentModel: "demo/model",
             models: [{ id: "model", name: "Demo", provider: "demo" }],
             historyMessages: [{ role: "assistant", content: "Ready for attachments." }],
           });
           await page.goto(suite.server.baseUrl + route);
+          await expect
+            .poll(() => page.locator("html").getAttribute("data-theme"))
+            .toBe(theme === "claw" ? mode : theme);
           if (route === "chat") {
             await page.getByText("Ready for attachments.", { exact: true }).waitFor();
           }
@@ -42,6 +85,7 @@ suite.define(() => {
               path: path.join(suite.artifactDir, `${device}-${route}-rejected.png`),
             });
           }
+          await expectAttachmentErrorToast(toast, theme === "beacon" ? 7 : 4.5);
           expect(await toast.locator(".app-toast__message").textContent()).toBe(
             "File too large. Try a smaller file.",
           );
@@ -140,6 +184,7 @@ suite.define(() => {
             path: path.join(suite.artifactDir, `${device}-read-failed-toast.png`),
           });
         }
+        await expectAttachmentErrorToast(toast);
         const bounds = (await toast.boundingBox())!;
         expect(bounds.x + bounds.width / 2).toBeCloseTo(viewport.width / 2, 0);
         expect(bounds.y).toBeLessThan(viewport.height / 4);

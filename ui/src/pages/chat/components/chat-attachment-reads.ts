@@ -231,7 +231,11 @@ export function readChatAttachmentFile(
     entry.compress = undefined;
     if (outcome === "ready" && !uploadsEnabled(props.uploadConfig)) {
       if (reads.fail(entry)) {
-        showToast({ message: uploadsDisabledMessage(), placement: "top-center" });
+        showToast({
+          message: uploadsDisabledMessage(),
+          placement: "top-center",
+          severity: "error",
+        });
       }
     } else if (outcome === "ready" && typeof reader.result === "string" && !signal.aborted) {
       const completedAttachment = registerChatAttachmentPayload({
@@ -252,7 +256,7 @@ export function readChatAttachmentFile(
     } else if (outcome === "aborted" || signal.aborted) {
       reads.remove(entry);
     } else if (reads.fail(entry)) {
-      showToast({ message: t(failureMessage), placement: "top-center" });
+      showToast({ message: t(failureMessage), placement: "top-center", severity: "error" });
     }
     entry.destination.onPendingReadsChange?.(-1);
   };

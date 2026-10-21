@@ -36,6 +36,7 @@ export function ToastView(props: {
             "app-toast",
             {
               "app-toast--anchored": Boolean(anchor()),
+              "app-toast--error": props.toast.severity === "error",
               "app-toast--bottom": !anchor() && props.toast.placement === "bottom",
               "app-toast--top-center": !anchor() && props.toast.placement === "top-center",
             },

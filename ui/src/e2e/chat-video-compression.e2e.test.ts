@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { expectAttachmentErrorToast } from "./chat-attachment-toast.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Client-side video compression" });
@@ -122,6 +123,7 @@ suite.define(() => {
                 path: path.join(suite.artifactDir, `${device}-compression-failed-toast.png`),
               });
             }
+            await expectAttachmentErrorToast(toast);
             const bounds = (await toast.boundingBox())!;
             expect(bounds.x + bounds.width / 2).toBeCloseTo(viewport.width / 2, 0);
             expect(bounds.y).toBeLessThan(viewport.height / 4);

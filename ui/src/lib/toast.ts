@@ -12,6 +12,7 @@ export type ToastOptions = {
   anchor?: Element;
   /** Bottom placement suits settings feedback without covering the page heading. */
   placement?: "top" | "top-center" | "bottom";
+  severity?: "error";
   icon?: IconName;
   /** Agent identity shown for session notifications, using the shared avatar loader. */
   avatar?: AgentIdentity;

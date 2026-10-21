@@ -55,6 +55,7 @@ function skippedFilesToast(messageKey: string, skipped: readonly File[]): void {
   showToast({
     message: tooLarge ? t("chat.attachments.tooLargeToast") : t(messageKey),
     placement: "top-center",
+    severity: "error",
   });
 }
 

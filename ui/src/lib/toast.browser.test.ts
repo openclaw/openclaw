@@ -76,6 +76,25 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     }
   });
 
+  it("uses the error theme tone only for error feedback", async () => {
+    const { host, toast, action, dismiss } = await renderToast();
+    const neutral = getComputedStyle(toast).color;
+    showToast({ ...host.toast!, severity: "error", icon: "alertTriangle" });
+    await waitForSolid(() => expect(toast.classList.contains("app-toast--error")).toBe(true));
+    const tone = document.createElement("span");
+    tone.style.color = "var(--danger)";
+    toast.append(tone);
+    const danger = getComputedStyle(tone).color;
+    tone.remove();
+    expect(getComputedStyle(toast).color).toBe(danger);
+    expect(getComputedStyle(action).color).toBe(danger);
+    expect(getComputedStyle(dismiss).color).toBe(danger);
+    expect(getComputedStyle(host.querySelector(".app-toast__icon")!).color).toBe(danger);
+    showToast({ message: "Saved" });
+    await waitForSolid(() => expect(toast.classList.contains("app-toast--error")).toBe(false));
+    expect(getComputedStyle(toast).color).toBe(neutral);
+  });
+
   it("shows the selected agent avatar at notification size without crowding the action", async () => {
     await useViewport(390);
     const onAction = vi.fn();
