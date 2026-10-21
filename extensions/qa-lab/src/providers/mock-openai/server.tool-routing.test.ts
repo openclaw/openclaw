@@ -4,6 +4,12 @@ import { expect, it, describe } from "vitest";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
 import type { AnthropicMessage } from "./mock-openai-contracts.js";
 import {
+  expectIncludes,
+  functionCall,
+  respond,
+  textBlock,
+} from "./server.fixtures.test-support.js";
+import {
   type AnthropicResponse,
   ANTHROPIC_GUEST_CODE_MODE_TOOLS,
   expectAnthropicMessagesJson,
@@ -26,10 +32,10 @@ import {
   outputToolCall,
   postJson,
   postResponses,
-  expectOpenAiNonStreamingResponsesJson,
   outputToolArgs,
   outputItem,
   outputToolCallId,
+  expectOpenAiNonStreamingResponsesJson,
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
@@ -70,49 +76,43 @@ async function startTurn(prompt: string, body: Record<string, unknown> = {}) {
   return { server, input, request, complete };
 }
 
-it.each([
-  {
+it("completes WhatsApp upload-file through the namespaced catalog with intentional silence", async () => {
+  const prompt =
+    "Use the WhatsApp message tool upload-file action to send a PNG with caption WHATSAPP_QA_AGENT_UPLOAD_TEST. Do not send any visible text reply after the upload.";
+  const args = {
     action: "upload-file",
-    prompt:
-      "Use the WhatsApp message tool upload-file action to send a PNG with caption WHATSAPP_QA_AGENT_UPLOAD_TEST. Do not send any visible text reply after the upload.",
-    args: {
-      action: "upload-file",
-      caption: "WHATSAPP_QA_AGENT_UPLOAD_TEST",
-      contentType: "image/png",
-    },
-  },
-])(
-  "completes WhatsApp $action through the namespaced catalog with intentional silence",
-  async ({ prompt, args }) => {
-    const turn = await startTurn(prompt, {
-      model: "gpt-5.6-luna",
-      tools: [shellExec, ...namespace],
-    });
-    turn.input.unshift({
-      role: "developer",
-      content: "## Messaging\n### message tool\n- Proactive send/channel action: `message`.",
-    });
-    const payload = await turn.request();
-    expect(outputItems(payload)).toHaveLength(1);
-    const call = outputToolCall(payload, "dispatch_action");
-    expect(call.namespace).toBe("openclaw");
-    expect(callArgs(call)).toMatchObject({ id: "message", args });
-    expect(await getJson(turn.server, "/debug/last-request")).toMatchObject({
-      plannedToolName: "message",
-      plannedWireToolName: "dispatch_action",
-    });
-    const completed = await turn.complete(call, catalogResult("message", { ok: true }));
-    expect(outputItems(completed).some((item) => item.type === "function_call")).toBe(false);
-    expect(outputText(completed)).toBe("NO_REPLY");
-    const continuation = await expectNonStreamingResponsesJson(turn.server, {
-      model: "gpt-5.6-luna",
-      tools: [],
-      input: [...turn.input, makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)],
-    });
-    expect(outputItems(continuation).some((item) => item.type === "function_call")).toBe(false);
-    expect(outputText(continuation)).toBe("NO_REPLY");
-  },
-);
+    caption: "WHATSAPP_QA_AGENT_UPLOAD_TEST",
+    contentType: "image/png",
+  };
+
+  const turn = await startTurn(prompt, {
+    model: "gpt-5.6-luna",
+    tools: [shellExec, ...namespace],
+  });
+  turn.input.unshift({
+    role: "developer",
+    content: "## Messaging\n### message tool\n- Proactive send/channel action: `message`.",
+  });
+  const payload = await turn.request();
+  expect(outputItems(payload)).toHaveLength(1);
+  const call = outputToolCall(payload, "dispatch_action");
+  expect(call.namespace).toBe("openclaw");
+  expect(callArgs(call)).toMatchObject({ id: "message", args });
+  expect(await getJson(turn.server, "/debug/last-request")).toMatchObject({
+    plannedToolName: "message",
+    plannedWireToolName: "dispatch_action",
+  });
+  const completed = await turn.complete(call, catalogResult("message", { ok: true }));
+  expect(outputItems(completed).some((item) => item.type === "function_call")).toBe(false);
+  expect(outputText(completed)).toBe("NO_REPLY");
+  const continuation = await expectNonStreamingResponsesJson(turn.server, {
+    model: "gpt-5.6-luna",
+    tools: [],
+    input: [...turn.input, makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)],
+  });
+  expect(outputItems(continuation).some((item) => item.type === "function_call")).toBe(false);
+  expect(outputText(continuation)).toBe("NO_REPLY");
+});
 
 it.each(["sessions_spawn", "ls"])(
   "routes %s runtime fixtures without mistaking instruction arguments for fixture targets",
@@ -210,31 +210,26 @@ it.each([true])("honors protocol failure %s over accepted catalog details", asyn
   ]);
 });
 
-it.each([
-  {
-    scenario: "silent",
-    instructions:
-      "## Messaging\n### message tool\nVisible source replies are not automatically delivered for this run. Use message(action=send) for user-visible source-channel output. When the message is the completed reply to the current source conversation, set final=true.",
-    completion:
-      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n[Internal task completion event]\nTask: qa-terminal-silent\nResult: (no output)\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-    target: "message",
-    args: { action: "send", message: "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED", final: true },
-    receipt: { ok: true },
-    reply: "",
-  },
-])(
-  "routes the $scenario completion through the catalog once",
-  async ({ scenario, instructions, completion, target, args, receipt, reply }) => {
-    const turn = await startTurn(`Subagent terminal reply QA check: ${scenario}.`, {
-      model: "gpt-5.6-luna",
-      instructions,
-    });
-    turn.input.push(makeUserInput(completion));
-    const call = outputToolCall(await turn.request(), "dispatch_action");
-    expect(callArgs(call)).toEqual({ id: target, args });
-    expect(outputText(await turn.complete(call, catalogResult(target, receipt)))).toBe(reply);
-  },
-);
+it("routes the silent completion through the catalog once", async () => {
+  const scenario = "silent";
+  const instructions =
+    "## Messaging\n### message tool\nVisible source replies are not automatically delivered for this run. Use message(action=send) for user-visible source-channel output. When the message is the completed reply to the current source conversation, set final=true.";
+  const completion =
+    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n[Internal task completion event]\nTask: qa-terminal-silent\nResult: (no output)\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+  const target = "message";
+  const args = { action: "send", message: "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED", final: true };
+  const receipt = { ok: true };
+  const reply = "";
+
+  const turn = await startTurn(`Subagent terminal reply QA check: ${scenario}.`, {
+    model: "gpt-5.6-luna",
+    instructions,
+  });
+  turn.input.push(makeUserInput(completion));
+  const call = outputToolCall(await turn.request(), "dispatch_action");
+  expect(callArgs(call)).toEqual({ id: target, args });
+  expect(outputText(await turn.complete(call, catalogResult(target, receipt)))).toBe(reply);
+});
 
 it("drives yielded-parent fallback through catalog spawn and namespaced yield", async () => {
   const tools = [
@@ -275,8 +270,7 @@ it("drives yielded-parent fallback through catalog spawn and namespaced yield", 
   const body = await (
     await expectResponses(turn.server, { stream: true, tools, input: turn.input })
   ).text();
-  expect(body).toContain('"name":"sessions_yield"');
-  expect(body).toContain("QA-SUBAGENT-DIRECT-FALLBACK-OK");
+  expectIncludes(body, '"name":"sessions_yield"', "QA-SUBAGENT-DIRECT-FALLBACK-OK");
   expect(body.match(/"namespace":"openclaw_direct"/g)).toHaveLength(3);
   expect(await getJson(turn.server, "/debug/last-request")).toMatchObject({
     plannedToolName: "sessions_yield",
@@ -292,7 +286,7 @@ it("resolves the current Telegram session through developer additional tools", a
   turn.input.unshift(
     {
       role: "system",
-      content: [{ type: "input_text", text: "Use session_status to inspect the current session." }],
+      content: [textBlock("Use session_status to inspect the current session.")],
     },
     { type: "additional_tools", role: "developer", tools: namespace },
   );
@@ -491,8 +485,7 @@ it("routes Anthropic hidden tools through Code Mode and preserves scenario evide
   });
   expect(readAgentArgs).toEqual({ title: expect.any(String), code: expect.any(String) });
   const readAgentCode = String(requireRecord(readAgent.input, "exec input").code);
-  expect(readAgentCode).toContain("await catalog.search(targetName)");
-  expect(readAgentCode).toContain("await target(targetArgs)");
+  expectIncludes(readAgentCode, "await catalog.search(targetName)", "await target(targetArgs)");
   expect(readAgentCode).not.toContain("ALL_TOOLS");
   expect(readAgentCode).toContain("value.content.slice(0, 2048)");
   await expectPlan("read", { path: "AGENT.md" }, String(readAgent.id));
@@ -583,8 +576,8 @@ describe("responses-contract", () => {
       async (prompt) => {
         const body = await expectOpenAiNonStreamingResponsesJson(await startMockServer(), {
           model: "qa-model",
-          input: [{ role: "user", content: prompt }],
           tools: [{ type: "function", name: "exec", parameters: guestCodeModeExecTool.parameters }],
+          input: [{ role: "user", content: prompt }],
         });
         const call = outputItem(body);
         expect(call).toMatchObject({
@@ -608,7 +601,7 @@ describe("responses-contract", () => {
 describe("subagent-handoff", () => {
   const kickoff = "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.";
   const result = "Protocol note: inspected QA_KICKOFF_TASK.md and verified the workspace mission.";
-  const user = (text: string) => ({ role: "user", content: [{ type: "input_text", text }] });
+  const user = (text: string) => ({ role: "user", content: [textBlock(text)] });
   const tools = ["sessions_spawn", "sessions_yield", "read"].map((name) => ({
     type: "function",
     name,
@@ -682,11 +675,7 @@ describe("subagent-handoff", () => {
       async ({ completion, ok }) => {
         const server = await startMockServer();
         const request = (input: unknown[]) =>
-          expectNonStreamingResponsesJson(server, {
-            model: "gpt-5.6-luna",
-            tools,
-            input,
-          });
+          respond(server, input, { model: "gpt-5.6-luna", tools });
         const spawned = await request([user(kickoff)]);
         const call = outputToolCall(spawned, "sessions_spawn");
         expect(call).toBeDefined();
@@ -711,9 +700,7 @@ describe("subagent-handoff", () => {
         const completed = await request([user(kickoff), call, accepted, ...completionInput]);
         expect(outputItems(completed).some((item) => item.type === "function_call")).toBe(false);
         const text = outputText(completed);
-        expect(text).toContain("Delegated task:");
-        expect(text).toContain(ok ? result : "Subagent unavailable:");
-        expect(text).toContain("Evidence:");
+        expectIncludes(text, "Delegated task:", ok ? result : "Subagent unavailable:", "Evidence:");
         expect(text).not.toContain('"status":"accepted"');
         const unrelated = await request([user(kickoff), ...completionInput, user("Hello again.")]);
         expect(JSON.stringify(unrelated)).not.toContain(result);
@@ -758,12 +745,11 @@ describe("subagent-handoff", () => {
           tools: structuredTools,
           input: [
             user(kickoff),
-            {
-              type: "function_call",
-              name: "dispatch_action",
-              call_id: "dispatch",
-              arguments: JSON.stringify({ id: "sessions_spawn", args: { task: "Bounded task" } }),
-            },
+            functionCall(
+              "dispatch_action",
+              { id: "sessions_spawn", args: { task: "Bounded task" } },
+              "dispatch",
+            ),
             makeToolOutputWithCallId(
               "dispatch",
               JSON.stringify({

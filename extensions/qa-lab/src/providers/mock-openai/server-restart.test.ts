@@ -2,10 +2,10 @@ import { runInNewContext } from "node:vm";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
+import { respondOpenAi } from "./server.fixtures.test-support.js";
 import {
   createMockServerTestHarness,
   guestCodeModeExecTool,
-  expectOpenAiNonStreamingResponsesJson,
   outputItems,
   outputToolArgsFromItem,
   outputToolCall,
@@ -112,7 +112,7 @@ it("settles hard-kill recovery after one real checkpoint and resets from request
   const prompt = "Code Mode restart wait QA check. Original prompt marker: KILL-RESTART-PROMPT.";
   const tools = [...restartCheckpointTools, unsafeProbe];
   const input: JsonObject[] = [makeUserInput(prompt)];
-  const request = () => expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+  const request = () => respondOpenAi(server, input, { tools });
   const execArgs = await checkpointWait(input, request, 1, [
     "kill-restart-checkpoint-1",
     "kill-restart-exec",
@@ -120,10 +120,7 @@ it("settles hard-kill recovery after one real checkpoint and resets from request
   const recovered = await request();
   expect(outputItems(recovered).map((item) => item.type)).toEqual(["message"]);
   expect(outputText(recovered)).toBe("KILL-RESTART-RECOVERED-OK");
-  const freshPayload = await expectOpenAiNonStreamingResponsesJson(server, {
-    tools,
-    input: [makeUserInput(prompt)],
-  });
+  const freshPayload = await respondOpenAi(server, prompt, { tools });
   expect(outputToolArgsFromItem(singleToolCall(freshPayload, "exec"))).toEqual(execArgs);
 });
 
@@ -133,9 +130,7 @@ it("derives three restart checkpoints from request history with developer additi
     "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT.";
   const input: JsonObject[] = [makeUserInput(prompt)];
   const request = (history = input, tools = restartCheckpointTools) =>
-    expectOpenAiNonStreamingResponsesJson(server, {
-      input: [{ type: "additional_tools", role: "developer", tools }, ...history],
-    });
+    respondOpenAi(server, [{ type: "additional_tools", role: "developer", tools }, ...history]);
   for (const checkpoint of [1, 2, 3]) {
     await checkpointWait(input, request, checkpoint, [
       `restart-checkpoint-${checkpoint}`,

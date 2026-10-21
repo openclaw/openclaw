@@ -4,9 +4,9 @@ import {
   buildChannelStreamingFixtureEvents,
   resolveTelegramChannelStreamingPause,
 } from "./mock-openai-events.js";
+import { respondOpenAi } from "./server.fixtures.test-support.js";
 import {
   createMockServerTestHarness,
-  expectOpenAiNonStreamingResponsesJson,
   makeUserInput,
   outputText,
   postResponses,
@@ -99,9 +99,7 @@ describe("Telegram policy hot-reload mock provider", () => {
     const server = await startMockServer();
     const marker = "TG-RELOAD-account-a1b2c3d4-NEXT";
     const prompt = `[Sat 2026-10-03 11:56 UTC] ${senderEnvelope}Write 12 numbered plain-text lines. Every line must contain ${marker} and the words new policy keeps this conversation connected. Finish with a separate final line containing ${marker}-END. Do not use tools, Markdown, or explicit reply tags.`;
-    const response = await expectOpenAiNonStreamingResponsesJson(server, {
-      input: [makeUserInput(prompt)],
-    });
+    const response = await respondOpenAi(server, prompt);
     expect(outputText(response)).toBe(
       [
         ...Array.from(

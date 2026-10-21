@@ -3,10 +3,10 @@ import type { PluginHookRegistration } from "openclaw/plugin-sdk/plugin-test-run
 import { describe, expect, it } from "vitest";
 import qaLabPlugin from "../../../index.js";
 import { QA_SESSION_OBSERVER_HEADER } from "../shared/session-observer-registry.js";
+import { respond, textBlock } from "./server.fixtures.test-support.js";
 import {
   type MockServer,
   createMockServerTestHarness,
-  expectNonStreamingResponsesJson,
   expectOk,
   getJson,
   makeToolOutputWithCallId,
@@ -154,7 +154,7 @@ describe("QA transport session identity", () => {
       { instructions, input: "Reply exactly: {}" },
       ...["system", "developer"].map((role) => ({
         input: [
-          { type: "message", role, content: [{ type: "input_text", text: instructions }] },
+          { type: "message", role, content: [textBlock(instructions)] },
           makeUserInput("Reply exactly: {}"),
         ],
       })),
@@ -176,19 +176,9 @@ describe("QA transport session identity", () => {
     expect(await anthropic.json()).toMatchObject({ content: [{ type: "text", text: "{}" }] });
   });
 
-  it.each<{ name: string; body: Record<string, unknown>; route?: string }>([
-    {
-      name: "Anthropic history discarded by normalization",
-      route: "/v1/messages",
-      body: {
-        system: "You are a JSON-only function.",
-        messages: [
-          { role: "assistant", content: [{ type: "thinking", thinking: "Earlier reasoning" }] },
-          { role: "user", content: "Reply exactly: {}" },
-        ],
-      },
-    },
-  ])("requires utility affinity for $name", async ({ body, route = "/v1/responses" }) => {
+  it("requires utility affinity for Anthropic history discarded by normalization", async () => {
+    const route = "/v1/messages";
+
     const server = await startMockServer();
     const sessionId = "observed-agent-session";
     await observeSession(server, sessionId);
@@ -196,14 +186,18 @@ describe("QA transport session identity", () => {
       instructions: "You are a JSON-only function. Return only a valid JSON value.",
       input: [makeUserInput("Reply exactly: {}")],
       tools: [],
-      ...body,
+      system: "You are a JSON-only function.",
+      messages: [
+        { role: "assistant", content: [{ type: "thinking", thinking: "Earlier reasoning" }] },
+        { role: "user", content: "Reply exactly: {}" },
+      ],
     };
     const missing = await postJson(server, route, request);
     expect(missing.status).toBe(500);
     expect(await missing.text()).toContain("Missing QA session identity");
     expect(await getJson(server, "/debug/requests")).toEqual([]);
     const admitted = await postJson(server, route, request, {
-      [route === "/v1/messages" ? "x-session-affinity" : "session_id"]: sessionId,
+      "x-session-affinity": sessionId,
     });
     expect(admitted.status).toBe(200);
     expect(await getJson(server, "/debug/last-request")).toMatchObject({ sessionId });
@@ -242,10 +236,9 @@ describe("QA transport session identity", () => {
     expect(outputText(response)).toBe("Worker started.");
     expect(await getJson(server, "/debug/last-request")).toMatchObject({ sessionId });
     await server.terminalRequesters.settle(gateway);
-    const child = await expectNonStreamingResponsesJson(server, {
+    const child = await respond(server, "Subagent terminal reply QA worker: visible.", {
       client_metadata: { session_id: "identity-child" },
       instructions: `- Your session: ${childSessionKey}.`,
-      input: [makeUserInput("Subagent terminal reply QA worker: visible.")],
     });
     expect(outputText(child)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
   });

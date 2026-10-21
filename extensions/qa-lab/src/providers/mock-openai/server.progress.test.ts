@@ -2,8 +2,16 @@ import { describe, expect, it } from "vitest";
 import { buildMatrixToolProgressMentionSafetyPrompt } from "../../live-transports/matrix/scenarios/scenario-runtime-prompts.js";
 import { runLoadedScenarioFlow } from "../../scenario-flow-runner.test-support.js";
 import {
+  anthropicCall,
+  completedResult,
+  functionCall,
+  respond,
+  textBlock,
+  expectResponseText,
+  expectAnthropicText,
+} from "./server.fixtures.test-support.js";
+import {
   createMockServerTestHarness,
-  expectNonStreamingResponsesJson,
   expectOk,
   makeToolOutputWithCallId,
   makeUserInput,
@@ -54,7 +62,7 @@ async function requestProgress(
   }));
   const input = [prompt, ...(context ? [context] : [])].map((text) => ({
     role: "user",
-    content: route === "responses" ? [{ type: "input_text", text }] : text,
+    content: route === "responses" ? [textBlock(text)] : text,
   }));
   const body =
     route === "responses"
@@ -62,12 +70,7 @@ async function requestProgress(
           input: [
             ...input,
             ...toolResults.flatMap((result) => [
-              {
-                type: "function_call",
-                name: result.tool,
-                call_id: result.callId,
-                arguments: JSON.stringify(result.args),
-              },
+              functionCall(result.tool, result.args, result.callId),
               {
                 type: "function_call_output",
                 call_id: result.callId,
@@ -81,17 +84,7 @@ async function requestProgress(
           messages: [
             ...input,
             ...toolResults.flatMap((result) => [
-              {
-                role: "assistant",
-                content: [
-                  {
-                    type: "tool_use",
-                    name: result.tool,
-                    id: result.callId,
-                    input: result.args,
-                  },
-                ],
-              },
+              anthropicCall(result.tool, result.args, result.callId),
               {
                 role: "user",
                 content: [
@@ -119,58 +112,54 @@ async function requestProgress(
 }
 
 describe("Anthropic command progress wire", () => {
-  it.each([{ exitCode: 0, expected: "BUG-TOOL-DID-NOT-FAIL" }])(
-    "honors the Matrix required failure after exit $exitCode",
-    async ({ exitCode, expected }) => {
-      const prompt = buildMatrixToolProgressMentionSafetyPrompt(
-        "@qa-sut:matrix-qa.test",
-        "PROGRESS_OK",
-      );
-      const plan = await requestProgress("messages", prompt, []);
-      const call = plan.content[0];
-      expect(call.name).toBe("exec");
-      const args = call.input;
-      expect(args.command).toBe(
-        "while [ ! -d 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release' ]; do sleep 1; done; rmdir 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release'; false",
-      );
-      const results: ProgressResult[] = [
+  it("honors the Matrix required failure after exit 0", async () => {
+    const prompt = buildMatrixToolProgressMentionSafetyPrompt(
+      "@qa-sut:matrix-qa.test",
+      "PROGRESS_OK",
+    );
+    const plan = await requestProgress("messages", prompt, []);
+    const call = plan.content[0];
+    expect(call.name).toBe("exec");
+    const args = call.input;
+    expect(args.command).toBe(
+      "while [ ! -d 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release' ]; do sleep 1; done; rmdir 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release'; false",
+    );
+    const results: ProgressResult[] = [
+      {
+        tool: "exec",
+        args,
+        output: [{ type: "text", text: RUNNING_OUTPUT }],
+      },
+    ];
+    const pending = await requestProgress("messages", prompt, results);
+    expect(pending.content).toMatchObject([{ name: "process" }]);
+    results.push({
+      tool: "process",
+      args: { action: "poll", sessionId: "lucky-slug" },
+      output: "\n\nProcess exited with code 0.",
+    });
+    expect(await requestProgress("messages", prompt, results)).toMatchObject({
+      content: [{ text: "BUG-TOOL-DID-NOT-FAIL" }],
+    });
+  });
+  it("rejects empty call IDs even when command failure is allowed", async () => {
+    const callId = "";
+
+    const response = await requestProgress(
+      "messages",
+      EXEC_PROMPT.replace("command completes,", "command completes or fails,"),
+      [
+        { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT, callId },
         {
-          tool: "exec",
-          args,
-          output: exitCode === 1 ? RUNNING_OUTPUT : [{ type: "text", text: RUNNING_OUTPUT }],
+          tool: "process",
+          args: { action: "poll", sessionId: "lucky-slug" },
+          output: "\n\nProcess exited with code 0.",
+          callId,
         },
-      ];
-      const pending = await requestProgress("messages", prompt, results);
-      expect(pending.content).toMatchObject([{ name: "process" }]);
-      results.push({
-        tool: "process",
-        args: { action: "poll", sessionId: "lucky-slug" },
-        output: `\n\nProcess exited with code ${exitCode}.`,
-      });
-      expect(await requestProgress("messages", prompt, results)).toMatchObject({
-        content: [{ text: expected }],
-      });
-    },
-  );
-  it.each([{ label: "empty", callId: "" }])(
-    "rejects $label call IDs even when command failure is allowed",
-    async ({ callId }) => {
-      const response = await requestProgress(
-        "messages",
-        EXEC_PROMPT.replace("command completes,", "command completes or fails,"),
-        [
-          { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT, callId },
-          {
-            tool: "process",
-            args: { action: "poll", sessionId: "lucky-slug" },
-            output: "\n\nProcess exited with code 0.",
-            callId,
-          },
-        ],
-      );
-      expect(response).toMatchObject({ content: [{ text: "BUG-TOOL-PROGRESS-CALL-MISMATCH" }] });
-    },
-  );
+      ],
+    );
+    expect(response).toMatchObject({ content: [{ text: "BUG-TOOL-PROGRESS-CALL-MISMATCH" }] });
+  });
 });
 
 function execResult(output: ProgressResult["output"], isError?: boolean): ProgressResult {
@@ -198,7 +187,7 @@ describe("background command progress", () => {
       execResult(RUNNING_OUTPUT),
       poll,
     ]);
-    expect(response).toMatchObject({ output: [{ content: [{ text: marker }] }] });
+    expectResponseText(response, marker);
   });
 
   it("allows a terminal typed failure with an unknown exit code", async () => {
@@ -206,24 +195,22 @@ describe("background command progress", () => {
       execResult(RUNNING_OUTPUT),
       pollResult("\n\nProcess exited with unknown exit code.", true),
     ]);
-    expect(response).toMatchObject({ output: [{ content: [{ text: "PROGRESS_OK" }] }] });
+    expectResponseText(response, "PROGRESS_OK");
   });
 
-  it.each([{ output: "Node: node-1\n(Command exited with code 7)", isError: false }])(
-    "reports foreground failure from $output",
-    async ({ output, isError }) => {
-      for (const allowsFailure of [false, true]) {
-        const response = await requestProgress(
-          "responses",
-          allowsFailure ? FAILURE_ALLOWED_PROMPT : EXEC_PROMPT,
-          [execResult(output, isError)],
-        );
-        expect(response).toMatchObject({
-          output: [{ content: [{ text: allowsFailure ? "PROGRESS_OK" : "BUG-TOOL-FAILED" }] }],
-        });
-      }
-    },
-  );
+  it("reports foreground failure from Node: node-1\n(Command exited with code 7)", async () => {
+    const output = "Node: node-1\n(Command exited with code 7)";
+    const isError = false;
+
+    for (const allowsFailure of [false, true]) {
+      const response = await requestProgress(
+        "responses",
+        allowsFailure ? FAILURE_ALLOWED_PROMPT : EXEC_PROMPT,
+        [execResult(output, isError)],
+      );
+      expectResponseText(response, allowsFailure ? "PROGRESS_OK" : "BUG-TOOL-FAILED");
+    }
+  });
 
   it.each([
     [
@@ -240,7 +227,7 @@ describe("background command progress", () => {
     "does not accept %s even when command failure is allowed",
     async (_label, results, marker) => {
       const response = await requestProgress("responses", FAILURE_ALLOWED_PROMPT, [...results]);
-      expect(response).toMatchObject({ output: [{ content: [{ text: marker }] }] });
+      expectResponseText(response, marker);
     },
   );
 });
@@ -300,11 +287,7 @@ it("selects commentary, exec, and final delivery for the actual Telegram scenari
     }),
   ).rejects.toBe(captured);
   const request = (input: unknown[]) =>
-    expectNonStreamingResponsesJson(server, {
-      model: "qa-model",
-      tools: [{ type: "function", name: "exec" }],
-      input,
-    });
+    respond(server, input, { model: "qa-model", tools: [{ type: "function", name: "exec" }] });
   const input = [makeUserInput(prompt)];
   const plan = await request(input);
   expect(outputItems(plan)).toMatchObject([
@@ -375,31 +358,19 @@ describe("tool progress stdout", () => {
       args: fixture.tool === "exec" ? { command: "true" } : { path: "empty.txt" },
       ...fixture,
     });
-    expect(response).toMatchObject({
-      stop_reason: "end_turn",
-      content: [{ type: "text", text: "PROGRESS_OK" }],
-    });
+    expectAnthropicText(response, "PROGRESS_OK");
   });
 });
 
-it.each([
-  {
-    label: "untyped content without failure evidence",
-    output: "Access denied",
-    isError: undefined,
-    expected: "BUG-TOOL-DID-NOT-FAIL",
-  },
-])("uses $label for error-progress completion", async ({ expected, ...fixture }) => {
+it("rejects untyped content without failure evidence for error-progress completion", async () => {
   const response = await completeProgress({
     prompt: ERROR_PROMPT,
     tool: "read",
     args: { path: "denied.txt" },
-    ...fixture,
+    output: "Access denied",
+    isError: undefined,
   });
-  expect(response).toMatchObject({
-    stop_reason: "end_turn",
-    content: [{ type: "text", text: expected }],
-  });
+  expectAnthropicText(response, "BUG-TOOL-DID-NOT-FAIL");
 });
 
 it("distinguishes a successful CodeMode runner from its failed read", async () => {
@@ -440,16 +411,10 @@ it("distinguishes a successful CodeMode runner from its failed read", async () =
           type: "tool_result",
           tool_use_id: plan.content[0].id,
           is_error: false,
-          content: JSON.stringify({
-            status: "completed",
-            value: { status: "error", error: "Access denied" },
-          }),
+          content: completedResult({ status: "error", error: "Access denied" }),
         },
       ],
     },
   ]);
-  expect(result).toMatchObject({
-    stop_reason: "end_turn",
-    content: [{ type: "text", text: "PROGRESS_OK" }],
-  });
+  expectAnthropicText(result, "PROGRESS_OK");
 });
