@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
-import type { buildEmbeddedRunPayloads } from "./payloads.js";
 import {
   assistantMessage,
   attemptResult,
@@ -11,8 +10,9 @@ import {
 } from "./terminal-preparation.test-support.js";
 
 // Run stats do not depend on rendered payloads.
-vi.mock("./payloads.js", () => ({
-  buildEmbeddedRunPayloads: (): ReturnType<typeof buildEmbeddedRunPayloads> => [],
+vi.mock("./payloads.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./payloads.js")>()),
+  buildEmbeddedRunPayloads: () => [],
 }));
 
 describe("prepareEmbeddedRunTerminal run stats", () => {
