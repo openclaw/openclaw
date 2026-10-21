@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerDiscordActivities } from "./register.js";
 import { getDiscordActivitiesRuntime, setDiscordActivitiesRuntime } from "./runtime.js";
 import { DiscordActivityStore, openDiscordActivityStores } from "./store.js";
-import { createMemoryKeyedStore } from "./test-helpers.test-support.js";
+import { createActivityTestConfig, createMemoryKeyedStore } from "./test-helpers.test-support.js";
 
 afterEach(() => {
   setDiscordActivitiesRuntime(undefined);
@@ -11,14 +11,6 @@ afterEach(() => {
 });
 
 describe("Discord Activity persistence", () => {
-  const launch = {
-    accountId: "default",
-    channelId: "channel",
-    discordUserId: "user",
-    widgetId: "widget-a",
-    createdAt: 1,
-  };
-
   it("records delivery against the current widget and fails if it disappears", async () => {
     const stores = openDiscordActivityStores(createMemoryKeyedStore);
     const activity = new DiscordActivityStore(stores);
@@ -51,14 +43,17 @@ describe("Discord Activity persistence", () => {
   it("keeps a replacement launch when retirement encounters a conflict", async () => {
     const stores = openDiscordActivityStores(createMemoryKeyedStore);
     const activity = new DiscordActivityStore(stores);
-    await activity.recordPendingLaunch(launch);
+    await activity.recordPendingLaunch({
+      accountId: "default",
+      channelId: "channel",
+      discordUserId: "user",
+      widgetId: "widget-a",
+      createdAt: 1,
+    });
+    const replacement = { state: "single" as const, widgetId: "widget-b", createdAt: 2 };
     const compareAndApply = stores.launches.compareAndApply;
     vi.spyOn(stores.launches, "compareAndApply").mockImplementationOnce(async (...args) => {
-      await stores.launches.register(args[0], {
-        state: "single",
-        widgetId: "widget-b",
-        createdAt: 2,
-      });
+      await stores.launches.register(args[0], replacement);
       return await compareAndApply(...args);
     });
 
@@ -93,16 +88,10 @@ function createApi(
 }
 
 describe("Discord Activities registration", () => {
+  const unconfigured = { channels: { discord: { token: "test" } } };
+  const context = { messageChannel: "discord", accountId: "default", nativeChannelId: "987654321" };
   it("registers static transport surfaces before runtime config is published", () => {
-    const runtimeConfig = {
-      channels: {
-        discord: {
-          token: "test",
-          activities: { clientSecret: "secret", applicationId: "123" },
-        },
-      },
-    };
-    const test = createApi({ channels: { discord: { token: "test" } } }, runtimeConfig);
+    const test = createApi(unconfigured, createActivityTestConfig());
 
     registerDiscordActivities(test.api);
 
@@ -117,34 +106,15 @@ describe("Discord Activities registration", () => {
       }),
     ]);
     const presenter = test.widgetPresenters[0];
-    expect(
-      presenter?.target === "current_channel" &&
-        presenter.match({
-          messageChannel: "discord",
-          accountId: "default",
-          nativeChannelId: "987654321",
-        }),
-    ).toBe(true);
+    expect(presenter?.target === "current_channel" && presenter.match(context)).toBe(true);
     expect(getDiscordActivitiesRuntime()).toBeDefined();
   });
 
-  it.each([
-    {
-      name: "Activities are unconfigured",
-      config: { channels: { discord: { token: "test" } } },
-    },
-  ])("keeps the static presenter unavailable when $name", ({ config }) => {
-    const test = createApi({}, config);
+  it("keeps the static presenter unavailable when Activities are unconfigured", () => {
+    const test = createApi({}, unconfigured);
     registerDiscordActivities(test.api);
 
     const presenter = test.widgetPresenters[0];
-    expect(
-      presenter?.target === "current_channel" &&
-        presenter.match({
-          messageChannel: "discord",
-          accountId: "default",
-          nativeChannelId: "987654321",
-        }),
-    ).toBe(false);
+    expect(presenter?.target === "current_channel" && presenter.match(context)).toBe(false);
   });
 });
