@@ -342,12 +342,38 @@ type CdpSocketOptions = {
   headers?: Record<string, string>;
   handshakeTimeoutMs?: number;
   commandTimeoutMs?: number;
-  handshakeRetries?: 0;
+  handshakeRetries?: number;
+  handshakeRetryDelayMs?: number;
+  handshakeMaxRetryDelayMs?: number;
   lookup?: CdpSocketLookup;
   signal?: AbortSignal;
   /** Read-only probes can cancel commands; write callers retain the socket for compensation. */
   abortScope?: "operation";
 };
+
+function normalizeRetryCount(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+function computeHandshakeRetryDelayMs(attempt: number, opts?: CdpSocketOptions): number {
+  const baseDelayMs =
+    typeof opts?.handshakeRetryDelayMs === "number" && Number.isFinite(opts.handshakeRetryDelayMs)
+      ? Math.max(1, Math.floor(opts.handshakeRetryDelayMs))
+      : 200;
+  const maxDelayMs =
+    typeof opts?.handshakeMaxRetryDelayMs === "number" &&
+    Number.isFinite(opts.handshakeMaxRetryDelayMs)
+      ? Math.max(baseDelayMs, Math.floor(opts.handshakeMaxRetryDelayMs))
+      : 3000;
+  const raw = Math.min(maxDelayMs, baseDelayMs * 2 ** Math.max(0, attempt - 1));
+  // Jitter keeps several browser sessions from retrying handshakes in lockstep
+  // after a shared Chrome or network hiccup.
+  const jitterScale = 0.8 + Math.random() * 0.4;
+  return Math.max(1, Math.floor(raw * jitterScale));
+}
 
 function shouldRetryCdpHandshakeError(err: unknown): boolean {
   if (!(err instanceof Error)) {
@@ -383,7 +409,7 @@ export async function withCdpSocket<T>(
   fn: (send: CdpSendFn) => Promise<T>,
   opts?: CdpSocketOptions,
 ): Promise<T> {
-  const maxHandshakeRetries = opts?.handshakeRetries ?? 2;
+  const maxHandshakeRetries = normalizeRetryCount(opts?.handshakeRetries, 2);
   for (let attempt = 0; ; attempt += 1) {
     opts?.signal?.throwIfAborted();
     const ws = openCdpWebSocket(wsUrl, opts);
