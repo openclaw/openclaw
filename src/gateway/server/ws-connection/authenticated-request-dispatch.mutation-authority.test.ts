@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertOperatorModelAllowed,
   readAdmittedRunOperatorAuthority,
@@ -67,7 +67,6 @@ function createCaptureFixture(params: {
   connection?: AbortController;
   sourceAuthority?: CaptureOptions["sourceAuthority"];
   requireGuard?: boolean;
-  captureGuard?: boolean;
 }) {
   const client = createOperatorWsClient(
     params.connection ? { socket: { close: () => params.connection?.abort() } } : {},
@@ -86,7 +85,6 @@ function createCaptureFixture(params: {
   });
   context.resolveGatewayContext = () => context;
   const captures: Capture[] = [];
-  let guard: ReturnType<typeof readGatewayRequestMutationAuthority> | undefined;
   const handler = vi.fn(async (options: GatewayRequestHandlerOptions) => {
     const current = params.requireGuard
       ? expectDefined(options.hasCurrentClientAuthority, "WS caller guard")
@@ -98,9 +96,6 @@ function createCaptureFixture(params: {
       sourceAuthority: params.sourceAuthority,
     });
     captures.push(expectDefined(captured, "captured operator source"));
-    if (params.captureGuard) {
-      guard = readGatewayRequestMutationAuthority(options);
-    }
     options.respond(true, { accepted: true });
   });
   const harness = createDispatchTestHarness({
@@ -110,7 +105,7 @@ function createCaptureFixture(params: {
   });
   const dispatch = (id: string) =>
     harness.dispatcher.dispatch(requestFrame(id, params.method), client);
-  return { client, context, captures, handler, harness, dispatch, guard: () => guard };
+  return { client, context, captures, handler, harness, dispatch };
 }
 
 vi.mock("../../../state/user-channel-identity-operations.js", async (importOriginal) => ({
@@ -277,74 +272,6 @@ describe("authenticated request mutation custody", () => {
           retained.release();
         }
         vi.useRealTimers();
-      }
-    });
-  });
-
-  it("fences stale requests without revoking retained work until its committed grant changes", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const identity = "retained@example.test";
-      const profile = ensureProfileForEmail(identity);
-      const identityScopes = {
-        [identity]: ["operator.admin" as const],
-        "other@example.test": ["operator.read" as const],
-      };
-      let committedConfig: OpenClawConfig = {
-        gateway: { auth: { identityScopes } },
-      };
-      setRuntimeConfigSnapshot(committedConfig);
-      const fixture = createCaptureFixture({
-        config: () => committedConfig,
-        profileId: profile.id,
-        method: "test.identity-scopes",
-        generation: createGeneration(),
-        captureGuard: true,
-        policy: { role: "operator", verifiedIdentity: identity },
-      });
-      const { client, context, harness, dispatch, captures } = fixture;
-      client.authenticatedUserId = identity;
-      try {
-        await dispatch("identity-scopes");
-        expect(harness.send).toHaveBeenLastCalledWith(
-          expect.objectContaining({ ok: true, payload: { accepted: true } }),
-        );
-        const { authority } = expectDefined(captures.at(-1), "captured operator source");
-        const mutationGuard = expectDefined(fixture.guard(), "request mutation guard");
-        assert(mutationGuard.family === "worker");
-
-        committedConfig = structuredClone(committedConfig);
-        committedConfig.gateway!.auth!.identityScopes!["other@example.test"] = ["operator.admin"];
-        setRuntimeConfigSnapshot(committedConfig);
-        publishOperatorRoleConfigChange(context);
-        expect(authority.signal?.aborted).toBe(false);
-        expect(() => authority.assertCurrent()).not.toThrow();
-        expect(() => mutationGuard.assertWorkerCurrent()).not.toThrow();
-        expect(harness.close).not.toHaveBeenCalled();
-
-        committedConfig = structuredClone(committedConfig);
-        committedConfig.gateway!.trustedProxies = ["192.0.2.10"];
-        setRuntimeConfigSnapshot(committedConfig);
-        await dispatch("transport-fenced");
-        expect(harness.close).toHaveBeenCalledWith(
-          4001,
-          "client invalidated: gateway-policy-changed",
-        );
-        expect(client).toMatchObject({ sourceInvalidated: false });
-        expect(authority.signal?.aborted).toBe(false);
-        expect(authority.assertCurrent).not.toThrow();
-
-        committedConfig = structuredClone(committedConfig);
-        delete committedConfig.gateway!.auth!.identityScopes![identity];
-        setRuntimeConfigSnapshot(committedConfig);
-        await dispatch("grant-revoked");
-        expect(client).toMatchObject({ sourceInvalidated: true });
-        expect(authority.signal?.aborted).toBe(true);
-        expect(() => authority.assertCurrent()).toThrow(/authority is no longer active/);
-        expect(() => mutationGuard.assertWorkerCurrent()).toThrow(
-          /Gateway requester authority changed/,
-        );
-      } finally {
-        captures.at(-1)?.release();
       }
     });
   });

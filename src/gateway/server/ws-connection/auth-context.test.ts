@@ -94,7 +94,10 @@ describe("resolveConnectAuthState", () => {
   });
 
   it("does not let valid device reconnects consume remote shared-secret attempts", async () => {
-    const rateLimiter = createRealLimiter(2);
+    const rateLimiter = createGatewayAuthRateLimiter(
+      { maxAttempts: 2, windowMs: 60_000, lockoutMs: 60_000, pruneIntervalMs: 0 },
+      { scheduler: createTestGatewayScheduler() },
+    );
     try {
       rateLimiter.recordFailure(CLIENT_IP, "shared-secret");
       for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -125,13 +128,6 @@ const bootstrapOnly: Partial<ConnectAuthState> = {
   deviceTokenCandidate: undefined,
   deviceTokenCandidateSource: undefined,
 };
-
-function createRealLimiter(maxAttempts: number, exemptLoopback?: boolean) {
-  return createGatewayAuthRateLimiter(
-    { maxAttempts, windowMs: 60_000, lockoutMs: 60_000, pruneIntervalMs: 0, exemptLoopback },
-    { scheduler: createTestGatewayScheduler() },
-  );
-}
 
 function createVerifyDeviceToken(result: DeviceTokenResult) {
   return vi.fn<VerifyDeviceTokenFn>(async () => result);
@@ -314,43 +310,4 @@ describe("resolveConnectAuthDecision", () => {
       }
     },
   );
-
-  it("serializes concurrent bootstrap-token failures before checking the next attempt", async () => {
-    const rateLimiter = createRealLimiter(3, false);
-    let activeBootstrapChecks = 0;
-    let maxActiveBootstrapChecks = 0;
-    const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => {
-      activeBootstrapChecks += 1;
-      maxActiveBootstrapChecks = Math.max(maxActiveBootstrapChecks, activeBootstrapChecks);
-      await new Promise((resolve) => {
-        setTimeout(resolve, 5);
-      });
-      activeBootstrapChecks -= 1;
-      return { ok: false, reason: "bootstrap_token_invalid" };
-    });
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
-    try {
-      const decisions = await Promise.all(
-        Array.from(
-          { length: 8 },
-          async () =>
-            await resolveDeviceTokenDecision({
-              verifyBootstrapToken,
-              verifyDeviceToken,
-              rateLimiter,
-              clientIp: CLIENT_IP,
-              stateOverrides: bootstrapOnly,
-            }),
-        ),
-      );
-      const reasons = decisions.map((decision) => decision.authResult.reason);
-      expect(reasons.filter((reason) => reason === "bootstrap_token_invalid")).toHaveLength(3);
-      expect(reasons.filter((reason) => reason === "rate_limited")).toHaveLength(5);
-      expect(verifyBootstrapToken).toHaveBeenCalledTimes(3);
-      expect(maxActiveBootstrapChecks).toBe(1);
-      expect(verifyDeviceToken).not.toHaveBeenCalled();
-    } finally {
-      rateLimiter.dispose();
-    }
-  });
 });

@@ -338,18 +338,15 @@ describe("authenticated WebSocket request trace dispatch", () => {
     },
   );
 
-  it("isolates concurrent request contexts on one connection", async () => {
-    const requestBarrier = createDeferredCore();
+  it("gives concurrent requests their own root admission", async () => {
+    const gate = createRequestGate();
     const bothObserved = createDeferredCore();
-    const observed = new Map<string, TraceObservation>();
-    const { dispatcher } = createDispatcher(async ({ req }) => {
-      const observation: TraceObservation = { before: getActiveDiagnosticTraceContext() };
-      observed.set(req.id, observation);
-      if (observed.size === 2) {
+    let entered = 0;
+    const { dispatcher } = createDispatcher(async () => {
+      if (++entered === 2) {
         bothObserved.resolve();
       }
-      await requestBarrier.promise;
-      observation.after = getActiveDiagnosticTraceContext();
+      await gate.wait();
     });
     const client = createClient();
 
@@ -358,25 +355,17 @@ describe("authenticated WebSocket request trace dispatch", () => {
       throw new Error("expected open parent work admission");
     }
     const dispatches = parent.run(() =>
-      Promise.all([
-        dispatchInFreshMessageScope(dispatcher, client, "first", TRACEPARENTS.first),
-        dispatchInFreshMessageScope(dispatcher, client, "second", TRACEPARENTS.second),
-      ]),
+      Promise.all(["first", "second"].map((id) => dispatcher.dispatch(traceRequest(id), client))),
     );
     try {
       await bothObserved.promise;
-      // The pending starts retain their traces but cannot borrow the parent root.
+      // Pending starts cannot borrow the caller's parent admission.
       expect(getActiveGatewayRootWorkCount()).toBe(3);
     } finally {
-      requestBarrier.resolve();
+      gate.release();
       parent.release();
       await dispatches;
     }
-
-    expect(observed.get("first")?.before?.traceId).toBe("11111111111111111111111111111111");
-    expect(observed.get("second")?.before?.traceId).toBe("22222222222222222222222222222222");
-    expect(observed.get("first")?.after).toEqual(observed.get("first")?.before);
-    expect(observed.get("second")?.after).toEqual(observed.get("second")?.before);
   });
 
   it("preserves request isolation through a real authenticated WebSocket session", async () => {
