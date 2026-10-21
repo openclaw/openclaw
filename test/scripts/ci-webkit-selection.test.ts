@@ -15,7 +15,7 @@ describe("Control UI WebKit selection", () => {
     ["ui/src/components/solid/overlay.css", true],
     ["ui/src/pages/chat/components/chat-composer.tsx", true],
     ["ui/src/pages/chat/chat-pane-header.ts", true],
-    ["ui/src/pages/chat/components/chat-pane-header.ts", true],
+    ["ui/src/pages/chat/components/chat-pane-header.tsx", true],
     ["ui/src/pages/chat/components/chat-pane-versions-menu.tsx", true],
     ["ui/src/lib/solid-bridge.ts", true],
     ["ui/src/lib/presentation.ts", true],

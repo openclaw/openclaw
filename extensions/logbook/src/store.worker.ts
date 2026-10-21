@@ -430,20 +430,17 @@ class LogbookDatabaseStore {
     startMs,
     endMs,
     drafts,
-    selectKeyframes = false,
   }: LogbookOperations["replaceCardsInWindow"]["input"]): void {
     const now = Date.now();
     runSqliteImmediateTransactionSync(
       this.db,
       () => {
-        const frames = selectKeyframes
-          ? executeSqliteQuerySync(
-              this.db,
-              this.frameMetadataQuery
-                .where("captured_at_ms", ">=", startMs)
-                .where("captured_at_ms", "<", endMs),
-            ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }))
-          : undefined;
+        const frames = executeSqliteQuerySync(
+          this.db,
+          this.frameMetadataQuery
+            .where("captured_at_ms", ">=", startMs)
+            .where("captured_at_ms", "<", endMs),
+        ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }));
         this.statements.deleteCards({ day, startMs, endMs });
         for (let offset = 0; offset < drafts.length; offset += WRITE_BATCH_SIZE) {
           executeSqliteQuerySync(
@@ -460,7 +457,7 @@ class LogbookDatabaseStore {
                 app_primary: draft.appPrimary ?? null,
                 app_secondary: draft.appSecondary ?? null,
                 distractions: JSON.stringify(draft.distractions),
-                keyframe_id: (frames ? pickKeyframeId(draft, frames) : draft.keyframeId) ?? null,
+                keyframe_id: pickKeyframeId(draft, frames) ?? null,
                 updated_ms: now,
               })),
             ),

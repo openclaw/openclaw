@@ -598,8 +598,8 @@ serveOwnedWorkerTasks(
         );
       }
       if (request.kind === "session-entries") {
-        const { prepareSessionMemoryEntries } = await import("./session-memory-entry.worker.js");
-        return { entries: await prepareSessionMemoryEntries(request.entries) };
+        const { deliverSessionMemoryEntries } = await import("./session-memory-entry.worker.js");
+        return await deliverSessionMemoryEntries(request.entries, channel, control);
       }
       return await runWithSessionTranscriptReadFence(
         request.admission,

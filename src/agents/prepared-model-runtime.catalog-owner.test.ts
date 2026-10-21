@@ -26,6 +26,7 @@ import {
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
+import { PreparedModelRuntimeClosedError } from "./prepared-model-runtime.lifecycle.js";
 import {
   publishModelRuntimeSnapshot,
   resolvePreparedModelRuntimeOwnerBySnapshot,
@@ -724,36 +725,51 @@ it("preserves the primary publication error when terminal generation cleanup als
 });
 
 describe("captured startup inventory refresh", () => {
-  it("reports redacted nested failures from the committed catalog refresh", async () => {
-    const warning = createDeferred<string>();
-    const token = "sk-abcdefghijklmnopqrstuv";
-    const failure = new AggregateError(
-      [
-        new Error("registry release failed", {
-          cause: new Error(`Authorization: Bearer ${token}`),
-        }),
-        new Error("donor close failed"),
-      ],
-      "Prepared plugin resources failed to close",
-    );
-    mocks.configuredAgentIds = ["pro"];
-    mocks.runPreparedModelCatalogWorker.mockRejectedValue(failure);
-    mocks.warn.mockImplementation((message: string) => warning.resolve(message));
+  it.each(["nested cleanup", "identical shutdown text", "wrapped shutdown"] as const)(
+    "reports %s failures from the committed catalog refresh",
+    async (kind) => {
+      const warning = createDeferred<string>();
+      const token = "sk-abcdefghijklmnopqrstuv";
+      const closedMessage = "prepared model runtime process lifetime closed";
+      const failure =
+        kind === "identical shutdown text"
+          ? new Error(closedMessage)
+          : new AggregateError(
+              [
+                new Error("registry release failed", {
+                  cause: new Error(`Authorization: Bearer ${token}`),
+                }),
+                new Error("donor close failed"),
+                ...(kind === "wrapped shutdown" ? [new PreparedModelRuntimeClosedError()] : []),
+              ],
+              "Prepared plugin resources failed to close",
+            );
+      mocks.configuredAgentIds = ["pro"];
+      mocks.runPreparedModelCatalogWorker.mockRejectedValue(failure);
+      mocks.warn.mockImplementation((message: string) => warning.resolve(message));
 
-    await refreshPreparedModelRuntimeSnapshots(
-      { agents: { entries: { pro: {} } } },
-      { gatewayLifecycle: true, catalogMode: "static" },
-    );
-    const message = await warning.promise;
+      await refreshPreparedModelRuntimeSnapshots(
+        { agents: { entries: { pro: {} } } },
+        { gatewayLifecycle: true, catalogMode: "static" },
+      );
+      const message = await warning.promise;
 
-    expect(message).toContain("provider catalog refresh failed:");
-    expect(message).toContain("Prepared plugin resources failed to close");
-    expect(message).toContain("registry release failed");
-    expect(message).toContain("donor close failed");
-    expect(message).toContain("Authorization: Bearer");
-    expect(message).not.toContain(token);
-    expect(mocks.warn).toHaveBeenCalledOnce();
-  });
+      expect(message).toContain("provider catalog refresh failed:");
+      if (kind === "identical shutdown text") {
+        expect(message).toContain(closedMessage);
+      } else {
+        expect(message).toContain("Prepared plugin resources failed to close");
+        expect(message).toContain("registry release failed");
+        expect(message).toContain("donor close failed");
+        expect(message).toContain("Authorization: Bearer");
+        if (kind === "wrapped shutdown") {
+          expect(message).toContain(closedMessage);
+        }
+      }
+      expect(message).not.toContain(token);
+      expect(mocks.warn).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not refill a successful empty refresh from the captured startup registry", async () => {
     const captured = {

@@ -235,9 +235,17 @@ describe("write-unified-entry-dts", () => {
           files: ["consumer.ts"],
         }),
       );
+      // Declaration reuse needs the shared runtime graph, not unrelated standalone workers.
+      const runtimeConfig = "tsdown.fixture-runtime.config.ts";
+      write(
+        runtimeConfig,
+        `import configs from "./tsdown.config.ts";
+export default configs.filter(config => Object.hasOwn(config.entry ?? {}, "index"));
+`,
+      );
       const initial = await measurePhase(
         "initial-build",
-        async () => await runUnifiedBuild(command, root),
+        async () => await runUnifiedBuild(command, root, runtimeConfig),
         (result) => result.status,
       );
       expect(initial.status, initial.stdout + initial.stderr).toBe(0);
@@ -312,7 +320,7 @@ describe("write-unified-entry-dts", () => {
       }
       const repeated = await measurePhase(
         "unchanged-build",
-        async () => await runUnifiedBuild(command, root),
+        async () => await runUnifiedBuild(command, root, runtimeConfig),
         (result) => result.status,
       );
       expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
@@ -333,7 +341,7 @@ describe("write-unified-entry-dts", () => {
       );
       const isolatedEdit = await measurePhase(
         "edited-build",
-        async () => await runUnifiedBuild(command, root),
+        async () => await runUnifiedBuild(command, root, runtimeConfig),
         (result) => result.status,
       );
       expect(isolatedEdit.status, isolatedEdit.stdout + isolatedEdit.stderr).toBe(0);

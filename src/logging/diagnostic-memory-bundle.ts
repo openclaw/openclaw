@@ -27,6 +27,8 @@ export function readMemoryUsage(input: unknown, label: string): DiagnosticMemory
     [
       "anonymousRssBytes",
       "anonymousSwapBytes",
+      "heapSizeLimitBytes",
+      "oldGenerationAfterGcBytes",
       "workerCount",
       "workerHeapSampledCount",
       "workerHeapTotalBytes",
@@ -61,7 +63,14 @@ export function readMemoryUsage(input: unknown, label: string): DiagnosticMemory
         sample,
         worker,
         entryLabel,
-        ["threadId", "external", "arrayBuffers", "sampleAgeMs", "heapSizeLimitBytes"],
+        [
+          "threadId",
+          "external",
+          "arrayBuffers",
+          "sampleAgeMs",
+          "heapSizeLimitBytes",
+          "oldGenerationAfterGcBytes",
+        ],
         readOptionalPositiveInteger,
       );
       if (Array.isArray(worker.retainedData)) {

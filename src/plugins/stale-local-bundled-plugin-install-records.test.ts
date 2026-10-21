@@ -117,7 +117,6 @@ describe("pruneStaleLocalBundledPluginInstallRecords", () => {
         {
           pluginId: "discord",
           record: records.discord,
-          recordPathField: "installPath",
           stalePath,
           bundledPath: currentPath,
         },

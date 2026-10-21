@@ -43,6 +43,30 @@ describe("cleanSchemaForGemini", () => {
     expect(cleanSchemaForGemini(input)).toStrictEqual(expected);
   });
 
+  it.each(["anyOf", "oneOf"])("simplifies %s without losing outer metadata", (keyword) => {
+    for (const { variants, expected } of [
+      {
+        variants: [
+          { type: "string", const: "compact" },
+          { type: "string", const: "wide" },
+        ],
+        expected: { type: "string", enum: ["compact", "wide"] },
+      },
+      {
+        variants: [{ type: "null" }, { type: "string", description: "inner" }],
+        expected: { type: "string", description: "outer" },
+      },
+      {
+        variants: [{ type: "string" }, { type: "integer" }],
+        expected: { type: "string" },
+      },
+    ]) {
+      expect(
+        cleanSchemaForGemini({ [keyword]: variants, description: "outer", title: "Choice" }),
+      ).toStrictEqual({ ...expected, description: "outer", title: "Choice" });
+    }
+  });
+
   it("strips empty required arrays in nested schemas", () => {
     const nested = object({ optional: { type: "string" } });
     expect(

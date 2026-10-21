@@ -93,7 +93,6 @@ async function logShadowedNpmInstallWarning(params: {
   }
   const report = await buildPluginSnapshotReportAsync({
     config: params.config,
-    effectiveOnly: true,
     onlyPluginIds: [params.pluginId],
   });
   const active = report.plugins.find((plugin) => plugin.id === params.pluginId);

@@ -2,59 +2,31 @@ import { describe, expect, it, vi } from "vitest";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
+const key = "agent:main:test";
+const move = (target: { kind: "gateway" } | { kind: "profile"; profileId: string }) => ({
+  key,
+  expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+  target,
+});
+const profileMove = move({ kind: "profile", profileId: "development" });
+const writer = ["operator.write"];
 const placementCases = [
-  [
-    "writer device dispatch",
-    "sessions.dispatch",
-    { key: "agent:main:test", deviceId: "device-1" },
-    ["operator.write"],
-    true,
-  ],
+  ["writer device dispatch", "sessions.dispatch", { key, deviceId: "device-1" }, writer, true],
   [
     "writer profile dispatch",
     "sessions.dispatch",
-    { key: "agent:main:test", profileId: "development" },
-    ["operator.write"],
+    { key, profileId: "development" },
+    writer,
     false,
   ],
-  [
-    "writer gateway move",
-    "sessions.move",
-    {
-      key: "agent:main:test",
-      expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
-      target: { kind: "gateway" },
-    },
-    ["operator.write"],
-    true,
-  ],
-  [
-    "writer profile move",
-    "sessions.move",
-    {
-      key: "agent:main:test",
-      expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
-      target: { kind: "profile", profileId: "development" },
-    },
-    ["operator.write"],
-    false,
-  ],
-  [
-    "admin profile move",
-    "sessions.move",
-    {
-      key: "agent:main:test",
-      expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
-      target: { kind: "profile", profileId: "development" },
-    },
-    ["operator.admin"],
-    true,
-  ],
+  ["writer gateway move", "sessions.move", move({ kind: "gateway" }), writer, true],
+  ["writer profile move", "sessions.move", profileMove, writer, false],
+  ["admin profile move", "sessions.move", profileMove, ["operator.admin"], true],
 ] as const;
 
-function operatorClient(id: string, scopes: readonly string[]) {
-  return {
-    connId: `conn-${id}`,
+async function dispatch(method: string, params: unknown, scopes: readonly string[], stub = true) {
+  const client = {
+    connId: `conn-${crypto.randomUUID()}`,
     connect: {
       role: "operator",
       scopes: [...scopes],
@@ -63,33 +35,30 @@ function operatorClient(id: string, scopes: readonly string[]) {
       maxProtocol: 1,
     },
   } as Parameters<typeof handleGatewayRequest>[0]["client"];
-}
-
-function requestContext() {
-  return {
+  const context = {
     getRuntimeConfig: () => ({}),
     logGateway: { warn: vi.fn() },
   } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
+  const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { reached: true }));
+  const respond = vi.fn();
+  await handleGatewayRequest({
+    req: { type: "req", id: `req-${method}`, method, params },
+    respond,
+    client,
+    isWebchatConnect: () => false,
+    context,
+    ...(stub ? { extraHandlers: { [method]: handler } } : {}),
+  });
+  return { handler, respond };
 }
 
-const FOLDER = { deviceId: "device-1", path: "/srv/project" };
+const folder = { deviceFolder: { deviceId: "device-1", path: "/srv/project" } };
 
 describe("session placement target authorization", () => {
   it.each(placementCases)(
     "authorizes %s before the handler",
-    async (name, method, params, scopes, allowed) => {
-      const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
-        respond(true, { reached: true }),
-      );
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        req: { type: "req", id: `req-${name}`, method, params },
-        respond,
-        client: operatorClient(name, scopes),
-        isWebchatConnect: () => false,
-        context: requestContext(),
-        extraHandlers: { [method]: handler },
-      });
+    async (_name, method, params, scopes, allowed) => {
+      const { handler, respond } = await dispatch(method, params, scopes);
 
       if (allowed) {
         expect(handler).toHaveBeenCalledOnce();
@@ -113,33 +82,16 @@ describe("session placement target authorization", () => {
   );
 
   it.each([
-    ["writer with a device folder", { deviceFolder: FOLDER }, ["operator.write"], true],
-    [
-      "own-session writer with a device folder",
-      { deviceFolder: FOLDER },
-      ["operator.sessions.write"],
-      false,
-    ],
+    ["writer with a device folder", folder, writer, true],
+    ["own-session writer with a device folder", folder, ["operator.sessions.write"], false],
   ] as const)(
     "authorizes sessions.create for a %s before the handler",
-    async (name, extra, scopes, allowed) => {
-      const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
-        respond(true, { reached: true }),
+    async (_name, extra, scopes, allowed) => {
+      const { handler, respond } = await dispatch(
+        "sessions.create",
+        { key: "agent:main:dashboard:folder", ...extra },
+        scopes,
       );
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: `req-create-${name}`,
-          method: "sessions.create",
-          params: { key: "agent:main:dashboard:folder", ...extra },
-        },
-        respond,
-        client: operatorClient(name, scopes),
-        isWebchatConnect: () => false,
-        context: requestContext(),
-        extraHandlers: { "sessions.create": handler },
-      });
 
       // The handler owns node validation and persistence, so a refusal here precedes both.
       expect(handler).toHaveBeenCalledTimes(allowed ? 1 : 0);
@@ -162,14 +114,7 @@ describe("session placement target authorization", () => {
     ["sessions.dispatch", { key: "agent:main:test", profileId: "profile", deviceId: "device" }],
     ["sessions.move", { key: "agent:main:test", target: { kind: "profile" } }],
   ] as const)("lets malformed %s params reach schema validation", async (method, params) => {
-    const respond = vi.fn();
-    await handleGatewayRequest({
-      req: { type: "req", id: `req-malformed-${method}`, method, params },
-      respond,
-      client: operatorClient(method, ["operator.write"]),
-      isWebchatConnect: () => false,
-      context: requestContext(),
-    });
+    const { respond } = await dispatch(method, params, ["operator.write"], false);
 
     expect(respond).toHaveBeenCalledWith(
       false,

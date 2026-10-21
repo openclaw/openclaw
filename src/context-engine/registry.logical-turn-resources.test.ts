@@ -199,7 +199,6 @@ it.each([
             config,
             agentDir: path.join(directory, "staged-agent"),
             workspaceDir: path.join(directory, "workspace"),
-            warn: () => {},
           }),
         ),
       );
@@ -407,7 +406,6 @@ it("disposes a shared engine once while releasing both factory source claims", a
     createLease({
       identity: { runId: "alias-run", sessionId: "alias-session" },
       config,
-      warn: () => {},
     }),
   );
   let cleanup: Promise<void> | undefined;

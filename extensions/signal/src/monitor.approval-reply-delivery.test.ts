@@ -3,10 +3,26 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearSignalApprovalReactionTargetsForTest,
-  resolveSignalApprovalReactionTargetWithPersistence,
-} from "./approval-reactions.js";
+import { resolveSignalApprovalReactionTargetWithPersistence } from "./approval-reactions.js";
+
+const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
+
+vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
+  return {
+    ...actual,
+    createApprovalReactionTargetStore: <TTarget>(
+      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
+    ) => {
+      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
+      if (params.namespace === "signal.approval-reactions.v2") {
+        reactionStores.add(store);
+      }
+      return store;
+    },
+  };
+});
 
 const sendMocks = vi.hoisted(() => ({
   sendMessageSignal: vi.fn(),
@@ -75,7 +91,7 @@ async function deliverReplyPayload(
 
 describe("Signal monitor reply delivery", () => {
   beforeEach(() => {
-    clearSignalApprovalReactionTargetsForTest();
+    reactionStores.forEach((store) => store.clearForTest());
     sendMocks.sendMessageSignal.mockReset().mockResolvedValue({
       messageId: "1700000000200",
     });

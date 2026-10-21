@@ -103,6 +103,10 @@ export type DiagnosticMemoryUsage = {
   anonymousSwapBytes?: number;
   heapTotalBytes: number;
   heapUsedBytes: number;
+  /** Actual main-isolate V8 limit; absent on runtimes without V8. */
+  heapSizeLimitBytes?: number;
+  /** old_space + large_object_space at the last observed native major-GC epilogue. */
+  oldGenerationAfterGcBytes?: number;
   externalBytes: number;
   arrayBuffersBytes: number;
   heapSpaces?: HeapSpaceInfo[];
@@ -132,6 +136,8 @@ export type DiagnosticMemoryUsage = {
     retainedData?: readonly DiagnosticWorkerRetainedData[];
     /** Actual V8 isolate limit; unavailable on runtimes without V8. */
     heapSizeLimitBytes?: number;
+    /** Absent until a major GC is observed, and for native-only fallback samples. */
+    oldGenerationAfterGcBytes?: number;
     threadId?: number;
     /** Same bounded slot as diagnostic.gc; absent for overflow and other scripts. */
     workerSlot?: number;

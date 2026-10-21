@@ -58,6 +58,7 @@ it("replaces optional welcome actions with plugin starters and keeps them unsent
     "What tools does it have?",
     "How do I set it up?",
   ]);
+  const reveal = vi.spyOn(Element.prototype, "scrollIntoView");
   page.store.setInput("Keep my existing draft.");
   await page.updateComplete;
   starters[0]!.click();
@@ -67,6 +68,11 @@ it("replaces optional welcome actions with plugin starters and keeps them unsent
   expect(document.activeElement).toBe(composer);
   expect(request).toHaveBeenCalledOnce();
   expect(request.mock.calls[0]?.[1]).not.toHaveProperty("message");
+  const focus = vi.spyOn(composer, "focus");
+  page.store.setInput(composer.value);
+  await page.updateComplete;
+  expect(focus).not.toHaveBeenCalled();
+  expect(reveal).not.toHaveBeenCalled();
 
   page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
   await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
@@ -81,6 +87,7 @@ it("replaces optional welcome actions with plugin starters and keeps them unsent
   expect(page.textContent).toContain("This plugin adds useful capabilities.");
   expect(page.textContent).not.toContain(greeting.reply);
   expect(page.querySelector("openclaw-option-card")).toBeNull();
+  expect(reveal).toHaveBeenLastCalledWith({ block: "nearest" });
 });
 
 it("preserves an existing conversation and draft when a plugin becomes selected", async () => {

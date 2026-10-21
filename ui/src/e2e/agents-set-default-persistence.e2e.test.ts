@@ -1,92 +1,54 @@
-// Control UI tests cover Agents page Set Default persistence behavior.
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
-import {
-  createControlUiE2eContextOptions,
-  createControlUiE2eSuite,
-} from "./control-ui-e2e-suite.test-support.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
+import { configSnapshot, createConfigSuite } from "./config-composer-fixtures.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({
-  name: "Control UI agents Set Default mocked Gateway E2E",
-  startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-});
+const suite = createConfigSuite("Control UI agents Set Default mocked Gateway E2E");
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
-function requestParams(request: MockGatewayRequest): Record<string, unknown> {
-  return requireRecord(request.params);
+function configResponse(config: Record<string, unknown>, hash: string) {
+  return { ...configSnapshot(config, hash), sourceConfig: config };
 }
 
 suite.define(() => {
   it("persists Set Default through config.set instead of only staging the form draft", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const initialConfig = {
+      const makeConfig = (agentId: string) => ({
         agents: {
           ownership: "explicit",
-          defaults: { systemAgent: { agentId: "main" } },
+          defaults: { systemAgent: { agentId } },
           entries: { main: {}, kimi: {} },
         },
-      };
-      const savedConfig = {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "kimi" } },
-          entries: { main: {}, kimi: {} },
-        },
-      };
+      });
+      const initialConfig = makeConfig("main");
+      const savedConfig = makeConfig("kimi");
       const gateway = await installMockGateway(page, {
         assistantName: "Main agent",
         defaultAgentId: "main",
         methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main agent" },
-              { id: "kimi", name: "Kimi agent" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
-          "config.get": {
-            config: initialConfig,
-            sourceConfig: initialConfig,
-            hash: "hash-1",
-            issues: [],
-            raw: JSON.stringify(initialConfig),
-            valid: true,
-          },
-          "config.set": {
-            config: savedConfig,
-            sourceConfig: savedConfig,
-            hash: "hash-2",
-            issues: [],
-            raw: JSON.stringify(savedConfig),
-            valid: true,
-          },
+          "agents.list": agentRoster({ main: "Main agent", kimi: "Kimi agent" }, "main", "agent"),
+          "config.get": configResponse(initialConfig, "hash-1"),
+          "config.set": configResponse(savedConfig, "hash-2"),
         },
       });
 
       const response = await page.goto(`${suite.server.baseUrl}settings/agents`);
       expect(response?.status()).toBe(200);
 
-      // Click auto-waits for the elements to be actionable (enabled), so
-      // these implicitly assert the dropdown loaded and Set Default is clickable for a
-      // non-default agent.
       const agentSelect = page.locator("openclaw-agent-select");
       await agentSelect.locator(".agent-select__trigger").click();
       await agentSelect.getByRole("menuitemradio", { name: "Kimi agent", exact: true }).click();
       await page.getByRole("button", { name: "Set Default", exact: true }).click();
 
-      // The fix routes Set Default through the canonical save path; without it the click
-      // only stages a form draft and never emits config.set, so this request never arrives.
+      // A draft-only update never emits config.set.
       const setRequest = await gateway.waitForRequest("config.set");
-      const raw = requestParams(setRequest).raw;
-      expect(JSON.parse(String(raw))).toEqual(savedConfig);
-      expect(requireRecord(JSON.parse(String(raw))).agents).not.toHaveProperty("list");
+      const saved = JSON.parse(String(requireRecord(setRequest.params).raw));
+      expect(saved).toEqual(savedConfig);
+      expect(requireRecord(saved).agents).not.toHaveProperty("list");
     });
   });
 
@@ -106,24 +68,15 @@ suite.define(() => {
           defaultAgentId: defaultId,
           methodResponses: {
             "agents.list": {
-              agents: [
-                { id: "main", name: "Main agent" },
-                { id: "research", name: "Research agent" },
-              ],
-              defaultId,
+              ...agentRoster(
+                { main: "Main agent", research: "Research agent" },
+                defaultId,
+                "per-sender",
+              ),
               ownership: "explicit",
               selectionRequired,
-              mainKey: "main",
-              scope: "per-sender",
             },
-            "config.get": {
-              config,
-              sourceConfig: config,
-              hash: "roster-hash",
-              issues: [],
-              raw: JSON.stringify(config),
-              valid: true,
-            },
+            "config.get": configResponse(config, "roster-hash"),
           },
         });
 

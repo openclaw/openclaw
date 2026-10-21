@@ -46,8 +46,6 @@ function operations(database: ReturnType<typeof openTeamReportsDatabase>) {
           return database.latestSourceWarnings();
         case "latestPeople":
           return database.latestPeople();
-        case "getDayReports":
-          return database.getDayReports(command.input.sinceMs, command.input.untilMs);
         case "listPersonDays":
           return database.listPersonDays(command.input.login, command.input.options);
         case "listPersonDaysSince":

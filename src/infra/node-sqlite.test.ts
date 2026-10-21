@@ -263,13 +263,10 @@ describe("node SQLite safety", () => {
     if (storage.sourceId === null || storage.compileOptions === null) {
       expect(identity).toBeUndefined();
     } else {
-      expect(JSON.parse(identity!)).toEqual([
-        "3.53.4",
-        "different source",
-        "different options",
-        process.versions.node,
-        process.versions.bun ?? null,
-      ]);
+      expect(identity).toEqual({
+        sourceId: "different source",
+        compileOptions: "different options",
+      });
     }
     expect(native.prepare).toHaveBeenCalledOnce();
   });

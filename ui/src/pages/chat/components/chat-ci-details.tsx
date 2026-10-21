@@ -5,6 +5,8 @@ import type {
   ControlUiSessionPullRequestCheckStep,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import type { MenuControls } from "../../../components/solid/menu.tsx";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatCiEnglish } from "../../../i18n/locales/en-chat-ci.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
@@ -61,18 +63,10 @@ function CheckStatus(props: { state: CheckState }) {
       <Show
         when={props.state !== "skipped"}
         fallback={
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
+          <StrokeIcon aria-hidden="true">
             <circle cx="12" cy="12" r="10" />
             <path d="M8 12h8" />
-          </svg>
+          </StrokeIcon>
         }
       >
         <Icon name={CHECK_PRESENTATION[props.state][1]} />
@@ -97,9 +91,9 @@ type DetailsState = {
   retryAt: number;
   expandedJobs: Record<number, boolean>;
 };
-const inputHandlers = new WeakMap<HTMLElement, (key: keyof ChatCiDisclosureProps) => void>();
+const inputHandlers = new WeakMap<HTMLElement, (key: keyof ChatCiDetailsProps) => void>();
 
-function createCiDetails(host: SolidBridgeElement<ChatCiDisclosureProps>) {
+function createCiDetails(host: ChatCiDetailsElement) {
   const [state, setState] = createStore<DetailsState>({
     loading: false,
     result: undefined,
@@ -163,10 +157,10 @@ function createCiDetails(host: SolidBridgeElement<ChatCiDisclosureProps>) {
     return true;
   }
 
-  function handleInputsChanged(key: keyof ChatCiDisclosureProps) {
+  function handleInputsChanged(key: keyof ChatCiDetailsProps) {
     if (key === "gateway") {
       bindGateway();
-    } else if (key === "presented" || syncTarget()) {
+    } else if (key === "presented" || key === "inline" || syncTarget()) {
       if (!disclosure.visible()) {
         cancelRequest();
       } else {
@@ -311,11 +305,16 @@ function createCiDetails(host: SolidBridgeElement<ChatCiDisclosureProps>) {
   };
 }
 
-export type ChatCiDetailsElement = SolidBridgeElement<ChatCiDisclosureProps>;
-function ChatCiDetailsContent(
-  _props: ChatCiDisclosureProps,
-  host: SolidBridgeElement<ChatCiDisclosureProps>,
-) {
+type ChatCiDetailsProps = ChatCiDisclosureProps & {
+  /** Opt summaries into the containing Menu's native control navigation. */
+  menuControls?: boolean;
+  controls?: MenuControls;
+};
+
+export type ChatCiDetailsElement = SolidBridgeElement<ChatCiDetailsProps>;
+function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElement) {
+  const retryRef = props.controls?.ref();
+  const skippedRef = props.controls?.ref();
   const model = createCiDetails(host);
   const state = model.state;
   const retryWait = () => Math.max(0, state.retryAt - Date.now());
@@ -333,6 +332,8 @@ function ChatCiDetailsContent(
     result()?.status === "unavailable" ||
     result()?.error;
   const job = (check: () => ControlUiSessionPullRequestCheck) => {
+    const summaryRef = props.controls?.ref();
+    const linkRef = props.controls?.ref();
     const jobState = (): CheckState =>
       check().state === "running" && check().status !== "in_progress" ? "queued" : check().state;
     const url = () =>
@@ -352,7 +353,11 @@ function ChatCiDetailsContent(
           model.setExpanded(check().id, event.currentTarget.open);
         }}
       >
-        <summary class="chat-ci__job-summary">
+        <summary
+          ref={(element) => summaryRef?.(element)}
+          class="chat-ci__job-summary"
+          data-form-control={props.menuControls ? "" : undefined}
+        >
           <CheckStatus state={jobState()} />
           <span class="chat-ci__name">{check().name}</span>
           <span class="chat-ci__duration">{duration(check(), jobState() === "running")}</span>
@@ -392,7 +397,13 @@ function ChatCiDetailsContent(
           </Show>
           <Show when={url()}>
             {(href) => (
-              <a class="chat-ci__job-link" href={href()} target="_blank" rel="noopener noreferrer">
+              <a
+                ref={(element) => linkRef?.(element)}
+                class="chat-ci__job-link"
+                href={href()}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 {t(
                   check().source === "actions"
                     ? "chat.pullRequests.openJob"
@@ -433,6 +444,7 @@ function ChatCiDetailsContent(
                   : undefined}
               </span>
               <button
+                ref={(element) => retryRef?.(element)}
                 class="chat-ci__retry"
                 type="button"
                 disabled={state.loading || retryWait() > 0}
@@ -456,7 +468,10 @@ function ChatCiDetailsContent(
         </For>
         <Show when={skipped().length}>
           <details class="chat-ci__skipped">
-            <summary>
+            <summary
+              ref={(element) => skippedRef?.(element)}
+              data-form-control={props.menuControls ? "" : undefined}
+            >
               <CheckStatus state="skipped" />
               <span>
                 {t("chat.pullRequests.checksSkippedCount", { count: String(skipped().length) })}
@@ -485,12 +500,15 @@ function ChatCiDetailsContent(
   );
 }
 
-defineSolidBridge<ChatCiDisclosureProps>("openclaw-chat-ci-details", ChatCiDetailsContent, {
+defineSolidBridge<ChatCiDetailsProps>("openclaw-chat-ci-details", ChatCiDetailsContent, {
   propertyChanged: (host, key) => inputHandlers.get(host)?.(key),
   properties: {
     gateway: { default: undefined, attribute: false },
     pullRequest: { default: undefined, attribute: false },
     sessionKey: { default: "", attribute: false },
     presented: { default: true, type: Boolean },
+    inline: { default: false, attribute: false },
+    menuControls: { default: false, attribute: false },
+    controls: { default: undefined, attribute: false },
   },
 });

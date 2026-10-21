@@ -13,7 +13,6 @@ import {
   buildSystemAgentGreetingUserPrompt,
   parseSystemAgentAssistantPlanText,
   type SystemAgentAssistantPlan,
-  type SystemAgentAssistantTurn,
 } from "./assistant-prompts.js";
 import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 import type { SystemAgentGreetingFacts, SystemAgentGreetingPlan } from "./greeting.js";
@@ -36,14 +35,6 @@ export {
   type SystemAgentAssistantTurn,
 } from "./assistant-prompts.js";
 
-export type SystemAgentAssistantPlanner = (params: {
-  input: string;
-  overview: SystemAgentOverview;
-  history?: SystemAgentAssistantTurn[];
-  pendingOperation?: string;
-  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-}) => Promise<SystemAgentAssistantPlan | null>;
-
 const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
   type: "object",
   properties: {
@@ -58,8 +49,6 @@ const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
 export async function planSystemAgentCommand(params: {
   input: string;
   overview: SystemAgentOverview;
-  history?: SystemAgentAssistantTurn[];
-  pendingOperation?: string;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
 }): Promise<SystemAgentAssistantPlan | null> {
   const input = params.input.trim();
@@ -69,8 +58,6 @@ export async function planSystemAgentCommand(params: {
   const prompt = buildSystemAgentAssistantUserPrompt({
     input,
     overview: params.overview,
-    ...(params.history ? { history: params.history } : {}),
-    ...(params.pendingOperation ? { pendingOperation: params.pendingOperation } : {}),
   });
   const result = await runConfiguredSystemAgentText({
     prompt,

@@ -13,7 +13,6 @@ import { fsMocks, mocks } from "./doctor-gateway-services.native.test-support.js
 
 await vi.hoisted(() => import("./doctor-gateway-services.native.test-support.js"));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 beforeEach(() => {
   vi.clearAllMocks();
   pinSnapshotMock.mockReturnValue({ revision: "empty", stored: false });
@@ -22,76 +21,96 @@ beforeEach(() => {
   mocks.resolveNodeRuntimeInfo.mockResolvedValue({ status: "supported" });
   mocks.resolveGatewayAuthTokenForService.mockResolvedValue({});
   mocks.needsNodeRuntimeMigration.mockReturnValue(true);
-  mocks.resolveSystemNodeInfo.mockResolvedValue(null);
 });
 
-it.each([false, true])(
-  "previews unresolved runtime and source findings before consent (approved=%s)",
-  async (approved) => {
-    const root = tempDirs.make("openclaw-doctor-preview-");
-    for (const directory of [".git", "src", "extensions", "dist"]) {
-      await fs.mkdir(path.join(root, directory));
+it.each([
+  { supported: false, approved: false },
+  { supported: false, approved: true },
+  { supported: true, approved: false },
+])(
+  "previews runtime and source findings before consent (supported=$supported, approved=$approved)",
+  async ({ supported, approved }) => {
+    let entrypoint = "/synthetic/openclaw/dist/index.js";
+    if (!supported) {
+      const root = tempDirs.make("openclaw-doctor-preview-");
+      for (const directory of [".git", "src", "extensions", "dist"]) {
+        await fs.mkdir(path.join(root, directory));
+      }
+      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+      entrypoint = path.join(root, "dist", "index.js");
+      await fs.writeFile(entrypoint, "export {};\n");
     }
-    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-    const entrypoint = path.join(root, "dist", "index.js");
-    await fs.writeFile(entrypoint, "export {};\n");
-    const node = "/home/test/.nvm/versions/node/v24.16.0/bin/node";
+    const node = "/home/test/.nvm/bin/node";
     const command = {
-      programArguments: [node, entrypoint, "gateway", "--port", "18789"],
-      environment: { PATH: "/old/bin" },
+      programArguments: [node, entrypoint, "gateway"],
+      environment: supported ? {} : { PATH: "/old/bin" },
     };
-    const plan = { ...command, environment: { PATH: "/usr/bin:/bin" } };
     mocks.readCommand.mockResolvedValue(command);
-    mocks.buildGatewayInstallPlan.mockResolvedValue(plan);
+    mocks.buildGatewayInstallPlan.mockImplementation(async ({ runtimePath }) => ({
+      ...command,
+      programArguments: supported
+        ? [runtimePath ?? node, ...command.programArguments.slice(1)]
+        : command.programArguments,
+      environment: supported ? {} : { PATH: "/usr/bin:/bin" },
+    }));
+    const code = supported ? "runtime" : "gateway-node-version-manager";
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
-      issues: [
-        {
-          code: "gateway-node-version-manager",
-          message: "version-managed Node",
-          level: "recommended",
-        },
-      ],
-      definitionDrift: [
-        {
-          kind: "outdated",
-          key: "ExitTimeOut",
-          current: 20,
-          expected: 330,
-          message: "old shutdown budget",
-        },
-      ],
+      issues: [{ code, message: "runtime migration", level: "recommended" }],
+      definitionDrift: supported
+        ? undefined
+        : [
+            {
+              kind: "outdated",
+              key: "ExitTimeOut",
+              current: 20,
+              expected: 330,
+              message: "old shutdown budget",
+            },
+          ],
     });
+    mocks.resolveSystemNodeInfo.mockResolvedValue(
+      supported ? { path: "/usr/bin/node", status: "supported", version: "24.16.0" } : null,
+    );
     const prompter = makeDoctorPrompts();
     prompter.confirmRuntimeRepair.mockImplementation(async ({ message }) => {
       const preview = mocks.note.mock.calls.find(
         ([, title]) => title === "Gateway service repair preview",
       )?.[0];
-      expect(preview).toContain(`Runtime: ${node} -> ${node}`);
-      expect(preview).toContain(`Entrypoint: ${entrypoint} -> ${entrypoint}`);
-      expect(preview).toContain("PATH: /old/bin -> /usr/bin:/bin");
-      expect(preview).toContain("Shutdown budget (ExitTimeOut): 20 -> 330");
-      expect(preview).toContain("No supported system Node is available");
-      expect(preview).toContain("retains a source-checkout entrypoint");
-      expect(preview).toContain("`openclaw --profile preview-proof gateway install --force`");
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("`openclaw --profile preview-proof gateway install --force`"),
-        "Gateway service config",
+      expect(preview).toContain(`Runtime: ${node} -> ${supported ? "/usr/bin/node" : node}`);
+      expect(preview).toContain(
+        supported ? "PATH: not set -> not set" : "PATH: /old/bin -> /usr/bin:/bin",
       );
-      expect(message).not.toContain("recommended defaults");
+      if (supported) {
+        expect(preview).not.toContain("No supported system Node");
+      } else {
+        for (const text of [
+          `Entrypoint: ${entrypoint} -> ${entrypoint}`,
+          "Shutdown budget (ExitTimeOut): 20 -> 330",
+          "No supported system Node is available",
+          "retains a source-checkout entrypoint",
+          "`openclaw --profile preview-proof gateway install --force`",
+        ]) {
+          expect(preview).toContain(text);
+        }
+        expect(message).not.toContain("recommended defaults");
+      }
       return approved;
     });
     await withEnvAsync(
       {
-        OPENCLAW_GATEWAY_TOKEN: undefined,
+        ...(!supported ? { OPENCLAW_GATEWAY_TOKEN: undefined } : {}),
         OPENCLAW_PROFILE: "preview-proof",
         OPENCLAW_CONTAINER_HINT: undefined,
       },
-      async () => {
-        await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter, {
+      () =>
+        maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter, {
           writeConfig: mocks.writeConfig,
-        });
-      },
+        }),
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("`openclaw --profile preview-proof gateway install --force`"),
+      "Gateway service config",
     );
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
     expect(mocks.install).toHaveBeenCalledTimes(Number(approved));
@@ -103,7 +122,7 @@ it.each([false, true])(
       expect(mocks.install).toHaveBeenCalledWith(
         expect.objectContaining({ programArguments: command.programArguments }),
       );
-    } else {
+    } else if (!supported) {
       expect(
         mocks.note.mock.calls.some(
           ([, title]) => title === "Gateway service findings still unresolved",
@@ -112,48 +131,3 @@ it.each([false, true])(
     }
   },
 );
-
-it("previews a supported system runtime instead of claiming the runtime warning will remain", async () => {
-  const command = {
-    programArguments: ["/home/test/.nvm/bin/node", "/synthetic/openclaw/dist/index.js", "gateway"],
-    environment: {},
-  };
-  mocks.readCommand.mockResolvedValue(command);
-  mocks.buildGatewayInstallPlan.mockImplementation(async ({ runtimePath }) => ({
-    ...command,
-    programArguments: [
-      runtimePath ?? command.programArguments[0],
-      ...command.programArguments.slice(1),
-    ],
-  }));
-  mocks.auditGatewayServiceConfig.mockResolvedValue({
-    ok: false,
-    issues: [{ code: "runtime", message: "runtime migration", level: "recommended" }],
-  });
-  mocks.resolveSystemNodeInfo.mockResolvedValue({
-    path: "/usr/bin/node",
-    status: "supported",
-    version: "24.16.0",
-  });
-  const prompter = makeDoctorPrompts();
-  prompter.confirmRuntimeRepair.mockResolvedValue(false);
-  await withEnvAsync(
-    { OPENCLAW_PROFILE: "preview-proof", OPENCLAW_CONTAINER_HINT: undefined },
-    async () => {
-      await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter, {
-        writeConfig: mocks.writeConfig,
-      });
-    },
-  );
-  expect(mocks.note).toHaveBeenCalledWith(
-    expect.stringContaining("`openclaw --profile preview-proof gateway install --force`"),
-    "Gateway service config",
-  );
-  const preview = mocks.note.mock.calls.find(
-    ([, title]) => title === "Gateway service repair preview",
-  )?.[0];
-  expect(preview).toContain("Runtime: /home/test/.nvm/bin/node -> /usr/bin/node");
-  expect(preview).toContain("PATH: not set -> not set");
-  expect(preview).not.toContain("No supported system Node");
-  expect(mocks.install).not.toHaveBeenCalled();
-});

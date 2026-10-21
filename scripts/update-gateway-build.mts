@@ -136,10 +136,79 @@ async function captureReferenceInputs(root: string, git: (args: string[]) => Pro
       .split("\0")
       .filter((name) => name && !name.split("/").some(isGitRuntimeStagingName))
       .toSorted();
-    return await Promise.all(
+    // Only native, reciprocal registrations identify a separate checkout. An unknown
+    // nested repository is still a build input we cannot safely copy or ignore.
+    let registrations: Promise<{ roots: Set<string>; common: string }> | undefined;
+    const inspectWorktree = async (file: string) => {
+      registrations ??= (async () => ({
+        roots: new Set(
+          (await git(["worktree", "list", "--porcelain", "-z"]))
+            .split("\0")
+            .filter((field) => field.startsWith("worktree "))
+            .map((field) => field.slice("worktree ".length)),
+        ),
+        common: await fs.promises.realpath(
+          path.resolve(root, (await git(["rev-parse", "--git-common-dir"])).trim()),
+        ),
+      }))();
+      const { roots, common } = await registrations;
+      const checkout = path.resolve(file);
+      const invalid = () =>
+        new Error(`Unverified nested worktree source input: ${path.relative(root, checkout)}`);
+      if (!roots.has(checkout) || (await fs.promises.realpath(checkout)) !== checkout) {
+        throw invalid();
+      }
+      const readPointer = async (marker: string) => {
+        const stat = await fs.promises.lstat(marker, { bigint: true });
+        if (!stat.isFile()) {
+          throw invalid();
+        }
+        return {
+          identity: `${stat.dev}:${stat.ino}`,
+          contents: await fs.promises.readFile(marker, "utf8"),
+        };
+      };
+      const marker = path.join(checkout, ".git");
+      const pointer = await readPointer(marker);
+      const target = /^gitdir: (.+)\r?\n?$/u.exec(pointer.contents)?.[1];
+      if (!target) {
+        throw invalid();
+      }
+      const admin = await fs.promises.realpath(path.resolve(checkout, target));
+      if (path.dirname(admin) !== path.join(common, "worktrees")) {
+        throw invalid();
+      }
+      const adminStat = await fs.promises.stat(admin, { bigint: true });
+      const backlink = await readPointer(path.join(admin, "gitdir"));
+      const commonPointer = await readPointer(path.join(admin, "commondir"));
+      if (
+        !adminStat.isDirectory() ||
+        path.resolve(admin, backlink.contents.trim()) !== marker ||
+        (await fs.promises.realpath(path.resolve(admin, commonPointer.contents.trim()))) !== common
+      ) {
+        throw invalid();
+      }
+      // Do not snapshot the other checkout's content/HEAD: unpublished edits stay
+      // operator-owned. Recheck just its registration and identity before stopping.
+      return {
+        admin,
+        identity: `${adminStat.dev}:${adminStat.ino}`,
+        pointer,
+        backlink,
+        commonPointer,
+      };
+    };
+    const entries = await Promise.all(
       names.map(async (name) => {
         const file = path.join(root, name);
         const stat = await fs.promises.lstat(file, { bigint: true });
+        if (stat.isDirectory()) {
+          return {
+            name,
+            identity: `${stat.dev}:${stat.ino}`,
+            worktree: await inspectWorktree(file),
+          };
+        }
         if (!stat.isFile() && !stat.isSymbolicLink()) {
           throw new Error(`Unsupported untracked source input: ${name}`);
         }
@@ -154,6 +223,10 @@ async function captureReferenceInputs(root: string, git: (args: string[]) => Pro
         };
       }),
     );
+    return {
+      files: entries.filter((entry) => entry.worktree === undefined),
+      worktrees: entries.filter((entry) => entry.worktree !== undefined),
+    };
   };
   const original = await snapshot();
   return {
@@ -169,7 +242,7 @@ async function captureReferenceInputs(root: string, git: (args: string[]) => Pro
       }
     },
     async copy(candidate: string) {
-      for (const entry of original) {
+      for (const entry of original.files) {
         const destination = path.join(candidate, entry.name);
         let parent = candidate;
         for (const component of entry.name.split("/").slice(0, -1)) {
@@ -206,7 +279,7 @@ async function captureReferenceInputs(root: string, git: (args: string[]) => Pro
         }
       }
       candidateExternal.length = 0;
-      for (const entry of original) {
+      for (const entry of original.files) {
         if (entry.target?.kind !== "candidate") {
           continue;
         }

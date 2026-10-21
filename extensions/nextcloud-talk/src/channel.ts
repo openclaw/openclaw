@@ -1,12 +1,16 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
   clearAccountFieldsFromConfigSection,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  buildChannelOutboundSessionRoute,
+  createChatChannelPlugin,
+} from "openclaw/plugin-sdk/channel-core";
 import {
   createAccountStatusSink,
   runPassiveAccountLifecycle,
@@ -21,6 +25,7 @@ import {
   createAllowlistProviderRouteAllowlistWarningCollector,
   createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
@@ -29,7 +34,10 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
   isNextcloudTalkAccountConfigured,
@@ -39,7 +47,6 @@ import {
   resolveDefaultNextcloudTalkAccountId,
   resolveNextcloudTalkAccount,
 } from "./accounts.js";
-import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
 import { DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
 import { NextcloudTalkChannelConfigSchema } from "./config-schema.js";
@@ -50,6 +57,7 @@ import { registerNextcloudTalkWebhook } from "./monitor.js";
 import {
   looksLikeNextcloudTalkTargetId,
   normalizeNextcloudTalkMessagingTarget,
+  stripNextcloudTalkTargetPrefix,
 } from "./normalize.js";
 import {
   resolveNextcloudTalkGroupRequireMention,
@@ -58,7 +66,6 @@ import {
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { sendMessageNextcloudTalk } from "./send.js";
-import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
 import { nextcloudTalkSetupContract } from "./setup-core.js";
 import { nextcloudTalkSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
@@ -68,6 +75,51 @@ import {
   resolveNextcloudTalkLegacyWebhook,
 } from "./webhook-route.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
+
+function normalizeNextcloudTalkApproverId(value: string | number): string | undefined {
+  return normalizeOptionalLowercaseString(
+    String(value)
+      .trim()
+      .replace(/^(nextcloud-talk|nc-talk|nc):/i, ""),
+  );
+}
+
+const nextcloudTalkApprovalAuth = createChannelApprovalAuth({
+  channelLabel: "Nextcloud Talk",
+  resolveInputs: ({ cfg, accountId }) => {
+    const account = resolveNextcloudTalkAccount({ cfg, accountId });
+    return { allowFrom: account.config.allowFrom };
+  },
+  normalizeApprover: normalizeNextcloudTalkApproverId,
+}).approvalAuth;
+
+function resolveNextcloudTalkOutboundSessionRoute(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  accountId?: string | null;
+  target: string;
+}) {
+  const roomId = stripNextcloudTalkTargetPrefix(params.target);
+  if (!roomId) {
+    return null;
+  }
+  return buildChannelOutboundSessionRoute({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "nextcloud-talk",
+    accountId: params.accountId,
+    // Room tokens do not reveal whether inbound keys by room or sender id.
+    // Keep delivery behavior, but reject this route for explicit session selection.
+    recipientSessionExact: false,
+    peer: {
+      kind: "group",
+      id: roomId,
+    },
+    chatType: "group",
+    from: `nextcloud-talk:room:${roomId}`,
+    to: `nextcloud-talk:${roomId}`,
+  });
+}
 
 function normalizeOrigin(value: string): string | null {
   return URL.parse(value)?.origin.toLowerCase() ?? null;

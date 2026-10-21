@@ -38,6 +38,7 @@ import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
   capturePendingSessionMaintenanceAgeChanges,
   observeSessionEntryMaintenanceAgeChanges,
+  restartSessionMaintenanceAgeScan,
   updateSessionEntryMaintenanceAgeFact,
   type SessionEntryMaintenanceAgeFact,
   type SessionEntryMaintenanceAgeChange,
@@ -520,12 +521,17 @@ async function runPendingMaintenance(
         archiveDirectory: owner.archiveDirectory,
         maintenance,
         maxCapEntries: MAX_AUTOMATIC_CAP_ENTRIES,
+        maxAgeEntries: MAX_AUTOMATIC_CAP_ENTRIES,
         storePath: owner.storePath,
       },
     };
     let noFinalization = true;
     let verifiedNextAt: number | undefined;
-    while (true) {
+    // Physical close can retire the owner while archive finalization settles.
+    while (isCurrent()) {
+      operation.input.ageContinuation =
+        restartSessionMaintenanceAgeScan(operation.input.ageContinuation, owner.ageChanges) ??
+        operation.input.ageContinuation;
       const plannedChanges = capturePendingSessionMaintenanceAgeChanges(owner.ageChanges);
       operation.ageChanges = plannedChanges.changes;
       let planningConsumed = false;
@@ -604,6 +610,14 @@ async function runPendingMaintenance(
             },
           );
       finalized = true;
+      const ageContinuation =
+        plan.ageContinuation ??
+        restartSessionMaintenanceAgeScan(operation.input.ageContinuation, owner.ageChanges);
+      if (ageContinuation) {
+        // Protected or malformed rows still advance the scan. Every page releases FIFO.
+        Object.assign(operation.input, { ageContinuation }, captureProtection());
+        continue;
+      }
       if (
         !completed?.capped ||
         (owner.ageFact?.entryCount !== undefined &&

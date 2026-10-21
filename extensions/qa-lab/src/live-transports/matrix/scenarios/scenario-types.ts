@@ -1,7 +1,6 @@
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 
 export type MatrixQaReplyArtifact = {
-  bodyPreview?: string;
   eventId: string;
   mentions?: MatrixQaObservedEvent["mentions"];
   relatesTo?: MatrixQaObservedEvent["relatesTo"];

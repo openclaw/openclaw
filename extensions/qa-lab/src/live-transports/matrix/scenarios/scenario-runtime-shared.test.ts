@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockMatrixQaHttp } from "../substrate/http.test-support.js";
 import {
-  buildMatrixReplyArtifact,
   createMatrixQaScenarioClient,
   resolveMatrixQaNoReplyWindowMs,
   runNoReplyExpectedScenario,
@@ -181,17 +180,6 @@ describe("matrix scenario runtime shared", () => {
 
   it("keeps every shared Matrix preview UTF-16 safe", () => {
     const prefix = "a".repeat(199);
-    const event = {
-      kind: "message" as const,
-      roomId: "!room:matrix-qa.test",
-      eventId: "$event",
-      sender: "@sut:matrix-qa.test",
-      type: "m.room.message",
-    };
     expect(truncateMatrixQaPreview(`${prefix}😀tail`)).toBe(prefix);
-    expect(buildMatrixReplyArtifact({ ...event, body: `${prefix}😀tail` }).bodyPreview).toBe(
-      prefix,
-    );
-    expect(buildMatrixReplyArtifact({ ...event, body: " " }).bodyPreview).toBe("");
   });
 });

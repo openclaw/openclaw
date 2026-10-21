@@ -599,10 +599,10 @@ export async function detectLegacyStateMigrations(params: {
     ],
     [apns.hasLegacy, "- APNs registrations: legacy JSON → shared SQLite state"],
     [deviceAuth.hasLegacy, "- Device auth tokens: legacy JSON → shared SQLite state"],
-    [deviceIdentity.hasLegacy, "- Primary device identity: legacy JSON → shared SQLite state"],
+    [deviceIdentity.hasLegacy, "- Client identities: legacy JSON → local SQLite credentials"],
     [
       deviceIdentity.hasInvalidCanonical && !deviceIdentity.hasLegacy,
-      "- Primary device identity: invalid SQLite row → new device identity",
+      "- Client device identities: invalid SQLite row → repaired device identity",
     ],
     [execApprovals.hasLegacy, execApprovals.preview],
     [mcpOauth.hasLegacy, "- MCP OAuth credentials: legacy JSON → shared SQLite state"],
@@ -1096,10 +1096,8 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
       detected.pairingStores.hasLegacy,
     ],
     "device-identity": [
-      pathEndpoints(
-        detected.deviceIdentity.sourcePath,
-        detected.deviceIdentity.claimPath,
-        detected.deviceIdentity.nativeClaimPath,
+      detected.deviceIdentity.sources.flatMap((source) =>
+        pathEndpoints(source.sourcePath, source.claimPath, source.nativeClaimPath),
       ),
       detected.deviceIdentity.hasLegacy || detected.deviceIdentity.hasInvalidCanonical,
     ],

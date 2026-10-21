@@ -401,7 +401,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
       params.onMutation?.("enable");
     }
   }
-  const teardownDeadline = Date.now() + LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS;
+  const teardownDeadline = performance.now() + LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS;
   for (;;) {
     params.assertCurrent?.();
     const boot = await execLaunchctl(
@@ -433,7 +433,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
         return "already-loaded";
       }
     }
-    const remainingMs = teardownDeadline - Date.now();
+    const remainingMs = teardownDeadline - performance.now();
     if (
       !params.retryPendingTeardown ||
       !isLaunchctlBootstrapPendingTeardown(boot) ||

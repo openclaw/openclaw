@@ -111,7 +111,9 @@ If you are a guest, you can ask the agent:
 
 Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
 current selected repository base into this session's existing local managed
-workspace. The Gateway fetches with its host identity and prepares any missing
+workspace. This action is offered only in sessions with a writable managed sandbox;
+sessions running directly on the host merge the base with git in their workspace,
+then publish. The Gateway fetches with its host identity and prepares any missing
 file contents from the selected repository before offline merge and snapshot
 operations, including the ancestor versions needed to merge diverged branches.
 This also works when a partial clone already knows the base commit. A

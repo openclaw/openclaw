@@ -66,16 +66,23 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
     ).toEqual(expected);
   });
 
-  it("restores explicit MiniMax-M3 maxTokens when rewriting budget thinking", () => {
-    expect(
-      captureThinkingPayload({
-        model: { ...minimaxModel, id: "MiniMax-M3" },
-        payload: { max_tokens: 8692, thinking: { type: "enabled", budget_tokens: 8192 } },
-        thinkingLevel: "adaptive",
-        options: { maxTokens: 500 },
-      }),
-    ).toMatchObject({ max_tokens: 500, thinking: { type: "adaptive" } });
-  });
+  it.each([
+    [500, 500],
+    [1.5, 1],
+    [0.5, 0],
+  ])(
+    "restores explicit MiniMax-M3 maxTokens %s when rewriting budget thinking",
+    (maxTokens, expected) => {
+      expect(
+        captureThinkingPayload({
+          model: { ...minimaxModel, id: "MiniMax-M3" },
+          payload: { max_tokens: 8692, thinking: { type: "enabled", budget_tokens: 8192 } },
+          thinkingLevel: "adaptive",
+          options: { maxTokens },
+        }),
+      ).toMatchObject({ max_tokens: expected, thinking: { type: "adaptive" } });
+    },
+  );
 
   it("preserves explicit enabled thinking for MiniMax-M3", () => {
     const capturedPayload = captureThinkingPayload({

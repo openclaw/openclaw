@@ -13,6 +13,7 @@ import {
   normalizeMimeType,
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveCanvasHttpPathToLocalPath } from "../canvas/documents.js";
 import { logVerbose } from "../globals.js";
@@ -498,12 +499,6 @@ function toImageFileName(fileName: string | undefined, mimeType: string): string
 const DEFAULT_VISION_MAX_SIDE = 2048;
 const LOW_IMAGE_SIDE_FALLBACKS = [640, 512, 384, 256, 192, 128] as const;
 
-function positiveInteger(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
-}
-
 function effectiveImageQualityPreference(
   policy?: ImageCompressionPolicy,
 ): Exclude<ImageQualityPreference, "auto"> {
@@ -519,15 +514,15 @@ function effectiveImageQualityPreference(
 }
 
 function maxSideForModel(model: ImageCompressionModelPolicy | undefined): number {
-  const maxSide = positiveInteger(model?.maxSidePx);
-  const maxPixels = positiveInteger(model?.maxPixels);
+  const maxSide = floorPositiveFiniteNumber(model?.maxSidePx);
+  const maxPixels = floorPositiveFiniteNumber(model?.maxPixels);
   const hardLimits = [maxSide, maxPixels ? Math.floor(Math.sqrt(maxPixels)) : undefined].filter(
     (value): value is number => value !== undefined,
   );
   if (hardLimits.length > 0) {
     return Math.min(...hardLimits);
   }
-  return positiveInteger(model?.preferredSidePx) ?? DEFAULT_VISION_MAX_SIDE;
+  return floorPositiveFiniteNumber(model?.preferredSidePx) ?? DEFAULT_VISION_MAX_SIDE;
 }
 
 function sideForPreference(
@@ -539,7 +534,7 @@ function sideForPreference(
   const preferredSide = Math.min(
     ...models.map(
       (model) =>
-        positiveInteger(model?.preferredSidePx) ??
+        floorPositiveFiniteNumber(model?.preferredSidePx) ??
         Math.min(maxSideForModel(model), DEFAULT_VISION_MAX_SIDE),
     ),
   );
@@ -555,7 +550,7 @@ function sideForPreference(
 
 function imageMaxBytesForPolicy(policy?: ImageCompressionPolicy): number | undefined {
   const maxBytes = policy?.models
-    ?.map((model) => positiveInteger(model.maxBytes))
+    ?.map((model) => floorPositiveFiniteNumber(model.maxBytes))
     .filter((value): value is number => value !== undefined);
   return maxBytes?.length ? Math.min(...maxBytes) : undefined;
 }
@@ -567,10 +562,10 @@ function imageSatisfiesHardDimensionPolicy(
 ): boolean {
   const models = policy?.models ?? [];
   const hardMaxSide = Math.min(
-    ...models.map((model) => positiveInteger(model.maxSidePx) ?? Infinity),
+    ...models.map((model) => floorPositiveFiniteNumber(model.maxSidePx) ?? Infinity),
   );
   const hardMaxPixels = Math.min(
-    ...models.map((model) => positiveInteger(model.maxPixels) ?? Infinity),
+    ...models.map((model) => floorPositiveFiniteNumber(model.maxPixels) ?? Infinity),
   );
   if (hardMaxSide === Infinity && hardMaxPixels === Infinity) {
     return true;

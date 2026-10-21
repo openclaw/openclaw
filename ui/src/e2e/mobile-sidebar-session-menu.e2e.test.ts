@@ -6,6 +6,7 @@ import {
   controlUiBundledSettingsStorageKey,
   createControlUiMockSameOriginGatewayScript,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   controlUiSessionUrl,
@@ -36,7 +37,7 @@ async function box(item: Locator) {
 }
 
 async function openDrawer(page: Page, wait = false) {
-  const toggle = page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first();
+  const toggle = navigationDrawerToggle(page);
   if (wait) {
     await toggle.waitFor({ state: "visible", timeout: 10_000 });
   }

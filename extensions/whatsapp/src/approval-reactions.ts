@@ -426,7 +426,3 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
   });
   return true;
 }
-
-export function clearWhatsAppApprovalReactionTargetsForTest(): void {
-  whatsappApprovalReactionTargets.clearForTest();
-}

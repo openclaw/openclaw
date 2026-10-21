@@ -10,7 +10,6 @@ type ApprovalIdentity = { approvalId: string; channelId: string; messageTs: stri
 
 type SlackDesktopRemoteMetadata = {
   gatewayAlive?: boolean;
-  gatewayPid?: string;
   hydrateMode?: string;
   openedUrl?: string;
   qaExitCode?: number;
@@ -254,7 +253,6 @@ async function readRemoteMetadata(
     return {
       gatewayAlive:
         typeof candidate.gatewayAlive === "boolean" ? candidate.gatewayAlive : undefined,
-      gatewayPid: typeof candidate.gatewayPid === "string" ? candidate.gatewayPid : undefined,
       hydrateMode: typeof candidate.hydrateMode === "string" ? candidate.hydrateMode : undefined,
       openedUrl: typeof candidate.openedUrl === "string" ? candidate.openedUrl : undefined,
       qaExitCode: typeof candidate.qaExitCode === "number" ? candidate.qaExitCode : undefined,

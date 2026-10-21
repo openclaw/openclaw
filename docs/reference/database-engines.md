@@ -391,7 +391,9 @@ vector index is not a PostgreSQL JavaScript-scan fallback. An embedding-provider
 does not silently authorize keyword-only PostgreSQL admission.
 
 Memory admits its search definitions through the agent
-database owner. PostgreSQL rebuilds use connection-local temporary staging and
+database owner, including on the first turn after a port that omits rebuildable
+memory indexes. No manual memory-index rebuild is required before chatting.
+PostgreSQL rebuilds use connection-local temporary staging and
 publish canonical rows and their derived search projections in one writer
 transaction. SQLite retains its existing shadow-file publication. Memory search
 uses these same admitted projections. Forgetting removes derived text and vector
@@ -609,6 +611,11 @@ server or operating-system crash can lose recently acknowledged commits. Backups
 and recovery must account for that durability policy. The adapter sets generous
 lock and statement timeouts once during connection setup; operations do not
 change timeout settings individually.
+
+PostgreSQL model-context navigation reads parse each selected transcript row once
+and keep intermediate projections as JSONB until the navigation and byte counts
+cross the database boundary. The read remains bounded by the context page, and
+PostgreSQL transcript writes do not precompute navigation envelopes.
 
 ## Anchors and backups
 
@@ -829,6 +836,11 @@ writes invalidate only their declared replica scopes; raw writes and schema
 changes invalidate the whole store. Empty commits leave replica revisions
 unchanged, so unrelated reads can reuse their cached snapshots.
 A PostgreSQL function that writes rows and is called through SELECT must be classified unscoped.
+
+Full transcript hydration reads PostgreSQL payloads in byte-budgeted pages within
+one read snapshot. Paging preserves all selected events and their sequence order;
+it does not impose a history cutoff. Individual oversized events retain bounded
+byte slicing.
 
 The engine boundary publishes Node.js `diagnostics_channel` events on
 `openclaw.database.statement` and `openclaw.database.request`. Subscriptions are

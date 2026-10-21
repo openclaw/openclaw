@@ -589,25 +589,36 @@ describe("public ClawHub Claw catalog", () => {
     await expectCode(readClawHubClawDetail({ packageName }), "clawhub_manifest_summary_missing");
   });
 
-  it("accepts an exact release with build metadata without borrowing the latest scan status", async () => {
-    const selectedVersion = "0.9.0+build.1";
-    mocks.artifact.mockResolvedValue(artifact(selectedVersion));
-    mocks.detail.mockResolvedValue({
-      package: { ...officialPackage(), ownerHandle: undefined, scanStatus: "clean" },
-      owner: { handle: "openclaw", official: true },
-    });
-    mocks.version.mockResolvedValue(release(selectedVersion));
-    mocks.read.mockImplementation(async (root: string) => ({
-      ok: true,
-      manifest: emptyManifest,
-      source: { ...readSource(root, selectedVersion), byteLength: archiveBytes.byteLength },
-      diagnostics: [],
-    }));
+  it.each([undefined, `/api/v1/skill-icons/${"b".repeat(64)}`])(
+    "uses exact-release artwork and scan status for older build-metadata versions (%s)",
+    async (icon) => {
+      const selectedVersion = "0.9.0+build.1";
+      mocks.artifact.mockResolvedValue(artifact(selectedVersion));
+      mocks.detail.mockResolvedValue({
+        package: {
+          ...officialPackage(),
+          ownerHandle: undefined,
+          scanStatus: "clean",
+          icon: `/api/v1/skill-icons/${"a".repeat(64)}`,
+        },
+        owner: { handle: "openclaw", official: true },
+      });
+      const selected = release(selectedVersion);
+      mocks.version.mockResolvedValue({ ...selected, version: { ...selected.version, icon } });
+      mocks.read.mockImplementation(async (root: string) => ({
+        ok: true,
+        manifest: emptyManifest,
+        source: { ...readSource(root, selectedVersion), byteLength: archiveBytes.byteLength },
+        diagnostics: [],
+      }));
 
-    const detail = await readClawHubClawDetail({ packageName, version: selectedVersion });
-    expect(detail.version).toBe(selectedVersion);
-    expect(detail).not.toHaveProperty("scanStatus");
-  });
+      const detail = await readClawHubClawDetail({ packageName, version: selectedVersion });
+      expect(detail.version).toBe(selectedVersion);
+      expect(detail.iconUrl).toBe(icon ? `https://clawhub.ai${icon}` : undefined);
+      expect(validateClawsCatalogDetailResult({ detail })).toBe(true);
+      expect(detail).not.toHaveProperty("scanStatus");
+    },
+  );
 
   it("refuses a non-canonical coordinate or forged publisher before resolving detail", async () => {
     await expect(
@@ -842,4 +853,35 @@ describe("verified ClawHub Claw source", () => {
     await expectCode(probeSource({ mode: "apply", stateDir }), "clawhub_identity_mismatch");
     await expectMissing(stateDir);
   });
+});
+
+describe("Claw catalog artwork", () => {
+  it.each([
+    {
+      icon: `/api/v1/skill-icons/${"a".repeat(64)}`,
+      expected: `https://registry.example/api/v1/skill-icons/${"a".repeat(64)}`,
+    },
+    {
+      icon: `https://registry.example/api/v1/skill-icons/${"a".repeat(64)}`,
+      expected: `https://registry.example/api/v1/skill-icons/${"a".repeat(64)}`,
+    },
+    { icon: `https://tracker.example/api/v1/skill-icons/${"a".repeat(64)}`, expected: undefined },
+    { icon: "https://registry.example/arbitrary.svg", expected: undefined },
+    { icon: null, expected: undefined },
+  ])(
+    "projects only registry-hosted content-addressed artwork: $icon",
+    async ({ icon, expected }) => {
+      const pkg = { ...officialPackage(), icon };
+      mocks.list.mockResolvedValue({ items: [pkg], nextCursor: null });
+      mocks.search.mockResolvedValue([{ package: pkg }]);
+      const listed = await listClawHubClaws({ baseUrl: "https://registry.example" });
+      const searched = await searchClawHubClaws({
+        query: "research",
+        baseUrl: "https://registry.example",
+      });
+      for (const entries of [listed, searched]) {
+        expect(entries[0]?.iconUrl).toBe(expected);
+      }
+    },
+  );
 });

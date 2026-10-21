@@ -30,7 +30,12 @@ import {
 import { seedCompletedRuntimePinMigration } from "./test-helpers/service-audit-runtime-pin.js";
 
 const native = vi.hoisted(() => ({ task: vi.fn() }));
-vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.task }));
+// mock-isolation: Definition facts come from the synthetic scheduler, not host task mutations.
+vi.mock("./schtasks-exec.js", () => ({
+  execSchtasks: native.task,
+  execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+    native.task(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+}));
 vi.mock("../process/exec.js", async (original) => ({
   ...(await original<typeof import("../process/exec.js")>()),
   runExec: vi.fn(async (_command: string, args: string[], options: { input: Uint8Array }) =>
@@ -192,6 +197,50 @@ it.each(["other-source", "unreadable-drop-in"])(
     }
   },
 );
+
+it.each(["base", "drop-in"])("recognizes standard systemd directives in %s", async (location) => {
+  const custom = [
+    "[Unit]",
+    "OnFailure=recovery.service",
+    "StartLimitBurst=10",
+    "StartLimitIntervalSec=120",
+    "[Service]",
+    "CPUWeight=1000",
+    "KillMode=control-group",
+    "ManagedOOMPreference=avoid",
+    "TimeoutStartSec=60",
+    "ExecStartPre=/usr/bin/true",
+    "RestartSteps=5",
+    "RestartMaxDelaySec=60",
+    "ProtectSystem=strict",
+    "MemoryMax=1G",
+    "[Install]",
+    "Alias=custom.service",
+    "Also=helper.service",
+  ].join("\n");
+  const fixture = await systemdFixture(
+    (unit) => (location === "base" ? `${unit}\n${custom}\n` : unit),
+    location === "drop-in" ? `${custom}\n` : undefined,
+  );
+  const result = await auditGatewayServiceConfig(fixture);
+  const sourcePath =
+    location === "base" ? fixture.sourcePath : `${fixture.sourcePath}.d/operator.conf`;
+  expect(result.definitionDrift).toContainEqual(
+    expect.objectContaining({
+      kind: "unknown-edit",
+      key: "Service.CPUWeight",
+      sourcePath,
+      message: expect.stringContaining("not changed"),
+    }),
+  );
+  expect(JSON.stringify(result.definitionDrift)).not.toContain("unrecognized");
+
+  await fs.appendFile(sourcePath, "\n[Service]\nRestartStpes=5\nOnFailure=wrong-section.service\n");
+  const unknown = (await auditGatewayServiceConfig(fixture)).definitionDrift?.filter((fact) =>
+    fact.message.includes("unrecognized"),
+  );
+  expect(unknown?.map((fact) => fact.key)).toEqual(["Service.RestartStpes", "Service.OnFailure"]);
+});
 
 it.each([
   { seconds: undefined, kind: "outdated" },

@@ -44,11 +44,17 @@ describe("resolveSlackThreadStarter cache", () => {
   it("caches within ttl and isolates the same channel and thread across Slack accounts", async () => {
     const teamOne = createThreadStarterRepliesClient("team one root");
     const teamTwo = createThreadStarterRepliesClient("team two root");
+    const root = Promise.withResolvers<{ messages: { text: string }[] }>();
+    teamOne.replies.mockImplementationOnce(() => root.promise);
 
     const scopeOne = { workspaceScope: { accountId: "account-one", teamId: "T1" } };
     const scopeTwo = { workspaceScope: { accountId: "account-two", teamId: "T2" } };
-    const first = await resolveTestSlackThreadStarter(teamOne.client, scopeOne);
+    const firstPending = resolveTestSlackThreadStarter(teamOne.client, scopeOne);
+    const sharedPending = resolveTestSlackThreadStarter(teamOne.client, scopeOne);
     const second = await resolveTestSlackThreadStarter(teamTwo.client, scopeTwo);
+    root.resolve({ messages: [{ text: "team one root" }] });
+    const first = await firstPending;
+    expect(await sharedPending).toEqual(first);
     const cachedFirst = await resolveTestSlackThreadStarter(teamOne.client, scopeOne);
 
     expect(first?.text).toBe("team one root");
@@ -80,6 +86,17 @@ describe("resolveSlackThreadStarter cache", () => {
 
     expect([first, second]).toEqual([null, null]);
     expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes cached starters and retries after a failed refresh", async () => {
+    const { replies, client } = createThreadStarterRepliesClient();
+    await resolveTestSlackThreadStarter(client);
+    replies.mockRejectedValueOnce(new Error("slack down"));
+    expect(await resolveTestSlackThreadStarter(client, { refresh: true })).toBeNull();
+    replies.mockResolvedValueOnce({ messages: [{ text: "updated root" }] });
+    expect((await resolveTestSlackThreadStarter(client))?.text).toBe("updated root");
+    expect((await resolveTestSlackThreadStarter(client))?.text).toBe("updated root");
+    expect(replies).toHaveBeenCalledTimes(3);
   });
 
   it("evicts oldest entries once cache exceeds bounded size", async () => {

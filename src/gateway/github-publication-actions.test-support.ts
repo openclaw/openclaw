@@ -20,6 +20,22 @@ import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const mocks = githubPublicationTestMocks();
+
+const toolTransport = await vi.hoisted(async () => {
+  const { AsyncLocalStorage } = await import("node:async_hooks");
+  return new AsyncLocalStorage<InProcessGatewayCaller>();
+});
+vi.mock("../agents/tools/in-process-gateway.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/tools/in-process-gateway.js")>();
+  const callInProcessGatewayTool: InProcessGatewayCaller = async <T>(
+    ...args: Parameters<InProcessGatewayCaller>
+  ): Promise<T> => await (toolTransport.getStore() ?? actual.callInProcessGatewayTool)<T>(...args);
+  return { ...actual, callInProcessGatewayTool };
+});
+
+export function withPublicationToolTransport<T>(call: InProcessGatewayCaller, run: () => T): T {
+  return toolTransport.run(call, run);
+}
 const checkpoint = vi.hoisted(() => vi.fn());
 export const publicationCheckpoint = checkpoint;
 vi.mock("./worker-environments/session-repository-checkpoints.js", async (importOriginal) => {
@@ -177,17 +193,18 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
       }
       return result as T;
     };
-    return await withGatewayToolCallerIdentity({ agentId: "main", sessionKey: source }, async () =>
-      invocation.raw
-        ? {
-            content: [],
-            details: await callGateway("sessions.github.action", { sessionKey: source, ...args }),
-          }
-        : createGitHubPublishTool({
-            callGateway,
-            actionsAvailable: actor !== "guest",
-            sandbox: invocation.sandbox,
-          }).execute("publication-action", args),
+    return await withPublicationToolTransport(callGateway, () =>
+      withGatewayToolCallerIdentity({ agentId: "main", sessionKey: source }, async () =>
+        invocation.raw
+          ? {
+              content: [],
+              details: await callGateway("sessions.github.action", { sessionKey: source, ...args }),
+            }
+          : createGitHubPublishTool({
+              actionsAvailable: actor !== "guest",
+              sandbox: invocation.sandbox,
+            }).execute("publication-action", args),
+      ),
     );
   };
   const expected = { requestId: publication.requestId, expectedHeadCommit: publication.headCommit };

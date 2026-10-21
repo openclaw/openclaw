@@ -1,15 +1,15 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginCache } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -22,18 +22,7 @@ import {
 } from "./server-reload-handlers.config.test-support.js";
 import { createGatewayReloadHandlers } from "./server-reload-hot.js";
 
-const loadPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
-vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
-  loadPluginMetadataSnapshot.mockImplementation(actual.loadPluginMetadataSnapshot);
-  return { ...actual, loadPluginMetadataSnapshot };
-});
-
 const registry = createEmptyPluginRegistry();
-beforeEach(() => {
-  setActivePluginRegistry(registry);
-  loadPluginMetadataSnapshot.mockClear();
-});
 afterEach(() => {
   clearRuntimeConfigSnapshot();
   clearCurrentPluginMetadataSnapshot();
@@ -41,8 +30,10 @@ afterEach(() => {
 });
 
 it("cron reconciliation after a reload commit reads the published plugin inventory", async () => {
+  setActivePluginRegistry(registry);
+  using loadMetadata = vi.spyOn(pluginMetadata, "loadPluginMetadataSnapshot");
   await withOpenClawTestState({ label: "post-commit-plugin-metadata" }, async () => {
-    const config: OpenClawConfig = {};
+    const config = {};
     setRuntimeConfigSnapshot(config);
     setGatewayPluginMetadataSnapshot(
       createPluginMetadataSnapshotFixture({
@@ -95,6 +86,6 @@ it("cron reconciliation after a reload commit reads the published plugin invento
 
     expect(commitCacheKind).toBe("operation");
     expect(resolvedProviders).toEqual(["fixture"]);
-    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(loadMetadata).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { aroundEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
@@ -13,35 +13,43 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as workerStore from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  resolveSharedAuthStoreOwnership,
-  resolveSharedAuthStoreOwnershipAsync,
-} from "./path-resolve.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath,
-  setRuntimeAuthProfileStoreSnapshot,
-} from "./runtime-snapshots.js";
+import * as paths from "./path-resolve.js";
+import * as snapshots from "./runtime-snapshots.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
 import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
-import {
-  prepareAuthProfileWriteTransactionAsync,
-  resolveAuthProfileDatabasePath,
-} from "./sqlite.js";
+import * as sqlite from "./sqlite.js";
 import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
 import { withAuthProfileStoreAgentDir } from "./store.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  clearRuntimeConfigSnapshot();
-  clearRuntimeAuthProfileStoreSnapshots();
-});
+const committedOwner = { location: "state-db" } as const;
 
-async function prepareActor(env: NodeJS.ProcessEnv) {
-  openOpenClawStateDatabase({ env });
+let env: NodeJS.ProcessEnv;
+let stateDir: string;
+let sourceDir: string;
+let sourcePath: string;
+aroundEach(async (runTest) => {
+  try {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      ({ env, stateDir } = state);
+      sourceDir = resolveSharedMainAuthAgentDir(env);
+      sourcePath = sqlite.resolveAuthProfileDatabasePath(sourceDir);
+      await runTest();
+    });
+  } finally {
+    vi.restoreAllMocks();
+    clearRuntimeConfigSnapshot();
+    snapshots.clearRuntimeAuthProfileStoreSnapshots();
+  }
+});
+const prepare = (assertCurrent?: () => void) =>
+  sqlite.prepareAuthProfileWriteTransactionAsync(undefined, { env }, assertCurrent);
+const ownership = () => readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env });
+
+async function prepareActor(selectedEnv = env) {
+  openOpenClawStateDatabase({ env: selectedEnv });
   await workerStore.runOpenClawStateWorkerOperation(
-    captureOpenClawStateWorkerContext({ env }),
+    captureOpenClawStateWorkerContext({ env: selectedEnv }),
     async () => undefined,
   );
 }
@@ -57,217 +65,184 @@ function interceptBootstrap(intercept: <T>(execute: () => Promise<T>) => Promise
 it.each(["missing", "credentials"] as const)(
   "prepares the %s legacy auth source without caller-thread SQL",
   async (source) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env, stateDir }) => {
-      const sourcePath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir(env));
-      if (source === "credentials") {
-        const database = openOpenClawAgentDatabase({ agentId: "main", path: sourcePath, env });
-        writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
-      }
-      await prepareActor(env);
-      const sql = observeHostDataSql();
-      try {
-        expect(
-          await updateAuthProfileStoreWithLock({ stateDir, updater: () => false }),
-        ).not.toBeNull();
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-      }
-      const expected = source === "credentials" ? "legacy-main" : "state-db";
-      expect(resolveSharedAuthStoreOwnership(env).location).toBe(expected);
-      expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toEqual(
-        source === "credentials" ? undefined : { location: "state-db" },
-      );
-    });
+    if (source === "credentials") {
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: sourcePath, env });
+      writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
+    }
+    await prepareActor();
+    const sql = observeHostDataSql();
+    try {
+      expect(
+        await updateAuthProfileStoreWithLock({ stateDir, updater: () => false }),
+      ).not.toBeNull();
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    const expected = source === "credentials" ? "legacy-main" : "state-db";
+    expect(paths.resolveSharedAuthStoreOwnership(env).location).toBe(expected);
+    expect(ownership()).toEqual(source === "credentials" ? undefined : { location: "state-db" });
   },
 );
 
 it("keeps legacy ownership when the configured inheritance owner has credentials", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env, stateDir }) => {
-    const ownerDir = path.join(stateDir, "agents", "ops", "agent");
-    const ownerPath = resolveAuthProfileDatabasePath(ownerDir);
-    const database = openOpenClawAgentDatabase({ agentId: "ops", path: ownerPath, env });
-    writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
-    const config = {
-      agents: {
-        defaults: { authInheritance: { agentId: "ops" } },
-        entries: { main: {}, ops: {} },
-      },
-    };
-    setRuntimeConfigSnapshot(config, config);
-    await prepareActor(env);
+  const ownerDir = path.join(stateDir, "agents", "ops", "agent");
+  const ownerPath = sqlite.resolveAuthProfileDatabasePath(ownerDir);
+  const database = openOpenClawAgentDatabase({ agentId: "ops", path: ownerPath, env });
+  writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
+  const config = {
+    agents: {
+      defaults: { authInheritance: { agentId: "ops" } },
+      entries: { main: {}, ops: {} },
+    },
+  };
+  setRuntimeConfigSnapshot(config, config);
+  await prepareActor();
 
-    const updated = await updateAuthProfileStoreWithLock({ updater: () => false });
+  const updated = await updateAuthProfileStoreWithLock({ updater: () => false });
 
-    expect(updated).not.toBeNull();
-    expect(resolveSharedAuthStoreOwnership(env).location).toBe("legacy-main");
-    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toBeUndefined();
-  });
+  expect(updated).not.toBeNull();
+  expect(paths.resolveSharedAuthStoreOwnership(env).location).toBe("legacy-main");
+  expect(ownership()).toBeUndefined();
 });
 
 it("does not combine an explicit environment with the ambient runtime auth owner", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env, stateDir }) => {
-    const ambientOwnerDir = path.join(stateDir, "agents", "ambient", "agent");
-    const ambientPath = resolveAuthProfileDatabasePath(ambientOwnerDir);
-    const database = openOpenClawAgentDatabase({
-      agentId: "ambient",
-      path: ambientPath,
-      env,
-    });
-    writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
-    const config = {
-      agents: {
-        defaults: { authInheritance: { agentId: "ambient" } },
-        entries: { main: {}, ambient: {} },
-      },
-    };
-    setRuntimeConfigSnapshot(config, config);
-    await prepareActor(env);
-
-    const prepared = await prepareAuthProfileWriteTransactionAsync(undefined, { env });
-
-    expect(prepared.sharedOwner.location).toBe("state-db");
-    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toEqual({
-      location: "state-db",
-    });
+  const ambientOwnerDir = path.join(stateDir, "agents", "ambient", "agent");
+  const ambientPath = sqlite.resolveAuthProfileDatabasePath(ambientOwnerDir);
+  const database = openOpenClawAgentDatabase({
+    agentId: "ambient",
+    path: ambientPath,
+    env,
   });
+  writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
+  const config = {
+    agents: {
+      defaults: { authInheritance: { agentId: "ambient" } },
+      entries: { main: {}, ambient: {} },
+    },
+  };
+  setRuntimeConfigSnapshot(config, config);
+  await prepareActor();
+
+  const prepared = await sqlite.prepareAuthProfileWriteTransactionAsync(undefined, { env });
+
+  expect(prepared.sharedOwner.location).toBe("state-db");
+  expect(ownership()).toEqual({ location: "state-db" });
 });
 
 it("does not combine a scoped installation with the ambient runtime auth owner", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env, stateDir }) => {
-    const scopedStateDir = path.join(stateDir, "installation-b", "state");
-    const scopedEnv = { ...env, OPENCLAW_STATE_DIR: scopedStateDir };
-    const scopedMainDir = resolveSharedMainAuthAgentDir(scopedEnv);
-    const scopedMainPath = resolveAuthProfileDatabasePath(scopedMainDir);
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: scopedMainPath,
-      env: scopedEnv,
-    });
-    writeAuthProfileJsonCell(database.db, "store", "agent", {
-      version: 1,
-      profiles: { "openai:scoped": { type: "api_key", provider: "openai", key: "scoped-key" } },
-    });
-    const ambientConfig = {
-      agents: {
-        defaults: { authInheritance: { agentId: "ops" } },
-        entries: { main: {}, ops: {} },
-      },
-    };
-    setRuntimeConfigSnapshot(ambientConfig, ambientConfig);
-    await prepareActor(scopedEnv);
-
-    await withAuthProfileStoreAgentDir(scopedMainDir, scopedStateDir, async () => {
-      expect(
-        await updateAuthProfileStoreWithLock({ sharedStoreWrite: true, updater: () => false }),
-      ).not.toBeNull();
-    });
-
-    expect(resolveSharedAuthStoreOwnership(scopedEnv).location).toBe("legacy-main");
-    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env: scopedEnv })).toBeUndefined();
+  const scopedStateDir = path.join(stateDir, "installation-b", "state");
+  const scopedEnv = { ...env, OPENCLAW_STATE_DIR: scopedStateDir };
+  const scopedMainDir = resolveSharedMainAuthAgentDir(scopedEnv);
+  const scopedMainPath = sqlite.resolveAuthProfileDatabasePath(scopedMainDir);
+  const database = openOpenClawAgentDatabase({
+    agentId: "main",
+    path: scopedMainPath,
+    env: scopedEnv,
   });
+  writeAuthProfileJsonCell(database.db, "store", "agent", {
+    version: 1,
+    profiles: { "openai:scoped": { type: "api_key", provider: "openai", key: "scoped-key" } },
+  });
+  const ambientConfig = {
+    agents: {
+      defaults: { authInheritance: { agentId: "ops" } },
+      entries: { main: {}, ops: {} },
+    },
+  };
+  setRuntimeConfigSnapshot(ambientConfig, ambientConfig);
+  await prepareActor(scopedEnv);
+
+  await withAuthProfileStoreAgentDir(scopedMainDir, scopedStateDir, async () => {
+    expect(
+      await updateAuthProfileStoreWithLock({ sharedStoreWrite: true, updater: () => false }),
+    ).not.toBeNull();
+  });
+
+  expect(paths.resolveSharedAuthStoreOwnership(scopedEnv).location).toBe("legacy-main");
+  expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env: scopedEnv })).toBeUndefined();
 });
 
 it("holds an empty legacy source against a foreign writer through shared commit admission", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const sourcePath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir(env));
-    openOpenClawAgentDatabase({ agentId: "main", path: sourcePath, env });
-    await prepareActor(env);
-    const foreign = new DatabaseSync(sourcePath);
-    let blocked = 0;
-    probe.admission(admission, (request, grant, admit) => {
-      if (request.stage === "transaction" || request.stage === "commit") {
-        expect(() => foreign.exec("BEGIN IMMEDIATE")).toThrow(/locked/i);
-        blocked++;
-      }
-      admit(request, grant);
-    });
-    try {
-      await prepareAuthProfileWriteTransactionAsync(undefined, { env });
-      expect(blocked).toBe(2);
-      expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toEqual({
-        location: "state-db",
-      });
-      foreign.exec("BEGIN IMMEDIATE; ROLLBACK");
-    } finally {
-      foreign.close();
+  openOpenClawAgentDatabase({ agentId: "main", path: sourcePath, env });
+  await prepareActor();
+  const foreign = new DatabaseSync(sourcePath);
+  let blocked = 0;
+  probe.admission(admission, (request, grant, admit) => {
+    if (request.stage === "transaction" || request.stage === "commit") {
+      expect(() => foreign.exec("BEGIN IMMEDIATE")).toThrow(/locked/i);
+      blocked++;
     }
+    admit(request, grant);
   });
+  try {
+    await prepare();
+    expect(blocked).toBe(2);
+    expect(ownership()).toEqual(committedOwner);
+    foreign.exec("BEGIN IMMEDIATE; ROLLBACK");
+  } finally {
+    foreign.close();
+  }
 });
 
 it("fences replacement of the selected legacy source", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const sourceDir = resolveSharedMainAuthAgentDir(env);
-    const sourcePath = resolveAuthProfileDatabasePath(sourceDir);
-    await prepareActor(env);
-    interceptBootstrap((execute) => {
-      fs.mkdirSync(sourceDir, { recursive: true });
-      fs.writeFileSync(sourcePath, "replacement source");
-      return execute();
-    });
-    const prepared = prepareAuthProfileWriteTransactionAsync(undefined, { env });
-    await expect(prepared).rejects.toThrow(/identity changed/);
-    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toBeUndefined();
-    expect(fs.readFileSync(sourcePath, "utf8")).toBe("replacement source");
+  await prepareActor();
+  interceptBootstrap((execute) => {
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(sourcePath, "replacement source");
+    return execute();
   });
+  const prepared = prepare();
+  await expect(prepared).rejects.toThrow(/identity changed/);
+  expect(ownership()).toBeUndefined();
+  expect(fs.readFileSync(sourcePath, "utf8")).toBe("replacement source");
 });
 
-it("publishes acknowledged relocation without replay when its result is lost", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    await prepareActor(env);
+it.each(["reply", "caller", "source"] as const)(
+  "publishes committed ownership despite a lost %s after the worker reply",
+  async (lost) => {
+    await prepareActor();
+    if (lost !== "reply") {
+      await paths.resolveSharedAuthStoreOwnershipAsync(captureOpenClawStateWorkerContext({ env }));
+      snapshots.setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, sourceDir);
+    }
+    let revoked = false;
     let attempts = 0;
     interceptBootstrap(async (execute) => {
-      await execute();
+      const result = await execute();
       attempts++;
-      throw new SqliteWorkerError("Synthetic bootstrap reply loss", "outcome-unknown");
+      if (lost === "reply") {
+        throw new SqliteWorkerError("Synthetic bootstrap reply loss", "outcome-unknown");
+      }
+      if (lost === "caller") {
+        revoked = true;
+      } else {
+        fs.mkdirSync(sourceDir, { recursive: true });
+        fs.writeFileSync(sourcePath, "replacement after committed relocation");
+      }
+      return result;
     });
-    const prepared = await prepareAuthProfileWriteTransactionAsync(undefined, { env });
-    expect(prepared.sharedOwner.location).toBe("state-db");
-    expect(attempts).toBe(1);
-    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toEqual({
-      location: "state-db",
+    const prepared = prepare(() => {
+      if (revoked) {
+        throw new Error("Synthetic caller retired after commit");
+      }
     });
-  });
-});
-
-it.each(["caller", "source"] as const)(
-  "publishes committed ownership before refusing a retired %s after the worker reply",
-  async (retired) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      await prepareActor(env);
-      const sourceDir = resolveSharedMainAuthAgentDir(env);
-      const sourcePath = resolveAuthProfileDatabasePath(sourceDir);
-      await resolveSharedAuthStoreOwnershipAsync(captureOpenClawStateWorkerContext({ env }));
-      setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, sourceDir);
-      let revoked = false;
-      interceptBootstrap(async (execute) => {
-        const result = await execute();
-        if (retired === "caller") {
-          revoked = true;
-        } else {
-          fs.mkdirSync(sourceDir, { recursive: true });
-          fs.writeFileSync(sourcePath, "replacement after committed relocation");
-        }
-        return result;
-      });
-      await expect(
-        prepareAuthProfileWriteTransactionAsync(undefined, { env }, () => {
-          if (revoked) {
-            throw new Error("Synthetic caller retired after commit");
-          }
-        }),
-      ).rejects.toThrow(retired === "caller" ? /caller retired/ : /identity changed/);
-      expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toEqual({
-        location: "state-db",
-      });
-      expect(resolveSharedAuthStoreOwnership(env).location).toBe("state-db");
-      const snapshot = getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(sourcePath);
-      if (retired === "caller") {
+    if (lost === "reply") {
+      expect((await prepared).sharedOwner.location).toBe("state-db");
+      expect(attempts).toBe(1);
+    } else {
+      await expect(prepared).rejects.toThrow(
+        lost === "caller" ? /caller retired/ : /identity changed/,
+      );
+      expect(paths.resolveSharedAuthStoreOwnership(env).location).toBe("state-db");
+      const snapshot = snapshots.getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(sourcePath);
+      if (lost === "caller") {
         expect(snapshot?.owner).toMatchObject({ location: "state-db" });
       } else {
         expect(snapshot).toBeUndefined();
         expect(fs.readFileSync(sourcePath, "utf8")).toBe("replacement after committed relocation");
       }
-    });
+    }
+    expect(ownership()).toEqual(committedOwner);
   },
 );

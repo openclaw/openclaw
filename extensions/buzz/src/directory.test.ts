@@ -1,6 +1,14 @@
 import { getPublicKey, type Event, type Filter } from "nostr-tools";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BuzzConfigInput } from "./config-schema.js";
+import type { BuzzDirectoryState } from "./directory-state.js";
+import {
+  getBuzzDirectorySelf,
+  listBuzzDirectoryGroupMembers,
+  listBuzzDirectoryGroupsLive,
+  listBuzzDirectoryPeersLive,
+} from "./directory.js";
 
 const relayMocks = vi.hoisted(() => ({
   auth: vi.fn(async () => "ok"),
@@ -11,19 +19,10 @@ const relayMocks = vi.hoisted(() => ({
   send: vi.fn(async () => {}),
   subscribe: vi.fn(),
 }));
-const gatewayMocks = vi.hoisted(() => ({
-  activeBus: undefined as
-    | {
-        directory: {
-          listGroups: (params: { query?: string | null; limit?: number | null }) => unknown[];
-          listGroupMembers: (params: { groupId: string; limit?: number | null }) => unknown[];
-          listPeers: (params: { query?: string | null; limit?: number | null }) => unknown[];
-          self: () => unknown;
-        };
-        refreshDirectory: () => Promise<void>;
-      }
-    | undefined,
-}));
+type Directory = Pick<BuzzDirectoryState, "listGroups" | "listGroupMembers" | "listPeers" | "self">;
+type ActiveBus = { directory: Directory; refreshDirectory: () => Promise<void> };
+type Handlers = { onevent: (event: Event) => void; oneose: () => void };
+const gatewayMocks = vi.hoisted(() => ({ activeBus: undefined as ActiveBus | undefined }));
 
 vi.mock("nostr-tools", async (importOriginal) => {
   const actual = await importOriginal<typeof import("nostr-tools")>();
@@ -40,19 +39,12 @@ vi.mock("nostr-tools", async (importOriginal) => {
       scheduleIdleClose = vi.fn();
       send = relayMocks.send;
 
-      prepareSubscription(
-        filters: Filter[],
-        handlers: {
-          onevent: (event: Event) => void;
-          oneose: () => void;
-        },
-      ) {
+      prepareSubscription(filters: Filter[], handlers: Handlers) {
         const filter = filters[0] ?? {};
         relayMocks.filters.push(filter);
-        const subscription = relayMocks.subscribe(filter, handlers);
         return {
           id: `sub:${relayMocks.filters.length}`,
-          ...subscription,
+          ...relayMocks.subscribe(filter, handlers),
         };
       }
     },
@@ -68,16 +60,40 @@ const BOT_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "he
 const MEMBER_PUBLIC_KEY = "b".repeat(64);
 const RELAY_PUBLIC_KEY = "c".repeat(64);
 const ROOM_ID = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
+const roomFilter = { authors: [RELAY_PUBLIC_KEY], "#d": [ROOM_ID], limit: 1 };
 
-function event(params: Partial<Event> & Pick<Event, "kind" | "pubkey">): Event {
+function directoryParams(overrides: BuzzConfigInput = {}) {
+  const buzz = {
+    relayUrl: "wss://buzz.example.com",
+    privateKey: PRIVATE_KEY,
+    groups: { [ROOM_ID]: {} },
+    ...overrides,
+  };
+  return { cfg: { channels: { buzz } }, accountId: "default" };
+}
+
+function activeBus(overrides: Partial<Directory> = {}): ActiveBus {
   return {
-    id: params.id ?? "f".repeat(64),
-    kind: params.kind,
-    pubkey: params.pubkey,
-    created_at: params.created_at ?? 1_700_000_000,
-    content: params.content ?? "",
-    sig: params.sig ?? "e".repeat(128),
-    tags: params.tags ?? [],
+    directory: {
+      self: () => ({ kind: "user", id: BOT_PUBLIC_KEY }),
+      listPeers: () => [],
+      listGroupMembers: () => [],
+      listGroups: () => [],
+      ...overrides,
+    },
+    refreshDirectory: vi.fn(async () => {}),
+  };
+}
+
+function event(params: Partial<Event> & Pick<Event, "kind">): Event {
+  return {
+    id: "f".repeat(64),
+    created_at: 1_700_000_000,
+    sig: "e".repeat(128),
+    content: "",
+    tags: [],
+    pubkey: RELAY_PUBLIC_KEY,
+    ...params,
   };
 }
 
@@ -96,55 +112,40 @@ describe("Buzz live directory", () => {
         }),
       ),
     );
-    relayMocks.subscribe.mockImplementation(
-      (
-        filter: Filter,
-        handlers: {
-          onevent: (event: Event) => void;
-          oneose: () => void;
-        },
-      ) => {
-        if (filter.kinds?.includes(39_002)) {
-          handlers.onevent(
-            event({
-              kind: 39_002,
-              pubkey: RELAY_PUBLIC_KEY,
-              tags: [
-                ["d", ROOM_ID],
-                ["p", BOT_PUBLIC_KEY, "", "bot"],
-                ["p", MEMBER_PUBLIC_KEY, "", "member"],
-              ],
-            }),
-          );
-        } else if (filter.kinds?.includes(39_000)) {
-          handlers.onevent(
-            event({
-              kind: 39_000,
-              pubkey: RELAY_PUBLIC_KEY,
-              tags: [
-                ["d", ROOM_ID],
-                ["name", "Engineering"],
-                ...(relayMocks.roomArchived ? [["archived", "true"]] : []),
-              ],
-            }),
-          );
-        } else if (filter.kinds?.includes(0)) {
-          handlers.onevent(
-            event({
-              kind: 0,
-              pubkey: MEMBER_PUBLIC_KEY,
-              content: JSON.stringify({
-                display_name: "Alice",
-                picture: "https://example.com/alice.png",
-                nip05: "alice@example.com",
-              }),
-            }),
-          );
-        }
-        queueMicrotask(() => handlers.oneose());
-        return { close: vi.fn() };
-      },
-    );
+    relayMocks.subscribe.mockImplementation((filter: Filter, handlers: Handlers) => {
+      const emit = (params: Parameters<typeof event>[0]) => handlers.onevent(event(params));
+      if (filter.kinds?.includes(39_002)) {
+        emit({
+          kind: 39_002,
+          tags: [
+            ["d", ROOM_ID],
+            ["p", BOT_PUBLIC_KEY, "", "bot"],
+            ["p", MEMBER_PUBLIC_KEY, "", "member"],
+          ],
+        });
+      } else if (filter.kinds?.includes(39_000)) {
+        emit({
+          kind: 39_000,
+          tags: [
+            ["d", ROOM_ID],
+            ["name", "Engineering"],
+            ...(relayMocks.roomArchived ? [["archived", "true"]] : []),
+          ],
+        });
+      } else if (filter.kinds?.includes(0)) {
+        emit({
+          kind: 0,
+          pubkey: MEMBER_PUBLIC_KEY,
+          content: JSON.stringify({
+            display_name: "Alice",
+            picture: "https://example.com/alice.png",
+            nip05: "alice@example.com",
+          }),
+        });
+      }
+      queueMicrotask(() => handlers.oneose());
+      return { close: vi.fn() };
+    });
   });
 
   afterEach(() => {
@@ -153,21 +154,11 @@ describe("Buzz live directory", () => {
   });
 
   it("loads current room membership and member profiles in one authenticated snapshot", async () => {
-    const { listBuzzDirectoryPeersLive } = await import("./directory.js");
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          groups: { [ROOM_ID]: {} },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const params = directoryParams();
 
     await expect(
       listBuzzDirectoryPeersLive({
-        cfg,
-        accountId: "default",
+        ...params,
         query: "alice",
         limit: 1,
       }),
@@ -181,25 +172,14 @@ describe("Buzz live directory", () => {
     ]);
 
     expect(relayMocks.filters).toEqual([
-      {
-        kinds: [39_000],
-        authors: [RELAY_PUBLIC_KEY],
-        "#d": [ROOM_ID],
-        limit: 1,
-      },
-      {
-        kinds: [39_002],
-        authors: [RELAY_PUBLIC_KEY],
-        "#d": [ROOM_ID],
-        limit: 1,
-      },
+      { ...roomFilter, kinds: [39_000] },
+      { ...roomFilter, kinds: [39_002] },
       { kinds: [0], authors: [BOT_PUBLIC_KEY, MEMBER_PUBLIC_KEY], limit: 2 },
     ]);
     expect(relayMocks.auth).toHaveBeenCalledOnce();
     expect(relayMocks.close).toHaveBeenCalledOnce();
     const peers = await listBuzzDirectoryPeersLive({
-      cfg,
-      accountId: "default",
+      ...params,
       query: "  @EXAMPLE.COM  ",
       limit: 1,
     });
@@ -215,47 +195,31 @@ describe("Buzz live directory", () => {
     async ({ rootEnabled, accountEnabled, active, unavailable }) => {
       const refreshDirectory = vi.fn(async () => {});
       if (active) {
-        gatewayMocks.activeBus = {
-          directory: {
-            self: () => null,
-            listPeers: () => [],
-            listGroupMembers: () => [],
-            listGroups: () => [],
-          },
-          refreshDirectory,
-        };
+        gatewayMocks.activeBus = { ...activeBus(), refreshDirectory };
       }
+      const account = directoryParams({
+        enabled: accountEnabled,
+        privateKey: unavailable
+          ? { source: "env", provider: "default", id: "UNAVAILABLE_KEY" }
+          : PRIVATE_KEY,
+      }).cfg.channels.buzz;
       const cfg = {
         channels: {
           buzz: {
             enabled: rootEnabled,
-            accounts: {
-              ada: {
-                enabled: accountEnabled,
-                relayUrl: "wss://buzz.example.com",
-                privateKey: unavailable
-                  ? { source: "env", provider: "default", id: "UNAVAILABLE_KEY" }
-                  : PRIVATE_KEY,
-                groups: { [ROOM_ID]: {} },
-              },
-            },
+            accounts: { ada: account },
           },
         },
       } as OpenClawConfig;
-      const {
-        listBuzzDirectoryGroupsLive,
-        listBuzzDirectoryPeersLive,
-        listBuzzDirectoryGroupMembers,
-        getBuzzDirectorySelf,
-      } = await import("./directory.js");
+      const params = { cfg, accountId: "ada" };
       await expect(
-        listBuzzDirectoryGroupsLive({ cfg, accountId: "ada", query: ROOM_ID, limit: 1 }),
+        listBuzzDirectoryGroupsLive({ ...params, query: ROOM_ID, limit: 1 }),
       ).resolves.toEqual([expect.objectContaining({ id: `buzz:${ROOM_ID}` })]);
-      await expect(listBuzzDirectoryPeersLive({ cfg, accountId: "ada" })).resolves.toEqual([]);
-      await expect(
-        listBuzzDirectoryGroupMembers({ cfg, accountId: "ada", groupId: ROOM_ID }),
-      ).resolves.toEqual([]);
-      const self = await getBuzzDirectorySelf({ cfg, accountId: "ada" });
+      await expect(listBuzzDirectoryPeersLive(params)).resolves.toEqual([]);
+      await expect(listBuzzDirectoryGroupMembers({ ...params, groupId: ROOM_ID })).resolves.toEqual(
+        [],
+      );
+      const self = await getBuzzDirectorySelf(params);
       expect(self?.id ?? null).toBe(unavailable ? null : BOT_PUBLIC_KEY);
       expect(fetch).not.toHaveBeenCalled();
       expect(relayMocks.connect).not.toHaveBeenCalled();
@@ -265,18 +229,10 @@ describe("Buzz live directory", () => {
 
   it("does not open a relay for live directory reads when an auth-tag SecretRef is unavailable", async () => {
     vi.stubEnv("BUZZ_AUTH_TAG", '["auth","owner","kind=9","signature"]');
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          authTag: { source: "env", provider: "default", id: "MISSING_BUZZ_AUTH_TAG" },
-          groups: { [ROOM_ID]: {} },
-        },
-      },
-    } as OpenClawConfig;
+    const { cfg } = directoryParams({
+      authTag: { source: "env", provider: "default", id: "MISSING_BUZZ_AUTH_TAG" },
+    });
     const { listBuzzDirectoryGroupsFromConfig } = await import("./directory-config.js");
-    const { listBuzzDirectoryGroupsLive } = await import("./directory.js");
 
     await expect(listBuzzDirectoryGroupsFromConfig({ cfg, accountId: "default" })).resolves.toEqual(
       [expect.objectContaining({ id: `buzz:${ROOM_ID}` })],
@@ -290,67 +246,26 @@ describe("Buzz live directory", () => {
 
   it("does not load peers or memberships from archived rooms", async () => {
     relayMocks.roomArchived = true;
-    const { listBuzzDirectoryPeersLive } = await import("./directory.js");
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          groups: { [ROOM_ID]: {} },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    await expect(
-      listBuzzDirectoryPeersLive({
-        cfg,
-        accountId: "default",
-      }),
-    ).resolves.toEqual([]);
+    await expect(listBuzzDirectoryPeersLive(directoryParams())).resolves.toEqual([]);
 
     expect(relayMocks.filters).toEqual([
-      {
-        kinds: [39_000],
-        authors: [RELAY_PUBLIC_KEY],
-        "#d": [ROOM_ID],
-        limit: 1,
-      },
+      { ...roomFilter, kinds: [39_000] },
       { kinds: [0], authors: [BOT_PUBLIC_KEY], limit: 1 },
     ]);
   });
 
   it("refreshes only room listings when an active bus already owns directory state", async () => {
-    const refreshDirectory = vi.fn(async () => {});
-    const self = vi.fn(() => ({ kind: "user", id: BOT_PUBLIC_KEY, name: "OpenClaw" }));
-    const listPeers = vi.fn(() => [{ kind: "user", id: MEMBER_PUBLIC_KEY, name: "Alice" }]);
-    const listGroups = vi.fn(() => [{ kind: "group", id: `buzz:${ROOM_ID}`, name: "Engineering" }]);
-    const listGroupMembers = vi.fn(() => [{ kind: "user", id: MEMBER_PUBLIC_KEY, name: "Alice" }]);
-    gatewayMocks.activeBus = {
-      directory: { self, listPeers, listGroups, listGroupMembers },
-      refreshDirectory,
-    };
-    const {
-      getBuzzDirectorySelf,
-      listBuzzDirectoryGroupMembers,
-      listBuzzDirectoryGroupsLive,
-      listBuzzDirectoryPeersLive,
-    } = await import("./directory.js");
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          groups: { [ROOM_ID]: {} },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const bus = activeBus();
+    gatewayMocks.activeBus = bus;
+    const { refreshDirectory } = bus;
+    const params = directoryParams();
 
-    await getBuzzDirectorySelf({ cfg, accountId: "default" });
-    await listBuzzDirectoryPeersLive({ cfg, accountId: "default" });
-    await listBuzzDirectoryGroupMembers({ cfg, accountId: "default", groupId: ROOM_ID });
+    await getBuzzDirectorySelf(params);
+    await listBuzzDirectoryPeersLive(params);
+    await listBuzzDirectoryGroupMembers({ ...params, groupId: ROOM_ID });
     expect(refreshDirectory).not.toHaveBeenCalled();
 
-    await listBuzzDirectoryGroupsLive({ cfg, accountId: "default" });
+    await listBuzzDirectoryGroupsLive(params);
     expect(refreshDirectory).toHaveBeenCalledOnce();
     expect(relayMocks.connect).not.toHaveBeenCalled();
   });
@@ -360,29 +275,14 @@ describe("Buzz live directory", () => {
       throw new Error("relay stalled");
     });
     gatewayMocks.activeBus = {
-      directory: {
-        self: () => null,
-        listPeers: () => [],
-        listGroupMembers: () => [],
+      ...activeBus({
         listGroups: () => [{ kind: "group", id: `buzz:${ROOM_ID}`, name: "Cached Engineering" }],
-      },
+      }),
       refreshDirectory,
     };
-    const { listBuzzDirectoryGroupsLive } = await import("./directory.js");
 
-    await expect(
-      listBuzzDirectoryGroupsLive({
-        cfg: {
-          channels: {
-            buzz: {
-              relayUrl: "wss://buzz.example.com",
-              privateKey: PRIVATE_KEY,
-              groups: { [ROOM_ID]: {} },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        accountId: "default",
-      }),
-    ).resolves.toEqual([{ kind: "group", id: `buzz:${ROOM_ID}`, name: "Cached Engineering" }]);
+    await expect(listBuzzDirectoryGroupsLive(directoryParams())).resolves.toEqual([
+      { kind: "group", id: `buzz:${ROOM_ID}`, name: "Cached Engineering" },
+    ]);
   });
 });

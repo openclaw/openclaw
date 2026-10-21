@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "./api/gateway.ts";
 import { WorkboardCatalog } from "./catalog.ts";

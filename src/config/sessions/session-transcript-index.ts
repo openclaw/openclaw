@@ -28,6 +28,7 @@ import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
 } from "./session-transcript-fts.js";
+import { createPostgresProjectionFlusher } from "./session-transcript-index-postgres.js";
 import {
   prepareSessionTranscriptProjectionAppend,
   type SessionTranscriptProjectionState,
@@ -317,7 +318,16 @@ export function createTranscriptIndexAppenderInTransaction(
   let pendingUpdatedAt: number | undefined;
   const pendingActiveRows: PreparedSessionTranscriptProjection["activeRows"] = [];
   const pendingFtsRows: TranscriptIndexEntry[] = [];
+  const flushPostgres = isPostgresSqlConnection(db)
+    ? createPostgresProjectionFlusher(db, sessionId)
+    : undefined;
   const flushRows = () => {
+    if (flushPostgres) {
+      flushPostgres({ activeRows: pendingActiveRows, ftsRows: pendingFtsRows }, persisted);
+      pendingActiveRows.length = 0;
+      pendingFtsRows.length = 0;
+      return;
+    }
     if (pendingActiveRows.length > 0) {
       insertActiveEvent ??= createActiveEventInserter(db, sessionId);
       insertActiveEvent(pendingActiveRows);
@@ -399,6 +409,23 @@ export function createTranscriptIndexAppenderInTransaction(
     append: appendEvent,
     flushRows,
     flush() {
+      if (flushPostgres) {
+        const next =
+          pendingUpdatedAt !== undefined && watermark
+            ? { ...watermark, updatedAt: pendingUpdatedAt }
+            : undefined;
+        flushPostgres(
+          { activeRows: pendingActiveRows, ftsRows: pendingFtsRows, watermark: next },
+          persisted,
+        );
+        pendingActiveRows.length = 0;
+        pendingFtsRows.length = 0;
+        if (next) {
+          persisted = true;
+          pendingUpdatedAt = undefined;
+        }
+        return;
+      }
       flushRows();
       if (pendingUpdatedAt === undefined || !watermark) {
         return;
