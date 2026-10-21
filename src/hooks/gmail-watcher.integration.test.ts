@@ -1,10 +1,4 @@
-/**
- * Runs startGmailWatcher and stopGmailWatcher with NO mocks for spawn or
- * killProcessTree. A fake `gog` binary is placed on PATH; it spawns a
- * credential-helper child and deliberately does NOT kill it on SIGTERM,
- * simulating the real bug. The test asserts that stopGmailWatcher removes
- * both the gog process and its descendant via the process-group signal.
- */
+// Real spawn/killProcessTree: fake gog leaves a SIGTERM-resistant child for shutdown to reap.
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,8 +50,6 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
       ].join("\n"),
     );
 
-    // fake gog: handles `watch start` (exits 0) and `watch serve`
-    // (spawns a credential-helper that ignores SIGTERM)
     const gogScript = join(tmpDir, "gog");
     writeFileSync(
       gogScript,
@@ -91,18 +83,14 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
     } catch {
       // Force cleanup below; this test must not leave subprocesses behind on failure.
     }
-    if (gogPid !== undefined) {
-      try {
-        process.kill(-gogPid, "SIGKILL");
-      } catch {
-        // The process group may already be gone.
+    for (const pid of [gogPid === undefined ? undefined : -gogPid, helperPid]) {
+      if (pid === undefined) {
+        continue;
       }
-    }
-    if (helperPid !== undefined) {
       try {
-        process.kill(helperPid, "SIGKILL");
+        process.kill(pid, "SIGKILL");
       } catch {
-        // The helper may already be gone with its process group.
+        // The process/group may already be gone.
       }
     }
     if (savedPath !== undefined) {
@@ -138,11 +126,9 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
     gogPid = Number.parseInt(readFileSync(join(tmpDir, "gog.pid"), "utf8").trim(), 10);
     helperPid = Number.parseInt(readFileSync(join(tmpDir, "helper.pid"), "utf8").trim(), 10);
 
-    console.log(`\ngog pid=${gogPid}, credential-helper pid=${helperPid}`);
     expect(alive(gogPid)).toBe(true);
     expect(alive(helperPid)).toBe(true);
 
-    console.log("calling stopGmailWatcher...");
     await withinTest(stopGmailWatcher(), signal);
 
     // The watcher joins its leader and escalation, but exposes no descendant reap receipt.
@@ -153,8 +139,5 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
     }
     expect(alive(gogPid)).toBe(false);
     expect(alive(helperPid)).toBe(false);
-
-    console.log(`gog alive after stop: ${alive(gogPid)}`);
-    console.log(`credential-helper alive after stop: ${alive(helperPid)}`);
   }, 15_000);
 });

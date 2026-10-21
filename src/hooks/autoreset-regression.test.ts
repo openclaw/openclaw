@@ -11,8 +11,6 @@ import {
   clearInternalHooks,
   registerInternalHook,
   setInternalHooksEnabled,
-  unregisterInternalHook,
-  type InternalHookHandler,
 } from "./internal-hooks.js";
 import { emitSessionAutoResetHook } from "./session-auto-reset.js";
 
@@ -41,17 +39,16 @@ vi.mock("../plugins/legacy-internal-hook-state.js", async (importOriginal) => ({
   listLegacyPluginInternalHooks: () => [],
 }));
 
-beforeEach(() => {
+function reset() {
   clearInternalHooks();
-  setInternalHooksEnabled(true);
   resetGatewayWorkAdmission();
+}
+beforeEach(() => {
+  reset();
+  setInternalHooksEnabled(true);
   vi.clearAllMocks();
 });
-
-afterEach(() => {
-  clearInternalHooks();
-  resetGatewayWorkAdmission();
-});
+afterEach(reset);
 
 it("releases delayed hook work and continues dispatch after requester closure and a hook error", async ({
   signal,
@@ -65,19 +62,17 @@ it("releases delayed hook work and continues dispatch after requester closure an
   const release = createDeferredCore();
   const trailing = vi.fn();
   const effect = vi.fn();
-  const handler: InternalHookHandler = async () => {
+  registerInternalHook("session:auto-reset", async () => {
     entered.resolve();
     await release.promise;
     await trackAsyncWork(() => {
       effect();
       throw new Error("synthetic hook failure");
     });
-  };
-  const trailingHandler: InternalHookHandler = async () => {
+  });
+  registerInternalHook("session:auto-reset", async () => {
     trailing();
-  };
-  registerInternalHook("session:auto-reset", handler);
-  registerInternalHook("session:auto-reset", trailingHandler);
+  });
   try {
     await root.run(async () =>
       parent.run(() =>
@@ -102,16 +97,11 @@ it("releases delayed hook work and continues dispatch after requester closure an
   } finally {
     release.resolve();
     root.release();
-    try {
-      await parent.drain();
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {
-        timeout: 2_000,
-        interval: 10,
-      });
-    } finally {
-      unregisterInternalHook("session:auto-reset", handler);
-      unregisterInternalHook("session:auto-reset", trailingHandler);
-    }
+    await parent.drain();
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {
+      timeout: 2_000,
+      interval: 10,
+    });
   }
   expect(trailing).toHaveBeenCalledExactlyOnceWith();
   expect(effect).toHaveBeenCalledExactlyOnceWith();

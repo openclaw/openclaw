@@ -1,15 +1,17 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-// Fire-and-forget hook tests cover async hook execution without blocking callers.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { fireAndForgetBoundedHook, fireAndForgetHook } from "./fire-and-forget.js";
 
+async function observe(task: Promise<unknown>, label = "hook failed") {
+  const logger = vi.fn();
+  fireAndForgetHook(task, label, logger);
+  await Promise.resolve();
+  return logger;
+}
+
 function requireFirstLog(logger: ReturnType<typeof vi.fn>): string {
-  const [call] = logger.mock.calls;
-  if (!call) {
-    throw new Error("expected log call");
-  }
-  const [message] = call;
+  const message = logger.mock.calls[0]?.[0];
   if (typeof message !== "string") {
     throw new Error("expected string log message");
   }
@@ -18,26 +20,20 @@ function requireFirstLog(logger: ReturnType<typeof vi.fn>): string {
 
 describe("fireAndForgetHook", () => {
   it("keeps truncated error logs free of lone surrogates", async () => {
-    const logger = vi.fn();
-    fireAndForgetHook(Promise.reject(new Error(`${"a".repeat(499)}😀tail`)), "hook", logger);
-    await Promise.resolve();
+    const logger = await observe(Promise.reject(new Error(`${"a".repeat(499)}😀tail`)), "hook");
 
     const message = requireFirstLog(logger);
     expect(Buffer.from(message).toString()).toBe(message);
   });
 
   it("logs rejection errors as sanitized single-line messages", async () => {
-    const logger = vi.fn();
-    fireAndForgetHook(
+    const logger = await observe(
       Promise.reject(
         new Error(
           "boom\0\u001f\nforged\tsecret sk-test1234567890\u007f\u2028\u2029tail\u0085\u009f",
         ),
       ),
-      "hook failed",
-      logger,
     );
-    await Promise.resolve();
     expect(logger).toHaveBeenCalledWith("hook failed: boom forged secret *** tail\u0085\u009f");
     const message = requireFirstLog(logger);
     expect(message).not.toContain("\n");
@@ -45,48 +41,37 @@ describe("fireAndForgetHook", () => {
   });
 
   it("does not log for resolved tasks", async () => {
-    const logger = vi.fn();
-    fireAndForgetHook(Promise.resolve("ok"), "hook failed", logger);
-    await Promise.resolve();
+    const logger = await observe(Promise.resolve("ok"));
     expect(logger).not.toHaveBeenCalled();
   });
 });
 
 describe("fireAndForgetBoundedHook", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
   it.each(["resolve", "reject"] as const)(
     "holds queue capacity until timed-out hooks %s",
     async (settlement) => {
-      vi.useFakeTimers();
       const logger = vi.fn();
       const first = createDeferred();
       const starts: string[] = [];
+      const enqueue = (task: () => Promise<unknown>) =>
+        fireAndForgetBoundedHook(task, "hook failed", logger, {
+          maxConcurrency: 1,
+          maxQueue: 1,
+          timeoutMs: 10_000,
+        });
       try {
-        fireAndForgetBoundedHook(
-          function (this: unknown) {
-            expect(this).toBeUndefined();
-            starts.push("first");
-            return first.promise;
-          },
-          "hook failed",
-          logger,
-          { maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 },
-        );
-        fireAndForgetBoundedHook(
-          async () => {
-            starts.push("second");
-          },
-          "hook failed",
-          logger,
-          { maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 },
-        );
-        fireAndForgetBoundedHook(
-          async () => {
-            starts.push("third");
-          },
-          "hook failed",
-          logger,
-          { maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 },
-        );
+        enqueue(function (this: unknown) {
+          expect(this).toBeUndefined();
+          starts.push("first");
+          return first.promise;
+        });
+        for (const name of ["second", "third"]) {
+          enqueue(async () => {
+            starts.push(name);
+          });
+        }
 
         expect(starts).toEqual([]);
         expect(logger).toHaveBeenCalledWith("hook failed: queue full; dropping hook");
@@ -105,13 +90,11 @@ describe("fireAndForgetBoundedHook", () => {
       } finally {
         first.resolve();
         await vi.advanceTimersByTimeAsync(0);
-        vi.useRealTimers();
       }
     },
   );
 
   it("caps oversized hook timeout timers", async () => {
-    vi.useFakeTimers();
     const pending = createDeferred();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
@@ -128,7 +111,6 @@ describe("fireAndForgetBoundedHook", () => {
       pending.resolve();
       await vi.advanceTimersByTimeAsync(0);
       timeoutSpy.mockRestore();
-      vi.useRealTimers();
     }
   });
 });

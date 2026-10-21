@@ -8,6 +8,7 @@ import {
 } from "../infra/install-package-dir.js";
 import { packToArchive } from "../plugins/test-helpers/archive-fixtures.js";
 import { npmCommandArgs } from "../test-utils/npm-command.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 
 const scanPackageInstallSourceMock = vi.fn();
 const scanInstalledPackageDependencyTreeMock = vi.fn();
@@ -25,6 +26,11 @@ vi.mock("../plugins/install-security-scan.js", () => ({
 
 const { installHooksFromPath, installHooksFromNpmSpec } = await import("./install.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const manifest = {
+  name: "@acme/canonical-hooks",
+  version: "1.0.0",
+  openclaw: { hooks: ["./hooks/one-hook"] },
+};
 
 function makeHookInstallFixture() {
   const root = tempDirs.make("openclaw-hook-policy-");
@@ -32,14 +38,7 @@ function makeHookInstallFixture() {
   const hookDir = path.join(pkgDir, "hooks", "one-hook");
   const hooksDir = path.join(root, "hooks");
   fs.mkdirSync(hookDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pkgDir, "package.json"),
-    JSON.stringify({
-      name: "@acme/canonical-hooks",
-      version: "1.0.0",
-      openclaw: { hooks: ["./hooks/one-hook"] },
-    }),
-  );
+  fs.writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify(manifest));
   fs.writeFileSync(path.join(hookDir, "HOOK.md"), "---\nname: one-hook\n---\n");
   fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
   return { root, pkgDir, hookDir, hooksDir };
@@ -53,16 +52,12 @@ describe("hook install policy warnings", () => {
   });
 
   it("passes acknowledgement through both scan stages", async () => {
-    const root = tempDirs.make("openclaw-hook-policy-");
-    const source = path.join(root, "source");
-    fs.mkdirSync(source);
-    fs.writeFileSync(path.join(source, "HOOK.md"), "---\nname: my-hook\n---\n");
-    fs.writeFileSync(path.join(source, "handler.ts"), "export default async () => {};\n");
+    const { hookDir, hooksDir } = makeHookInstallFixture();
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
 
     await installHooksFromPath({
-      path: source,
-      hooksDir: path.join(root, "hooks"),
+      path: hookDir,
+      hooksDir,
       onInstallPolicyWarning,
     });
 
@@ -122,22 +117,17 @@ describe("hook install policy warnings", () => {
           throw new Error("unexpected npm fixture command");
         }
         fs.copyFileSync(sourcePath, path.join(options.cwd, "hooks.tgz"));
-        return {
-          code: 0,
+        return createCommandResult({
           stdout: JSON.stringify([
-            { name: "@acme/canonical-hooks", version: "1.0.0", filename: "hooks.tgz" },
+            { name: manifest.name, version: manifest.version, filename: "hooks.tgz" },
           ]),
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        });
       });
     }
     const result = await (source === "npm"
       ? installHooksFromNpmSpec(
           requestDeferredPackageDirInstall({
-            spec: "@acme/canonical-hooks@1.0.0",
+            spec: `${manifest.name}@${manifest.version}`,
             hooksDir,
             mode,
           }),
