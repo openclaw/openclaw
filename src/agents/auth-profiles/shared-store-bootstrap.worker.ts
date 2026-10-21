@@ -100,7 +100,7 @@ export function bootstrapSharedAuthStoreInWorker(
         const result: AuthProfileBootstrapResult = {
           ownership: relocated ? { location: "state-db" } : ownership,
           relocated,
-          sourcePath: handoffSourcePath,
+          ...(handoffSourcePath === input.sourcePath ? {} : { sourcePath: handoffSourcePath }),
         };
         if (relocated) {
           writeConfigMachineStateInDatabase(db, SHARED_AUTH_STORE_STATE_KEY, result.ownership);
