@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../../../packages/gateway-client/src/pending-request.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import { createAudioFixture } from "./audio.test-support.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./gateway-relay.ts";
 import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
 import {
@@ -12,88 +13,15 @@ import {
 
 type GatewayFrame = { event: string; payload?: unknown };
 type GatewayListener = (event: GatewayFrame) => void;
-type MockProcessor = {
-  connect: ReturnType<typeof vi.fn>;
-  disconnect: ReturnType<typeof vi.fn>;
-  onaudioprocess:
-    | ((event: { inputBuffer: { getChannelData: (channel: number) => Float32Array } }) => void)
-    | null;
-};
-
 export const listeners = new Set<GatewayListener>();
-export const processors: MockProcessor[] = [];
-export const inputSinks: Array<{
-  connect: ReturnType<typeof vi.fn>;
-  disconnect: ReturnType<typeof vi.fn>;
-  gain: { value: number };
-}> = [];
-export const createdSources: MockAudioBufferSource[] = [];
+const audioFixture = createAudioFixture();
+export const { processors, inputSinks, createdSources } = audioFixture;
 export let getUserMedia: ReturnType<typeof vi.fn>;
 export const audioClock = { currentTime: 0 };
 
-class MockAudioBufferSource {
-  buffer: unknown = null;
-  readonly addEventListener = vi.fn();
-  readonly connect = vi.fn();
-  readonly start = vi.fn();
-  readonly stop = vi.fn();
-}
-
-export class MockAudioContext {
+export class MockAudioContext extends audioFixture.AudioContextBase {
   get currentTime(): number {
     return audioClock.currentTime;
-  }
-  readonly destination = {};
-  readonly close = vi.fn(async () => undefined);
-
-  createMediaStreamSource() {
-    return {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-    };
-  }
-
-  createScriptProcessor() {
-    const processor: MockProcessor = {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      onaudioprocess: null,
-    };
-    processors.push(processor);
-    return processor;
-  }
-
-  createGain() {
-    const sink = {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      gain: { value: 1 },
-    };
-    inputSinks.push(sink);
-    return sink;
-  }
-
-  createAnalyser() {
-    return {
-      fftSize: 0,
-      smoothingTimeConstant: 0,
-      disconnect: vi.fn(),
-      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
-    };
-  }
-
-  createBuffer(_channels: number, length: number, sampleRate: number) {
-    const channel = new Float32Array(length);
-    return {
-      duration: length / sampleRate,
-      getChannelData: () => channel,
-    };
-  }
-
-  createBufferSource() {
-    const source = new MockAudioBufferSource();
-    createdSources.push(source);
-    return source;
   }
 }
 

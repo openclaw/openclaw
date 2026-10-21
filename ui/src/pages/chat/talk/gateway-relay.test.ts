@@ -380,58 +380,55 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
   });
 
-  it.each(["event count", "bytes"])("enforces the provisional relay %s bound", async (bound) => {
-    const onStatus = vi.fn();
-    const client = createClient();
-    const transport = await createTransport({ callbacks: { onStatus }, client });
+  it.each(["event count", "bytes", "provider close", "callback"])(
+    "rejects provisional relay failure: %s",
+    async (failure) => {
+      const onStatus = vi.fn();
+      const client = createClient();
+      const transport = await createTransport({ callbacks: { onStatus }, client });
 
-    await expect(transport.start()).resolves.toBe("ready");
-    onStatus.mockClear();
-    if (bound === "event count") {
-      for (let index = 0; index < 33; index += 1) {
+      const startup = transport.start();
+      if (failure === "callback") {
         relayEvent({ type: "ready" });
       }
-    } else {
-      relayEvent({ type: "transcript", role: "assistant", text: "x".repeat(131_073), final: true });
-    }
-    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
-
-    expect(() => transport.activate()).toThrow(
-      "Realtime relay emitted too much data before browser setup completed",
-    );
-    expect(onStatus).not.toHaveBeenCalled();
-  });
-
-  it("rejects a relay that closes before browser setup commits", async () => {
-    const client = createClient();
-    const onStatus = vi.fn();
-    const transport = await createTransport({ callbacks: { onStatus }, client });
-
-    await expect(transport.start()).resolves.toBe("ready");
-    onStatus.mockClear();
-    relayEvent({ type: "error", message: "provider rejected setup" });
-    relayEvent({ type: "close", reason: "error" });
-
-    expect(() => transport.activate()).toThrow("provider rejected setup");
-    expect(onStatus).not.toHaveBeenCalled();
-    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(0);
-  });
-
-  it("closes the relay when a provisional callback throws during activation", async () => {
-    const client = createClient();
-    const onStatus = vi.fn();
-    const transport = await createTransport({ callbacks: { onStatus }, client });
-
-    const start = transport.start();
-    relayEvent({ type: "ready" });
-    await expect(start).resolves.toBe("ready");
-    onStatus.mockImplementation(() => {
-      throw new Error("consumer failed");
-    });
-
-    expect(() => transport.activate()).toThrow("consumer failed");
-    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
-  });
+      await expect(startup).resolves.toBe("ready");
+      onStatus.mockClear();
+      let message = "Realtime relay emitted too much data before browser setup completed";
+      if (failure === "event count") {
+        for (let index = 0; index < 33; index += 1) {
+          relayEvent({ type: "ready" });
+        }
+      } else if (failure === "bytes") {
+        relayEvent({
+          type: "transcript",
+          role: "assistant",
+          text: "x".repeat(131_073),
+          final: true,
+        });
+      } else if (failure === "provider close") {
+        message = "provider rejected setup";
+        relayEvent({ type: "error", message });
+        relayEvent({ type: "close", reason: "error" });
+      } else {
+        message = "consumer failed";
+        onStatus.mockImplementation(() => {
+          throw new Error(message);
+        });
+      }
+      if (failure !== "callback") {
+        expect(requestCallsFor(client, "talk.session.close")).toHaveLength(
+          failure === "provider close" ? 0 : 1,
+        );
+      }
+      expect(() => transport.activate()).toThrow(message);
+      expect(requestCallsFor(client, "talk.session.close")).toHaveLength(
+        failure === "provider close" ? 0 : 1,
+      );
+      if (failure !== "callback") {
+        expect(onStatus).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("cancels overflowing playback and ignores late audio until provider clear", async () => {
     const { client, transport } = await startRelay();
@@ -479,19 +476,6 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     },
   );
 
-  it("reports microphone activity and resets it when stopped", async () => {
-    const onInputLevel = vi.fn();
-    const transport = await createTransport({ callbacks: { onInputLevel } });
-
-    await startTransport(transport);
-    pumpMicrophone(new Float32Array(4096));
-    pumpMicrophone(new Float32Array(4096).fill(0.25));
-    void transport.stop();
-
-    expect(onInputLevel.mock.calls.some(([level]) => level > 0)).toBe(true);
-    expect(onInputLevel).toHaveBeenLastCalledWith(0);
-  });
-
   it("reclaims the input meter when its first level update stops the transport", async () => {
     vi.useFakeTimers();
     const client = createClient();
@@ -509,6 +493,8 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
     expect(vi.getTimerCount()).toBe(0);
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
+    expect(onInputLevel.mock.calls.some(([level]) => level > 0)).toBe(true);
+    expect(onInputLevel).toHaveBeenLastCalledWith(0);
   });
 
   it("recovers from a 10-second append stall with bounded audio and repeat guidance", async () => {
@@ -937,47 +923,42 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     },
   );
 
-  it("treats server relay tool results as terminal for active consult calls", async () => {
-    const client = createConsultClient();
-    const onTalkEvent = vi.fn();
-    const { transport } = await startRelay(client, { onTalkEvent });
-    await emitConsultAndWait(client);
-
-    const progress = talkEvent({
-      type: "tool.progress",
-      callId: "call-1",
-      payload: { name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME, status: "working" },
-    });
-    relayEvent({ type: "toolResult", callId: "call-1", talkEvent: progress });
-    expect(onTalkEvent).not.toHaveBeenCalled();
-    expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
-
-    relayEvent({ type: "toolResult", callId: "call-1" });
-    emitGatewayFrame({
-      event: "chat",
-      payload: {
-        runId: "run-1",
-        state: "aborted",
-      },
-    });
-
-    expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
-    expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
-    void transport.stop();
-  });
-
-  it("leaves provider cancellation to the Gateway and suppresses its late result", async () => {
-    const { client, transport } = await startRelay(createConsultClient());
-    await emitConsultAndWait(client);
-
-    relayEvent({ type: "toolCallCancelled", callId: "call-1" });
-
-    expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
-    emitFinal("late answer");
-    await Promise.resolve();
-    expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
-    void transport.stop();
-  });
+  it.each(["toolResult", "toolCallCancelled", "stop"] as const)(
+    "suppresses late consult results after %s without duplicate cancellation",
+    async (terminal) => {
+      const onTalkEvent = vi.fn();
+      const { client, transport } = await startRelay(createConsultClient(), { onTalkEvent });
+      await emitConsultAndWait(client);
+      if (terminal === "toolResult") {
+        relayEvent({
+          type: "toolResult",
+          callId: "call-1",
+          talkEvent: talkEvent({
+            type: "tool.progress",
+            callId: "call-1",
+            payload: { name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME, status: "working" },
+          }),
+        });
+        expect(onTalkEvent).not.toHaveBeenCalled();
+        expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
+      }
+      if (terminal === "stop") {
+        await transport.stop();
+        expectClose(client, "abort");
+      } else {
+        relayEvent({ type: terminal, callId: "call-1" });
+      }
+      if (terminal === "toolResult") {
+        emitGatewayFrame({ event: "chat", payload: { runId: "run-1", state: "aborted" } });
+      } else {
+        emitFinal("late answer");
+      }
+      await Promise.resolve();
+      expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
+      expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
+      void transport.stop();
+    },
+  );
 
   it("suppresses a late control result after provider cancellation", async () => {
     const pendingSteer = createDeferred<unknown>();
@@ -1012,18 +993,6 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     );
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
     void transport.stop();
-  });
-
-  it("stops local consult waiting without accepting a late result or duplicating cancellation", async () => {
-    const client = createConsultClient();
-    const { transport } = await startRelay(client);
-    await emitConsultAndWait(client);
-    await transport.stop();
-    expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
-    expectClose(client, "abort");
-    emitFinal("late answer");
-    await Promise.resolve();
-    expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -105,6 +105,18 @@ export function expectRequest(
   }
 }
 
+export function expectClose(
+  request: ReturnType<typeof vi.fn>,
+  voiceSessionId: string,
+  sessionKey = "main",
+) {
+  expect(request).toHaveBeenCalledWith(
+    "talk.client.close",
+    { sessionKey, voiceSessionId },
+    { signal: expect.any(AbortSignal), ...requestTimeoutOptions },
+  );
+}
+
 export function transportContext(transport: object | undefined): RealtimeTalkTransportContext {
   if (!transport) {
     throw new Error("Expected realtime transport instance");
@@ -215,6 +227,10 @@ export function voiceRequest(
 export function voiceSession(request: unknown, callbacks: RealtimeTalkCallbacks = {}) {
   return new RealtimeTalkSession({ request } as never, "agent:main:main", callbacks);
 }
+export function sequenceRequest(prefix: string, transcriptEntryIds?: string[]) {
+  let count = 0;
+  return voiceRequest(() => createWebRtcSession(`${prefix}-${++count}`), transcriptEntryIds);
+}
 export function calls<T extends [string, ...unknown[]]>(
   request: { mock: { calls: T[] } },
   method: string,
@@ -225,7 +241,7 @@ export function closeIds(request: { mock: { calls: [string, RequestParams?][] } 
   return calls(request, "talk.client.close").map(([, params]) => params?.voiceSessionId);
 }
 
-export async function start(request: unknown, callbacks: RealtimeTalkCallbacks) {
+export async function start(request: unknown, callbacks: RealtimeTalkCallbacks = {}) {
   const session = voiceSession(request, callbacks);
   await session.start();
   const context = webRtcInstances.at(-1)?.ctx;

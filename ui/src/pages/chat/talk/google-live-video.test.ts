@@ -12,28 +12,25 @@ import {
 } from "./google-live.test-support.ts";
 import type { RealtimeTalkCallbacks } from "./shared.ts";
 
-function audioFixture() {
-  const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+function mediaFixture(kind: "Audio" | "Video", deviceId?: string) {
+  const track = Object.assign(new EventTarget(), {
+    stop: vi.fn(),
+    ...(kind === "Video" ? { readyState: "live", enabled: true, muted: false } : {}),
+    ...(deviceId ? { getSettings: () => ({ deviceId }) } : {}),
+  });
   const stream = {
-    getAudioTracks: () => [track],
+    [`get${kind}Tracks`]: () => [track],
     getTracks: () => [track],
   } as unknown as MediaStream;
   return { track, stream };
 }
 
 function cameraFixture(deviceId?: string) {
-  const track = Object.assign(new EventTarget(), {
-    stop: vi.fn(),
-    readyState: "live",
-    enabled: true,
-    muted: false,
-    ...(deviceId ? { getSettings: () => ({ deviceId }) } : {}),
-  });
-  const stream = {
-    getVideoTracks: () => [track],
-    getTracks: () => [track],
-  } as unknown as MediaStream;
-  return { track, stream };
+  return mediaFixture("Video", deviceId);
+}
+
+function audioFixture() {
+  return mediaFixture("Audio");
 }
 
 function installMedia(...streams: MediaStream[]) {
@@ -269,90 +266,64 @@ describe("Google Live Video Talk", () => {
     },
   );
 
-  it("releases camera media when Google setup times out", async () => {
-    const { track: audioTrack, stream: audio } = audioFixture();
-    const { track: videoTrack, stream: camera } = cameraFixture();
-    const getUserMedia = installMedia(audio, camera);
-    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
-    const onStatus = vi.fn();
-    const onVideoStream = vi.fn();
-    const transport = await createVideoTransport({ onStatus, onVideoStream });
-
-    const { start, ws } = await beginTransport(transport);
-    onStatus.mockClear();
-    await transport.setVideoEnabled(true);
-    ws.emitOpen();
-    const rejected = expect(start).rejects.toThrow("Realtime connection timed out after 30000ms");
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    await rejected;
-    expect(onStatus).not.toHaveBeenCalled();
-    expect(audioTrack.stop).toHaveBeenCalledOnce();
-    expect(videoTrack.stop).toHaveBeenCalledOnce();
-    expect(getUserMedia).toHaveBeenNthCalledWith(2, { video: true });
-    expect(onVideoStream).not.toHaveBeenCalled();
-    expect(ws.readyState).toBe(3);
-  });
-});
-
-const SETUP_TIMEOUT_MS = 30_000;
-describe("Google Live setup timeout", () => {
-  installGoogleLiveTestFixture();
-  beforeEach(() => vi.useFakeTimers());
-
-  afterEach(() => vi.useRealTimers());
-
-  it.each(["open", "connecting"])(
-    "times out %s setup without provisional callbacks",
+  const SETUP_TIMEOUT_MS = 30_000;
+  it.each(["open", "connecting", "camera", "close", "error"])(
+    "releases failed %s setup without provisional callbacks",
     async (state) => {
       const onStatus = vi.fn();
+      const onVideoStream = vi.fn();
+      const { track: audioTrack, stream: audio } = audioFixture();
+      const { track: videoTrack, stream: camera } = cameraFixture();
+      const getUserMedia = state === "camera" ? installMedia(audio, camera) : undefined;
+      if (state === "camera") {
+        vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      }
       const onTalkEvent = vi.fn(() => {
         throw new Error("talk callback must remain provisional");
       });
-      const transport = await createTransport({ onStatus, onTalkEvent });
+      const transport = await createTransport({ onStatus, onTalkEvent, onVideoStream });
       const { start, ws: socket } = await beginTransport(transport);
       onStatus.mockClear();
-      if (state === "open") {
+      if (state === "camera") {
+        await transport.setVideoEnabled(true);
+        expect(getUserMedia).toHaveBeenNthCalledWith(2, { video: true });
+      }
+      if (state === "open" || state === "camera") {
         socket.emitOpen();
-      } else {
+      } else if (state === "connecting") {
         socket.readyState = 0;
         onStatus.mockImplementation(() => {
           throw new Error("status callback must remain provisional");
         });
       }
-      const rejected = expect(start).rejects.toThrow("Realtime connection timed out after 30000ms");
-      await vi.advanceTimersByTimeAsync(SETUP_TIMEOUT_MS);
+      const detail =
+        state === "close"
+          ? "Realtime connection closed"
+          : state === "error"
+            ? "Realtime connection failed"
+            : "Realtime connection timed out after 30000ms";
+      const rejected = expect(start).rejects.toThrow(detail);
+      if (state === "close") {
+        socket.emitClose();
+      } else if (state === "error") {
+        socket.emitError();
+      } else {
+        await vi.advanceTimersByTimeAsync(SETUP_TIMEOUT_MS);
+      }
       await rejected;
       expect(onStatus).not.toHaveBeenCalled();
       expect(onTalkEvent).not.toHaveBeenCalled();
-      expectAudioReleased();
+      if (state === "camera") {
+        expect(audioTrack.stop).toHaveBeenCalledOnce();
+        expect(videoTrack.stop).toHaveBeenCalledOnce();
+        expect(onVideoStream).not.toHaveBeenCalled();
+      } else {
+        expectAudioReleased();
+      }
       expect(socket.readyState).toBe(3);
       expect(vi.getTimerCount()).toBe(0);
     },
   );
-
-  it.each([
-    ["close", "Realtime connection closed"],
-    ["error", "Realtime connection failed"],
-  ] as const)("rejects startup when the WebSocket emits %s", async (event, detail) => {
-    const onStatus = vi.fn();
-    const transport = await createTransport({ onStatus });
-    const { start, ws: socket } = await beginTransport(transport);
-    onStatus.mockClear();
-    const rejected = expect(start).rejects.toThrow(detail);
-
-    if (event === "close") {
-      socket.emitClose();
-    } else {
-      socket.emitError();
-    }
-
-    await rejected;
-    expect(onStatus).not.toHaveBeenCalled();
-    expectAudioReleased();
-    expect(socket.readyState).toBe(3);
-    expect(vi.getTimerCount()).toBe(0);
-  });
 
   it("releases resources when a readiness callback throws during activation", async () => {
     const onStatus = vi.fn();

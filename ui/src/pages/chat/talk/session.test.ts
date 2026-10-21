@@ -60,13 +60,7 @@ describe("RealtimeTalkSession", () => {
     expect(onStatus).toHaveBeenLastCalledWith("error", "Microphone disconnected");
     expect(request.mock.calls.filter(([method]) => method === "talk.client.close")).toEqual([]);
     saved.resolve({ ok: true });
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith(
-        "talk.client.close",
-        { sessionKey: "main", voiceSessionId: "voice-1" },
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
-      ),
-    );
+    await vi.waitFor(() => fixture.expectClose(request, "voice-1"));
     await session.start();
     ctx.callbacks.onTalkEvent?.({ type: "session.closed" });
     expect(fixture.googleStop).toHaveBeenCalledOnce();
@@ -126,19 +120,7 @@ describe("RealtimeTalkSession", () => {
     creates[0]!.resolve(fixture.createWebRtcSession("voice-stale"));
     await firstStart;
 
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith(
-        "talk.client.close",
-        {
-          sessionKey: "main",
-          voiceSessionId: "voice-stale",
-        },
-        {
-          signal: expect.any(AbortSignal),
-          timeoutMs: 30_000,
-        },
-      ),
-    );
+    await vi.waitFor(() => fixture.expectClose(request, "voice-stale"));
     expect(fixture.webRtcInstances).toHaveLength(1);
     expect(fixture.webRtcStart).toHaveBeenCalledTimes(1);
     void session.stop();
@@ -181,7 +163,7 @@ describe("RealtimeTalkSession", () => {
     await session.start();
 
     fixture.expectRequest(request, "talk.client.create", {
-      ...clientParams,
+      ...fixture.clientParams,
       voice: "marin",
       voiceChangeId: "voice-change-1",
       transport: "webrtc",
@@ -191,30 +173,46 @@ describe("RealtimeTalkSession", () => {
     });
   });
 
-  it("requests camera-frame for the active video-capable provider without enabling camera", async () => {
-    const request = fixture.videoRequest();
-    const onVideoCapability = vi.fn();
-    const session = fixture.sessionFor(request, { onVideoCapability });
+  it.each([false, true])(
+    "negotiates camera capability without enabling it (supported: %s)",
+    async (supported) => {
+      const request = fixture.strictRequest({
+        "talk.catalog": () => fixture.videoCatalog(supported),
+        "talk.client.create": () => fixture.createWebRtcSession(),
+        "talk.client.close": () => ({ ok: true }),
+      });
+      const onVideoCapability = vi.fn();
+      const session = fixture.sessionFor(request, { onVideoCapability });
 
-    await session.start();
+      await session.start();
 
-    fixture.expectRequest(request, "talk.catalog", { sessionKey: "main" }, 1);
-    fixture.expectRequest(request, "talk.client.create", fixture.cameraParams, 2);
-    expect(onVideoCapability).toHaveBeenCalledWith(true);
-    expect(fixture.transportContext(fixture.webRtcInstances[0])).toEqual(
-      expect.not.objectContaining({ videoEnabled: expect.anything() }),
-    );
+      fixture.expectRequest(request, "talk.catalog", { sessionKey: "main" }, 1);
+      fixture.expectRequest(
+        request,
+        "talk.client.create",
+        supported ? fixture.cameraParams : fixture.clientParams,
+        2,
+      );
+      expect(onVideoCapability).toHaveBeenCalledWith(supported);
+      expect(fixture.transportContext(fixture.webRtcInstances[0])).toEqual(
+        expect.not.objectContaining({ videoEnabled: expect.anything() }),
+      );
 
-    await session.setVideoEnabled(true);
-    expect(fixture.webRtcSetVideoEnabled).toHaveBeenCalledWith(true);
+      if (!supported) {
+        void session.stop();
+        return;
+      }
+      await session.setVideoEnabled(true);
+      expect(fixture.webRtcSetVideoEnabled).toHaveBeenCalledWith(true);
 
-    await switchActiveRealtimeTalkCameras("back-camera");
-    expect(fixture.webRtcSwitchCamera).toHaveBeenCalledWith("back-camera");
-    fixture.webRtcSwitchCamera.mockClear();
-    await session.switchCamera("back-camera");
-    expect(fixture.webRtcSwitchCamera).toHaveBeenCalledWith("back-camera");
-    void session.stop();
-  });
+      await switchActiveRealtimeTalkCameras("back-camera");
+      expect(fixture.webRtcSwitchCamera).toHaveBeenCalledWith("back-camera");
+      fixture.webRtcSwitchCamera.mockClear();
+      await session.switchCamera("back-camera");
+      expect(fixture.webRtcSwitchCamera).toHaveBeenCalledWith("back-camera");
+      void session.stop();
+    },
+  );
 
   it("tracks a pending camera enable without retaining a stopped session", async () => {
     const enable = createDeferred<undefined>();
@@ -233,22 +231,6 @@ describe("RealtimeTalkSession", () => {
     await enabling;
     await switchActiveRealtimeTalkCameras("desk-camera");
     expect(fixture.webRtcSwitchCamera).toHaveBeenCalledOnce();
-  });
-
-  it("does not request camera-frame for a provider without video-frame support", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.catalog") {
-        return fixture.videoCatalog(false);
-      }
-      return fixture.createWebRtcSession();
-    });
-    const onVideoCapability = vi.fn();
-    const session = fixture.sessionFor(request, { onVideoCapability });
-
-    await session.start();
-
-    fixture.expectRequest(request, "talk.client.create", fixture.clientParams, 2);
-    expect(onVideoCapability).toHaveBeenCalledWith(false);
   });
 
   it.each([
@@ -324,7 +306,7 @@ describe("RealtimeTalkSession", () => {
             }
             throw clientError;
           }
-          return { ...createWebRtcSession("replacement"), clientSecret: "test-session" };
+          return fixture.createWebRtcSession("replacement", "test-session");
         }
         if (method === "talk.config") {
           return await pending.promise;
@@ -423,9 +405,7 @@ describe("RealtimeTalkSession lifecycle", () => {
         }
       },
     );
-    const session = fixture.voiceSession(request);
-    await session.start();
-    const context = fixture.transportContext(fixture.webRtcInstances[0]);
+    const { session, context } = await fixture.start(request);
     fixture.publish(context, "first");
     fixture.publish(context, "second", "assistant");
 
@@ -472,13 +452,8 @@ describe("RealtimeTalkSession lifecycle", () => {
   });
 
   it("closes both calls when a restart cancels during transport startup", async () => {
-    let creates = 0;
-    const request = fixture.voiceRequest(() =>
-      fixture.createWebRtcSession(`voice-cancelled-${++creates}`, "fixture-secret"),
-    );
-    const session = fixture.voiceSession(request);
-    await session.start();
-    const previous = fixture.transportContext(fixture.webRtcInstances[0]);
+    const request = fixture.sequenceRequest("voice-cancelled");
+    const { session, context: previous } = await fixture.start(request);
     fixture.webRtcStart.mockResolvedValueOnce("cancelled");
     await session.start();
     expect(fixture.webRtcInstances[0]!.stop).toHaveBeenCalledOnce();
@@ -489,53 +464,38 @@ describe("RealtimeTalkSession lifecycle", () => {
     void session.stop();
   });
 
-  it("retires both relays when restart activation throws", async () => {
-    const request = fixture.voiceRequest(() =>
-      fixture.createRelaySession("openai", "relay-activation"),
-    );
-    const session = fixture.voiceSession(request);
-    await session.start();
-    fixture.relayActivate.mockImplementationOnce(() => {
-      throw new Error("activation failed");
-    });
+  it.each([false, true])(
+    "retires relays when activation throws (concurrent stop: %s)",
+    async (stop) => {
+      const request = fixture.voiceRequest(() =>
+        fixture.createRelaySession("openai", "relay-activation-stop"),
+      );
+      const session = fixture.voiceSession(request);
+      await session.start();
+      fixture.relayActivate.mockImplementationOnce(() => {
+        if (stop) {
+          void session.stop();
+        }
+        throw new Error("activation failed");
+      });
 
-    await expect(session.start()).rejects.toThrow("activation failed");
+      await expect(session.start()).rejects.toThrow("activation failed");
 
-    expect(fixture.relayInstances[0]!.stop).toHaveBeenCalledOnce();
-    expect(fixture.relayInstances[1]!.stop).toHaveBeenCalledOnce();
-    void session.stop();
-    expect(fixture.relayInstances[0]!.stop).toHaveBeenCalledOnce();
-  });
-
-  it("does not restore an active relay after activation stops the session", async () => {
-    const request = fixture.voiceRequest(() =>
-      fixture.createRelaySession("openai", "relay-activation-stop"),
-    );
-    const session = fixture.voiceSession(request);
-    await session.start();
-    fixture.relayActivate.mockImplementationOnce(() => {
+      expect(fixture.relayInstances[0]!.stop).toHaveBeenCalledOnce();
+      if (stop) {
+        expect(fixture.relayInstances[0]!.stop).toHaveBeenCalledWith({ disposition: "detach" });
+      }
+      expect(fixture.relayInstances[1]!.stop).toHaveBeenCalledOnce();
       void session.stop();
-      throw new Error("activation stopped");
-    });
-
-    await expect(session.start()).rejects.toThrow("activation stopped");
-
-    expect(fixture.relayInstances[0]!.stop).toHaveBeenCalledOnce();
-    expect(fixture.relayInstances[0]!.stop).toHaveBeenCalledWith({ disposition: "detach" });
-    expect(fixture.relayInstances[1]!.stop).toHaveBeenCalledOnce();
-    void session.stop();
-    expect(fixture.relayInstances[0]!.stop).toHaveBeenCalledOnce();
-    expect(fixture.relayInstances[1]!.stop).toHaveBeenCalledOnce();
-  });
+      expect(fixture.relayInstances[0]!.stop).toHaveBeenCalledOnce();
+      expect(fixture.relayInstances[1]!.stop).toHaveBeenCalledOnce();
+    },
+  );
 
   it("ignores transcripts from a superseded pending replacement", async () => {
     const firstReplacementStart = createDeferred<"ready">();
     const transcriptEntryIds: string[] = [];
-    let creates = 0;
-    const request = fixture.voiceRequest(
-      () => fixture.createWebRtcSession(`voice-overlapping-${++creates}`),
-      transcriptEntryIds,
-    );
+    const request = fixture.sequenceRequest("voice-overlapping", transcriptEntryIds);
     const session = fixture.voiceSession(request);
     await session.start();
     fixture.webRtcStart.mockImplementationOnce(async () => await firstReplacementStart.promise);
@@ -609,10 +569,7 @@ describe("RealtimeTalkSession lifecycle", () => {
   });
 
   it("releases newly allocated owners after transport startup failures", async () => {
-    let createCount = 0;
-    const request = fixture.voiceRequest(() =>
-      fixture.createWebRtcSession(`voice-start-${++createCount}`),
-    );
+    const request = fixture.sequenceRequest("voice-start");
     const client = { request } as never;
     fixture.webRtcStart
       .mockRejectedValueOnce(new Error("first startup failed"))
@@ -634,11 +591,7 @@ describe("RealtimeTalkSession lifecycle", () => {
   it("does not restore a failed replacement after concurrent stop", async () => {
     const replacementStart = createDeferred<"ready">();
     const transcriptEntryIds: string[] = [];
-    let creates = 0;
-    const request = fixture.voiceRequest(
-      () => fixture.createWebRtcSession(`voice-concurrent-stop-${++creates}`),
-      transcriptEntryIds,
-    );
+    const request = fixture.sequenceRequest("voice-concurrent-stop", transcriptEntryIds);
     const client = { request } as never;
     const session = new RealtimeTalkSession(client, "agent:main:main");
     await session.start();
@@ -841,10 +794,7 @@ describe("RealtimeTalkSession lifecycle", () => {
   });
 
   it("drops a previous transport's delayed transcript and close event after stop and restart", async () => {
-    let createCount = 0;
-    const request = fixture.voiceRequest(() =>
-      fixture.createWebRtcSession(`voice-${++createCount}`),
-    );
+    const request = fixture.sequenceRequest("voice");
     const onTranscript = vi.fn();
     const onTalkEvent = vi.fn();
     const session = new RealtimeTalkSession({ request } as never, "agent:main:main", {

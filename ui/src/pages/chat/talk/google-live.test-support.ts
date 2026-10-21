@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import { createAudioFixture } from "./audio.test-support.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./google-live.ts";
 import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
 import type {
@@ -14,17 +15,8 @@ type MockWebSocketEventType = "close" | "error" | "message" | "open";
 
 export const wsInstances: MockGoogleLiveWebSocket[] = [];
 export const audioContexts: MockAudioContext[] = [];
-export const createdSources: MockAudioBufferSource[] = [];
-export const inputProcessors: Array<{
-  connect: ReturnType<typeof vi.fn>;
-  disconnect: ReturnType<typeof vi.fn>;
-  onaudioprocess: ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void) | null;
-}> = [];
-export const inputSinks: Array<{
-  connect: ReturnType<typeof vi.fn>;
-  disconnect: ReturnType<typeof vi.fn>;
-  gain: { value: number };
-}> = [];
+const audioFixture = createAudioFixture();
+export const { createdSources, processors: inputProcessors, inputSinks } = audioFixture;
 
 export const googleLiveTestFixture = {
   getUserMedia: vi.fn(),
@@ -107,64 +99,14 @@ class MockGoogleLiveWebSocket {
   }
 }
 
-class MockAudioBufferSource {
-  buffer: unknown = null;
-  readonly addEventListener = vi.fn();
-  readonly connect = vi.fn();
-  readonly start = vi.fn();
-  readonly stop = vi.fn();
-}
-
-function mockAudioNode() {
-  return { connect: vi.fn(), disconnect: vi.fn() };
-}
-
-class MockAudioContext {
+class MockAudioContext extends audioFixture.AudioContextBase {
   readonly currentTime = 0;
-  readonly destination = {};
   readonly sampleRate: number;
-  readonly close = vi.fn(async () => undefined);
 
   constructor(options?: { sampleRate?: number }) {
+    super();
     this.sampleRate = options?.sampleRate ?? 24000;
     audioContexts.push(this);
-  }
-
-  createMediaStreamSource = mockAudioNode;
-
-  createScriptProcessor() {
-    const processor = { ...mockAudioNode(), onaudioprocess: null };
-    inputProcessors.push(processor);
-    return processor;
-  }
-
-  createGain() {
-    const sink = { ...mockAudioNode(), gain: { value: 1 } };
-    inputSinks.push(sink);
-    return sink;
-  }
-
-  createAnalyser() {
-    return {
-      fftSize: 0,
-      smoothingTimeConstant: 0,
-      disconnect: vi.fn(),
-      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
-    };
-  }
-
-  createBuffer(_channels: number, length: number, sampleRate: number) {
-    const channel = new Float32Array(length);
-    return {
-      duration: length / sampleRate,
-      getChannelData: () => channel,
-    };
-  }
-
-  createBufferSource() {
-    const source = new MockAudioBufferSource();
-    createdSources.push(source);
-    return source;
   }
 }
 
@@ -244,20 +186,10 @@ export function expectAudioReleased() {
   }
 }
 
-export async function beginTimedTransport(transport: GoogleLiveRealtimeTalkTransport) {
-  const start = transport.start();
-  await vi.advanceTimersByTimeAsync(0);
-  return { start, ws: latestWebSocket() };
-}
-
-export async function startTimedTransport(transport: GoogleLiveRealtimeTalkTransport) {
-  const { start, ws } = await beginTimedTransport(transport);
-  ws.emitOpen();
-  ws.emitJson({ setupComplete: {} });
-  await expect(start).resolves.toBe("ready");
-  transport.activate();
-  return ws;
-}
+export const beginTimedTransport = (transport: GoogleLiveRealtimeTalkTransport) =>
+  beginTransport(transport, true);
+export const startTimedTransport = (transport: GoogleLiveRealtimeTalkTransport) =>
+  startTransport(transport, true);
 
 export function encodeJsonFrame(value: unknown): ArrayBuffer {
   return new TextEncoder().encode(JSON.stringify(value)).buffer;
@@ -271,16 +203,22 @@ export function latestWebSocket(): MockGoogleLiveWebSocket {
   return ws;
 }
 
-export async function beginTransport(transport: GoogleLiveRealtimeTalkTransport) {
+export async function beginTransport(transport: GoogleLiveRealtimeTalkTransport, timed = false) {
   const start = transport.start();
-  await waitForFast(() => expect(wsInstances).toHaveLength(1));
+  if (timed) {
+    await vi.advanceTimersByTimeAsync(0);
+  } else {
+    await waitForFast(() => expect(wsInstances).toHaveLength(1));
+  }
   return { start, ws: latestWebSocket() };
 }
 
-export async function startTransport(transport: GoogleLiveRealtimeTalkTransport) {
-  const { start, ws } = await beginTransport(transport);
+export async function startTransport(transport: GoogleLiveRealtimeTalkTransport, timed = false) {
+  const { start, ws } = await beginTransport(transport, timed);
   ws.emitOpen();
-  ws.emitMessage(encodeJsonFrame({ setupComplete: {} }));
+  ws.emitMessage(
+    timed ? JSON.stringify({ setupComplete: {} }) : encodeJsonFrame({ setupComplete: {} }),
+  );
   await expect(start).resolves.toBe("ready");
   transport.activate();
   return ws;
