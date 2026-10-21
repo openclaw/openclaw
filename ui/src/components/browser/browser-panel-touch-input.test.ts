@@ -18,11 +18,7 @@ setupBrowserPanelTestCleanup();
 
 function pointer(type: string, id: number, x: number, y: number, pointerType: string) {
   const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
-  Object.defineProperties(event, {
-    pointerId: { configurable: true, value: id },
-    pointerType: { configurable: true, value: pointerType },
-  });
-  return event as PointerEvent;
+  return Object.assign(event, { pointerId: id, pointerType }) as PointerEvent;
 }
 
 function click(x: number, y: number) {
@@ -53,11 +49,11 @@ function renderInput(controller: BrowserPanel): HTMLTextAreaElement {
 
 function setup() {
   vi.useFakeTimers();
-  const { client, request } = createBrowserClient(async (envelope) => {
-    if (envelope.path === "/act") {
-      return { result: true };
+  const { client, request } = createBrowserClient(async ({ path }) => {
+    if (path !== "/act") {
+      throw new Error(`Unexpected browser route: ${path}`);
     }
-    throw new Error(`Unexpected browser route: ${envelope.path}`);
+    return { result: true };
   });
   const controller = createBrowserPanelTestController(client, "tab-a");
   const actions = () =>
@@ -76,15 +72,17 @@ async function settle() {
 }
 
 describe("Browser panel touch and pen input", () => {
-  it.each(["touch", "pen"])("keeps %s taps as clicks and scrolls drags", async (pointerType) => {
+  it.each(["touch", "pen", "mouse"])("handles %s taps and drags", async (pointerType) => {
     const { controller, clicks, scrolls } = setup();
     const input = renderInput(controller);
+    const tap = { kind: "clickCoords", targetId: "tab-a", x: 20, y: 20 };
+    const drag = { kind: "clickCoords", targetId: "tab-a", x: 50, y: 40 };
 
     input.dispatchEvent(pointer("pointerdown", 1, 20, 20, pointerType));
     input.dispatchEvent(pointer("pointerup", 1, 20, 20, pointerType));
     input.dispatchEvent(click(20, 20));
     await settle();
-    expect(clicks()).toEqual([{ kind: "clickCoords", targetId: "tab-a", x: 20, y: 20 }]);
+    expect(clicks()).toEqual([tap]);
 
     input.dispatchEvent(pointer("pointerdown", 2, 50, 70, pointerType));
     input.dispatchEvent(pointer("pointermove", 2, 50, 40, pointerType));
@@ -96,25 +94,9 @@ describe("Browser panel touch and pen input", () => {
     input.dispatchEvent(pointer("pointercancel", 3, 50, 60, pointerType));
     await settle();
 
-    expect(scrolls()).toEqual([
-      ["0", "30"],
-      ["0", "-20"],
-    ]);
-    expect(clicks()).toHaveLength(1);
-  });
-
-  it("leaves mouse drags as clicks without remote scrolling", async () => {
-    const { controller, clicks, scrolls } = setup();
-    const input = renderInput(controller);
-
-    input.dispatchEvent(pointer("pointerdown", 1, 50, 70, "mouse"));
-    input.dispatchEvent(pointer("pointermove", 1, 50, 40, "mouse"));
-    input.dispatchEvent(pointer("pointerup", 1, 50, 40, "mouse"));
-    input.dispatchEvent(click(50, 40));
-    await settle();
-
-    expect(scrolls()).toEqual([]);
-    expect(clicks()).toEqual([{ kind: "clickCoords", targetId: "tab-a", x: 50, y: 40 }]);
+    const deltas = pointerType === "mouse" ? [] : ["30", "-20"];
+    expect(scrolls()).toEqual(deltas.map((dy) => ["0", dy]));
+    expect(clicks()).toEqual(pointerType === "mouse" ? [tap, drag] : [tap]);
   });
 
   it("drops a pending pen scroll when capture state resets", async () => {
@@ -133,10 +115,6 @@ describe("Browser panel touch and pen input", () => {
   it("suppresses the click that follows an inspect pointerdown", async () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       drawImage: vi.fn(),
-      beginPath: vi.fn(),
-      moveTo: vi.fn(),
-      lineTo: vi.fn(),
-      stroke: vi.fn(),
       strokeRect: vi.fn(),
     } as unknown as CanvasRenderingContext2D);
     vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
