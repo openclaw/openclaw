@@ -405,11 +405,13 @@ describe("openai transport stream", () => {
         }),
       });
     const onCompactionRejected = vi.fn();
+    const recoveryRequest = request as never;
 
     await expect(
       testing.createResponsesStreamWithRecovery({
         client: { responses: { create } } as never,
-        request: request as never,
+        request: recoveryRequest,
+        buildFullHistoryRequest: () => recoveryRequest,
         requestOptions: undefined,
         model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
         onCompactionRejected,
@@ -444,17 +446,19 @@ describe("openai transport stream", () => {
       .mockReturnValueOnce({ withResponse: vi.fn().mockRejectedValue(finalFailure) });
     const onCompactionRejected = vi.fn();
 
+    const request = {
+      model: "gpt-5.5",
+      stream: true,
+      input: [
+        { type: "reasoning", encrypted_content: "reasoning", summary: [] },
+        { type: "compaction", encrypted_content: "compaction" },
+      ],
+    } as never;
     await expect(
       testing.createResponsesStreamWithRecovery({
         client: { responses: { create } } as never,
-        request: {
-          model: "gpt-5.5",
-          stream: true,
-          input: [
-            { type: "reasoning", encrypted_content: "reasoning", summary: [] },
-            { type: "compaction", encrypted_content: "compaction" },
-          ],
-        } as never,
+        request,
+        buildFullHistoryRequest: () => request,
         requestOptions: undefined,
         model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
         onCompactionRejected,
@@ -479,17 +483,19 @@ describe("openai transport stream", () => {
       .mockReturnValueOnce({ withResponse: vi.fn().mockRejectedValue(unrelatedFailure) });
     const onCompactionRejected = vi.fn();
 
+    const request = {
+      model: "gpt-5.5",
+      stream: true,
+      input: [
+        { type: "reasoning", encrypted_content: "reasoning", summary: [] },
+        { type: "compaction", encrypted_content: "compaction" },
+      ],
+    } as never;
     await expect(
       testing.createResponsesStreamWithRecovery({
         client: { responses: { create } } as never,
-        request: {
-          model: "gpt-5.5",
-          stream: true,
-          input: [
-            { type: "reasoning", encrypted_content: "reasoning", summary: [] },
-            { type: "compaction", encrypted_content: "compaction" },
-          ],
-        } as never,
+        request,
+        buildFullHistoryRequest: () => request,
         requestOptions: undefined,
         model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
         onCompactionRejected,
@@ -513,13 +519,15 @@ describe("openai transport stream", () => {
         response: new Response(null, { status: 200 }),
       }),
     });
+    const request = {
+      model: "gpt-5.5",
+      stream: true,
+      input: [{ type: "reasoning", encrypted_content: "reasoning", summary: [] }],
+    } as never;
     const result = await testing.createResponsesStreamWithRecovery({
       client: { responses: { create } } as never,
-      request: {
-        model: "gpt-5.5",
-        stream: true,
-        input: [{ type: "reasoning", encrypted_content: "reasoning", summary: [] }],
-      } as never,
+      request,
+      buildFullHistoryRequest: () => request,
       requestOptions: undefined,
       model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
     });

@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { domProbe } from "../../test-helpers/dom-probe.ts";
+import { nextFrame } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   PluginCredentialEditor,
@@ -170,7 +171,6 @@ it.each(["button", "modal"])("blocks %s dismissal during Save", async (dismissal
   await open(editor);
   click("Save");
   if (dismissal === "button") {
-    expect(button(editor, "Cancel").disabled).toBe(true);
     click("Cancel");
   } else {
     const event = new CustomEvent("modal-cancel", { bubbles: true, cancelable: true });
@@ -179,7 +179,40 @@ it.each(["button", "modal"])("blocks %s dismissal during Save", async (dismissal
   }
   flush();
   expect(modal(editor)).not.toBeNull();
+  expect(button(editor, "Cancel").disabled).toBe(true);
   pending.resolve(true);
+  await vi.waitFor(() => expect(modal(editor)).toBeNull());
+});
+
+it("keeps a successor reference busy when a retired save completes", async () => {
+  const { editor, context, scope, update, click } = await mount(reference());
+  const retired = createDeferred<boolean>();
+  const successor = createDeferred<boolean>();
+  vi.mocked(context.onCommit)
+    .mockReturnValueOnce(retired.promise)
+    .mockReturnValueOnce(successor.promise);
+  await open(editor);
+  click("Save");
+  await update({ pluginId: "replacement" });
+  await vi.waitFor(() => expect(scope.client.request).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(editor.textContent).not.toContain("Loading"));
+  await open(editor);
+  const id = dialogInputs(editor)[1]!;
+  editInput(id, "SUCCESSOR_KEY");
+  flush();
+  click("Save");
+  expect(context.onCommit).toHaveBeenCalledTimes(2);
+
+  retired.resolve(true);
+  await retired.promise;
+  await nextFrame();
+  flush();
+  expect(modal(editor)).not.toBeNull();
+  expect(id.value).toBe("SUCCESSOR_KEY");
+  expect(button(editor, "Saving…").disabled).toBe(true);
+  expect(button(editor, "Cancel").disabled).toBe(true);
+
+  successor.resolve(true);
   await vi.waitFor(() => expect(modal(editor)).toBeNull());
 });
 

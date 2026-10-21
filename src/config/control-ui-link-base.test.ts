@@ -5,20 +5,17 @@ import {
   resolveControlUiPublicSessionUrl,
 } from "./control-ui-link-base.js";
 
+const origin = "http://127.0.0.1:18789";
+const linkBase = (controlUi: { enabled?: boolean; basePath?: string }) =>
+  resolveControlUiSessionLinkBase({ gateway: { publicOrigin: origin, controlUi } });
+
 describe("resolveControlUiSessionLinkBase", () => {
   it("omits session links without a public Gateway origin", () => {
     expect(resolveControlUiSessionLinkBase({ gateway: {} })).toBeUndefined();
   });
 
   it("omits session links when the Control UI is disabled", () => {
-    expect(
-      resolveControlUiSessionLinkBase({
-        gateway: {
-          publicOrigin: "http://127.0.0.1:18789",
-          controlUi: { enabled: false },
-        },
-      }),
-    ).toBeUndefined();
+    expect(linkBase({ enabled: false })).toBeUndefined();
   });
 
   it("joins a valid public origin with the normalized Control UI base path", () => {
@@ -33,26 +30,14 @@ describe("resolveControlUiSessionLinkBase", () => {
   });
 
   it("preserves a session link base just under the hard cap", () => {
-    const origin = "http://127.0.0.1:18789";
     const basePath = `/${"a".repeat(176)}`;
     const expected = `${origin}${basePath}`;
     expect(expected).toHaveLength(199);
-    expect(
-      resolveControlUiSessionLinkBase({
-        gateway: { publicOrigin: origin, controlUi: { basePath } },
-      }),
-    ).toBe(expected);
+    expect(linkBase({ basePath })).toBe(expected);
   });
 
   it("omits a session link base with an oversized Control UI base path", () => {
-    expect(
-      resolveControlUiSessionLinkBase({
-        gateway: {
-          publicOrigin: "http://127.0.0.1:18789",
-          controlUi: { basePath: `/${"a".repeat(178)}` },
-        },
-      }),
-    ).toBeUndefined();
+    expect(linkBase({ basePath: `/${"a".repeat(178)}` })).toBeUndefined();
   });
 });
 
@@ -96,15 +81,11 @@ describe("resolveControlUiPublicSessionUrl", () => {
     updatedAt: 1,
     publicShare: { id: "a".repeat(48), sessionId: "session-1", createdAt: 1 },
   };
+  const session = { sessionKey: "agent:main:main", sessionId: "session-1", agentId: "main" };
   it("uses the canonical anonymous chat route for the published generation", () => {
-    expect(
-      resolveControlUiPublicSessionUrl(config, {
-        sessionKey: "agent:main:main",
-        sessionId: "session-1",
-        agentId: "main",
-        entry,
-      }),
-    ).toBe("https://gateway.example/chat/main");
+    expect(resolveControlUiPublicSessionUrl(config, { ...session, entry })).toBe(
+      "https://gateway.example/chat/main",
+    );
   });
   it.each([
     { name: "missing", entry: undefined },
@@ -113,12 +94,7 @@ describe("resolveControlUiPublicSessionUrl", () => {
     { name: "stale", entry: { ...entry, sessionId: "session-2" } },
   ])("omits $name sessions", ({ entry: current }) => {
     expect(
-      resolveControlUiPublicSessionUrl(config, {
-        sessionKey: "agent:main:main",
-        sessionId: "session-1",
-        agentId: "main",
-        entry: current,
-      }),
+      resolveControlUiPublicSessionUrl(config, { ...session, entry: current }),
     ).toBeUndefined();
   });
 });

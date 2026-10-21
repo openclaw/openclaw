@@ -258,7 +258,7 @@ test("sessions.create uses a non-git Gateway cwd directly but not as a worktree 
   expect(direct.payload?.entry?.spawnedCwd).toBe(cwd);
 
   const isolated = await createSession({ cwd, worktree: true });
-  expectInvalid(isolated, "agent workspace is not a git checkout");
+  expectInvalid(isolated, `requested working directory is not a git checkout: ${cwd}`);
 });
 
 test("sessions.create keeps its cwd contract absolute-only", async () => {

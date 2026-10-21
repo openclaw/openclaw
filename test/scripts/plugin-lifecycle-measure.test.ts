@@ -1,24 +1,21 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, it } from "vitest";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  isProcessAlive as pidExists,
+  waitForProcessExit as waitForPidExit,
+} from "./live-process-fixture.test-support.js";
 
 const fixtureLifetime = createFixtureLifetime();
-const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) => {
-  afterEach(async () => {
-    // Vitest's timeout settles before the body finally; join that body before removing its inputs.
-    await fixtureLifetime.cleanup();
-    cleanupDirs();
-  });
-});
+// Join timed-out bodies before releasing their inputs.
+afterEach(() => fixtureLifetime.cleanup());
 const scriptPath = "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs";
 
 function measureFixture() {
-  const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
+  const dir = fixtureLifetime.createTempDir("openclaw-plugin-lifecycle-measure-");
   return { dir, summary: path.join(dir, "summary.tsv") };
 }
 
@@ -83,22 +80,6 @@ function checkTermination(
       }
     }
   });
-}
-
-function pidExists(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// The sampler sends SIGKILL before exiting, but does not join foreign PID extinction.
-async function waitForPidExit(pid: number, signal: AbortSignal): Promise<void> {
-  while (pidExists(pid)) {
-    await delay(5, undefined, { signal });
-  }
 }
 
 function nonEmptyPathExists(filePath: string): boolean {
@@ -174,12 +155,7 @@ it.runIf(process.platform === "linux")(
     const result = spawnSync(
       process.execPath,
       [scriptPath, summary, "getconf-units", "--", process.execPath, "-e", ""],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env,
-        timeout: 5000,
-      },
+      { cwd: process.cwd(), encoding: "utf8", env, timeout: 5000 },
     );
 
     expect(readFileSync(logPath, "utf8")).toBe("PAGESIZE\nCLK_TCK\n");

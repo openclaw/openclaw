@@ -1,7 +1,7 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { overwriteFileHandle } from "@openclaw/fs-safe/advanced";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   canonicalPathFromExistingAncestor,
   FsSafeError,
@@ -41,10 +41,6 @@ type FileWriteParams = {
   expectedCanonicalPath?: unknown;
   expectedBinding?: unknown;
 };
-
-function sha256Hex(buf: Buffer): string {
-  return crypto.createHash("sha256").update(buf).digest("hex");
-}
 
 async function writeBoundTarget(input: {
   binding: Extract<PathBinding, { kind: "write" }>;

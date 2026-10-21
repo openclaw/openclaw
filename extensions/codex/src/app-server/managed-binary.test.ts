@@ -2,6 +2,7 @@ import { access, chmod, mkdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { embeddedAgentLog as log } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as runner from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { SemVer } from "semver";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ import { buildMigrationProvider } from "../../migration-provider-api.js";
 import type { CodexAppServerStartOptions as StartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import * as desktopAppPaths from "./desktop-app-paths.js";
+import * as installedProbe from "./installed-probe.js";
 import {
   assertInstalledCodexAppServerVersion as assertVersion,
   INSTALLED_CODEX_PROBE_TIMEOUT_MS as PROBE_TIMEOUT,
@@ -20,6 +22,10 @@ import {
 } from "./managed-binary.js";
 import { CODEX_APP_SERVER_VERSION as VERSION } from "./version.js";
 
+// mock-isolation: Selection owns the synthetic handshake; native probe proof stays separate.
+vi.mock("./installed-probe.js", () => ({ probeCodexAppServerHandshake: vi.fn() }));
+
+const originalPlatform = process.platform;
 let root: string;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
@@ -271,6 +277,9 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.mocked(installedProbe.probeCodexAppServerHandshake).mockReset();
+    vi.unstubAllEnvs();
+    Object.defineProperty(process, "platform", { value: originalPlatform });
     installedState.selection = Promise.resolve(undefined);
     delete installedState.selected;
     delete installedState.rejected;
@@ -297,10 +306,18 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     } = {},
     selectionTimeoutMs?: number,
   ) {
-    const clientVersion = await resolveVersion("package-first", {
-      probes: { env: { PATH: bin }, probeHandshake: async () => NEWER, ...probes },
-      selectionTimeoutMs,
-    });
+    vi.stubEnv("PATH", bin);
+    vi.spyOn(installedProbe, "probeCodexAppServerHandshake").mockImplementation(
+      (command) => probes.probeHandshake?.(command) ?? Promise.resolve(NEWER),
+    );
+    if (probes.runVersion) {
+      const runVersion = probes.runVersion;
+      vi.spyOn(runner, "runUtf8CommandWithTimeout").mockImplementation(async (argv) => {
+        const stdout = await runVersion(argv[0] ?? "");
+        return { stdout, stderr: "", code: 0, signal: null, killed: false, termination: "exit" };
+      });
+    }
+    const clientVersion = await resolveVersion("package-first", { selectionTimeoutMs });
     return { clientVersion, selected: installedState.selected };
   }
   const BUNDLED = { clientVersion: VERSION, selected: undefined };
@@ -441,13 +458,14 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     vi.spyOn(desktopAppPaths, "resolveMacOSDesktopCodexAppServerCommandCandidates").mockReturnValue(
       [desktop],
     );
-    const runVersion = vi.fn(async () => `codex-cli ${NEWER}`);
-    const probeHandshake = vi.fn(async () => NEWER);
+    const runVersion = vi.spyOn(runner, "runUtf8CommandWithTimeout");
+    const probeHandshake = vi.spyOn(installedProbe, "probeCodexAppServerHandshake");
+    vi.stubEnv("PATH", bin);
+    Object.defineProperty(process, "platform", { value: "darwin" });
 
     await expect(
       resolveVersion("package-only", {
         platform: "darwin",
-        probes: { env: { PATH: bin }, platform: "darwin", runVersion, probeHandshake },
       }),
     ).resolves.toBe(VERSION);
     expect(runVersion).not.toHaveBeenCalled();
@@ -516,11 +534,12 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
 
     // Without the desktop app, desktop-first starts reach the installed Codex.
     await installNpmCodex();
+    vi.stubEnv("PATH", bin);
+    vi.spyOn(installedProbe, "probeCodexAppServerHandshake").mockResolvedValue(NEWER);
     await expect(
       resolveVersion("desktop-first", {
         platform: "darwin",
         pathExists: async () => false,
-        probes: { env: { PATH: bin }, probeHandshake: async () => NEWER },
       }),
     ).resolves.toBe(NEWER);
   });

@@ -221,7 +221,11 @@ account.
 Catalog discovery fences and settles historical peers through the same
 request-owned native writer as the refreshing credential. Each peer update
 retains its captured database file identity and compares the credential inside
-the write transaction; empty agent stores do not block a shared-store refresh.
+the write transaction. An identity-bound read skips definitely unrelated refresh
+generations before write admission, so empty retained stores from completed agent
+deletions do not block a shared-store refresh. Matching generations still require
+write admission and remain blocked by completed deletion. Unreadable or
+identity-replaced stores fail closed.
 If peer fencing fails before the provider refresh starts, claimed credentials
 are restored. Once the provider request starts, failed refreshes remain terminal
 because the provider may already have consumed the old refresh token.

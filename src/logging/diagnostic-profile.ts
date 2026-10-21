@@ -217,7 +217,7 @@ export function sanitizeDiagnosticProfileFrame(
 
 /** Owns one ephemeral isolate-local capture; it never opens an inspector listener. */
 export async function captureDiagnosticProfile<Profile, Result>(options: {
-  signal: AbortSignal;
+  signal?: AbortSignal;
   hasAuthority: () => boolean;
   durationMs: number;
   /** Worker captures require tracing admission from the Gateway; trace_events is main-only. */
@@ -253,7 +253,7 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
   let startBlockedMs = 0;
   let packageRoot: string | null = null;
   const assertActive = () => {
-    if (options.signal.aborted || !options.hasAuthority()) {
+    if (options.signal?.aborted || !options.hasAuthority()) {
       throw new ProfileFailure("cancelled");
     }
   };
@@ -314,7 +314,7 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     failure =
       error instanceof ProfileFailure
         ? error.reason
-        : options.signal.aborted
+        : options.signal?.aborted
           ? "cancelled"
           : "capture-failed";
   } finally {

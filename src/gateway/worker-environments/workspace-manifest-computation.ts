@@ -3,7 +3,7 @@ import type {
   readWorkspaceFileSnapshotWithLimit,
 } from "./workspace-actual-manifest.js";
 import type { WorkspaceHashMetrics } from "./workspace-hash-memo.js";
-import type { WorkspaceNode } from "./workspace-manifest-comparison.js";
+import type { WorkspaceNode, WorkspacePreflightInput } from "./workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -60,10 +60,8 @@ export type WorkspaceManifestValueInputs = {
     prepared: WorkerWorkspaceManifest;
     incoming: WorkerWorkspaceManifest;
   };
-  "workspace.reconcile.preflight": {
+  "workspace.reconcile.preflight": WorkspacePreflightInput & {
     root: string;
-    base: WorkerWorkspaceManifest;
-    current: WorkerWorkspaceManifest;
     hashes?: WorkspaceComputationHashes;
   };
 };

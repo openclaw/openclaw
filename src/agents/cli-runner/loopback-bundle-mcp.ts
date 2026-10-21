@@ -29,9 +29,9 @@ export type CliLoopbackBundleMcp = {
 };
 
 /**
- * Exclusive CLI runs cannot pass configured MCP servers to the CLI: native
- * servers bypass per-turn caps. Materialize them as OpenClaw tools instead, so
- * the Gateway lists one stable catalog and enforces each turn's policy on call.
+ * Local Claude and exclusive CLI runs use one Gateway-owned configured MCP
+ * catalog. Materialize its tools for the bridge, which enforces each turn's
+ * policy on call independently of the CLI's native tool selection.
  */
 export async function prepareCliLoopbackBundleMcp(params: {
   run: RunCliAgentParams;

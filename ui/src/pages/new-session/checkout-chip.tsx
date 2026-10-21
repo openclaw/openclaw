@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup } from "solid-js";
+import { createMemo, createSignal, For, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -7,6 +7,7 @@ import type { resolveCheckoutChip } from "./checkout-chip.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
 import { SessionPicker } from "./picker.tsx";
+import { repositoryIssueText } from "./submit-gates.ts";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 function WorktreeFields(props: {
@@ -144,7 +145,7 @@ function WorktreeFields(props: {
                 <For each={suggestions()} keyed={(branch) => branch.name}>
                   {(branch, index) => {
                     let button: HTMLButtonElement;
-                    onCleanup(() => {
+                    onSettled(() => () => {
                       suggestionRefs.delete(branch().name);
                       if (activeSuggestion === button) {
                         clearActiveSuggestion();
@@ -280,9 +281,8 @@ export function CheckoutChip(props: {
                 title: worktreeAvailable()
                   ? undefined
                   : (props.params.place.currentCheckoutUnavailableReason ??
-                    (props.params.place.repository.kind === "unavailable"
-                      ? t("newSession.gitCheckUnavailable")
-                      : t("newSession.worktreeUnavailable"))),
+                    repositoryIssueText(props.params.place.repository) ??
+                    t("newSession.worktreeUnavailable")),
                 onSelect: () => props.params.place.selectWorktree(true),
                 keepOpen: true,
               }}

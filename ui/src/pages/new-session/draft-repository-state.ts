@@ -1,3 +1,7 @@
+import {
+  GatewayProtocolRequestError,
+  readMissingScopeError,
+} from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   AgentSummary,
@@ -399,11 +403,21 @@ export class DraftRepositoryStateOwner {
             : { kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable", repoRoot },
         );
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (requestId !== this.requestToken) {
           return;
         }
-        this.adoptResolvedRepository({ kind: "unavailable", repoRoot });
+        const missing = readMissingScopeError(error);
+        this.adoptResolvedRepository(
+          missing ||
+            (error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN")
+            ? {
+                kind: "forbidden",
+                repoRoot,
+                ...(missing ? { missingScope: missing.missingScope } : {}),
+              }
+            : { kind: "unavailable", repoRoot },
+        );
       });
   }
 

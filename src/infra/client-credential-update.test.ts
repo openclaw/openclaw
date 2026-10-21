@@ -409,8 +409,11 @@ function assertMigratedCredentials(f: Fixture) {
   });
   if (!f.native) {
     expect(
-      local.database.prepare("SELECT socket_token FROM native_exec_socket_credentials").get(),
+      local.database
+        .prepare("SELECT socket_path,socket_token FROM native_exec_socket_credentials")
+        .get(),
     ).toEqual({
+      socket_path: "/synthetic/native.sock",
       socket_token: "synthetic-socket-token",
     });
   }
@@ -606,8 +609,15 @@ describe("client credential public update custody", () => {
     },
   );
 
-  it("captures SQLite before cutover, restores exact shared credentials, and rebuilds an orphan through Doctor", async () => {
+  it("migrates SQLite despite stale socket projections, restores exact credentials, and rebuilds an orphan through Doctor", async () => {
     const f = await fixture("sqlite");
+    const originalApprovals = (() => {
+      using source = openNodeSqliteDatabase(f.pathname);
+      source
+        .prepare("UPDATE exec_approvals_config SET socket_path=?,has_socket_token=0")
+        .run("/synthetic/stale.sock");
+      return source.prepare("SELECT * FROM exec_approvals_config").get();
+    })();
     const captured = await capture(f);
     await migrate(f, captured);
     {
@@ -629,6 +639,12 @@ describe("client credential public update custody", () => {
     const localPath = resolveClientCredentialStorePath(f.env);
     const orphan = fs.readFileSync(localPath);
     await rollback(f, captured);
+    {
+      using restored = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+      expect(restored.prepare("SELECT * FROM exec_approvals_config").get()).toEqual(
+        originalApprovals,
+      );
+    }
     expect(fs.existsSync(localPath)).toBe(false);
     // Released drivers leave this file behind when they restore shared state.
     fs.mkdirSync(path.dirname(localPath), { recursive: true });

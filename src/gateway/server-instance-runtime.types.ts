@@ -77,7 +77,11 @@ export type GatewayRecoveryTypingParams = {
 export type GatewayRecoveryRuntime = {
   resumeChatInput: (
     target: import("./chat-input-recovery-source.js").ChatInputRecoveryTarget,
-    options: { signal: AbortSignal; assertCurrent: () => void },
+    options: {
+      signal: AbortSignal;
+      assertCurrent: () => void;
+      trace?: import("./pending-input-recovery-trace.js").PendingInputRecoveryTrace;
+    },
   ) => Promise<void>;
   /** Healthy boots are ready synchronously; safe mode returns its owner's pause deadline. */
   prepareRestartRecovery: (signal?: AbortSignal) => Promise<number | undefined> | undefined;

@@ -1,0 +1,79 @@
+/* Only the desktop section uses this structure; mobile retains its own body. */
+[data-details-group="environment"] > .chat-details-desktop-section__heading {
+  min-width: 0;
+}
+
+[data-details-group="environment"] .chat-details-desktop-section__title {
+  flex: none;
+}
+
+[data-details-group="environment"] .chat-details-desktop-section__metadata {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chat-environment-desktop__summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.chat-environment-desktop__summary > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  padding-inline-end: 16px;
+  text-overflow: clip;
+  white-space: nowrap;
+  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+}
+
+.chat-environment-desktop__summary > .chat-environment-desktop__branch:last-child {
+  padding-inline-end: 0;
+  text-align: end;
+  text-overflow: clip;
+  mask-image: none;
+}
+
+.chat-environment-desktop__summary
+  > .chat-environment-desktop__branch[data-scrollable="true"]:last-child {
+  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+}
+
+.chat-environment-desktop__machine-icon {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+.chat-environment-desktop__machine-icon > svg {
+  width: 100%;
+  height: 100%;
+}
+
+.chat-environment-desktop__machine-icon > i {
+  position: absolute;
+  box-sizing: content-box;
+  right: -3px;
+  bottom: -2px;
+  width: 6px;
+  height: 6px;
+  border: 2px solid var(--details-surface, var(--panel));
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.chat-environment-desktop__machine-icon[data-connection="offline"] > i {
+  background: var(--danger);
+}
+
+[data-details-group="environment"] .chat-details__row .chat-environment-desktop__machine-icon {
+  flex: none;
+  overflow: visible;
+}

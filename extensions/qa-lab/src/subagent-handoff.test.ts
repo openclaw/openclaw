@@ -1,6 +1,6 @@
 import { wrapPromptDataBlock } from "openclaw/plugin-sdk/qa-runtime";
 import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { nestedToolActivityFixture } from "../test/nested-tool-activity-fixture.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { findSubagentHandoffReply } from "./subagent-handoff-reply.js";
@@ -12,6 +12,17 @@ const child = {
   childSessionKey: "agent:qa:subagent:child",
   runId: "child-run",
 };
+const requester = "agent:qa:handoff:this-handoff";
+function forRequester<Args extends unknown[], Result>(run: (...args: Args) => Result) {
+  return (_env: unknown, session: string | { sessionKey: string }, ...args: Args) => {
+    expect(typeof session === "string" ? session : session.sessionKey).toBe(requester);
+    return run(...args);
+  };
+}
+function messageEvent(id: string, parentId: string, message: unknown) {
+  return { type: "message", id, parentId, message };
+}
+afterEach(() => vi.useRealTimers());
 
 async function runHandoff({
   fault,
@@ -24,24 +35,24 @@ async function runHandoff({
   deliveredReply?: string;
   api?: Record<string, unknown>;
 } = {}) {
-  const result =
-    fault === "partial result"
-      ? childReply + " was mentioned"
-      : fault === "result under evidence"
-        ? "No result"
-        : deliveredReply;
-  const evidence =
-    fault === "result under evidence" ? "expected " + childReply : "Workspace check.";
+  const hasFault = (name: string) => fault === name;
+  const result = hasFault("partial result")
+    ? childReply + " was mentioned"
+    : hasFault("result under evidence")
+      ? "No result"
+      : deliveredReply;
+  const evidence = hasFault("result under evidence")
+    ? "expected " + childReply
+    : "Workspace check.";
   const reply = {
     role: "assistant",
     __openclaw: { id: "report" },
     content: `Delegated task:\n- Check the fixture.\nResult:\n- ${result}\nEvidence:\n- ${evidence}`,
   };
-  // Same field boundaries as subagent-announce.requester-settle-results.test.ts.
-  // The task label deliberately equals the usual answer, even when the delivered result differs.
-  const secondResult = fault === "answer only in second child";
+  // The task label matches the usual answer even when the delivered result differs.
+  const secondResult = hasFault("answer only in second child");
   const delivered =
-    secondResult || fault === "answer only in task" ? "A different result" : childReply;
+    secondResult || hasFault("answer only in task") ? "A different result" : childReply;
   const childResult = (text: string) => wrapPromptDataBlock({ label: "Child result", text });
   const settlement = [
     wrapPromptDataBlock({ label: "1. Child task", text: "qa-sidecar" }),
@@ -49,98 +60,69 @@ async function runHandoff({
     childResult(delivered),
     ...(secondResult ? ["status: ok", childResult(childReply)] : []),
   ].join("\n");
-  const delivery = {
-    type: "message",
-    id: "delivery",
-    parentId: "request",
-    message: {
-      role: "user",
-      content:
-        fault === "private announcement" ? "Continue the OpenClaw runtime event." : settlement,
-      provenance: {
-        kind: "inter_session",
-        sourceChannel: "internal",
-        sourceTool: fault === "private announcement" ? "subagent_announce" : "subagent_settle",
-        sourceSessionKey:
-          fault === "another child's delivery" ? "another-child" : child.childSessionKey,
-      },
+  const delivery = messageEvent("delivery", "request", {
+    role: "user",
+    content: hasFault("private announcement") ? "Continue the OpenClaw runtime event." : settlement,
+    provenance: {
+      kind: "inter_session",
+      sourceChannel: "internal",
+      sourceTool: hasFault("private announcement") ? "subagent_announce" : "subagent_settle",
+      sourceSessionKey: hasFault("another child's delivery")
+        ? "another-child"
+        : child.childSessionKey,
     },
-  };
-  const report = {
-    type: "message",
-    id: "report",
-    parentId: fault === "other branch" ? "request" : delivery.id,
-    message: reply,
-  };
-  const requester = "agent:qa:handoff:this-handoff";
+  });
+  const report = messageEvent("report", hasFault("other branch") ? "request" : delivery.id, reply);
   return runLoadedScenarioFlow("subagent-handoff", {
     api: {
       randomUUID: () => "this-handoff",
-      startAgentRun: async (_env: unknown, { sessionKey }: { sessionKey: string }) => {
-        expect(sessionKey).toBe(requester);
-        return { runId: "parent-run" };
-      },
+      startAgentRun: forRequester(async () => ({ runId: "parent-run" })),
       extractQaToolPayload,
-      readSessionToolActivity: async (_env: unknown, sessionKey: string) => {
-        expect(sessionKey).toBe(requester);
-        const receipt = fault === "forbidden" ? { status: "forbidden" } : child;
-        return projectQaToolActivity([
+      readSessionToolActivity: forRequester(async () =>
+        projectQaToolActivity([
           nestedToolActivityFixture({
             toolName: "sessions_spawn",
             toolCallId: "spawn-call",
             input: { task: "Check the fixture" },
-            // The tool may return normally even though admission was forbidden.
-            text: JSON.stringify(receipt),
+            text: JSON.stringify(hasFault("forbidden") ? { status: "forbidden" } : child),
           }),
-        ]);
-      },
+        ]),
+      ),
       waitForAgentRun: async (_env: unknown, runId: string) => {
         expect(runId).toBe(child.runId);
         return {
-          runId: fault === "another run" ? "other-run" : runId,
-          status: fault === "child failed" ? "error" : "ok",
+          runId: hasFault("another run") ? "other-run" : runId,
+          status: hasFault("child failed") ? "error" : "ok",
           endedAt: 100,
-          yielded: fault === "child yielded",
+          yielded: hasFault("child yielded"),
           terminalReply: {
-            disposition: fault === "silent terminal after progress" ? "silent" : "visible",
+            disposition: hasFault("silent terminal after progress") ? "silent" : "visible",
             text: childReply,
           },
         };
       },
-      readSubagentHandoffReply: async (
-        _env: unknown,
-        sessionKey: string,
-        childKey: string,
-        text: string,
-        messages: unknown[],
-      ) => {
-        expect(sessionKey).toBe(requester);
-        expect(childKey).toBe(child.childSessionKey);
-        // This is all in the requester: completed children need not remain in sessions.list.
-        const events =
-          fault === "parent guessed before completion"
+      readSubagentHandoffReply: forRequester(
+        async (childKey: string, text: string, messages: unknown[]) => {
+          expect(childKey).toBe(child.childSessionKey);
+          const events = hasFault("parent guessed before completion")
             ? [{ ...report, parentId: "request" }, delivery]
             : [delivery, report];
-        return findSubagentHandoffReply(messages, childKey, text, async () => events);
-      },
-      waitForAgentHistory: async (
-        _env: unknown,
-        sessionKey: string,
-        select: (history: { messages: unknown[] }) => Promise<string | undefined>,
-      ) => {
-        expect(sessionKey).toBe(requester);
-        // Completion input stays internal. A single read may already include the later reply.
-        const visible =
-          fault === "unrelated public reply"
+          return findSubagentHandoffReply(messages, childKey, text, async () => events);
+        },
+      ),
+      waitForAgentHistory: forRequester(
+        async (select: (history: { messages: unknown[] }) => Promise<string | undefined>) => {
+          const visible = hasFault("unrelated public reply")
             ? { ...reply, __openclaw: { id: "another-report" } }
             : reply;
-        const selected = await select({ messages: [visible] });
-        if (!selected) {
-          throw new Error("no matching delivered reply");
-        }
-        expect(selected).toBe(reply.content);
-        return selected;
-      },
+          const selected = await select({ messages: [visible] });
+          if (!selected) {
+            throw new Error("no matching delivered reply");
+          }
+          expect(selected).toBe(reply.content);
+          return selected;
+        },
+      ),
       ...api,
     },
   });
@@ -153,11 +135,9 @@ it.each([
   ["column A\tcolumn B\r\n2 < 3", "column Acolumn B\n2 &lt; 3"],
   ["literal &lt; stays &lt;", "literal &lt; stays &lt;"],
 ])(
-  "credits the accepted child's settled result in the requester's subsequent visible reply: %s",
+  "credits the child's settled result in the requester's visible reply: %s",
   async (childReply, deliveredReply) => {
-    await expect(runHandoff({ childReply, deliveredReply })).resolves.toMatchObject({
-      status: "pass",
-    });
+    expect((await runHandoff({ childReply, deliveredReply })).status).toBe("pass");
   },
 );
 it.each([
@@ -187,24 +167,18 @@ it.each([
 ])("reports which observation expired at %s", async (wait, name) => {
   const details = "timed out after 360000ms";
   vi.useFakeTimers();
-  try {
-    // Let the preceding observations succeed, then expire only the selected wait.
-    const pending = runHandoff({
-      api: {
-        runScenario: runQaSuiteScenarioSteps,
-        [wait]: async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 360_000);
-          });
-          throw new Error(details);
-        },
-      },
-    });
-    await vi.advanceTimersByTimeAsync(360_000);
-    const result = await pending;
-    expect(result.status).toBe("fail");
-    expect(result.steps.at(-1)).toMatchObject({ name, status: "fail", details });
-  } finally {
-    vi.useRealTimers();
-  }
+  // Let the preceding observations succeed, then expire only the selected wait.
+  const pending = runHandoff({
+    api: {
+      runScenario: runQaSuiteScenarioSteps,
+      [wait]: () =>
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error(details)), 360_000);
+        }),
+    },
+  });
+  await vi.advanceTimersByTimeAsync(360_000);
+  const result = await pending;
+  expect(result.status).toBe("fail");
+  expect(result.steps.at(-1)).toMatchObject({ name, status: "fail", details });
 });

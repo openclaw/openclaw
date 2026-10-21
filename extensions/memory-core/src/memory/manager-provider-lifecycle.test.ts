@@ -8,7 +8,7 @@ import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import type { MemoryIndexWorkItem } from "./manager-sync-ops.js";
+import type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
 type LifecycleFields = {
   provider: EmbeddingProvider | null;

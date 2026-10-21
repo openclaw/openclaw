@@ -401,7 +401,17 @@ describe("session placement draft advancement", () => {
 
   it("keeps a terminal recovery session visible before first-turn sending", async () => {
     storeRecovery(recoveryRecord("agent:cloud:pre-send", "not sent yet"));
-    const request = vi.fn().mockResolvedValueOnce({ session: { placement: { state: "failed" } } });
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        session: {
+          placement: {
+            state: "failed",
+            recoveryError: "Provider could not allocate the requested environment",
+          },
+        },
+      })
+      .mockResolvedValueOnce({ ok: true });
     const clearRecovery = vi.fn();
 
     await expect(
@@ -415,10 +425,14 @@ describe("session placement draft advancement", () => {
       recovery: {
         reason: "not-sent",
         message: "not sent yet",
-        error: "session placement became failed",
+        error: "Provider could not allocate the requested environment",
       },
     });
     expect(request).not.toHaveBeenCalledWith("sessions.delete", expect.anything());
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "sessions.describe",
+      "sessions.reclaim",
+    ]);
     expect(clearRecovery).not.toHaveBeenCalled();
   });
 });

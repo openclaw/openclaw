@@ -10,6 +10,7 @@ import type {
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import {
+  resolveSessionCreatorActor,
   sessionCreatorProfileId,
   type SessionActor,
 } from "../config/sessions/session-entry-provenance.js";
@@ -32,7 +33,7 @@ import {
   resolveCurrentUserProfileDisplay,
   type CurrentUserProfileDisplay,
 } from "./current-user-profile-display.js";
-import type { SessionEntryPair } from "./session-list-order.js";
+import type { SessionListEntry } from "./session-list-order.js";
 
 export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
 export type SessionIdentityProjection = ReturnType<typeof createSessionIdentityProjection>;
@@ -219,7 +220,7 @@ export function projectSessionOwner(
   const persisted = entry?.owner;
   const identities = userProfileIdentityById ?? new Map();
   const actor = projectAssignableSessionOwner(
-    persisted?.actor ?? entry?.createdActor,
+    persisted?.actor ?? resolveSessionCreatorActor(entry?.createdActor),
     identities,
     cfg,
     configuredAgentIds,
@@ -284,7 +285,7 @@ export function projectSessionPeople(
 /** Resolve navigation references within the caller-prepared visibility scope. */
 export function* resolveSessionListProfileReference(
   reference: string,
-  entries: readonly SessionEntryPair[],
+  entries: readonly SessionListEntry[],
   identities: Map<string, SessionActorProfileIdentity | undefined>,
   allowedProfileIds: ReadonlySet<string> | undefined,
   shouldYield?: () => boolean,

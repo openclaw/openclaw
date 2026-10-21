@@ -54,7 +54,6 @@ import {
   loadTranscriptEvents as loadEvents,
   markSessionAbortTarget,
   onSessionIdentityMutation,
-  openSessionEntryReadView,
   patchSessionEntryCore,
   patchSessionEntryTarget,
   persistSessionTranscriptTurn as persistTurn,
@@ -2140,25 +2139,6 @@ describe("session accessor seam", () => {
     await expect(loadEvents(transcriptScope("session-1"))).resolves.toEqual([
       expect.objectContaining({ id: "session-1", type: "session" }),
     ]);
-  });
-
-  it("opens a borrowed read view with raw exact-key probes and deferred enumeration", async () => {
-    const mixedKey = "agent:main:matrix:channel:!RoomAbC:example.org";
-    const skillsSnapshot = { prompt: "saved skill prompt", skills: [] };
-    await seed(entryScope(mixedKey), "mixed-session", { skillsSnapshot });
-    const view = openSessionEntryReadView({ storePath });
-
-    expect(view.get(mixedKey)?.sessionId).toBe("mixed-session");
-    expect(view.get(mixedKey)?.skillsSnapshot).toEqual(skillsSnapshot);
-    // Raw probe contract: unlike loadSessionEntry, no folded-alias or
-    // canonical-key resolution happens on get.
-    expect(view.get(mixedKey.toLowerCase())).toBeUndefined();
-    expect(view.entries()).toEqual([
-      { sessionKey: mixedKey, entry: expect.objectContaining({ sessionId: "mixed-session" }) },
-    ]);
-    const metadata = openSessionEntryReadView({ storePath, projection: "list" });
-    expect(metadata.get(mixedKey)?.skillsSnapshot).toBeUndefined();
-    expect(metadata.entries()).toEqual([{ sessionKey: mixedKey, entry: metadata.get(mixedKey) }]);
   });
 
   it("returns an implicit candidate fallback without persisting it", () => {

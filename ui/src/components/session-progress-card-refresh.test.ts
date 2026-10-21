@@ -151,7 +151,9 @@ describe("progress card refresh control", () => {
     expect(container.querySelector("details")?.open).toBe(true);
     vi.advanceTimersToNextFrame();
     flush();
-    expect(vi.getTimerCount()).toBe(1);
+    // Details without refresh controls has no timestamp; the board activity timer retires.
+    expect(container.querySelector("time")).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("refreshes relative activity while mounted and clears its timer on unmount", () => {

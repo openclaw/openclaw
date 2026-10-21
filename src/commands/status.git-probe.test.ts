@@ -9,7 +9,6 @@ import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers
 import { statusCommand } from "./status.command.js";
 import { createStatusScanCoreBootstrap } from "./status.scan.bootstrap-shared.js";
 import { baseStatusServices, createStatusScanResultFixture } from "./status.test-support.js";
-import { getUpdateCheckResult } from "./status.update.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const gitFixture = vi.hoisted(() => ({ root: "" }));
@@ -56,8 +55,6 @@ async function scanWithGitProbe(opts: Parameters<typeof createStatusScanCoreBoot
     opts,
     fetchGitUpdate: opts.all === true,
     includeRegistryUpdate: opts.all === true,
-    getTailnetHostname: async () => null,
-    getUpdateCheckResult,
     getAgentLocalStatuses: async () => fixture.agentStatus,
   });
   return { ...fixture, update: await bootstrap.updatePromise };

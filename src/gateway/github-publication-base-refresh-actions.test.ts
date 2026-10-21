@@ -1,6 +1,9 @@
 // Install the existing synthetic GitHub transport before loading publication owners.
 // oxfmt-ignore
-import { publicationCheckpoint as checkpoint } from "./github-publication-actions.test-support.js";
+import {
+  publicationCheckpoint as checkpoint,
+  withPublicationToolTransport,
+} from "./github-publication-actions.test-support.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -280,13 +283,13 @@ it("recovers one guest integration, retains saved data and publishes the resolve
       }
       return result as T;
     };
-    const result = await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: f.session.sessionKey },
-      () =>
-        createGitHubPublishTool({ callGateway, sandbox: prepared }).execute("refresh", {
+    const result = await withPublicationToolTransport(callGateway, () =>
+      withGatewayToolCallerIdentity({ agentId: "main", sessionKey: f.session.sessionKey }, () =>
+        createGitHubPublishTool({ sandbox: prepared }).execute("refresh", {
           action: "refresh_base",
           ...args,
         }),
+      ),
     );
     return result.details;
   };
@@ -313,8 +316,10 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   await fs.rm(path.join(hostObjects, ancestorBlob.slice(0, 2), ancestorBlob.slice(2)));
   expect(await missingContents(ancestorCommit)).toContain(`?${ancestorBlob}`);
   const beforeAdmission = await git("rev-parse", "HEAD");
-  await expect(refresh({}, null)).rejects.toThrow("sandboxed agent");
-  await expect(refresh({}, { ...sandbox, workspaceAccess: "ro" })).rejects.toThrow("read-only");
+  await expect(refresh({}, null)).rejects.toThrow("merge the base with git in their workspace");
+  await expect(refresh({}, { ...sandbox, workspaceAccess: "ro" })).rejects.toThrow(
+    "writable managed sandbox workspace",
+  );
   expect(await git("rev-parse", "HEAD")).toBe(beforeAdmission);
   await expectFile(cwd, "artifact.txt", "accepted\n");
   await expect(refresh()).rejects.toThrow("base contents could not be fetched");

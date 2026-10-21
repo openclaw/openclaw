@@ -1,60 +1,67 @@
 import { describe, expect, it } from "vitest";
 import { resolveCiCheckFamilyScope } from "../../scripts/lib/ci-check-family-scope.mts";
 
-type ScopeCase = {
-  paths: string[];
-  expected: Partial<ReturnType<typeof resolveCiCheckFamilyScope>>;
-};
-const scoped: ScopeCase["expected"] = {
+type Scope = Partial<ReturnType<typeof resolveCiCheckFamilyScope>>;
+type Case = [string | string[], Scope];
+const kit = "apps/shared/OpenClawKit/Sources";
+const noTs = { madgeImportCycles: false, kyselyGuardrails: false };
+const scoped: Scope = {
   baselineRatchets: true,
   madgeImportCycles: true,
   kyselyGuardrails: true,
   lint: true,
   types: true,
 };
-const cases: ScopeCase[] = [
+const casesFor = (expected: Scope, ...paths: string[]): Case[] =>
+  paths.map((path) => [path, expected]);
+const cases: Case[] = [
   ...[
     ["packages/gateway-protocol/README.md", false],
     ["packages/gateway-protocol/README.mdx", false],
     ["packages/gateway-protocol/src/schema.ts", true],
     ["packages/gateway-protocol/test/fixtures/README.md", true],
     ["packages/gateway-protocol/prompts/runtime.md", true],
-  ].map(([file, selected]): ScopeCase => ({
-    paths: [String(file), "src/utils/absolute-deadline.test.ts"],
-    expected: { fastTasks: selected ? ["bundled-protocol"] : [] },
-  })),
-
-  {
-    paths: ["src/agents/session.test.ts"],
-    expected: {
+  ].map(([file, selected]): Case => [
+    [String(file), "src/utils/absolute-deadline.test.ts"],
+    { fastTasks: selected ? ["bundled-protocol"] : [] },
+  ]),
+  [
+    "src/agents/session.test.ts",
+    {
       ...scoped,
       mode: "scoped",
       checkTasks: ["guards", "dependencies"],
       fastTasks: [],
       additionalGroups: ["boundaries", "source-contracts", "runtime-topology-architecture"],
     },
-  },
-  ...[
+  ],
+  ...casesFor(
+    {
+      ...scoped,
+      checkTasks: ["guards", "dependencies"],
+      fastTasks: [],
+      additionalGroups: expect.arrayContaining(["boundaries", "extension-package-boundary"]),
+    },
     "src/shared/runtime.ts",
     "src/shared/view.tsx",
     "packages/media-core/src/runtime.mts",
     "packages/media-core/src/runtime.cts",
     "extensions/telegram/src/runtime.ts",
     "packages/media-core/src/types.d.ts",
-  ].map((path) => ({
-    paths: [path],
-    expected: {
+  ),
+  ...casesFor(
+    { checkTasks: expect.arrayContaining(["bundled-channel-config-metadata"]) },
+    "src/config/zod-schema.core.ts",
+    "extensions/telegram/src/config-schema.ts",
+  ),
+  ...casesFor(
+    {
       ...scoped,
-      checkTasks: ["guards", "dependencies"],
-      fastTasks: [],
-      additionalGroups: expect.arrayContaining(["boundaries", "extension-package-boundary"]),
+      mode: "full",
+      checkTasks: expect.arrayContaining(["npm-lock"]),
+      fastTasks: ["bundled-protocol"],
+      additionalGroups: expect.arrayContaining(["extension-package-boundary"]),
     },
-  })),
-  ...["src/config/zod-schema.core.ts", "extensions/telegram/src/config-schema.ts"].map((path) => ({
-    paths: [path],
-    expected: { checkTasks: expect.arrayContaining(["bundled-channel-config-metadata"]) },
-  })),
-  ...[
     "test/helpers/fixture.ts",
     "src/agents/session.test-support.ts",
     "scripts/lib/source-file-scan-cache.mts",
@@ -63,78 +70,47 @@ const cases: ScopeCase[] = [
     "extensions/telegram/package.json",
     "pnpm-lock.yaml",
     "new-owner/data.json",
-  ].map((path): ScopeCase => ({
-    paths: [path],
-    expected: {
-      ...scoped,
-      mode: "full",
-      checkTasks: expect.arrayContaining(["npm-lock"]),
-      fastTasks: ["bundled-protocol"],
-      additionalGroups: expect.arrayContaining(["extension-package-boundary"]),
+  ),
+  [
+    ["ui/src/styles/chat.css", `${kit}/OpenClawKit/Resources/tool-display.json`],
+    { checkTasks: ["guards"] },
+  ],
+  ...Object.entries({
+    "docs/providers/new-provider.md": { fastTasks: [] },
+    "docs/.generated/sqlite-session-transcript-schema-baseline.sha256": {
+      additionalGroups: ["source-contracts"],
     },
-  })),
-  {
-    paths: [
-      "ui/src/styles/chat.css",
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
-    ],
-    expected: { checkTasks: ["guards"] },
-  },
-  { paths: ["docs/providers/new-provider.md"], expected: { fastTasks: [] } },
-  {
-    paths: ["docs/.generated/sqlite-session-transcript-schema-baseline.sha256"],
-    expected: { additionalGroups: ["source-contracts"] },
-  },
-  {
-    paths: ["apps/shared/OpenClawKit/Sources/OpenClawNativeState/OpenClawNativeStateSQLite.swift"],
-    expected: { additionalGroups: ["boundaries"] },
-  },
-  {
-    paths: ["apps/macos/Sources/OpenClaw/Storage.swift"],
-    expected: { additionalGroups: ["runtime-topology-architecture"] },
-  },
-  {
-    paths: ["apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt"],
-    expected: { fastTasks: ["bundled-protocol"] },
-  },
-  ...["docs/plugins/sdk-subpaths.md", "extensions/discord/skills/discord/SKILL.md"].map((path) => ({
-    paths: ["ui/src/styles/chat.css", path],
-    expected: { fastTasks: [] },
-  })),
-  {
-    paths: ["packages/normalization-core/src/record-coerce.ts"],
-    expected: { checkTasks: expect.arrayContaining(["npm-lock"]) },
-  },
-  { paths: ["src/config/catalog.yaml"], expected: { lint: true, types: false } },
-  {
-    paths: ["src/config/catalog.json"],
-    expected: { lint: true, types: true, madgeImportCycles: false, kyselyGuardrails: false },
-  },
-  {
-    paths: ["src/shared/runtime.js"],
-    expected: { madgeImportCycles: false, kyselyGuardrails: false },
-  },
-  {
-    paths: ["ui/src/runtime.tsx"],
-    expected: {
+    [`${kit}/OpenClawNativeState/OpenClawNativeStateSQLite.swift`]: {
+      additionalGroups: ["boundaries"],
+    },
+    "apps/macos/Sources/OpenClaw/Storage.swift": {
+      additionalGroups: ["runtime-topology-architecture"],
+    },
+    "apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt": {
+      fastTasks: ["bundled-protocol"],
+    },
+    "packages/normalization-core/src/record-coerce.ts": {
+      checkTasks: expect.arrayContaining(["npm-lock"]),
+    },
+    "src/config/catalog.yaml": { lint: true, types: false },
+    "src/config/catalog.json": { lint: true, types: true, ...noTs },
+    "src/shared/runtime.js": noTs,
+    "ui/src/runtime.tsx": {
       madgeImportCycles: true,
       kyselyGuardrails: false,
       checkTasks: ["guards", "dependencies"],
     },
-  },
-  {
-    paths: ["ui/src/runtime.tsx", "src/config/catalog.json"],
-    expected: { madgeImportCycles: true, kyselyGuardrails: false },
-  },
-  { paths: ["test/openclaw-launcher.e2e.test.ts"], expected: { fastTasks: ["bun-launcher"] } },
-  {
-    paths: ["cli-invocation.mjs"],
-    expected: { fastTasks: expect.arrayContaining(["bun-launcher"]) },
-  },
-  {
-    paths: ["src/infra/sqlite-existing-database.ts"],
-    expected: { fastTasks: ["bun-launcher"] },
-  },
+    "test/openclaw-launcher.e2e.test.ts": { fastTasks: ["bun-launcher"] },
+    "cli-invocation.mjs": { fastTasks: expect.arrayContaining(["bun-launcher"]) },
+    "src/infra/sqlite-existing-database.ts": { fastTasks: ["bun-launcher"] },
+  } satisfies Record<string, Scope>),
+  ...["docs/plugins/sdk-subpaths.md", "extensions/discord/skills/discord/SKILL.md"].map(
+    (path): Case => [["ui/src/styles/chat.css", path], { fastTasks: [] }],
+  ),
+  [
+    ["ui/src/runtime.tsx", "src/config/catalog.json"],
+    { madgeImportCycles: true, kyselyGuardrails: false },
+  ],
 ];
 
 describe("narrow PR check families", () => {
@@ -151,8 +127,9 @@ describe("narrow PR check families", () => {
       types: false,
     });
   });
-
-  it.each(cases)("selects the check families owned by $paths", ({ paths, expected }) => {
-    expect(resolveCiCheckFamilyScope(paths)).toMatchObject(expected);
+  it.each(cases)("selects the check families owned by %j", (paths, expected) => {
+    expect(resolveCiCheckFamilyScope(typeof paths === "string" ? [paths] : paths)).toMatchObject(
+      expected,
+    );
   });
 });

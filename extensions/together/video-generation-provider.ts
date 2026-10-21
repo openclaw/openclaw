@@ -12,6 +12,7 @@ import {
   postJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderApiKeyHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asSafeIntegerInRange,
@@ -84,19 +85,18 @@ function resolveTogetherVideoBaseUrl(req: VideoGenerationRequest): string {
 }
 
 function extractTogetherVideoUrl(payload: TogetherVideoResponse): string | undefined {
-  if (Array.isArray(payload.outputs)) {
-    for (const entry of payload.outputs) {
-      const url = normalizeOptionalString(entry.video_url) ?? normalizeOptionalString(entry.url);
-      if (url) {
-        return url;
-      }
+  const outputs = Array.isArray(payload.outputs)
+    ? payload.outputs
+    : payload.outputs
+      ? [payload.outputs]
+      : [];
+  for (const entry of outputs) {
+    const url = normalizeOptionalString(entry.video_url) ?? normalizeOptionalString(entry.url);
+    if (url) {
+      return url;
     }
-    return undefined;
   }
-  return (
-    normalizeOptionalString(payload.outputs?.video_url) ??
-    normalizeOptionalString(payload.outputs?.url)
-  );
+  return undefined;
 }
 
 function readTogetherVideoFailureMessage(payload: TogetherVideoResponse): string | undefined {
@@ -154,6 +154,9 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
           missingApiKeyMessage: "Together API key missing",
           baseUrl: resolveTogetherVideoBaseUrl(req),
           defaultBaseUrl: TOGETHER_VIDEO_BASE_URL,
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.together?.request,
+          ),
           allowPrivateNetwork: false,
           provider: "together",
           capability: "video",
@@ -240,6 +243,8 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
                   : { ...deadline, label: `Together video generation task ${videoId}` },
               defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
               fetchFn,
+              ssrfPolicy: { allowPrivateNetwork },
+              dispatcherPolicy,
               maxAttempts: MAX_POLL_ATTEMPTS,
               pollIntervalMs: POLL_INTERVAL_MS,
               requestFailedMessage: "Together video status request failed",

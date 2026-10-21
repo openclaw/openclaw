@@ -165,6 +165,55 @@ describe("node host MCP manager", () => {
     expect(docs.close).toHaveBeenCalledOnce();
   });
 
+  it("skips enterprise auth on node hosts without retrying and directs setup to the Gateway", async () => {
+    vi.useFakeTimers();
+    const parsed = OpenClawSchema.parse({
+      nodeHost: {
+        mcp: {
+          servers: {
+            enterprise: {
+              url: "https://enterprise.example.com/mcp",
+              transport: "streamable-http",
+              auth: "enterprise",
+              enterprise: {
+                identity: "shared",
+                idpIssuer: "https://idp.example.com",
+                idpClientId: "idp-client",
+                idpClientSecret: "fixture-idp-secret",
+                resourceIssuer: "https://auth.example.com",
+                resourceClientId: "resource-client",
+                resourceClientSecret: "fixture-resource-secret",
+                scope: "mcp.read",
+                redirectUrl: "http://localhost:3097/callback",
+              },
+            },
+            docs: { command: "docs" },
+          },
+        },
+      },
+    });
+    const createClientFor = vi.fn(() => createClient({ tools: [tool("search")] }));
+    const resolveTransportFor = vi.fn(() => transport);
+    const warn = vi.fn();
+    const manager = await startManager(
+      { createClient: createClientFor, resolveTransport: resolveTransportFor, warn },
+      parsed.nodeHost?.mcp?.servers,
+    );
+
+    expect(createClientFor).toHaveBeenCalledOnce();
+    expect(resolveTransportFor).toHaveBeenCalledOnce();
+    expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toEqual(["docs"]);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      'node host MCP server "enterprise" skipped: enterprise-managed authorization is not supported on node hosts; configure it in mcp.servers on the Gateway and run openclaw mcp login <server-name> there',
+    );
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(createClientFor).toHaveBeenCalledOnce();
+    await expect(
+      manager.callMcpTool({ server: "enterprise", tool: "search" }),
+    ).rejects.toMatchObject({ code: "MCP_SERVER_UNAVAILABLE" });
+    await manager.close();
+  });
+
   it.each<[Record<string, Tool[]>, string[]]>([
     [
       { "123 docs": [tool("find.item"), tool("find-item")], "123-docs": [tool("find-item")] },

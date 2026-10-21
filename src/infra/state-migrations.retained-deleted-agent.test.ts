@@ -292,7 +292,7 @@ describe("Doctor with a deleted agent database", () => {
     await expect(
       noteStateIntegrity(
         { agents: { ownership: "explicit", entries: { main: {} } }, plugins: { enabled: false } },
-        { confirmRuntimeRepair: async () => false, note },
+        { confirmRuntimeRepair: async () => false },
       ),
     ).resolves.toBeUndefined();
     expect(fs.readFileSync(sourcePath)).toEqual(bytes);

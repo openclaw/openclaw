@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
@@ -7,12 +8,22 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import type { SessionRowEventListener, SessionRowObservation } from "./session-capability.ts";
+import type { SessionRowEventListener } from "./session-capability.ts";
+
+const frame = (event: string, seq: number, payload: object): GatewayEventFrame => ({
+  type: "event",
+  event,
+  seq,
+  payload: { agentId: "main", ...payload },
+});
 
 it.each(["event", "read"] as const)(
   "does not recapture a descriptor after retirement by an authoritative %s",
   async (retirement) => {
     vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const initial: GatewaySessionRow = {
       agentId: "main",
       key: "agent:main:retired-event-capture",
@@ -33,80 +44,56 @@ it.each(["event", "read"] as const)(
     const target = { key: initial.key, agentId: "main" };
     const delivered = vi.fn<SessionRowEventListener>();
     const currentDelivered = vi.fn<SessionRowEventListener>();
-    let original: SessionRowObservation | undefined;
-    let replacement: SessionRowObservation | undefined;
-    try {
-      await sessions.refresh({ agentId: "main", force: true });
-      if (retirement === "event") {
-        expect(sessions.state.result?.sessions).toEqual([]);
-        expect(sessions.captureReconcile()(initial)).toBe(true);
-      }
-      // Keep the original handle attached deliberately: retirement must end
-      // admission of new frames without requiring the consumer to dispose it.
-      original = sessions.observeRow(target, () => undefined, { onEvent: delivered });
-      expect(original.row).toMatchObject(initial);
-      const retiringFrame = {
-        type: "event" as const,
-        event: "sessions.changed",
-        seq: 1,
-        payload: {
-          agentId: "main",
-          reason: "create",
-          session: successor,
-          ts: 200,
-        },
-      };
-      if (retirement === "event") {
-        emitEvent(retiringFrame);
-        // The frame captured before retirement still belongs to this callback.
-        expect(delivered).toHaveBeenCalledExactlyOnceWith(retiringFrame, { applied: false });
-      } else {
-        listed = [successor];
-        await sessions.refresh({ agentId: "main", force: true });
-        expect(delivered).not.toHaveBeenCalled();
-      }
-      expect(original.isCurrent()).toBe(false);
-      expect(original.row).toBeNull();
-      expect(original.captureReconcile()(initial)).toEqual({ status: "retired" });
-      expect(sessions.state.result?.sessions[0]).toMatchObject(successor);
-
-      replacement = sessions.observeRow(target, () => undefined, { onEvent: currentDelivered });
-      expect(replacement.isCurrent()).toBe(true);
-      expect(replacement.row).toMatchObject(successor);
-      const next = {
-        type: "event" as const,
-        event: "session.message",
-        seq: 2,
-        payload: {
-          agentId: "main",
-          sessionKey: initial.key,
-          session: { ...successor, updatedAt: 201 },
-        },
-      };
-      emitEvent(next);
-      expect(delivered).toHaveBeenCalledTimes(retirement === "event" ? 1 : 0);
-      expect(currentDelivered).toHaveBeenCalledExactlyOnceWith(
-        next,
-        expect.objectContaining({
-          applied: true,
-          admittedRow: expect.objectContaining({ sessionId: successor.sessionId }),
-        }),
-      );
-      // A current descriptor still receives an unrelated raw frame for shared
-      // recovery; only the already-retired registration loses future admission.
-      const unrelated = {
-        ...next,
-        seq: 3,
-        payload: { agentId: "main", sessionKey: "agent:main:unrelated", reason: "patch" },
-      };
-      emitEvent(unrelated);
-      expect(delivered).toHaveBeenCalledTimes(retirement === "event" ? 1 : 0);
-      expect(currentDelivered).toHaveBeenLastCalledWith(unrelated, { applied: false });
-    } finally {
-      replacement?.dispose();
-      original?.dispose();
-      sessions.dispose();
-      vi.useRealTimers();
+    await sessions.refresh({ agentId: "main", force: true });
+    if (retirement === "event") {
+      expect(sessions.state.result?.sessions).toEqual([]);
+      expect(sessions.captureReconcile()(initial)).toBe(true);
     }
+    // Retirement must stop admission without consumer disposal.
+    const original = sessions.observeRow(target, () => undefined, { onEvent: delivered });
+    expect(original.row).toMatchObject(initial);
+    const retiringFrame = frame("sessions.changed", 1, {
+      reason: "create",
+      session: successor,
+      ts: 200,
+    });
+    if (retirement === "event") {
+      emitEvent(retiringFrame);
+      // The frame captured before retirement still belongs to this callback.
+      expect(delivered).toHaveBeenCalledExactlyOnceWith(retiringFrame, { applied: false });
+    } else {
+      listed = [successor];
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(delivered).not.toHaveBeenCalled();
+    }
+    expect(original.isCurrent()).toBe(false);
+    expect(original.row).toBeNull();
+    expect(original.captureReconcile()(initial)).toEqual({ status: "retired" });
+    expect(sessions.state.result?.sessions[0]).toMatchObject(successor);
+
+    const replacement = sessions.observeRow(target, () => undefined, { onEvent: currentDelivered });
+    expect(replacement.isCurrent()).toBe(true);
+    expect(replacement.row).toMatchObject(successor);
+    const next = frame("session.message", 2, {
+      sessionKey: initial.key,
+      session: { ...successor, updatedAt: 201 },
+    });
+    emitEvent(next);
+    expect(delivered).toHaveBeenCalledTimes(retirement === "event" ? 1 : 0);
+    expect(currentDelivered).toHaveBeenCalledExactlyOnceWith(
+      next,
+      expect.objectContaining({
+        applied: true,
+        admittedRow: expect.objectContaining({ sessionId: successor.sessionId }),
+      }),
+    );
+    // Only the current descriptor receives unrelated frames for recovery.
+    const unrelated = frame("session.message", 3, {
+      sessionKey: "agent:main:unrelated",
+      reason: "patch",
+    });
+    emitEvent(unrelated);
+    expect(delivered).toHaveBeenCalledTimes(retirement === "event" ? 1 : 0);
+    expect(currentDelivered).toHaveBeenLastCalledWith(unrelated, { applied: false });
   },
 );

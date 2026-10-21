@@ -65,11 +65,10 @@ async function requestFishAudioTts(params: FishAudioTtsRequest): Promise<{
   response: Response;
   release: () => Promise<void>;
 }> {
-  const baseUrl = normalizeFishAudioBaseUrl(params.baseUrl);
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
   return await fetchWithSsrFGuard({
-    url: `${baseUrl}/v1/tts`,
+    url: `${params.baseUrl}/v1/tts`,
     init: {
       method: "POST",
       headers: {
@@ -90,7 +89,7 @@ async function requestFishAudioTts(params: FishAudioTtsRequest): Promise<{
       }),
     },
     timeoutMs: params.timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
     auditContext: "fish-audio.tts",
   });
 }
@@ -100,7 +99,9 @@ async function fishAudioTts(params: FishAudioTtsRequest): Promise<Buffer> {
     await import("openclaw/plugin-sdk/provider-http");
   const { response, release } = await requestFishAudioTts(params);
   try {
-    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error");
+    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error", {
+      requestHeaders: { Authorization: `Bearer ${params.apiKey}` },
+    });
     return await readProviderBinaryResponse(response, "Fish Audio TTS API error", "audio", {
       maxBytes: params.maxBytes,
     });
@@ -119,7 +120,9 @@ async function fishAudioTtsStream(params: FishAudioTtsRequest): Promise<{
     await import("openclaw/plugin-sdk/provider-http");
   const { response, release } = await requestFishAudioTts(params);
   try {
-    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error");
+    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error", {
+      requestHeaders: { Authorization: `Bearer ${params.apiKey}` },
+    });
     assertProviderBinaryResponseContent(response, "Fish Audio TTS API error", "audio");
     if (!response.body) {
       throw new Error("Fish Audio TTS API response missing audio stream");
@@ -419,7 +422,7 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
       const baseUrl = normalizeFishAudioBaseUrl(trimToUndefined(req.baseUrl) ?? config.baseUrl);
       const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const requestVoicePage = async (self: boolean, pageNumber: number) => {
-        const url = new URL(`${normalizeFishAudioBaseUrl(baseUrl)}/model`);
+        const url = new URL(`${baseUrl}/model`);
         url.searchParams.set("type", "tts");
         url.searchParams.set("page_size", String(FISH_AUDIO_VOICE_PAGE_SIZE));
         url.searchParams.set("page_number", String(pageNumber));
@@ -432,20 +435,24 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
           await import("openclaw/plugin-sdk/provider-http");
         const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
           await import("openclaw/plugin-sdk/ssrf-runtime");
+        const requestHeaders = { Authorization: `Bearer ${apiKey}` };
         const { response, release } = await fetchWithSsrFGuard({
           url: url.toString(),
-          init: { headers: { Authorization: `Bearer ${apiKey}` } },
+          init: { headers: requestHeaders },
           timeoutMs,
           policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
           auditContext: "fish-audio.voices",
         });
         try {
-          await assertOkOrThrowProviderError(response, "Fish Audio voices API error");
+          await assertOkOrThrowProviderError(response, "Fish Audio voices API error", {
+            requestHeaders,
+          });
           return await readProviderJsonResponse<FishAudioVoicePayload>(
             response,
             "Fish Audio voices",
             {
               maxBytes: FISH_AUDIO_VOICES_MAX_BYTES,
+              requestHeaders,
             },
           );
         } finally {

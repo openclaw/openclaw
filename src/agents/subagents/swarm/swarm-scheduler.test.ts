@@ -1,18 +1,15 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { PluginRuntimeCloseRetainedError } from "../../../plugins/runtime-close-error.js";
-import {
-  activateSwarmRun,
-  bindSwarmRunReservation,
-  closeSwarmScheduler,
-  enqueueSwarmRun,
-  isSwarmRunActive,
-  isSwarmRunWaitingForCapacity,
-  holdQueuedSwarmRun,
-  releaseSwarmRun,
-  reserveSwarmRun,
-} from "./swarm-scheduler.js";
-import { testing } from "./swarm-scheduler.test-support.js";
+let PluginRuntimeCloseRetainedError: typeof import("../../../plugins/runtime-close-error.js").PluginRuntimeCloseRetainedError;
+let activateSwarmRun: typeof import("./swarm-scheduler.js").activateSwarmRun;
+let bindSwarmRunReservation: typeof import("./swarm-scheduler.js").bindSwarmRunReservation;
+let closeSwarmScheduler: typeof import("./swarm-scheduler.js").closeSwarmScheduler;
+let enqueueSwarmRun: typeof import("./swarm-scheduler.js").enqueueSwarmRun;
+let isSwarmRunActive: typeof import("./swarm-scheduler.js").isSwarmRunActive;
+let isSwarmRunWaitingForCapacity: typeof import("./swarm-scheduler.js").isSwarmRunWaitingForCapacity;
+let holdQueuedSwarmRun: typeof import("./swarm-scheduler.js").holdQueuedSwarmRun;
+let releaseSwarmRun: typeof import("./swarm-scheduler.js").releaseSwarmRun;
+let reserveSwarmRun: typeof import("./swarm-scheduler.js").reserveSwarmRun;
 
 // queueMicrotask-driven starts need real microtask turns; fake timers'
 // runAllTicks only drains nextTick, so flush the microtask queue explicitly.
@@ -41,14 +38,30 @@ function makeQueue(groupId = "group", maxConcurrent = 1) {
 }
 
 describe("swarm scheduler", () => {
-  beforeEach(() => {
-    testing.reset();
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      activateSwarmRun,
+      bindSwarmRunReservation,
+      closeSwarmScheduler,
+      enqueueSwarmRun,
+      isSwarmRunActive,
+      isSwarmRunWaitingForCapacity,
+      holdQueuedSwarmRun,
+      releaseSwarmRun,
+      reserveSwarmRun,
+    } = await import("./swarm-scheduler.js"));
+    ({ PluginRuntimeCloseRetainedError } = await import("../../../plugins/runtime-close-error.js"));
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
+  afterEach(async () => {
+    try {
+      await closeSwarmScheduler();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("preserves admission order when later preparation finishes first", async () => {

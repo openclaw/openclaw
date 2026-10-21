@@ -162,7 +162,7 @@ it.each(["runtime", "doctor"] as const)(
         heartbeatAt: 200,
         payloadJson: "{}",
       });
-      const ledger = createSqliteAcpEventLedger({ ...options, now: () => 200 });
+      const ledger = createSqliteAcpEventLedger(options);
       await ledger.recordUpdate({
         ...session,
         update: {

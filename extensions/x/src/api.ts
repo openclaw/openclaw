@@ -548,11 +548,16 @@ export function createXApiClient(options: {
         },
       });
     },
-    async getUserByUsername(username: string, signal?: AbortSignal): Promise<XUser> {
+    async getUserByUsername(
+      username: string,
+      signal?: AbortSignal,
+      assertActive?: XAssertActive,
+    ): Promise<XUser> {
       const user = await request(
         `/2/users/by/username/${encodeURIComponent(username.replace(/^@/, ""))}?user.fields=id,username,name`,
         {
           signal,
+          assertActive,
           billing: {
             maximum: X_USER_READ_MICRO_USD,
             actual: (value) => xReadCost(value, "users"),

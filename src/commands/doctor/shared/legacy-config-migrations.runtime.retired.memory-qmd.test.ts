@@ -9,17 +9,21 @@ function migrate(raw: Record<string, unknown>) {
   }
   return { raw, changes };
 }
-function memorySearch(search: Record<string, unknown>) {
-  return { memory: { search } };
+function memorySearch(search: Record<string, unknown>, qmd?: Record<string, unknown>) {
+  return { memory: { search: { ...search, ...(qmd ? { qmd } : {}) } } };
 }
 function collection(path: string, pattern?: string) {
   return { extraCollections: [{ path, ...(pattern ? { pattern } : {}) }] };
 }
 const sessionMemory = { memory: { search: { qmd: { sessions: { enabled: true } } } } };
+const sessionIndex = { experimental: { sessionMemory: true }, sources: ["memory", "sessions"] };
+const optedOut = { rememberAcrossConversations: false, experimental: { sessionMemory: false } };
 
 describe("retired QMD memory migration", () => {
   it("preserves builtin siblings and imports external paths without altering a shadowed roster", () => {
-    const list = [{ id: "legacy", memory: { search: { qmd: collection("/tmp/list") } } }];
+    const list = [{ id: "legacy", ...memorySearch({}, collection("/tmp/list")) }];
+    const existing = { provider: "openai", extraPaths: ["notes", "/tmp/shared"] };
+    const research = { enabled: false, extraPaths: ["/tmp/existing"] };
     const raw = {
       memory: {
         backend: "qmd",
@@ -33,23 +37,12 @@ describe("retired QMD memory migration", () => {
             { path: " " },
           ],
         },
-        search: {
-          provider: "openai",
-          extraPaths: ["notes", "/tmp/shared"],
-          qmd: collection("/tmp/search"),
-        },
+        search: { ...structuredClone(existing), qmd: collection("/tmp/search") },
       },
       agents: {
-        defaults: memorySearch({
-          extraPaths: ["notes"],
-          qmd: collection("/tmp/defaults"),
-        }),
+        defaults: memorySearch({ extraPaths: ["notes"] }, collection("/tmp/defaults")),
         entries: {
-          research: memorySearch({
-            enabled: false,
-            extraPaths: ["/tmp/existing"],
-            qmd: collection("/tmp/research", "*.md"),
-          }),
+          research: memorySearch(structuredClone(research), collection("/tmp/research", "*.md")),
         },
         list: structuredClone(list),
       },
@@ -71,12 +64,10 @@ describe("retired QMD memory migration", () => {
       memory: {
         citations: "on",
         search: {
-          provider: "openai",
-          experimental: { sessionMemory: true },
-          sources: ["memory", "sessions"],
+          ...existing,
+          ...sessionIndex,
           extraPaths: [
-            "notes",
-            "/tmp/shared",
+            ...existing.extraPaths,
             "/tmp/global",
             { path: "/tmp/patterned", pattern: "notes/*.md" },
             { path: "/tmp/shared", pattern: "**/*.md" },
@@ -89,8 +80,8 @@ describe("retired QMD memory migration", () => {
         defaults: {},
         entries: {
           research: memorySearch({
-            enabled: false,
-            extraPaths: ["/tmp/existing", { path: "/tmp/research", pattern: "*.md" }],
+            ...research,
+            extraPaths: [...research.extraPaths, { path: "/tmp/research", pattern: "*.md" }],
           }),
         },
         list,
@@ -99,44 +90,33 @@ describe("retired QMD memory migration", () => {
     expect(migrate(result.raw).changes).toEqual([]);
   });
 
-  it.each([
-    { raw: { agents: { defaults: sessionMemory } }, target: "memory.search" },
-    {
-      raw: { agents: { entries: { research: sessionMemory } } },
-      target: "agents.entries.research.memory.search",
-    },
-    {
-      raw: { agents: { list: [{ id: "research", ...sessionMemory }] } },
-      target: "agents.list.0.memory.search",
-    },
-  ])("preserves explicit transcript indexing at $target", ({ raw, target }) => {
-    const result = migrate(structuredClone(raw));
-    expect(result.raw).toHaveProperty(`${target}.experimental.sessionMemory`, true);
-    expect(result.raw).toHaveProperty(`${target}.sources`, ["memory", "sessions"]);
+  const scopes: [string, Record<string, unknown>][] = [
+    ["memory.search", { defaults: sessionMemory }],
+    ["agents.entries.research.memory.search", { entries: { research: sessionMemory } }],
+    ["agents.list.0.memory.search", { list: [{ id: "research", ...sessionMemory }] }],
+  ];
+  it.each(scopes)("preserves explicit transcript indexing at %s", (target, agents) => {
+    const result = migrate({ agents: structuredClone(agents) });
+    expect(result.raw).toHaveProperty(target, expect.objectContaining(sessionIndex));
     expect(result.raw).not.toHaveProperty(`${target}.rememberAcrossConversations`);
     expect(migrate(result.raw).changes).toEqual([]);
   });
 
-  it.each([{ sources: [] }, { sources: ["memory"] }])(
-    "preserves privacy opt-outs while merging sources=$sources",
-    ({ sources }) => {
-      const result = migrate({
-        memory: {
-          qmd: { sessions: { enabled: true } },
-          search: {
-            rememberAcrossConversations: false,
-            experimental: { sessionMemory: false },
-            sources: [...sources],
-          },
+  it.each([[[]], [["memory"]]])("preserves privacy opt-outs for %j", (sources) => {
+    const result = migrate({
+      memory: {
+        qmd: { sessions: { enabled: true } },
+        search: {
+          ...structuredClone(optedOut),
+          sources: [...sources],
         },
-      });
-      expect(result.raw).toHaveProperty("memory.search", {
-        rememberAcrossConversations: false,
-        experimental: { sessionMemory: false },
-        sources: ["memory", "sessions"],
-      });
-    },
-  );
+      },
+    });
+    expect(result.raw).toHaveProperty("memory.search", {
+      ...optedOut,
+      sources: ["memory", "sessions"],
+    });
+  });
 
   it("does not enable builtin sessions for disabled QMD indexing", () => {
     const result = migrate({ memory: { qmd: { sessions: { enabled: false } } } });

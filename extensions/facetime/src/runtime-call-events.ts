@@ -12,7 +12,6 @@ import {
   type AuthenticatedFaceTimeOwner,
   type FaceTimeCallStatusEvent,
 } from "./call-events.js";
-import type { FaceTimeCallRegistry } from "./call-lifecycle.js";
 import type { FaceTimeConfig } from "./config.js";
 import { assertFaceTimeNativeAction } from "./helper-results.js";
 import type { FaceTimeHelperPeer, FaceTimeHelperSocketServer } from "./helper-rpc.js";
@@ -23,10 +22,14 @@ import {
 } from "./outbound-call.js";
 import type { createFaceTimeCallControl } from "./runtime-call-control.js";
 import { retainHelperResultPeers } from "./runtime-helper-results.js";
-import { ActiveFaceTimeCall, updateCallStatus } from "./runtime-state.js";
+import {
+  ActiveFaceTimeCall,
+  updateCallStatus,
+  type FaceTimeCallRegistry,
+} from "./runtime-state.js";
 
 export function createFaceTimeCallEventHandler(params: {
-  calls: FaceTimeCallRegistry<ActiveFaceTimeCall>;
+  calls: FaceTimeCallRegistry;
   helper: FaceTimeHelperSocketServer;
   config: FaceTimeConfig;
   logger: RuntimeLogger;

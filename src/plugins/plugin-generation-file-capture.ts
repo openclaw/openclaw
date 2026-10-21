@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -16,6 +17,47 @@ import {
   readPluginSourceDirectory,
   type PluginCapturedSourceFact,
 } from "./plugin-source-verification.js";
+
+/** Publish only verified dependency links; real nested installs keep their own bytes. */
+export function linkPluginGenerationDependency(link: string, target: string): boolean {
+  const entry = fs.lstatSync(link, { throwIfNoEntry: false });
+  if (entry && !entry.isSymbolicLink()) {
+    return false;
+  }
+  if (
+    entry &&
+    path.resolve(path.dirname(link), fs.readlinkSync(link)) === target &&
+    fs.statSync(link, { throwIfNoEntry: false })
+  ) {
+    return false;
+  }
+  fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
+  if (process.platform === "win32") {
+    if (entry) {
+      // MoveFileEx cannot replace a directory junction. Unlink only the reparse point.
+      if (!fs.lstatSync(link).isSymbolicLink()) {
+        throw new Error(`Dependency link became a real entry: ${link}`);
+      }
+      fs.unlinkSync(link);
+    }
+    fs.symlinkSync(target, link, "junction");
+  } else {
+    const staged = `${link}.${randomUUID()}.tmp`;
+    try {
+      fs.symlinkSync(path.relative(path.dirname(link), target), staged, "junction");
+      fs.renameSync(staged, link);
+    } finally {
+      fs.rmSync(staged, { force: true });
+    }
+  }
+  if (!fs.lstatSync(link).isSymbolicLink() || fs.realpathSync(link) !== fs.realpathSync(target)) {
+    throw new Error(`Dependency link does not resolve to its captured target: ${link}`);
+  }
+  if (entry) {
+    process.emitWarning(`Replacing plugin dependency link ${link}`);
+  }
+  return true;
+}
 
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();

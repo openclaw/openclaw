@@ -12,6 +12,7 @@ import {
   readProviderJsonObjectResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderApiKeyHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   isRecord,
@@ -39,7 +40,6 @@ const MAX_DURATION_SECONDS = 10;
 type RunwayTaskStatus = "PENDING" | "RUNNING" | "THROTTLED" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
 type RunwayTaskDetailResponse = {
-  id?: unknown;
   status?: unknown;
   output?: unknown;
   failure?: unknown;
@@ -116,14 +116,6 @@ function resolveSourceUri(
   return `data:${mimeType};base64,${asset.buffer.toString("base64")}`;
 }
 
-function resolveDurationSeconds(value: number | undefined): number {
-  const duration = normalizeVideoGenerationDuration({ durationSeconds: value });
-  if (duration === undefined || !Number.isSafeInteger(value)) {
-    return 5;
-  }
-  return Math.max(2, Math.min(MAX_DURATION_SECONDS, duration));
-}
-
 const RUNWAY_RATIO_SIZES = new Map([
   ["9:16", "720:1280"],
   ["16:9", "1280:720"],
@@ -133,46 +125,26 @@ const RUNWAY_RATIO_SIZES = new Map([
   ["21:9", "1584:672"],
 ]);
 
-function resolveRunwayRatio(req: VideoGenerationRequest): string {
-  const hasImageInput = (req.inputImages?.length ?? 0) > 0;
-  const requested =
-    normalizeOptionalString(req.size) ||
-    RUNWAY_RATIO_SIZES.get(normalizeOptionalString(req.aspectRatio) ?? "");
-  if (requested) {
-    if (!hasImageInput && requested !== "1280:720" && requested !== "720:1280") {
-      throw new Error("Runway text-to-video currently supports only 16:9 or 9:16 output ratios.");
-    }
-    return requested;
-  }
-  return "1280:720";
-}
-
-function resolveEndpoint(
-  req: VideoGenerationRequest,
-): "/v1/text_to_video" | "/v1/image_to_video" | "/v1/video_to_video" {
-  const imageCount = req.inputImages?.length ?? 0;
-  const videoCount = req.inputVideos?.length ?? 0;
-  if (imageCount > 0 && videoCount > 0) {
-    throw new Error("Runway video generation does not support image and video inputs together.");
-  }
-  if (imageCount > 1 || videoCount > 1) {
-    throw new Error("Runway video generation supports at most one input image or one input video.");
-  }
-  if (videoCount > 0) {
-    return "/v1/video_to_video";
-  }
-  if (imageCount > 0) {
-    return "/v1/image_to_video";
-  }
-  return "/v1/text_to_video";
-}
-
 function buildCreateBody(
   req: VideoGenerationRequest,
-  endpoint: ReturnType<typeof resolveEndpoint>,
+  endpoint: "/v1/text_to_video" | "/v1/image_to_video" | "/v1/video_to_video",
 ): Record<string, unknown> {
-  const duration = resolveDurationSeconds(req.durationSeconds);
-  const ratio = resolveRunwayRatio(req);
+  const normalizedDuration = normalizeVideoGenerationDuration({
+    durationSeconds: req.durationSeconds,
+  });
+  const duration =
+    normalizedDuration === undefined || !Number.isSafeInteger(req.durationSeconds)
+      ? 5
+      : Math.max(2, Math.min(MAX_DURATION_SECONDS, normalizedDuration));
+  const hasReferenceInput =
+    (req.inputImages?.length ?? 0) > 0 || (req.inputVideos?.length ?? 0) > 0;
+  const ratio =
+    normalizeOptionalString(req.size) ||
+    RUNWAY_RATIO_SIZES.get(normalizeOptionalString(req.aspectRatio) ?? "") ||
+    "1280:720";
+  if (!hasReferenceInput && ratio !== "1280:720" && ratio !== "720:1280") {
+    throw new Error("Runway text-to-video currently supports only 16:9 or 9:16 output ratios.");
+  }
   const model = normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL;
   if (endpoint !== "/v1/video_to_video") {
     const imageToVideo = endpoint === "/v1/image_to_video";
@@ -245,7 +217,24 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
     },
     async generateVideo(req): Promise<VideoGenerationResult> {
       const fetchFn = fetch;
-      const endpoint = resolveEndpoint(req);
+      const imageCount = req.inputImages?.length ?? 0;
+      const videoCount = req.inputVideos?.length ?? 0;
+      if (imageCount > 0 && videoCount > 0) {
+        throw new Error(
+          "Runway video generation does not support image and video inputs together.",
+        );
+      }
+      if (imageCount > 1 || videoCount > 1) {
+        throw new Error(
+          "Runway video generation supports at most one input image or one input video.",
+        );
+      }
+      const endpoint =
+        videoCount > 0
+          ? "/v1/video_to_video"
+          : imageCount > 0
+            ? "/v1/image_to_video"
+            : "/v1/text_to_video";
       const requestBody = buildCreateBody(req, endpoint);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveProviderApiKeyHttpRequestConfig({
@@ -253,6 +242,9 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
           missingApiKeyMessage: "Runway API key missing",
           baseUrl: req.cfg?.models?.providers?.runway?.baseUrl,
           defaultBaseUrl: DEFAULT_RUNWAY_BASE_URL,
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.runway?.request,
+          ),
           defaultHeaders: {
             "X-Runway-Version": RUNWAY_API_VERSION,
           },
@@ -297,6 +289,8 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
               : { ...deadline, label: `Runway video generation task ${taskId}` },
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           fetchFn,
+          ssrfPolicy: { allowPrivateNetwork },
+          dispatcherPolicy,
           maxAttempts: MAX_POLL_ATTEMPTS,
           pollIntervalMs: POLL_INTERVAL_MS,
           requestFailedMessage: "Runway video status request failed",

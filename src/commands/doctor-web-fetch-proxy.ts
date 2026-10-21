@@ -19,9 +19,8 @@ type ProxyEnvSource = {
   label: "doctor process" | "installed Gateway service";
 };
 
-async function probeDirectTlsConnectivity(): Promise<DirectConnectivity> {
-  return await new Promise((resolve) => {
-    let settled = false;
+function probeDirectTlsConnectivity(): Promise<DirectConnectivity> {
+  return new Promise((resolve) => {
     const socket = tls.connect({
       host: DIRECT_PROBE_HOST,
       port: DIRECT_PROBE_PORT,
@@ -29,10 +28,6 @@ async function probeDirectTlsConnectivity(): Promise<DirectConnectivity> {
       timeout: DIRECT_PROBE_TIMEOUT_MS,
     });
     const finish = (result: DirectConnectivity) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
       socket.destroy();
       resolve(result);
     };
@@ -65,9 +60,6 @@ async function resolveProxyEnvSources(params: {
 export async function noteWebFetchProxyDiagnostic(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  service?: Pick<GatewayService, "readCommand">;
-  probeDirectConnectivity?: () => Promise<DirectConnectivity>;
-  noteFn?: typeof note;
 }): Promise<void> {
   if (params.cfg.gateway?.mode === "remote") {
     return;
@@ -90,7 +82,7 @@ export async function noteWebFetchProxyDiagnostic(params: {
             `  ${formatCliCommand("openclaw config set proxy.enabled false")}`,
             "- If external traffic requires a proxy, keep HTTP_PROXY/HTTPS_PROXY and set NO_PROXY=127.0.0.1,localhost,::1 in the Gateway service environment.",
           ];
-    (params.noteFn ?? note)(
+    note(
       [
         "- Managed proxy routing (proxy.enabled) is active, but a request to this process's loopback listener failed. This can cause WebChat/Codex handshake errors or 502 responses.",
         `- Inspect the proxy configuration: ${formatCliCommand("openclaw config get proxy")}`,
@@ -110,19 +102,19 @@ export async function noteWebFetchProxyDiagnostic(params: {
 
   const sources = await resolveProxyEnvSources({
     env,
-    service: params.service ?? resolveGatewayService(),
+    service: resolveGatewayService(),
   });
   if (sources.length === 0) {
     return;
   }
 
-  const directConnectivity = await (params.probeDirectConnectivity ?? probeDirectTlsConnectivity)();
+  const directConnectivity = await probeDirectTlsConnectivity();
   const sourceLines = sources.map((source) => {
     const keys = HTTP_PROXY_ENV_KEYS.filter((key) => Boolean(source.env[key]?.trim()));
     return `- HTTP(S) proxy environment detected in the ${source.label}: ${keys.join(", ")}.`;
   });
 
-  (params.noteFn ?? note)(
+  note(
     [
       ...sourceLines,
       "- web_fetch still uses direct connections because tools.web.fetch.useTrustedEnvProxy is not enabled.",

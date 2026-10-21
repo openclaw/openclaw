@@ -1,4 +1,7 @@
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { once } from "node:events";
+import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGatewayMethodRegistry } from "../gateway/methods/registry.js";
@@ -63,11 +66,17 @@ async function startFixture(
   const registry = createEmptyPluginRegistry();
   const record = createPluginRecord({ id: "files" });
   registry.plugins.push(record);
-  registry.nodeHostCommands.push({
-    pluginId: record.id,
-    source: record.source,
-    command: { command: "file.fetch", handle: async () => "{}" },
-  });
+  const command = (
+    name: string,
+    duplex?: true | "optional",
+    owner = { id: record.id, source: record.source },
+  ) =>
+    registry.nodeHostCommands.push({
+      pluginId: owner.id,
+      source: owner.source,
+      command: { command: name, ...(duplex ? { duplex } : {}), handle: async () => "{}" },
+    });
+  command("file.fetch");
   const context = {
     trackExecution: trackAsyncWork,
     dedupe: new Map(),
@@ -103,9 +112,7 @@ async function startFixture(
   });
   const handle = await startPluginServices({ registry, config: {} });
   handles.add(handle);
-  if (!serviceContext) {
-    throw new Error("Service did not start");
-  }
+  assert(serviceContext, "Service did not start");
   const nodeHandler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
   context.getGatewayMethodRegistry = () =>
     createGatewayMethodRegistry([
@@ -124,7 +131,16 @@ async function startFixture(
         },
       },
     ]);
-  return { registry, record, context, resolveContext, serviceContext, handle, nodeHandler };
+  return {
+    registry,
+    record,
+    context,
+    resolveContext,
+    serviceContext,
+    handle,
+    nodeHandler,
+    command,
+  };
 }
 
 const request = {
@@ -149,9 +165,7 @@ describe("service-owned node invocation", () => {
         lease: createPluginRuntimeCapabilityLease("retained node capability"),
         isStopping: () => false,
       });
-      if (!invoker) {
-        throw new Error("Node invoker was not created");
-      }
+      assert(invoker, "Node invoker was not created");
       new RetiringCaller().stop(invoker);
       return invoker;
     });
@@ -166,98 +180,86 @@ describe("service-owned node invocation", () => {
     }
   });
 
-  it.each([false, true])(
-    "preserves document read access for a profile-backed=%s reader",
-    async (profileBacked) => {
-      await withOpenClawTestState({}, async () => {
-        const fixture = await startFixture();
-        const profile = ensureProfileForEmail("reader@example.test");
-        setUserProfileRole(profile.id, "limited");
-        const reader = createSyntheticPluginRuntimeClient({
-          scopes: ["operator.read"],
-          ...(profileBacked
-            ? {
-                authenticatedUserProfile: {
-                  profileId: profile.id,
-                  displayName: "reader",
-                  hasAvatar: false,
-                  updatedAt: 1,
-                },
-              }
-            : {}),
-        });
-        const run = async () => {
-          await expect(dispatchGatewayMethodInProcess("node.invoke", request)).rejects.toThrow(
-            /scope|permission/i,
-          );
-          await expect(
-            dispatchGatewayRequestInProcess(
-              "agents.files.get",
-              {},
-              {
-                client: reader,
-                context: fixture.context,
-                methodRegistry: fixture.context.getGatewayMethodRegistry!(),
-              },
-            ),
-          ).resolves.toEqual({ ok: true });
-          expect(fixture.nodeHandler).toHaveBeenCalledOnce();
-          const calledClient = fixture.nodeHandler.mock.calls[0]![0].client;
-          expect(calledClient?.connect.scopes).toEqual(["operator.write"]);
-          expect(calledClient?.internal).toMatchObject({
-            operatorRoleActor: { kind: "system" },
-            pluginRuntimeOwnerId: "files",
-          });
-          expect(calledClient?.authenticatedUserProfile).toBeUndefined();
-          await expect(dispatchGatewayMethodInProcess("node.invoke", request)).rejects.toThrow(
-            /scope|permission/i,
-          );
-        };
-        await withPluginRuntimeGatewayRequestScope(
-          { client: reader, context: fixture.context, isWebchatConnect: () => false },
-          () =>
-            profileBacked
-              ? withOperatorToolGatewayAuthority(
-                  {
-                    authenticatedUserProfile: reader.authenticatedUserProfile!,
-                    scopes: ["operator.read"],
-                  },
-                  run,
-                )
-              : run(),
-        );
+  it.each([false, true])("isolates profile-backed=%s readers", async (profileBacked) => {
+    await withOpenClawTestState({}, async () => {
+      const { context, nodeHandler } = await startFixture();
+      const profile = ensureProfileForEmail("reader@example.test");
+      setUserProfileRole(profile.id, "limited");
+      const authenticatedUserProfile = profileBacked
+        ? { profileId: profile.id, displayName: "reader", hasAvatar: false, updatedAt: 1 }
+        : undefined;
+      const reader = createSyntheticPluginRuntimeClient({
+        scopes: ["operator.read"],
+        authenticatedUserProfile,
       });
-    },
-  );
-
-  it.each(["absent", "unbound"] as const)(
-    "omits node access for an %s host under a foreign Gateway scope",
-    async (gateway) => {
-      const loadRuntime = vi
-        .spyOn(nativeModuleRequire, "tryNativeRequireModule")
-        .mockImplementation(() => {
-          throw new Error("Service metadata must not load the broad runtime");
-        });
-      try {
-        const foreign = await startFixture();
-        await withPluginRuntimeGatewayRequestScope(
-          {
-            context: foreign.context,
-            resolveGatewayContext: foreign.resolveContext,
-            isWebchatConnect: () => false,
-          },
-          async () => {
-            const { serviceContext } = await startFixture({ gateway });
-            expect(serviceContext.invokeNode).toBeUndefined();
-            expect(serviceContext.openNodeDuplex).toBeUndefined();
-            expect(loadRuntime).not.toHaveBeenCalled();
-          },
+      const expectReadOnly = () =>
+        expect(dispatchGatewayMethodInProcess("node.invoke", request)).rejects.toThrow(
+          /scope|permission/i,
         );
-      } finally {
-        loadRuntime.mockRestore();
-      }
-    },
-  );
+      const run = async () => {
+        await expectReadOnly();
+        await expect(
+          dispatchGatewayRequestInProcess(
+            "agents.files.get",
+            {},
+            {
+              client: reader,
+              context,
+              methodRegistry: context.getGatewayMethodRegistry!(),
+            },
+          ),
+        ).resolves.toEqual({ ok: true });
+        expect(nodeHandler).toHaveBeenCalledOnce();
+        const calledClient = nodeHandler.mock.calls[0]![0].client;
+        expect(calledClient?.connect.scopes).toEqual(["operator.write"]);
+        expect(calledClient?.internal).toMatchObject({
+          operatorRoleActor: { kind: "system" },
+          pluginRuntimeOwnerId: "files",
+        });
+        expect(calledClient?.authenticatedUserProfile).toBeUndefined();
+        await expectReadOnly();
+      };
+      await withPluginRuntimeGatewayRequestScope(
+        { client: reader, context, isWebchatConnect: () => false },
+        () =>
+          profileBacked
+            ? withOperatorToolGatewayAuthority(
+                {
+                  authenticatedUserProfile: authenticatedUserProfile!,
+                  scopes: ["operator.read"],
+                },
+                run,
+              )
+            : run(),
+      );
+    });
+  });
+
+  it.each(["absent", "unbound"] as const)("omits access from an %s host", async (gateway) => {
+    const loadRuntime = vi
+      .spyOn(nativeModuleRequire, "tryNativeRequireModule")
+      .mockImplementation(() => {
+        throw new Error("Service metadata must not load the broad runtime");
+      });
+    try {
+      const foreign = await startFixture();
+      await withPluginRuntimeGatewayRequestScope(
+        {
+          context: foreign.context,
+          resolveGatewayContext: foreign.resolveContext,
+          isWebchatConnect: () => false,
+        },
+        async () => {
+          const { serviceContext } = await startFixture({ gateway });
+          expect(serviceContext.invokeNode).toBeUndefined();
+          expect(serviceContext.openNodeDuplex).toBeUndefined();
+          expect(loadRuntime).not.toHaveBeenCalled();
+        },
+      );
+    } finally {
+      loadRuntime.mockRestore();
+    }
+  });
 
   it("rejects core and other-plugin commands", async () => {
     const fixture = await startFixture();
@@ -320,9 +322,7 @@ describe("service-owned node invocation", () => {
     const fixture = await startFixture({ stop: () => cleanup.promise });
     fixture.nodeHandler.mockImplementation(async ({ signal, respond }) => {
       entered.resolve(signal!);
-      await new Promise<void>((resolve) => {
-        signal!.addEventListener("abort", () => resolve(), { once: true });
-      });
+      await once(signal!, "abort");
       respond(false, undefined, { code: "UNAVAILABLE", message: "cancelled" });
     });
     const pending = fixture.serviceContext.invokeNode!(request);
@@ -344,18 +344,12 @@ async function openServiceDuplex(
   options: { assertCurrent?: () => void; duplex?: true | "optional" } = {},
 ) {
   const fixture = await startFixture();
-  fixture.registry.nodeHostCommands.push({
-    pluginId: fixture.record.id,
-    source: fixture.record.source,
-    command: { command: "file.create", duplex: options.duplex ?? true, handle: async () => "{}" },
-  });
+  fixture.command("file.create", options.duplex ?? true);
   const dispatched = createDeferredCore<GatewayRequestHandlerOptions>();
   const finish = createDeferredCore();
   fixture.nodeHandler.mockImplementation(async (ctx) => {
     dispatched.resolve(ctx);
-    const cancelled = new Promise<void>((resolve) => {
-      ctx.signal?.addEventListener("abort", () => resolve(), { once: true });
-    });
+    const cancelled = once(ctx.signal!, "abort");
     await Promise.race([finish.promise, cancelled]);
     ctx.respond(true, { ok: true });
   });
@@ -377,9 +371,7 @@ async function openServiceDuplex(
   void opening.then(() => {
     ready = true;
   });
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  await setImmediate();
   expect(ready).toBe(false);
   stream.onDispatchReady("upload");
   const endpoint = createNodeDuplexEndpoint({
@@ -396,9 +388,9 @@ async function openServiceDuplex(
 
 describe("service-owned node duplex", () => {
   it.each(["listener", "send", "concurrent send"] as const)(
-    "preserves an invocation rejection after readiness for %s setup",
+    "preserves rejection during %s setup",
     async (operation) => {
-      const fixture = await openServiceDuplex();
+      const { channel, ctx, finish, sendInvokeInput } = await openServiceDuplex();
       const pairingChanged = {
         code: "UNAVAILABLE",
         message: "node pairing changed while invocation was active",
@@ -408,85 +400,79 @@ describe("service-owned node duplex", () => {
       try {
         if (operation === "concurrent send") {
           const retired = new NodeRegistry();
-          fixture.sendInvokeInput.mockImplementation((id, frame) => {
+          sendInvokeInput.mockImplementation((id, frame) => {
             retired.sendInvokeInput(id, frame);
           });
         }
-        fixture.ctx.respond(false, undefined, pairingChanged);
+        ctx.respond(false, undefined, pairingChanged);
         if (operation !== "concurrent send") {
-          await expect(fixture.channel.closed).rejects.toMatchObject(pairingChanged);
+          await expect(channel.closed).rejects.toMatchObject(pairingChanged);
         }
 
         const setup =
           operation === "listener"
-            ? Promise.resolve().then(() => fixture.channel.onMessage(vi.fn()))
-            : fixture.channel.send(Uint8Array.of(1));
+            ? Promise.resolve().then(() => channel.onMessage(vi.fn()))
+            : channel.send(Uint8Array.of(1));
         await expect(setup).rejects.toMatchObject(pairingChanged);
-        expect(() => fixture.channel.onMessage(vi.fn())).toThrow(pairingChanged.message);
+        expect(() => channel.onMessage(vi.fn())).toThrow(pairingChanged.message);
         if (operation === "concurrent send") {
-          expect(fixture.sendInvokeInput).toHaveBeenCalledOnce();
-          await expect(fixture.channel.closed).rejects.toMatchObject(pairingChanged);
+          expect(sendInvokeInput).toHaveBeenCalledOnce();
+          await expect(channel.closed).rejects.toMatchObject(pairingChanged);
         } else {
-          expect(fixture.sendInvokeInput).not.toHaveBeenCalled();
+          expect(sendInvokeInput).not.toHaveBeenCalled();
         }
       } finally {
-        fixture.finish.resolve();
+        finish.resolve();
       }
     },
   );
 
-  it.each([true, "optional"] as const)(
-    "uses %s duplex after canonical preflight",
-    async (duplex) => {
-      const fixture = await openServiceDuplex({ duplex });
-      const received: Uint8Array[] = [];
-      fixture.endpoint.onMessage((message) => {
-        received.push(message);
-      });
-      const source = Buffer.alloc(128 * 1024, 7);
-      await fixture.channel.send(source);
-      expect(received.map((message) => Buffer.from(message))).toEqual([source]);
-      expect(fixture.sendInvokeInput).toHaveBeenCalledTimes(16);
-      expect(fixture.ctx.client?.internal).toMatchObject({
-        pluginRuntimeOwnerId: "files",
-        operatorRoleActor: { kind: "system" },
-      });
-      fixture.finish.resolve();
-      await expect(fixture.channel.closed).resolves.toEqual({ ok: true });
-      await expect(fixture.channel.send(source)).rejects.toThrow(/closed/);
-    },
-  );
+  it.each([true, "optional"] as const)("supports %s duplex", async (duplex) => {
+    const { channel, endpoint, ctx, finish, sendInvokeInput } = await openServiceDuplex({ duplex });
+    const received: Uint8Array[] = [];
+    endpoint.onMessage((message) => {
+      received.push(message);
+    });
+    const source = Buffer.alloc(128 * 1024, 7);
+    await channel.send(source);
+    expect(received.map((message) => Buffer.from(message))).toEqual([source]);
+    expect(sendInvokeInput).toHaveBeenCalledTimes(16);
+    expect(ctx.client?.internal).toMatchObject({
+      pluginRuntimeOwnerId: "files",
+      operatorRoleActor: { kind: "system" },
+    });
+    finish.resolve();
+    await expect(channel.closed).resolves.toEqual({ ok: true });
+    await expect(channel.send(source)).rejects.toThrow(/closed/);
+  });
 
-  it.each(["stop", "gateway", "replace", "caller"])(
-    "stops retained sends and pending dispatch on %s revocation",
-    async (action) => {
-      let current = true;
-      const fixture = await openServiceDuplex({
-        assertCurrent() {
-          if (!current) {
-            throw new Error("turn no longer current");
-          }
-        },
-      });
-      const closed = expect(fixture.channel.closed).rejects.toThrow();
-      if (action === "stop") {
-        await fixture.handle.stop();
-      }
-      if (action === "gateway") {
-        getGatewayContextLifetime(fixture.resolveContext).abort();
-      }
-      if (action === "replace") {
-        revokePluginRecord(fixture.registry, fixture.record);
-      }
-      if (action === "caller") {
-        current = false;
-      }
-      await expect(fixture.channel.send(Uint8Array.of(1))).rejects.toThrow();
-      await closed;
-      expect(fixture.sendInvokeInput).not.toHaveBeenCalled();
-      expect(fixture.ctx.signal?.aborted).toBe(true);
-    },
-  );
+  it.each(["stop", "gateway", "replace", "caller"])("revokes on %s", async (action) => {
+    let current = true;
+    const fixture = await openServiceDuplex({
+      assertCurrent() {
+        if (!current) {
+          throw new Error("turn no longer current");
+        }
+      },
+    });
+    const closed = expect(fixture.channel.closed).rejects.toThrow();
+    if (action === "stop") {
+      await fixture.handle.stop();
+    }
+    if (action === "gateway") {
+      getGatewayContextLifetime(fixture.resolveContext).abort();
+    }
+    if (action === "replace") {
+      revokePluginRecord(fixture.registry, fixture.record);
+    }
+    if (action === "caller") {
+      current = false;
+    }
+    await expect(fixture.channel.send(Uint8Array.of(1))).rejects.toThrow();
+    await closed;
+    expect(fixture.sendInvokeInput).not.toHaveBeenCalled();
+    expect(fixture.ctx.signal?.aborted).toBe(true);
+  });
 
   it("rejects non-duplex and unowned commands before dispatch", async () => {
     const fixture = await startFixture();

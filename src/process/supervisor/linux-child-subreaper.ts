@@ -45,11 +45,16 @@ export function acquireLinuxChildSubreaper() {
   }
   const spawnedChildren = new Set<number>();
   const signaledChildren = new Map<number, "SIGTERM" | "SIGKILL">();
+  let observingChildExits = false;
   const retainSpawnedChild = (pid: number, child: Pick<ChildProcess, "pid" | "once">) => {
     if (child.pid !== pid || !Number.isSafeInteger(pid) || pid <= 0) {
       throw new Error("Linux child ownership requires a spawned root");
     }
     spawnedChildren.add(pid);
+    if (!observingChildExits) {
+      process.on("SIGCHLD", reapExitedChildren);
+      observingChildExits = true;
+    }
     // The runtime reaps before emitting exit, in this same event-loop turn. Retire the
     // signal reservation here so a newly adopted reuse of this PID gets its own signal.
     child.once("exit", () => {
@@ -64,7 +69,7 @@ export function acquireLinuxChildSubreaper() {
     throw new Error("Linux child ownership requires a dedicated owner without existing children");
   }
   let closed = false;
-  return {
+  const owner = {
     retainSpawnedChild,
     /** Discovery selects candidates; a retained kernel wait pins every signal target. */
     drain(signal?: "SIGTERM" | "SIGKILL"): boolean {
@@ -103,7 +108,17 @@ export function acquireLinuxChildSubreaper() {
         return false;
       }
       closed = true;
+      process.off("SIGCHLD", reapExitedChildren);
       return true;
     },
   };
+  // The live root can itself be waiting for an adopted child's process group to disappear.
+  const reapExitedChildren = () => {
+    try {
+      owner.drain();
+    } catch {
+      // The final explicit drain remains authoritative if this observation fails.
+    }
+  };
+  return owner;
 }

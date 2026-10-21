@@ -1,13 +1,17 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { startOpenClawCrablineAdapter } from "@openclaw/crabline";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { expect, it } from "vitest";
 import WebSocket from "ws";
 import { createQaBusState } from "./bus-state.js";
 import { startCrablineDiscordReplies } from "./crabline-discord-replies.js";
+
+const record = createRequireRecord("record", "expected-record");
 
 it("relays Discord message bytes unchanged while rewriting transport endpoints", async () => {
   await withTempDir("qa-discord-relay-payload-", async (outputDir) => {
@@ -23,9 +27,7 @@ it("relays Discord message bytes unchanged while rewriting transport endpoints",
     });
     let socket: WebSocket | undefined;
     try {
-      if (!relay || adapter.manifest.provider !== "discord") {
-        throw new Error("Discord relay did not start");
-      }
+      assert(relay && adapter.manifest.provider === "discord", "Discord relay did not start");
       const manifest = adapter.manifest;
       const headers = { authorization: `Bot ${manifest.botToken}` };
       const relayOrigin = new URL(relay.apiBaseUrl).origin;
@@ -66,42 +68,27 @@ it("relays Discord message bytes unchanged while rewriting transport endpoints",
         const payload = {
           content: text,
           embeds: [{ description: text, title: text, url: `${origin}/semantic-link` }],
+          attachments: [{ id: "0", description: text }],
         };
         const form = new FormData();
-        form.set(
-          "payload_json",
-          JSON.stringify({
-            ...payload,
-            attachments: [{ id: "0", description: text }],
-          }),
-        );
+        form.set("payload_json", JSON.stringify(payload));
         form.set("files[0]", new Blob(["attachment bytes"]), "proof.txt");
         delivered = createDeferred<unknown>();
         const response = await fetch(messagesUrl, { method: "POST", headers, body: form });
         expect(response.ok).toBe(true);
-        const message: unknown = await response.json();
-        if (!isRecord(message) || typeof message.id !== "string") {
-          throw new Error("Discord reply omitted its message ID");
-        }
+        const message = record(await response.json());
+        assert(typeof message.id === "string", "Discord reply omitted its message ID");
         const event = await delivered.promise;
         const retainedResponse = await fetch(`${messagesUrl}/${message.id}`, { headers });
         expect(retainedResponse.ok).toBe(true);
-        for (const received of [message, event, await retainedResponse.json()]) {
-          expect(received).toMatchObject(payload);
-          if (!isRecord(received) || !Array.isArray(received.attachments)) {
-            throw new Error("Discord reply omitted its attachments");
-          }
-          expect(received.attachments).toHaveLength(1);
-          const attachment: unknown = received.attachments[0];
-          expect(attachment).toMatchObject({ description: text });
-          if (!isRecord(attachment)) {
-            throw new Error("Discord attachment is invalid");
-          }
+        for (const value of [message, event, await retainedResponse.json()]) {
+          const received = record(value);
+          expect(received).toMatchObject({ ...payload, attachments: [{ description: text }] });
+          assert(Array.isArray(received.attachments), "Discord reply omitted its attachments");
+          const attachment = record(received.attachments[0]);
           for (const field of ["url", "proxy_url"]) {
             const url = attachment[field];
-            if (typeof url !== "string") {
-              throw new Error(`Discord attachment omitted ${field}`);
-            }
+            assert(typeof url === "string", `Discord attachment omitted ${field}`);
             expect(new URL(url).origin).toBe(relayOrigin);
             const download = await fetch(url);
             expect(download.ok).toBe(true);

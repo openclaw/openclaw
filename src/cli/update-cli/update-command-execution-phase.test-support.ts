@@ -25,7 +25,6 @@ import { executeMutableUpdate } from "./update-command-execution.js";
 import { bindExecutionGuards } from "./update-command-execution.test-support.js";
 import type * as fixtures from "./update-command-execution.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import * as gitAdmission from "./update-command-git-admission.js";
 import type { updateGitInstall } from "./update-command-git.js";
 import type { PackageInstallUpdateParams } from "./update-command-package.js";
 
@@ -265,13 +264,16 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
   it("refuses downstream work after an interrupted staging receipt", async () => {
     await withPhase("staging", async (fixture) => {
       let received = false;
-      const inspect = gitAdmission.recordInspectedGitTarget;
+      const recordPhase = phaseWrites.recordUpdateRunPhaseAsync;
       using _ = vi
-        .spyOn(gitAdmission, "recordInspectedGitTarget")
+        .spyOn(phaseWrites, "recordUpdateRunPhaseAsync")
         .mockImplementation(async (...args) => {
-          await inspect(...args);
-          received = true;
-          fixture.run.interrupted = true;
+          const record = await recordPhase(...args);
+          if (args[1] === "staging") {
+            received = true;
+            fixture.run.interrupted = true;
+          }
+          return record;
         });
       expect(await fixture.start()).toMatchObject({
         mutationStarted: false,

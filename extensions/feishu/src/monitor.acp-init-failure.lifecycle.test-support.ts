@@ -6,8 +6,6 @@ import {
 } from "./lifecycle.test-support.js";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../runtime-api.js";
-// Feishu plugin module implements monitor.acp init failure.lifecycle support behavior.
 import {
   createFeishuLifecycleFixture,
   createFeishuTextMessageEvent,
@@ -18,30 +16,16 @@ import {
   setupFeishuLifecycleHandler,
   stopFeishuLifecycleMonitors,
 } from "./test-support/lifecycle-test-support.js";
-import type { ResolvedFeishuAccount } from "./types.js";
 
-const {
-  createEventDispatcherMock,
-  dispatchReplyFromConfigMock,
-  ensureConfiguredBindingRouteReadyMock,
-  resolveAgentRouteMock,
-  resolveBoundConversationMock,
-  resolveConfiguredBindingRouteMock,
-  sendMessageFeishuMock,
-  withReplyDispatcherMock,
-} = getFeishuLifecycleTestMocks();
+const mocks = getFeishuLifecycleTestMocks();
 let lastRuntime = createRuntimeEnv();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const { cfg: lifecycleConfig, account: lifecycleAccount } = createFeishuLifecycleFixture({
   accountId: "acct-acp",
   appId: "cli_test",
   appSecret: "secret_test",
-  channelConfig: {
-    groupPolicy: "open",
-    allowFrom: ["ou_sender_1"],
-  },
+  channelConfig: { groupPolicy: "open", allowFrom: ["ou_sender_1"] },
   accountConfig: {
-    groupPolicy: "open",
     groups: {
       oc_group_topic: {
         requireMention: false,
@@ -50,25 +34,8 @@ const { cfg: lifecycleConfig, account: lifecycleAccount } = createFeishuLifecycl
       },
     },
   },
-  extraConfig: {
-    session: { mainKey: "main", scope: "per-sender" },
-  },
-}) as {
-  cfg: ClawdbotConfig;
-  account: ResolvedFeishuAccount;
-};
-
-async function setupLifecycleMonitor() {
-  lastRuntime = createRuntimeEnv();
-  return setupFeishuLifecycleHandler({
-    createEventDispatcherMock,
-    runtime: lastRuntime,
-    cfg: lifecycleConfig,
-    account: lifecycleAccount,
-    handlerKey: "im.message.receive_v1",
-    missingHandlerMessage: "missing im.message.receive_v1 handler",
-  });
-}
+  extraConfig: { session: { mainKey: "main", scope: "per-sender" } },
+});
 
 describe("Feishu ACP-init failure lifecycle", () => {
   beforeEach(() => {
@@ -77,8 +44,8 @@ describe("Feishu ACP-init failure lifecycle", () => {
     lastRuntime = createRuntimeEnv();
     setFeishuLifecycleStateDir("openclaw-feishu-acp-failure");
 
-    resolveBoundConversationMock.mockReturnValue(null);
-    resolveAgentRouteMock.mockReturnValue({
+    mocks.resolveBoundConversationMock.mockReturnValue(null);
+    mocks.resolveAgentRouteMock.mockReturnValue({
       agentId: "main",
       channel: "feishu",
       accountId: "acct-acp",
@@ -86,47 +53,9 @@ describe("Feishu ACP-init failure lifecycle", () => {
       mainSessionKey: "agent:main:main",
       matchedBy: "default",
     });
-    resolveConfiguredBindingRouteMock.mockReturnValue({
-      bindingResolution: {
-        configuredBinding: {
-          spec: {
-            channel: "feishu",
-            accountId: "acct-acp",
-            conversationId: "oc_group_topic:topic:om_topic_root_1",
-            agentId: "codex",
-            mode: "persistent",
-          },
-          record: {
-            bindingId: "config:acp:feishu:acct-acp:oc_group_topic:topic:om_topic_root_1",
-            targetSessionKey: "agent:codex:acp:binding:feishu:acct-acp:abc123",
-            targetKind: "session",
-            conversation: {
-              channel: "feishu",
-              accountId: "acct-acp",
-              conversationId: "oc_group_topic:topic:om_topic_root_1",
-              parentConversationId: "oc_group_topic",
-            },
-            status: "active",
-            boundAt: 0,
-            metadata: { source: "config" },
-          },
-        },
-        statefulTarget: {
-          kind: "stateful",
-          driverId: "acp",
-          sessionKey: "agent:codex:acp:binding:feishu:acct-acp:abc123",
-          agentId: "codex",
-        },
-      },
-      configuredBinding: {
-        spec: {
-          channel: "feishu",
-          accountId: "acct-acp",
-          conversationId: "oc_group_topic:topic:om_topic_root_1",
-          agentId: "codex",
-          mode: "persistent",
-        },
-      },
+    mocks.resolveConfiguredBindingRouteMock.mockReturnValue({
+      // The readiness mock rejects before binding contents can be consumed.
+      bindingResolution: {},
       route: {
         agentId: "codex",
         channel: "feishu",
@@ -136,19 +65,17 @@ describe("Feishu ACP-init failure lifecycle", () => {
         matchedBy: "binding.channel",
       },
     });
-    ensureConfiguredBindingRouteReadyMock.mockResolvedValue({
+    mocks.ensureConfiguredBindingRouteReadyMock.mockResolvedValue({
       ok: false,
       error: "runtime unavailable",
     });
 
-    dispatchReplyFromConfigMock.mockResolvedValue({
+    mocks.dispatchReplyFromConfigMock.mockResolvedValue({
       queuedFinal: false,
       counts: { final: 0 },
     });
     installFeishuLifecycleReplyRuntime({
-      resolveAgentRouteMock,
-      dispatchReplyFromConfigMock,
-      withReplyDispatcherMock,
+      ...mocks,
       storePath: "/tmp/feishu-acp-failure-sessions.json",
     });
   });
@@ -163,7 +90,14 @@ describe("Feishu ACP-init failure lifecycle", () => {
   });
 
   it("sends one ACP failure notice to the topic root across replay", async () => {
-    const onMessage = await setupLifecycleMonitor();
+    const onMessage = await setupFeishuLifecycleHandler({
+      createEventDispatcherMock: mocks.createEventDispatcherMock,
+      runtime: lastRuntime,
+      cfg: lifecycleConfig,
+      account: lifecycleAccount,
+      handlerKey: "im.message.receive_v1",
+      missingHandlerMessage: "missing im.message.receive_v1 handler",
+    });
     const event = createFeishuTextMessageEvent({
       messageId: "om_topic_msg_1",
       chatId: "oc_group_topic",
@@ -175,22 +109,20 @@ describe("Feishu ACP-init failure lifecycle", () => {
     await expectFeishuSingleEffectAcrossReplay({
       handler: onMessage,
       event,
-      effectMock: sendMessageFeishuMock,
+      effectMock: mocks.sendMessageFeishuMock,
     });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "acct-acp",
-        to: "chat:oc_group_topic",
-        replyToMessageId: "om_topic_root_1",
-        replyInThread: true,
-        text: expect.stringContaining("runtime unavailable"),
-      }),
-    );
-    expect(dispatchReplyFromConfigMock).not.toHaveBeenCalled();
+    expect(mocks.resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessageFeishuMock.mock.calls[0]?.[0]).toMatchObject({
+      accountId: "acct-acp",
+      to: "chat:oc_group_topic",
+      replyToMessageId: "om_topic_root_1",
+      replyInThread: true,
+      text: expect.stringContaining("runtime unavailable"),
+    });
+    expect(mocks.dispatchReplyFromConfigMock).not.toHaveBeenCalled();
   });
 });

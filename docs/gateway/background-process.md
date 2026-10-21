@@ -81,9 +81,8 @@ Behavior:
 ### Disable automatic completion turns
 
 Background exec completion notifications are enabled by default. They can run a
-model turn marked `[OpenClaw exec completion]` even when
-`agents.defaults.heartbeat.every` is `"0m"`: that setting disables recurring polls,
-not completion follow-ups.
+model turn marked `[OpenClaw exec completion]` even when recurring automation
+jobs are disabled. A periodic schedule does not own completion follow-ups.
 
 To keep background commands running without automatic completion turns, set:
 

@@ -364,7 +364,6 @@ async function createInstance(
             params: { transport: "sse", openaiWsWarmup: false },
           },
         },
-        heartbeat: { every: "0m" },
         skipBootstrap: true,
         skills: [],
         timeoutSeconds: 120,

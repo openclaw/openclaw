@@ -8,6 +8,7 @@ import {
   applyMcpConnectionOverride,
   resolveRequesterScopedMcpConnections,
 } from "./mcp-connection-resolver.js";
+import { mcpEnterpriseIdpIdentity } from "./mcp-enterprise.js";
 import { operatorMcpOAuthIdentity, requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
@@ -28,7 +29,7 @@ export async function prepareMcpEventCredentialConnection(
 ) {
   let authority: McpConnectionAuthority | undefined;
   let disposed = false;
-  let kind: "configured" | "resolver" | "oauth" | "auth-profile" = "configured";
+  let kind: "configured" | "resolver" | "oauth" | "enterprise" | "auth-profile" = "configured";
   const assertActive = () => {
     if (disposed) {
       throw new McpConnectionAuthorityError("retired");
@@ -102,6 +103,14 @@ export async function prepareMcpEventCredentialConnection(
           assertCurrent: assertCallerCurrent,
         });
         kind = "oauth";
+      } else if (transport.auth === "enterprise" && transport.enterprise) {
+        const { captureMcpOAuthAuthorization } = await import("./mcp-oauth-authorization.js");
+        assertActive();
+        authority = await captureMcpOAuthAuthorization({
+          identity: mcpEnterpriseIdpIdentity(transport.enterprise),
+          assertCurrent: assertCallerCurrent,
+        });
+        kind = "enterprise";
       }
     }
     assertCurrent();

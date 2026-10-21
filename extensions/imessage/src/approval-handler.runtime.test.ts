@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { imessageApprovalNativeRuntime as native } from "./approval-handler.runtime.js";
-import {
-  iMessageApprovalPollTargets,
-  maybeResolveIMessageApprovalPollVote,
-} from "./approval-polls.js";
-import {
-  clearIMessageApprovalReactionTargetsForTest,
-  handleIMessageApprovalReaction,
-} from "./approval-reactions.js";
 import { pollVote } from "./test-support/approval.js";
+
+let native: typeof import("./approval-handler.runtime.js").imessageApprovalNativeRuntime;
+let maybeResolveIMessageApprovalPollVote: typeof import("./approval-polls.js").maybeResolveIMessageApprovalPollVote;
+let handleIMessageApprovalReaction: typeof import("./approval-reactions.js").handleIMessageApprovalReaction;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ imessageApprovalNativeRuntime: native } = await import("./approval-handler.runtime.js"));
+  ({ maybeResolveIMessageApprovalPollVote } = await import("./approval-polls.js"));
+  ({ handleIMessageApprovalReaction } = await import("./approval-reactions.js"));
+});
 
 const send = vi.hoisted(() => vi.fn());
 
@@ -217,8 +219,6 @@ describe("imessageApprovalNativeRuntime", () => {
     });
 
   beforeEach(() => {
-    iMessageApprovalPollTargets.clearForTest();
-    clearIMessageApprovalReactionTargetsForTest();
     approvalGatewayMock.resolve.mockReset().mockResolvedValue({ applied: true, approval: {} });
     send
       .mockReset()

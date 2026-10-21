@@ -17,6 +17,7 @@ import {
   resetServerUiPrefsSync,
 } from "../../app/server-prefs.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import type { WebPushSnapshot } from "../../app/web-push.ts";
 import {
   installDialogPolyfill,
   nextFrame,
@@ -150,6 +151,63 @@ it("refreshes notification presentation from in-place owner publications", () =>
   Object.assign(context.webPush.snapshot, { loading: true });
   publishConfigSource(context.webPush);
   expect(state.configProps().webPush?.loading).toBe(true);
+});
+
+it("renders Web Push registration publications and dispatches Unsubscribe without reloading", () => {
+  const snapshot: WebPushSnapshot = {
+    supported: true,
+    canManage: true,
+    canReadPreferences: true,
+    permission: "default",
+    subscription: "unknown",
+    loading: false,
+  };
+  const run = vi.fn();
+  const webPush = { snapshot, run };
+  const context = configContext({
+    webPush,
+    runtimeConfig: { state: { connected: true } },
+  });
+  const { container } = mountConfigPage(context, { pageId: "notifications" });
+  expect(container.textContent).toContain("Checking");
+  expect(container.textContent).toContain("Not requested");
+
+  snapshot.loading = true;
+  publishConfigSource(webPush);
+  const enable = container.querySelector<HTMLButtonElement>("button.btn.primary")!;
+  expect(enable.textContent).toContain("Subscribing");
+  expect(enable.disabled).toBe(true);
+
+  const user = {
+    categories: {
+      approvalRequested: true,
+      agentFinished: true,
+      agentQuestion: true,
+      humanMentioned: true,
+      scheduledTaskFailed: true,
+    },
+    detailLevel: "private" as const,
+    quietHours: { enabled: false, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
+    agentIds: [],
+  };
+  const device = { enabled: true, label: "Settings test browser" };
+  snapshot.permission = "granted";
+  snapshot.subscription = "registered";
+  snapshot.loading = false;
+  snapshot.preferences = { durableIdentity: true, user, device, effective: { ...user, ...device } };
+  publishConfigSource(webPush);
+  expect(container.textContent).toContain("Granted");
+  expect(container.textContent).toContain("Subscribed");
+  expect(container.textContent).not.toContain("Checking");
+  expect(
+    container.querySelector<HTMLInputElement>('input[aria-label="Notification label"]')?.value,
+  ).toBe("Settings test browser");
+  const unsubscribe = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+    (button) => button.textContent?.trim() === "Unsubscribe",
+  )!;
+  expect(unsubscribe.disabled).toBe(false);
+  unsubscribe.click();
+  expect(run).toHaveBeenCalledExactlyOnceWith({ kind: "disable" });
 });
 
 it.each([
@@ -311,9 +369,8 @@ it.each([
   vi.stubGlobal("navigator", { mediaDevices: devices });
   const page = mountConfigPageState(configContext(), { pageId: "appearance" });
   const props = page.state.configProps;
-  await waitForSolid(() => {
-    expect(props()).toMatchObject({ microphone: { loading: false }, camera: { loading: false } });
-  });
+  await Promise.all([props().microphone?.discovery, props().camera?.discovery]);
+  flush();
   enumerateDevices.mockReset().mockResolvedValue([]);
   const startsWithPermission = scenario === "permission failure";
   // devicechange refreshes both pickers; only this scenario's picker is delayed.
@@ -333,6 +390,7 @@ it.each([
     devices.dispatchEvent(new Event("devicechange"));
   }
   refresh();
+  flush();
   const initialCalls = startsWithPermission ? 1 : 2;
   expect(enumerateDevices).toHaveBeenCalledTimes(initialCalls);
   expect(getUserMedia).not.toHaveBeenCalled();
@@ -361,7 +419,8 @@ it.each([
     await Promise.resolve();
     flush();
   } else {
-    await waitForSolid(() => expect(props()[kind]?.loading).toBe(false));
+    await props()[kind]?.discovery;
+    flush();
   }
   const permits = ["reentry with gesture", "passive failure"].includes(scenario);
   expect(getUserMedia).toHaveBeenCalledTimes(permits ? 1 : 0);
@@ -373,9 +432,41 @@ it.each([
   }
   if (scenario === "permission failure") {
     expect(enumerateDevices).toHaveBeenCalledOnce();
-    expect(props()[kind]?.error).toBeTruthy();
+    await expect(props()[kind]?.discovery).resolves.toBeTruthy();
   }
 });
+it("keeps media permission gestures live while discovery status is pending", async () => {
+  const initial = deferred<MediaDeviceInfo[]>();
+  const enumerateDevices = vi.fn().mockReturnValueOnce(initial.promise).mockResolvedValue([]);
+  const stop = vi.fn();
+  const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
+  const mediaDevices = Object.assign(new EventTarget(), { enumerateDevices, getUserMedia });
+  vi.stubGlobal("navigator", { mediaDevices });
+  const { container } = mountConfigPage(configContext(), { pageId: "appearance" });
+  const select = container.querySelector<HTMLSelectElement>("[data-settings-microphone]")!;
+  expect(select).not.toBeNull();
+  expect(select.disabled).toBe(false);
+  expect(select.closest(".settings-row")?.textContent).not.toContain("No additional microphones");
+  select.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+  initial.resolve([]);
+  await waitForSolid(() => expect(getUserMedia).toHaveBeenCalledWith({ audio: true }));
+  expect(stop).toHaveBeenCalledOnce();
+  await waitForSolid(() =>
+    expect(select.closest(".settings-row")?.textContent).toContain("No additional microphones"),
+  );
+  enumerateDevices.mockRejectedValueOnce(new DOMException("Device unavailable", "NotFoundError"));
+  mediaDevices.dispatchEvent(new Event("devicechange"));
+  await waitForSolid(() =>
+    expect(select.closest(".settings-row")?.querySelector('[role="alert"]')).not.toBeNull(),
+  );
+  expect(container.querySelector("[data-settings-microphone]")).toBe(select);
+  mediaDevices.dispatchEvent(new Event("devicechange"));
+  await waitForSolid(() =>
+    expect(select.closest(".settings-row")?.querySelector('[role="alert"]')).toBeNull(),
+  );
+  expect(container.querySelector("[data-settings-microphone]")).toBe(select);
+});
+
 it("persists only confirmed camera selections and ignores superseded failures", async () => {
   const first = deferred();
   switchActiveRealtimeTalkCameras

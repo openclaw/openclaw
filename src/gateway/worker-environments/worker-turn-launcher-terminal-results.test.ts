@@ -5,7 +5,6 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
-import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run.js";
 import { resolveModelFallbackError } from "../../agents/failover-error.js";
@@ -104,31 +103,6 @@ function recoveringWorker(options: { beforeAck?: () => Promise<unknown>; retry?:
     }),
   };
 }
-
-type ReplyCase = {
-  name: string;
-  content: Parameters<typeof makeAgentAssistantMessage>[0]["content"];
-  visibleText?: string;
-  rawText?: string;
-  terminalReply?: AgentRunTerminalReplySnapshot;
-  costs?: { first: number; last: number; total: number };
-};
-function textReply(rawText: string, visibleText: string, preservesRawText = true): ReplyCase {
-  return {
-    name: `prepared final ${JSON.stringify(rawText)}`,
-    content: [{ type: "text", text: rawText }],
-    rawText: preservesRawText ? rawText : undefined,
-    visibleText,
-    terminalReply: visibleText
-      ? { disposition: "visible", text: visibleText }
-      : { disposition: "empty" },
-  };
-}
-const phaseText = (text: string, phase: string) => ({
-  type: "text" as const,
-  text,
-  textSignature: JSON.stringify({ v: 1, id: phase === "commentary" ? phase : "final", phase }),
-});
 
 describe("worker finishing admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -771,42 +745,8 @@ describe("worker turn launcher terminal results", () => {
     expect(worker.destroy).not.toHaveBeenCalled();
   });
 
-  it.each<ReplyCase>([
-    {
-      name: "visible final answer",
-      costs: { first: 0.125, last: 0.25, total: 0.375 },
-      content: [
-        { type: "thinking", thinking: "Private reasoning" },
-        phaseText("Working...", "commentary"),
-        phaseText("Usage reply", "final_answer"),
-      ],
-      visibleText: "Usage reply",
-      rawText: "Usage reply",
-      terminalReply: { disposition: "visible", text: "Usage reply" },
-    },
-    {
-      ...textReply("No_Reply", ""),
-      name: "mixed-case explicit silence",
-      terminalReply: { disposition: "silent" },
-    },
-    textReply("<think>Private reasoning</think>Usage reply", "Usage reply"),
-    textReply("NO_REPLY.", "NO_REPLY."),
-    textReply('"NO_REPLY"', '"NO_REPLY"'),
-    textReply('{"reply":"NO_REPLY"}', '{"reply":"NO_REPLY"}'),
-    textReply("NO_REPLY\nNO_REPLY", "NO_REPLY"),
-    textReply("NO_REPLY\n<final></final>", ""),
-    textReply("[[reply_to_current]]", "", false),
-    {
-      name: "reasoning-only completion",
-      content: [{ type: "thinking", thinking: "Private reasoning" }],
-    },
-    {
-      name: "tool-only completion",
-      content: [{ type: "toolCall", id: "call-final", name: "read", arguments: {} }],
-    },
-    { name: "empty final answer", content: [] },
-  ])(
-    "reports canonical usage and $name",
+  it.each(fx.workerTurnTerminalReplyCases)(
+    "reports canonical usage, prompt tools, and $name",
     async ({
       content,
       visibleText,
@@ -875,13 +815,23 @@ describe("worker turn launcher terminal results", () => {
 
       const result = await provider.executeTurn(
         runIdentity("run-worker-usage"),
-        fx.turn("run-worker-usage"),
+        { ...fx.turn("run-worker-usage"), toolsAllow: ["read"] },
         localResult,
       );
 
       expect(result.meta.finalAssistantVisibleText ?? "").toBe(visibleText ?? "");
       expect(result.meta.finalAssistantRawText).toBe(rawText);
       expect(result.meta.terminalReply).toEqual(terminalReply);
+      expect(result.meta.systemPromptReport).toMatchObject({
+        source: "run",
+        sessionId: fx.SESSION_ID,
+        sessionKey: fx.SESSION_KEY,
+      });
+      // Code Mode presents wrappers around the permitted read tool.
+      expect(result.meta.systemPromptReport?.tools.entries.map(({ name }) => name)).toEqual([
+        "exec",
+        "wait",
+      ]);
       const payloadTexts = result.payloads?.map((payload) => payload.text) ?? [];
       expect(payloadTexts).toEqual(visibleText ? [visibleText] : []);
       expect(result.meta.agentMeta).toEqual({

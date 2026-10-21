@@ -146,16 +146,21 @@ function readHistory(scope: Scope) {
   });
 }
 
-function acquiredPayloadBytes(
+function observePayloadAcquisition(
   connection: ReturnType<typeof openOpenClawAgentDatabase>["db"],
   marker: string,
   read: () => void,
-): number {
+) {
   const db = requireNativeSqliteDatabase(connection);
   clearNodeSqliteKyselyCacheForDatabase(db);
   const prepare = db.prepare.bind(db);
+  const parse = JSON.parse;
   const restoreStatements: Array<() => void> = [];
+  const pending = new Map<string, number>();
   let acquiredBytes = 0;
+  let largestRowBytes = 0;
+  let peakPendingBytes = 0;
+  let decodedRows = 0;
   const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((query) => {
     const statement = prepare(query);
     const iterate = statement.iterate.bind(statement);
@@ -164,7 +169,14 @@ function acquiredPayloadBytes(
       for (const row of iterate(...params)) {
         for (const value of Object.values(row)) {
           if (typeof value === "string" && value.includes(marker)) {
-            acquiredBytes += Buffer.byteLength(value);
+            const bytes = Buffer.byteLength(value);
+            acquiredBytes += bytes;
+            pending.set(value, bytes);
+            largestRowBytes = Math.max(largestRowBytes, bytes);
+            peakPendingBytes = Math.max(
+              peakPendingBytes,
+              [...pending.values()].reduce((a, b) => a + b, 0),
+            );
           }
         }
         yield row;
@@ -174,15 +186,28 @@ function acquiredPayloadBytes(
     restoreStatements.push(() => iterateSpy.mockRestore());
     return statement;
   });
+  const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+    if (pending.delete(text)) {
+      decodedRows++;
+    }
+    return parse(text, reviver);
+  });
   try {
     read();
   } finally {
+    parseSpy.mockRestore();
     prepareSpy.mockRestore();
     for (const restore of restoreStatements) {
       restore();
     }
   }
-  return acquiredBytes;
+  return {
+    acquiredBytes,
+    largestRowBytes,
+    peakPendingBytes,
+    decodedRows,
+    pendingRows: pending.size,
+  };
 }
 
 it("skips sizing an empty transcript and reads its first committed turn", async () => {
@@ -279,6 +304,27 @@ it("enforces context count and byte budgets and releases rejected reads for late
   });
 });
 
+it("decodes context payloads without buffering the whole encoded window", async () => {
+  await withBoundedContextScope(async (scope) => {
+    const marker = "synthetic-context-payload:";
+    const content = marker + "🦞".repeat(256);
+    await persist(scope, [
+      user("a", null, content),
+      assistant("b", "a", content),
+      user("c", "b", content),
+    ]);
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    const acquisition = observePayloadAcquisition(db, marker, () => {
+      const context = readContext(scope, 16_384);
+      expect(eventIds(context.events)).toEqual([scope.sessionId, "a", "b", "c"]);
+      expect(context.serializedBytes).toBe(serializedBytes(context.events));
+    });
+    expect(acquisition.decodedRows).toBe(3);
+    expect(acquisition.pendingRows).toBe(0);
+    expect(acquisition.peakPendingBytes).toBeLessThanOrEqual(acquisition.largestRowBytes);
+  });
+});
+
 it.each(["header", "compaction"] as const)(
   "bounds oversized %s before acquiring its payload",
   async (kind) => {
@@ -321,7 +367,7 @@ it.each(["header", "compaction"] as const)(
         { agentId: scope.agentId },
       );
       const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-      const bytes = acquiredPayloadBytes(db, marker, () => {
+      const acquisition = observePayloadAcquisition(db, marker, () => {
         if (kind === "header") {
           expect(() => readContext(scope)).toThrow(
             "Session transcript header exceeds the active-context byte limit",
@@ -333,7 +379,7 @@ it.each(["header", "compaction"] as const)(
           expect(context.serializedBytes).toBe(serializedBytes(context.events));
         }
       });
-      expect(bytes).toBe(0);
+      expect(acquisition.acquiredBytes).toBe(0);
     });
   },
 );
@@ -594,7 +640,7 @@ it("keeps later unindexed feedback payloads outside an admitted context read", a
     ).toBe(true);
     await waitProjection(scope);
     const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-    const acquiredBytes = acquiredPayloadBytes(db, marker, () => {
+    const acquisition = observePayloadAcquisition(db, marker, () => {
       runWithSessionTranscriptReadFence(
         { ...anchor, logicalTurnId: "current", role: "user" },
         () => {
@@ -604,7 +650,7 @@ it("keeps later unindexed feedback payloads outside an admitted context read", a
         },
       );
     });
-    expect(acquiredBytes).toBe(0);
+    expect(acquisition.acquiredBytes).toBe(0);
   });
 });
 

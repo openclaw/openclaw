@@ -59,15 +59,6 @@ function buildAuditGatewayAuthOverride(params: {
   };
 }
 
-function formatSummary(summary: { critical: number; warn: number; info: number }): string {
-  const rich = isRich();
-  return [
-    colorize(rich, theme.error, `${summary.critical} critical`),
-    colorize(rich, theme.warn, `${summary.warn} warn`),
-    colorize(rich, theme.muted, `${summary.info} info`),
-  ].join(" · ");
-}
-
 export function registerSecurityCli(program: Command) {
   const security = program
     .command("security")
@@ -157,7 +148,12 @@ export function registerSecurityCli(program: Command) {
 
       const lines: string[] = [];
       lines.push(heading("OpenClaw security audit"));
-      lines.push(muted(`Summary: ${formatSummary(report.summary)}`));
+      const summary = [
+        colorize(rich, theme.error, `${report.summary.critical} critical`),
+        colorize(rich, theme.warn, `${report.summary.warn} warn`),
+        colorize(rich, theme.muted, `${report.summary.info} info`),
+      ].join(" · ");
+      lines.push(muted(`Summary: ${summary}`));
       if ((report.suppressedFindings?.length ?? 0) > 0) {
         lines.push(muted(`Suppressed: ${report.suppressedFindings?.length ?? 0} configured`));
       }

@@ -34,6 +34,12 @@ never opens the selected Gateway database. Shared state schema 29 retires
 and removes socket material from `exec_approvals_config`. Approval policy remains
 shared; its meaning and execution authority are unchanged.
 
+The cutover reads socket credentials from the canonical approval JSON, even when
+the legacy SQL path or token-presence projections are stale. It preserves the
+socket path, token, and approval policy; rollback restores the original row,
+including its projections. Invalid socket values in the canonical JSON still
+require repair before migration.
+
 The TypeScript owner and Swift adapter use exclusive SQLite custody in DELETE
 journal mode. A running macOS app owns the bounded operation route; other clients
 use its authenticated control socket first. The app closes the physical database

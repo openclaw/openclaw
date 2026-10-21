@@ -568,12 +568,9 @@ function isPermissionDeniedError(err: unknown): boolean {
   );
 }
 
-export async function hasTailscaleFunnelRouteForPort(
-  port: number,
-  exec: typeof runExec = runExec,
-): Promise<boolean> {
+export async function hasTailscaleFunnelRouteForPort(port: number): Promise<boolean> {
   const tailscaleBin = await getTailscaleBinary();
-  const { stdout } = await exec(tailscaleBin, ["funnel", "status", "--json"], {
+  const { stdout } = await runExec(tailscaleBin, ["funnel", "status", "--json"], {
     maxBuffer: 200_000,
     timeoutMs: 5_000,
   });

@@ -680,7 +680,7 @@ describe("session progress card Gateway response boundary", () => {
     });
     gateway.start();
     current().request.mockResolvedValue({ card: oldCard });
-    current().opts.onHello?.(hello("global"));
+    current().testOptions.onHello?.(hello("global"));
     const store = sessionProgressCardsForGateway(gateway);
     const owner = {};
     onTestFinished(() => {
@@ -695,17 +695,17 @@ describe("session progress card Gateway response boundary", () => {
 
     const staleRead = createDeferred<{ card: typeof oldCard }>();
     current().request.mockReturnValueOnce(staleRead.promise);
-    current().opts.onEvent?.(
+    current().testOptions.onEvent?.(
       createGatewayEvent("progressCard.changed", { sessionKey: oldCard.sessionKey, revision: 2 }),
     );
     const oldRead = store.load(reconnectTarget);
-    current().opts.onEvent?.(
+    current().testOptions.onEvent?.(
       createGatewayEvent("progressCard.changed", { sessionKey: oldCard.sessionKey, revision: 3 }),
     );
     gateway.connect();
     const replacement = current();
     replacement.request.mockResolvedValue({ card: nextCard });
-    replacement.opts.onHello?.(hello("agent:main:main"));
+    replacement.testOptions.onHello?.(hello("agent:main:main"));
     await vi.waitFor(() => expect(store.get(reconnectTarget)).toEqual(nextCard));
     staleRead.resolve({ card: oldCard });
     await expect(oldRead).resolves.toBeNull();
@@ -716,20 +716,20 @@ describe("session progress card Gateway response boundary", () => {
 
     const interruptedRead = createDeferred<{ card: typeof nextCard }>();
     replacement.request.mockReturnValueOnce(interruptedRead.promise);
-    replacement.opts.onEvent?.(
+    replacement.testOptions.onEvent?.(
       createGatewayEvent("progressCard.changed", { sessionKey: nextCard.sessionKey, revision: 2 }),
     );
     const reconnectRead = store.load(reconnectTarget);
-    replacement.opts.onEvent?.(
+    replacement.testOptions.onEvent?.(
       createGatewayEvent("progressCard.changed", { sessionKey: nextCard.sessionKey, revision: 3 }),
     );
-    replacement.opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+    replacement.testOptions.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
     expect(gateway.snapshot.phase).toBe("reconnecting");
     expect(gateway.snapshot.client).toBe(replacement);
     expect(store.get(reconnectTarget)).toEqual(nextCard);
     const refreshedCard = { ...nextCard, revision: 2, markdown: "Progress while disconnected" };
     replacement.request.mockResolvedValue({ card: refreshedCard });
-    replacement.opts.onHello?.(hello("agent:main:main"));
+    replacement.testOptions.onHello?.(hello("agent:main:main"));
     await vi.waitFor(() => expect(store.get(reconnectTarget)).toEqual(refreshedCard));
     interruptedRead.resolve({ card: nextCard });
     await expect(reconnectRead).resolves.toBeNull();

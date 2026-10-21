@@ -531,7 +531,6 @@ async function resolveCliCommandSurfaceOwner(params: {
   const manifestOwner = resolveManifestCliCommandSurfaceOwner({
     command: params.primary,
     config: params.config,
-    env: process.env,
   });
   if (manifestOwner) {
     return manifestOwner;

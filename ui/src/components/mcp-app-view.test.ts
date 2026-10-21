@@ -1,4 +1,4 @@
-import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol";
+import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol/gateway-error-details";
 import { createComponent, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";

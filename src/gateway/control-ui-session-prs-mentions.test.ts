@@ -15,6 +15,16 @@ import {
   requestUrl,
 } from "./control-ui-session-prs.test-support.js";
 
+function mergedPull(number: number, ref: string, sha: string) {
+  return pullListItem({
+    number,
+    html_url: `https://github.com/openclaw/openclaw/pull/${number}`,
+    state: "closed",
+    merged_at: "2026-09-01T00:00:00Z",
+    head: { ref, sha: sha.repeat(40) },
+  });
+}
+
 describe("session PR mention isolation", () => {
   let state: OpenClawTestState;
   const sessionKey = "agent:main:pr-mentions";
@@ -39,26 +49,12 @@ describe("session PR mention isolation", () => {
   it.each(["feature", "main", null])(
     "does not promote assistant links on checkout %s",
     async (branch) => {
-      const workingPull = pullListItem({
-        number: 41,
-        html_url: "https://github.com/openclaw/openclaw/pull/41",
-        state: "closed",
-        merged_at: "2026-09-01T00:00:00Z",
-        head: { ref: "feature", sha: "a".repeat(40) },
-      });
       const fetchImpl = vi.fn<typeof fetch>(async (input) => {
         const url = new URL(requestUrl(input));
-        if (url.pathname.endsWith("/pulls")) {
-          return githubJson([workingPull]);
-        }
         return githubJson(
-          pullListItem({
-            number: 42,
-            html_url: "https://github.com/openclaw/openclaw/pull/42",
-            state: "closed",
-            merged_at: "2026-09-01T00:00:00Z",
-            head: { ref: "unrelated-work", sha: "b".repeat(40) },
-          }),
+          url.pathname.endsWith("/pulls")
+            ? [mergedPull(41, "feature", "a")]
+            : mergedPull(42, "unrelated-work", "b"),
         );
       });
       vi.stubGlobal("fetch", fetchImpl);

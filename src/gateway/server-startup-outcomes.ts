@@ -39,7 +39,6 @@ type GatewayStartupOutcomeRecorderParams = {
   cfg: OpenClawConfig;
   gatewayStartHooks: boolean;
   internalHooksConfigured: boolean;
-  env?: NodeJS.ProcessEnv;
 };
 
 function skipped(
@@ -63,7 +62,7 @@ export function createGatewayStartupOutcomeRecorder(
     ? "hooks-disabled"
     : !params.cfg.hooks.gmail?.account
       ? "no-gmail-account"
-      : isTruthyEnvValue((params.env ?? process.env).OPENCLAW_SKIP_GMAIL_WATCHER)
+      : isTruthyEnvValue(process.env.OPENCLAW_SKIP_GMAIL_WATCHER)
         ? "disabled-by-environment"
         : "scheduled";
 

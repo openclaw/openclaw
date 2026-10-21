@@ -4,8 +4,8 @@ import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-ha
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { AgentHarnessModelCatalogParams } from "./harness/types.js";
+import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import { prepareModelCatalogView } from "./model-catalog-view.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import {
@@ -130,28 +130,17 @@ describe("prepared model runtime config stamps", () => {
       });
       return [row];
     });
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: runtime,
-      source: "fixture",
-      harness: {
-        id: runtime,
-        label: "Native observation fixture",
-        authBootstrap: "harness",
-        supports: () => ({ supported: true }),
-        async runAttempt() {
-          throw new Error("Catalog fixture must not run a model");
-        },
-        loadModelCatalog,
-        readModelCatalogReadiness: (params) => {
-          const observed = observations.get(params.config);
-          return observed !== undefined &&
-            observed.agentDir === params.agentDir &&
-            observed.workspaceDir === params.workspaceDir &&
-            observed.pluginConfig === params.config.plugins?.entries?.[runtime]?.config
-            ? { accountType: "chatgpt", authMode: "oauth" }
-            : undefined;
-        },
+    const registry = harnessRegistry(runtime, {
+      authBootstrap: "harness",
+      loadModelCatalog,
+      readModelCatalogReadiness: (params) => {
+        const observed = observations.get(params.config);
+        return observed !== undefined &&
+          observed.agentDir === params.agentDir &&
+          observed.workspaceDir === params.workspaceDir &&
+          observed.pluginConfig === params.config.plugins?.entries?.[runtime]?.config
+          ? { accountType: "chatgpt", authMode: "oauth" }
+          : undefined;
       },
     });
     mocks.resolveNativeModelPrimary.mockReturnValue("custom/model");

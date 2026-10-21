@@ -175,7 +175,14 @@ export async function runCrabboxCommandWithCoordinatorRetry(
   let coordinatorDetail: string | undefined;
   for (let attempt = 1; ; attempt += 1) {
     const result = await runCrabboxCommand({ ...params, timeoutMs });
-    const transient = isCoordinatorTransportFailure(result);
+    // Fixed-claim resolution precedes script execution; profile setup is safe to repeat.
+    const transient =
+      isCoordinatorTransportFailure(result) ||
+      (params.action === "profile setup" &&
+        result.termination === "exit" &&
+        result.code === 4 &&
+        result.stdout.trim() === "" &&
+        /^lease_id_conflict:[^\r\n]*$/u.test(result.stderr.trim()));
     if (transient) {
       coordinatorDetail = crabboxCommandDetail(result);
     }

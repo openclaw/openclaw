@@ -61,11 +61,11 @@ export function buildSubagentStopConfig(
     deviceAutoApprove: { enabled: true, scopes: [...operatorScopes] },
   };
   return {
+    cron: { enabled: false },
     agents: {
       defaults: {
         workspace,
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
         model: { primary: "synthetic/stop-proof" },
         subagents: { allowAgents: ["*"] },
       },

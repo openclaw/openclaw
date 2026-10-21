@@ -215,7 +215,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
         lastRunPromptUsage,
       }),
       replayInvalid: input.replayState.replayInvalid ? true : undefined,
-      livenessState: "blocked",
     });
     // Escalating provider failures throw above; only returned results carry a terminal stop.
     result.meta.modelFallbackStopReason = "idle_timeout_circuit_breaker";

@@ -18,7 +18,7 @@ import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suite-artifacts.js";
 import { waitForQaHttpReady } from "./suite-http-readiness.js";
 import { shouldUseIsolatedQaSuiteScenarioWorkers } from "./suite-planning.js";
-import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
+import { runQaSuiteScenarioDefinition } from "./suite-runtime-flow.js";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
 import {
   rejectRemovedQaChannelDriverSelection,
@@ -318,7 +318,6 @@ export async function runQaSuiteScenarioDefinitionForRuntime(
   return await runQaSuiteScenarioDefinition({
     env,
     scenario,
-    runScenario: runQaSuiteScenarioSteps,
     constants: {
       imageUnderstandingPngBase64: QA_IMAGE_UNDERSTANDING_PNG_BASE64,
       imageUnderstandingLargePngBase64: QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64,

@@ -1,5 +1,4 @@
 import { formatLlamaCppMemory, type LlamaCppHardware } from "./hardware.js";
-import { LLAMA_SERVER_BUILD } from "./llama-server-assets.js";
 import { resolveLlamaCppDiskBudget, resolveLlamaCppMemoryBudget } from "./model-catalog.js";
 
 const GIB = 1024 ** 3;
@@ -148,11 +147,6 @@ export function recommendLlamaCppMedia(
     kind: "unavailable",
     reason,
   });
-  if (LLAMA_SERVER_BUILD !== 10_809) {
-    return unavailable(
-      `Local media requires verified llama.cpp build 10809; available build is ${String(LLAMA_SERVER_BUILD)}. Use another image provider until these recipes are verified with the new runtime.`,
-    );
-  }
   const memoryBudgetBytes = resolveLlamaCppMemoryBudget(hardware, "cpu");
   const rejections: string[] = [];
   for (const recipe of LLAMA_CPP_MEDIA_RECIPES) {

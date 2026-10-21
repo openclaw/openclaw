@@ -110,7 +110,7 @@ describe("prepared reply fallback ownership", () => {
       workspaceDir: dispatch.workspaceDir,
       thinkingRuntime: "openclaw",
     });
-    const warning = vi.fn();
+    using warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     reply.execute.mockImplementation(async () => {
       const pluginGeneration = getPreparedModelRuntimePluginGeneration()!;
       expect(pluginGeneration).not.toBe(dispatch.pluginGeneration);
@@ -119,7 +119,6 @@ describe("prepared reply fallback ownership", () => {
         identity: { runId: "reply-context-fallback", sessionId: "reply-context-fallback" },
         agentDir: dispatch.agentDir,
         workspaceDir: dispatch.workspaceDir,
-        warn: warning,
       });
       try {
         expect(contextEngine.effectiveEngineId).toBe("legacy");

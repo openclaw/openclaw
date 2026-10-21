@@ -104,7 +104,6 @@ function createPluginReloadHandler(
       reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
-      reconcileSystemJobs: vi.fn(async () => "converged" as const),
     },
   };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };

@@ -1,5 +1,6 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { createFeishuClient } from "./client.js";
+import { extractFeishuApiErrorMeta } from "./comment-shared.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 type FeishuLogger = (...args: unknown[]) => void;
@@ -40,18 +41,6 @@ function writeCache(key: string, entry: CacheEntry): void {
   pruneMapToMaxSize(cache, MAX_CACHE_ENTRIES);
 }
 
-function readFeishuErrorCode(error: unknown): number | undefined {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  const data = (error as { response?: { data?: unknown } }).response?.data;
-  if (!data || typeof data !== "object") {
-    return undefined;
-  }
-  const code = (data as { code?: unknown }).code;
-  return typeof code === "number" ? code : undefined;
-}
-
 async function requestBotName(params: {
   account: ResolvedFeishuAccount;
   openId: string;
@@ -76,7 +65,7 @@ async function requestBotName(params: {
       log(`feishu[${account.accountId}]: bot name lookup failed (code=${code})`);
     }
   } catch (error) {
-    if (readFeishuErrorCode(error) === 99991672) {
+    if (extractFeishuApiErrorMeta(error).feishuCode === 99991672) {
       log(`feishu[${account.accountId}]: bot.basic_info scope not granted`);
     } else {
       log(`feishu[${account.accountId}]: bot name lookup failed: ${String(error)}`);

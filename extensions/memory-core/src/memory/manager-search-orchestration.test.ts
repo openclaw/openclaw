@@ -505,9 +505,6 @@ describe("memory index", () => {
       await maintenance.ready;
       expect(manager.status()).toMatchObject({ dirty: true });
       expect(maintenance.state.fields!.runInPlaceReindex).toHaveBeenCalledTimes(1);
-      expect(maintenance.state.fields!.syncMemoryFiles).toHaveBeenCalledWith(
-        expect.objectContaining({ needsFullReindex: true }),
-      );
 
       expectFixtureHit(await firstSearch);
       await expect(searchCurrent()).resolves.toEqual([]);

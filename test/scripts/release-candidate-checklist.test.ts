@@ -307,12 +307,14 @@ describe("release candidate checklist", () => {
     telegramRunId?: string;
     retainedHelperRequest?: boolean;
     sdkAcknowledgement?: string;
+    sdkReport?: boolean;
     generatedFailure?: boolean;
   };
 
   it.each<QualificationCase>([
     ...["", "deadbeef", "f4b495f3"].map<QualificationCase>((sdkAcknowledgement) => ({
       sdkAcknowledgement,
+      sdkReport: sdkAcknowledgement === "",
     })),
     { launch: "npm-only", generatedFailure: true },
     { workflowSha: "b".repeat(40), savedToolingTag: "release-publish/bbbbbbbbbbbb-100" },
@@ -426,6 +428,7 @@ describe("release candidate checklist", () => {
       telegramRunId,
       retainedHelperRequest,
       sdkAcknowledgement,
+      sdkReport,
       generatedFailure,
     }) => {
       const { root: targetRoot, git } = candidateGitFixture({
@@ -624,6 +627,7 @@ describe("release candidate checklist", () => {
             env: {},
             execPath: process.execPath,
           },
+          TextDecoder,
           DEFAULT_REPO: "openclaw/openclaw",
           resolvePath: (...paths: string[]) => join(...paths),
           console: { log, warn: log },
@@ -679,7 +683,10 @@ describe("release candidate checklist", () => {
           validateCandidateChangelogProvenance: () => ({ status: "passed", shippedBaselines: [] }),
           runLocalGeneratedCheckIfNeeded: generatedChecks,
           releaseBranchForTag,
-          readFileSync: () => readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
+          readFileSync: (file: string) =>
+            file.endsWith("plugin-sdk-api-release-diff.md")
+              ? readFileSync(file)
+              : readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
           waitForSuccessfulRun: async (_repo: string, runId: string) => {
             if (dispatches.length === 0) {
               expect(generatedChecks).not.toHaveBeenCalled();
@@ -691,7 +698,26 @@ describe("release candidate checklist", () => {
               source: { workflowRef: options.workflowRef },
             };
           },
-          downloadArtifact: () => {},
+          downloadArtifact: (_repo: string, _runId: string, name: string, outputDir: string) => {
+            if (sdkReport && name.startsWith("plugin-sdk-api-release-diff-")) {
+              mkdirSync(outputDir, { recursive: true });
+              writeFileSync(
+                join(outputDir, "plugin-sdk-api-release-diff.md"),
+                [
+                  "# Plugin SDK API diff",
+                  "",
+                  "latest: v2026.8.1 → fixture",
+                  "",
+                  "Acknowledgement digest: `f4b495f3`",
+                  "",
+                  "## Exports added (1)",
+                  "",
+                  "- `openclaw/plugin-sdk` — `send`",
+                  "",
+                ].join("\n"),
+              );
+            }
+          },
           readJson: (file: string) =>
             file === statePath || file.endsWith("frv-request.json")
               ? JSON.parse(readFileSync(file, "utf8"))
@@ -758,7 +784,14 @@ describe("release candidate checklist", () => {
         expect(error.message).toContain(
           "Plugin SDK API changes require acknowledgement digest f4b495f3",
         );
-        expect(error.message).toContain("Review the Plugin SDK API diff before rerunning.");
+        if (sdkReport) {
+          expect(error.message).toContain("## Exports added (1)");
+          expect(error.message).toContain("- `openclaw/plugin-sdk` — `send`");
+        } else {
+          expect(error.message).toContain(
+            "Review the Plugin SDK API diff artifact before rerunning.",
+          );
+        }
         const command = error.message.split("\n").at(-1);
         const decoded = execFileSync(
           "bash",

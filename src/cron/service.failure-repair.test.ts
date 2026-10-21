@@ -30,8 +30,8 @@ function expectNotifications(f: RepairFixture, repairs: number, alerts: number, 
   expect(f.runCronFailureRepair).toHaveBeenCalledTimes(repairs);
   expect(f.sendCronFailureAlert).toHaveBeenCalledTimes(alerts);
   if (notices !== undefined) {
-    expect(f.enqueueSystemEvent).toHaveBeenCalledTimes(notices);
-    expect(f.requestHeartbeat).toHaveBeenCalledTimes(notices);
+    expect(f.enqueueSessionEvent).toHaveBeenCalledTimes(notices);
+    expect(f.requestHeartbeat).not.toHaveBeenCalled();
   }
 }
 
@@ -116,7 +116,7 @@ describe("CronService failure repair", () => {
         sessionKey: ownerSessionKey,
         repairId: expect.any(String),
       });
-      expect(f.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(f.enqueueSessionEvent).not.toHaveBeenCalled();
       expect(f.requestHeartbeat).not.toHaveBeenCalled();
       const brief = request?.message ?? "";
       expect(brief).toContain(`(id ${job.id}), created in this conversation, failed 2`);
@@ -398,7 +398,7 @@ describe("CronService failure repair", () => {
           expect(f.runScriptJob).toHaveBeenCalledOnce();
           expectNotifications(f, repairs, alerts, notices);
           if (notices) {
-            expect(f.enqueueSystemEvent).toHaveBeenCalledWith(
+            expect(f.enqueueSessionEvent).toHaveBeenCalledWith(
               expect.stringContaining("auto-disabled"),
               expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
             );

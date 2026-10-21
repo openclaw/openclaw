@@ -1,9 +1,6 @@
 /** Reads the selected Gateway catalog or an explicitly identified local published view. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type {
-  ModelChoice,
-  ModelsListParams,
-} from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
+import type { ModelsListParams } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
@@ -14,7 +11,7 @@ import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { startProxy, stopProxy } from "../../infra/net/proxy/proxy-lifecycle.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { getModelCatalogWarnings, readSelectedGatewayModelCatalog } from "./catalog-warnings.js";
-import { formatTag, formatTokenK, isRich, padTerminalCell, truncate } from "./list.format.js";
+import { formatTokenK, isRich, padTerminalCell, truncate } from "./list.format.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
 import { ensureFlagCompatibility, resolveModelsTargetAgent } from "./shared.js";
@@ -26,31 +23,6 @@ const MODEL_PAD = 42;
 const INPUT_PAD = 10;
 const CTX_PAD = 11;
 const STATE_PAD = 5;
-
-function formatContextLabel(row: ModelRow): string {
-  if (
-    typeof row.contextTokens === "number" &&
-    Number.isFinite(row.contextTokens) &&
-    row.contextTokens > 0 &&
-    row.contextTokens !== row.contextWindow
-  ) {
-    return `${formatTokenK(row.contextTokens)}/${formatTokenK(row.contextWindow)}`;
-  }
-  return formatTokenK(row.contextWindow);
-}
-
-function toCliModelRow(model: ModelChoice): ModelRow {
-  return {
-    key: modelKey(model.provider, model.id),
-    name: model.name,
-    input: model.input?.join("+") || "-",
-    contextWindow: model.contextWindow ?? null,
-    ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
-    local: model.local ?? null,
-    available: model.available ?? null,
-    tags: [...new Set([...(model.tags ?? []), ...(model.alias ? [`alias:${model.alias}`] : [])])],
-  };
-}
 
 export async function modelsListCommand(
   opts: {
@@ -175,7 +147,16 @@ export async function modelsListCommand(
   }
   const rows = result.models
     .filter((model) => !opts.local || model.local === true)
-    .map(toCliModelRow);
+    .map((model): ModelRow => ({
+      key: modelKey(model.provider, model.id),
+      name: model.name,
+      input: model.input?.join("+") || "-",
+      contextWindow: model.contextWindow ?? null,
+      contextTokens: model.contextTokens,
+      local: model.local ?? null,
+      available: model.available ?? null,
+      tags: [...new Set([...(model.tags ?? []), ...(model.alias ? [`alias:${model.alias}`] : [])])],
+    }));
   if (rows.length === 0 && !opts.json && !opts.plain) {
     runtime.log("No models found.");
   } else if (opts.json) {
@@ -202,7 +183,26 @@ export async function modelsListCommand(
   } else {
     const rich = isRich(opts);
     const formatRowTag = rich
-      ? (tag: string) => formatTag(sanitizeTerminalText(tag))
+      ? (rawTag: string) => {
+          const tag = sanitizeTerminalText(rawTag);
+          switch (tag) {
+            case "default":
+              return theme.success(tag);
+            case "image":
+              return theme.accentBright(tag);
+            case "configured":
+              return theme.accent(tag);
+            case "missing":
+              return theme.error(tag);
+          }
+          if (tag.startsWith("fallback#") || tag.startsWith("img-fallback#")) {
+            return theme.warn(tag);
+          }
+          if (tag.startsWith("alias:")) {
+            return theme.accentDim(tag);
+          }
+          return theme.muted(tag);
+        }
       : sanitizeTerminalText;
     const formatState = (value: boolean | null, unavailableColor = theme.muted) =>
       colorize(
@@ -228,10 +228,17 @@ export async function modelsListCommand(
         padTerminalCell(sanitizeTerminalText(row.input) || "-", INPUT_PAD),
       );
 
+      const contextLabel =
+        typeof row.contextTokens === "number" &&
+        Number.isFinite(row.contextTokens) &&
+        row.contextTokens > 0 &&
+        row.contextTokens !== row.contextWindow
+          ? `${formatTokenK(row.contextTokens)}/${formatTokenK(row.contextWindow)}`
+          : formatTokenK(row.contextWindow);
       const line = [
         rich ? theme.accent(keyLabel) : keyLabel,
         coloredInput,
-        padTerminalCell(formatContextLabel(row), CTX_PAD),
+        padTerminalCell(contextLabel, CTX_PAD),
         formatState(row.local),
         formatState(row.available, theme.error),
         row.tags.map(formatRowTag).join(","),

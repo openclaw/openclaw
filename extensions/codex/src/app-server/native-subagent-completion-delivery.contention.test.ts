@@ -56,10 +56,11 @@ describe("native completion durable receipts", () => {
       retirement = parent.unregister();
       await entered.promise;
       observer = await f.register(client);
-      await observer.ready;
       observer.bindTurn("observer-turn");
       await client.notify(nativeCompletionNotification({ turnId: "observer-turn", result }));
       release.resolve();
+      // Restoration drains the retirement write, so release the test gate before awaiting it.
+      await observer.ready;
       await retirement;
       await observer.unregister();
       expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual(

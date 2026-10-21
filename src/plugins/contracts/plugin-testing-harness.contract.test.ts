@@ -7,13 +7,23 @@ import {
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 
-const echoCases = typedCases([
-  { message: "alpha", expected: "scoped:alpha" },
-  { message: "beta", expected: "scoped:beta" },
-]);
+function echoTool(prefix: string, home: string) {
+  return {
+    name: "fixture_echo",
+    label: "Fixture Echo",
+    description: "Echo a fixture value",
+    parameters: {},
+    execute: async (_toolCallId: string, params: unknown) => {
+      const message = (params as { message: string }).message;
+      return {
+        content: [{ type: "text" as const, text: `${prefix}:${message}` }],
+        details: { home, message },
+      };
+    },
+  };
+}
 
 describePluginRegistrationContract(pluginRegistrationContractCases.brave);
 
@@ -31,13 +41,7 @@ describe("plugin testing harness contracts", () => {
       expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
 
       const { config, registry } = createPluginRegistryFixture({
-        plugins: {
-          entries: {
-            "fixture-echo": {
-              config: { prefix: "scoped" },
-            },
-          },
-        },
+        plugins: { entries: { "fixture-echo": { config: { prefix: "scoped" } } } },
       });
 
       registerVirtualTestPlugin({
@@ -51,36 +55,26 @@ describe("plugin testing harness contracts", () => {
           if (typeof prefix !== "string") {
             throw new Error("fixture prefix missing");
           }
-          api.registerTool({
-            name: "fixture_echo",
-            label: "Fixture Echo",
-            description: "Echo a fixture value",
-            parameters: {},
-            execute: async (_toolCallId, params) => {
-              const message = (params as { message: string }).message;
-              return {
-                content: [{ type: "text", text: `${prefix}:${message}` }],
-                details: { home, message },
-              };
-            },
-          });
+          api.registerTool(echoTool(prefix, home));
         },
       });
 
       expect(registry.registry.tools).toHaveLength(1);
       const registration = registry.registry.tools[0];
-      expect(registration?.pluginId).toBe("fixture-echo");
-      expect(registration?.names).toEqual(["fixture_echo"]);
+      expect(registration).toMatchObject({ pluginId: "fixture-echo", names: ["fixture_echo"] });
       const tool = registration?.factory({ workspaceDir: home });
       if (!tool || Array.isArray(tool)) {
         throw new Error("expected one registered fixture tool");
       }
       expect(tool.name).toBe("fixture_echo");
 
-      for (const testCase of echoCases) {
-        await expect(tool.execute("fixture-call", { message: testCase.message })).resolves.toEqual({
-          content: [{ type: "text", text: testCase.expected }],
-          details: { home, message: testCase.message },
+      for (const [message, expected] of [
+        ["alpha", "scoped:alpha"],
+        ["beta", "scoped:beta"],
+      ]) {
+        await expect(tool.execute("fixture-call", { message })).resolves.toEqual({
+          content: [{ type: "text", text: expected }],
+          details: { home, message },
         });
       }
       expect(registry.registry.diagnostics).toEqual([]);
@@ -92,13 +86,7 @@ describe("plugin testing harness contracts", () => {
         id: "missing-contract",
         name: "Missing Contract",
         register(api) {
-          api.registerTool({
-            name: "fixture_echo",
-            label: "Fixture Echo",
-            description: "Echo a fixture value",
-            parameters: {},
-            execute: async () => ({ content: [], details: {} }),
-          });
+          api.registerTool(echoTool("unused", home));
         },
       });
 

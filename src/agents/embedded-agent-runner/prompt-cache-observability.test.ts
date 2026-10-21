@@ -54,6 +54,8 @@ describe("prompt cache observability", () => {
     expect(complete(6_000)?.providerPrefix).toBe("unverified-after:512");
     input[513] = { ...message, content: "changed tail" };
     expect(complete(3_000)?.providerPrefix).toBe("message-tail:512");
+    input.length = 31;
+    expect(complete(0)?.providerPrefix).toBe("message:31.removed");
   });
 
   beforeEach(() => {

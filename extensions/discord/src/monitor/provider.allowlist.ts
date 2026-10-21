@@ -136,101 +136,6 @@ function collectChannelResolutionInputs(guildEntries: GuildEntries): ChannelReso
   return entries;
 }
 
-async function resolveGuildEntriesByChannelAllowlist(params: {
-  token: string;
-  guildEntries: GuildEntries;
-  fetcher: typeof fetch;
-  runtime: RuntimeEnv;
-  channelPolicyBindings: DiscordChannelPolicyBinding[];
-  guildPolicyBindings: Map<string, string>;
-}): Promise<GuildEntries> {
-  const entries = collectChannelResolutionInputs(params.guildEntries);
-  if (entries.length === 0) {
-    return params.guildEntries;
-  }
-  try {
-    const resolved = await resolveDiscordChannelAllowlist({
-      token: params.token,
-      entries: entries.map((entry) => entry.input),
-      fetcher: params.fetcher,
-    });
-    const sourceByInput = new Map(entries.map((entry) => [entry.input, entry]));
-    const nextGuilds = { ...params.guildEntries };
-    const mappingByTarget = new Map<string, DiscordChannelResolvedGroup>();
-    const unresolved: string[] = [];
-    for (const entry of resolved) {
-      const source = sourceByInput.get(entry.input);
-      if (!source) {
-        continue;
-      }
-      const sourceGuild = params.guildEntries[source.guildKey] ?? {};
-      if (!entry.resolved || !entry.guildId) {
-        unresolved.push(formatDiscordChannelUnresolved(entry));
-        continue;
-      }
-      // The first resolved alias owns the same precedence as nextGuilds below.
-      if (!params.guildPolicyBindings.has(entry.guildId)) {
-        params.guildPolicyBindings.set(entry.guildId, source.guildKey);
-      }
-      if (source.channelKey && entry.channelId && source.channelKey !== entry.channelId) {
-        params.channelPolicyBindings.push({
-          guildKey: source.guildKey,
-          channelKey: source.channelKey,
-          channelId: entry.channelId,
-        });
-      }
-      const target = entry.channelId ? `${entry.guildId}/${entry.channelId}` : entry.guildId;
-      const existingGroup =
-        mappingByTarget.get(target) ??
-        ({
-          target,
-          aliases: [],
-          guildName: entry.guildName,
-          channelName: entry.channelName,
-          note: entry.note,
-        } satisfies DiscordChannelResolvedGroup);
-      if (entry.input !== target && !existingGroup.aliases.includes(entry.input)) {
-        existingGroup.aliases.push(entry.input);
-      }
-      for (const key of ["guildName", "channelName", "note"] as const) {
-        if (!existingGroup[key] && entry[key]) {
-          existingGroup[key] = entry[key];
-        }
-      }
-      mappingByTarget.set(target, existingGroup);
-      const existing = nextGuilds[entry.guildId] ?? {};
-      let mergedChannels = {
-        ...sourceGuild.channels,
-        ...existing.channels,
-      };
-      if (source.channelKey && entry.channelId) {
-        const sourceChannel = sourceGuild.channels?.[source.channelKey];
-        if (sourceChannel) {
-          mergedChannels = {
-            ...mergedChannels,
-            [entry.channelId]: { ...sourceChannel, ...mergedChannels[entry.channelId] },
-          };
-        }
-      }
-      nextGuilds[entry.guildId] = {
-        ...sourceGuild,
-        ...existing,
-        channels: mergedChannels,
-      };
-    }
-    const mapping = [...mappingByTarget.values()].map((group) =>
-      formatDiscordChannelResolvedGroup(group),
-    );
-    summarizeMapping("discord channels", mapping, unresolved, params.runtime);
-    return nextGuilds;
-  } catch (err) {
-    params.runtime.log?.(
-      `discord channel resolve failed; using config entries. ${formatErrorMessage(err)}`,
-    );
-    return params.guildEntries;
-  }
-}
-
 async function resolveUserAllowlist<T>(
   params: { token: string; fetcher: typeof fetch; runtime: RuntimeEnv },
   existing: T,
@@ -289,12 +194,95 @@ export async function resolveDiscordAllowlistConfig(params: {
   const guildPolicyBindings = new Map<string, string>();
 
   if (hasGuildEntries(guildEntries)) {
-    guildEntries = await resolveGuildEntriesByChannelAllowlist({
-      ...params,
-      guildEntries,
-      channelPolicyBindings,
-      guildPolicyBindings,
-    });
+    const sourceGuildEntries = guildEntries;
+    const { token, fetcher, runtime } = params;
+    guildEntries = await (async (): Promise<GuildEntries> => {
+      const entries = collectChannelResolutionInputs(sourceGuildEntries);
+      if (entries.length === 0) {
+        return sourceGuildEntries;
+      }
+      try {
+        const resolved = await resolveDiscordChannelAllowlist({
+          token,
+          entries: entries.map((entry) => entry.input),
+          fetcher,
+        });
+        const sourceByInput = new Map(entries.map((entry) => [entry.input, entry]));
+        const nextGuilds = { ...sourceGuildEntries };
+        const mappingByTarget = new Map<string, DiscordChannelResolvedGroup>();
+        const unresolved: string[] = [];
+        for (const entry of resolved) {
+          const source = sourceByInput.get(entry.input);
+          if (!source) {
+            continue;
+          }
+          const sourceGuild = sourceGuildEntries[source.guildKey] ?? {};
+          if (!entry.resolved || !entry.guildId) {
+            unresolved.push(formatDiscordChannelUnresolved(entry));
+            continue;
+          }
+          // The first resolved alias owns the same precedence as nextGuilds below.
+          if (!guildPolicyBindings.has(entry.guildId)) {
+            guildPolicyBindings.set(entry.guildId, source.guildKey);
+          }
+          if (source.channelKey && entry.channelId && source.channelKey !== entry.channelId) {
+            channelPolicyBindings.push({
+              guildKey: source.guildKey,
+              channelKey: source.channelKey,
+              channelId: entry.channelId,
+            });
+          }
+          const target = entry.channelId ? `${entry.guildId}/${entry.channelId}` : entry.guildId;
+          const existingGroup =
+            mappingByTarget.get(target) ??
+            ({
+              target,
+              aliases: [],
+              guildName: entry.guildName,
+              channelName: entry.channelName,
+              note: entry.note,
+            } satisfies DiscordChannelResolvedGroup);
+          if (entry.input !== target && !existingGroup.aliases.includes(entry.input)) {
+            existingGroup.aliases.push(entry.input);
+          }
+          for (const key of ["guildName", "channelName", "note"] as const) {
+            if (!existingGroup[key] && entry[key]) {
+              existingGroup[key] = entry[key];
+            }
+          }
+          mappingByTarget.set(target, existingGroup);
+          const existing = nextGuilds[entry.guildId] ?? {};
+          let mergedChannels = {
+            ...sourceGuild.channels,
+            ...existing.channels,
+          };
+          if (source.channelKey && entry.channelId) {
+            const sourceChannel = sourceGuild.channels?.[source.channelKey];
+            if (sourceChannel) {
+              mergedChannels = {
+                ...mergedChannels,
+                [entry.channelId]: { ...sourceChannel, ...mergedChannels[entry.channelId] },
+              };
+            }
+          }
+          nextGuilds[entry.guildId] = {
+            ...sourceGuild,
+            ...existing,
+            channels: mergedChannels,
+          };
+        }
+        const mapping = [...mappingByTarget.values()].map((group) =>
+          formatDiscordChannelResolvedGroup(group),
+        );
+        summarizeMapping("discord channels", mapping, unresolved, runtime);
+        return nextGuilds;
+      } catch (err) {
+        runtime.log?.(
+          `discord channel resolve failed; using config entries. ${formatErrorMessage(err)}`,
+        );
+        return sourceGuildEntries;
+      }
+    })();
   }
   setDiscordPolicyBindings(params.accountId, channelPolicyBindings, guildPolicyBindings);
 

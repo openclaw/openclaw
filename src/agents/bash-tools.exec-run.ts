@@ -54,10 +54,9 @@ import {
 import {
   attachExecApprovalReview,
   buildExecForegroundResult,
-  createExecHostResolver,
-  resolveExecElevatedMode,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
+import { resolveExecElevatedMode, resolveExecHost } from "./bash-tools.exec-target.js";
 import type {
   ExecToolApprovalReview,
   ExecToolDefaults,
@@ -167,7 +166,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
-  const resolveHostForParams = createExecHostResolver(defaults);
   const buildUnavailableWorkdirResult = (params: {
     cwd: string;
     startedAt?: number;
@@ -185,7 +183,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const requestPreparation = createExecRequestPreparation({
     defaults,
     agentId,
-    resolveHostForParams,
+    resolveHostForParams: (params) => resolveExecHost(params, defaults),
   });
   const tool: AgentToolWithMeta<typeof execSchema, ExecToolDetails> = {
     name: "exec",
@@ -286,7 +284,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             .join("\n"),
         );
       }
-      const host = resolveHostForParams(params);
+      const host = resolveExecHost(params, defaults);
       const foregroundFallbackWarning =
         (host === "node" || !backgroundAvailable) &&
         (params.background === true || typeof params.yieldMs === "number")

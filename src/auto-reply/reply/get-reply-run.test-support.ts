@@ -76,22 +76,19 @@ export function createSessionTurn<
 export function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
 ): Parameters<typeof runPreparedReply>[0] {
+  const route = {
+    ThreadHistoryBody: "Earlier message in this thread",
+    OriginatingChannel: "slack",
+    OriginatingTo: "C123",
+    ChatType: "group",
+  };
   const defaults = {
-    ctx: {
-      ...createInboundBody(""),
-      ThreadHistoryBody: "Earlier message in this thread",
-      OriginatingChannel: "slack",
-      OriginatingTo: "C123",
-      ChatType: "group",
-    },
+    ctx: { ...createInboundBody(""), ...route },
     sessionCtx: {
       ...createSessionBody(""),
-      ThreadHistoryBody: "Earlier message in this thread",
+      ...route,
       media: [{ path: "/tmp/input.png" }],
       Provider: "slack",
-      ChatType: "group",
-      OriginatingChannel: "slack",
-      OriginatingTo: "C123",
     },
     cfg: { session: {}, channels: {}, agents: { defaults: {} } },
     agentId: "default",
@@ -111,10 +108,7 @@ export function baseParams(
     } as never,
     commandSource: "",
     allowTextCommands: true,
-    directives: {
-      hasThinkDirective: false,
-      thinkLevel: undefined,
-    } as never,
+    directives: { hasThinkDirective: false, thinkLevel: undefined } as never,
     defaultActivation: "always",
     resolvedThinkLevel: "high",
     resolvedVerboseLevel: "off",
@@ -176,9 +170,6 @@ export function baseParams(
 
 export function ownerParams(): Parameters<typeof runPreparedReply>[0] {
   const params = baseParams();
-  params.command = {
-    ...params.command,
-    senderIsOwner: true,
-  };
+  params.command.senderIsOwner = true;
   return params;
 }

@@ -553,6 +553,49 @@ describe("checkGatewayHealth", () => {
     );
   });
 
+  it.each([
+    ["auth profile migration required", "auth profile migration required", "doctor --fix", ""],
+    [
+      "auth profile migration required",
+      "auth profile migration required",
+      "doctor --fix",
+      "repair-test",
+    ],
+    ["secret reference was not found", "secret reference was not found", "secrets reload", ""],
+    ["private unknown reason", "secret resolution failed", "secrets reload", ""],
+  ])(
+    "reports the remedy for %s in Doctor (%s, %s, %s)",
+    async (_reason, redacted, command, profile) => {
+      vi.stubEnv("OPENCLAW_PROFILE", profile);
+      vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
+      callGateway
+        .mockResolvedValueOnce({
+          degradedSecretOwners: [
+            {
+              ownerKind: "route",
+              ownerId: "legacy-agent",
+              state: "unavailable",
+              degradationState: "cold",
+              paths: ["auth-profile-legacy:auth-profiles"],
+              reason: redacted,
+            },
+          ],
+        })
+        .mockResolvedValue({});
+
+      await expect(checkGatewayHealth({ runtime: sharedRuntime, cfg })).resolves.toMatchObject({
+        healthOk: true,
+        authenticated: true,
+      });
+
+      const retryHint = `openclaw${profile ? ` --profile ${profile}` : ""} ${command}`;
+      expect(note).toHaveBeenCalledWith(
+        `- cold route:legacy-agent (auth-profile-legacy:auth-profiles): ${redacted}\n  Retry: ${retryHint}`,
+        "Secret runtime degradation",
+      );
+    },
+  );
+
   it("lists every degraded SecretRef owner reported by Gateway status", async () => {
     callGateway
       .mockResolvedValueOnce({
@@ -633,6 +676,15 @@ describe("checkGatewayHealth", () => {
       ].join("\n"),
       "Plugins configured unavailable",
     );
+  });
+
+  it("shows the Gateway's observed model reasoning mismatch and remediation", async () => {
+    const warning = "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.";
+    callGateway.mockResolvedValue({ modelReasoningWarning: warning });
+
+    await checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(warning, "Model reasoning");
   });
 
   it("reports a typed close without depending on gateway error wording", async () => {

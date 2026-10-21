@@ -160,7 +160,6 @@ it.skipIf(process.platform === "win32")(
           operator,
           root,
           capacity: 1,
-          capacityWaitMs: 0,
           nodeConfig: config,
         });
         expect(node.identity.deviceId).toBe(identity.deviceId);

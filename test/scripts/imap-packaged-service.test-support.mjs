@@ -195,7 +195,7 @@ try {
     (expected === "red" ? [1, 2] : [1, 2, 4, 5]).map((uid) => `hook:imap:fixture:7:${uid}`),
   );
   assert.equal(cursor.lastSeenUid, expected === "red" ? 3 : 5);
-  assert.equal(stores.get("skip-count").lookup("fixture:sender-not-allowed").count, 1);
+  assert(logs.includes("imap: account=fixture uid=3 domain=example.test gate=sender-not-allowed"));
   assert(dispatched[0].message.includes("Plain control."));
   assert(dispatched[1].message.includes("Multipart control."));
   if (expected === "red") {

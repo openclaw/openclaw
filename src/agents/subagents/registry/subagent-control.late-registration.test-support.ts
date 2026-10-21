@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
-import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import * as killSession from "./subagent-control-session.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
@@ -223,7 +222,6 @@ export function registerLateDescendantControlTests({
           await pending;
         } finally {
           await Promise.all(reservationReleases);
-          swarmSchedulerTesting.reset();
         }
       }
     },

@@ -290,7 +290,6 @@ suite.define(() => {
           ...buildGatewaySessionSnapshot({
             sessionRow: session,
             agentId: "main",
-            includeSession: true,
           }),
           placement: session.placement,
           placementMove: null,

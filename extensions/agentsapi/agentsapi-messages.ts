@@ -50,7 +50,6 @@ export class AgentsApiMessageProjection {
   readonly reply: AgentsApiReply = { assistantUsage: makeAgentsApiZeroUsage() };
   private readonly items = new Map<string, NativeTextState>();
   private readonly turnByItem = new Map<string, string>();
-  private readonly unknownTypes = new Set<string>();
   private readonly usageByTurn = new Map<string, NormalizedUsage>();
   private canonicalUsageRecorded = false;
   private readonly nativeTools: AgentsApiNativeToolProjection;
@@ -218,10 +217,6 @@ export class AgentsApiMessageProjection {
     }
     if (event.type.startsWith("agent.session.environment.")) {
       await this.emitEnvironment(event);
-      return;
-    }
-    if (!INTERNAL_EVENT_TYPES.has(event.type)) {
-      this.recordUnknownType(event.type);
     }
   }
 
@@ -406,7 +401,6 @@ export class AgentsApiMessageProjection {
       return;
     }
     if (item.type !== "message" && item.type !== "reasoning") {
-      this.recordUnknownType(`item:${item.type}`);
       return;
     }
     const id = this.identity(turnId, item.id);
@@ -599,7 +593,6 @@ export class AgentsApiMessageProjection {
   private async emitEnvironment(event: AgentsApiEvent): Promise<void> {
     const status = event.type.slice("agent.session.environment.".length);
     if (!ENVIRONMENT_TITLES.has(status)) {
-      this.recordUnknownType(event.type);
       return;
     }
     await this.emit({
@@ -617,17 +610,6 @@ export class AgentsApiMessageProjection {
             }),
         source: "agentsapi",
       },
-    });
-  }
-
-  private recordUnknownType(type: string): void {
-    const safeType = type.replace(/[^a-zA-Z0-9_.:-]/gu, "?").slice(0, 128);
-    if (this.unknownTypes.size >= 20 || this.unknownTypes.has(safeType)) {
-      return;
-    }
-    this.unknownTypes.add(safeType);
-    embeddedAgentLog.debug("Agents API projection omitted an unfamiliar native type", {
-      type: safeType,
     });
   }
 
@@ -673,27 +655,6 @@ export class AgentsApiMessageProjection {
     );
   }
 }
-
-const INTERNAL_EVENT_TYPES = new Set([
-  "error",
-  "agent.session.created",
-  "agent.session.idle",
-  "agent.session.in_progress",
-  "agent.session.requires_action",
-  "agent.session.failed",
-  "agent.session.error",
-  "agent.session.turn.created",
-  "agent.session.turn.in_progress",
-  "agent.session.turn.completed",
-  "agent.session.turn.failed",
-  "agent.session.turn.cancelled",
-  "agent.session.turn.content_part.added",
-  "agent.session.turn.content_part.done",
-  // Native delegation remains disabled until child history and settlement exist.
-  "agent.session.subagent.active",
-  "agent.session.subagent.closed",
-  "agent.session.subagent.created",
-]);
 
 const ENVIRONMENT_TITLES = new Map([
   ["pending", "Agent environment starting"],

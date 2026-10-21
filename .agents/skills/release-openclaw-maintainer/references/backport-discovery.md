@@ -115,6 +115,32 @@ git show <baseline-sha>:<producer-path>
 git log -p -S '<contract-symbol>' <pinned-main-sha> -- <producer-path>
 ```
 
+Run the bounded companion audit for every selected commit. Repeat `--selected`
+for an ordered group. Before picks, omit `--candidate`; after picks, supply the
+final candidate so the report compares the selected main file set with the
+actual baseline-to-candidate delta.
+
+```bash
+pnpm release:backport-companions -- \
+  --baseline <pinned-maintenance-baseline> \
+  --scan-end <pinned-main-sha> \
+  --selected <selected-main-sha> \
+  --candidate <final-candidate-sha>
+```
+
+Disposition every reported later same-path commit, later mention of the
+selected PR number, existing neighbor test, selected-file reference/registry,
+candidate file-set difference, and candidate content difference. A whole-file
+difference is inspection evidence, not a failure: a release adaptation or the
+final selected companion sequence can differ legitimately. This scan is
+heuristic and never establishes dependency closure or approval: manually trace
+symbols, callers, imports/exports, producers, workflows, registries, generated
+inputs, and differently named or cross-directory tests. Record
+`present-equivalent`, `selected`, `missing`, or `not-applicable` in the
+existing backport ledger. Missing or unverified rows keep the group blocked.
+Do not silence a candidate merely because it is not a dependency, and do not
+automatically cherry-pick it.
+
 Read callers and sibling consumers too. For an IPC-readiness consumer, check
 that the baseline's fixture producer emits the expected receipt and preserves
 any shell/file-readiness callers. For an imported fixture helper, check the

@@ -6,7 +6,6 @@ import { createReplyOperation } from "../../../sessions/session-controller.opera
 import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
-import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import type { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
 import { runSubagentStateWorkerOperation } from "./subagent-control.test-support.js";
@@ -211,7 +210,6 @@ export function registerQueuedReservationFailureTests({
       }
     } finally {
       await Promise.all(reservationReleases);
-      swarmSchedulerTesting.reset();
     }
   });
 }

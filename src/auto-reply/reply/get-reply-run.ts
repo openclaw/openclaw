@@ -2,6 +2,7 @@ import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runt
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRetentionOwner } from "../../plugins/plugin-retention-diagnostics.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { ReplyPayload } from "../types.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
@@ -17,6 +18,16 @@ import {
 
 /** Runs a prepared reply turn after session, prompt, queue, and policy state are resolved. */
 export async function runPreparedReply(
+  inputParams: RunPreparedReplyParams,
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  return withPluginRetentionOwner(
+    { agentId: inputParams.agentId, sessionKey: inputParams.sessionKey },
+    () => runPreparedReplyWithOwner(inputParams),
+  );
+}
+
+// Attribute acquisitions before preparation; the admitted runner adds its run ID.
+async function runPreparedReplyWithOwner(
   inputParams: RunPreparedReplyParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const source = prepareReplySourceInput(inputParams.sessionCtx, inputParams.cfg, inputParams.opts);

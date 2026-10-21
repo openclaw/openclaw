@@ -36,7 +36,6 @@ import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
-  type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asRecord,
@@ -129,16 +128,12 @@ function isOfficialFirecrawlEndpoint(url: URL): boolean {
   return url.protocol === "https:" && ALLOWED_FIRECRAWL_HOSTS.has(url.hostname);
 }
 
-async function firecrawlEndpointTargetsPrivateNetwork(
-  url: URL,
-  lookupFn?: LookupFn,
-): Promise<boolean> {
+async function firecrawlEndpointTargetsPrivateNetwork(url: URL): Promise<boolean> {
   if (isBlockedHostnameOrIp(url.hostname)) {
     return true;
   }
   try {
     const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, {
-      lookupFn,
       policy: { allowPrivateNetwork: true },
     });
     return pinned.addresses.every((address) => isPrivateIpAddress(address));
@@ -147,10 +142,7 @@ async function firecrawlEndpointTargetsPrivateNetwork(
   }
 }
 
-async function validateFirecrawlBaseUrl(
-  url: URL,
-  lookupFn?: LookupFn,
-): Promise<FirecrawlEndpointMode> {
+async function validateFirecrawlBaseUrl(url: URL): Promise<FirecrawlEndpointMode> {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("Firecrawl baseUrl must use http:// or https://.");
   }
@@ -158,7 +150,7 @@ async function validateFirecrawlBaseUrl(
     return "strict";
   }
 
-  const isPrivateTarget = await firecrawlEndpointTargetsPrivateNetwork(url, lookupFn);
+  const isPrivateTarget = await firecrawlEndpointTargetsPrivateNetwork(url);
   if (isPrivateTarget) {
     return "selfHosted";
   }
@@ -171,10 +163,9 @@ async function validateFirecrawlBaseUrl(
 async function resolveEndpoint(
   baseUrl: string,
   pathname: "/v2/search" | "/v2/scrape",
-  lookupFn?: LookupFn,
 ): Promise<FirecrawlResolvedEndpoint> {
   const url = new URL(baseUrl.trim() || DEFAULT_FIRECRAWL_BASE_URL);
-  const mode = await validateFirecrawlBaseUrl(url, lookupFn);
+  const mode = await validateFirecrawlBaseUrl(url);
   url.username = "";
   url.password = "";
   url.search = "";

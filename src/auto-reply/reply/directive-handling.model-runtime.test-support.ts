@@ -20,7 +20,6 @@ type RuntimeDirectiveTestHarness = {
     sessionEntry?: SessionEntry;
     provider?: string;
     model?: string;
-    initialModelLabel?: string;
   }) => Promise<{
     result: Awaited<ReturnType<typeof applyInlineDirectiveOverrides>>;
     sessionEntry: SessionEntry;
@@ -31,14 +30,29 @@ type RuntimeDirectiveTestHarness = {
 };
 
 export function registerModelRuntimeDirectiveTests(harness: RuntimeDirectiveTestHarness): void {
-  const {
-    setOpenAiRuntimeScopedUltraProvider,
-    createSessionEntry,
-    createGptAliasIndex,
-    persistModelDirectiveForTest,
-    queueMocks,
-    stickyModelMock,
-  } = harness;
+  const { createSessionEntry, persistModelDirectiveForTest, queueMocks, stickyModelMock } = harness;
+  const pinnedSession = () =>
+    createSessionEntry({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      agentRuntimeOverride: "claude-cli",
+      nativeRuntimeConsent: "claude-cli",
+    });
+  const selectGpt = (runtime: "openclaw" | "codex", sessionEntry: SessionEntry) => {
+    const models = { "openai/gpt-4o": { agentRuntime: { id: runtime } } };
+    const model = { provider: "openai", id: "gpt-4o", name: "GPT-4o" };
+    return persistModelDirectiveForTest({
+      command: "/model gpt -s",
+      directiveOnly: true,
+      aliasIndex: harness.createGptAliasIndex(),
+      allowedModelKeys: ["openai/gpt-4o"],
+      allowedModelCatalog: [
+        { ...model, ...(runtime === "codex" ? { nativeRuntime: runtime } : { reasoning: false }) },
+      ],
+      cfg: { agents: { defaults: { models } } },
+      sessionEntry,
+    });
+  };
   it("rejects an explicit incompatible runtime without changing the session", async () => {
     const sessionEntry = createSessionEntry({
       providerOverride: "openai",
@@ -54,36 +68,13 @@ export function registerModelRuntimeDirectiveTests(harness: RuntimeDirectiveTest
       sessionEntry,
       provider: "openai",
       model: "gpt-4o",
-      initialModelLabel: "openai/gpt-4o",
     });
     expect(persisted.errorText).toContain('Runtime "codex" is not supported');
     expect(sessionEntry).toEqual(initial);
   });
 
   it("switches a directive-only alias to configured routing and clears incompatible consent", async () => {
-    const cfg: OpenClawConfig = {
-      commands: { text: true },
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-6",
-          models: { "openai/gpt-4o": { agentRuntime: { id: "openclaw" } } },
-        },
-      },
-    };
-    const { result, sessionEntry } = await persistModelDirectiveForTest({
-      command: "/model gpt -s",
-      directiveOnly: true,
-      cfg,
-      aliasIndex: createGptAliasIndex(),
-      allowedModelKeys: ["openai/gpt-4o"],
-      allowedModelCatalog: [{ provider: "openai", id: "gpt-4o", name: "GPT-4o", reasoning: false }],
-      sessionEntry: createSessionEntry({
-        providerOverride: "anthropic",
-        modelOverride: "claude-opus-4-6",
-        agentRuntimeOverride: "claude-cli",
-        nativeRuntimeConsent: "claude-cli",
-      }),
-    });
+    const { result, sessionEntry } = await selectGpt("openclaw", pinnedSession());
     expect(result).toMatchObject({
       kind: "reply",
       reply: { text: expect.stringContaining("Model set to gpt (openai/gpt-4o)") },
@@ -102,31 +93,12 @@ export function registerModelRuntimeDirectiveTests(harness: RuntimeDirectiveTest
   });
 
   it("validates configured native runtime availability after implicitly clearing a pin", async () => {
-    const sessionEntry = createSessionEntry({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6",
-      agentRuntimeOverride: "claude-cli",
-      nativeRuntimeConsent: "claude-cli",
-    });
+    const sessionEntry = pinnedSession();
     const initial = { ...sessionEntry };
     await vi.mocked(preparePublishedModelRuntimeChoice).withImplementation(
       async () => ({ kind: "unavailable", message: "Configured native runtime is unavailable." }),
       async () => {
-        const { result } = await persistModelDirectiveForTest({
-          command: "/model gpt -s",
-          directiveOnly: true,
-          cfg: {
-            agents: {
-              defaults: { models: { "openai/gpt-4o": { agentRuntime: { id: "codex" } } } },
-            },
-          },
-          aliasIndex: createGptAliasIndex(),
-          allowedModelKeys: ["openai/gpt-4o"],
-          allowedModelCatalog: [
-            { provider: "openai", id: "gpt-4o", name: "GPT-4o", nativeRuntime: "codex" },
-          ],
-          sessionEntry,
-        });
+        const { result } = await selectGpt("codex", sessionEntry);
         expect(result).toMatchObject({
           kind: "reply",
           reply: { text: "Configured native runtime is unavailable.", isError: true },
@@ -137,32 +109,29 @@ export function registerModelRuntimeDirectiveTests(harness: RuntimeDirectiveTest
     expect(queueMocks.refreshQueuedFollowupSession).not.toHaveBeenCalled();
     expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
-  it.each(["openclaw"])(
-    "commits %s selection while keeping supported mixed thinking on its turn",
-    async (runtime) => {
-      setOpenAiRuntimeScopedUltraProvider();
-      const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
-      const { persisted, result } = await persistModelDirectiveForTest({
-        command: `/model openai/gpt-5.6-luna --runtime ${runtime} /think ultra please solve`,
-        allowedModelKeys: ["openai/gpt-5.6-luna"],
-        sessionEntry,
-      });
+  it("commits openclaw selection while keeping supported mixed thinking on its turn", async () => {
+    harness.setOpenAiRuntimeScopedUltraProvider();
+    const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
+    const { persisted, result } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-5.6-luna --runtime openclaw /think ultra please solve",
+      allowedModelKeys: ["openai/gpt-5.6-luna"],
+      sessionEntry,
+    });
 
-      expect(persisted.errorText).toBeUndefined();
-      expect(result).toMatchObject({
-        kind: "continue",
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        directives: { thinkLevel: "ultra" },
-        directiveAck: { text: expect.stringContaining("Thinking level set to ultra.") },
-      });
-      expect(sessionEntry).toMatchObject({
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-luna",
-        modelOverrideSource: "user",
-        agentRuntimeOverride: runtime,
-        thinkingLevel: "high",
-      });
-    },
-  );
+    expect(persisted.errorText).toBeUndefined();
+    expect(result).toMatchObject({
+      kind: "continue",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      directives: { thinkLevel: "ultra" },
+      directiveAck: { text: expect.stringContaining("Thinking level set to ultra.") },
+    });
+    expect(sessionEntry).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.6-luna",
+      modelOverrideSource: "user",
+      agentRuntimeOverride: "openclaw",
+      thinkingLevel: "high",
+    });
+  });
 }

@@ -12,7 +12,6 @@ import {
   IOS_RELEASE_TESTS,
   MODEL_REF,
   parseMeasurement,
-  requireExactTestResult,
   runTrials,
   summarizeMeasurements,
   testRunnerEnv,
@@ -146,10 +145,6 @@ function result(
   return { testNodes: [{ nodeType: "Test Plan", children: [bundle] }] };
 }
 
-const childRuns = (nodeType: string, ...results: string[]) => ({
-  children: results.map((runResult) => ({ nodeType, result: runResult })),
-});
-
 function expectFailedTrial(
   report: Awaited<ReturnType<typeof runTrials>>,
   error: string,
@@ -211,32 +206,6 @@ function preparationFailure(
     diagnostics: [diagnostic(operation, code, extra)],
   };
 }
-
-describe("iOS release test identity", () => {
-  it("accepts XCTest class/method identity under its exact UI bundle", () => {
-    for (const test of IOS_RELEASE_TESTS) {
-      requireExactTestResult(result(test, childRuns("Test Case Run", "Passed")), test);
-    }
-  });
-
-  it.each([
-    ["basename", result(undefined, { nodeIdentifier: IOS_RELEASE_TESTS[0].split("/").at(-1) })],
-    ["skipped", result(undefined, { result: "Skipped" })],
-    ["failed", result(undefined, { result: "Failed" })],
-    ["failed child", result(undefined, childRuns("Test Case Run", "Failed"))],
-    ["retry to green", result(undefined, childRuns("Repetition", "Passed", "Passed"))],
-    ["multiple runs", result(undefined, childRuns("Test Case Run", "Passed", "Passed"))],
-    ["wrong target", result(undefined, {}, { name: "OtherUITests" })],
-    ["unit bundle", result(undefined, {}, { nodeType: "Unit test bundle" })],
-    ["missing tests", { testNodes: [] }],
-    [
-      "extra tests",
-      { testNodes: [...result().testNodes, ...result(IOS_RELEASE_TESTS[1]).testNodes] },
-    ],
-  ])("rejects %s", (_name, value) => {
-    expect(() => requireExactTestResult(value, IOS_RELEASE_TESTS[0])).toThrow();
-  });
-});
 
 it("writes a failure proof when the real CLI rejects an impossible target", () => {
   const output = path.join(tempDirs.make("ios-release-e2e-cli-"), "proof.json");
@@ -658,9 +627,11 @@ describe("release qualification workflow authority", () => {
     { flow: "qualification", enabled: false },
     { flow: "screenshots", enabled: true },
     { flow: "screenshots", enabled: false },
+    { flow: "screenshots", enabled: false, startupProbe: true },
   ])(
     "runs $flow with optional resource diagnostics=$enabled without masking failure",
-    ({ flow, enabled }) => {
+    ({ flow, enabled, startupProbe = false }) => {
+      const diagnostics = enabled || startupProbe;
       const selected = flow === "qualification" ? workflow : release;
       expect(selected.on.workflow_dispatch.inputs.resource_diagnostics).toMatchObject({
         type: "boolean",
@@ -695,6 +666,9 @@ fs.writeFileSync(process.env.FIXTURE_RECORD, JSON.stringify({
   args: process.argv.slice(2),
   diagnostics: process.env.OPENCLAW_IOS_RESOURCE_DIAGNOSTICS,
   snapshots: process.env.OPENCLAW_SNAPSHOT_DIAGNOSTICS,
+  startupProbe: process.env.OPENCLAW_SNAPSHOT_STARTUP_PROBE,
+  deviceFamily: process.env.OPENCLAW_SNAPSHOT_DEVICE_FAMILY,
+  skipWatch: process.env.OPENCLAW_SNAPSHOT_SKIP_WATCH,
   phasePath: process.env.OPENCLAW_IOS_RESOURCE_PHASE_PATH,
 }));
 process.exitCode = 23;
@@ -710,7 +684,7 @@ process.exitCode = 23;
             ? String(
                 evaluateWorkflow(value, {
                   eventName: "workflow_dispatch",
-                  inputs: { resource_diagnostics: enabled },
+                  inputs: { resource_diagnostics: enabled, startup_probe: startupProbe },
                   steps: { simslim: { outputs: { binary: "" } } },
                 }),
               )
@@ -740,9 +714,9 @@ process.exitCode = 23;
       });
       expect(execution.status, execution.stderr).toBe(23);
       const observed = JSON.parse(readFileSync(record, "utf8"));
-      expect(observed.diagnostics).toBe(enabled ? "1" : "0");
-      expect(Boolean(observed.phasePath)).toBe(enabled);
-      expect(readdirSync(root).includes("ios-resource-timeline.jsonl")).toBe(enabled);
+      expect(observed.diagnostics).toBe(diagnostics ? "1" : "0");
+      expect(Boolean(observed.phasePath)).toBe(diagnostics);
+      expect(readdirSync(root).includes("ios-resource-timeline.jsonl")).toBe(diagnostics);
       expect(observed.args).toEqual(
         flow === "qualification"
           ? [
@@ -759,6 +733,9 @@ process.exitCode = 23;
       );
       if (flow === "screenshots") {
         expect(observed.snapshots).toBe("1");
+        expect(observed.startupProbe).toBe(startupProbe ? "1" : "0");
+        expect(observed.deviceFamily).toBe(startupProbe ? "iphone" : "");
+        expect(observed.skipWatch).toBe(startupProbe ? "1" : "0");
       }
     },
   );

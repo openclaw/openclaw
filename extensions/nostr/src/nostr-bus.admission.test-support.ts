@@ -24,6 +24,25 @@ export function registerNostrAdmissionTests() {
   let relay: Awaited<ReturnType<typeof createNostrRelayFixture>>;
   let bus: Awaited<ReturnType<typeof startNostrBus>> | undefined;
   const enqueuedIds: string[] = [];
+  const onMessage = vi.fn(async () => {});
+  let completed = createDeferred<void>();
+
+  async function start(options: Partial<Parameters<typeof startNostrBus>[0]> = {}) {
+    bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onError: (error, context) => errors.push(context + ": " + error.message),
+      accountId: "default",
+      relays: [relay.url],
+      admissionPubkeys: [approvedPubkey],
+      onMessage,
+      trackIngressTask: (task) => {
+        const completion = completed;
+        void task.then(() => completion.resolve());
+      },
+      ...options,
+    });
+    await relay.subscribed;
+  }
 
   function dm(key: Uint8Array, text: string): Event {
     return finalizeEvent(
@@ -38,6 +57,8 @@ export function registerNostrAdmissionTests() {
   }
 
   beforeEach(async () => {
+    onMessage.mockReset().mockImplementation(async () => {});
+    completed = createDeferred<void>();
     errors.length = 0;
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "nostr-admission-"));
     enqueuedIds.length = 0;
@@ -77,7 +98,6 @@ export function registerNostrAdmissionTests() {
   it.each([0, 200])(
     "delivers approved DM after %i signed denied events without persisting them",
     async (count) => {
-      const onMessage = vi.fn(async () => {});
       const authorizeSender = vi.fn(
         async ({ senderPubkey }: { senderPubkey: string }): Promise<"allow" | "block"> =>
           senderPubkey === approvedPubkey ? "allow" : "block",
@@ -85,13 +105,7 @@ export function registerNostrAdmissionTests() {
       const tasks: Promise<void>[] = [];
       const received = createDeferred<void>();
       let seen = 0;
-      bus = await startNostrBus({
-        privateKey: TEST_HEX_PRIVATE_KEY,
-        onError: (error, context) => errors.push(context + ": " + error.message),
-        accountId: "default",
-        relays: [relay.url],
-        admissionPubkeys: [approvedPubkey],
-        onMessage,
+      await start({
         authorizeSender,
         trackIngressTask: (task) => {
           tasks.push(task);
@@ -100,7 +114,6 @@ export function registerNostrAdmissionTests() {
           }
         },
       });
-      await relay.subscribed;
       const denied = Array.from({ length: count }, (_, i) =>
         dm(new Uint8Array(32).fill(3 + Math.floor(i / 20)), "denied-" + i),
       );
@@ -128,23 +141,10 @@ export function registerNostrAdmissionTests() {
   );
 
   it("does not grant authorization to a matching literal author", async () => {
-    const onMessage = vi.fn(async () => {});
-    const done = createDeferred<void>();
     const authorizeSender = vi.fn(async () => "block" as const);
-    bus = await startNostrBus({
-      privateKey: TEST_HEX_PRIVATE_KEY,
-      onError: (error, context) => errors.push(context + ": " + error.message),
-      relays: [relay.url],
-      admissionPubkeys: [approvedPubkey],
-      onMessage,
-      authorizeSender,
-      trackIngressTask: (task) => {
-        void task.then(() => done.resolve());
-      },
-    });
-    await relay.subscribed;
+    await start({ accountId: undefined, authorizeSender });
     relay.sendIncoming([dm(approved, "not authorized")]);
-    await done.promise;
+    await completed.promise;
     expect(errors).toEqual([]);
     expect(authorizeSender).toHaveBeenCalledOnce();
     expect(onMessage).not.toHaveBeenCalled();
@@ -152,24 +152,10 @@ export function registerNostrAdmissionTests() {
 
   it("retains the default 200-event allowed admission cap and resets after 60 seconds", async () => {
     const keys = Array.from({ length: 11 }, (_, i) => new Uint8Array(32).fill(30 + i));
-    const onMessage = vi.fn(async () => {});
-    let completed = createDeferred<void>();
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
-      bus = await startNostrBus({
-        privateKey: TEST_HEX_PRIVATE_KEY,
-        onError: (error, context) => errors.push(context + ": " + error.message),
-        accountId: "default",
-        relays: [relay.url],
-        admissionPubkeys: keys.map(getPublicKey),
-        onMessage,
-        trackIngressTask: (task) => {
-          const completion = completed;
-          void task.then(() => completion.resolve());
-        },
-      });
-      await relay.subscribed;
+      await start({ admissionPubkeys: keys.map(getPublicKey) });
       for (let i = 0; i < 201; i++) {
         completed = createDeferred<void>();
         relay.sendIncoming([dm(keys[Math.floor(i / 20)]!, "allowed-" + i)]);

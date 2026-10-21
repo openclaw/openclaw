@@ -40,7 +40,6 @@ import {
 
 const log = createSubsystemLogger("extensions/lmstudio/stream");
 
-type StreamOptions = Parameters<StreamFn>[2];
 type StreamModel = Parameters<StreamFn>[0];
 
 const preloadInFlight = new Map<string, Promise<LmstudioPreparedModel | undefined>>();
@@ -74,41 +73,6 @@ function withLmstudioUsageCompat(model: StreamModel): StreamModel {
   };
 }
 
-async function resolveLmstudioPreloadRequest(params: {
-  baseUrl: string;
-  modelKey: string;
-  requestedContextLength?: number;
-  timeoutMs?: number;
-  options: StreamOptions;
-  model: StreamModel;
-  ctx: ProviderWrapStreamFnContext;
-}) {
-  const providerConfig = params.ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
-  const providerHeaders = { ...providerConfig?.headers, ...params.model.headers };
-  const runtimeApiKey = params.options?.apiKey?.trim();
-  const timeoutMs = params.timeoutMs ?? 120_000;
-  const headers = await resolveLmstudioProviderHeaders({
-    config: params.ctx.config,
-    headers: providerHeaders,
-  });
-  return {
-    baseUrl: params.baseUrl,
-    apiKey:
-      runtimeApiKey && !isNonSecretApiKeyMarker(runtimeApiKey)
-        ? runtimeApiKey
-        : await resolveLmstudioRuntimeApiKey({
-            config: params.ctx.config,
-            agentDir: params.ctx.agentDir,
-            headers: providerHeaders,
-          }),
-    headers,
-    fetchImpl: buildGuardedModelFetch({ ...params.model, baseUrl: params.baseUrl }, timeoutMs),
-    modelKey: params.modelKey,
-    requestedContextLength: params.requestedContextLength,
-    timeoutMs,
-  };
-}
-
 export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): StreamFn {
   const underlying = ctx.streamFn ?? streamSimple;
   // LM Studio does not ride the shared OpenAI provider hook stack, so the
@@ -137,19 +101,38 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
     const requestedContextLength =
       asPositiveSafeInteger(model.contextTokens) ?? asPositiveSafeInteger(model.contextWindow);
     return (async () => {
-      let request: Awaited<ReturnType<typeof resolveLmstudioPreloadRequest>>;
-      try {
-        request = await resolveLmstudioPreloadRequest({
+      async function resolveLmstudioPreloadRequest() {
+        const requestedTimeoutMs =
+          clampPositiveTimerTimeoutMs(options?.timeoutMs ?? asRecord(model).requestTimeoutMs) ??
+          finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds);
+        const preloadProviderConfig = ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
+        const providerHeaders = { ...preloadProviderConfig?.headers, ...model.headers };
+        const runtimeApiKey = options?.apiKey?.trim();
+        const timeoutMs = requestedTimeoutMs ?? 120_000;
+        const headers = await resolveLmstudioProviderHeaders({
+          config: ctx.config,
+          headers: providerHeaders,
+        });
+        return {
           baseUrl: resolvedBaseUrl,
+          apiKey:
+            runtimeApiKey && !isNonSecretApiKeyMarker(runtimeApiKey)
+              ? runtimeApiKey
+              : await resolveLmstudioRuntimeApiKey({
+                  config: ctx.config,
+                  agentDir: ctx.agentDir,
+                  headers: providerHeaders,
+                }),
+          headers,
+          fetchImpl: buildGuardedModelFetch({ ...model, baseUrl: resolvedBaseUrl }, timeoutMs),
           modelKey,
           requestedContextLength,
-          timeoutMs:
-            clampPositiveTimerTimeoutMs(options?.timeoutMs ?? asRecord(model).requestTimeoutMs) ??
-            finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds),
-          options,
-          model,
-          ctx,
-        });
+          timeoutMs,
+        };
+      }
+      let request: Awaited<ReturnType<typeof resolveLmstudioPreloadRequest>>;
+      try {
+        request = await resolveLmstudioPreloadRequest();
       } catch (error) {
         options?.signal?.throwIfAborted();
         log.warn(`LM Studio inference preload failed for "${modelKey}": ${String(error)}`);

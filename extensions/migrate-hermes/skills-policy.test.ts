@@ -1,78 +1,48 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  resolvePreferredOpenClawTmpDir,
-  tempWorkspace,
-  type TempWorkspace,
-} from "openclaw/plugin-sdk/temp-path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildHermesMigrationProvider } from "./provider.js";
-import { makeConfigRuntime, makeContext, writeFile } from "./test/provider-helpers.js";
+import { useHermesFixture } from "./test/migration-fixture.js";
+import { makeConfigRuntime, writeFile } from "./test/provider-helpers.js";
 
-let workspace: TempWorkspace;
+const fixture = useHermesFixture();
+const provider = buildHermesMigrationProvider();
+const readSkill = (root: string, name: string) =>
+  fs.readFile(path.join(root, "skills", name, "SKILL.md"), "utf8");
+const writeSkill = (name: string, content: string) =>
+  writeFile(path.join(fixture.paths.source, "skills", name, "SKILL.md"), content);
+const plannedCopy = (directory: string, skillName: string) =>
+  expect.objectContaining({
+    action: "copy",
+    status: "planned",
+    target: path.join(fixture.paths.workspaceDir, "skills", directory),
+    details: expect.objectContaining({ skillName }),
+  });
+const configEntry = (name: string, value: object, status = "planned") =>
+  expect.objectContaining({ status, details: { path: ["skills", "entries", name], value } });
 
 describe("Hermes skill activation policy migration", () => {
-  beforeEach(async () => {
-    workspace = await tempWorkspace({
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-hermes-skills-policy-",
-    });
-  });
-
-  afterEach(async () => {
-    await workspace.cleanup();
-  });
-
   it("plans skill config and disabled state as independently conflicting entries", async () => {
-    const source = path.join(workspace.dir, "hermes");
-    const workspaceDir = path.join(workspace.dir, "workspace");
+    const { source } = fixture.paths;
     await writeFile(
       path.join(source, "config.yaml"),
       "skills:\n  disabled: [hidden-skill]\n  config:\n    hidden-skill:\n      mode: careful\n    selected-skill:\n      mode: fast\n",
     );
-    await writeFile(
-      path.join(source, "skills", "hidden-directory", "SKILL.md"),
-      "---\nname: hidden-skill\ndescription: Hidden skill\n---\n",
-    );
-    await writeFile(
-      path.join(source, "skills", "selected-directory", "SKILL.md"),
-      "\uFEFF---\r\nname: selected-skill\r\ndescription: Selected skill\r\n---\r\n",
-    );
-    const ctx = makeContext({ source, stateDir: path.join(workspace.dir, "state"), workspaceDir });
+    await writeSkill("hidden-directory", "---\nname: hidden-skill\n---\n");
+    await writeSkill("selected-directory", "\uFEFF---\r\nname: selected-skill\r\n---\r\n");
+    const ctx = fixture.context();
     ctx.config.skills = { entries: { "hidden-skill": { enabled: true } } };
 
-    const plan = await buildHermesMigrationProvider().plan(ctx);
+    const plan = await provider.plan(ctx);
 
     expect(plan.items.filter((item) => item.kind === "skill")).toEqual([
-      expect.objectContaining({
-        action: "copy",
-        status: "planned",
-        target: path.join(workspaceDir, "skills", "hidden-directory"),
-        details: expect.objectContaining({ skillName: "hidden-skill" }),
-      }),
-      expect.objectContaining({
-        action: "copy",
-        status: "planned",
-        target: path.join(workspaceDir, "skills", "selected-directory"),
-        details: expect.objectContaining({ skillName: "selected-skill" }),
-      }),
+      plannedCopy("hidden-directory", "hidden-skill"),
+      plannedCopy("selected-directory", "selected-skill"),
     ]);
     expect(plan.items.filter((item) => item.kind === "config")).toEqual([
-      expect.objectContaining({
-        status: "conflict",
-        details: {
-          path: ["skills", "entries", "hidden-skill"],
-          value: { config: { mode: "careful" }, enabled: false },
-        },
-      }),
-      expect.objectContaining({
-        status: "planned",
-        details: {
-          path: ["skills", "entries", "selected-skill"],
-          value: { config: { mode: "fast" } },
-        },
-      }),
+      configEntry("hidden-skill", { config: { mode: "careful" }, enabled: false }, "conflict"),
+      configEntry("selected-skill", { config: { mode: "fast" } }),
     ]);
   });
 
@@ -86,15 +56,12 @@ describe("Hermes skill activation policy migration", () => {
     ["sequence", "- name: ignored-name"],
     ["malformed", "name: [unterminated"],
   ])("keeps the directory name and planned copy for %s frontmatter", async (_, frontmatter) => {
-    const source = path.join(workspace.dir, "hermes");
-    const workspaceDir = path.join(workspace.dir, "workspace");
+    const { source, workspaceDir } = fixture.paths;
     const skillSource = path.join(source, "skills", "review-directory");
     const contents = `---\n${frontmatter}\n---\n# Review\n`;
-    await writeFile(path.join(skillSource, "SKILL.md"), contents);
+    await writeSkill("review-directory", contents);
 
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({ source, stateDir: path.join(workspace.dir, "state"), workspaceDir }),
-    );
+    const plan = await provider.plan(fixture.context());
 
     expect(plan.items).toEqual([
       expect.objectContaining({
@@ -107,7 +74,7 @@ describe("Hermes skill activation policy migration", () => {
         details: { skillName: "review-directory" },
       }),
     ]);
-    expect(await fs.readFile(path.join(skillSource, "SKILL.md"), "utf8")).toBe(contents);
+    expect(await readSkill(source, "review-directory")).toBe(contents);
   });
 
   it.each([
@@ -115,50 +82,38 @@ describe("Hermes skill activation policy migration", () => {
     ["scalar name", "hidden-skill"],
     ["Python literal array string", "\"['hidden-skill']\""],
   ])("keeps globally disabled skills disabled from a %s", async (_, disabled) => {
-    const source = path.join(workspace.dir, "hermes");
-    const workspaceDir = path.join(workspace.dir, "workspace");
+    const { source, workspaceDir } = fixture.paths;
     await writeFile(
       path.join(source, "config.yaml"),
       `skills:\n  disabled: ${disabled}\n  config:\n    hidden-skill:\n      mode: careful\n`,
     );
     const skillContents = "---\nname: hidden-skill\ndescription: Hidden skill\n---\n# Hidden\n";
-    await writeFile(path.join(source, "skills", "hidden-skill", "SKILL.md"), skillContents);
-    const ctx = makeContext({ source, stateDir: path.join(workspace.dir, "state"), workspaceDir });
+    await writeSkill("hidden-skill", skillContents);
+    const ctx = fixture.context();
     ctx.runtime = makeConfigRuntime(ctx.config);
 
-    const result = await buildHermesMigrationProvider().apply(ctx);
+    const result = await provider.apply(ctx);
 
     expect(result.summary.errors).toBe(0);
     expect(ctx.config.skills?.entries?.["hidden-skill"]).toEqual({
       config: { mode: "careful" },
       enabled: false,
     });
-    expect(
-      await fs.readFile(path.join(workspaceDir, "skills", "hidden-skill", "SKILL.md"), "utf8"),
-    ).toBe(skillContents);
+    expect(await readSkill(workspaceDir, "hidden-skill")).toBe(skillContents);
   });
 
   it.each([undefined, "current", "../previous"])(
     "imports only the active organization mirror (%s)",
     async (activeOrg) => {
-      const source = path.join(workspace.dir, "hermes");
-      const workspaceDir = path.join(workspace.dir, "workspace");
+      const { source, workspaceDir } = fixture.paths;
       for (const org of ["current", "previous"]) {
-        await writeFile(
-          path.join(source, "skills", "_org", org, "review", "SKILL.md"),
-          `# ${org} review\n`,
-        );
+        await writeSkill(`_org/${org}/review`, `# ${org} review\n`);
       }
-      await writeFile(path.join(source, "skills", "personal", "SKILL.md"), "# Personal\n");
+      await writeSkill("personal", "# Personal\n");
       if (activeOrg) {
         await writeFile(path.join(source, "skills", "_org", ".active_org"), `${activeOrg}\n`);
       }
-      const provider = buildHermesMigrationProvider();
-      const ctx = makeContext({
-        source,
-        stateDir: path.join(workspace.dir, "state"),
-        workspaceDir,
-      });
+      const ctx = fixture.context();
       const plan = await provider.plan(ctx);
       const validOrg = activeOrg === "current" || activeOrg === "previous";
 
@@ -170,9 +125,7 @@ describe("Hermes skill activation policy migration", () => {
       const result = await provider.apply(ctx, plan);
       expect(result.summary.errors).toBe(0);
       if (validOrg) {
-        expect(
-          await fs.readFile(path.join(workspaceDir, "skills", "review", "SKILL.md"), "utf8"),
-        ).toBe(`# ${activeOrg} review\n`);
+        expect(await readSkill(workspaceDir, "review")).toBe(`# ${activeOrg} review\n`);
       } else {
         await expect(fs.access(path.join(workspaceDir, "skills", "review"))).rejects.toThrow();
       }

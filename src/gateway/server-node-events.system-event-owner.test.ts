@@ -24,105 +24,91 @@ it.each([
 ])("preserves the loaded global owner for $name", async ({ name, event, explicit, denied }) => {
   requestHeartbeat.mockClear();
   resetSystemEventsForTest();
-  await withOpenClawTestState(
-    { label: "node-event-owner", layout: "state-only" },
-    async (state) => {
-      const config = {
-        agents: {
-          ownership: "explicit" as const,
-          defaults: { systemAgent: { agentId: "research" } },
-          entries: { main: {}, research: {} },
-        },
-        session: {
-          scope: "global" as const,
-          store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-        },
-      };
-      setRuntimeConfigSnapshot(config, config);
-      for (const agentId of ["main", "research"]) {
-        await replaceSessionEntry(
-          { agentId, sessionKey: "global" },
-          { sessionId: `${agentId}-session`, updatedAt: 1 },
-        );
-      }
-      const authorizeNodeSystemRunEvent = vi.fn(() => !denied);
-      const ctx: NodeEventContext = {
-        deps: {},
-        broadcast: () => {},
-        nodeSendToSession: () => {},
-        nodeSubscribe: () => {},
-        nodeUnsubscribe: () => {},
-        broadcastVoiceWakeChanged: () => {},
-        addChatRun: () => {},
-        removeChatRun: () => undefined,
-        dedupe: new Map(),
-        agentRunSeq: new Map(),
-        getHealthCache: () => null,
-        refreshHealthSnapshot: async () => {
-          throw new Error("Unexpected health refresh");
-        },
-        loadGatewayModelCatalog: async () => [],
-        authorizeNodeSystemRunEvent,
-        logGateway: { warn: vi.fn() },
-      };
-      const runId = `node-owner-${name}`;
-      const result = await handleNodeEvent(
-        ctx,
-        "node-owner",
-        {
-          event,
-          payloadJSON: JSON.stringify({
-            ...(explicit ? { sessionKey: "agent:research:main" } : {}),
-            change: "posted",
-            key: "notification-owner",
-            title: "Owned notification",
-            runId,
-            exitCode: 0,
-            output: "owned exec result",
-          }),
-        },
-        { connId: "owner-connection" },
+  await withOpenClawTestState({ label: "node-owner", layout: "state-only" }, async (state) => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "research" } },
+        entries: { main: {}, research: {} },
+      },
+      session: {
+        scope: "global" as const,
+        store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    };
+    setRuntimeConfigSnapshot(config, config);
+    for (const agentId of ["main", "research"]) {
+      await replaceSessionEntry(
+        { agentId, sessionKey: "global" },
+        { sessionId: `${agentId}-session`, updatedAt: 1 },
       );
-
-      expect(peekSystemEvents("agent:main:global")).toEqual([]);
-      if (event === "exec.finished") {
-        expect(authorizeNodeSystemRunEvent).toHaveBeenCalledExactlyOnceWith({
-          nodeId: "node-owner",
-          connId: "owner-connection",
+    }
+    const authorizeNodeSystemRunEvent = vi.fn(() => !denied);
+    const ctx: NodeEventContext = {
+      deps: {},
+      broadcast: () => {},
+      nodeSendToSession: () => {},
+      nodeSubscribe: () => {},
+      nodeUnsubscribe: () => {},
+      broadcastVoiceWakeChanged: () => {},
+      addChatRun: () => {},
+      removeChatRun: () => undefined,
+      dedupe: new Map(),
+      agentRunSeq: new Map(),
+      getHealthCache: () => null,
+      refreshHealthSnapshot: async () => {
+        throw new Error("Unexpected health refresh");
+      },
+      loadGatewayModelCatalog: async () => [],
+      authorizeNodeSystemRunEvent,
+      logGateway: { warn: vi.fn() },
+    };
+    const runId = `node-owner-${name}`;
+    const result = await handleNodeEvent(
+      ctx,
+      "node-owner",
+      {
+        event,
+        payloadJSON: JSON.stringify({
+          ...(explicit ? { sessionKey: "agent:research:main" } : {}),
+          change: "posted",
+          key: "notification-owner",
+          title: "Owned notification",
           runId,
-          sessionKey: "agent:research:main",
-          event: "exec.finished",
-        });
-      }
-      if (denied) {
-        expect(result).toMatchObject({ handled: false, reason: "unmatched_exec_event" });
-        expect(peekSystemEvents("agent:research:global")).toEqual([]);
-        expect(requestHeartbeat).not.toHaveBeenCalled();
-        return;
-      }
-      expect(result).toBeUndefined();
-      expect(peekSystemEvents("agent:research:global")).toEqual([
-        expect.stringContaining(
-          event === "exec.finished" ? "owned exec result" : "Owned notification",
-        ),
-      ]);
-      expect(requestHeartbeat).toHaveBeenCalledExactlyOnceWith(
-        event === "exec.finished"
-          ? {
-              source: "exec-event",
-              intent: "event",
-              reason: "exec-event",
-              coalesceMs: 0,
-              agentId: "research",
-            }
-          : {
-              source: "notifications-event",
-              intent: "event",
-              reason: "notifications-event",
-              agentId: "research",
-              sessionKey: "global",
-            },
-      );
-    },
-  );
+          exitCode: 0,
+          output: "owned exec result",
+        }),
+      },
+      { connId: "owner-connection" },
+    );
+
+    expect(peekSystemEvents("agent:main:global")).toEqual([]);
+    if (event === "exec.finished") {
+      expect(authorizeNodeSystemRunEvent).toHaveBeenCalledExactlyOnceWith({
+        nodeId: "node-owner",
+        connId: "owner-connection",
+        runId,
+        sessionKey: "agent:research:main",
+        event: "exec.finished",
+      });
+    }
+    expect(result).toEqual(
+      denied
+        ? expect.objectContaining({ handled: false, reason: "unmatched_exec_event" })
+        : undefined,
+    );
+    const text = event === "exec.finished" ? "owned exec result" : "Owned notification";
+    expect(peekSystemEvents("agent:research:global")).toEqual(
+      denied ? [] : [expect.stringContaining(text)],
+    );
+    const source = event === "exec.finished" ? "exec-event" : "notifications-event";
+    const wake = {
+      source,
+      intent: "event",
+      reason: source,
+      agentId: "research",
+      ...(event === "exec.finished" ? { coalesceMs: 0 } : { sessionKey: "global" }),
+    };
+    expect(requestHeartbeat.mock.calls).toEqual(denied ? [] : [[wake]]);
+  });
 });

@@ -1,9 +1,11 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, createSignal, onSettled, Show, untrack } from "solid-js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import {
   initializeQuestionDrafts,
@@ -17,6 +19,8 @@ import type {
   QuestionPanelQuestion,
   QuestionPanelViewModel,
 } from "./chat-question-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type PanelBridgeProps = { props?: QuestionPanelProps };
 export type ChatQuestionPanel = SolidBridgeElement<PanelBridgeProps>;
@@ -58,15 +62,13 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
   const focusTarget = createMemo(() => [collapsed(), currentQuestionIndex()] as const, {
     equals: (previous, next) => previous[0] === next[0] && previous[1] === next[1],
   });
-  let initialFocus = true;
   // Question navigation moves browser focus to the newly presented panel.
-  createEffect(focusTarget, ([isCollapsed]) => {
-    if (!isCollapsed && (!initialFocus || initialModel.autoFocus !== false)) {
-      panel?.focus({ preventScroll: true });
-    }
-    initialFocus = false;
+  createPendingFocus(focusTarget, {
+    requested: ([isCollapsed], previous) =>
+      !isCollapsed && (previous !== undefined || initialModel.autoFocus !== false),
+    focus: () => panel?.focus({ preventScroll: true }),
   });
-  onCleanup(() => {
+  onSettled(() => () => {
     live = false;
   });
   const setCollapsed = (value: boolean) => {

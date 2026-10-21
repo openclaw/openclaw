@@ -16,10 +16,6 @@ import {
   readSessionTranscriptHistoryAnchorPageFromProjection,
   type SessionTranscriptMessageByIdOptions,
 } from "./session-accessor.sqlite-history-query.js";
-import type {
-  SessionTranscriptMessageEvent,
-  SessionTranscriptMessageAnchorPage,
-} from "./session-accessor.sqlite-projection-read.js";
 import { readVisibleTranscriptStats } from "./session-accessor.sqlite-reset-window.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
 
@@ -42,19 +38,12 @@ export function withRecentActiveTranscriptEvents<T>(
 
 export function useHistoryEventScope() {
   const env: NodeJS.ProcessEnv = {};
-  const scope = {
-    agentId: "main",
-    env,
-    sessionId: "history-events-test",
-    sessionKey: "agent:main:history-events-test",
-  };
+  const sessionId = "history-events-test";
+  const scope = { agentId: "main", env, sessionId, sessionKey: `agent:main:${sessionId}` };
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-history-events-");
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
-    scope.env = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: sessionDirs.make(),
-    };
+    scope.env = { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() };
   });
   return scope;
 }
@@ -96,49 +85,33 @@ export function insertSyntheticHistory(
         ...(isBoundary
           ? boundaryType === "compaction"
             ? { summary: "synthetic" }
-            : {
-                customType: "synthetic-notice",
-                content: "synthetic",
-                display: seq % 4 === 0,
-              }
+            : { customType: "synthetic-notice", content: "synthetic", display: seq % 4 === 0 }
           : { message: { role: "user", content: "synthetic" } }),
       };
       insertEvent({ seq, eventJson: JSON.stringify(event), createdAt: seq });
       insertIdentity.run(sessionId, id, seq, type, seq);
-      insertActive.run(
-        sessionId,
-        seq - 1,
-        seq,
-        isBoundary ? null : boundaries ? Math.floor(seq / 2) : seq - 1,
-      );
+      const messagePosition = isBoundary ? null : boundaries ? Math.floor(seq / 2) : seq - 1;
+      insertActive.run(sessionId, seq - 1, seq, messagePosition);
     }
+    const messageCount = boundaries ? count + 1 : lastSeq;
     database.db
       .prepare(
         `UPDATE session_transcript_index_state
          SET indexed_seq = ?, leaf_event_id = ?, active_event_count = ?, active_message_count = ?
          WHERE session_id = ?`,
       )
-      .run(
-        lastSeq,
-        `synthetic-message-${String(lastSeq)}`,
-        lastSeq,
-        boundaries ? count + 1 : lastSeq,
-        sessionId,
-      );
+      .run(lastSeq, `synthetic-message-${lastSeq}`, lastSeq, messageCount, sessionId);
   });
 }
 
 export function readSessionTranscriptHistoryEvents(
   scope: SessionTranscriptReadScope,
   options: { readOnly?: boolean } = {},
-): SessionTranscriptMessageEvent[] {
+) {
+  const page = { offset: 0, maxMessages: Number.MAX_SAFE_INTEGER };
   return withCurrentProjectionSnapshot(
     scope,
-    (projection) =>
-      readSessionTranscriptHistoryEventPageFromProjection(projection, {
-        offset: 0,
-        maxMessages: Number.MAX_SAFE_INTEGER,
-      }).events,
+    (projection) => readSessionTranscriptHistoryEventPageFromProjection(projection, page).events,
     options,
   );
 }
@@ -160,7 +133,7 @@ export function readSessionTranscriptHistoryEventById(
 export function readSessionTranscriptHistoryAnchorPage(
   scope: SessionTranscriptReadScope,
   options: TranscriptAnchorPageOptions & { readOnly?: boolean },
-): SessionTranscriptMessageAnchorPage {
+) {
   return withCurrentProjectionSnapshot(
     scope,
     (projection) => readSessionTranscriptHistoryAnchorPageFromProjection(projection, options),

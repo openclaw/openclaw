@@ -42,6 +42,7 @@ export function updateWarmImage(patch: Partial<WarmImageRecord>) {
   });
   return entry;
 }
+const uncached = { preparationKey: null, cacheKey: null, purpose: null };
 
 export const warmImage = (
   checkpointId: string,
@@ -51,9 +52,7 @@ export const warmImage = (
   kind: "native",
   state: "available",
   createdAtMs: 1,
-  preparationKey: null,
-  cacheKey: null,
-  purpose: null,
+  ...uncached,
   lastDemandAtMs: 1,
   ...overrides,
 });
@@ -104,19 +103,13 @@ export const warmAllocation = (
   machineClass: "standard",
   phase: "pending",
   choice,
-  preparationKey: null,
-  cacheKey: null,
-  purpose: null,
+  ...uncached,
   demandAtMs: null,
   imageGeneration: null,
   ...overrides,
 });
 
 export function expectText(text: string | undefined, contains: string[], excludes: string[] = []) {
-  for (const value of contains) {
-    expect(text).toContain(value);
-  }
-  for (const value of excludes) {
-    expect(text).not.toContain(value);
-  }
+  contains.forEach((value) => expect(text).toContain(value));
+  excludes.forEach((value) => expect(text).not.toContain(value));
 }

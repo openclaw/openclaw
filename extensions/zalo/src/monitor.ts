@@ -154,8 +154,13 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
 
   switch (event_name) {
     case "message.text.received":
+    case "message.unsupported.received":
       if (message.text?.trim()) {
         await processMessageWithPipeline({ message, text: message.text, ...sharedContext });
+      } else if (event_name === "message.unsupported.received") {
+        runtime.log?.(
+          `[${account.accountId}] Zalo unsupported message has no recoverable text; ask the sender to resend as plain text.`,
+        );
       }
       break;
     case "message.image.received":
@@ -166,13 +171,6 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
       break;
     case "message.sticker.received":
       logVerbose(core, runtime, `[${account.accountId}] Received sticker from ${message.from.id}`);
-      break;
-    case "message.unsupported.received":
-      logVerbose(
-        core,
-        runtime,
-        `[${account.accountId}] Received unsupported message type from ${message.from.id}`,
-      );
       break;
   }
 }

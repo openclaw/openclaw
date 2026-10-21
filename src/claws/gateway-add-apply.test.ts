@@ -53,7 +53,15 @@ vi.mock("./gateway-disclosure.js", () => ({ projectClawConfiguredAccess: mocks.c
 // mock-isolation: Consent decisions are varied without invoking installer prompts.
 vi.mock("./gateway-plugin-consent.js", () => ({ bindClawPluginInstallConsent: mocks.consent }));
 // mock-isolation: The real Add mutates shared state; these tests observe handoff decisions.
-vi.mock("./add-stateless.js", () => ({ applyClawAddPlanStateless: mocks.apply }));
+vi.mock("./add-stateless.js", () => ({
+  stageClawAddHostRequirementsStateless: async (plan: unknown, options: unknown) => ({
+    kind: "ready",
+    stageAgent: async () => ({
+      kind: "ready",
+      finish: async () => await mocks.apply(plan, options),
+    }),
+  }),
+}));
 
 const coordinate = { packageName: "@openclaw/workflow-operator", version: "1.0.0" };
 const source = {

@@ -10,9 +10,14 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const repo = path.resolve(import.meta.dirname, "../..");
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const workflow = parse(fs.readFileSync(path.join(repo, ".github/workflows/ci.yml"), "utf8"));
-const swiftStep = workflow.jobs["macos-swift"].steps.find(
-  (step: { name?: string }) => step.name === "Swift test",
+const swiftSteps = workflow.jobs["macos-swift"].steps;
+const swiftBuildStep = swiftSteps.find(
+  (step: { name?: string }) => step.name === "Build Swift tests",
 ).run as string;
+const swiftStep =
+  swiftBuildStep +
+  "\n" +
+  swiftSteps.find((step: { name?: string }) => step.name === "Swift test").run;
 
 function eventStream(...kinds: string[]) {
   return (
@@ -293,6 +298,20 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
       expected: 0,
       hosts: 2,
     },
+    {
+      events: appHostEventStream("complete"),
+      inspection: "absent",
+      expected: 0,
+      hosts: 1,
+      filters: ["credential-startup"],
+    },
+    {
+      events: appHostEventStream("complete"),
+      inspection: "absent",
+      expected: 0,
+      hosts: 3,
+      filters: ["retry", "credential-startup", "relaunch"],
+    },
     { events: eventStream("runStarted", "runEnded"), inspection: "absent", expected: 1, hosts: 1 },
     { events: appHostEventStream("skipped"), inspection: "absent", expected: 1, hosts: 1 },
     { events: appHostEventStream("suite-only"), inspection: "absent", expected: 1, hosts: 1 },
@@ -304,7 +323,7 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
     },
   ])(
     "owns fresh app hosts and refuses incomplete proof ($inspection, $hosts hosts)",
-    ({ events, inspection, expected, hosts }) => {
+    ({ events, inspection, expected, hosts, filters = ["retry", "relaunch"] }) => {
       const f = fixture(0, false, 0, "", "3", events);
       const contents = path.join(f.root, "Fixture.app/Contents");
       fs.mkdirSync(path.join(contents, "MacOS"), { recursive: true });
@@ -343,7 +362,7 @@ if (process.argv[2] === 'print') {
         { mode: 0o755 },
       );
       const result = f.run(
-        `node '${path.join(repo, "scripts/test-macos-native.mts")}' app-host '${path.dirname(contents)}' '${bundle}' retry relaunch`,
+        `node '${path.join(repo, "scripts/test-macos-native.mts")}' app-host '${path.dirname(contents)}' '${bundle}' ${filters.join(" ")}`,
       );
       expect(result.status, result.stderr).toBe(expected);
       const calls = f.calls();
@@ -371,7 +390,7 @@ if (process.argv[2] === 'print') {
           path.join(home, `.openclaw-${invoked[0].env.OPENCLAW_PROFILE}`),
         );
         expect(invoked.map((call) => call.args[call.args.indexOf("--filter") + 1])).toEqual(
-          hosts === 2 ? ["retry", "relaunch"] : ["retry"],
+          filters.slice(0, hosts),
         );
         const artifactLine = fs
           .readFileSync(f.env.GITHUB_OUTPUT, "utf8")
@@ -380,7 +399,7 @@ if (process.argv[2] === 'print') {
         expect(artifactLine).toBeDefined();
         const artifact = artifactLine!.slice("recovery-artifact-path=".length);
         expect(fs.readdirSync(artifact).toSorted()).toEqual(
-          hosts === 2 ? ["phase-0-events.jsonl", "phase-1-events.jsonl"] : ["phase-0-events.jsonl"],
+          Array.from({ length: hosts }, (_, index) => `phase-${index}-events.jsonl`),
         );
         expect(fs.readFileSync(path.join(artifact, "phase-0-events.jsonl"), "utf8")).toContain(
           "runEnded",
@@ -391,7 +410,7 @@ if (process.argv[2] === 'print') {
         if (inspection === "unknown") {
           expect(result.stderr).toContain("retirement is unverified");
         }
-        if (hosts === 1) {
+        if (expected === 1 && inspection === "absent") {
           expect(result.stderr).toContain("Swift Testing did not finish its run");
         }
       } finally {
@@ -405,6 +424,24 @@ if (process.argv[2] === 'print') {
   it.each(["scripts/test-macos-native.mts"])("routes %s through macOS CI", (changedPath) => {
     expect(detectChangedScope([changedPath])).toMatchObject({ runNode: true, runMacos: true });
   });
+
+  it.each([false, true])(
+    "builds before runtime availability (artifact present: %s)",
+    (available) => {
+      const f = fixture();
+      if (available) {
+        fs.mkdirSync(path.join(f.root, "workspace/dist"));
+        fs.writeFileSync(
+          path.join(f.root, "workspace/dist/entry.js"),
+          "throw new Error('must not load CLI while building');",
+        );
+      }
+      const result = f.run(swiftBuildStep);
+      expect(result.status, result.stderr).toBe(0);
+      expect(f.calls().map((call) => [call.tool, call.args[0]])).toEqual([["swift", "build"]]);
+      expect(fs.readFileSync(f.env.GITHUB_OUTPUT, "utf8")).toContain("debug-tests-built=true");
+    },
+  );
 
   it.each([
     { defaultCode: 0, renderedCode: 0, namedCode: 0, logicalCpu: "3", expectedWidth: "3" },

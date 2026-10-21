@@ -6,7 +6,11 @@ import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ModelProviderCard } from "./data.ts";
-import { ProviderProfiles, type ProviderProfilesViewProps } from "./profiles-view.tsx";
+import {
+  ProviderAccountSummary,
+  ProviderProfiles,
+  type ProviderProfilesViewProps,
+} from "./profiles-view.tsx";
 import { card as viewCard, props as makeViewProps } from "./view.test-support.tsx";
 
 function makeProfile(profileId: string): ModelProviderCard["profiles"][number] {
@@ -110,6 +114,61 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   Reflect.deleteProperty(document, "elementFromPoint");
+});
+
+it("retains account summary focus while refreshed snapshots update account data and recovery", () => {
+  const profileId = "account:shared";
+  const cards = [
+    card({
+      id: "route-one",
+      profiles: [{ ...makeProfile(profileId), source: "saved", email: "one@example.invalid" }],
+      profileProviderIds: { [profileId]: "owner-one" },
+      apiKey: { source: "env", envVar: "EXAMPLE_API_KEY" },
+    }),
+    card({
+      id: "route-two",
+      profiles: [{ ...makeProfile(profileId), source: "saved", email: "two@example.invalid" }],
+      profileProviderIds: { [profileId]: "owner-two" },
+    }),
+  ];
+  const originalUse = vi.fn();
+  const [current, setCurrent] = createSignal({
+    cards,
+    recovery: { authProvider: "owner-one", disabled: false, onUse: originalUse },
+  });
+  const { container } = mountSolid(() => <ProviderAccountSummary {...current()} />);
+  flush();
+  const rows = [...container.querySelectorAll(".model-provider-login__account")];
+  expect(rows).toHaveLength(2);
+  const button = rows[0]!.querySelector<HTMLButtonElement>("[data-models-use-account]")!;
+  expect(rows[1]!.querySelector("[data-models-use-account]")).toBeNull();
+  button.focus();
+
+  const refreshed = structuredClone(cards);
+  refreshed[0]!.profiles[0]!.email = "updated-one@example.invalid";
+  refreshed[0]!.catalogStatus = "auth-rejected";
+  refreshed[0]!.apiKey = { source: "config" };
+  refreshed[1]!.profiles[0]!.email = "updated-two@example.invalid";
+  const latestUse = vi.fn();
+  setCurrent({
+    cards: refreshed,
+    recovery: { authProvider: "owner-one", disabled: false, onUse: latestUse },
+  });
+  flush();
+
+  const updatedRows = [...container.querySelectorAll(".model-provider-login__account")];
+  expect(updatedRows[0]).toBe(rows[0]);
+  expect(updatedRows[1]).toBe(rows[1]);
+  expect(rows[0]!.textContent).toContain("updated-one@example.invalid");
+  expect(rows[0]!.textContent).toContain("Credentials configured");
+  expect(rows[1]!.textContent).toContain("updated-two@example.invalid");
+  expect(container.querySelector("p.muted")?.textContent).toBe("API key set in config");
+  expect(container.textContent).not.toContain("EXAMPLE_API_KEY");
+  expect(rows[0]!.querySelector("[data-models-use-account]")).toBe(button);
+  expect(document.activeElement).toBe(button);
+  button.click();
+  expect(latestUse).toHaveBeenCalledExactlyOnceWith(profileId);
+  expect(originalUse).not.toHaveBeenCalled();
 });
 
 it("shows account provenance and removes drag handles for config-locked priority", () => {
@@ -247,6 +306,32 @@ it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "ot
     ]);
   },
 );
+
+it("releases account usage mounted after its profile row settles", () => {
+  const releaseUsage = vi.fn();
+  const registerAccountUsage = vi.fn(() => releaseUsage);
+  const providerCard = orderedCard(pair);
+  for (const profile of providerCard.profiles) {
+    profile.type = "api_key";
+  }
+  const { container, update } = mount(providerCard, props({ registerAccountUsage }));
+  const retainedRow = rowFor(container, "openai:one");
+  expect(registerAccountUsage).not.toHaveBeenCalled();
+
+  update({
+    ...providerCard,
+    profiles: [makeProfile("openai:one")],
+    profileOrders: { openai: ["openai:one"] },
+  });
+  expect(rowFor(container, "openai:one")).toBe(retainedRow);
+  expect(container.querySelector("openclaw-model-account-usage")).not.toBeNull();
+  expect(registerAccountUsage).toHaveBeenCalledTimes(1);
+  expect(releaseUsage).not.toHaveBeenCalled();
+
+  update({ ...providerCard, profiles: [], profileOrders: {} });
+  expect(container.querySelector("openclaw-model-account-usage")).toBeNull();
+  expect(releaseUsage).toHaveBeenCalledTimes(1);
+});
 
 it("releases a removed row's drag without handling the next Escape", () => {
   const onProfileOrderChange = vi.fn();

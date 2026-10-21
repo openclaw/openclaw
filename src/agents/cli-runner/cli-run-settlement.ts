@@ -1,7 +1,11 @@
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
+import { hasCompletionMessageSessionSpawn } from "../accepted-session-spawn.js";
+import {
+  filterAgentRunTerminalPayloadsForPresentation,
+  sanitizeAgentRunTerminalReply,
+} from "../agent-run-terminal-reply.js";
 import {
   externalCliDiscoveryForProviderAuth,
   loadAuthProfileStoreForRuntimeAsync,
@@ -24,6 +28,8 @@ import { mergeAttemptToolMediaPayloads } from "../embedded-agent-runner/run/tool
 import { isFailoverError } from "../failover-error.js";
 import {
   createMissingReplyNotice,
+  MISSING_REPLY_NOTICE_TEXT,
+  resolveReplyCompletion,
   resolveReplyExpectation,
   shouldDeliverMissingReplyNotice,
 } from "../reply-completion.js";
@@ -464,6 +470,11 @@ export function buildCliRunResult(params: {
     toolTrustedLocalMedia: output.toolTrustedLocalMedia,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
   });
+  const replyExpectation = resolveReplyExpectation(runParams);
+  const payloadsForVisibleCompletion = filterAgentRunTerminalPayloadsForPresentation({
+    payloads: payloadsWithToolMedia,
+    isHeartbeatTrigger: runParams.trigger === "heartbeat" && !runParams.continuesConversation,
+  });
   const unflushed = !sessionBindingDisabled && effectiveCliSessionId && bindingFlushOk === false;
   const terminalInterruption = output.terminalInterruption;
   // Cancellation preserves established continuity, but an unfinished replacement
@@ -505,7 +516,22 @@ export function buildCliRunResult(params: {
         ? (runParams.sessionId ?? "")
         : (effectiveCliSessionId ?? runParams.sessionId ?? "");
   const yielded = output.yielded === true;
-  const stopReason = terminalInterruption?.reason ?? (yielded ? "end_turn" : "completed");
+  const presentationHiddenRequiredReply =
+    !terminalInterruption &&
+    !yielded &&
+    !hasCompletionMessageSessionSpawn(output.acceptedSessionSpawns) &&
+    !hasCompletedSourceReplyDeliveryEvidence(output) &&
+    (payloadsWithToolMedia?.length ?? 0) > 0 &&
+    (payloadsForVisibleCompletion?.length ?? 0) === 0 &&
+    resolveReplyCompletion(replyExpectation, "empty").outcome === "missing";
+  const stopReason = presentationHiddenRequiredReply
+    ? "error"
+    : (terminalInterruption?.reason ?? (yielded ? "end_turn" : "completed"));
+  const resultPayloads = presentationHiddenRequiredReply
+    ? shouldDeliverMissingReplyNotice(runParams)
+      ? [createMissingReplyNotice()]
+      : undefined
+    : payloadsWithToolMedia;
 
   try {
     if (!terminalInterruption && runParams.onSuccessfulAuthBinding) {
@@ -543,44 +569,65 @@ export function buildCliRunResult(params: {
   }
 
   return {
-    payloads: payloadsWithToolMedia,
+    payloads: resultPayloads,
     meta: {
       durationMs: Date.now() - context.started,
       ...(output.finalPromptText ? { finalPromptText: output.finalPromptText } : {}),
-      ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
+      ...(!presentationHiddenRequiredReply && finalAssistantVisibleText
+        ? { finalAssistantVisibleText }
+        : {}),
       ...(rawText ? { finalAssistantRawText: rawText } : {}),
-      terminalReply: preparedReply.terminalReply,
-      terminalReplyExpectation: resolveReplyExpectation(runParams),
+      terminalReply: presentationHiddenRequiredReply
+        ? { disposition: "empty" as const }
+        : preparedReply.terminalReply,
+      terminalReplyExpectation: replyExpectation,
       // An empty final message is recorded as "" so capture never falls back to
       // the cumulative raw text.
       ...(rawFinalText !== undefined && rawFinalText !== rawText
         ? { finalAssistantMessageRawText: rawFinalText }
         : {}),
       systemPromptReport: context.systemPromptReport,
-      ...(terminalInterruption
-        ? {
-            aborted: true,
-            providerStarted: true,
-            stopReason,
-            ...(terminalInterruption.reason === "timeout"
-              ? { timeoutPhase: "provider" as const }
-              : {}),
-          }
-        : yielded
-          ? { yielded: true, livenessState: "paused" as const, stopReason }
-          : {}),
+      ...(presentationHiddenRequiredReply
+        ? { stopReason }
+        : terminalInterruption
+          ? {
+              aborted: true,
+              providerStarted: true,
+              stopReason,
+              ...(terminalInterruption.reason === "timeout"
+                ? { timeoutPhase: "provider" as const }
+                : {}),
+            }
+          : yielded
+            ? { yielded: true, livenessState: "paused" as const, stopReason }
+            : {}),
       ...(output.yieldAcknowledgment ? { yieldAcknowledgment: output.yieldAcknowledgment } : {}),
       ...buildCliExecutionMetadata(context, {
-        result: terminalInterruption?.reason ?? "success",
-        ...(terminalInterruption
-          ? { reason: formatCliTerminalInterruption(terminalInterruption) }
-          : {}),
+        result: presentationHiddenRequiredReply
+          ? "error"
+          : (terminalInterruption?.reason ?? "success"),
+        ...(presentationHiddenRequiredReply
+          ? { reason: MISSING_REPLY_NOTICE_TEXT }
+          : terminalInterruption
+            ? { reason: formatCliTerminalInterruption(terminalInterruption) }
+            : {}),
       }),
       completion: {
-        finishReason: terminalInterruption?.reason ?? (yielded ? "end_turn" : "stop"),
+        finishReason: presentationHiddenRequiredReply
+          ? "error"
+          : (terminalInterruption?.reason ?? (yielded ? "end_turn" : "stop")),
         stopReason,
         refusal: false,
       },
+      ...(presentationHiddenRequiredReply
+        ? {
+            error: {
+              kind: "incomplete_turn" as const,
+              message: MISSING_REPLY_NOTICE_TEXT,
+              fallbackSafe: false,
+            },
+          }
+        : {}),
       ...(output.toolSummary ? { toolSummary: output.toolSummary } : {}),
       agentMeta: {
         sessionId: agentSessionId,

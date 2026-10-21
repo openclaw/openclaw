@@ -1,7 +1,9 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
-import { createStubSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
-import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import {
+  createTextEndBlockReplyHarness,
+  emitToolRun,
+} from "./embedded-agent-subscribe.e2e-harness.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 function ollamaAssistant(text: string, extra?: AssistantMessage["content"]): AssistantMessage {
@@ -12,21 +14,28 @@ function ollamaAssistant(text: string, extra?: AssistantMessage["content"]): Ass
   });
 }
 
+function setup(runId: string) {
+  const onBlockReply = vi.fn();
+  const { emit, subscription } = createTextEndBlockReplyHarness({
+    runId,
+    onBlockReply,
+    blockReplyChunking: { minChars: 4, maxChars: 200 },
+  });
+  onTestFinished(() => subscription.unsubscribe());
+  return {
+    emit,
+    subscription,
+    onBlockReply,
+    texts: () => onBlockReply.mock.calls.map(([payload]) => payload.text),
+    update: (message: AssistantMessage, assistantMessageEvent: object) =>
+      emit({ type: "message_update", message, assistantMessageEvent }),
+  };
+}
+
 describe("native Ollama pre-tool narration", () => {
   it("streams two narrated tool rounds and the final answer exactly once", async () => {
-    const { session, emit } = createStubSessionHarness();
-    const onBlockReply = vi.fn();
+    const { emit, update, subscription, texts } = setup("run-ollama-stream");
     const expected: string[] = [];
-    const texts = () => onBlockReply.mock.calls.map(([payload]) => payload.text);
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run-ollama-stream",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-      blockReplyChunking: { minChars: 4, maxChars: 200 },
-    });
-
-    onTestFinished(() => subscription.unsubscribe());
 
     for (const [index, path] of ["README.md", "NOTES.md"].entries()) {
       const narration = `Let me read ${path} before answering.`;
@@ -38,30 +47,18 @@ describe("native Ollama pre-tool narration", () => {
       };
       const unsigned = ollamaAssistant(narration);
       emit({ type: "message_start", message: ollamaAssistant("") });
-      emit({
-        type: "message_update",
-        message: ollamaAssistant(""),
-        assistantMessageEvent: { type: "text_start", contentIndex: 0 },
-      });
-      emit({
-        type: "message_update",
-        message: unsigned,
-        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: narration },
-      });
+      update(ollamaAssistant(""), { type: "text_start", contentIndex: 0 });
+      update(unsigned, { type: "text_delta", contentIndex: 0, delta: narration });
       await subscription.waitForPendingEvents();
       expected.push(narration);
       expect(texts()).toEqual(expected);
 
       // Native Ollama keeps the same unsigned text through the tool boundary.
-      emit({
-        type: "message_update",
-        message: unsigned,
-        assistantMessageEvent: {
-          type: "text_end",
-          contentIndex: 0,
-          content: narration,
-          partial: unsigned,
-        },
+      update(unsigned, {
+        type: "text_end",
+        contentIndex: 0,
+        content: narration,
+        partial: unsigned,
       });
       await subscription.waitForPendingEvents();
       expect(texts()).toEqual(expected);
@@ -82,30 +79,17 @@ describe("native Ollama pre-tool narration", () => {
           partial: ollamaAssistant(narration, [toolCall]),
         },
       ]) {
-        emit({
-          type: "message_update",
-          message: event.partial,
-          assistantMessageEvent: { ...event, contentIndex: 1 },
-        });
+        update(event.partial, { ...event, contentIndex: 1 });
       }
       emit({
         type: "message_end",
-        message: {
-          ...unsigned,
-          stopReason: "toolUse",
-          content: [...unsigned.content, toolCall],
-        },
+        message: { ...ollamaAssistant(narration, [toolCall]), stopReason: "toolUse" },
       });
-      emit({
-        type: "tool_execution_start",
+      emitToolRun({
+        emit,
         toolName: toolCall.name,
         toolCallId: toolCall.id,
         args: toolCall.arguments,
-      });
-      emit({
-        type: "tool_execution_end",
-        toolName: toolCall.name,
-        toolCallId: toolCall.id,
         result: { content: [{ type: "text", text: "File contents" }] },
         isError: false,
       });
@@ -116,20 +100,12 @@ describe("native Ollama pre-tool narration", () => {
     const answer = "Both files are checked.";
     const finalMessage = { ...ollamaAssistant(answer), stopReason: "stop" as const };
     emit({ type: "message_start", message: ollamaAssistant("") });
-    emit({
-      type: "message_update",
-      message: finalMessage,
-      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: answer },
-    });
-    emit({
-      type: "message_update",
-      message: finalMessage,
-      assistantMessageEvent: {
-        type: "text_end",
-        contentIndex: 0,
-        content: answer,
-        partial: finalMessage,
-      },
+    update(finalMessage, { type: "text_delta", contentIndex: 0, delta: answer });
+    update(finalMessage, {
+      type: "text_end",
+      contentIndex: 0,
+      content: answer,
+      partial: finalMessage,
     });
     await subscription.waitForPendingEvents();
     expected.push(answer);
@@ -142,43 +118,16 @@ describe("native Ollama pre-tool narration", () => {
   it.each(["stop", "length"] as const)(
     "delivers unphased text before reasoning exactly once at %s",
     async (stopReason) => {
-      const { session, emit } = createStubSessionHarness();
-      const onBlockReply = vi.fn();
-      const subscription = subscribeEmbeddedAgentSession({
-        session,
-        runId: "run-ollama-answer",
-        onBlockReply,
-        blockReplyBreak: "text_end",
-        blockReplyChunking: { minChars: 4, maxChars: 200 },
-      });
-      onTestFinished(() => subscription.unsubscribe());
+      const { emit, update, subscription, onBlockReply, texts } = setup("run-ollama-answer");
       const answer = "Visible answer";
       emit({ type: "message_start", message: ollamaAssistant("") });
-      emit({
-        type: "message_update",
-        message: ollamaAssistant(answer),
-        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: answer },
-      });
-      const finalMessage = {
-        ...ollamaAssistant(answer),
-        content: [
-          { type: "thinking" as const, thinking: "Late reasoning" },
-          { type: "text" as const, text: answer },
-        ],
-        stopReason,
-      };
-      emit({
-        type: "message_update",
-        message: finalMessage,
-        assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "Late reasoning" },
-      });
-      emit({
-        type: "message_update",
-        message: finalMessage,
-        assistantMessageEvent: { type: "text_end", contentIndex: 1, content: answer },
-      });
+      update(ollamaAssistant(answer), { type: "text_delta", contentIndex: 0, delta: answer });
+      const finalMessage = { ...ollamaAssistant(answer), stopReason };
+      finalMessage.content.unshift({ type: "thinking", thinking: "Late reasoning" });
+      update(finalMessage, { type: "thinking_delta", contentIndex: 0, delta: "Late reasoning" });
+      update(finalMessage, { type: "text_end", contentIndex: 1, content: answer });
       await subscription.waitForPendingEvents();
-      expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([answer]);
+      expect(texts()).toEqual([answer]);
       emit({ type: "message_end", message: finalMessage });
       await subscription.waitForPendingEvents();
       expect(onBlockReply).toHaveBeenCalledTimes(1);

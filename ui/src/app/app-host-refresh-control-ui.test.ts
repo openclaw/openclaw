@@ -69,7 +69,7 @@ afterEach(() => {
 });
 
 it("retires cached roster admission before publishing a replacement connection", () => {
-  store.current().opts.onHello?.({
+  store.current().testOptions.onHello?.({
     type: "hello-ok",
     protocol: 1,
     auth: { role: "operator", scopes: [], recoveryScope: "admitted-account" },
@@ -123,7 +123,7 @@ it.each(["clear", "replace", "remote"])(
 
 it("continues the browser handoff when manual refresh follows a failed automatic probe", async () => {
   fetchMock.mockResolvedValueOnce(new Response(null, { status: 503 }));
-  store.current().opts.onClose?.({
+  store.current().testOptions.onClose?.({
     code: 1008,
     reason: "Control UI updated",
     error: {

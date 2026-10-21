@@ -17,7 +17,11 @@ import {
   PR_PROTECTED_RUNTIME_TEST_FILES,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
-import { fallbackGroups, selectedFiles } from "./ci-changed-node-test-plan.test-support.js";
+import {
+  fallbackGroups,
+  isSerialNodeTestProjection,
+  selectedFiles,
+} from "./ci-changed-node-test-plan.test-support.js";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -310,6 +314,14 @@ it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (
       ] as const) {
         expect(group[key], `${group.shard_name} group ${key}`).toEqual(selectedGroup[key]);
       }
+      const serialProjection = isSerialNodeTestProjection(job.groups, selectedJob);
+      // Serial projections retain the same two-worker ceiling when they share setup.
+      const expectedJobEnv =
+        serialProjection &&
+        selectedGroup.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined &&
+        selectedJob.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+          ? { ...selectedJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
+          : selectedJob.env;
       for (const key of [
         "env",
         "runner",
@@ -317,12 +329,12 @@ it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (
         "requiresDist",
         "timeoutMinutes",
       ] as const) {
-        expect(job[key], `${group.shard_name} job ${key}`).toEqual(selectedJob[key]);
+        expect(job[key], `${group.shard_name} job ${key}`).toEqual(
+          key === "env" ? expectedJobEnv : selectedJob[key],
+        );
       }
       expect(job.planConcurrency, `${group.shard_name} job planConcurrency`).toBe(
-        job.groups?.length === 1 && selectedJob.planConcurrency === 2
-          ? 1
-          : selectedJob.planConcurrency,
+        serialProjection ? 1 : selectedJob.planConcurrency,
       );
     }
   }

@@ -9,10 +9,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const fixture = async (options: { isAuthorized?: () => boolean; signal?: AbortSignal } = {}) => {
   const root = tempDirs.make("openclaw-bundle-transfer-");
   await fs.writeFile(path.join(root, "bundle.tgz"), "bundle");
-  const service = createNodeWorkerBundleTransferService({
-    now: () => 1_000,
-    generateToken: () => "A".repeat(43),
-  });
+  const service = createNodeWorkerBundleTransferService();
   const prepared = service.prepare({
     gatewayNamespace: "gateway-test",
     artifact: {

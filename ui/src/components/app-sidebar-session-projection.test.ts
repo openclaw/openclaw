@@ -43,7 +43,7 @@ function projectionInput(
     knownGroups: [],
     collapsedSections: new Set(),
     emptyGroupsMode: "filtering",
-    ownerFiltered: false,
+    ownerFilter: null,
     visibleSessionLimits: new Map(),
     sortMode: "created",
     statusFilter: "active",
@@ -74,6 +74,69 @@ function subtitle(
     ...overrides,
   });
 }
+
+it.each(["active", "archived", "snoozed"] as const)(
+  "hides empty native groups with the %s status filter and preserves other section owners",
+  (statusFilter) => {
+    const rows = [sessionRow("matching", { category: "Matching" })];
+    const input = {
+      statusFilter,
+      knownGroups: ["Matching", "Empty"],
+      catalogIds: ["external"],
+      collapsedSections: new Set(["category:Matching"]),
+    };
+    const filtered = project(rows, input);
+    expect(filtered.sections.map(({ id }) => id)).toEqual([
+      "category:Matching",
+      "catalog:external",
+    ]);
+    expect(filtered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
+
+    const unfiltered = project(rows, { ...input, statusFilter: "all" });
+    expect(unfiltered.sections.map(({ id }) => id)).toContain("category:Empty");
+    expect(unfiltered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
+    expect(
+      project(rows, { ...input, emptyGroupsMode: "never" }).sections.map(({ id }) => id),
+    ).toContain("category:Empty");
+  },
+);
+
+it("retains unloaded group destinations until the session list establishes their contents", () => {
+  const input = { knownGroups: ["Awaiting sessions"], statusFilter: "active" as const };
+  expect(project([], { ...input, listLoaded: false }).sections.map(({ id }) => id)).toContain(
+    "category:Awaiting sessions",
+  );
+  expect(project([], input).sections.map(({ id }) => id)).not.toContain(
+    "category:Awaiting sessions",
+  );
+});
+
+it("renders a single selected owner's sessions inline instead of under a person header", () => {
+  const owned = (key: string, id: string) =>
+    sessionRow(key, {
+      owner: { actor: { type: "human", id, identity: { type: "profile", id } } },
+    });
+  const headers = (rows: SidebarRecentSession[], overrides: Partial<ProjectionInput>) =>
+    project(rows, { grouping: "person", selfOwnerId: "patrick", ...overrides })
+      .sections.filter((section) => section.id.startsWith("person:"))
+      .map((section) => [section.id, section.renderHeader, section.visibleRowCount]);
+
+  expect(
+    headers([owned("mine", "patrick")], {
+      ownerFilter: "owner",
+      collapsedSections: new Set(["person:profile:patrick"]),
+    }),
+  ).toEqual([["person:profile:patrick", false, 1]]);
+  expect(
+    headers([owned("mine", "patrick"), owned("theirs", "ada")], { ownerFilter: "involvingMe" }),
+  ).toEqual([
+    ["person:profile:patrick", true, 1],
+    ["person:profile:ada", true, 1],
+  ]);
+  expect(headers([owned("mine", "patrick")], { ownerFilter: null })).toEqual([
+    ["person:profile:patrick", true, 1],
+  ]);
+});
 
 it("prunes only absent rows when the bounded registry exceeds its cap", () => {
   const original = Array.from({ length: 1_000 }, (_, index) => ({ key: `original-${index}` }));
