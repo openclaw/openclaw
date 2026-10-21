@@ -19,6 +19,7 @@ import {
   createCronCreatorAuthorityRunScope,
   getCronManagementAuthority,
   getCronManagementCallerOrigin,
+  hasCronCreatorGrantProvenance,
   mintCronCreatorAuthorityGrant as mint,
   resolveCronCreatorAuthorityGrantProvenance as provenance,
   revokeCronCreatorAuthorityRunScope as revokeScope,
@@ -108,6 +109,47 @@ describe("cron creator authority grants", () => {
     expect(() => mint(external, undefined, undefined, undefined, "requester")).toThrow(
       "requires authenticated creator facts",
     );
+  });
+
+  it("retains requester-only remote admin provenance without granting runtime authority", () => {
+    const remote = createScope(
+      "run-remote-admin",
+      { kind: "unknown" },
+      { source: "control-ui-admin" },
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const grant = mint(remote, undefined, undefined, undefined, "requester");
+    expect(provenance(grant, remote.runId)).toEqual({
+      capturesRuntimeAuthority: false,
+      callerScopedCreation: true,
+    });
+    expect(hasCronCreatorGrantProvenance({ cronCreatorAuthorityGrant: grant }, remote.runId)).toBe(
+      true,
+    );
+    expect(hasCronCreatorGrantProvenance({ cronCreatorAuthorityGrant: grant }, "other-run")).toBe(
+      false,
+    );
+    expect(() => mint(remote)).toThrow("Automation creation is not granted");
+    expect(consume(grant).authority).toBeUndefined();
+    expect(hasCronCreatorGrantProvenance({ cronCreatorAuthorityGrant: grant }, remote.runId)).toBe(
+      false,
+    );
+    revokeScope(remote);
+  });
+
+  it("does not infer remote creator provenance from admin management alone", () => {
+    const remote = createScope(
+      "run-admin-only",
+      { kind: "unknown" },
+      { source: "control-ui-admin" },
+    );
+    expect(() => mint(remote, undefined, undefined, undefined, "requester")).toThrow(
+      "Automation creation is not granted",
+    );
+    revokeScope(remote);
   });
 
   it("rejects run substitution and transports private runtime authority only once", () => {
