@@ -1,6 +1,5 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as llmStream from "../../llm/stream.js";
 import * as pdfExtract from "../../media/pdf-extract.js";
@@ -12,7 +11,6 @@ import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-
 import { createOAuthRefreshCredential } from "../auth-profiles/credential-fixtures.test-support.js";
 import { persistAuthProfileBatch } from "../auth-profiles/upsert-with-lock.js";
 import { createEmptyPreparedModelRuntimeFixture } from "../embedded-agent-runner/model.fixture.test-support.js";
-import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -107,213 +105,142 @@ it.each(["API key", "OAuth"])("routes %s PDF auth with Codex chat", async (mode)
   });
 });
 
-describe("Anthropic PDF model authentication routing", () => {
-  it.each(["setup token", "provider-default setup token", "API key"] as const)(
-    "routes an Anthropic %s profile through the PDF tool to Messages",
-    async (mode) => {
-      resetPdfToolAuthEnv();
-      await withTempPdfAgentDir(async (agentDir) => {
-        const modelId = "claude-opus-4-6";
-        const profileId = "anthropic:pdf-fixture";
-        const usesSetupToken = mode !== "API key";
-        const credential = usesSetupToken
-          ? {
-              type: "token" as const,
-              provider: "anthropic" as const,
-              token: "sk-ant-oat01-fixture-setup-token",
-            }
-          : {
-              type: "api_key" as const,
-              provider: "anthropic" as const,
-              key: "fixture-anthropic-api-key",
-            };
-        await persistAuthProfileBatch({
-          agentDir,
-          profiles: [{ profileId, credential }],
-        });
-
-        const requests: Array<{
-          authorizationIsSetupToken: boolean;
-          xApiKeyIsControl: boolean;
-          anthropicBeta: string;
-          userAgentIsClaudeCode: boolean;
-          documentCount: number;
-          status: number;
-        }> = [];
-        const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          }
-          const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-            messages?: Array<{ content?: Array<{ type?: string }> }>;
-          };
-          const captured = {
-            authorizationIsSetupToken:
-              request.headers.authorization === "Bearer sk-ant-oat01-fixture-setup-token",
-            xApiKeyIsControl: request.headers["x-api-key"] === "fixture-anthropic-api-key",
-            anthropicBeta: request.headers["anthropic-beta"]?.toString() ?? "",
-            userAgentIsClaudeCode: /^claude-cli\/\d+\.\d+\.\d+$/.test(
-              request.headers["user-agent"]?.toString() ?? "",
-            ),
-            documentCount:
-              body.messages?.[0]?.content?.filter((block) => block.type === "document").length ?? 0,
-          };
-          const betaHeaders = new Set(
-            captured.anthropicBeta.split(",").map((value) => value.trim()),
-          );
-          const setupTokenAccepted =
-            captured.authorizationIsSetupToken &&
-            !request.headers["x-api-key"] &&
-            captured.userAgentIsClaudeCode &&
-            betaHeaders.has("claude-code-20250219") &&
-            betaHeaders.has("oauth-2025-04-20") &&
-            betaHeaders.has("pdfs-2024-09-25");
-          const apiKeyAccepted =
-            captured.xApiKeyIsControl &&
-            !request.headers.authorization &&
-            betaHeaders.has("pdfs-2024-09-25") &&
-            !betaHeaders.has("oauth-2025-04-20");
-          const status = setupTokenAccepted || apiKeyAccepted ? 200 : 401;
-          requests.push({ ...captured, status });
-          response.writeHead(status, { "content-type": "application/json" });
-          response.end(
-            JSON.stringify(
-              status === 200
-                ? { content: [{ type: "text", text: "PDF summary" }] }
-                : { error: { message: "invalid authentication" } },
-            ),
-          );
-        };
-        const fixture = createServer((request, response) => {
-          void handleRequest(request, response);
-        });
-        await new Promise<void>((resolve) => {
-          fixture.listen(0, "127.0.0.1", () => resolve());
-        });
-        const address = fixture.address();
-        if (!address || typeof address === "string") {
-          throw new Error("loopback fixture did not bind to a TCP port");
-        }
-
-        try {
-          const config: OpenClawConfig = {
-            plugins: { entries: { anthropic: { enabled: true } } },
-            auth: {
-              profiles: {
-                [profileId]: {
-                  provider: "anthropic",
-                  mode: usesSetupToken ? "oauth" : "api_key",
-                },
-              },
-              order: { anthropic: [profileId] },
-            },
-            models: {
-              mode: "merge",
-              providers: {
-                anthropic: {
-                  baseUrl: `http://127.0.0.1:${address.port}`,
-                  ...(mode === "provider-default setup token"
-                    ? { request: { auth: { mode: "provider-default" as const } } }
-                    : {}),
-                  models: [
-                    {
-                      id: modelId,
-                      name: modelId,
-                      input: ["text"],
-                      reasoning: true,
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      contextWindow: 200_000,
-                      maxTokens: 8192,
-                    },
-                  ],
-                },
-              },
-            },
-            agents: {
-              defaults: {
-                model: { primary: `anthropic/${modelId}` },
-                pdfModel: { primary: `anthropic/${modelId}` },
-              },
-            },
-          };
-          const { buildAnthropicProvider } = await loadBundledPluginFacade<{
-            buildAnthropicProvider: () => ProviderPlugin;
-          }>({ pluginId: "anthropic", artifactBasename: "api.js" });
-          const pluginRegistry = createEmptyPluginRegistry();
-          pluginRegistry.providers.push({
-            pluginId: "anthropic",
-            source: path.resolve("extensions/anthropic/index.ts"),
-            provider: buildAnthropicProvider(),
-          });
-          const metadataSnapshot = createPluginMetadataSnapshotFixture({
-            plugins: [{ id: "anthropic", providers: ["anthropic"], enabledByDefault: true }],
-          });
-          const preparedModelRuntime = {
-            catalogOwner: undefined,
-            agentDir,
-            workspaceDir: agentDir,
-            activeProjectKeys: [],
-            config,
-            observationConfig: config,
-            isCurrent: () => true,
-            authModes: { anthropic: usesSetupToken ? "oauth" : "api_key" },
-            metadataSnapshot,
-            pluginRegistry,
-            allowGatewaySubagentBinding: false,
-            modelCatalog: { entries: [], routeVariants: [] },
-            configuredRuntimeModels: [],
-            findConfiguredRuntimeModel: () => undefined,
-            inlineProviderModels: [],
-            createStores: () => {
-              const authStorage = AuthStorage.inMemory();
-              return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
-            },
-          } satisfies PreparedModelRuntimeSnapshot;
-
-          vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
-          const tool = createPdfTool({ config, agentDir, preparedModelRuntime });
-          if (!tool) {
-            throw new Error("PDF tool was not registered");
-          }
-          const result = await tool.execute("pdf-auth", {
-            pdf: "/tmp/doc.pdf",
-            prompt: "Summarize this PDF.",
-          });
-
-          expect(result.content).toEqual([{ type: "text", text: "PDF summary" }]);
-          expect(requests).toHaveLength(1);
-          const request = requests[0];
-          if (!request) {
-            throw new Error("expected a captured Anthropic PDF request");
-          }
-          expect(request.documentCount).toBe(1);
-          expect(request.userAgentIsClaudeCode).toBe(usesSetupToken);
-          const betaHeaders = request.anthropicBeta.split(",").map((value) => value.trim());
-          expect(betaHeaders).toContain("pdfs-2024-09-25");
-          if (usesSetupToken) {
-            expect(request.authorizationIsSetupToken).toBe(true);
-            expect(request.xApiKeyIsControl).toBe(false);
-            expect(betaHeaders).toEqual(
-              expect.arrayContaining(["claude-code-20250219", "oauth-2025-04-20"]),
-            );
-          } else {
-            expect(request.authorizationIsSetupToken).toBe(false);
-            expect(request.xApiKeyIsControl).toBe(true);
-            expect(betaHeaders).not.toContain("oauth-2025-04-20");
-          }
-        } finally {
-          await new Promise<void>((resolve, reject) => {
-            fixture.close((error) => {
-              if (error) {
-                reject(error);
-              } else {
-                resolve();
-              }
-            });
-          });
-        }
+it.each(["setup token", "provider-default setup token", "API key"] as const)(
+  "routes an Anthropic %s profile through the PDF tool to Messages",
+  async (mode) => {
+    resetPdfToolAuthEnv();
+    await withTempPdfAgentDir(async (agentDir) => {
+      const modelId = "claude-opus-4-6";
+      const profileId = "anthropic:pdf-fixture";
+      const oauth = mode !== "API key";
+      await persistAuthProfileBatch({
+        agentDir,
+        profiles: [
+          {
+            profileId,
+            credential: oauth
+              ? { type: "token", provider: "anthropic", token: "sk-ant-oat01-fixture-setup-token" }
+              : { type: "api_key", provider: "anthropic", key: "fixture-anthropic-api-key" },
+          },
+        ],
       });
-    },
-  );
-});
+      const model = { primary: `anthropic/${modelId}` };
+      const config: OpenClawConfig = {
+        plugins: { entries: { anthropic: { enabled: true } } },
+        auth: {
+          profiles: { [profileId]: { provider: "anthropic", mode: oauth ? "token" : "api_key" } },
+          order: { anthropic: [profileId] },
+        },
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "http://127.0.0.1:12345",
+              ...(mode === "provider-default setup token"
+                ? { request: { auth: { mode: "provider-default" } } }
+                : {}),
+              models: [
+                {
+                  id: modelId,
+                  name: modelId,
+                  input: ["text"],
+                  reasoning: true,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+        agents: { defaults: { model, pdfModel: model } },
+      };
+      const { buildAnthropicProvider } = await loadBundledPluginFacade<{
+        buildAnthropicProvider: () => ProviderPlugin;
+      }>({ pluginId: "anthropic", artifactBasename: "api.js" });
+      const pluginRegistry = createEmptyPluginRegistry();
+      pluginRegistry.providers.push({
+        pluginId: "anthropic",
+        source: path.resolve("extensions/anthropic/index.ts"),
+        provider: buildAnthropicProvider(),
+      });
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "anthropic", providers: ["anthropic"], enabledByDefault: true }],
+      });
+      const preparedModelRuntime = {
+        ...createEmptyPreparedModelRuntimeFixture({
+          agentDir,
+          config,
+          metadataSnapshot,
+          createStores: () => {
+            const authStorage = AuthStorage.inMemory();
+            return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
+          },
+        }),
+        workspaceDir: agentDir,
+        authModes: { anthropic: oauth ? ("token" as const) : ("api_key" as const) },
+        pluginRegistry,
+      };
+      vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(Response.json({ content: [{ type: "text", text: "PDF summary" }] }));
+      const tool =
+        createPdfTool({ config, agentDir, preparedModelRuntime }) ??
+        expect.fail("PDF tool was not registered");
+      const result = await tool.execute("pdf-auth", {
+        pdf: "/tmp/doc.pdf",
+        prompt: "Summarize this PDF.",
+      });
+      expect(result.content).toEqual([{ type: "text", text: "PDF summary" }]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] ?? expect.fail("Expected a PDF request");
+      expect(url).toBe("http://127.0.0.1:12345/v1/messages");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe(
+        oauth ? "Bearer sk-ant-oat01-fixture-setup-token" : null,
+      );
+      expect(headers.get("x-api-key")).toBe(oauth ? null : "fixture-anthropic-api-key");
+      expect(headers.get("anthropic-beta")?.split(",")).toEqual(
+        oauth
+          ? expect.arrayContaining(["pdfs-2024-09-25", "claude-code-20250219", "oauth-2025-04-20"])
+          : ["pdfs-2024-09-25"],
+      );
+      if (oauth) {
+        expect(headers.get("user-agent")).toMatch(/^claude-cli\/\d+\.\d+\.\d+$/);
+        expect(headers.get("x-app")).toBe("cli");
+      }
+      const body = JSON.parse(String(init?.body));
+      expect(body.system).toEqual(
+        oauth
+          ? [
+              {
+                type: "text",
+                text: expect.stringMatching(
+                  /^x-anthropic-billing-header: cc_version=\d+\.\d+\.\d+; cc_entrypoint=sdk-cli;$/,
+                ),
+              },
+              { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
+            ]
+          : undefined,
+      );
+      expect(body).toMatchObject({
+        model: modelId,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "document",
+                source: {
+                  media_type: "application/pdf",
+                  data: FAKE_PDF_MEDIA.buffer.toString("base64"),
+                },
+              },
+              { type: "text", text: "Summarize this PDF." },
+            ],
+          },
+        ],
+      });
+    });
+  },
+);
