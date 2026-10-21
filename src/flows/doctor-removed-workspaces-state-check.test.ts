@@ -71,26 +71,7 @@ it("ignores a plain user directory without plugin fingerprints", async () => {
   await expect(fs.readFile(notes, "utf8")).resolves.toBe("personal");
 });
 
-it("skips cleanup when the agent workspace resolves to the retired state directory", async () => {
-  await fingerprint();
-  const cfg = { agents: { entries: { ops: { workspace: join(staleDir, "..", "workspaces") } } } };
-  const findings = await detect(cfg);
-  expect(findings).toEqual([
-    expect.objectContaining({
-      message: expect.stringContaining("Automatic removal is disabled"),
-      path: staleDir,
-      severity: "warning",
-    }),
-  ]);
-  expect(await check.repair!(context(cfg), findings)).toMatchObject({
-    status: "skipped",
-    changes: [],
-    warnings: [expect.stringContaining("Automatic removal is disabled")],
-  });
-  await expect(fs.stat(staleDir)).resolves.toBeDefined();
-});
-
-it.each(["symlink beneath state", "ancestor of state"])(
+it.each(["retired directory", "symlink beneath state", "ancestor of state"])(
   "preserves an overlapping agent workspace (%s)",
   async (overlap) => {
     await fingerprint();
@@ -102,11 +83,24 @@ it.each(["symlink beneath state", "ancestor of state"])(
       await fs.mkdir(preserved);
       await fs.symlink(preserved, workspace, "dir");
     }
-    const cfg = { agents: { defaults: { workspace } } };
+    const cfg = {
+      agents:
+        overlap === "retired directory"
+          ? { entries: { ops: { workspace: join(staleDir, "..", "workspaces") } } }
+          : { defaults: { workspace } },
+    };
     const findings = await detect(cfg);
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("Automatic removal is disabled"),
+        path: staleDir,
+        severity: "warning",
+      }),
+    ]);
     expect(await check.repair!(context(cfg), findings)).toMatchObject({
       status: "skipped",
       changes: [],
+      warnings: [expect.stringContaining("Automatic removal is disabled")],
     });
     await expect(fs.stat(preserved)).resolves.toBeDefined();
   },

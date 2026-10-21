@@ -17,7 +17,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createDoctorRuntime, mocks } from "./doctor-health.test-support.js";
+import { createDoctorConfig, createDoctorRuntime, mocks } from "./doctor-health.test-support.js";
 
 // Keep the real Doctor config/migration chain; the shared harness isolates service and UI checks.
 vi.doUnmock("../commands/doctor-config-flow.js");
@@ -33,8 +33,7 @@ afterEach(() => vi.restoreAllMocks());
 
 function writeConfig(state: OpenClawTestState, session?: { store: string }) {
   return state.writeConfig({
-    agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
-    gateway: { mode: "local" },
+    ...createDoctorConfig(state),
     plugins: { enabled: false },
     ...(session ? { session } : {}),
   });

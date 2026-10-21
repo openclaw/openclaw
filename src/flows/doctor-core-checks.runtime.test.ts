@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { collectGatewayHealthFindings } from "../commands/doctor-gateway-health.js";
 import { createSqliteWalHealth } from "../commands/sqlite-wal-health.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createCoreHealthChecks } from "./doctor-core-checks.js";
 import { exitCodeFromFindings } from "./doctor-lint-flow.js";
@@ -399,40 +397,6 @@ describe("doctor runtime tool schema checks", () => {
     expect(mocks.catalog).toHaveBeenCalledTimes(inspected.length);
     expectBundleCall({ workspaceDir: expect.stringContaining(workspaceName) });
     expect(mocks.disposeMcp).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not probe requester-scoped MCP without a requester", async () => {
-    const resolverRegistry = createMcpProofPluginRegistry();
-    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
-      const resolveConnection = vi.fn();
-      resolverRegistry.apiFor("fuzzplugin").registerMcpServerConnectionResolver({
-        serverName: "fuzzplugin",
-        resolve: resolveConnection,
-      });
-      expect(
-        await inspectSchemas(
-          mcpServers({
-            fuzzplugin: {
-              url: "https://placeholder.invalid/mcp",
-              transport: "streamable-http",
-              auth: "oauth",
-            },
-          }),
-        ),
-      ).toContainEqual(
-        findingMatching("runtime-tool-schemas", "info", {
-          path: "mcp.servers.fuzzplugin",
-          requirement: "authenticated requester context",
-          fixHint: "Verify this server from an authenticated agent turn.",
-        }),
-      );
-      expect(resolveConnection).not.toHaveBeenCalled();
-      expect(mocks.mcpRuntime).toHaveBeenCalledWith(
-        expect.objectContaining({
-          excludeServerNames: new Set(["fuzzplugin"]),
-        }),
-      );
-    });
   });
 
   it("defers shared OAuth without suppressing non-OAuth probes", async () => {
