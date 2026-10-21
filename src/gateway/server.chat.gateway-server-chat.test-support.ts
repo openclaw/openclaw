@@ -71,7 +71,7 @@ export function installGatewayServerChatTestSuite(
     abortChatRun: (runId: string) => request("chat.abort", { sessionKey: "main", runId }),
     expectAgentWaitStartedAt: (res: Awaited<ReturnType<typeof rpcReq>>, startedAt: number) =>
       expect(res).toMatchObject({ ok: true, payload: { status: "ok", startedAt } }),
-    expectAgentWaitTimeout(res: Awaited<ReturnType<typeof rpcReq>>, error?: string) {
+    expectAgentWaitTimeout: (res: Awaited<ReturnType<typeof rpcReq>>, error?: string) => {
       expect(res).toMatchObject({ ok: true, payload: { status: "timeout" } });
       if (error !== undefined) {
         expect(res.payload).toMatchObject({ error, pendingError: true });
@@ -81,7 +81,7 @@ export function installGatewayServerChatTestSuite(
     get requestExecution() {
       return expectDefined(requestExecution, "request execution observer");
     },
-    mockBlockedChatReply() {
+    mockBlockedChatReply: () => {
       const blockedReply = createDeferred();
       mockGetReplyFromConfigOnce(async (_ctx, opts) => {
         await new Promise<void>((resolve) => {
@@ -98,7 +98,7 @@ export function installGatewayServerChatTestSuite(
     sendChatAndExpectStarted: (runId: string, message = "/context list") =>
       request("chat.send", { sessionKey: "main", message, idempotencyKey: runId }, "started"),
     settleGatewayFixture,
-    async waitForAgentRunDrained(runId: string, target = socket()) {
+    waitForAgentRunDrained: async (runId: string, target = socket()) => {
       await expectDefined(requestExecution, "request execution observer").waitForCompletion(runId);
       await waitForConnectWork?.();
       expect(getActiveGatewayRootWorkCount()).toBe(0);

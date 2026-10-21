@@ -34,7 +34,6 @@ const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("openclaw.gatewayTestHelpers.con
 
 // Typed defaults keep mutable fixture fields wide without duplicating their full shape.
 const initial = <T>(value: T): T => value;
-const unset = <T>(): T | undefined => undefined;
 
 const mutableValue = <T>(value: T) => ({ value });
 
@@ -83,20 +82,20 @@ const gatewayTestHoisted = resolveGatewayTestFileFixture(
       .fn<SendWhatsAppFn>()
       .mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
     testState: {
-      agentConfig: unset<Record<string, unknown>>(),
-      agentsConfig: unset<Record<string, unknown>>(),
-      bindingsConfig: unset<AgentBinding[]>(),
-      channelsConfig: unset<Record<string, unknown>>(),
-      sessionStorePath: unset<string>(),
-      sessionConfig: unset<Record<string, unknown>>(),
-      allowFrom: unset<string[]>(),
-      cronStorePath: unset<string>(),
+      agentConfig: initial<Record<string, unknown> | undefined>(undefined),
+      agentsConfig: initial<Record<string, unknown> | undefined>(undefined),
+      bindingsConfig: initial<AgentBinding[] | undefined>(undefined),
+      channelsConfig: initial<Record<string, unknown> | undefined>(undefined),
+      sessionStorePath: initial<string | undefined>(undefined),
+      sessionConfig: initial<Record<string, unknown> | undefined>(undefined),
+      allowFrom: initial<string[] | undefined>(undefined),
+      cronStorePath: initial<string | undefined>(undefined),
       cronEnabled: initial<boolean | undefined>(false),
-      cronTriggersEnabled: unset<boolean>(),
-      gatewayBind: unset<"auto" | "lan" | "tailnet" | "loopback">(),
-      gatewayAuth: unset<Record<string, unknown>>(),
-      gatewayControlUi: unset<Record<string, unknown>>(),
-      hooksConfig: unset<HooksConfig>(),
+      cronTriggersEnabled: initial<boolean | undefined>(undefined),
+      gatewayBind: initial<"auto" | "lan" | "tailnet" | "loopback" | undefined>(undefined),
+      gatewayAuth: initial<Record<string, unknown> | undefined>(undefined),
+      gatewayControlUi: initial<Record<string, unknown> | undefined>(undefined),
+      hooksConfig: initial<HooksConfig | undefined>(undefined),
       legacyIssues: new Array<{ path: string; message: string }>(),
       legacyParsed: initial<Record<string, unknown>>({}),
       migrationConfig: initial<Record<string, unknown> | null>(null),

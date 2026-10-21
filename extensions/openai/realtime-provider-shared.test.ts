@@ -6,6 +6,7 @@ const { fetchGuard } = vi.hoisted(() => ({
   fetchGuard: vi.fn(),
 }));
 
+// mock-isolation: Controlled responses exercise parsing without live DNS or HTTP requests.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchGuard,
 }));

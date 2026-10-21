@@ -21,6 +21,7 @@ export function useRetirementServer(responseBody: Record<string, string>) {
   return {
     seen,
     async start<T extends MatrixClient>(
+      this: void,
       Client: new (...args: ConstructorParameters<typeof MatrixClient>) => T,
     ) {
       seen.length = 0;

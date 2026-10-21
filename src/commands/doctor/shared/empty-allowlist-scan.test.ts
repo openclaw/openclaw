@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./empty-allowlist-scan.js";
 
+// mock-isolation: Synthetic channel capabilities keep policy scanning independent of plugin loading.
 vi.mock("../channel-capabilities.js", () => ({
   getDoctorChannelCapabilities: (channelName?: string) => ({
     dmAllowFromMode: "topOnly",

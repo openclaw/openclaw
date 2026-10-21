@@ -3,6 +3,7 @@ import { mockMatrixQaHttp } from "../substrate/http.test-support.js";
 
 const runMatrixQaCanary = vi.hoisted(() => vi.fn(async () => ({})));
 
+// mock-isolation: A synthetic Matrix account keeps scenario observations off operator config.
 vi.mock("../substrate/config.js", () => ({
   buildMatrixQaConfig: () => ({ channels: { matrix: { execApprovals: { enabled: true } } } }),
 }));

@@ -4,6 +4,7 @@ import { createPluginCache, resetPluginCache, withPluginCache } from "./plugin-c
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 async function loadPolicy(scope: string, load: () => unknown) {
+  // mock-isolation: Control artifact results without executing bundled provider modules.
   vi.doMock("./public-surface-loader.js", () => ({
     loadBundledPluginPublicArtifactModuleFromCandidatesSync: load,
   }));

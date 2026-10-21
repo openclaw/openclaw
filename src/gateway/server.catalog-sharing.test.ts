@@ -72,7 +72,7 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
     const request = (catalogId: string, search: string, progress?: string) => {
       const id = `catalog-${requests.length}`;
       const matches = (frame: ResponseFrame) => frame.type === "res" && frame.id === id;
-      const response = onceMessage(socket, matches);
+      const response = onceMessage<ResponseFrame>(socket, matches);
       requests.push(response);
       const params = { catalogId, search, progressId: progress };
       socket.send(JSON.stringify({ type: "req", id, method: "sessions.catalog.list", params }));

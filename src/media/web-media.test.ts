@@ -52,7 +52,7 @@ function remoteOptions(
   overrides: MediaOptions = {},
 ): MediaOptions {
   return {
-    fetchImpl: async () => new Response(body, { headers }),
+    fetchImpl: vi.fn(async () => new Response(body, { headers })),
     ssrfPolicy: { allowedHostnames: ["example.test"] },
     ...overrides,
   };
@@ -413,7 +413,7 @@ describe("loadWebMedia", () => {
       "alternating-high.csv",
       Buffer.from(Array.from({ length: 9000 }, (_, index) => (index % 2 === 0 ? 0x41 : 0xff))),
     ],
-  ] as const)("rejects unsafe host-read document %s", async (name, body, outside) => {
+  ] as const)("rejects unsafe host-read document %s", async (name, body, outside = false) => {
     if (name === "prefix-tail.csv") {
       expect(body.length - 4).toBeGreaterThan(8192);
     }

@@ -10,9 +10,13 @@ const debug = vi.hoisted(() => vi.fn());
 
 // mock-isolation: The fixture supplies the inventory instead of discovering installed plugins.
 vi.mock("./manifest-contract-eligibility.js", () => ({ loadManifestMetadataSnapshot }));
+// mock-isolation: Auth choices come from the synthetic setup inventory, not installed providers.
 vi.mock("./provider-auth-choices.js", () => ({ resolveManifestProviderAuthChoices }));
+// mock-isolation: Simulate capability consent without persisting plugin configuration changes.
 vi.mock("./enable.js", () => ({ enablePluginInConfig, enablePluginWithCapabilityConsent }));
+// mock-isolation: Availability probes use controlled providers without loading runtime integrations.
 vi.mock("./providers.runtime.js", () => ({ resolvePluginProvidersCore }));
+// mock-isolation: Capture diagnostic output without initializing the process logger.
 vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => ({ debug }) }));
 
 const metadataSnapshot = { manifestRegistry: { plugins: [] } };

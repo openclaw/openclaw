@@ -3,7 +3,6 @@ import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { expect, it, vi } from "vitest";
 import crabboxPlugin from "../../extensions/crabbox/index.js";
-import { commandResult } from "../../extensions/crabbox/src/crabbox-worker-provider.test-support.js";
 import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "../../src/plugins/services.js";
 import { startPluginServices } from "../../src/plugins/services.test-support.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
@@ -48,7 +47,7 @@ it("settles an active Crabbox heartbeat before strict replacement completes", as
         }, finished.reject);
         return await command;
       }
-      return commandResult({
+      return {
         stdout:
           argv[1] === "--version"
             ? "999.0.0"
@@ -58,7 +57,12 @@ it("settles an active Crabbox heartbeat before strict replacement completes", as
                 ready: true,
                 state: "running",
               }),
-      });
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
     });
   let provider!: WorkerProvider;
   const { api, registry } = createServiceRegistry("crabbox", {
