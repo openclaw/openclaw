@@ -5,6 +5,11 @@ const MatrixConfigSchema = MatrixChannelConfigSchema.runtime;
 if (!MatrixConfigSchema) {
   throw new Error("expected Matrix runtime config schema");
 }
+const auth = { homeserver: "https://matrix.example.org", accessToken: "token" };
+const approvers = ["@owner:example.org"];
+function approvalInput(execApprovals: Record<string, unknown>) {
+  return { ...auth, execApprovals: { approvers, ...execApprovals } };
+}
 
 describe("MatrixConfigSchema SecretInput", () => {
   it("preserves root and account join-introduction overrides without materializing defaults", () => {
@@ -15,11 +20,7 @@ describe("MatrixConfigSchema SecretInput", () => {
         inherited: {},
       },
     };
-    const result = MatrixConfigSchema.safeParse(input);
-    expect(result).toMatchObject({ success: true, data: input });
-    if (result.success) {
-      expect(result.data).not.toHaveProperty("accounts.inherited.joinIntro");
-    }
+    expect(MatrixConfigSchema.parse(input)).toEqual(input);
   });
 
   it("publishes account credential SecretInput leaves for Control UI redaction hints", () => {
@@ -32,8 +33,7 @@ describe("MatrixConfigSchema SecretInput", () => {
 
   it("rejects retired account streaming input with a doctor pointer", () => {
     const result = MatrixConfigSchema.safeParse({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
+      ...auth,
       accounts: { work: { streamMode: "progress" } },
     });
     expect(result.success).toBe(false);
@@ -45,68 +45,24 @@ describe("MatrixConfigSchema SecretInput", () => {
 
 describe("MatrixConfigSchema exec approvals", () => {
   it.each([true, false, "auto"] as const)("accepts the shipped enabled mode %s", (enabled) => {
-    const result = MatrixConfigSchema.safeParse({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-      execApprovals: {
-        enabled,
-        approvers: ["@owner:example.org"],
-      },
+    expect(MatrixConfigSchema.parse(approvalInput({ enabled })).execApprovals).toEqual({
+      enabled,
+      approvers,
     });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data).toMatchObject({ execApprovals: { enabled } });
-    }
   });
 
   it("preserves omitted approval enablement without introducing a default", () => {
-    const result = MatrixConfigSchema.safeParse({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-      execApprovals: { approvers: ["@owner:example.org"] },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data).toMatchObject({
-        execApprovals: { approvers: ["@owner:example.org"] },
-      });
-      expect(result.data).not.toMatchObject({
-        execApprovals: { enabled: expect.anything() },
-      });
-    }
+    expect(MatrixConfigSchema.parse(approvalInput({})).execApprovals).toEqual({ approvers });
   });
 
   it("preserves the existing non-strict approval object", () => {
-    const result = MatrixConfigSchema.safeParse({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-      execApprovals: {
-        enabled: "auto",
-        approvers: ["@owner:example.org"],
-        unknownApprovalField: true,
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data).toMatchObject({
-        execApprovals: { enabled: "auto", approvers: ["@owner:example.org"] },
-      });
-      expect(result.data).not.toMatchObject({
-        execApprovals: { unknownApprovalField: true },
-      });
-    }
+    expect(
+      MatrixConfigSchema.parse(approvalInput({ enabled: "auto", unknownApprovalField: true }))
+        .execApprovals,
+    ).toEqual({ enabled: "auto", approvers });
   });
 
   it.each(["AUTO", 1, null])("rejects the invalid enabled mode %s", (enabled) => {
-    const result = MatrixConfigSchema.safeParse({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-      execApprovals: { enabled, approvers: ["@owner:example.org"] },
-    });
-
-    expect(result.success).toBe(false);
+    expect(MatrixConfigSchema.safeParse(approvalInput({ enabled })).success).toBe(false);
   });
 });

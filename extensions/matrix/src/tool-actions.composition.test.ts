@@ -99,8 +99,9 @@ it("drops public delete reasons but preserves the downstream undefined property"
 
 it("carries only trusted read context and retains undefined context properties", async () => {
   const params = {
-    roomId: "!room:example",
-    messageId: "$message",
+    room_id: "!room:example",
+    message_id: "$message",
+    limit: "5",
     accountId: "untrusted",
     requesterAccountId: "untrusted",
     currentChannelId: "!untrusted:example",
@@ -115,7 +116,7 @@ it("carries only trusted read context and retains undefined context properties",
       currentChatType: "direct",
     },
   };
-  await run("reactions", params, context);
+  const result = await run("reactions", params, context);
 
   expect(mocks.withAuthorizedMatrixReadTarget.mock.lastCall?.[0].context).toStrictEqual({
     accountId: "ops",
@@ -125,7 +126,16 @@ it("carries only trusted read context and retains undefined context properties",
     currentChatType: "direct",
     conversationReadOrigin: undefined,
   });
-  expect(mocks.listMatrixReactions.mock.lastCall?.[2].accountId).toBe("ops");
+  expect(mocks.listMatrixReactions).toHaveBeenCalledWith("!room:example", "$message", {
+    cfg,
+    accountId: "ops",
+    client: mocks.matrixClient,
+    limit: 5,
+  });
+  expect(result.details).toEqual({
+    ok: true,
+    reactions: [{ key: "👍", count: 1, users: ["@u:example"] }],
+  });
 });
 
 it.each([
@@ -162,6 +172,7 @@ it("uses the current Matrix room only for emoji discovery and retains late white
     { cfg, client: mocks.matrixClient, limit: 3 },
   ]);
   mocks.withAuthorizedMatrixReadTarget.mockClear();
+  mocks.listMatrixEmojis.mockClear();
   const blankContext = { toolContext: { ...toolContext, currentChannelId: " " } };
   await expectError(
     run("emoji-list", {}, blankContext, disabledCfg),
@@ -176,6 +187,7 @@ it("uses the current Matrix room only for emoji discovery and retains late white
     "Matrix emoji-list requires a roomId or current Matrix conversation.",
   );
   expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
+  expect(mocks.listMatrixEmojis).not.toHaveBeenCalled();
 });
 
 it("preserves profile aliases and dropped fields at the public owner boundary", async () => {

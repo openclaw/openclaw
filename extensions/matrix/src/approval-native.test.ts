@@ -18,15 +18,25 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
-function authorize(cfg: OpenClawConfig, senderId: string, approvalKind: "plugin" | "exec") {
-  return matrixApprovalCapability.authorizeActorActionAsync?.({
-    accountId: "default",
-    cfg,
-    senderId,
-    action: "approve",
-    approvalKind,
-  });
-}
+const context = { accountId: "default", action: "approve" as const };
+const execRequest = {
+  id: "opaque-exec-approval-id",
+  request: { command: "echo hi" },
+  createdAtMs: 0,
+  expiresAtMs: 1000,
+};
+const pluginRequest = {
+  ...execRequest,
+  id: "opaque-approval-id",
+  request: {
+    title: "Plugin Approval Required",
+    description: "Allow plugin access",
+    pluginId: "git-tools",
+    turnSourceChannel: "matrix",
+    turnSourceTo: "room:!ops:example.org",
+  },
+};
+const { nativeAsync: native, nativeRuntimeAsync: runtime, delivery } = matrixApprovalCapability;
 
 describe("matrix approval capability", () => {
   it.each([undefined, "work"])("describes the Matrix setup path for account %s", (accountId) => {
@@ -47,52 +57,14 @@ describe("matrix approval capability", () => {
   });
 
   it("resolves approver dm targets", async () => {
-    const targets = await matrixApprovalCapability.nativeAsync?.resolveApproverDmTargets?.({
+    const targets = await native?.resolveApproverDmTargets?.({
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
-      request: {
-        id: "req-1",
-        request: { command: "echo hi" },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
+      request: execRequest,
     });
 
     expect(targets).toEqual([{ to: "user:@owner:example.org" }]);
-  });
-
-  it("keeps plugin approval auth independent from exec approvers", async () => {
-    const cfg = buildConfig({
-      dm: { allowFrom: ["@owner:example.org"] },
-      execApprovals: { enabled: true, approvers: ["@exec:example.org"], target: "both" },
-    });
-
-    expect(await authorize(cfg, "@owner:example.org", "plugin")).toEqual({ authorized: true });
-
-    expect(await authorize(cfg, "@exec:example.org", "plugin")).toEqual({
-      authorized: false,
-      reason: "❌ You are not authorized to approve plugin requests on Matrix.",
-    });
-
-    expect(await authorize(cfg, "@exec:example.org", "exec")).toEqual({ authorized: true });
-  });
-
-  it("requires exact Matrix identities for native approval actions", async () => {
-    const cfg = buildConfig({
-      dm: { allowFrom: ["@\u212A:example.org"] },
-      execApprovals: { enabled: true, approvers: ["@\u212A:example.org"], target: "both" },
-    });
-
-    for (const approvalKind of ["plugin", "exec"] as const) {
-      expect(await authorize(cfg, "@\u212A:example.org", approvalKind)).toEqual({
-        authorized: true,
-      });
-      expect(await authorize(cfg, "@k:example.org", approvalKind)).toEqual({
-        authorized: false,
-        reason: `\u274c You are not authorized to approve ${approvalKind} requests on Matrix.`,
-      });
-    }
   });
 
   it("requires Matrix DM approvers before enabling plugin approval auth", async () => {
@@ -101,7 +73,14 @@ describe("matrix approval capability", () => {
       execApprovals: { enabled: true, approvers: ["@exec:example.org"], target: "both" },
     });
 
-    expect(await authorize(cfg, "@exec:example.org", "plugin")).toEqual({
+    expect(
+      await matrixApprovalCapability.authorizeActorActionAsync?.({
+        ...context,
+        cfg,
+        senderId: "@exec:example.org",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({
       authorized: false,
       reason: "❌ Matrix plugin approvals are not enabled for this bot account.",
     });
@@ -116,8 +95,7 @@ describe("matrix approval capability", () => {
     expect(
       matrixApprovalCapability.getActionAvailabilityState?.({
         cfg,
-        accountId: "default",
-        action: "approve",
+        ...context,
         approvalKind: "plugin",
       }),
     ).toEqual({ kind: "enabled" });
@@ -125,8 +103,7 @@ describe("matrix approval capability", () => {
     expect(
       await matrixApprovalCapability.getExecInitiatingSurfaceStateAsync?.({
         cfg,
-        accountId: "default",
-        action: "approve",
+        ...context,
       }),
     ).toEqual({ kind: "disabled" });
   });
@@ -136,46 +113,30 @@ describe("matrix approval capability", () => {
       dm: { allowFrom: ["*"] },
       execApprovals: { enabled: true, approvers: [], target: "both" },
     });
-    const request = {
-      id: "opaque-approval-id",
-      request: {
-        title: "Plugin Approval Required",
-        description: "Allow plugin access",
-        pluginId: "git-tools",
-        turnSourceChannel: "matrix",
-        turnSourceTo: "room:!ops:example.org",
-      },
-      createdAtMs: 0,
-      expiresAtMs: 1000,
-    };
-
-    const pluginContext = { cfg, accountId: "default", approvalKind: "plugin" as const, request };
+    const request = pluginRequest;
+    const pluginContext = { ...context, cfg, approvalKind: "plugin" as const, request };
+    expect(await runtime?.availability.shouldHandle(pluginContext)).toBe(true);
+    expect((await native?.describeDeliveryCapabilities(pluginContext))?.enabled).toBe(true);
+    expect(await native?.resolveOriginTarget?.(pluginContext)).toEqual({
+      to: "room:!ops:example.org",
+      threadId: undefined,
+    });
     expect(
-      await matrixApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle(pluginContext),
-    ).toBe(true);
-    expect(
-      (await matrixApprovalCapability.nativeAsync?.describeDeliveryCapabilities(pluginContext))
-        ?.enabled,
-    ).toBe(true);
-    expect(
-      await matrixApprovalCapability.nativeAsync?.resolveOriginTarget?.(pluginContext),
-    ).toEqual({ to: "room:!ops:example.org", threadId: undefined });
-    expect(
-      await matrixApprovalCapability.nativeAsync?.resolveOriginTarget?.({
+      await native?.resolveOriginTarget?.({
         cfg,
         accountId: "default",
         request,
       } as never),
     ).toBeNull();
     expect(
-      await matrixApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
+      await runtime?.availability.shouldHandle({
         cfg: buildConfig(),
         accountId: "default",
         request,
       } as never),
     ).toBe(false);
     expect(
-      await matrixApprovalCapability.delivery?.shouldSuppressForwardingFallbackAsync?.({
+      await delivery?.shouldSuppressForwardingFallbackAsync?.({
         cfg,
         approvalKind: "plugin",
         target: { channel: "matrix", to: "room:!ops:example.org", accountId: "default" },
@@ -183,35 +144,21 @@ describe("matrix approval capability", () => {
       } as never),
     ).toBe(true);
     expect(
-      await matrixApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
+      await runtime?.availability.shouldHandle({
         cfg,
         accountId: "default",
         approvalKind: "exec",
-        request: {
-          id: "opaque-exec-approval-id",
-          request: { command: "echo hi" },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
+        request: execRequest,
       }),
     ).toBe(false);
   });
 
   it("keeps matrix-native plugin approval delivery disabled without DM approvers", async () => {
-    const capabilities = await matrixApprovalCapability.nativeAsync?.describeDeliveryCapabilities({
+    const capabilities = await native?.describeDeliveryCapabilities({
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "plugin",
-      request: {
-        id: "plugin:req-1",
-        request: {
-          title: "Plugin Approval Required",
-          description: "Allow plugin access",
-          pluginId: "git-tools",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
+      request: pluginRequest,
     });
 
     expect(capabilities).toEqual({

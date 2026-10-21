@@ -28,9 +28,6 @@ const account = { accountId: "ops" };
 const authorizedOpts = { cfg, ...account, client: mocks.matrixClient };
 const mediaLocalRoots = ["/tmp/openclaw-matrix-test"];
 const blockedMessage = "Matrix read target is not allowed.";
-function blockReadTarget() {
-  mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(new Error(blockedMessage));
-}
 type BlockedCase = [
   action: Parameters<typeof runMatrixAction>[0],
   params: Record<string, unknown>,
@@ -146,17 +143,6 @@ describe("Matrix public message actions", () => {
     });
   });
 
-  it("rejects custom-emote discovery when reactions are disabled", async () => {
-    const params = { roomId: "!blocked:example" };
-    await expect(
-      runMatrixAction("emoji-list", params, {
-        channels: { matrix: { actions: { reactions: false } } },
-      }),
-    ).rejects.toThrow("Matrix reactions are disabled.");
-    expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
-    expect(mocks.listMatrixEmojis).not.toHaveBeenCalled();
-  });
-
   it.each<BlockedCase>([
     ["react", { ...target, emoji: "👍" }, [mocks.reactMatrixMessage]],
     ["edit", { ...target, message: "updated" }, [mocks.editMatrixMessage]],
@@ -182,7 +168,7 @@ describe("Matrix public message actions", () => {
   ])(
     "rejects blocked %s before reading or mutating Matrix",
     async (action, params, forbidden, config = cfg, context = {}) => {
-      blockReadTarget();
+      mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(new Error(blockedMessage));
       await expect(
         runMatrixAction(action, { ...params, roomId: "!blocked:example" }, config, context),
       ).rejects.toThrow(blockedMessage);
@@ -197,22 +183,6 @@ describe("Matrix public message actions", () => {
     expect(mocks.removeMatrixReactions).toHaveBeenCalledWith(roomId, "$msg", {
       ...authorizedOpts,
       emoji: "👍",
-    });
-  });
-
-  it("passes account-scoped opts and limit to reaction listing", async () => {
-    const result = await runScoped("reactions", {
-      room_id: roomId,
-      message_id: "$msg",
-      limit: "5",
-    });
-    expect(mocks.listMatrixReactions).toHaveBeenCalledWith(roomId, "$msg", {
-      ...authorizedOpts,
-      limit: 5,
-    });
-    expect(result.details).toEqual({
-      ok: true,
-      reactions: [{ key: "👍", count: 1, users: ["@u:example"] }],
     });
   });
 

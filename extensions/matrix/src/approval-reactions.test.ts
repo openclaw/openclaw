@@ -22,22 +22,26 @@ const touchedTargetRefs = new Map<string, UnregisterTargetParams>();
 const anchor = { roomId: "!ops:example.org", eventId: "$approval-msg" };
 const approval = { ...anchor, approvalId: "req-123", approvalKind: "exec" as const };
 
-function rememberTargetRef(params: UnregisterTargetParams): void {
-  touchedTargetRefs.set(JSON.stringify(params), params);
+function rememberTargetRef({ accountId, roomId, eventId }: UnregisterTargetParams): void {
+  const ref = { accountId, roomId, eventId };
+  touchedTargetRefs.set(JSON.stringify(ref), ref);
 }
 
-async function registerTarget(
-  params: Omit<RegisterTargetParams, "accountId"> & { accountId?: string },
-): Promise<void> {
-  const { accountId = "default", ...target } = params;
-  rememberTargetRef({ accountId, roomId: target.roomId, eventId: target.eventId });
-  await registerMatrixApprovalReactionTargetRaw({ ...target, accountId });
+async function registerTarget(params: Partial<RegisterTargetParams> = {}): Promise<void> {
+  const target = {
+    accountId: "default",
+    ...approval,
+    allowedDecisions: ["allow-once" as const],
+    ...params,
+  };
+  rememberTargetRef(target);
+  await registerMatrixApprovalReactionTargetRaw(target);
 }
 
-function resolveTarget(params: Omit<ResolveTargetParams, "accountId"> & { accountId?: string }) {
-  const { accountId = "default", ...target } = params;
-  rememberTargetRef({ accountId, roomId: target.roomId, eventId: target.eventId });
-  return resolveMatrixApprovalReactionTargetWithPersistenceRaw({ ...target, accountId });
+function resolveTarget(params: Partial<ResolveTargetParams> = {}) {
+  const target = { accountId: "default", ...anchor, reactionKey: "✅", ...params };
+  rememberTargetRef(target);
+  return resolveMatrixApprovalReactionTargetWithPersistenceRaw(target);
 }
 
 function createRuntimeLogger(overrides: { warn?: ReturnType<typeof vi.fn> } = {}) {
@@ -60,12 +64,8 @@ afterEach(async () => {
 
 describe("matrix approval reactions", () => {
   it("ignores reactions that are not allowed on the registered approval anchor event", async () => {
-    await registerTarget({
-      ...approval,
-      allowedDecisions: ["allow-once", "deny"],
-    });
-
-    expect(await resolveTarget({ ...anchor, reactionKey: "♾️" })).toBeNull();
+    await registerTarget({ allowedDecisions: ["allow-once", "deny"] });
+    expect(await resolveTarget({ reactionKey: "♾️" })).toBeNull();
   });
 
   it("does not expose an approval reaction target to another Matrix account", async () => {
@@ -74,24 +74,10 @@ describe("matrix approval reactions", () => {
       accountId: "account-a",
       ...shared,
       approvalId: "req-account-a",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once"],
     });
 
-    await expect(
-      resolveTarget({
-        accountId: "account-b",
-        ...shared,
-        reactionKey: "✅",
-      }),
-    ).resolves.toBeNull();
-    await expect(
-      resolveTarget({
-        accountId: "account-a",
-        ...shared,
-        reactionKey: "✅",
-      }),
-    ).resolves.toEqual({
+    expect(await resolveTarget({ accountId: "account-b", ...shared })).toBeNull();
+    expect(await resolveTarget({ accountId: "account-a", ...shared })).toEqual({
       approvalId: "req-account-a",
       approvalKind: "exec",
       decision: "allow-once",
@@ -99,24 +85,17 @@ describe("matrix approval reactions", () => {
   });
 
   it("rejects reaction targets without a valid approval kind", async () => {
-    await registerTarget({
-      ...anchor,
-      approvalId: "req-123",
-      approvalKind: "invalid",
-      allowedDecisions: ["allow-once"],
-    } as never);
-
-    expect(await resolveTarget({ ...anchor, reactionKey: "✅" })).toBeNull();
+    await registerTarget({ approvalKind: "invalid" } as never);
+    expect(await resolveTarget()).toBeNull();
   });
 
   it("stops resolving reactions after the approval anchor event is unregistered", async () => {
     await registerTarget({
-      ...approval,
       allowedDecisions: ["allow-once", "allow-always", "deny"],
     });
     await unregisterMatrixApprovalReactionTargetRaw({ ...anchor, accountId: "default" });
 
-    expect(await resolveTarget({ ...anchor, reactionKey: "✅" })).toBeNull();
+    expect(await resolveTarget()).toBeNull();
   });
 
   it("persists system-agent approval reaction targets when runtime state is available", async () => {
@@ -128,11 +107,11 @@ describe("matrix approval reactions", () => {
     const record = {
       version: 1,
       target: {
+        ...approval,
         accountId: "default",
-        approvalId: "req-123",
         approvalKind,
         ...persistedAnchor,
-        allowedDecisions: ["allow-once", "deny"],
+        allowedDecisions: ["allow-once", "deny"] as const,
       },
     };
     const lookup = vi.fn().mockResolvedValue(record);
@@ -149,10 +128,9 @@ describe("matrix approval reactions", () => {
       logging: { getChildLogger: () => createRuntimeLogger({ warn }) },
     } as never);
 
-    await registerTarget({ ...record.target, allowedDecisions: ["allow-once", "deny"], ttlMs: 1 });
+    await registerTarget({ ...record.target, ttlMs: 1 });
 
-    expect(register).toHaveBeenCalledTimes(1);
-    expect(register).toHaveBeenCalledWith(
+    expect(register).toHaveBeenCalledExactlyOnceWith(
       '["default","!ops:example.org","$approval-msg-2"]',
       record,
       { ttlMs: 1 },
@@ -169,7 +147,6 @@ describe("matrix approval reactions", () => {
 
     register.mockRejectedValueOnce(new Error("sqlite unavailable"));
     await registerTarget({
-      roomId: "!ops:example.org",
       eventId: "$approval-msg-3",
       approvalId: "req-fallback",
       approvalKind,
@@ -179,7 +156,6 @@ describe("matrix approval reactions", () => {
 
     expect(
       await resolveTarget({
-        roomId: "!ops:example.org",
         eventId: "$approval-msg-3",
         reactionKey: "❌",
       }),

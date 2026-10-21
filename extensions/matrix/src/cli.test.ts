@@ -37,6 +37,10 @@ const mocks = vi.hoisted(() => ({
   log: vi.fn(),
   error: vi.fn(),
   stdout: vi.fn(),
+  directInspect: vi.fn(),
+  directRepair: vi.fn(),
+  resolvedClient: vi.fn(),
+  startedClient: vi.fn(),
 }));
 
 function expectLogs(...messages: string[]): void {
@@ -147,6 +151,16 @@ vi.mock("./matrix/accounts.js", () => ({
 
 vi.mock("./matrix/client.js", () => ({
   resolveMatrixAuthContext: mocks.authContext,
+}));
+vi.mock("./matrix/actions/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./matrix/actions/client.js")>()),
+  withResolvedActionClient: mocks.resolvedClient,
+  withStartedActionClient: mocks.startedClient,
+}));
+vi.mock("./matrix/direct-management.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./matrix/direct-management.js")>()),
+  inspectMatrixDirectRooms: mocks.directInspect,
+  repairMatrixDirectRooms: mocks.directRepair,
 }));
 
 vi.mock("./setup-core.js", async (importOriginal) => {
@@ -342,6 +356,72 @@ describe("matrix CLI verification commands", () => {
     vi.restoreAllMocks();
     process.exitCode = previousExitCode ?? 0;
   });
+
+  it.each(["inspect", "repair"] as const)(
+    "direct %s client lifecycle and projection",
+    async (name) => {
+      const repair = name === "repair",
+        client = {};
+      const cfg = { channels: { matrix: { encryption: true } } };
+      const room = {
+        roomId: "!dm:example.org",
+        source: "account-data",
+        strict: true,
+        joinedMembers: null,
+      };
+      const inspection = {
+        selfUserId: "@bot:example.org",
+        remoteUserId: "@peer:example.org",
+        mappedRoomIds: [room.roomId],
+        mappedRooms: [{ ...room, explicit: true }],
+        discoveredStrictRoomIds: [],
+        activeRoomId: room.roomId,
+      };
+      mocks.loadConfig.mockReturnValue(cfg);
+      for (const mock of [mocks.resolvedClient, mocks.startedClient]) {
+        mock.mockImplementation(async (_opts, operation) => operation(client));
+      }
+      mocks.directInspect.mockResolvedValue(inspection);
+      mocks.directRepair.mockResolvedValue({
+        ...inspection,
+        createdRoomId: null,
+        changed: true,
+        directContentBefore: {},
+        directContentAfter: { "@peer:example.org": [room.roomId] },
+      });
+      await runMatrixCli(
+        `direct ${name}`,
+        "--account",
+        "ops",
+        "--user-id",
+        "@peer:example.org",
+        repair ? "--verbose" : "--json",
+      );
+      expect(repair ? mocks.startedClient : mocks.resolvedClient).toHaveBeenCalledWith(
+        { accountId: "ops", cfg },
+        expect.any(Function),
+      );
+      expect(repair ? mocks.resolvedClient : mocks.startedClient).not.toHaveBeenCalled();
+      expect(repair ? mocks.directRepair : mocks.directInspect).toHaveBeenCalledWith({
+        client,
+        remoteUserId: "@peer:example.org",
+        ...(repair ? { encrypted: true } : {}),
+      });
+      expect(repair ? mocks.directInspect : mocks.directRepair).not.toHaveBeenCalled();
+      if (repair) {
+        expectLogs(
+          "Encrypted room creation: enabled",
+          "Created room: none",
+          "m.direct updated: yes",
+          'm.direct after: ["!dm:example.org"]',
+        );
+      } else {
+        expect(jsonOutput()).toMatchObject({ accountId: "ops" });
+        expect(jsonOutput().mappedRooms).toEqual([room]);
+        expect(jsonOutput()).not.toHaveProperty("encrypted");
+      }
+    },
+  );
 
   it("prints recovery-key and identity-trust diagnostics for device verification failures", async () => {
     mocks.verifyKey.mockResolvedValue({

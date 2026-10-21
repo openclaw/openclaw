@@ -122,28 +122,22 @@ describe("matrix onboarding", () => {
   });
 
   it("reuses an existing raw default-like key during onboarding promotion when defaultAccount is unset", async () => {
-    const prompter = createMatrixTokenAddAccountPrompter();
-
+    const legacy = createLegacyMatrixTopLevelConfig();
+    const support = {
+      homeserver: "https://matrix.support.example.org",
+      accessToken: "support-token",
+    };
     const result = await configure({
       cfg: {
-        ...createLegacyMatrixTopLevelConfig(),
+        ...legacy,
         channels: {
           matrix: {
-            ...createLegacyMatrixTopLevelConfig().channels?.matrix,
-            accounts: {
-              Default: {
-                enabled: true,
-                deviceName: "Legacy raw key",
-              },
-              support: {
-                homeserver: "https://matrix.support.example.org",
-                accessToken: "support-token",
-              },
-            },
+            ...legacy.channels?.matrix,
+            accounts: { Default: { enabled: true, deviceName: "Legacy raw key" }, support },
           },
         },
       } as CoreConfig,
-      prompter,
+      prompter: createMatrixTokenAddAccountPrompter(),
       shouldPromptAccountIds: true,
     });
 
@@ -158,7 +152,7 @@ describe("matrix onboarding", () => {
     });
     expect(result.cfg.channels?.matrix?.accounts?.default).toBeUndefined();
     expect(result.cfg.channels?.matrix?.accounts).toMatchObject({
-      support: { homeserver: "https://matrix.support.example.org", accessToken: "support-token" },
+      support,
       ops: { name: "ops", homeserver: "https://matrix.ops.example.org", accessToken: "ops-token" },
     });
   });
@@ -202,27 +196,15 @@ describe("matrix onboarding", () => {
   it("preserves SecretRef access tokens when keeping existing credentials", async () => {
     process.env.MATRIX_ACCESS_TOKEN = "env-token";
 
-    const prompter = createMatrixUpdateKeepCredentialsPrompter();
-
+    const accessToken = { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" } as const;
     const result = await configure({
       cfg: {
-        ...createConfiguredMatrixTopLevelConfig({
-          accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
-        }),
-        secrets: {
-          defaults: {
-            env: "default",
-          },
-        },
+        ...createConfiguredMatrixTopLevelConfig({ accessToken }),
+        secrets: { defaults: { env: "default" } },
       } as CoreConfig,
-      prompter,
+      prompter: createMatrixUpdateKeepCredentialsPrompter(),
     });
-
-    expect(result.cfg.channels?.matrix?.accessToken).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MATRIX_ACCESS_TOKEN",
-    });
+    expect(result.cfg.channels?.matrix?.accessToken).toEqual(accessToken);
   });
 
   it("writes allowlists and room access to the selected Matrix account", async () => {
@@ -258,17 +240,12 @@ describe("matrix onboarding", () => {
   it("clears Matrix invite auto-join allowlists when switching auto-join off", async () => {
     const notes: string[] = [];
 
-    const prompter = createMatrixUpdateKeepCredentialsPrompter({
-      notes,
-      inviteAutoJoin: "off",
-    });
-
     const result = await configure({
       cfg: createConfiguredMatrixTopLevelConfig({
         autoJoin: "allowlist",
         autoJoinAllowlist: ["#ops:example.org"],
       }),
-      prompter,
+      prompter: createMatrixUpdateKeepCredentialsPrompter({ notes, inviteAutoJoin: "off" }),
     });
 
     expect(result.cfg.channels?.matrix?.autoJoin).toBe("off");
@@ -330,12 +307,8 @@ describe("matrix onboarding", () => {
       resolveConfigKeys(
         createMatrixNamedAccountsConfig({
           accounts: {
-            default: {
-              homeserver: "https://matrix.main.example.org",
-            },
-            ops: {
-              homeserver: "https://matrix.ops.example.org",
-            },
+            default: { homeserver: "https://matrix.main.example.org" },
+            ops: { homeserver: "https://matrix.ops.example.org" },
           },
         }),
         "ops",

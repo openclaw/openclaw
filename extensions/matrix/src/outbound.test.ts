@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 // mock-isolation: Verify outbound translation without opening a Matrix SDK client or network connection.
 vi.mock("./matrix/send.js", () => mocks);
 
+import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { matrixOutbound } from "./outbound.js";
 
 const to = "room:!room:example";
@@ -35,6 +36,13 @@ function mockOptions(source: { mock: { calls: unknown[][] } }, callIndex = 0) {
     throw new Error(`expected send options at call ${callIndex}`);
   }
   return options as Record<string, unknown>;
+}
+function renderPresentation(presentation: MessagePresentation, text = "") {
+  return matrixOutbound.renderPresentation!({
+    payload: { text, presentation },
+    presentation,
+    ctx: {} as never,
+  });
 }
 
 function senderResult(
@@ -103,11 +111,9 @@ describe("matrixOutbound cfg threading", () => {
     const sent = senderResult("first\nlast", ["$first", "media", "$reply"], ["$last", "text"]);
     mocks.sendMessageMatrix.mockResolvedValueOnce(sent);
     const result = await matrixOutbound.sendMedia!({
-      cfg: {} as OpenClawConfig,
-      to: "room:!room:example",
+      ...context,
       text: "first\nlast",
       mediaUrl: "file:///tmp/photo.png",
-      accountId: "default",
     });
 
     expect(result).toMatchObject({
@@ -121,10 +127,7 @@ describe("matrixOutbound cfg threading", () => {
   });
 
   it("passes resolved cfg through injected deps.matrix", async () => {
-    const matrix = vi.fn(async () => ({
-      messageId: "evt-injected",
-      roomId: "!room:example",
-    }));
+    const matrix = vi.fn(async () => ({ messageId: "evt-injected", roomId: "!room:example" }));
 
     await matrixOutbound.sendText!({
       ...context,
@@ -163,25 +166,18 @@ describe("matrixOutbound cfg threading", () => {
   });
 
   it("renders divider-only MessagePresentation with a non-empty Matrix fallback body", async () => {
-    const presentation = {
-      blocks: [{ type: "divider" as const }],
-    };
-
-    const rendered = await matrixOutbound.renderPresentation!({
-      payload: { text: "", presentation },
-      presentation,
-      ctx: {} as never,
-    });
+    const presentation = { blocks: [{ type: "divider" as const }] };
+    const rendered = await renderPresentation(presentation);
 
     expect(rendered?.text).toBe("---");
-    expect(
-      (rendered!.channelData!.matrix as { extraContent?: Record<string, unknown> }).extraContent?.[
-        "com.openclaw.presentation"
-      ],
-    ).toEqual({
-      ...presentation,
-      version: 1,
-      type: "message.presentation",
+    expect(rendered?.channelData?.matrix).toEqual({
+      extraContent: {
+        "com.openclaw.presentation": {
+          ...presentation,
+          version: 1,
+          type: "message.presentation",
+        },
+      },
     });
   });
 
@@ -205,11 +201,7 @@ describe("matrixOutbound cfg threading", () => {
       ],
     };
 
-    const rendered = await matrixOutbound.renderPresentation!({
-      payload: { text: "Choose", presentation },
-      presentation,
-      ctx: {} as never,
-    });
+    const rendered = await renderPresentation(presentation, "Choose");
 
     expect(rendered?.text).toBe(
       "Choose\n\nEnvironment:\n- Production: `/deploy production`\n- Opaque",
@@ -238,35 +230,45 @@ describe("matrixOutbound cfg threading", () => {
     },
   );
 
-  it("preserves durable dispatch ownership across sendPayload media fanout", async () => {
+  it("keeps dispatch ownership and first-part caption/presentation across media fanout", async () => {
     const onPlatformSendDispatch = vi.fn();
-
+    const extraContent = {
+      "com.openclaw.presentation": { version: 1, type: "message.presentation" },
+    };
     await sendPayload(
       {
         text: "caption",
         mediaUrls: ["", "file:///tmp/a.png", "   ", "file:///tmp/b.png"],
+        channelData: channelData(extraContent),
       },
       {
+        ...context,
         deliveryQueueId: "queue-1",
         onPlatformSendDispatch,
+        threadId: "$thread",
       },
     );
 
     expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(2);
-    expect(mockOptions(mocks.sendMessageMatrix, 0)).toMatchObject({
-      mediaUrl: "file:///tmp/a.png",
-      deliveryQueueId: "queue-1",
-      deliveryPartIndex: 0,
-      deliveryPartCount: 2,
-      onPlatformSendDispatch,
-    });
-    expect(mockOptions(mocks.sendMessageMatrix, 1)).toMatchObject({
-      mediaUrl: "file:///tmp/b.png",
-      deliveryQueueId: "queue-1",
-      deliveryPartIndex: 1,
-      deliveryPartCount: 2,
-      onPlatformSendDispatch,
-    });
+    for (const [index, mediaUrl, text] of [
+      [0, "file:///tmp/a.png", "caption"],
+      [1, "file:///tmp/b.png", ""],
+    ] as const) {
+      expectSend(
+        mocks.sendMessageMatrix,
+        text,
+        {
+          mediaUrl,
+          deliveryQueueId: "queue-1",
+          deliveryPartIndex: index,
+          deliveryPartCount: 2,
+          onPlatformSendDispatch,
+          threadId: "$thread",
+          extraContent: index === 0 ? extraContent : undefined,
+        },
+        index + 1,
+      );
+    }
   });
 
   it("combines media payload receipts without inventing replies on later events", async () => {
@@ -300,52 +302,17 @@ describe("matrixOutbound cfg threading", () => {
       messageId: "$second-image",
       primaryMessageId: "$image",
       content: "caption\noverflow\nsecond image",
+      receipt: {
+        primaryPlatformMessageId: "$image",
+        platformMessageIds: ["$image", "$caption-overflow", "$second-image"],
+        parts: [
+          { platformMessageId: "$image", kind: "media", index: 0, replyToId: "$reply" },
+          { platformMessageId: "$caption-overflow", kind: "text", index: 1 },
+          { platformMessageId: "$second-image", kind: "media", index: 2 },
+        ],
+      },
     });
-    expect(result.receipt?.primaryPlatformMessageId).toBe("$image");
-    expect(result.receipt?.platformMessageIds).toEqual([
-      "$image",
-      "$caption-overflow",
-      "$second-image",
-    ]);
-    expect(result.receipt?.parts).toMatchObject([
-      { platformMessageId: "$image", kind: "media", index: 0, replyToId: "$reply" },
-      { platformMessageId: "$caption-overflow", kind: "text", index: 1 },
-      { platformMessageId: "$second-image", kind: "media", index: 2 },
-    ]);
     expect(result.receipt?.parts[1]).not.toHaveProperty("replyToId");
     expect(result.receipt?.parts[2]).not.toHaveProperty("replyToId");
-  });
-
-  it("applies caption and presentation metadata to the first non-empty media URL", async () => {
-    await sendPayload(
-      {
-        text: "caption",
-        mediaUrls: ["", "file:///tmp/a.png", "file:///tmp/b.png"],
-        channelData: channelData({
-          "com.openclaw.presentation": { version: 1, type: "message.presentation" },
-        }),
-      },
-      {
-        ...context,
-        threadId: "$thread",
-      },
-    );
-
-    expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(2);
-    expectSend(mocks.sendMessageMatrix, "caption", {
-      mediaUrl: "file:///tmp/a.png",
-      threadId: "$thread",
-      extraContent: { "com.openclaw.presentation": { version: 1, type: "message.presentation" } },
-    });
-    expectSend(
-      mocks.sendMessageMatrix,
-      "",
-      {
-        mediaUrl: "file:///tmp/b.png",
-        threadId: "$thread",
-        extraContent: undefined,
-      },
-      2,
-    );
   });
 });

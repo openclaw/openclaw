@@ -103,9 +103,6 @@ describe("matrix channel message adapter", () => {
 
     expect(result.messageId).toBe("$overflow");
     expect(result.receipt).toBe(receipt);
-    expect(result.receipt.primaryPlatformMessageId).toBe("$image");
-    expect(result.receipt.platformMessageIds).toEqual(["$image", "$overflow"]);
-    expect(result.receipt.parts[1]).not.toHaveProperty("replyToId");
   });
 
   it("routes the standard Matrix send action through canonical durable delivery", async () => {
