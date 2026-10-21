@@ -6,53 +6,7 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import { DebugOverlayFrame } from "./debug-overlay-frame-view.tsx";
 
 const key = "openclaw.debug-overlay.position";
-let container: HTMLDivElement;
 let dispose: (() => void) | undefined;
-let updateFrame:
-  | ((value: { mode: "expanded" | "minimized"; body: JSX.Element }) => void)
-  | undefined;
-
-function disposeFrame() {
-  dispose?.();
-  dispose = updateFrame = undefined;
-}
-
-function renderFrame(mode: "expanded" | "minimized", body: JSX.Element) {
-  const next = { mode, body };
-  if (updateFrame) {
-    updateFrame(next);
-  } else {
-    const [state, setState] = createSignal(next);
-    updateFrame = setState;
-    dispose = mountSolid(
-      () => (
-        <DebugOverlayFrame
-          mode={state().mode}
-          body={state().body}
-          onClose={vi.fn()}
-          onToggleMode={vi.fn()}
-        />
-      ),
-      { container },
-    ).unmount;
-  }
-  flush();
-  return container.querySelector<HTMLElement>("aside")!;
-}
-
-async function mount(mode: "expanded" | "minimized") {
-  const panel = renderFrame(mode, <div>Diagnostics</div>);
-  await vi.dynamicImportSettled();
-  await new Promise(requestAnimationFrame);
-  const animate = panel.animate.bind(panel);
-  vi.spyOn(panel, "animate").mockImplementation((keyframes, options) => {
-    const animation = animate(keyframes, options);
-    // Own the native clock before a slow frame can finish the animation.
-    animation.pause();
-    return animation;
-  });
-  return panel;
-}
 
 async function frameAnimation(panel: HTMLElement) {
   // Runs after the layout's own frame callback, which the preceding render queued.
@@ -61,37 +15,54 @@ async function frameAnimation(panel: HTMLElement) {
   expect(animations).toHaveLength(1);
   const [animation] = animations;
   assert(animation?.effect instanceof KeyframeEffect);
-  return { animation, end: animation.effect.getKeyframes().at(-1)! };
+  return animation;
 }
 
-beforeEach(() => {
-  localStorage.removeItem(key);
-  container = document.createElement("div");
-  document.body.append(container);
-});
+beforeEach(() => localStorage.removeItem(key));
 
 afterEach(() => {
-  disposeFrame();
-  container.remove();
+  dispose?.();
+  dispose = undefined;
   localStorage.removeItem(key);
   vi.restoreAllMocks();
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("System busyness frame animation", () => {
   it("keeps a running mode animation when a same-mode render leaves its target unchanged", async () => {
-    const panel = await mount("minimized");
+    const [state, setState] = createSignal<{ mode: "expanded" | "minimized"; body: JSX.Element }>({
+      mode: "minimized",
+      body: <div>Diagnostics</div>,
+    });
+    const mounted = mountSolid(() => (
+      <DebugOverlayFrame
+        mode={state().mode}
+        body={state().body}
+        onClose={vi.fn()}
+        onToggleMode={vi.fn()}
+      />
+    ));
+    dispose = mounted.unmount;
+    const panel = mounted.container.querySelector<HTMLElement>("aside")!;
+    const renderFrame = (mode: "expanded" | "minimized", body: JSX.Element) => {
+      setState({ mode, body });
+      flush();
+    };
+    flush();
+    await vi.dynamicImportSettled();
+    await new Promise(requestAnimationFrame);
+    const animate = panel.animate.bind(panel);
+    vi.spyOn(panel, "animate").mockImplementation((keyframes, options) => {
+      const animation = animate(keyframes, options);
+      // Own the native clock before a slow frame can finish the animation.
+      animation.pause();
+      return animation;
+    });
     renderFrame("expanded", <div role="status">Loading diagnostics…</div>);
-    const { animation } = await frameAnimation(panel);
+    const animation = await frameAnimation(panel);
 
     // The expanded frame has a fixed height, so swapping its body keeps the target.
-    renderFrame(
-      "expanded",
-      <section>
-        <h3>Gateway</h3>
-        <p>No active runs.</p>
-      </section>,
-    );
-    const { animation: current } = await frameAnimation(panel);
+    renderFrame("expanded", <section>Gateway: No active runs.</section>);
+    const current = await frameAnimation(panel);
     expect(animation.playState).toBe("paused");
     expect(current).toBe(animation);
     animation.finish();
