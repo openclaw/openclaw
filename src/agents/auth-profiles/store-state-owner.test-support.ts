@@ -5,10 +5,7 @@ import { afterEach, expect, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
+import * as stateDatabase from "../../state/openclaw-state-db.js";
 import { withEnv } from "../../test-utils/env.js";
 import { clearAuthProfileMigrationDiagnostics } from "./legacy-source-diagnostic.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
@@ -34,8 +31,8 @@ export function createAuthOwnerTestFixtures() {
     clearRuntimeAuthProfileStoreSnapshots();
     clearAuthProfileMigrationDiagnostics();
     closeOpenClawAgentDatabasesForTest();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await stateDatabase.closeOpenClawStateDatabaseAsync();
+    stateDatabase.closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     tempDirs.cleanup();
   });
@@ -53,12 +50,11 @@ export function createAuthOwnerTestFixtures() {
     }
     const original = fs.readFileSync(databasePath);
     const relocated = path.join(stateDir, "unrelated-relocated-agent");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    vi.stubEnv("OPENCLAW_AGENT_DIR", relocated);
+    const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: relocated };
+    Object.entries(env).forEach(([name, value]) => vi.stubEnv(name, value));
     return () => {
       expect(fs.readFileSync(databasePath)).toEqual(original);
-      expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
-      expect(process.env.OPENCLAW_AGENT_DIR).toBe(relocated);
+      expect(process.env).toMatchObject(env);
       expect(fs.existsSync(relocated)).toBe(false);
     };
   }
