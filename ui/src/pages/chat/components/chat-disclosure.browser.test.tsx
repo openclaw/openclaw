@@ -88,29 +88,33 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
           isToolMessageExpanded: () => props.expanded,
           onToggleToolMessageExpanded: toggle,
         });
-        return kind === "work" ? (
-          <WorkGroupSummary
-            item={{ key: "work", durationMs: null, groups }}
-            options={{ expanded: props.expanded, onToggle: toggle }}
-          />
-        ) : kind === "activity" ? (
-          <ActivityGroup groups={groups} options={options()} presentation="standalone" />
-        ) : kind === "tool" ? (
-          <ChatToolCard
-            card={{
-              id: "search",
-              name: "web_search",
-              args: { query: "disclosures" },
-              completed: true,
-            }}
-            options={{ messageKey: "tool", expanded: props.expanded, onToggleExpanded: toggle }}
-          />
-        ) : kind === "tool-output" ? (
-          <MessageGroup group={output} options={options()} />
-        ) : (
-          <openclaw-chat-tool-raw>
-            <RawOutputToggle text="Copyable output" />
-          </openclaw-chat-tool-raw>
+        return (
+          <>
+            {kind === "work" ? (
+              <WorkGroupSummary
+                item={{ key: "work", durationMs: null, groups }}
+                options={{ expanded: props.expanded, onToggle: toggle }}
+              />
+            ) : kind === "activity" ? (
+              <ActivityGroup groups={groups} options={options()} presentation="standalone" />
+            ) : kind === "tool" ? (
+              <ChatToolCard
+                card={{
+                  id: "search",
+                  name: "web_search",
+                  args: { query: "disclosures" },
+                  completed: true,
+                }}
+                options={{ messageKey: "tool", expanded: props.expanded, onToggleExpanded: toggle }}
+              />
+            ) : kind === "tool-output" ? (
+              <MessageGroup group={output} options={options()} />
+            ) : (
+              <openclaw-chat-tool-raw>
+                <RawOutputToggle text="Copyable output" />
+              </openclaw-chat-tool-raw>
+            )}
+          </>
         );
       }
       const view = mountSolid(Disclosure, { expanded }, container);

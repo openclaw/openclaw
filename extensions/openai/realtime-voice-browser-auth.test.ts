@@ -61,6 +61,7 @@ const {
   requireFetchInit,
   requireFetchHeaders,
   requireFetchJsonBody,
+  readInternalRealtimeVoiceProviderApi,
   createTestJwt,
   resetTestState,
   restoreTestEnvironment,
@@ -437,13 +438,6 @@ describe("OpenAI realtime voice browser authentication", () => {
   });
 });
 
-const {
-  createTestJwt,
-  resetTestState,
-  restoreTestEnvironment,
-  readInternalRealtimeVoiceProviderApi,
-  createQuicksilverBrowserBrokerFixture,
-} = rt;
 const OPAQUE_REALTIME_MODEL = "gpt-live-test-canary";
 
 function projectionFixture(withBroker = false) {

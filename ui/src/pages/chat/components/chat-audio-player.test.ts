@@ -22,11 +22,6 @@ const audioResponse = () =>
     status: 200,
     headers: { "Content-Type": "audio/mpeg", "Content-Length": "4" },
   });
-async function update(player: ChatAudioPlayer, props: Partial<ChatAudioPlayer>) {
-  Object.assign(player, props);
-  await player.updateComplete;
-}
-
 function mockPlayback(media: HTMLMediaElement) {
   let paused = true;
   Object.defineProperty(media, "paused", { configurable: true, get: () => paused });
