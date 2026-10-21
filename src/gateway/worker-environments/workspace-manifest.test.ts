@@ -38,6 +38,18 @@ function readJournal(value: unknown) {
   return parseWorkerWorkspaceReconciliationPlan(JSON.stringify(value));
 }
 
+const directory = (path: string) => ({ path, type: "directory", mode: 0o700 });
+const namedFile = (path: string) => ({ ...file, path });
+function rejects(values: unknown[], read: (value: unknown) => unknown, error: string) {
+  for (const value of values) {
+    expect(() => read(value)).toThrow(error);
+  }
+}
+function rejectsEntry(value: unknown, error: string) {
+  expect(() => readManifest({ ...manifest, entries: [value] })).toThrow(error);
+  expect(() => readJournal({ ...journal, baseEntries: [value] })).toThrow(error);
+}
+
 describe("worker workspace manifest parsing", () => {
   it("prunes cache-only ancestors while preserving original empty directories", () => {
     const directories = [
@@ -52,24 +64,21 @@ describe("worker workspace manifest parsing", () => {
       "nested/empty",
     ];
     const entries = [
-      { ...file, path: ".artifacts/vitest-worker-cache/out.js" },
-      { ...file, path: ".local/share/pnpm/store/content" },
+      namedFile(".artifacts/vitest-worker-cache/out.js"),
+      namedFile(".local/share/pnpm/store/content"),
       file,
     ];
     const original = {
       ...manifest,
-      entries: [
-        ...directories.map((path) => ({ path, type: "directory", mode: 0o700 })),
-        ...entries,
-      ].toSorted((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)),
+      entries: [...directories.map(directory), ...entries].toSorted((left, right) =>
+        left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+      ),
     };
     const expected = { ...manifest, directories: ["empty", "nested", "nested/empty"] };
     expect(readManifest(original)).toEqual(expected);
     expect(
       readManifest(
-        JSON.parse(
-          serializeWorkerWorkspaceManifest({ version: 1, baseCommit: null, entries, directories }),
-        ),
+        JSON.parse(serializeWorkerWorkspaceManifest({ ...manifest, entries, directories })),
       ),
     ).toEqual(expected);
   });
@@ -80,11 +89,11 @@ describe("worker workspace manifest parsing", () => {
     const value = {
       ...manifest,
       entries: [
-        { path: ".artifacts", type: "directory", mode: 0o700 },
-        { path: ".artifacts/build-all-cache", type: "directory", mode: 0o700 },
-        { ...file, path: authored },
-        { path: ".artifacts/build-cache-inputs", type: "directory", mode: 0o700 },
-        { ...file, path: generated },
+        directory(".artifacts"),
+        directory(".artifacts/build-all-cache"),
+        namedFile(authored),
+        directory(".artifacts/build-cache-inputs"),
+        namedFile(generated),
         file,
       ],
       // Receipt contents cannot supply their own input-custody facts.
@@ -105,29 +114,22 @@ describe("worker workspace manifest parsing", () => {
     for (const value of [null, [], false, 1, "invalid"]) {
       expect(() => readManifest(value)).toThrow("manifest is invalid");
       expect(() => readJournal(value)).toThrow("journal is invalid");
-      expect(() => readManifest({ ...manifest, entries: [value] })).toThrow("invalid entry");
-      expect(() => readJournal({ ...journal, baseEntries: [value] })).toThrow("invalid entry");
+      rejectsEntry(value, "invalid entry");
     }
   });
 
   it.each([
-    {
-      field: "mode",
-      invalid: [undefined, null, "420", false, [], {}, -1, 0.5, 0o1000],
-      error: "invalid mode",
-    },
-    {
-      field: "size",
-      invalid: [undefined, null, "0", false, [], {}, -1, 0.5, Number.MAX_SAFE_INTEGER + 1],
-      error: "invalid file metadata",
-    },
-  ])(
-    "rejects nonnumeric, fractional, and out-of-range $field values",
-    ({ field, invalid, error }) => {
+    ["mode", [undefined, null, "420", false, [], {}, -1, 0.5, 0o1000], "invalid mode"],
+    [
+      "size",
+      [undefined, null, "0", false, [], {}, -1, 0.5, Number.MAX_SAFE_INTEGER + 1],
+      "invalid file metadata",
+    ],
+  ] as const)(
+    "rejects nonnumeric, fractional, and out-of-range %s values",
+    (field, invalid, error) => {
       for (const value of invalid) {
-        const entry = { ...file, [field]: value };
-        expect(() => readManifest({ ...manifest, entries: [entry] })).toThrow(error);
-        expect(() => readJournal({ ...journal, baseEntries: [entry] })).toThrow(error);
+        rejectsEntry({ ...file, [field]: value }, error);
       }
     },
   );
@@ -146,9 +148,11 @@ describe("worker workspace manifest parsing", () => {
     for (const baseCommit of [null, "a".repeat(40), "b".repeat(64)]) {
       expect(readManifest({ ...manifest, baseCommit }).baseCommit).toBe(baseCommit);
     }
-    for (const baseCommit of [undefined, false, 1, "", "a".repeat(39)]) {
-      expect(() => readManifest({ ...manifest, baseCommit })).toThrow("unsupported shape");
-    }
+    rejects(
+      [undefined, false, 1, "", "a".repeat(39)],
+      (baseCommit) => readManifest({ ...manifest, baseCommit }),
+      "unsupported shape",
+    );
   });
 
   it("rejects duplicate or unsorted manifest paths", () => {
@@ -159,13 +163,7 @@ describe("worker workspace manifest parsing", () => {
       expect(() =>
         readManifest({
           ...manifest,
-          entries: paths.map((path) => ({
-            path,
-            type: file.type,
-            mode: file.mode,
-            size: file.size,
-            sha256: file.sha256,
-          })),
+          entries: paths.map(namedFile),
         }),
       ).toThrow("not unique and sorted");
     }
@@ -183,15 +181,10 @@ describe("worker workspace reconciliation journal parsing", () => {
   it.each(["baseDirectories", "appliedDirectories"])(
     "rejects invalid %s values and paths",
     (field) => {
-      for (const value of [null, false, 0, "", {}]) {
-        expect(() => readJournal({ ...journal, [field]: value })).toThrow("unsupported shape");
-      }
-      for (const value of [[null], ["../outside"], ["dir\\child"], ["/absolute"]]) {
-        expect(() => readJournal({ ...journal, [field]: value })).toThrow("unsafe path");
-      }
-      expect(() => readJournal({ ...journal, [field]: ["same", "same"] })).toThrow(
-        "duplicate directories",
-      );
+      const read = (value: unknown) => readJournal({ ...journal, [field]: value });
+      rejects([null, false, 0, "", {}], read, "unsupported shape");
+      rejects([[null], ["../outside"], ["dir\\child"], ["/absolute"]], read, "unsafe path");
+      rejects([["same", "same"]], read, "duplicate directories");
     },
   );
 
@@ -201,10 +194,10 @@ describe("worker workspace reconciliation journal parsing", () => {
     expect(readJournal({ ...journal, appliedManifestRef }).appliedManifestRef).toBe(
       appliedManifestRef,
     );
-    for (const value of [null, false, 1, "", `sha256:${"f".repeat(63)}`]) {
-      expect(() => readJournal({ ...journal, appliedManifestRef: value })).toThrow(
-        "unsupported shape",
-      );
-    }
+    rejects(
+      [null, false, 1, "", `sha256:${"f".repeat(63)}`],
+      (value) => readJournal({ ...journal, appliedManifestRef: value }),
+      "unsupported shape",
+    );
   });
 });

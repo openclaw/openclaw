@@ -3,6 +3,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 
+function commandResult(stdout = "") {
+  return { stdout, stderr: "", code: 0, signal: null, killed: false, termination: "exit" as const };
+}
+
 describe("worker workspace quiescence", () => {
   it.each(["transport", "acknowledgement", "cleanup", "owner-closed", "legacy"] as const)(
     "recovers only an owned native nonce after failed acquisition (%s)",
@@ -15,14 +19,7 @@ describe("worker workspace quiescence", () => {
           if (failure === "cleanup") {
             throw new Error("recovery unavailable");
           }
-          return {
-            stdout: "",
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit" as const,
-          };
+          return commandResult();
         }
         if (failure === "owner-closed") {
           owner.abort();
@@ -30,14 +27,7 @@ describe("worker workspace quiescence", () => {
         if (failure !== "acknowledgement") {
           throw new Error("acquisition response lost");
         }
-        return {
-          stdout: "not an acknowledgement",
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
-        };
+        return commandResult("not an acknowledgement");
       });
       const acquiring = createWorkerWorkspaceQuiescence({
         ownerSignal: owner.signal,
@@ -79,23 +69,9 @@ describe("worker workspace quiescence", () => {
       const runWorkspaceCommand = vi.fn(async (command: { argv: readonly string[] }) => {
         if (command.argv.includes("final")) {
           await renewalBlocked;
-          return {
-            stdout: `renewed ${nonce}\n`,
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit" as const,
-          };
+          return commandResult(`renewed ${nonce}\n`);
         }
-        return {
-          stdout: `quiesced ${nonce}\n`,
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
-        };
+        return commandResult(`quiesced ${nonce}\n`);
       });
       const quiesce = createWorkerWorkspaceQuiescence({
         ownerSignal: owner.signal,
@@ -124,14 +100,7 @@ describe("worker workspace quiescence", () => {
     const owner = new AbortController();
     const runWorkspaceCommand = vi.fn(async () => {
       owner.abort();
-      return {
-        stdout: `quiesced ${"e".repeat(32)}\n`,
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      };
+      return commandResult(`quiesced ${"e".repeat(32)}\n`);
     });
     const lease = await createWorkerWorkspaceQuiescence({
       ownerSignal: owner.signal,
@@ -159,14 +128,7 @@ describe("worker workspace quiescence", () => {
         if (command.argv[4] === nonce && ++releaseAttempts === 1) {
           throw new Error("remote connection interrupted");
         }
-        return {
-          stdout: releaseAttempts === 0 ? `quiesced ${nonce}\n` : "",
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
-        };
+        return commandResult(releaseAttempts === 0 ? `quiesced ${nonce}\n` : "");
       });
       const lease = await createWorkerWorkspaceQuiescence({
         ownerSignal: new AbortController().signal,

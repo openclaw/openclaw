@@ -13,15 +13,30 @@ import {
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
 import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
-import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 import {
   createScriptWorkspace,
   initializeScriptGitWorkspace,
   writeWorkspaceFiles,
-  workspaceScriptRunner,
 } from "./workspace-sync-scripts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const digest = (raw: string) => createHash("sha256").update(raw).digest("hex");
+const fileEntry = (entryPath: string, content: string, size = content.length) => ({
+  path: entryPath,
+  type: "file" as const,
+  mode: 0o644,
+  size,
+  sha256: digest(content),
+});
+async function readCapture(manifestRoot: string, ref: string) {
+  const { entries }: { entries: Array<{ path: string; type: string }> } = JSON.parse(
+    await fs.readFile(path.join(manifestRoot, `${ref.trim().slice(7)}.json`), "utf8"),
+  );
+  return {
+    files: entries.filter((entry) => entry.type !== "directory"),
+    directories: entries.filter((entry) => entry.type === "directory").map((entry) => entry.path),
+  };
+}
 const cache = ".cache/vitest/results.json";
 const packageCaches = [
   ".local/share/pnpm/store/v11/files/10/package-content",
@@ -64,7 +79,7 @@ const userFiles = {
 };
 
 it("excludes only generated runtime roots from capture and transfer", async () => {
-  const { home, workspace, env } = await createScriptWorkspace(
+  const { workspace, runManifest, manifestRoot } = await createScriptWorkspace(
     tempDirs.make("workspace-generated-capture-"),
   );
   await writeWorkspaceFiles(workspace, {
@@ -84,37 +99,17 @@ it("excludes only generated runtime roots from capture and transfer", async () =
     local.manifest,
   );
   expect(result.entries.some((entry) => entry.path === "source.ts")).toBe(true);
-  const run = workspaceScriptRunner(REMOTE_WORKSPACE_MANIFEST_JS, workspace, env);
-  const remote = await run(["", "all"]);
+  const remote = await runManifest(["", "all"]);
   expect(remote.code, remote.stderr).toBe(0);
-  const raw = await fs.readFile(
-    path.join(home, ".openclaw-worker/manifests", `${remote.stdout.trim().slice(7)}.json`),
-    "utf8",
-  );
   const expected = [...Object.keys(userFiles), "source.ts"].toSorted();
   expect(local.manifest.entries.map((entry) => entry.path).toSorted()).toEqual(expected);
-  const captured: { entries: Array<{ path: string; type: string }> } = JSON.parse(raw);
-  expect(
-    captured.entries
-      .filter((entry) => entry.type !== "directory")
-      .map((entry) => entry.path)
-      .toSorted(),
-  ).toEqual(expected);
-  expect(
-    captured.entries.filter((entry) => entry.type === "directory").map((entry) => entry.path),
-  ).toEqual(local.manifest.directories);
+  const captured = await readCapture(manifestRoot, remote.stdout);
+  expect(captured.files.map((entry) => entry.path).toSorted()).toEqual(expected);
+  expect(captured.directories).toEqual(local.manifest.directories);
   const oversizedArtifact = ".local/share/user-data.bin";
   const oversized = {
     ...local.manifest,
-    entries: [
-      {
-        path: oversizedArtifact,
-        type: "file" as const,
-        mode: 0o644,
-        size: MAX_RECONCILIATION_FILE_BYTES + 1,
-        sha256: "0".repeat(64),
-      },
-    ],
+    entries: [fileEntry(oversizedArtifact, "", MAX_RECONCILIATION_FILE_BYTES + 1)],
   };
   expect(() =>
     parseChangedWorkspaceResult({ version: 1, baseCommit: null, entries: [] }, oversized),
@@ -158,16 +153,10 @@ it("omits cache-only ancestry from remote capture while retaining empty director
     }
     const remote = await runManifest(["", "all"]);
     expect(remote.code, remote.stderr).toBe(0);
-    const raw: { entries: Array<{ path: string; type: string }> } = JSON.parse(
-      await fs.readFile(path.join(manifestRoot, `${remote.stdout.trim().slice(7)}.json`), "utf8"),
-    );
+    const raw = await readCapture(manifestRoot, remote.stdout);
     const local = await readActualWorkspaceManifestImpl({ root: workspace, baseCommit: null });
-    expect(
-      raw.entries.filter((entry) => entry.type === "directory").map((entry) => entry.path),
-    ).toEqual(local.manifest.directories);
-    expect(raw.entries.filter((entry) => entry.type !== "directory")).toEqual(
-      local.manifest.entries,
-    );
+    expect(raw.directories).toEqual(local.manifest.directories);
+    expect(raw.files).toEqual(local.manifest.entries);
     expect(local.manifest.directories).toEqual(
       stage === "caches" ? [] : stage === "empty directory" ? ["empty"] : [".artifacts", "empty"],
     );
@@ -203,27 +192,21 @@ it.each([false, true])(
       entries: [
         ...[...directories].map((name) => ({ path: name, type: "directory", mode: 0o700 })),
         ...current.manifest.entries,
-        {
-          path: cachePath,
-          type: "file",
-          mode: 0o644,
-          size: 5,
-          sha256: createHash("sha256").update("cache").digest("hex"),
-        },
+        fileEntry(cachePath, "cache"),
       ].toSorted((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)),
     });
-    const digest = createHash("sha256").update(legacy).digest("hex");
+    const legacyDigest = digest(legacy);
     await fs.mkdir(manifestRoot, { recursive: true });
-    const legacyPath = path.join(manifestRoot, `${digest}.json`);
+    const legacyPath = path.join(manifestRoot, `${legacyDigest}.json`);
     await fs.writeFile(legacyPath, legacy);
     const expected = serializeWorkerWorkspaceManifest(
-      parseWorkerWorkspaceManifest(legacy, `sha256:${digest}`),
+      parseWorkerWorkspaceManifest(legacy, `sha256:${legacyDigest}`),
     );
-    const expectedDigest = createHash("sha256").update(expected).digest("hex");
+    const expectedDigest = digest(expected);
     const resolved = await runManifest([baseCommit, "resolve", expectedDigest]);
     expect(resolved.code, resolved.stderr).toBe(0);
     expect(resolved.stdout.trim()).toBe(`sha256:${expectedDigest}`);
-    const captured = await runManifest([baseCommit, "eligible", digest]);
+    const captured = await runManifest([baseCommit, "eligible", legacyDigest]);
     expect(captured.code, captured.stderr).toBe(0);
     expect(captured.stdout.trim()).toBe(`sha256:${expectedDigest}`);
     expect(await fs.readFile(legacyPath, "utf8")).toBe(legacy);
