@@ -64,6 +64,7 @@ const accountAppPolicyEntrySchema = z
     appName: z.string(),
     allowDestructiveActions: z.boolean(),
     allowOpenWorld: z.boolean().optional(),
+    readOnlyTools: z.record(z.string(), z.boolean()).optional(),
     destructiveApprovalMode: destructiveApprovalModeSchema.catch(undefined),
     mcpServerNames: z.array(z.string()),
   })
@@ -76,6 +77,7 @@ const pluginAppPolicyEntrySchema = z
     pluginName: z.string(),
     allowDestructiveActions: z.boolean(),
     allowOpenWorld: z.boolean().optional(),
+    readOnlyTools: z.record(z.string(), z.boolean()).optional(),
     destructiveApprovalMode: destructiveApprovalModeSchema.catch(undefined),
     mcpServerNames: z.array(z.string()),
   })

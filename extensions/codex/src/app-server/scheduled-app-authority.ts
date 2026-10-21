@@ -12,6 +12,7 @@ import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import type { CodexPluginDestructiveApprovalMode } from "./config.js";
 import { readCodexMcpToolConnectorId } from "./mcp-tool-metadata.js";
 import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
+import { readOnlyToolEnabled } from "./plugin-app-read-only.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildPluginAppPolicyContext,
@@ -534,29 +535,43 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
     // Current inventory owns existence; captured modes only cap tools that
     // still exist (and tools added later within the already-authorized app).
     const tools = currentPolicy.toolsByApp.get(appId) ?? new Map<string, CodexScheduledAppTool>();
-    appPatch.tools = Object.fromEntries(
-      [...tools.keys()].toSorted().map((toolName) => {
-        const capturedMode = captured.tools[toolName] ?? storedAppCeiling;
-        const currentToolPolicy = readCurrentToolPolicy(
-          currentPolicy.config,
-          appId,
-          toolName,
-          tools.get(toolName),
-          currentAppCeiling,
-        );
-        return [
-          toolName,
-          {
-            enabled:
-              currentToolPolicy.enabled && appToolHintsAllowed(tools.get(toolName), currentApp),
-            approval_mode: intersectToolApprovalMode(
-              intersectToolApprovalMode(capturedMode, storedAppCeiling),
-              intersectToolApprovalMode(currentToolPolicy.approvalMode, currentAppCeiling),
-            ),
-          },
-        ];
-      }),
-    );
+    appPatch.tools = {
+      ...(isJsonObject(appPatch.tools) ? appPatch.tools : {}),
+      ...Object.fromEntries(
+        [...tools.keys()].toSorted().map((toolName) => {
+          const capturedMode = captured.tools[toolName] ?? storedAppCeiling;
+          const currentToolPolicy = readCurrentToolPolicy(
+            currentPolicy.config,
+            appId,
+            toolName,
+            tools.get(toolName),
+            currentAppCeiling,
+          );
+          return [
+            toolName,
+            {
+              enabled:
+                currentToolPolicy.enabled &&
+                (currentApp.readOnlyTools !== undefined
+                  ? readOnlyToolEnabled(
+                      currentApp.readOnlyTools,
+                      toolName,
+                      tools.get(toolName)?.title,
+                    ) &&
+                    appToolHintsAllowed(tools.get(toolName), {
+                      ...currentApp,
+                      allowDestructiveActions: true,
+                    })
+                  : appToolHintsAllowed(tools.get(toolName), currentApp)),
+              approval_mode: intersectToolApprovalMode(
+                intersectToolApprovalMode(capturedMode, storedAppCeiling),
+                intersectToolApprovalMode(currentToolPolicy.approvalMode, currentAppCeiling),
+              ),
+            },
+          ];
+        }),
+      ),
+    };
   }
   return {
     ...config,
