@@ -89,6 +89,15 @@ The rule uses local dataflow, including explicit tuple-loop/map propagation; it
 is not an interprocedural proof of every possible wrapper or mutation. Keep new
 source, mutation, and sanitizer shapes covered by scanner fixtures.
 
+The host-environment override rule reviews known dangerous keys supplied directly
+in the `overrides` argument to `sanitizeHostExecEnv` or
+`sanitizeSystemRunEnvOverrides`. It does not treat trusted `baseEnv` values,
+policy blocklists, or comparisons with environment-variable names as overrides.
+This is a boundary-review heuristic, not proof that the sanitizer can be bypassed;
+it does not follow arbitrary dynamic keys, wrapper calls, or separately assigned
+override objects. Its non-executing TypeScript and JavaScript fixtures live in
+`rules/ghsa-j425-whc4-4jgc/` and run with the same `opengrep test --config` command.
+
 ## Validating locally
 
 ```bash
