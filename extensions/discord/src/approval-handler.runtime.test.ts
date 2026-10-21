@@ -263,6 +263,40 @@ describe("discordApprovalNativeRuntime", () => {
     },
   );
 
+  it.each([
+    { terminalStatus: "expired" as const, label: "Expired" },
+    { terminalStatus: "cancelled" as const, label: "Cancelled" },
+  ])("renders plugin approval terminal status $terminalStatus as $label", async (scenario) => {
+    const command = `${"x".repeat(500)}\u{1F600}`;
+    const view = {
+      approvalId: "approval-<@123>",
+      approvalKind: "plugin",
+      phase: "resolved",
+      title: command,
+      metadata: [{ label: "agent", value: "crew" }],
+      description: command,
+      severity: "critical",
+      decision: "deny",
+      resolvedBy: "<@456>",
+      terminalStatus: scenario.terminalStatus,
+    };
+    const result = await discordApprovalNativeRuntime.presentation.buildResolvedResult({
+      ...handlerContext,
+      view,
+    } as never);
+
+    expect(result.kind).toBe("update");
+    if (result.kind !== "update") {
+      return;
+    }
+    expect(result.payload).toMatchObject({
+      components: expect.arrayContaining([
+        { content: `## Plugin Approval: ${scenario.label}`, type: 10 },
+      ]),
+    });
+    expect(JSON.stringify(result.payload)).not.toContain("Denied");
+  });
+
   it("does not split emoji graphemes when truncating exec command previews", async () => {
     const prefix = "a".repeat(999);
 

@@ -156,6 +156,12 @@ export function buildResolvedApprovalView(
     ...(view.approvalKind === "system-agent"
       ? { applicationStatus: resolved.applicationStatus, terminalStatus: resolved.terminalStatus }
       : {}),
+    // A plugin approval that ended without a decision (expiry or cancel) must
+    // carry its recorded terminal status, otherwise the card reads as a plain
+    // denial (#158944).
+    ...(view.approvalKind === "plugin" && resolved.terminalStatus
+      ? { terminalStatus: resolved.terminalStatus }
+      : {}),
   };
 }
 

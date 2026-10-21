@@ -78,6 +78,7 @@ export type PluginApprovalResolvedView = PluginApprovalViewBase & {
   phase: "resolved";
   decision: ExecApprovalDecision;
   resolvedBy?: string | null;
+  terminalStatus?: "expired" | "cancelled";
 };
 
 export type PluginApprovalExpiredView = PluginApprovalViewBase & {
@@ -130,5 +131,8 @@ export type ApprovalViewModel = PendingApprovalView | ResolvedApprovalView | Exp
 export type ApprovalRequest = ApprovalRequestInput;
 export type ApprovalResolved =
   | (ExecApprovalResolved & { applicationStatus?: never; terminalStatus?: never })
-  | (PluginApprovalResolved & { applicationStatus?: never; terminalStatus?: never })
+  | (PluginApprovalResolved & {
+      applicationStatus?: never;
+      terminalStatus?: "expired" | "cancelled";
+    })
   | SystemAgentApprovalResolved;
