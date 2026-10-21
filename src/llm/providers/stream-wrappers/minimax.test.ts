@@ -14,7 +14,7 @@ const enabledThinking = { type: "enabled", budget_tokens: 1024 };
 const disabledThinking = { type: "disabled" };
 
 function captureThinkingPayload(
-  model = minimaxModel,
+  model: Model = minimaxModel,
   payload: Record<string, unknown> = {},
   thinkingLevel?: ThinkLevel,
   options: Parameters<StreamFn>[2] = {},
@@ -84,7 +84,7 @@ describe("createMinimaxFastModeWrapper", () => {
   it("rewrites MiniMax-M2.7 to highspeed variant in fast mode", () => {
     const baseStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
     void createMinimaxFastModeWrapper(baseStreamFn, true)(minimaxModel, { messages: [] }, {});
-    expect(baseStreamFn.mock.calls[0][0].id).toBe("MiniMax-M2.7-highspeed");
+    expect(baseStreamFn.mock.calls.map(([model]) => model.id)).toEqual(["MiniMax-M2.7-highspeed"]);
   });
 
   it("resolves dynamic fast mode for each stream call", () => {

@@ -16,7 +16,9 @@ export async function startPromptCacheMcpServer(signal: AbortSignal) {
     signal,
     createListener: () =>
       http.createServer((request, response) => {
-        const finish = (status: number, body?: string) => response.writeHead(status).end(body);
+        const finish = (status: number, body?: string) => {
+          response.writeHead(status).end(body);
+        };
         if (request.method !== "POST") {
           return finish(request.method === "DELETE" ? 204 : 405);
         }
@@ -26,10 +28,11 @@ export async function startPromptCacheMcpServer(signal: AbortSignal) {
             method: string;
             params?: { protocolVersion?: string };
           };
-          const reply = (result: unknown) =>
+          const reply = (result: unknown) => {
             response
               .writeHead(200, { "content-type": "application/json" })
               .end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+          };
           if (message.method === "initialize") {
             generation++;
             if (generation > 1) {

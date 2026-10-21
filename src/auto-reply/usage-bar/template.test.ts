@@ -62,7 +62,7 @@ async function loadObservedTemplate(path: string, expected: object, write = true
   return { template, subscription };
 }
 it.each([
-  [() => undefined, []],
+  [(): undefined => undefined, []],
   [() => ({ nope: true }), [[warning, { source: "inline", reason: "unsupported-shape" }]]],
   [() => tmpFile("empty.json", '{"output":{"default":[]}}'), []],
 ] as const)("uses the built-in template for input %#", (configured, warnings) => {
