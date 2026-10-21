@@ -55,8 +55,8 @@
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  color: hsl(var(--details-subagent-hue) 32% 65%);
-  background: hsl(var(--details-subagent-hue) 22% 30% / 0.35);
+  color: hsl(var(--subagent-avatar-hue) var(--subagent-avatar-ink, 32% 65%));
+  background: hsl(var(--subagent-avatar-hue) var(--subagent-avatar-tint, 22% 30% / 0.35));
 }
 
 .chat-details-subagents__avatar > svg {
@@ -157,7 +157,8 @@
 .chat-details-subagents__stack > .chat-details-subagents__avatar {
   background: color-mix(
     in srgb,
-    hsl(var(--details-subagent-hue) 22% 30%) 35%,
+    hsl(var(--subagent-avatar-hue) var(--subagent-avatar-tint, 22% 30%))
+      var(--subagent-avatar-tint-strength, 35%),
     var(--details-subagent-surface)
   );
   box-shadow: 0 0 0 1px var(--details-subagent-surface);

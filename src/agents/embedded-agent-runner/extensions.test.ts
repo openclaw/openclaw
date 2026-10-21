@@ -1,4 +1,3 @@
-// Coverage for embedded extension factory selection and runtime wiring.
 import type { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
@@ -8,8 +7,7 @@ import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
-  // Plugin-owned cache-TTL decisions are mocked out here; extension selection
-  // tests assert the core default wiring only.
+  // Extension selection tests assert core defaults, not plugin cache-TTL policy.
   resolveProviderCacheTtlEligibility: () => undefined,
   resolveProviderRuntimePlugin: () => undefined,
 }));
@@ -18,104 +16,41 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
 }));
 
-function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir = "/workspace") {
-  // The safeguard runtime attaches to the session manager, so tests keep the
-  // same manager instance around for both factory construction and inspection.
-  const sessionManager = {} as SessionManager;
-  const model = {
-    id: "claude-sonnet-4-20250514",
-    contextWindow: 200_000,
-  } as Model;
+type Compaction = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["compaction"]
+>;
 
+function buildSafeguardFactories(
+  qualityGuard?: Compaction["qualityGuard"],
+  workspaceDir = "/workspace",
+) {
+  // Runtime inspection must use the manager that owns the factories.
+  const sessionManager = {} as SessionManager;
   const factories = buildEmbeddedExtensionFactories({
-    cfg,
+    cfg: { agents: { defaults: { compaction: { mode: "safeguard", qualityGuard } } } },
     sessionManager,
     workspaceDir,
-    model,
+    model: { id: "claude-sonnet-4-20250514", contextWindow: 200_000 } as Model,
   });
-
   return { factories, sessionManager };
 }
 
-function expectSafeguardRuntime(
-  cfg: OpenClawConfig,
-  expectedRuntime: { qualityGuardEnabled: boolean; qualityGuardMaxRetries?: number },
-) {
-  const { factories, sessionManager } = buildSafeguardFactories(cfg);
-
-  expect(factories).toContain(compactionSafeguardExtension);
-  const runtime = getCompactionSafeguardRuntime(sessionManager);
-  expect(runtime?.qualityGuardEnabled).toBe(expectedRuntime.qualityGuardEnabled);
-  expect(runtime?.qualityGuardMaxRetries).toBe(expectedRuntime.qualityGuardMaxRetries);
-}
-
 describe("buildEmbeddedExtensionFactories", () => {
-  it("enables quality-guard retries by default in safeguard mode", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          compaction: {
-            mode: "safeguard",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    expectSafeguardRuntime(cfg, {
-      qualityGuardEnabled: true,
-    });
-  });
-
-  it("honors explicit safeguard quality-guard disablement", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          compaction: {
-            mode: "safeguard",
-            qualityGuard: {
-              enabled: false,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    expectSafeguardRuntime(cfg, {
-      qualityGuardEnabled: false,
-    });
-  });
-
-  it("wires explicit safeguard quality-guard runtime flags", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          compaction: {
-            mode: "safeguard",
-            qualityGuard: {
-              enabled: true,
-              maxRetries: 2,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    expectSafeguardRuntime(cfg, {
-      qualityGuardEnabled: true,
-      qualityGuardMaxRetries: 2,
+  it.each([
+    ["default", undefined, true, undefined],
+    ["disabled", { enabled: false }, false, undefined],
+    ["explicit retries", { enabled: true, maxRetries: 2 }, true, 2],
+  ] as const)("wires %s quality-guard settings", (_name, qualityGuard, enabled, maxRetries) => {
+    const { factories, sessionManager } = buildSafeguardFactories(qualityGuard);
+    expect(factories).toContain(compactionSafeguardExtension);
+    expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
+      qualityGuardEnabled: enabled,
+      qualityGuardMaxRetries: maxRetries,
     });
   });
 
   it("wires the run workspace into safeguard runtime", () => {
-    const { sessionManager } = buildSafeguardFactories(
-      {
-        agents: {
-          defaults: {
-            compaction: {
-              mode: "safeguard",
-            },
-          },
-        },
-      } as OpenClawConfig,
-      "/tmp/openclaw-workspace",
-    );
+    const { sessionManager } = buildSafeguardFactories(undefined, "/tmp/openclaw-workspace");
 
     expect(getCompactionSafeguardRuntime(sessionManager)?.workspaceDir).toBe(
       "/tmp/openclaw-workspace",

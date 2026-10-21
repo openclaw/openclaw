@@ -65,6 +65,7 @@
   --rail-header-action-disabled-opacity: 0.4;
   --rail-header-action-gap: 2px;
   --rail-header-background: var(--bg);
+  --session-header-control-surface: var(--bg-elevated);
   --rail-header-title-size: var(--control-ui-text-sm);
   --rail-header-title-weight: 600;
   --rail-divider-color: var(--border);
@@ -516,6 +517,15 @@
   --bg-hover: #efebe4;
   --bg-muted: #efebe4;
   --bg-content: #f4f1ec;
+
+  --session-header-control-surface: color-mix(in srgb, var(--text) 9%, var(--bg-content));
+  --session-header-sharing-hover-bg: color-mix(in srgb, var(--text) 12%, var(--bg-content));
+  --session-header-sharing-active-bg: color-mix(in srgb, var(--text) 15%, var(--bg-content));
+  --session-header-control-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg-content));
+  --session-header-control-active-color: color-mix(in srgb, var(--accent) 20%, var(--text));
+  --subagent-avatar-ink: 45% 36%;
+  --subagent-avatar-tint: 45% 94%;
+  --subagent-avatar-tint-strength: 100%;
 
   --card: #ffffff;
   --card-foreground: #211e1a;
