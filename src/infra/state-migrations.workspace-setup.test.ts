@@ -584,4 +584,63 @@ describe("legacy workspace Doctor migration", () => {
       expect(fs.readFileSync(path.join(path.dirname(source), archives[0]!), "utf8")).toBe(raw);
     },
   );
+
+  it("cleans a covered setup marker recreated after completed migration", async () => {
+    const source = setupPathFor(context.workspaceDir);
+    await write(source, COMPLETE_SETUP);
+    await migrateOk(context);
+    const raw = setupSource({ setupCompletedAt: COMPLETED_AT });
+    await write(source, raw);
+    await migrateOk(context);
+    expect(fs.existsSync(source)).toBe(false);
+    expect(readSetup("bootstrap_seeded_at, setup_completed_at")).toEqual({
+      bootstrap_seeded_at: SEEDED_AT,
+      setup_completed_at: COMPLETED_AT,
+    });
+    expect(get("SELECT * FROM migration_sources WHERE source_path = ?", source)).toMatchObject({
+      source_sha256: createHash("sha256").update(raw).digest("hex"),
+      removed_source: 1,
+    });
+    expect(readReport(source)).toMatchObject({ authoritative: true, resolution: "verified" });
+  });
+
+  it.each(["source", "claim", "collision"] as const)(
+    "handles a recreated attestation: %s",
+    async (mode) => {
+      const source = attestationPathFor();
+      const claim = claimPathFor(source);
+      const original = attestation();
+      const recreated = attestation("", "2026-07-16T11:00:00.000Z");
+      const originalMtime = new Date("2026-07-15T11:01:00.000Z");
+      const recreatedMtime = new Date("2026-07-16T11:01:00.000Z");
+      const seed = async (raw: string, mtime: Date) => {
+        await write(source, raw);
+        await fsp.utimes(source, mtime, mtime);
+      };
+      await seed(original, originalMtime);
+      await migrateOk(context);
+      await seed(recreated, recreatedMtime);
+      if (mode === "claim") {
+        await fsp.rename(source, claim);
+      } else if (mode === "collision") {
+        await write(claim, recreated);
+      }
+      const collision = mode === "collision";
+      expect((await migrate(context)).warnings).toEqual(
+        collision
+          ? ["Workspace state is in SQLite, but source and interrupted claim both exist."]
+          : [],
+      );
+      expect([fs.existsSync(source), fs.existsSync(claim)]).toEqual([collision, collision]);
+      expect(readSetup("attested_at_ms")).toEqual({
+        attested_at_ms: (collision ? originalMtime : recreatedMtime).getTime(),
+      });
+      expect(get("SELECT * FROM migration_sources WHERE source_path = ?", source)).toMatchObject({
+        source_sha256: createHash("sha256")
+          .update(collision ? original : recreated)
+          .digest("hex"),
+        removed_source: 1,
+      });
+    },
+  );
 });

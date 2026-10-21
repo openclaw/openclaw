@@ -18,8 +18,8 @@ import {
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
 import {
-  readPackageActivationStatus,
-  runPackageActivationRecovery,
+  readPackageActivationStatus as status,
+  runPackageActivationRecovery as recover,
 } from "./package-update-activation.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
@@ -230,8 +230,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     expect(fact.message!.length).toBeLessThanOrEqual(200);
     expect(report.body).not.toContain(root);
     expect(journalFiles(f.anchor)).toEqual(before);
-    expect(fs.lstatSync(file).nlink).toBe(observed.nlink);
-    expect(fs.lstatSync(file).mode).toBe(observed.mode);
+    expect(fs.lstatSync(file)).toMatchObject({ nlink: observed.nlink, mode: observed.mode });
   });
 
   it.each([false, true])(
@@ -250,7 +249,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
         },
         true,
       );
-      await expect(readPackageActivationStatus(f.anchor, f.operationId)).rejects.toThrow();
+      await expect(status(f.anchor, f.operationId)).rejects.toThrow();
       expect(journalFiles(f.anchor)).toEqual(before);
       expect(fs.existsSync(`${f.journalPath}-wal`)).toBe(false);
       expect(fs.existsSync(`${f.journalPath}-shm`)).toBe(false);
@@ -258,7 +257,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
       const admission = await f.journal.readForRecovery();
       expect(admission.record).toEqual(f.record);
       expect(journalFiles(f.anchor)).toEqual(before);
-      await expect(runPackageActivationRecovery(f.anchor, "repair", randomUUID())).rejects.toThrow(
+      await expect(recover(f.anchor, "repair", randomUUID())).rejects.toThrow(
         "different operation",
       );
       expect(journalFiles(f.anchor)).toEqual(before);
@@ -305,11 +304,9 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
         expect(fs.existsSync(`${f.journalPath}-wal`)).toBe(liveWriter);
         expect(fs.existsSync(`${f.journalPath}-shm`)).toBe(liveWriter);
         const before = journalFiles(f.anchor);
-        await expect(readPackageActivationStatus(f.anchor, f.operationId)).rejects.toThrow();
+        await expect(status(f.anchor, f.operationId)).rejects.toThrow();
         expect(journalFiles(f.anchor)).toEqual(before);
-        await expect(
-          runPackageActivationRecovery(f.anchor, "repair", f.operationId),
-        ).rejects.toThrow();
+        await expect(recover(f.anchor, "repair", f.operationId)).rejects.toThrow();
         expect(journalFiles(f.anchor)).toEqual(before);
       } finally {
         if (database.isOpen) {
@@ -365,23 +362,19 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
   });
 
   it.each([
-    { name: "malformed descriptor", column: "descriptor_json", value: () => "{" },
-    { name: "unknown phase", column: "phase", value: () => "automatically-repaired" },
-    { name: "negative revision", column: "revision", value: () => -1 },
-    {
-      name: "invalid intent",
-      column: "intent_json",
-      value: () => JSON.stringify({ kind: "displace", unexpected: true }),
-    },
-    {
-      name: "invalid publication identity",
-      column: "publications_json",
-      value: () => JSON.stringify([{ name: "openclaw", identity: "not-an-inode" }]),
-    },
-    {
-      name: "too many launchers",
-      column: "descriptor_json",
-      value: (record: PackageActivationRecord) =>
+    ["malformed descriptor", "descriptor_json", () => "{"],
+    ["unknown phase", "phase", () => "automatically-repaired"],
+    ["negative revision", "revision", () => -1],
+    ["invalid intent", "intent_json", () => JSON.stringify({ kind: "displace", unexpected: true })],
+    [
+      "invalid publication identity",
+      "publications_json",
+      () => JSON.stringify([{ name: "openclaw", identity: "not-an-inode" }]),
+    ],
+    [
+      "too many launchers",
+      "descriptor_json",
+      (record: PackageActivationRecord) =>
         JSON.stringify({
           ...record.descriptor,
           launchers: Array.from({ length: 65 }, (_, index) => ({
@@ -392,24 +385,24 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
             candidateIdentity: record.descriptor.launchers[0]!.candidateIdentity,
           })),
         }),
-    },
-    {
-      name: "duplicate launcher names",
-      column: "descriptor_json",
-      value: (record: PackageActivationRecord) =>
+    ],
+    [
+      "duplicate launcher names",
+      "descriptor_json",
+      (record: PackageActivationRecord) =>
         JSON.stringify({
           ...record.descriptor,
           launchers: [record.descriptor.launchers[0], record.descriptor.launchers[0]],
         }),
-    },
-    { name: "missing operation", column: null, value: () => "DELETE FROM package_activation" },
-    {
-      name: "additional operation",
-      column: null,
-      value: () =>
+    ],
+    ["missing operation", null, () => "DELETE FROM package_activation"],
+    [
+      "additional operation",
+      null,
+      () =>
         "INSERT INTO package_activation SELECT 2, revision, phase, descriptor_json, intent_json, publications_json FROM package_activation WHERE slot = 1",
-    },
-  ] as const)("preserves a journal with $name", async ({ name, column, value }) => {
+    ],
+  ] as const)("preserves a journal with %s", async (name, column, value) => {
     if (column === null) {
       withDatabase(f.journalPath, (db) => db.exec(value()));
     } else {
@@ -428,12 +421,12 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     async (phase) => {
       const disarmed = await f.transition(f.record, phase, null);
       const before = journalFiles(f.anchor);
-      await expect(readPackageActivationStatus(f.anchor, f.operationId)).resolves.toEqual({
+      await expect(status(f.anchor, f.operationId)).resolves.toEqual({
         phase,
         operationId: disarmed.descriptor.operationId,
         installKey: f.packageRoot,
       });
-      await expect(runPackageActivationRecovery(f.anchor, "repair", f.operationId)).rejects.toThrow(
+      await expect(recover(f.anchor, "repair", f.operationId)).rejects.toThrow(
         `Forward publication is disarmed (${phase})`,
       );
       expect(journalFiles(f.anchor)).toEqual(before);
@@ -497,32 +490,27 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     expect(f.journal.read()).toEqual(f.record);
     expect(journalFiles(f.anchor)).toEqual(before);
   });
-});
-
-const jsonColumns = ["descriptor_json", "intent_json", "publications_json"] as const;
-
-async function byteBoundsFixture(oversized: (typeof jsonColumns)[number]) {
-  const { anchor, journalPath: file } = await fixture();
-  replaceField(file, "descriptor_json", "{");
-  // Under one million characters, but over the one MiB byte bound.
-  replaceField(file, oversized, "é".repeat(512 * 1024 + 1));
-  const snapshot = () => {
-    const { dev, ino, mode, mtimeMs } = fs.statSync(file);
-    return { names: fs.readdirSync(anchor), dev, ino, mode, mtimeMs, bytes: fs.readFileSync(file) };
-  };
-  return { anchor, snapshot };
-}
-
-describe.skipIf(process.platform === "win32")("existing package journal byte bounds", () => {
+  const jsonColumns = ["descriptor_json", "intent_json", "publications_json"] as const;
   it.each(jsonColumns)(
     "refuses oversized %s before decoding without modifying the original journal",
     async (column) => {
-      const { anchor, snapshot } = await byteBoundsFixture(column);
-      const before = snapshot();
-      expect(() => openPackageActivationJournal(anchor).read()).toThrow(
+      replaceField(f.journalPath, "descriptor_json", "{");
+      // Under one million characters, but over the one MiB byte bound.
+      replaceField(f.journalPath, column, "é".repeat(512 * 1024 + 1));
+      const before = journalFiles(f.anchor);
+      const names = fs.readdirSync(f.anchor);
+      const metadata = fs.statSync(f.journalPath);
+      expect(() => openPackageActivationJournal(f.anchor).read()).toThrow(
         "Package publication journal must contain one bounded operation.",
       );
-      expect(snapshot()).toEqual(before);
+      expect(journalFiles(f.anchor)).toEqual(before);
+      expect(fs.readdirSync(f.anchor)).toEqual(names);
+      expect(fs.statSync(f.journalPath)).toMatchObject({
+        dev: metadata.dev,
+        ino: metadata.ino,
+        mode: metadata.mode,
+        mtimeMs: metadata.mtimeMs,
+      });
     },
   );
 });

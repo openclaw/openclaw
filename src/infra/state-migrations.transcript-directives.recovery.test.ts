@@ -9,8 +9,13 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
+import {
+  insertArchive,
+  writeMetadata,
+} from "./state-migrations.transcript-directives.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -33,30 +38,15 @@ it.each([
     const archiveBytes = Buffer.from(
       `${JSON.stringify({ type: "message", message: { role: "user", content: "clean" } })}\n`,
     );
+    const database = requireNativeSqliteDatabase(opened.db);
     const archiveHash = createHash("sha256").update(archiveBytes).digest("hex");
-    const insertArchive = opened.db.prepare(
-      `INSERT INTO session_transcript_archives(
-          session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
-          archive_name,created_at,published_at
-        ) VALUES(?,'generation',?,'deleted','identity',?,?,?,40,?)`,
-    );
-    function archive(sessionId: string, publishedAt: number | null) {
-      insertArchive.run(
-        sessionId,
-        `agent:main:${sessionId}`,
-        archiveBytes,
-        archiveHash,
-        `${sessionId}.jsonl`,
+    const archive = (sessionId: string, publishedAt: number | null) =>
+      insertArchive(database, archiveBytes, `${sessionId}.jsonl`, sessionId, {
+        createdAt: 40,
         publishedAt,
-      );
-    }
+      });
     archive("complete-recovery", null);
-    const insertMeta = opened.db.prepare(
-      `INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,app_version,created_at,updated_at)
-       VALUES(?,?,?,?,?,?,?)`,
-    );
-    const metadata = (key: string, value: unknown) =>
-      insertMeta.run(key, "agent", 1, "main", JSON.stringify(value), 1, 1);
+    const metadata = (key: string, value: unknown) => writeMetadata(database, value, key);
     metadata(
       "historical-transcript-directives-v1",
       cursorPhase === "complete"

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -7,8 +6,6 @@ import {
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
-import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { prepareTranscriptPayload } from "../config/sessions/transcript-payload.js";
 import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
@@ -25,11 +22,15 @@ import { encodeArchiveContent } from "./state-migrations.transcript-directives-a
 import { migrateHistoricalTranscriptDirectives as migrate } from "./state-migrations.transcript-directives.js";
 import {
   type FixtureEvent,
+  compressTranscriptRows,
+  insertArchive,
   insertSession,
   messageEvent,
   readEventJson,
   readGeneration,
   readMigrationCursor,
+  writeArchiveCopy,
+  writeMetadata as writeCursor,
 } from "./state-migrations.transcript-directives.test-support.js";
 
 const tempDirs: string[] = [];
@@ -113,34 +114,6 @@ function insertTrajectory(
   }
 }
 
-function compressTranscriptRows(database: import("node:sqlite").DatabaseSync): void {
-  const update = database.prepare(
-    "UPDATE transcript_events SET event_json = NULL, event_zstd = ?, event_utf8_bytes = ?, navigation_json = ? WHERE session_id = ? AND seq = ?",
-  );
-  for (const row of database
-    .prepare("SELECT session_id, seq, event_json FROM transcript_events")
-    .all() as Array<{ event_json: string; seq: number; session_id: string }>) {
-    const payload = prepareTranscriptPayload(database, row.event_json);
-    expect(payload.event_zstd).not.toBeNull();
-    update.run(
-      payload.event_zstd,
-      payload.event_utf8_bytes,
-      payload.navigation_json,
-      row.session_id,
-      row.seq,
-    );
-  }
-}
-
-function writeCursor(database: import("node:sqlite").DatabaseSync, cursor: unknown): void {
-  database
-    .prepare(
-      `INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,app_version,created_at,updated_at)
-         VALUES(?,?,?,?,?,?,?)`,
-    )
-    .run("historical-transcript-directives-v1", "agent", 1, "main", JSON.stringify(cursor), 1, 1);
-}
-
 it.each(["identity", "zstd"])(
   "restores %s masked providers from recorded session facts and leaves ambiguity masked",
   async (storage) => {
@@ -199,26 +172,13 @@ it.each(["identity", "zstd"])(
     const archiveEncoding = storage === "zstd" ? "zstd" : "identity";
     const archiveBytes = encodeArchiveContent(archiveContent, archiveEncoding, "fixture");
     const archiveName = `archived-session.jsonl.deleted.2026-01-01T00-00-00.000Z.archive-gen${archiveEncoding === "zstd" ? SESSION_ARCHIVE_ZSTD_SUFFIX : ""}`;
-    database
-      .prepare(
-        `INSERT INTO session_transcript_archives(
-          session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
-          archive_name,created_at,published_at
-        ) VALUES('archived-session','archive-gen','agent:main:archived-session','deleted',?,?,?,?,7,8)`,
-      )
-      .run(
-        archiveEncoding,
-        archiveBytes,
-        createHash("sha256").update(archiveBytes).digest("hex"),
-        archiveName,
-      );
-    const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
-      agentId: "main",
-      path: databasePath,
+    insertArchive(database, archiveBytes, archiveName, "archived-session", {
+      generation: "archive-gen",
+      encoding: archiveEncoding,
+      createdAt: 7,
+      publishedAt: 8,
     });
-    fs.mkdirSync(archiveDirectory, { recursive: true });
-    const archivePath = path.join(archiveDirectory, archiveName);
-    fs.writeFileSync(archivePath, archiveBytes);
+    const archivePath = writeArchiveCopy(databasePath, archiveName, archiveBytes);
     closeOpenClawAgentDatabasesForTest();
     const result = await migrate({ env });
     expect(result).toMatchObject({

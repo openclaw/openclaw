@@ -18,12 +18,16 @@ import {
   resolvePackageActivationAnchor,
 } from "./package-update-activation-paths.js";
 import { preparePackageActivationJournal } from "./package-update-activation-prepare.js";
+import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import {
   readPackageActivationStatus as status,
   runPackageActivationRecovery as recovery,
 } from "./package-update-activation.js";
 import { createPackageIntegrityReader } from "./package-update-integrity.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 const fixture = createPackageActivationLifetimeFixture();
 let root: string;
@@ -37,7 +41,96 @@ afterEach(async () => {
     await fixture.lifetime.cleanup();
   } finally {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   }
+});
+
+describe.skipIf(process.platform === "win32")("package fingerprint bounds", () => {
+  beforeEach(() => {
+    const state = path.join(root, "state");
+    fs.mkdirSync(state, { mode: 0o700 });
+    vi.stubEnv("OPENCLAW_STATE_DIR", state);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(state, "openclaw.json"));
+  });
+  function oversizedFile(payload: string, firstRegularOnly = false) {
+    const lstat = fsp.lstat.bind(fsp);
+    let observed = false;
+    vi.spyOn(fsp, "lstat").mockImplementation(async (...args) => {
+      const stat = await lstat(...args);
+      if (
+        String(args[0]) === payload &&
+        args[1]?.bigint &&
+        (!firstRegularOnly || (!observed && stat.isFile()))
+      ) {
+        stat.size = 8n * 1024n * 1024n * 1024n + 1n;
+        observed = true;
+      }
+      return stat;
+    });
+    return () => expect(observed).toBe(true);
+  }
+  it("activates after candidate byte exhaustion while retaining identity, version, and launcher checks", () =>
+    fixture.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixture.writePostCoreCapability(f.params.stage.packageRoot);
+      const payload = path.join(f.params.stage.packageRoot, "a-oversized.bin");
+      await fsp.writeFile(payload, "");
+      const location = resolvePackageActivationAnchor(f.packageRoot);
+      // Exhaust the budget before candidate hashing, but only on its first regular file.
+      const assertOversized = oversizedFile(payload, true);
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(f.packageRoot);
+        let transaction: PackageUpdateTransaction | undefined;
+        const result = await swapStagedPackageInstall({
+          ...f.params,
+          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+          onTransaction: (issued) => {
+            transaction = issued;
+          },
+        });
+        expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
+        assertOversized();
+        expect(result.step.advisory?.message).toContain("full package contents are unverified");
+        expect(updateRunStepsFromResultStep(result.step)).toContainEqual(
+          expect.objectContaining({ step: "warning:package-swap", status: "completed" }),
+        );
+        expect(transaction).toBeDefined();
+      });
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+      const manifest = path.join(f.packageRoot, "package.json");
+      const originalManifest = fs.readFileSync(manifest);
+      expect(JSON.parse(originalManifest.toString()).version).toBe("2.0.0");
+      const record = readJournal(location);
+      expect(record.phase).toBe("publication-complete");
+      const retire = () => recovery(location, "retire", record.descriptor.operationId);
+      const retained = path.join(root, "retained-candidate");
+      fs.renameSync(f.packageRoot, retained);
+      fs.mkdirSync(f.packageRoot);
+      fs.writeFileSync(manifest, originalManifest);
+      await expect(retire()).rejects.toThrow("Package publication object changed");
+      fs.unlinkSync(manifest);
+      fs.rmdirSync(f.packageRoot);
+      fs.renameSync(retained, f.packageRoot);
+      fs.writeFileSync(manifest, '{"name":"openclaw","version":"3.0.0"}');
+      await expect(retire()).rejects.toThrow("Package publication object changed");
+      fs.writeFileSync(manifest, originalManifest);
+      fs.writeFileSync(f.launcher, "changed launcher\n");
+      await expect(retire()).rejects.toThrow("Selected package launcher fingerprint changed");
+      fs.writeFileSync(f.launcher, "candidate launcher\n");
+      await complete(retire());
+      absent(location);
+    }));
+  it("keeps full fingerprint recovery strict when content verification exceeds its budget", () =>
+    fixture.lifetime.run(async () => {
+      const f = await fixture.prepare();
+      const assertOversized = oversizedFile(path.join(f.anchor, "candidate", "dist", "index.js"));
+      await expect(recovery(f.anchor, "repair", f.operationId)).rejects.toThrow(
+        "Package rollback verification byte limit exceeded",
+      );
+      assertOversized();
+      expect(readJournal(f.anchor).phase).toBe("prepared");
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+    }));
 });
 
 const prepare = (custody?: (retained: boolean) => void) =>

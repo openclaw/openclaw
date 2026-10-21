@@ -6,8 +6,6 @@ import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
-import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { prepareTranscriptPayload } from "../config/sessions/transcript-payload.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   claimOpenClawAgentDatabaseLease,
@@ -32,11 +30,16 @@ import { TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE } from "./state-migrations.tr
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 import {
   type FixtureEvent,
+  compressTranscriptRows,
+  insertArchive,
   insertSession,
   messageEvent,
   readEventJson,
   readGeneration,
   readMigrationCursor,
+  textEvent,
+  writeArchiveCopy,
+  writeMetadata,
 } from "./state-migrations.transcript-directives.test-support.js";
 
 const tempDirs: string[] = [];
@@ -60,16 +63,42 @@ function openLegacyAgentDatabase(stateDir: string, agentId = "main") {
 
 function hasTranscriptArchivesTable(databasePath: string): boolean {
   const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    return Boolean(
-      database
-        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("session_transcript_archives"),
+  using database = new DatabaseSync(databasePath, { readOnly: true });
+  return Boolean(
+    database
+      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
+      .get("session_transcript_archives"),
+  );
+}
+
+function fixture() {
+  const stateDir = makeTempDir(tempDirs, "transcript-directive-");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+  return {
+    stateDir,
+    env,
+    opened,
+    databasePath: opened.path,
+    database: requireNativeSqliteDatabase(opened.db),
+  };
+}
+
+function competingWriter(stateDir: string, env: NodeJS.ProcessEnv) {
+  // Bind before maintenance so this competing task cannot inherit its authority.
+  const claim = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
+  return () =>
+    claim({ agentId: "competitor", path: path.join(stateDir, "competitor.sqlite"), env });
+}
+
+function expireMaintenance(env: NodeJS.ProcessEnv) {
+  openOpenClawStateDatabase({ env })
+    .db.prepare("UPDATE state_leases SET expires_at = ? WHERE scope = ? AND lease_key = ?")
+    .run(
+      Date.now() - 1,
+      AGENT_DATABASE_MAINTENANCE_LEASE.scope,
+      AGENT_DATABASE_MAINTENANCE_LEASE.key,
     );
-  } finally {
-    database.close();
-  }
 }
 
 function parseArchive(content: string): FixtureEvent[] {
@@ -90,21 +119,12 @@ describe("historical transcript directive migration", () => {
   it.each(["identity", "zstd"])(
     "migrates %s assistant rows and archives while preserving code and derived indexes",
     async (storage) => {
-      const stateDir = makeTempDir(tempDirs, "transcript-directive-migration-");
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-      const databasePath = opened.path;
-      const tagged = messageEvent({
-        id: "tagged-assistant",
-        role: "assistant",
-        timestamp: 10,
-        content: [
-          {
-            type: "text",
-            text: "[[reply_to_current]]\n[[reply_to: message-7 ]]\n[[audio_as_voice]]\nFinal answer [[react: 👍]]",
-          },
-        ],
-      });
+      const { env, opened, database, databasePath } = fixture();
+      const tagged = textEvent(
+        "tagged-assistant",
+        "[[reply_to_current]]\n[[reply_to: message-7 ]]\n[[audio_as_voice]]\nFinal answer [[react: 👍]]",
+        10,
+      );
       const user = messageEvent({
         id: "user-marker",
         parentId: "tagged-assistant",
@@ -112,13 +132,13 @@ describe("historical transcript directive migration", () => {
         timestamp: 11,
         content: "Keep [[reply_to_current]] and [[react: 👍]]",
       });
-      const tool = messageEvent({
-        id: "tool-marker",
-        parentId: "user-marker",
-        role: "toolResult",
-        timestamp: 12,
-        content: [{ type: "text", text: "Keep [[audio_as_voice]]" }],
-      });
+      const tool = textEvent(
+        "tool-marker",
+        "Keep [[audio_as_voice]]",
+        12,
+        "toolResult",
+        "user-marker",
+      );
       const codeText = [
         "Use `[[reply_to_current]]` and `[[react: 👍]]` literally.",
         "```text",
@@ -126,18 +146,12 @@ describe("historical transcript directive migration", () => {
         "[[react_to_current: ✅]]",
         "```",
       ].join("\n");
-      const code = messageEvent({
-        id: "code-assistant",
-        role: "assistant",
-        timestamp: 20,
-        content: [{ type: "text", text: codeText }],
-      });
-      const reaction = messageEvent({
-        id: "reaction-assistant",
-        role: "assistant",
-        timestamp: 30,
-        content: [{ type: "text", text: "Reacted [[react_to_current: ✅]] without a fact" }],
-      });
+      const code = textEvent("code-assistant", codeText, 20);
+      const reaction = textEvent(
+        "reaction-assistant",
+        "Reacted [[react_to_current: ✅]] without a fact",
+        30,
+      );
       if (storage === "zstd") {
         for (const event of [tagged, user, tool, code, reaction]) {
           event.fixturePadding = "compression fixture ".repeat(256);
@@ -159,43 +173,15 @@ describe("historical transcript directive migration", () => {
         sessionId: "reaction-session",
       });
       if (storage === "zstd") {
-        const update = opened.db.prepare(
-          "UPDATE transcript_events SET event_json = NULL, event_zstd = ?, event_utf8_bytes = ?, navigation_json = ? WHERE session_id = ? AND seq = ?",
-        );
-        for (const row of opened.db
-          .prepare("SELECT session_id, seq, event_json FROM transcript_events")
-          .all()) {
-          if (
-            typeof row.event_json !== "string" ||
-            typeof row.session_id !== "string" ||
-            typeof row.seq !== "number"
-          ) {
-            throw new Error("Invalid transcript fixture row");
-          }
-          const payload = prepareTranscriptPayload(opened.db, row.event_json);
-          expect(payload.event_zstd).not.toBeNull();
-          update.run(
-            payload.event_zstd,
-            payload.event_utf8_bytes,
-            payload.navigation_json,
-            row.session_id,
-            row.seq,
-          );
-        }
+        compressTranscriptRows(database);
       }
 
-      const archivedTagged = messageEvent({
-        id: "archived-tagged",
-        role: "assistant",
-        timestamp: 40,
-        content: [{ type: "text", text: "[[reply_to: archive-2]] Archived answer" }],
-      });
-      const archivedCode = messageEvent({
-        id: "archived-code",
-        role: "assistant",
-        timestamp: 41,
-        content: [{ type: "text", text: "`[[reply_to_current]]`" }],
-      });
+      const archivedTagged = textEvent(
+        "archived-tagged",
+        "[[reply_to: archive-2]] Archived answer",
+        40,
+      );
+      const archivedCode = textEvent("archived-code", "`[[reply_to_current]]`", 41);
       const archivedUser = messageEvent({
         id: "archived-user",
         role: "user",
@@ -207,32 +193,12 @@ describe("historical transcript directive migration", () => {
         .join("\n")}\n`;
       const archiveBytes = Buffer.from(archiveContent, "utf8");
       const archiveName = "archived-session.jsonl.deleted.2026-01-01T00-00-00.000Z.archive-gen";
-      opened.db
-        .prepare(
-          `INSERT INTO session_transcript_archives(
-          session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
-          archive_name,created_at,published_at
-        ) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-        )
-        .run(
-          "archived-session",
-          "archive-gen",
-          "agent:main:archived-session",
-          "deleted",
-          "identity",
-          archiveBytes,
-          createHash("sha256").update(archiveBytes).digest("hex"),
-          archiveName,
-          40,
-          50,
-        );
-      const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
-        agentId: "main",
-        path: databasePath,
+      insertArchive(database, archiveBytes, archiveName, "archived-session", {
+        generation: "archive-gen",
+        createdAt: 40,
+        publishedAt: 50,
       });
-      fs.mkdirSync(archiveDirectory, { recursive: true });
-      const archivePath = path.join(archiveDirectory, archiveName);
-      fs.writeFileSync(archivePath, archiveBytes);
+      const archivePath = writeArchiveCopy(databasePath, archiveName, archiveBytes);
 
       const codeEventJson = JSON.stringify(code);
       const userEventJson = JSON.stringify(user);
@@ -340,31 +306,15 @@ describe("historical transcript directive migration", () => {
   );
 
   it("completes a pre-stuck archives cursor when the optional table is absent", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-stuck-archives-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    const databasePath = opened.path;
+    const { env, opened, database, databasePath } = fixture();
     opened.db.exec("DROP TABLE session_transcript_archives");
-    opened.db
-      .prepare(
-        `INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,app_version,created_at,updated_at)
-         VALUES(?,?,?,?,?,?,?)`,
-      )
-      .run(
-        "historical-transcript-directives-v1",
-        "agent",
-        1,
-        "main",
-        JSON.stringify({
-          generation: "",
-          phase: "archives",
-          scope: "all",
-          sessionId: "",
-          version: 2,
-        }),
-        1,
-        1,
-      );
+    writeMetadata(database, {
+      generation: "",
+      phase: "archives",
+      scope: "all",
+      sessionId: "",
+      version: 2,
+    });
     closeOpenClawAgentDatabasesForTest();
 
     await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
@@ -376,36 +326,22 @@ describe("historical transcript directive migration", () => {
   });
 
   it("rolls back same-version convergence when maintenance expires before commit", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-same-version-expiry-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    const databasePath = opened.path;
+    const { stateDir, env, opened, databasePath } = fixture();
     opened.db.exec(`
       DROP TRIGGER session_conversations_route_context_invalidate_after_update;
       ALTER TABLE session_conversations DROP COLUMN route_context_json;
     `);
     closeOpenClawAgentDatabasesForTest();
 
-    // Capture the competing task before entering maintenance, without inheriting its authority.
-    const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
+    const claimCompetingLease = competingWriter(stateDir, env);
     let competingLeaseId: string | undefined;
     const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
     const originalAssert = agentDatabaseLease.assertAgentDatabaseMaintenanceAuthorityIfPresent;
     const authority = vi
       .spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthorityIfPresent")
       .mockImplementation(() => {
-        openOpenClawStateDatabase({ env })
-          .db.prepare("UPDATE state_leases SET expires_at = ? WHERE scope = ? AND lease_key = ?")
-          .run(
-            Date.now() - 1,
-            AGENT_DATABASE_MAINTENANCE_LEASE.scope,
-            AGENT_DATABASE_MAINTENANCE_LEASE.key,
-          );
-        competingLeaseId = claimCompetingLease({
-          agentId: "competitor",
-          path: path.join(stateDir, "competitor.sqlite"),
-          env,
-        });
+        expireMaintenance(env);
+        competingLeaseId = claimCompetingLease();
         originalAssert();
       });
 
@@ -441,10 +377,7 @@ describe("historical transcript directive migration", () => {
   });
 
   it("surfaces lease inspection failures from preflight", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-lease-inspection-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    const databasePath = opened.path;
+    const { env, databasePath } = fixture();
     closeOpenClawAgentDatabasesForTest();
     const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
     vi.spyOn(agentDatabaseLease, "assertNoOpenClawAgentDatabaseLeases").mockImplementation(() => {
@@ -472,35 +405,15 @@ describe("historical transcript directive migration", () => {
   });
 
   it("leaves canonical archives and their active writer untouched", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-current-archive-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    const archived = messageEvent({
-      content: [{ type: "text", text: "Already canonical" }],
-      id: "archived-canonical",
-      role: "assistant",
-      timestamp: 1,
-    });
+    const { env, opened, database } = fixture();
+    const archived = textEvent("archived-canonical", "Already canonical");
     const archiveBytes = Buffer.from(`${JSON.stringify(archived)}\n`, "utf8");
-    opened.db
-      .prepare(
-        `INSERT INTO session_transcript_archives(
-          session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
-          archive_name,created_at,published_at
-        ) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-      )
-      .run(
-        "archived-canonical",
-        "generation",
-        "agent:main:archived-canonical",
-        "deleted",
-        "identity",
-        archiveBytes,
-        createHash("sha256").update(archiveBytes).digest("hex"),
-        "canonical.jsonl.deleted.2026-01-01T00-00-00.000Z.generation",
-        1,
-        null,
-      );
+    insertArchive(
+      database,
+      archiveBytes,
+      "canonical.jsonl.deleted.2026-01-01T00-00-00.000Z.generation",
+      "archived-canonical",
+    );
 
     await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
       changes: [],
@@ -545,10 +458,7 @@ describe("historical transcript directive migration", () => {
   });
 
   it("prunes a stale writer lease before completing an empty database", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-stale-writer-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    const databasePath = opened.path;
+    const { env, databasePath } = fixture();
     closeOpenClawAgentDatabasesForTest();
     const leaseId = claimOpenClawAgentDatabaseLease({
       agentId: "main",
@@ -567,26 +477,16 @@ describe("historical transcript directive migration", () => {
   });
 
   it("rolls back a transcript transaction when maintenance expires before commit", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-expired-commit-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    insertSession(requireNativeSqliteDatabase(opened.db), {
-      events: [
-        messageEvent({
-          content: [{ type: "text", text: "[[reply_to_current]] Migrating" }],
-          id: "assistant-expired",
-          role: "assistant",
-          timestamp: 1,
-        }),
-      ],
+    const { stateDir, env, opened, database } = fixture();
+    insertSession(database, {
+      events: [textEvent("assistant-expired", "[[reply_to_current]] Migrating")],
       generation: "before",
       sessionId: "session-expired",
     });
     const originalEventJson = readEventJson(opened.path, "session-expired", 0);
     closeOpenClawAgentDatabasesForTest();
 
-    // Capture the competing task before entering maintenance, without inheriting its authority.
-    const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
+    const claimCompetingLease = competingWriter(stateDir, env);
     let competingLeaseId: string | undefined;
     const originalAssert = assertAgentDatabaseMaintenanceAuthority;
     const maintenanceAuthority =
@@ -598,18 +498,8 @@ describe("historical transcript directive migration", () => {
         if (authority.mock.calls.length !== 1) {
           return;
         }
-        openOpenClawStateDatabase({ env })
-          .db.prepare("UPDATE state_leases SET expires_at = ? WHERE scope = ? AND lease_key = ?")
-          .run(
-            Date.now() - 1,
-            AGENT_DATABASE_MAINTENANCE_LEASE.scope,
-            AGENT_DATABASE_MAINTENANCE_LEASE.key,
-          );
-        competingLeaseId = claimCompetingLease({
-          agentId: "competitor",
-          path: path.join(stateDir, "competitor.sqlite"),
-          env,
-        });
+        expireMaintenance(env);
+        competingLeaseId = claimCompetingLease();
       });
 
     const result = await migrateHistoricalTranscriptDirectives({ env }).finally(() => {
@@ -638,68 +528,22 @@ describe("historical transcript directive migration", () => {
   });
 
   it("preserves a published archive when maintenance expires before rename", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-expired-archive-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    const archived = messageEvent({
-      content: [{ type: "text", text: "[[reply_to_current]] Archived" }],
-      id: "archived-expired",
-      role: "assistant",
-      timestamp: 1,
-    });
+    const { stateDir, env, opened, database } = fixture();
+    const archived = textEvent("archived-expired", "[[reply_to_current]] Archived");
     const archiveBytes = Buffer.from(`${JSON.stringify(archived)}\n`, "utf8");
     const archiveName = "expired.jsonl.deleted.2026-01-01T00-00-00.000Z.generation";
-    opened.db
-      .prepare(
-        `INSERT INTO session_transcript_archives(
-          session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
-          archive_name,created_at,published_at
-        ) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-      )
-      .run(
-        "archived-expired",
-        "generation",
-        "agent:main:archived-expired",
-        "deleted",
-        "identity",
-        archiveBytes,
-        createHash("sha256").update(archiveBytes).digest("hex"),
-        archiveName,
-        1,
-        1,
-      );
-    opened.db
-      .prepare(
-        `INSERT INTO schema_meta(
-          meta_key,schema_version,app_version,created_at,updated_at,role,agent_id
-        ) VALUES(?,?,?,?,?,?,?)`,
-      )
-      .run(
-        "historical-transcript-directives-v1",
-        1,
-        JSON.stringify({
-          generation: "",
-          phase: "archives",
-          scope: "all",
-          sessionId: "",
-          version: 2,
-        }),
-        1,
-        1,
-        "agent",
-        "main",
-      );
-    const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
-      agentId: "main",
-      path: opened.path,
+    insertArchive(database, archiveBytes, archiveName, "archived-expired", { publishedAt: 1 });
+    writeMetadata(database, {
+      generation: "",
+      phase: "archives",
+      scope: "all",
+      sessionId: "",
+      version: 2,
     });
-    fs.mkdirSync(archiveDirectory, { recursive: true });
-    const archivePath = path.join(archiveDirectory, archiveName);
-    fs.writeFileSync(archivePath, archiveBytes);
+    const archivePath = writeArchiveCopy(opened.path, archiveName, archiveBytes);
     closeOpenClawAgentDatabasesForTest();
 
-    // Capture the competing task before entering maintenance, without inheriting its authority.
-    const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
+    const claimCompetingLease = competingWriter(stateDir, env);
     let competingLeaseId: string | undefined;
     const originalAssert = assertAgentDatabaseMaintenanceAuthority;
     const maintenanceAuthority =
@@ -708,18 +552,8 @@ describe("historical transcript directive migration", () => {
       .spyOn(maintenanceAuthority, "assertAgentDatabaseMaintenanceAuthority")
       .mockImplementation(() => {
         if (!competingLeaseId && new Error().stack?.includes("beforeRename")) {
-          openOpenClawStateDatabase({ env })
-            .db.prepare("UPDATE state_leases SET expires_at = ? WHERE scope = ? AND lease_key = ?")
-            .run(
-              Date.now() - 1,
-              AGENT_DATABASE_MAINTENANCE_LEASE.scope,
-              AGENT_DATABASE_MAINTENANCE_LEASE.key,
-            );
-          competingLeaseId = claimCompetingLease({
-            agentId: "competitor",
-            path: path.join(stateDir, "competitor.sqlite"),
-            env,
-          });
+          expireMaintenance(env);
+          competingLeaseId = claimCompetingLease();
         }
         originalAssert();
       });
@@ -755,14 +589,7 @@ describe("historical transcript directive migration", () => {
       `session-${String(index).padStart(String(batchSize).length, "0")}`;
     for (let index = 0; index <= batchSize; index += 1) {
       insertSession(requireNativeSqliteDatabase(opened.db), {
-        events: [
-          messageEvent({
-            content: [{ type: "text", text: "[[reply_to_current]] Migrating" }],
-            id: `assistant-${index}`,
-            role: "assistant",
-            timestamp: index + 1,
-          }),
-        ],
+        events: [textEvent(`assistant-${index}`, "[[reply_to_current]] Migrating", index + 1)],
         generation: "before",
         sessionId: sessionIdAt(index),
         reconcile: false,
@@ -795,8 +622,7 @@ describe("historical transcript directive migration", () => {
     });
 
     let competingWriterError: unknown;
-    // Capture the competing task before entering maintenance, without inheriting its authority.
-    const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
+    const claimCompetingLease = competingWriter(stateDir, env);
     let competingLeaseId: string | undefined;
     let cursorAtCompetition: unknown;
     let competedAt = 0;
@@ -813,11 +639,7 @@ describe("historical transcript directive migration", () => {
           cursorAtCompetition = readMigrationCursor(opened.path);
           competedAt = Date.now();
           try {
-            competingLeaseId = claimCompetingLease({
-              agentId: "competitor",
-              path: path.join(stateDir, "competitor.sqlite"),
-              env,
-            });
+            competingLeaseId = claimCompetingLease();
           } catch (error) {
             competingWriterError = error;
           }
