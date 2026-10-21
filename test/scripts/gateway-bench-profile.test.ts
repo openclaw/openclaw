@@ -376,7 +376,10 @@ it.each([
           ({ threadId }) => threadId === completed.threadId,
         );
         expect(recording).toMatchObject({ completed: true });
-        const profile = await readJson<HeapProfiler.SamplingHeapProfile>(recording!.profilePath);
+        // V8 exports allocation samples beyond Node's inspector profile declaration.
+        const profile = await readJson<HeapProfiler.SamplingHeapProfile & { samples: unknown[] }>(
+          recording!.profilePath,
+        );
         expect(heapBytesUnder(profile.head, "retainedWorkerAllocation")).toBeGreaterThan(1_000_000);
         const discardedBytes = heapBytesUnder(profile.head, "discardedWorkerAllocation");
         if (includeCollectedObjects) {
