@@ -26,15 +26,11 @@ describe("kimi provider catalog", () => {
   it("builds the bundled Kimi coding defaults", () => {
     const provider = buildKimiCodingProvider();
 
-    expect(provider.api).toBe("anthropic-messages");
-    expect(provider.baseUrl).toBe("https://api.kimi.com/coding/");
+    expect(provider).toMatchObject({
+      api: "anthropic-messages",
+      baseUrl: "https://api.kimi.com/coding/",
+    });
     expect(provider.headers).toEqual({ "User-Agent": "claude-code/0.1.0" });
-    expect(provider.models.map((model) => model.id)).toEqual([
-      "k3",
-      "k3-256k",
-      "kimi-for-coding",
-      "kimi-for-coding-highspeed",
-    ]);
     const k3Contract = {
       reasoning: true,
       thinkingLevelMap: {
@@ -49,35 +45,26 @@ describe("kimi provider catalog", () => {
       maxTokens: 131_072,
       compat: { codeMode: "preferred" },
     };
-    expect(provider.models.find((model) => model.id === "k3")).toMatchObject({
-      ...k3Contract,
-      name: "Kimi K3",
-      contextWindow: 1_048_576,
-    });
-    expect(provider.models.find((model) => model.id === "k3-256k")).toMatchObject({
-      ...k3Contract,
-      name: "Kimi K3 (256k)",
-      contextWindow: 262_144,
-    });
-    expect(provider.models.find((model) => model.id === "kimi-for-coding-highspeed")).toMatchObject(
+    expect(provider.models).toMatchObject([
+      { ...k3Contract, id: "k3", name: "Kimi K3", contextWindow: 1_048_576 },
+      { ...k3Contract, id: "k3-256k", name: "Kimi K3 (256k)", contextWindow: 262_144 },
+      { id: "kimi-for-coding" },
       {
+        id: "kimi-for-coding-highspeed",
         name: "Kimi K2.7 Code HighSpeed",
         reasoning: true,
         contextWindow: 262_144,
         maxTokens: 32_768,
       },
-    );
-    // K2.7 stays unflagged here and in the sibling `moonshot` catalog; only K3 is preferred.
-    for (const id of ["kimi-for-coding", "kimi-for-coding-highspeed"]) {
-      expect(provider.models.find((model) => model.id === id)?.compat?.codeMode).toBeUndefined();
-    }
+    ]);
+    expect(provider.models.slice(2).map((model) => model.compat?.codeMode)).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 
   it("covers every K3 catalog row with the K3 thinking policy", () => {
-    // The manifest owns the rows and `provider-policy-api` owns the thinking
-    // profile, so a new bundled K3 variant must land in both or lose its
-    // levels. The policy list may additionally carry self-hosted wire ids
-    // (e.g. "kimi-k3") that have no bundled catalog row.
+    // Policy also covers self-hosted wire IDs absent from the bundled catalog.
     const thinkingRows = buildKimiCodingProvider()
       .models.filter((model) => model.thinkingLevelMap)
       .map((model) => model.id);
