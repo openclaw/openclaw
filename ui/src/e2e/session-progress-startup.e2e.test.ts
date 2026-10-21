@@ -58,6 +58,7 @@ suite.define(() => {
         const progressSurface = mobile
           ? details.locator(".chat-details-mobile-root")
           : details.locator(".chat-details-desktop-body");
+        const retry = progressSurface.getByRole("button", { name: "Retry", exact: true });
         // The Details shell becomes visible before its lazy composition has mounted.
         await progressSurface.waitFor();
         await progressSurface.getByRole("meter", { name: "Context", exact: true }).waitFor();
@@ -67,14 +68,7 @@ suite.define(() => {
         await progressSurface
           .getByRole("status", { name: "Loading session progress…", exact: true })
           .waitFor({ state: "hidden" });
-        expect(
-          await progressSurface
-            .getByText("Session progress is unavailable.", { exact: true })
-            .count(),
-        ).toBe(0);
-        expect(
-          await progressSurface.getByRole("button", { name: "Retry", exact: true }).count(),
-        ).toBe(0);
+        expect(await retry.count()).toBe(0);
         await gateway.deferNext("progressCard.get");
         await page.clock.runFor(30_000);
         expect(await gateway.getRequests("progressCard.get")).toHaveLength(2);
@@ -87,9 +81,7 @@ suite.define(() => {
             .getByRole("status", { name: "Loading session progress…", exact: true })
             .count(),
         ).toBe(0);
-        expect(
-          await progressSurface.getByRole("button", { name: "Retry", exact: true }).count(),
-        ).toBe(0);
+        expect(await retry.count()).toBe(0);
         await gateway.deferNext("progressCard.get");
         await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
         expect(await gateway.getRequests("progressCard.get")).toHaveLength(3);
@@ -102,16 +94,14 @@ suite.define(() => {
         await gateway.rejectDeferred("progressCard.get", {
           message: "Still temporarily unavailable",
         });
-        const retry = progressSurface
-          .getByRole("status")
-          .filter({ hasText: "task progress" })
-          .getByRole("button", { name: "Retry", exact: true });
-        await retry.waitFor();
-        await progressSurface
-          .getByText("Couldn't load task progress. Try again.", { exact: true })
-          .waitFor();
+        expect(await retry.count()).toBe(0);
+        expect(
+          await progressSurface
+            .getByText("Couldn't load task progress. Try again.", { exact: true })
+            .count(),
+        ).toBe(0);
         await gateway.deferNext("progressCard.get");
-        await retry.click();
+        await page.clock.runFor(60_000);
         expect(await gateway.getRequests("progressCard.get")).toHaveLength(5);
         await gateway.resolveDeferred("progressCard.get", { card });
         // Commit the recovered card and its queued layout frames under the paused clock.

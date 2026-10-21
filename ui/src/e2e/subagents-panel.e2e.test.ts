@@ -9,7 +9,7 @@ import {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   expectAbsent,
   expectNoRequests,
@@ -397,7 +397,7 @@ suite.define(() => {
           .waitFor();
         expect(await panel.getByText(persistent.label, { exact: true }).count()).toBe(0);
         await expect
-          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
+          .poll(() => tooltipTitleText(row.locator(".subagents-desktop__open")))
           .toContain("2 calls");
 
         await page.clock.install();
@@ -435,6 +435,8 @@ suite.define(() => {
           .getByText("Child list temporarily unavailable", { exact: false })
           .waitFor({ state: "hidden" });
         await page.clock.resume();
+        // Keep the shared tooltip active while live activity replaces its title source.
+        await row.locator(".subagents-desktop__open").hover();
         const activity = {
           sessionKey: child.key,
           agentId: "main",
@@ -455,10 +457,10 @@ suite.define(() => {
         };
         await gateway.emitGatewayEvent("agent", activity);
         await expect
-          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
+          .poll(() => tooltipTitleText(row.locator(".subagents-desktop__open")))
           .toContain("Reading notice component");
         await gateway.emitGatewayEvent("agent", activity);
-        expect(await row.locator(".subagents-desktop__open").getAttribute("title")).toContain(
+        expect(await tooltipTitleText(row.locator(".subagents-desktop__open"))).toContain(
           "2 calls",
         );
         await gateway.emitGatewayEvent("agent", {
@@ -473,10 +475,10 @@ suite.define(() => {
         const otherRow = panel.locator(`[data-session-key="${other.key}"]`);
         await otherRow.locator(".subagents-desktop__open").waitFor();
         await expect
-          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
+          .poll(() => tooltipTitleText(otherRow.locator(".subagents-desktop__open")))
           .toContain("Retry failed benchmark targets");
         await expect
-          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
+          .poll(() => tooltipTitleText(otherRow.locator(".subagents-desktop__open")))
           .toContain("1+ calls");
         expect(await row.locator(".subagents-desktop__avatar").count()).toBe(1);
 
