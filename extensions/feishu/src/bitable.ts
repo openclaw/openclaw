@@ -11,10 +11,51 @@ type BitableRecordCreatePayload = NonNullable<
 >;
 type BitableRecordFields = NonNullable<NonNullable<BitableRecordCreatePayload["data"]>["fields"]>;
 
+type BitableMetadataResponse<T> = {
+  code?: number;
+  msg?: string;
+  data?: { items?: T[]; has_more?: boolean; page_token?: string };
+};
+
 function ensureLarkSuccess(res: { code?: number; msg?: string }, api: string): void {
   if (res.code !== 0) {
     throw new Error(`[${api}] code=${res.code ?? -1} message=${res.msg ?? "unknown error"}`);
   }
+}
+
+async function listBitableMetadataItems<T>(
+  loadPage: (pageToken?: string) => Promise<BitableMetadataResponse<T>>,
+  api: string,
+): Promise<T[]> {
+  const items: T[] = [];
+  const seenPageTokens = new Set<string>();
+  let pageToken: string | undefined;
+
+  for (let page = 0; page < 100; page += 1) {
+    const response = await loadPage(pageToken);
+    ensureLarkSuccess(response, api);
+    const data = response.data;
+    if (!data) {
+      throw new Error(`${api} returned missing response data`);
+    }
+    items.push(...(data.items ?? []));
+    if (data.has_more !== true) {
+      return items;
+    }
+
+    // Provider cursors are opaque: validate blanks without changing token identity.
+    const nextPageToken = data.page_token;
+    if (!nextPageToken?.trim()) {
+      throw new Error(`${api} pagination returned a missing page token`);
+    }
+    if (seenPageTokens.has(nextPageToken)) {
+      throw new Error(`${api} pagination returned a repeated page token`);
+    }
+    seenPageTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
+
+  throw new Error(`${api} pagination exceeded 100 pages`);
 }
 
 const FIELD_TYPE_NAMES: Record<number, string> = {
@@ -86,14 +127,19 @@ async function getBitableMeta(client: Lark.Client, url: string) {
 
   let tables: { table_id: string; name: string }[] = [];
   if (!parsed.tableId) {
-    const tablesRes = await client.bitable.appTable.list({
-      path: { app_token: appToken },
-    });
-    if (tablesRes.code === 0) {
-      tables = (tablesRes.data?.items ?? []).map((t) => ({
-        table_id: t.table_id!,
-        name: t.name!,
-      }));
+    const loadPage = (pageToken?: string) =>
+      client.bitable.appTable.list({
+        path: { app_token: appToken },
+        params: { page_size: 100, page_token: pageToken },
+      });
+    const firstPage = await loadPage();
+    // App metadata remains useful when table discovery is initially denied.
+    if (firstPage.code === 0) {
+      const items = await listBitableMetadataItems(
+        (pageToken) => (pageToken === undefined ? Promise.resolve(firstPage) : loadPage(pageToken)),
+        "bitable.appTable.list",
+      );
+      tables = items.map((table) => ({ table_id: table.table_id!, name: table.name! }));
     }
   }
 
@@ -392,12 +438,14 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     parameters: ListFieldsSchema,
     async execute({ params, client }) {
       const { app_token, table_id } = params;
-      const res = await client.bitable.appTableField.list({
-        path: { app_token, table_id },
-      });
-      ensureLarkSuccess(res, "bitable.appTableField.list");
-
-      const fields = res.data?.items ?? [];
+      const fields = await listBitableMetadataItems(
+        (pageToken) =>
+          client.bitable.appTableField.list({
+            path: { app_token, table_id },
+            params: { page_size: 100, page_token: pageToken },
+          }),
+        "bitable.appTableField.list",
+      );
       return {
         fields: fields.map((f) => ({
           field_id: f.field_id,

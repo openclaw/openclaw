@@ -12,6 +12,12 @@ vi.mock("./client.js", () => ({
 
 import { registerFeishuBitableTools } from "./bitable.js";
 
+type MetadataList =
+  | Lark.Client["bitable"]["appTable"]["list"]
+  | Lark.Client["bitable"]["appTableField"]["list"];
+type MetadataListPayload = Parameters<MetadataList>[0];
+type MetadataPageResponse = Awaited<ReturnType<MetadataList>>;
+
 function createHarness() {
   const harness = createToolFactoryHarness(
     createFeishuTestConfig({
@@ -60,6 +66,42 @@ function createBitableClient(records: ReturnType<typeof record>[]) {
   const createApp = () =>
     harness.resolveTool("feishu_bitable_create_app").execute("create", { name: "Project Tracker" });
   return { batchDelete, client, createApp, ...harness };
+}
+
+function createMetadataList(responses: Array<MetadataPageResponse | Error>) {
+  const remaining = [...responses];
+  return vi.fn(async (_payload?: MetadataListPayload) => {
+    const pageResponse = remaining.shift();
+    if (!pageResponse) {
+      throw new Error("Unexpected Bitable metadata request");
+    }
+    if (pageResponse instanceof Error) {
+      throw pageResponse;
+    }
+    return pageResponse;
+  });
+}
+
+function createMetadataClient(params: {
+  tablePages?: Array<MetadataPageResponse | Error>;
+  fieldPages?: Array<MetadataPageResponse | Error>;
+}) {
+  const tableList = createMetadataList(params.tablePages ?? []);
+  const fieldList = createMetadataList(params.fieldPages ?? []);
+  const client = {
+    bitable: {
+      app: {
+        get: vi.fn(async () => ({
+          code: 0,
+          data: { app: { name: "Project Tracker" } },
+        })),
+      },
+      appTable: { list: tableList },
+      appTableField: { list: fieldList },
+    },
+  };
+  createFeishuClientMock.mockReturnValue(client);
+  return { client, fieldList, tableList };
 }
 
 describe("feishu bitable create app cleanup", () => {
@@ -193,6 +235,248 @@ describe("feishu bitable create app cleanup", () => {
     );
     expect(client.bitable.appTableRecord.list).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    {
+      name: "table discovery",
+      toolName: "feishu_bitable_get_meta",
+      params: { url: "https://example.feishu.cn/base/apptoken" },
+      rowsKey: "tables",
+      pageKind: "table" as const,
+      firstItem: { table_id: "tbl_first", name: "First" },
+      lastItem: { table_id: "tbl_last", name: "Last" },
+    },
+    {
+      name: "field listing",
+      toolName: "feishu_bitable_list_fields",
+      params: { app_token: "apptoken", table_id: "tbl_main" },
+      rowsKey: "fields",
+      pageKind: "field" as const,
+      firstItem: { field_id: "fld_first", field_name: "First", type: 1 },
+      lastItem: {
+        field_id: "fld_last",
+        field_name: "Last",
+        type: 2,
+        property: { formatter: "0.00" },
+      },
+    },
+  ])(
+    "returns every $name page while preserving opaque cursor identity",
+    async ({ toolName, params, rowsKey, pageKind, firstItem, lastItem }) => {
+      const pages = [
+        {
+          code: 0,
+          data: { items: [firstItem], has_more: true, page_token: "page-2" },
+        },
+        {
+          code: 0,
+          data: { items: [], has_more: true, page_token: " page-2 " },
+        },
+        { code: 0, data: { items: [lastItem], has_more: false } },
+      ];
+      const { fieldList, tableList } = createMetadataClient(
+        pageKind === "table" ? { tablePages: pages } : { fieldPages: pages },
+      );
+      const { resolveTool } = createHarness();
+
+      const result = await resolveTool(toolName).execute("call_metadata", params);
+      const details = result.details;
+      const list = pageKind === "table" ? tableList : fieldList;
+
+      expect(details[rowsKey]).toEqual([
+        expect.objectContaining(firstItem),
+        expect.objectContaining(lastItem),
+      ]);
+      if (rowsKey === "fields") {
+        expect(details.total).toBe(2);
+      }
+      const path =
+        pageKind === "table"
+          ? { app_token: "apptoken" }
+          : { app_token: "apptoken", table_id: "tbl_main" };
+      expect(list.mock.calls.map(([payload]) => payload)).toEqual(
+        [undefined, "page-2", " page-2 "].map((pageToken) => ({
+          path,
+          params: { page_size: 100, page_token: pageToken },
+        })),
+      );
+    },
+  );
+
+  it("keeps the selected-table metadata fast path to one app request", async () => {
+    const { client, tableList } = createMetadataClient({});
+    const { resolveTool } = createHarness();
+
+    const result = await resolveTool("feishu_bitable_get_meta").execute("call_selected", {
+      url: "https://example.feishu.cn/base/apptoken?table=tbl_selected",
+    });
+
+    expect(result.details).toMatchObject({
+      app_token: "apptoken",
+      table_id: "tbl_selected",
+      name: "Project Tracker",
+    });
+    expect(client.bitable.app.get).toHaveBeenCalledOnce();
+    expect(client.bitable.app.get).toHaveBeenCalledWith({ path: { app_token: "apptoken" } });
+    expect(tableList).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "a missing cursor",
+      responses: [{ code: 0, data: { items: [], has_more: true } }] satisfies Array<
+        MetadataPageResponse | Error
+      >,
+      error: /missing page token/i,
+      calls: 1,
+    },
+    {
+      name: "a blank cursor",
+      responses: [
+        { code: 0, data: { items: [], has_more: true, page_token: "   " } },
+      ] satisfies Array<MetadataPageResponse | Error>,
+      error: /missing page token/i,
+      calls: 1,
+    },
+    {
+      name: "an exactly repeated cursor",
+      responses: [
+        { code: 0, data: { items: [], has_more: true, page_token: "same" } },
+        { code: 0, data: { items: [], has_more: true, page_token: "same" } },
+      ] satisfies Array<MetadataPageResponse | Error>,
+      error: /repeated page token/i,
+      calls: 2,
+    },
+    {
+      name: "a later provider failure",
+      responses: [
+        {
+          code: 0,
+          data: {
+            items: [{ field_id: "fld_partial", field_name: "Partial", type: 1 }],
+            has_more: true,
+            page_token: "page-2",
+          },
+        },
+        { code: 91403, msg: "Bitable access was revoked" },
+      ] satisfies Array<MetadataPageResponse | Error>,
+      error: /Bitable access was revoked/i,
+      calls: 2,
+    },
+    {
+      name: "a later transport failure",
+      responses: [
+        {
+          code: 0,
+          data: {
+            items: [{ field_id: "fld_partial", field_name: "Partial", type: 1 }],
+            has_more: true,
+            page_token: "page-2",
+          },
+        },
+        new Error("Feishu transport disconnected"),
+      ] satisfies Array<MetadataPageResponse | Error>,
+      error: /Feishu transport disconnected/i,
+      calls: 2,
+    },
+    {
+      name: "a successful response without data",
+      responses: [{ code: 0 }] satisfies Array<MetadataPageResponse | Error>,
+      error: /missing response data/i,
+      calls: 1,
+    },
+  ])("rejects field metadata pagination with $name", async ({ responses, error, calls }) => {
+    const { fieldList } = createMetadataClient({ fieldPages: responses });
+    const { resolveTool } = createHarness();
+
+    const result = await resolveTool("feishu_bitable_list_fields").execute("call_fields", {
+      app_token: "app_token",
+      table_id: "tbl_main",
+    });
+
+    expect(result.details.error).toMatch(error);
+    expect(result.details).not.toHaveProperty("fields");
+    expect(result.details).not.toHaveProperty("total");
+    expect(fieldList).toHaveBeenCalledTimes(calls);
+  });
+
+  it("keeps known app metadata when initial table discovery is denied", async () => {
+    const { tableList } = createMetadataClient({
+      tablePages: [{ code: 91403, msg: "Bitable access was denied" }],
+    });
+    const { resolveTool } = createHarness();
+
+    const result = await resolveTool("feishu_bitable_get_meta").execute("call_denied", {
+      url: "https://example.feishu.cn/base/apptoken",
+    });
+
+    expect(result.details).toMatchObject({
+      app_token: "apptoken",
+      name: "Project Tracker",
+      url_type: "base",
+    });
+    expect(result.details).not.toHaveProperty("error");
+    expect(result.details).not.toHaveProperty("tables");
+    expect(tableList).toHaveBeenCalledOnce();
+  });
+
+  it("rejects partial table discovery when a later page is denied", async () => {
+    const { tableList } = createMetadataClient({
+      tablePages: [
+        {
+          code: 0,
+          data: {
+            items: [{ table_id: "tbl_partial", name: "Partial" }],
+            has_more: true,
+            page_token: "page-2",
+          },
+        },
+        { code: 91403, msg: "Bitable access was revoked" },
+      ],
+    });
+    const { resolveTool } = createHarness();
+
+    const result = await resolveTool("feishu_bitable_get_meta").execute("call_revoked", {
+      url: "https://example.feishu.cn/base/apptoken",
+    });
+
+    expect(result.details.error).toContain("Bitable access was revoked");
+    expect(result.details).not.toHaveProperty("tables");
+    expect(tableList).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([true, false])(
+    "bounds field metadata at 100 pages when the final page has_more=%s",
+    async (hasMore) => {
+      const pages = Array.from({ length: 100 }, (_, index) => ({
+        code: 0,
+        data: {
+          items: index === 99 ? [{ field_id: "fld_last", field_name: "Last", type: 1 }] : [],
+          has_more: index === 99 ? hasMore : true,
+          page_token: `page-${index + 1}`,
+        },
+      }));
+      const { fieldList } = createMetadataClient({ fieldPages: pages });
+      const { resolveTool } = createHarness();
+
+      const result = await resolveTool("feishu_bitable_list_fields").execute("call_fields", {
+        app_token: "app_token",
+        table_id: "tbl_main",
+      });
+
+      if (hasMore) {
+        expect(result.details.error).toMatch(/pagination exceeded 100 pages/i);
+        expect(result.details).not.toHaveProperty("fields");
+        expect(result.details).not.toHaveProperty("total");
+      } else {
+        expect(result.details).toMatchObject({
+          fields: [{ field_id: "fld_last", field_name: "Last", type: 1, type_name: "Text" }],
+          total: 1,
+        });
+      }
+      expect(fieldList).toHaveBeenCalledTimes(100);
+    },
+  );
 });
 
 it("emits a non-empty value schema for create_record fields (#94547)", () => {
