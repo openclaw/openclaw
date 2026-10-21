@@ -1,4 +1,3 @@
-// Shared public-command fixture for status-all collection and rendered diagnostics.
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import type { ProgressReporter } from "../../cli/progress.js";
@@ -229,12 +228,11 @@ export function setupStatusAllReportTest() {
     mocks.readConfigFileSnapshot.mockReset().mockResolvedValue(createTestConfigSnapshot({}));
     mocks.inspectPortUsage.mockReset().mockResolvedValue(null);
     mocks.resolveStatusAllConnectionDetails.mockReturnValue("");
-    mocks.resolveGatewayLogPaths.mockImplementation(() => {
-      throw new Error("No fixture logs");
-    });
-    mocks.resolveGatewaySupervisorLogPaths.mockImplementation(() => {
-      throw new Error("No fixture logs");
-    });
+    for (const mock of [mocks.resolveGatewayLogPaths, mocks.resolveGatewaySupervisorLogPaths]) {
+      mock.mockImplementation(() => {
+        throw new Error("No fixture logs");
+      });
+    }
     mocks.resolveGatewayRestartLogPath.mockReturnValue("/tmp/fixture-restart.log");
     mocks.readFileTailLines.mockReset().mockResolvedValue([]);
     mocks.history.mockReset().mockResolvedValue({});

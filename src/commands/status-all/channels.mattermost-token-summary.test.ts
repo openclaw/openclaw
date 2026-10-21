@@ -56,94 +56,88 @@ describe("channel table credential summaries", () => {
       { botTokenSource: "config" },
     );
 
-    expect(summary.state).toBe("ok");
-    expect(summary.detail).toContain("bot token config");
-    expect(summary.detail).not.toContain("need bot+app");
-    expect(summary.detail).toMatch(/sha256:[a-f0-9]{8} · len 15/u);
-    expect(summary.detail).not.toContain("bot-token-value");
-  });
-
-  it("keeps bot+app requirement when both fields exist", async () => {
-    const summary = await summarize({ botToken: "bot-token", appToken: "" });
-
-    expect(summary.state).toBe("warn");
-    expect(summary.detail).toContain("need bot+app");
-  });
-
-  it("reports configured-but-unavailable Slack credentials as warn", async () => {
-    const summary = await summarize(
-      {
-        configured: true,
-        botToken: "",
-        appToken: "",
-        botTokenSource: "config",
-        appTokenSource: "config",
-        botTokenStatus: "configured_unavailable",
-        appTokenStatus: "configured_unavailable",
-      },
-      { botTokenSource: "config", appTokenSource: "config" },
-    );
-
-    expect(summary.state).toBe("warn");
-    expect(summary.detail).toContain("unavailable in this command path");
-  });
-
-  it("treats status-only available HTTP credentials as resolved", async () => {
-    const summary = await summarize(
-      {
-        mode: "http",
-        botToken: "",
-        signingSecret: "", // pragma: allowlist secret
-        botTokenSource: "config",
-        signingSecretSource: "config", // pragma: allowlist secret
-        botTokenStatus: "available",
-        signingSecretStatus: "available", // pragma: allowlist secret
-      },
-      { botTokenSource: "config", signingSecretSource: "config" }, // pragma: allowlist secret
-    );
-
-    expect(summary.state).toBe("ok");
-    expect(summary.detail).toContain("credentials ok");
+    expect(summary).toMatchObject({
+      state: "ok",
+      detail: expect.stringMatching(
+        /^bot token config \(sha256:[a-f0-9]{8} · len 15\) · accounts 1\/1$/u,
+      ),
+    });
   });
 
   it.each([
     {
-      mode: "http",
+      name: "requires both bot and app tokens",
+      account: { botToken: "bot-token", appToken: "" },
+      snapshot: {},
+      expected: { state: "warn", detail: expect.stringContaining("need bot+app") },
+    },
+    {
+      name: "warns for configured-but-unavailable credentials",
       account: {
+        botToken: "",
+        appToken: "",
+        botTokenStatus: "configured_unavailable",
+        appTokenStatus: "configured_unavailable",
+      },
+      snapshot: { botTokenSource: "config", appTokenSource: "config" },
+      expected: {
+        state: "warn",
+        detail: expect.stringContaining("unavailable in this command path"),
+      },
+    },
+    {
+      name: "accepts status-only available HTTP credentials",
+      account: {
+        mode: "http",
+        botToken: "",
+        signingSecret: "", // pragma: allowlist secret
+        botTokenStatus: "available",
+        signingSecretStatus: "available", // pragma: allowlist secret
+      },
+      snapshot: { botTokenSource: "config", signingSecretSource: "config" }, // pragma: allowlist secret
+      expected: { state: "ok", detail: expect.stringContaining("credentials ok") },
+    },
+    {
+      name: "prioritizes unavailable credentials in HTTP mode",
+      account: {
+        mode: "http",
         botToken: "bot-token",
         signingSecret: "", // pragma: allowlist secret
         signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
       },
-      detail: "configured http credentials unavailable in this command path · accounts 1",
+      snapshot: {},
+      expected: {
+        state: "warn",
+        detail: "configured http credentials unavailable in this command path · accounts 1",
+      },
     },
     {
-      mode: "socket",
+      name: "preserves public unavailable-credential precedence in socket mode",
       account: {
+        mode: "socket",
         botToken: "bot-token",
         appToken: "",
         appTokenStatus: "configured_unavailable",
       },
-      detail: "configured credentials unavailable in this command path · accounts 1",
-    },
-  ])(
-    "preserves public unavailable-credential precedence in $mode mode",
-    async ({ mode, account, detail }) => {
-      expect(await summarize({ mode, ...account })).toMatchObject({
+      snapshot: {},
+      expected: {
         state: "warn",
-        detail,
-      });
+        detail: "configured credentials unavailable in this command path · accounts 1",
+      },
     },
-  );
-
-  it("requires token values for socket mode even when status fields report available", async () => {
-    expect(
-      await summarize({
+    {
+      name: "requires socket token values despite available status fields",
+      account: {
         botToken: "",
         appToken: "",
         botTokenStatus: "available",
         appTokenStatus: "available",
-      }),
-    ).toMatchObject({ state: "setup", detail: "no tokens (need bot+app)" });
+      },
+      snapshot: {},
+      expected: { state: "setup", detail: "no tokens (need bot+app)" },
+    },
+  ])("$name", async ({ account, snapshot, expected }) => {
+    expect(await summarize(account, snapshot)).toMatchObject(expected);
   });
 
   it.each([
