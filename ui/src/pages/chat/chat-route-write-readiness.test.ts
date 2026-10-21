@@ -23,9 +23,14 @@ it("holds history mutations without changing the cached transcript or draft", as
     requestHandlers: {},
   });
   const messages = host.chatMessages;
+  const rewindHost = Object.assign(host, {
+    handleChatDraftChange: (next: string) => {
+      host.chatMessage = next;
+    },
+  });
   expect(await clearChatHistory(host)).toBe("failed");
   expect(
-    await rewindChatHistory(host, "entry", new ChatAttachmentReadLifecycle(() => {})),
+    await rewindChatHistory(rewindHost, "entry", new ChatAttachmentReadLifecycle(() => {})),
   ).toBeNull();
   expect(await switchChatHistoryBranch(host, "leaf")).toBe(false);
   expect(await patchChatSessionSettings(host, host.sessionKey, { model: "synthetic" })).toBeNull();
