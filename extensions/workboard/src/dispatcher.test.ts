@@ -204,6 +204,22 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect(worktrees.removeIfLossless).not.toHaveBeenCalled();
   });
 
+  it("keeps a retained path out of the actual scratch worker prompt", async () => {
+    const card = await createCard({
+      title: "Scratch context",
+      workspace: { kind: "worktree", path: "/workspace/repository", branch: "main" },
+      workspaceAccess: { unrestricted: true },
+    });
+    await store.update(card.id, { workspace: { kind: "scratch" } });
+    const run = vi.fn().mockResolvedValue({ runId: "run-scratch" });
+
+    await dispatch(run, { now: 10, maxStarts: 1 });
+
+    const request = run.mock.calls[0]?.[0];
+    expect(request?.message).toContain("Workspace: scratch");
+    expect(request?.message).not.toContain("/workspace/repository");
+  });
+
   it("does not claim a card whose workspace authority changed after preflight", async () => {
     const card = await createCard({
       title: "Racing authority update",

@@ -719,6 +719,27 @@ describe("WorkboardStore", () => {
     expect(untrusted.metadata?.automation?.workspaceAccess).toBeUndefined();
   });
 
+  it("preserves workspace path and branch across scratch and dir switches", async () => {
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const card = await store.create({
+      title: "Switch workspace kinds",
+      workspace: { kind: "worktree", path: "/workspace/repository", branch: "main" },
+    });
+
+    await store.update(card.id, { workspace: { kind: "scratch" } });
+    expect((await store.get(card.id))?.metadata?.automation?.workspace).toEqual({
+      kind: "scratch",
+      path: "/workspace/repository",
+      branch: "main",
+    });
+    const dir = await store.update(card.id, { workspace: { kind: "dir" } });
+    expect(dir.metadata?.automation?.workspace).toMatchObject({
+      kind: "dir",
+      path: "/workspace/repository",
+      branch: "main",
+    });
+  });
+
   it("only accepts launch state from store-owned transitions", async () => {
     const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const card = await store.create({
