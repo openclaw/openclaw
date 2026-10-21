@@ -41,27 +41,21 @@ export async function createTelegramNativeCommandTestDriver(options: {
         match?: string;
       } = {},
     ) {
-      const command = input.command ?? "qaowner";
-      const native = bot.commandHandlers.get(command);
-      assert(native, `Expected registered native /${command} command`);
-      const senderId = input.senderId ?? 100;
-      const chatId = input.chatId ?? senderId;
+      const native = bot.commandHandlers.get(input.command ?? "qaowner");
+      assert(native, "Expected registered native command");
+      const { senderId = 100, chatId = senderId } = input;
       return native({
         match: input.match ?? "",
         message: {
           message_id: 17,
-          date: input.group ? 1_700_000_000 : Math.floor(Date.now() / 1000),
-          chat: input.group
-            ? { id: chatId, type: "supergroup", title: "Owners", is_forum: true }
-            : { id: chatId, type: "private" },
+          chat: { id: chatId, type: input.group ? "supergroup" : "private", is_forum: input.group },
           ...(input.group ? { message_thread_id: input.threadId } : {}),
           from: { id: senderId, username: input.group ? "admin" : "bob" },
         },
       });
     },
     pairingStoreReadCount: () => nativeCommandMocks.readChannelAllowFromStore.mock.calls.length,
-    deliveries: () =>
-      deliverReplies.mock.calls.map(([delivery]) => ({ replies: delivery.replies })),
+    deliveries: () => deliverReplies.mock.calls.map(([{ replies }]) => ({ replies })),
     sentMessages: () =>
       bot.sendMessage.mock.calls.map(([chatId, text]: unknown[]) => {
         assert(typeof chatId === "number" || typeof chatId === "string");
