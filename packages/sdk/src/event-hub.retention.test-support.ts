@@ -12,12 +12,9 @@ type Held = {
 };
 const held: Held[] = [];
 const report = {
-  phase: "setup",
-  gcPasses: 0,
   controlRetained: null as boolean | null,
   observations: [] as Array<{ mode: Mode; kind: Payload["kind"]; retained: boolean }>,
   hubCloseDrained: false,
-  terminalBehavior: [] as Array<{ mode: Mode; outcome: "done" | "filter-error" }>,
   cleanupErrors: [] as string[],
   error: null as string | null,
   verdict: "incomplete",
@@ -37,20 +34,17 @@ async function prepare(mode: Mode) {
   const hub = new EventHub<Payload>();
   let returned: Promise<IteratorResult<Payload>> | undefined;
   const stream = hub.stream((event) => {
-    if (event.kind === "trigger") {
-      if (mode === "filter-error") {
-        throw new Error("synthetic filter retirement");
-      }
-      if (mode === "reentrant-return") {
-        returned = iterator.return?.();
-      }
+    if (event.kind === "trigger" && mode === "filter-error") {
+      throw new Error("synthetic filter retirement");
+    }
+    if (event.kind === "trigger" && mode === "reentrant-return") {
+      returned = iterator.return?.();
     }
     return true;
   });
   const iterator: AsyncIterator<Payload> = stream[Symbol.asyncIterator]();
-  const item: Held = { mode, hub, iterator, refs: [] };
+  const item: Held = { mode, hub, iterator, refs: [publishWeak(hub, "backlog")] };
   held.push(item);
-  item.refs.push(publishWeak(hub, "backlog"));
   if (mode === "return") {
     await iterator.return?.();
   } else if (mode === "hub-close") {
@@ -64,8 +58,7 @@ async function prepare(mode: Mode) {
   }
 }
 
-let failed = false;
-let failure: unknown;
+const failures: unknown[] = [];
 try {
   const gc = globalThis.gc;
   assert.ok(gc, "The retirement probe requires --expose-gc");
@@ -73,15 +66,12 @@ try {
   for (const mode of ["return", "filter-error", "reentrant-return", "hub-close"] as const) {
     await prepare(mode);
   }
-  report.phase = "collect";
   // WeakRef construction keeps its target alive for the current job.
   await setImmediate();
   for (let pass = 0; pass < 8; pass++) {
     gc();
     await setImmediate();
-    report.gcPasses++;
   }
-  report.phase = "observe";
   report.controlRetained = control.deref() !== undefined;
   report.observations = held.flatMap(({ mode, refs }) =>
     refs.map(({ kind, value }) => ({ mode, kind, retained: value.deref() !== undefined })),
@@ -90,7 +80,6 @@ try {
     report.verdict = "gc-inconclusive";
     throw new Error("Uncached control retained; no payload-retention conclusion");
   }
-  report.phase = "verify-visible-contract";
   for (const { mode, iterator, refs } of held) {
     if (mode === "hub-close") {
       const expected = refs[0]?.value.deref();
@@ -102,26 +91,19 @@ try {
     }
     if (mode === "filter-error") {
       await assert.rejects(iterator.next(), /synthetic filter retirement/);
-      report.terminalBehavior.push({ mode, outcome: "filter-error" });
     } else {
       assert.deepEqual(await iterator.next(), { done: true, value: undefined });
-      report.terminalBehavior.push({ mode, outcome: "done" });
     }
   }
-  report.phase = "verify-retirement";
   report.verdict = "retention-failed";
-  const retainedRetired = report.observations.filter(
-    ({ mode, retained }) => mode !== "hub-close" && retained,
-  );
   assert.deepEqual(
-    retainedRetired,
+    report.observations.filter(({ mode, retained }) => mode !== "hub-close" && retained),
     [],
     "Retired iterators must release backlog and reentrant payloads",
   );
   report.verdict = "passed";
 } catch (error) {
-  failed = true;
-  failure = error;
+  failures.push(error);
   report.error = reason(error);
 } finally {
   for (const { hub, iterator } of held) {
@@ -129,8 +111,7 @@ try {
       await iterator.return?.();
     } catch (error) {
       report.cleanupErrors.push(reason(error));
-      failed = true;
-      failure ??= error;
+      failures.push(error);
     } finally {
       hub.close();
     }
@@ -140,6 +121,6 @@ try {
   }
   process.stdout.write(`${JSON.stringify(report)}\n`);
 }
-if (failed) {
-  throw failure;
+if (failures.length > 0) {
+  throw failures[0];
 }

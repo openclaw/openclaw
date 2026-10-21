@@ -2,20 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import { claimAgentSessionWriter } from "../../../src/agents/embedded-agent-runner/run/session-bootstrap.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  createEmbeddedRunHandle,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
 } from "../../../src/agents/embedded-agent-runner/runs.test-support.js";
 import { resolveDefaultSessionStorePath } from "../../../src/config/sessions/paths.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntry,
-} from "../../../src/config/sessions/session-accessor.js";
+import * as sessions from "../../../src/config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../../src/config/sessions/types.js";
 import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
 import { getAgentEventLifecycleGeneration } from "../../../src/infra/agent-events.js";
-import {
-  clearAgentRunContext,
-  registerAgentRunContext,
-} from "../../../src/infra/agent-run-registry.js";
+import * as runContexts from "../../../src/infra/agent-run-registry.js";
 import { withTimeout } from "../../../src/infra/fs-safe.js";
 import { GatewayClientTransport, OpenClaw } from "./index.js";
 
@@ -37,30 +32,28 @@ describe("SDK writer takeover through the Gateway", () => {
     const sessionKey = "agent:main:dashboard:sdk-writer-takeover";
     const runId = "sdk-prior-writer";
     const nextRunId = "sdk-next-writer";
-    const storePath = resolveDefaultSessionStorePath("main");
-    const target = { agentId: "main", sessionKey, storePath };
-    const cancellation = vi.fn(() => loadSessionEntry(target));
+    const target = {
+      agentId: "main",
+      sessionKey,
+      storePath: resolveDefaultSessionStorePath("main"),
+    };
+    const cancellation = vi.fn(() => sessions.loadSessionEntry(target));
     const incumbent = {
+      ...createEmbeddedRunHandle({ runId, abort: vi.fn() }),
       kind: "embedded" as const,
-      runId,
       cancel: cancellation,
-      abort: vi.fn(),
-      isCompacting: () => false,
-      isStreaming: () => true,
-      queueMessage: async () => {},
     };
 
     try {
       await oc.connect();
-      const sessionEntry = {
+      await sessions.replaceSessionEntry(target, {
         sessionId,
         updatedAt: 1,
         lifecycleRevision: "sdk-writer-revision",
         activeWriterRunId: runId,
-      } satisfies InternalSessionEntry;
-      await replaceSessionEntry(target, sessionEntry);
+      } satisfies InternalSessionEntry);
       setActiveEmbeddedRun(sessionId, incumbent, sessionKey, sessionKey);
-      registerAgentRunContext(runId, {
+      runContexts.registerAgentRunContext(runId, {
         agentId: "main",
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
         sessionId,
@@ -70,15 +63,11 @@ describe("SDK writer takeover through the Gateway", () => {
       const terminalEvent = (async () => {
         for await (const event of run.events()) {
           if (
-            event.type === "run.completed" ||
-            event.type === "run.failed" ||
-            event.type === "run.cancelled" ||
-            event.type === "run.timed_out"
+            ["run.completed", "run.failed", "run.cancelled", "run.timed_out"].includes(event.type)
           ) {
             return event.type;
           }
         }
-        return undefined;
       })().catch((error: unknown) => error);
 
       await claimAgentSessionWriter({
@@ -102,14 +91,14 @@ describe("SDK writer takeover through the Gateway", () => {
       expect(cancellation).toHaveReturnedWith(
         expect.objectContaining({ activeWriterRunId: nextRunId }),
       );
-      expect(loadSessionEntry(target)).toMatchObject({ activeWriterRunId: nextRunId });
+      expect(sessions.loadSessionEntry(target)).toMatchObject({ activeWriterRunId: nextRunId });
       expect({ eventType, waitStatus: wait.status }).toEqual({
         eventType: "run.cancelled",
         waitStatus: "cancelled",
       });
     } finally {
       clearActiveEmbeddedRun(sessionId, incumbent, sessionKey, sessionKey);
-      clearAgentRunContext(runId);
+      runContexts.clearAgentRunContext(runId);
       await oc.close();
       await started.server.close();
       started.envSnapshot.restore();

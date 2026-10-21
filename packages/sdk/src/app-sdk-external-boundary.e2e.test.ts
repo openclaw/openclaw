@@ -1,12 +1,10 @@
-// Scenario-owned proof for the source-internal preview App SDK package boundary.
-import { describe, it } from "vitest";
+import { it } from "vitest";
 import { createPackedSdkConsumer } from "./package.e2e.test-support.js";
 
-describe("external preview App SDK boundary", () => {
-  it("packs an external consumer that uses only the exported entrypoint and a custom transport", async () => {
-    const consumer = await createPackedSdkConsumer();
-    try {
-      await consumer.typecheck(`
+it("packs an external consumer that uses only the exported entrypoint and a custom transport", async () => {
+  const consumer = await createPackedSdkConsumer();
+  try {
+    await consumer.typecheck(`
         import type {
           AgentsCreateParams, AgentsDeleteParams, AgentsUpdateParams,
           ArtifactSummary, ArtifactsDownloadResult, GatewayArtifactSummary,
@@ -66,7 +64,7 @@ describe("external preview App SDK boundary", () => {
 
         void [artifactDownload, environments, createSession, sendSession, toolParams, toolResult];
       `);
-      await consumer.run(`
+    await consumer.run(`
         import assert from "node:assert/strict";
         import { GatewayClientTransport, OpenClaw, normalizeGatewayEvent } from "@openclaw/sdk";
 
@@ -117,8 +115,7 @@ describe("external preview App SDK boundary", () => {
         assert.equal(calls[1]?.options?.timeoutMs, null);
         assert.equal(calls[1]?.params?.timeoutMs, 25);
       `);
-    } finally {
-      await consumer.cleanup();
-    }
-  }, 240_000);
-});
+  } finally {
+    await consumer.cleanup();
+  }
+}, 240_000);
