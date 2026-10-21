@@ -205,7 +205,6 @@ export function registerMantisCli(qa: Command) {
           ...options,
           alternateModel: altModel,
           fastMode: fast,
-          gatewaySetup: opts.gatewaySetup,
           machineClass: options.machineClass ?? machineClassAlias,
           primaryModel: model,
           scenarioIds: scenario,
