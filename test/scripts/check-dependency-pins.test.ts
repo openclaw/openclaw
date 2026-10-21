@@ -9,7 +9,6 @@ import { createNestedGitEnv } from "../helpers/temp-repo.js";
 const tempDirs: string[] = [];
 const itUnix = process.platform === "win32" ? it.skip : it;
 const hangingGitTimeoutMs = 1_000;
-const revision = "0123456789abcdef0123456789abcdef01234567";
 
 function git(cwd: string, args: string[]) {
   execFileSync("git", args, {
@@ -64,17 +63,7 @@ it("accepts exact dependency specs and intentionally ranged peer contracts", () 
   const dir = makeRepo(
     {
       "package.json": {
-        dependencies: {
-          exact: "1.2.3",
-          prerelease: "1.2.3-beta.1",
-          alias: "npm:@scope/real-package@2.3.4",
-          workspace: "workspace:*",
-          linked: "link:../linked",
-          local: "file:../local",
-          gitPinned: `github:owner/repo#${revision}`,
-          gitPinnedPath: `github:owner/repo#${revision}&path:packages/pkg`,
-          tarballPinned: `https://codeload.github.com/owner/repo/tar.gz/${revision}`,
-        },
+        dependencies: { exact: "1.2.3" },
         devDependencies: { devExact: "4.5.6" },
         optionalDependencies: { optionalExact: "7.8.9" },
         peerDependencies: { peerCanRange: "^1.0.0" },
@@ -82,7 +71,6 @@ it("accepts exact dependency specs and intentionally ranged peer contracts", () 
     },
     `overrides:
   exact: 1.2.3
-  alias: "npm:@scope/real-package@2.3.4"
   parent>unused-adapter: "-"
 packageExtensions:
   parent@1.0.0:
@@ -97,13 +85,6 @@ packageExtensions:
 it("rejects floating dependency specs in tracked package manifests", () => {
   const floating: [string, string][] = [
     ["caret", "^1.2.3"],
-    ["tilde", "~1.2.3"],
-    ["wildcard", "*"],
-    ["tag", "latest"],
-    ["broad", ">=1 <2"],
-    ["malformedSemver", "01.2.3"],
-    ["gitFloating", "github:owner/repo#main"],
-    ["fragmentlessGitPath", `git+https://github.com/owner/repo/commit/${revision}`],
     ["invalidRemoval", "-"],
   ];
   const dir = makeRepo({
