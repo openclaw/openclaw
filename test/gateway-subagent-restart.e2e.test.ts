@@ -1,6 +1,5 @@
 // Managed process replacement proves recovery of a child whose requester already finished.
 import { once } from "node:events";
-import { mkdir, writeFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -13,13 +12,16 @@ import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import {
+  restartEnv,
+  readRestartSession,
+  writeRestartPlugin,
+  connectRestartClient,
   restartProviderServer,
   restartToolNames,
   writeRestartTitle,
   restartModelConfig,
   writeRestartToolCall,
 } from "./gateway-restart.test-support.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
@@ -178,11 +180,7 @@ it.skipIf(process.platform === "win32").for([
       stopTimeoutMs: 10_000,
       gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
       env: {
-        OPENAI_API_KEY: undefined,
-        OPENAI_BASE_URL: undefined,
-        OPENAI_API_BASE: undefined,
-        OPENCLAW_SKIP_PROVIDERS: undefined,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        ...restartEnv,
         OPENCLAW_NO_RESPAWN: "1",
         OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
       },
@@ -194,22 +192,8 @@ it.skipIf(process.platform === "win32").for([
     let replacementChild: Record<string, unknown> | undefined;
     let phase = "startup";
     const observations: Record<string, unknown> = {};
-    const persisted = (sessionKey: string) => {
-      const database = openNodeSqliteDatabase(
-        path.join(instance.state.agentDir(), "openclaw-agent.sqlite"),
-        { readOnly: true },
-      );
-      try {
-        const row = database
-          .prepare("SELECT entry_json FROM session_nodes WHERE session_key=?")
-          .get(sessionKey);
-        return typeof row?.entry_json === "string"
-          ? asRecord(JSON.parse(row.entry_json))
-          : undefined;
-      } finally {
-        database.close();
-      }
-    };
+    const persisted = (sessionKey: string) =>
+      readRestartSession(instance.state.agentDir(), sessionKey);
     const persistedChild = (
       identity: { runId: string } | { sessionKey: string },
     ): (Record<string, unknown> & { runId: string }) | undefined => {
@@ -237,14 +221,10 @@ it.skipIf(process.platform === "win32").for([
       }
     };
     const connect = () =>
-      acquireGatewayTestClient(
+      connectRestartClient(
+        instance,
         {
-          url: instance.url,
-          token: instance.gatewayToken,
-          clientName: "gateway-client",
-          // Recovery needs the original profiled operator; backend probes are unprofiled.
           mode: "test",
-          scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
             path: instance.state.statePath(
               "proof-identities",
@@ -266,12 +246,7 @@ it.skipIf(process.platform === "win32").for([
             }
           },
         },
-        {
-          timeoutMs: 30_000,
-          timeoutMessage: "quiet child recovery client did not connect",
-          closeMessage: "quiet child recovery client closed",
-          signal,
-        },
+        signal,
       );
     const restart = async (replaceChildAfterDrain = false) => {
       const child = instance.child;
@@ -333,18 +308,15 @@ it.skipIf(process.platform === "win32").for([
         try {
           const pluginId = "quiet-restart-checkpoint";
           const pluginDir = instance.state.path("checkpoint-plugin");
-          await mkdir(pluginDir, { recursive: true });
-          await writeFile(
-            path.join(pluginDir, "openclaw.plugin.json"),
-            JSON.stringify({
+
+          // Pause real prompt preparation before any recovery model request.
+          await writeRestartPlugin(
+            pluginDir,
+            {
               id: pluginId,
               activation: { onStartup: true },
               configSchema: { type: "object", additionalProperties: false, properties: {} },
-            }),
-          );
-          // The public prompt hook pauses real preparation before any model request.
-          await writeFile(
-            path.join(pluginDir, "index.mjs"),
+            },
             `export default {
               id: ${JSON.stringify(pluginId)},
               register(api) {
@@ -363,6 +335,7 @@ it.skipIf(process.platform === "win32").for([
                 }, { timeoutMs: 60000 });
               },
             };`,
+            "index.mjs",
           );
           await instance.state.writeConfig({
             update: { checkOnStart: false },

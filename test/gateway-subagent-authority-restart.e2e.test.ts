@@ -9,8 +9,7 @@ import type { GatewayClient } from "../src/gateway/client.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { extractAssistantPhaseText } from "../src/shared/chat-message-content.js";
-import { writeRestartToolCalls } from "./gateway-restart.test-support.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
+import { connectRestartClient, writeRestartToolCalls } from "./gateway-restart.test-support.js";
 import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
@@ -136,16 +135,11 @@ it.skipIf(process.platform === "win32")(
           path: instance.state.path("restart-operator-device", "client", "credentials.sqlite"),
         });
         const connect = () =>
-          acquireGatewayTestClient(
-            {
-              url: instance.url,
-              token: instance.gatewayToken,
-              deviceIdentity,
-              clientName: GATEWAY_CLIENT_IDS.TUI,
-              mode: GATEWAY_CLIENT_MODES.UI,
-              scopes: ["operator.admin", "operator.read", "operator.write"],
-            },
-            { timeoutMs: 60_000, timeoutMessage: "connect timeout", closeMessage: "closed" },
+          connectRestartClient(
+            instance,
+            { deviceIdentity, clientName: GATEWAY_CLIENT_IDS.TUI, mode: GATEWAY_CLIENT_MODES.UI },
+            undefined,
+            60_000,
           );
         await instance.startGateway();
         client = await connect();

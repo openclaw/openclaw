@@ -8,19 +8,19 @@ import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
-import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { killProcessTree } from "../src/process/kill-tree.js";
 import { getFileLockProcessStartTime } from "../src/shared/pid-alive.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import {
+  restartEnv,
+  connectRestartClient,
   restartProviderServer,
   restartToolNames,
   writeRestartJsonText,
   restartModelConfig,
   writeRestartToolCall,
 } from "./gateway-restart.test-support.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
@@ -219,11 +219,7 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
         },
       },
       env: {
-        OPENAI_API_KEY: undefined,
-        OPENAI_BASE_URL: undefined,
-        OPENAI_API_BASE: undefined,
-        OPENCLAW_SKIP_PROVIDERS: undefined,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        ...restartEnv,
         OPENCLAW_NO_RESPAWN: "1",
         OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
       },
@@ -238,25 +234,7 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
       },
     });
     let client: GatewayClient | undefined;
-    const connect = () =>
-      acquireGatewayTestClient(
-        {
-          url: instance.url,
-          token: instance.gatewayToken,
-          clientName: "gateway-client",
-          mode: "backend",
-          scopes: ["operator.admin", "operator.read", "operator.write"],
-          deviceIdentity: loadOrCreateDeviceIdentity({
-            path: instance.state.path("device", "client", "credentials.sqlite"),
-          }),
-        },
-        {
-          timeoutMs: 30_000,
-          timeoutMessage: "background-process restart client did not connect",
-          closeMessage: "background-process restart client closed",
-          signal,
-        },
-      );
+    const connect = () => connectRestartClient(instance, { mode: "backend" }, signal);
     const waitForIdleFinal = async (sessionKey: string, final: string) => {
       await withinTest(
         Promise.race([

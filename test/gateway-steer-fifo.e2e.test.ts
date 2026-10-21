@@ -1,5 +1,5 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -14,8 +14,15 @@ import { GatewayChatClient } from "../src/tui/gateway-chat.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 import {
   writeRestartToolCalls,
+  writeRestartPlugin,
+  restartModelConfig,
   readRestartTrace as readTrace,
 } from "./gateway-restart.test-support.js";
+import {
+  listenLoopback,
+  readRequestText,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
@@ -57,16 +64,6 @@ const diagnosticsClients: GatewayClient[] = [];
 const cleanupDirs: string[] = [];
 const modelServers: MockModelServer[] = [];
 
-async function collectCleanupFailures(
-  tasks: Array<Promise<unknown>>,
-  failures: unknown[],
-): Promise<void> {
-  const results = await Promise.allSettled(tasks);
-  failures.push(
-    ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-  );
-}
-
 afterEach(async () => {
   const failures: unknown[] = [];
   // Finish each ownership layer before closing the resources beneath it.
@@ -77,40 +74,15 @@ afterEach(async () => {
     () => modelServers.splice(0).map((server) => server.stop()),
     () => cleanupDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
   ]) {
-    await collectCleanupFailures(tasks(), failures);
+    const results = await Promise.allSettled(tasks());
+    failures.push(
+      ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+    );
   }
   if (failures.length > 0) {
     throw new AggregateError(failures, "Gateway steer FIFO cleanup failed");
   }
 });
-
-async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const body = Buffer.concat(chunks).toString("utf8");
-  return body ? (JSON.parse(body) as Record<string, unknown>) : {};
-}
-
-function writeTextResponse(res: ServerResponse, requestIndex: number): void {
-  writeOpenAiResponsesText(res, {
-    text: `TURN_${requestIndex}_COMPLETE`,
-    messageId: `msg_steer_fifo_${requestIndex}`,
-    responseId: `resp_steer_fifo_${requestIndex}`,
-  });
-}
-
-function writeToolResponse(res: ServerResponse): void {
-  writeToolsResponse(res, "resp_steer_fifo_tool", [["steer_fifo_status", "session_status"]]);
-}
-
-function writeSequentialToolsResponse(res: ServerResponse): void {
-  writeToolsResponse(res, "resp_steer_fifo_sequential_tools", [
-    ["steering_gate", STEERING_GATE_TOOL],
-    ["steering_tail", STEERING_TAIL_TOOL],
-  ]);
-}
 
 function writeToolsResponse(res: ServerResponse, id: string, tools: [string, string][]): void {
   const items = tools.map(([key, name]) => ({
@@ -133,27 +105,34 @@ async function startMockModelServer(holdSecondResponse = false) {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       if (req.method === "GET" && url.pathname === "/v1/models") {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ data: [{ id: "steer-fifo", object: "model" }] }));
+        respondJson(res, { data: [{ id: "steer-fifo", object: "model" }] });
         return;
       }
       if (req.method !== "POST" || url.pathname !== "/v1/responses") {
         res.writeHead(404).end();
         return;
       }
-      requests.push({ body: await readJsonRequest(req) });
+      const body = await readRequestText(req);
+      requests.push({ body: body ? (JSON.parse(body) as Record<string, unknown>) : {} });
       const requestIndex = requests.length;
       if (requestIndex === 1) {
         await firstResponse.promise;
         if (res.destroyed) {
           return;
         }
-        if (firstResponseKind === "tool") {
-          writeToolResponse(res);
-          return;
-        }
-        if (firstResponseKind === "sequential-tools") {
-          writeSequentialToolsResponse(res);
+        if (firstResponseKind !== "final") {
+          writeToolsResponse(
+            res,
+            firstResponseKind === "tool"
+              ? "resp_steer_fifo_tool"
+              : "resp_steer_fifo_sequential_tools",
+            firstResponseKind === "tool"
+              ? [["steer_fifo_status", "session_status"]]
+              : [
+                  ["steering_gate", STEERING_GATE_TOOL],
+                  ["steering_tail", STEERING_TAIL_TOOL],
+                ],
+          );
           return;
         }
       }
@@ -163,25 +142,21 @@ async function startMockModelServer(holdSecondResponse = false) {
           return;
         }
       }
-      writeTextResponse(res, requestIndex);
+      writeOpenAiResponsesText(res, {
+        text: `TURN_${requestIndex}_COMPLETE`,
+        messageId: `msg_steer_fifo_${requestIndex}`,
+        responseId: `resp_steer_fifo_${requestIndex}`,
+      });
     })().catch((error: unknown) => {
       if (!res.destroyed) {
-        res.writeHead(500, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: { message: String(error) } }));
+        respondJson(res, { error: { message: String(error) } }, 500);
       }
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("mock model server did not bind");
-  }
+  const baseUrl = await listenLoopback(server);
   let stopped = false;
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl,
     requests,
     releaseFirst: (kind: FirstResponseKind) => {
       firstResponseKind = kind;
@@ -210,22 +185,16 @@ async function writeSteeringToolsPlugin(
   const pluginDir = path.join(fixtureDir, "steering-tools-plugin");
   const releasePath = path.join(fixtureDir, "steering-gate.release");
   const tracePath = path.join(fixtureDir, "steering-tools.trace");
-  await mkdir(pluginDir, { recursive: true });
-  await Promise.all([
-    writeFile(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      `${JSON.stringify({
-        id: STEERING_PLUGIN_ID,
-        name: "Gateway Steering Tools",
-        activation: { onStartup: true },
-        contracts: { tools: [STEERING_GATE_TOOL, STEERING_TAIL_TOOL] },
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      })}\n`,
-      "utf8",
-    ),
-    writeFile(
-      path.join(pluginDir, "index.mjs"),
-      `import { access, appendFile } from "node:fs/promises";
+  await writeRestartPlugin(
+    pluginDir,
+    {
+      id: STEERING_PLUGIN_ID,
+      name: "Gateway Steering Tools",
+      activation: { onStartup: true },
+      contracts: { tools: [STEERING_GATE_TOOL, STEERING_TAIL_TOOL] },
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    },
+    `import { access, appendFile } from "node:fs/promises";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const trace = (event) => appendFile(${JSON.stringify(tracePath)}, event + "\\n", "utf8");
 async function waitForRelease() {
@@ -273,9 +242,7 @@ export default {
   },
 };
 `,
-      "utf8",
-    ),
-  ]);
+  );
   return { pluginDir, releasePath, tracePath };
 }
 
@@ -286,39 +253,33 @@ async function writeSteeringAdmissionPlugin(
   // The isolated Gateway child owns this observer of the real, successful admission.
   const pluginDir = path.join(fixtureDir, "steering-admission-plugin");
   const receiptPath = path.join(fixtureDir, "steering-admission.trace");
-  await mkdir(pluginDir, { recursive: true });
-  await Promise.all([
-    writeFile(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: STEERING_ADMISSION_PLUGIN_ID,
-        activation: { onStartup: true },
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      }),
-    ),
-    writeFile(
-      path.join(pluginDir, "index.mjs"),
-      [
-        'import { appendFileSync } from "node:fs";',
-        'import { Agent } from "openclaw/plugin-sdk/agent-core";',
-        "export default {",
-        `  id: ${JSON.stringify(STEERING_ADMISSION_PLUGIN_ID)},`,
-        "  register() {",
-        "    const admit = Agent.prototype.admitSteeringMessage;",
-        "    Agent.prototype.admitSteeringMessage = function (message) {",
-        "      const notify = admit.call(this, message);",
-        "      return () => {",
-        "        notify();",
-        `        if (message.role === "user" && JSON.stringify(message.content).includes(${JSON.stringify(marker)})) {`,
-        `          appendFileSync(${JSON.stringify(receiptPath)}, ${JSON.stringify(`${marker}\n`)});`,
-        "        }",
-        "      };",
-        "    };",
-        "  },",
-        "};",
-      ].join("\n"),
-    ),
-  ]);
+  await writeRestartPlugin(
+    pluginDir,
+    {
+      id: STEERING_ADMISSION_PLUGIN_ID,
+      activation: { onStartup: true },
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    },
+    [
+      'import { appendFileSync } from "node:fs";',
+      'import { Agent } from "openclaw/plugin-sdk/agent-core";',
+      "export default {",
+      `  id: ${JSON.stringify(STEERING_ADMISSION_PLUGIN_ID)},`,
+      "  register() {",
+      "    const admit = Agent.prototype.admitSteeringMessage;",
+      "    Agent.prototype.admitSteeringMessage = function (message) {",
+      "      const notify = admit.call(this, message);",
+      "      return () => {",
+      "        notify();",
+      `        if (message.role === "user" && JSON.stringify(message.content).includes(${JSON.stringify(marker)})) {`,
+      `          appendFileSync(${JSON.stringify(receiptPath)}, ${JSON.stringify(`${marker}\n`)});`,
+      "        }",
+      "      };",
+      "    };",
+      "  },",
+      "};",
+    ].join("\n"),
+  );
   return { pluginDir, receiptPath };
 }
 
@@ -333,6 +294,9 @@ function createConfig(params: {
     "steer-fifo",
   );
   const steeringTools = params.steeringTools;
+  const modelConfig = restartModelConfig(provider, path.join(params.fixtureDir, "workspace"), {
+    timeoutSeconds: undefined,
+  });
   const fixturePlugins = [
     ...(steeringTools ? [{ id: STEERING_PLUGIN_ID, dir: steeringTools.pluginDir }] : []),
     ...(params.steeringAdmission
@@ -340,6 +304,7 @@ function createConfig(params: {
       : []),
   ];
   return {
+    ...modelConfig,
     plugins:
       fixturePlugins.length > 0
         ? {
@@ -351,19 +316,7 @@ function createConfig(params: {
           }
         : { slots: { memory: "none" } },
     agents: {
-      defaults: {
-        workspace: path.join(params.fixtureDir, "workspace"),
-        model: { primary: provider.modelRef },
-        modelPolicy: { allow: [provider.modelRef] },
-        models: {
-          [provider.modelRef]: {
-            agentRuntime: { id: "openclaw" },
-            params: { transport: "sse", openaiWsWarmup: false },
-          },
-        },
-        skills: [],
-        skipBootstrap: true,
-      },
+      ...modelConfig.agents,
       entries: { main: { model: { primary: provider.modelRef }, skills: [] } },
     },
     tools: steeringTools
@@ -375,15 +328,6 @@ function createConfig(params: {
           alsoAllow: [STEERING_GATE_TOOL, STEERING_TAIL_TOOL],
         }
       : { profile: "minimal" },
-    models: {
-      mode: "replace",
-      providers: {
-        [provider.providerId]: {
-          ...provider.config,
-          request: { allowPrivateNetwork: true },
-        },
-      },
-    },
     messages: { queue: { mode: "steer", debounceMsByChannel: { webchat: 0 } } },
   };
 }
@@ -588,10 +532,9 @@ async function queueSteer(fixture: GatewayFixture, marker = "QUEUED_STEER_A") {
       sinceSeq: baseline.lastSeq ?? 0,
       limit: 20,
     });
-    const dispatchQueueEvents = (snapshot.events ?? []).filter(
-      (event) => event.type === "message.queued" && event.source === "followup-queue-steer",
+    expect(snapshot.events ?? []).toContainEqual(
+      expect.objectContaining({ type: "message.queued", source: "followup-queue-steer" }),
     );
-    expect(dispatchQueueEvents).not.toHaveLength(0);
     if (fixture.steeringAdmission) {
       // Parking precedes async authority preparation; release tools only after runtime admission.
       expect(await readTrace(fixture.steeringAdmission.receiptPath)).toContain(marker);
@@ -623,14 +566,12 @@ async function queueOrdinaryFollowup(
 async function waitForRunTerminal(fixture: GatewayFixture, runId: string): Promise<void> {
   await vi.waitFor(
     () =>
-      expect(fixture.events).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            runId,
-            stream: "lifecycle",
-            data: expect.objectContaining({ phase: "end" }),
-          }),
-        ]),
+      expect(fixture.events).toContainEqual(
+        expect.objectContaining({
+          runId,
+          stream: "lifecycle",
+          data: expect.objectContaining({ phase: "end" }),
+        }),
       ),
     WAIT_OPTS,
   );

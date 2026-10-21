@@ -1,25 +1,24 @@
 // Real process death is required: an in-process abort cannot prove durable startup custody.
 import { once } from "node:events";
-import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
-import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
-import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
-import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { extractTextFromChatContent } from "../src/shared/chat-content.js";
 import { extractAssistantPhaseText } from "../src/shared/chat-message-content.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import {
+  restartEnv,
+  readRestartSession,
+  writeRestartPlugin,
+  connectRestartClient,
   writeRestartTitle,
   restartModelConfig,
   writeRestartToolCall,
 } from "./gateway-restart.test-support.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
@@ -314,11 +313,7 @@ it(
       stopTimeoutMs: 10_000,
       gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
       env: {
-        OPENAI_API_KEY: undefined,
-        OPENAI_BASE_URL: undefined,
-        OPENAI_API_BASE: undefined,
-        OPENCLAW_SKIP_PROVIDERS: undefined,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        ...restartEnv,
         OPENCLAW_NO_RESPAWN: "1",
       },
     });
@@ -327,17 +322,10 @@ it(
     const gate = <T>(promise: Promise<T>) =>
       withinTest(Promise.race([promise, provider.failed]), signal);
     const connect = async () => {
-      client = await acquireGatewayTestClient(
+      client = await connectRestartClient(
+        instance,
         {
-          url: instance.url,
-          token: instance.gatewayToken,
-          clientName: "gateway-client",
-          // Recovery needs the original profiled operator; backend probes are unprofiled.
           mode: "test",
-          scopes: ["operator.admin", "operator.read", "operator.write"],
-          deviceIdentity: loadOrCreateDeviceIdentity({
-            path: instance.state.path("device", "client", "credentials.sqlite"),
-          }),
           onEvent: ({ event, payload }) => {
             if (!isRecord(payload)) {
               return;
@@ -359,12 +347,7 @@ it(
             }
           },
         },
-        {
-          signal,
-          timeoutMs: 30_000,
-          timeoutMessage: "shutdown recovery client did not connect",
-          closeMessage: "shutdown recovery client closed",
-        },
+        signal,
       );
       await client.request("sessions.subscribe", { agentId: "main" });
     };
@@ -418,22 +401,8 @@ it(
       expect(outcome, instance.logs()).toEqual(mode === "kill" ? [null, "SIGKILL"] : [0, null]);
       return child.pid;
     };
-    const readStoppedEntry = (scenario: Scenario) => {
-      const database = openNodeSqliteDatabase(
-        path.join(instance.state.agentDir(), "openclaw-agent.sqlite"),
-        { readOnly: true },
-      );
-      try {
-        const row = database
-          .prepare("SELECT entry_json FROM session_nodes WHERE session_key=?")
-          .get(scenario.key);
-        return asRecord(
-          typeof row?.entry_json === "string" ? JSON.parse(row.entry_json) : undefined,
-        );
-      } finally {
-        database.close();
-      }
-    };
+    const readStoppedEntry = (scenario: Scenario) =>
+      asRecord(readRestartSession(instance.state.agentDir(), scenario.key));
     const finish = async (scenario: Scenario) => {
       scenario.releaseResponse.resolve();
       pendingCompletions.add(scenario.name);
@@ -469,19 +438,15 @@ it(
         try {
           const pluginId = "shutdown-tool-checkpoint";
           const pluginDir = instance.state.path("checkpoint-plugin");
-          await mkdir(pluginDir, { recursive: true });
-          await writeFile(
-            path.join(pluginDir, "openclaw.plugin.json"),
-            JSON.stringify({
+
+          // The policy hook waits through cancellation; reset must revoke before its tool effect.
+          await writeRestartPlugin(
+            pluginDir,
+            {
               id: pluginId,
               activation: { onStartup: true },
               configSchema: { type: "object", additionalProperties: false, properties: {} },
-            }),
-          );
-          // A public policy hook ignores cancellation until released, so reset must
-          // revoke execution before the pending tool can reach its effect boundary.
-          await writeFile(
-            path.join(pluginDir, "index.mjs"),
+            },
             `export default {
               id: ${JSON.stringify(pluginId)},
               register(api) {
@@ -504,6 +469,7 @@ it(
                 }, { matcher: ["exec"] });
               },
             };`,
+            "index.mjs",
           );
           await instance.state.writeConfig({
             update: { checkOnStart: false },

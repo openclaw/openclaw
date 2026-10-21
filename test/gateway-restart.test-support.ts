@@ -1,12 +1,16 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../src/config/config.js";
+import type { GatewayClientOptions } from "../src/gateway/client.js";
 import type { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
+import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
+import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { readRequestText, respondJson } from "./helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
+import type { OpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
 export const restartEnv = {
   OPENAI_API_KEY: undefined,
@@ -15,6 +19,49 @@ export const restartEnv = {
   OPENCLAW_SKIP_PROVIDERS: undefined,
   OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
 };
+
+export function connectRestartClient(
+  instance: OpenClawTestInstance,
+  options: Omit<GatewayClientOptions, "url" | "token" | "onConnectError"> = {},
+  signal?: AbortSignal,
+  timeoutMs = 30_000,
+) {
+  return acquireGatewayTestClient(
+    {
+      url: instance.url,
+      token: instance.gatewayToken,
+      clientName: "gateway-client",
+      mode: "backend",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      deviceIdentity:
+        options.deviceIdentity === undefined
+          ? loadOrCreateDeviceIdentity({
+              path: instance.state.path("device", "client", "credentials.sqlite"),
+            })
+          : options.deviceIdentity,
+      ...options,
+    },
+    {
+      timeoutMs,
+      timeoutMessage: "restart client did not connect",
+      closeMessage: "restart client closed",
+      signal,
+    },
+  );
+}
+
+export async function writeRestartPlugin(
+  pluginDir: string,
+  manifest: object,
+  source: string,
+  entry = "index.mjs",
+) {
+  await mkdir(pluginDir, { recursive: true });
+  await Promise.all([
+    writeFile(path.join(pluginDir, "openclaw.plugin.json"), JSON.stringify(manifest)),
+    writeFile(path.join(pluginDir, entry), source),
+  ]);
+}
 
 export function restartProviderServer(
   failed: { reject(error: unknown): void },
