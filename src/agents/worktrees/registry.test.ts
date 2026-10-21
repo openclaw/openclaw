@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -39,8 +38,11 @@ import {
   getRegistryWorktree,
   listRegistryWorktrees,
 } from "./registry.test-support.js";
+import { makeWorktreeRecord } from "./service.test-support.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
+const roots = useWorktreeStateRoots();
 let root: string;
 let env: NodeJS.ProcessEnv;
 let record: ManagedWorktreeRecord;
@@ -53,29 +55,18 @@ async function closeDatabase() {
   closeOpenClawStateDatabaseForTest();
 }
 
-beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "worktree-registry-"));
+beforeEach(() => {
+  root = roots.make("worktree-registry-");
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "ambient"));
   env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-  record = {
-    id: "isolated",
-    name: "isolated",
-    repoFingerprint: "0123456789abcdef",
-    repoRoot: path.join(root, "repo"),
+  record = makeWorktreeRecord(path.join(root, "repo"), "isolated", {
     path: path.join(root, "isolated"),
     branch: "openclaw/isolated",
-    baseRef: "HEAD",
     ownerKind: "manual",
     createdAt: 10,
     lastActiveAt: 10,
-  };
+  });
   chunk = { worktreeId: record.id, path: "sample.txt", chunkIndex: 0 };
-});
-
-afterEach(async () => {
-  await closeDatabase();
-  vi.unstubAllEnvs();
-  await fs.rm(root, { recursive: true, force: true });
 });
 
 it("checks every captured removal claim in the current database generation", async () => {

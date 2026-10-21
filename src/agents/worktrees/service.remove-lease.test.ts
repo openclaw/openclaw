@@ -10,7 +10,7 @@ import { getRegistryWorktree } from "./registry.test-support.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
 import { hasLiveWorktreeRunLease, testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { classifyWorktreeRemovalError, IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
-import { git, useManagedWorktreeTestRepository } from "./service.test-support.js";
+import { expectBetween, git, useManagedWorktreeTestRepository } from "./service.test-support.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
 const initializeRepository = useManagedWorktreeTestRepository();
@@ -90,8 +90,7 @@ it("continues after snapshot failure when snapshot loss is allowed", async () =>
     removed: true,
     snapshotError: expect.stringContaining(snapshotFailure),
   });
-  expect(getRegistryWorktree(env, created.id)?.removedAt).toBeGreaterThanOrEqual(started);
-  expect(getRegistryWorktree(env, created.id)?.removedAt).toBeLessThanOrEqual(Date.now());
+  expectBetween(getRegistryWorktree(env, created.id)?.removedAt, started);
   await expectGone();
 });
 

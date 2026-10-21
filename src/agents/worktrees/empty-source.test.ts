@@ -11,19 +11,13 @@ import * as commandExec from "../../process/exec.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import { withWorktreeAllocationLease as withAllocation } from "./allocation.js";
 import { isEmptyWorktreeSource } from "./empty-source.js";
+import { gitIdentity } from "./git-fixture.test-support.js";
 import { requireGit, runGit } from "./git.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { retireExpiredManagedWorktreeSnapshot as retireSnapshot } from "./snapshot-host.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
-
-const identity = {
-  GIT_AUTHOR_NAME: "OpenClaw Test",
-  GIT_AUTHOR_EMAIL: "openclaw-test@example.invalid",
-  GIT_COMMITTER_NAME: "OpenClaw Test",
-  GIT_COMMITTER_EMAIL: "openclaw-test@example.invalid",
-};
 
 describe("empty managed workspaces", () => {
   const tempDirs = useWorktreeStateRoots(undefined, clearRuntimeConfigSnapshot);
@@ -38,6 +32,13 @@ describe("empty managed workspaces", () => {
     fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "worktree-sources", "empty"));
   const expire = (id: string) =>
     updateRegistryWorktree(env, id, { removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1 });
+  const isSource = (repoRoot: string, ownerId: string, sourceEnv = env) =>
+    isEmptyWorktreeSource({
+      env: sourceEnv,
+      ownerId: `agent:main:${ownerId}`,
+      repoRoot,
+      commitGuard: () => {},
+    });
 
   beforeEach(() => {
     root = tempDirs.make("openclaw-empty-workspace-");
@@ -76,29 +77,15 @@ describe("empty managed workspaces", () => {
     expect(await fs.readdir(path.dirname(source))).toEqual([path.basename(source)]);
     expect(fsSync.existsSync(bootstrapEnv.GIT_DIR)).toBe(false);
     expect(fsSync.existsSync(bootstrapEnv.GIT_INDEX_FILE)).toBe(false);
-    expect(
-      await isEmptyWorktreeSource({
-        env: bootstrapEnv,
-        ownerId: "agent:main:same-session",
-        repoRoot: source,
-        commitGuard: () => {},
-      }),
-    ).toBe(true);
-    expect(
-      await isEmptyWorktreeSource({
-        env,
-        ownerId: "agent:main:another-session",
-        repoRoot: source,
-        commitGuard: () => {},
-      }),
-    ).toBe(false);
+    expect(await isSource(source, "same-session", bootstrapEnv)).toBe(true);
+    expect(await isSource(source, "another-session")).toBe(false);
   });
 
   it("isolates files, history, remotes, and config while retaining snapshot recovery", async () => {
     const first = await create("first");
     await fs.writeFile(path.join(first.path, "notes.md"), "Committed task content\n");
     await requireGit(first.path, ["add", "notes.md"]);
-    await requireGit(first.path, ["commit", "-m", "Task progress"], { env: identity });
+    await requireGit(first.path, [...gitIdentity, "commit", "-m", "Task progress"]);
     await requireGit(first.path, ["remote", "add", "origin", "https://example.invalid/first.git"]);
     await requireGit(first.path, ["config", "openclaw.taskMarker", "first"]);
     const attachment = Buffer.from([0, 1, 128, 255]);

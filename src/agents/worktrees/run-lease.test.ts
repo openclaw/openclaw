@@ -1,9 +1,6 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -38,28 +35,10 @@ import {
 } from "./run-lease.js";
 import { hasLiveWorktreeRunLease, testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
-
-const execFileAsync = promisify(execFile);
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-  return stdout.trim();
-}
-
-async function initializeRepository(root: string): Promise<string> {
-  const repo = path.join(root, "repo");
-  await fs.mkdir(repo, { recursive: true });
-  await git(repo, "init", "-b", "main");
-  await git(repo, "config", "user.name", "OpenClaw Test");
-  await git(repo, "config", "user.email", "openclaw-test@example.invalid");
-  await fs.writeFile(path.join(repo, "README.md"), "base\n");
-  await git(repo, "add", "README.md");
-  await git(repo, "commit", "-m", "initial");
-  return await fs.realpath(repo);
-}
+import { git, useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 describe("worktree run lease", () => {
-  const templateTempDirs = useAutoCleanupTempDirTracker(afterAll);
+  const initializeRepository = useManagedWorktreeTestRepository();
   const caseTempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(async () => {
       vi.useRealTimers();
@@ -72,25 +51,13 @@ describe("worktree run lease", () => {
       cleanup();
     });
   });
-  let templateRepo: string;
   let root: string;
-  let repo: string;
   let env: NodeJS.ProcessEnv;
   let service: ManagedWorktreeService;
 
-  beforeAll(async () => {
-    const tempRoot = await fs.realpath(os.tmpdir());
-    const templateRoot = templateTempDirs.make("openclaw-run-lease-template-", tempRoot);
-    templateRepo = await initializeRepository(templateRoot);
-  });
-
   beforeEach(async () => {
-    const tempRoot = await fs.realpath(os.tmpdir());
-    root = caseTempDirs.make("openclaw-run-lease-", tempRoot);
-    repo = path.join(root, "repo");
-    // Each case keeps a private .git directory; only repository construction is shared.
-    await fs.cp(templateRepo, repo, { recursive: true });
-    repo = await fs.realpath(repo);
+    root = caseTempDirs.make("openclaw-run-lease-");
+    const repo = await initializeRepository(root);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
     setRuntimeConfigSnapshot({}, {});
     service = new ManagedWorktreeService({ env });
