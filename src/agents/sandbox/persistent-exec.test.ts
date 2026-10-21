@@ -7,19 +7,14 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { makeCronJob } from "../../cron/delivery.test-helpers.js";
-import { deleteCronJobRowInDatabase, upsertCronJobRow } from "../../cron/store/row-codec.js";
-import { makeCronStreamSandboxTarget } from "../../cron/stream-sandbox.test-support.js";
-import { cronStreamScheduleKey } from "../../cron/stream-schedule.js";
+import { deleteCronJobRowInDatabase } from "../../cron/store/row-codec.js";
 import { withSettledLocalWorkspaceProjectionPath } from "../../gateway/worker-environments/local-workspace-settlement.js";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -43,19 +38,25 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { bindLocalSandboxWorkspace, prepareLocalSandboxWorkspace } from "./local-workspace.js";
 import * as persistentExecStore from "./persistent-exec-store.js";
 import { createSandboxPersistentExecStore } from "./persistent-exec-store.js";
-import type {
-  SandboxPersistentExecMutationResult,
-  SandboxPersistentExecRecord,
-} from "./persistent-exec-store.types.js";
+import type { SandboxPersistentExecRecord } from "./persistent-exec-store.types.js";
 import {
   createSandboxPersistentExecOwner,
   settleSandboxPersistentExecsForRetirement,
 } from "./persistent-exec.js";
 import {
+  createStreamSource,
+  custodyTransitions,
+  expected,
+  receipt as baseReceipt,
+  registryEntry,
+  reservation,
+  retained,
+  setProcessOwner,
+} from "./persistent-exec.test-helpers.js";
+import {
   bindSandboxPersistentExecCapability,
   type DockerPersistentExecCleanupTarget,
   type DockerPersistentExecExtinctionProof,
-  type DockerPersistentExecReceipt,
   type SandboxPersistentExecCapability,
   type SandboxPersistentExecPreparation,
   type SandboxPersistentExecStopped,
@@ -101,40 +102,15 @@ function stopped(target: DockerPersistentExecCleanupTarget): SandboxPersistentEx
   return { reason: "cancelled", exitCode: null, extinction };
 }
 
-function retained(result: SandboxPersistentExecMutationResult): SandboxPersistentExecRecord {
-  expect(result.ok).toBe(true);
-  if (!result.ok || !result.current) {
-    throw new Error("Expected retained process custody");
-  }
-  return result.current;
-}
-
-function expected(record: SandboxPersistentExecRecord) {
-  return {
-    ownerKey: record.ownerKey,
-    attemptId: record.attemptId,
-    expectedRevision: record.revision,
-  };
-}
-
 function replaceProcessOwner(record: SandboxPersistentExecRecord, foreign = false) {
   if (record.owner.startedAt === null) {
     throw new Error("Fixture process identity is unavailable");
   }
   // A mismatched birth time models controller death without spawning or killing a process.
-  const owner = {
+  setProcessOwner(record, {
     ...record.owner,
     startedAt: record.owner.startedAt + 1,
     ...(foreign ? { namespace: "foreign-process-namespace" } : {}),
-  };
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<DB>(db)
-        .updateTable("sandbox_persistent_execs")
-        .set({ owner_json: JSON.stringify({ owner }) })
-        .where("owner_key", "=", record.ownerKey),
-    );
   });
 }
 
@@ -142,12 +118,7 @@ async function fixture() {
   const root = tempDirs.make("openclaw-persistent-exec-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const registry = {
-    containerName: "fixture-container",
-    backendId: "docker",
-    sessionKey: "agent:main",
-    image: "fixture:image",
-    createdAtMs: 1,
-    lastUsedAtMs: 1,
+    ...registryEntry,
     workspaceDir: path.join(root, "workspace"),
     backendTarget: {
       key: "docker:fixture-daemon",
@@ -156,29 +127,12 @@ async function fixture() {
   };
   await updateRegistry(registry);
   const store = createSandboxPersistentExecStore();
-  const job = {
-    ...makeCronJob({ state: { streamSourceIdentity: "source-a" } }),
-    schedule: { kind: "stream" as const, command: ["fixture-watcher"] },
-    streamSandbox: makeCronStreamSandboxTarget(),
-  };
-  const source = {
-    storeKey: path.join(root, "cron", "jobs.sqlite"),
-    jobId: job.id,
-    sourceIdentity: "source-a",
-    scheduleKey: cronStreamScheduleKey(job.schedule, job.streamSandbox),
-  };
-  const persistJob = () =>
-    runOpenClawStateWriteTransaction(({ db }) => {
-      upsertCronJobRow(db, source.storeKey, job, 0);
-    });
-  persistJob();
-  const receipt: DockerPersistentExecReceipt = {
-    version: 1,
-    target: { kind: "docker", endpoint: "unix:///var/run/docker.sock", daemonId: "fixture-daemon" },
-    parentContainerId: "a".repeat(64),
-    containerId: "b".repeat(64),
-    attemptId: "00000000-0000-4000-8000-000000000001",
-  };
+  const {
+    job,
+    source,
+    persist: persistJob,
+  } = createStreamSource(path.join(root, "cron", "jobs.sqlite"));
+  const receipt = structuredClone(baseReceipt);
   const exited = createDeferredCore<SandboxPersistentExecStopped>();
   const preparation = {
     receipt,
@@ -265,14 +219,9 @@ async function fixture() {
     let record = retained(
       await store.reserve(
         {
+          ...reservation,
           ownerKey: input.ownerKey,
-          sourceIdentity: source.sourceIdentity,
           attemptId: receipt.attemptId,
-          backendId: "docker",
-          backendTarget: receipt.target,
-          containerId: receipt.parentContainerId,
-          containerStartedAt: "2026-01-01T00:00:00.000Z",
-          containerName: registry.containerName,
         },
         input.assertCurrent,
         source,
@@ -281,20 +230,8 @@ async function fixture() {
     if (phase === "reserved") {
       return record;
     }
-    record = retained(
-      await store.transition(
-        { ...expected(record), phase: "prepared", receipt },
-        input.assertCurrent,
-        source,
-      ),
-    );
-    record = retained(
-      await store.transition(
-        { ...expected(record), phase: "running" },
-        input.assertCurrent,
-        source,
-      ),
-    );
+    const advance = custodyTransitions(store, input.assertCurrent, source);
+    record = await advance(await advance(record, "prepared", receipt), "running");
     if (phase === "stopped") {
       record = retained(
         await store.confirmContainerExtinction(expected(record), stopped(receipt).extinction),

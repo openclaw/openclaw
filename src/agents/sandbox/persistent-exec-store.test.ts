@@ -2,30 +2,28 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { makeCronJob } from "../../cron/delivery.test-helpers.js";
-import { upsertCronJobRow } from "../../cron/store/row-codec.js";
-import { makeCronStreamSandboxTarget } from "../../cron/stream-sandbox.test-support.js";
-import { cronStreamScheduleKey } from "../../cron/stream-schedule.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
-import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import * as containerEngine from "./container-engine.js";
 import { stopDockerPersistentExec } from "./docker-persistent-exec.js";
 import { createSandboxPersistentExecStore } from "./persistent-exec-store.js";
-import type {
-  SandboxPersistentExecMutationResult,
-  SandboxPersistentExecRecord,
-  SandboxPersistentExecReservation,
-} from "./persistent-exec-store.types.js";
-import type { DockerPersistentExecReceipt } from "./persistent-exec.types.js";
+import type { SandboxPersistentExecRecord } from "./persistent-exec-store.types.js";
+import {
+  createStreamSource,
+  custodyTransitions,
+  expected,
+  receipt,
+  registryEntry,
+  reservation,
+  retained as accepted,
+  setProcessOwner,
+} from "./persistent-exec.test-helpers.js";
 import { removeRegistryEntry, updateRegistry } from "./registry.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -59,51 +57,7 @@ async function fixture(initializeRegistry = true) {
   };
 }
 
-const reservation: SandboxPersistentExecReservation = {
-  ownerKey: "cron:fixture:job-a",
-  sourceIdentity: "source-a",
-  attemptId: "00000000-0000-4000-8000-000000000001",
-  backendId: "docker",
-  backendTarget: {
-    kind: "docker",
-    endpoint: "unix:///var/run/docker.sock",
-    daemonId: "fixture-daemon",
-  },
-  containerId: "a".repeat(64),
-  containerName: "fixture-container",
-  containerStartedAt: "2026-01-01T00:00:00.000Z",
-};
-const registryEntry = {
-  containerName: reservation.containerName,
-  backendId: "docker",
-  sessionKey: "agent:main",
-  image: "fixture:image",
-  createdAtMs: 1,
-  lastUsedAtMs: 1,
-  workspaceDir: "/fixture/workspace",
-};
-const receipt: DockerPersistentExecReceipt = {
-  version: 1,
-  target: reservation.backendTarget,
-  attemptId: reservation.attemptId,
-  parentContainerId: reservation.containerId,
-  containerId: "b".repeat(64),
-};
 const assertCurrent = () => {};
-function accepted(result: SandboxPersistentExecMutationResult): SandboxPersistentExecRecord {
-  expect(result.ok).toBe(true);
-  if (!result.ok || !result.current) {
-    throw new Error("Expected retained custody");
-  }
-  return result.current;
-}
-function expected(record: SandboxPersistentExecRecord) {
-  return {
-    ownerKey: record.ownerKey,
-    attemptId: record.attemptId,
-    expectedRevision: record.revision,
-  };
-}
 
 async function confirmStopped(
   store: ReturnType<typeof createSandboxPersistentExecStore>,
@@ -156,12 +110,8 @@ it("serializes reservation, rejects stale effects and releases only durably conf
   await writer.list();
   requireNodeSqlite();
   const hostSql = observeMainThreadSql();
-  const prepared = accepted(
-    await writer.transition(
-      { ...expected(reserved), phase: "prepared", receipt: activeReceipt },
-      assertCurrent,
-    ),
-  );
+  const advance = custodyTransitions(writer, assertCurrent);
+  const prepared = await advance(reserved, "prepared", activeReceipt);
   expect(
     await writer.transition({ ...expected(reserved), phase: "running" }, assertCurrent),
   ).toEqual({ ok: false, current: prepared });
@@ -179,9 +129,7 @@ it("serializes reservation, rejects stale effects and releases only durably conf
       assertCurrent,
     ),
   ).rejects.toThrow("stream container identity changed");
-  const running = accepted(
-    await writer.transition({ ...expected(prepared), phase: "running" }, assertCurrent),
-  );
+  const running = await advance(prepared, "running");
   const uncertain = accepted(
     await writer.transition({
       ...expected(running),
@@ -229,35 +177,10 @@ it("serializes reservation, rejects stale effects and releases only durably conf
 
 it("checks the canonical cron source before admission and during execution without blocking cleanup of retired intent", async () => {
   const { store, databasePath } = await fixture();
-  const job = {
-    ...makeCronJob({
-      state: { streamSourceIdentity: reservation.sourceIdentity },
-    }),
-    schedule: { kind: "stream" as const, command: ["fixture-watcher"] },
-    streamSandbox: makeCronStreamSandboxTarget(),
-  };
-  const source = {
-    storeKey: path.join(databasePath, "fixture-cron"),
-    jobId: job.id,
-    sourceIdentity: reservation.sourceIdentity,
-    scheduleKey: cronStreamScheduleKey(job.schedule, job.streamSandbox),
-  };
-  const persist = () =>
-    runOpenClawStateWriteTransaction(({ db }) => {
-      upsertCronJobRow(db, source.storeKey, job, 0);
-    });
-  persist();
+  const { job, source, persist } = createStreamSource(path.join(databasePath, "fixture-cron"));
   const reserved = accepted(await store.reserve(reservation, assertCurrent, source));
-  const prepared = accepted(
-    await store.transition(
-      { ...expected(reserved), phase: "prepared", receipt },
-      assertCurrent,
-      source,
-    ),
-  );
-  const running = accepted(
-    await store.transition({ ...expected(prepared), phase: "running" }, assertCurrent, source),
-  );
+  const advance = custodyTransitions(store, assertCurrent, source);
+  const running = await advance(await advance(reserved, "prepared", receipt), "running");
   expect(await store.checkExecutionCurrent(expected(running), source, assertCurrent)).toEqual({
     ok: true,
     current: running,
@@ -296,9 +219,7 @@ it("checks the canonical cron source before admission and during execution witho
 it("retains cleanup through registry writes and deletion, then reopens without a version bump", async () => {
   const { store } = await fixture();
   const reserved = accepted(await store.reserve(reservation, assertCurrent));
-  const prepared = accepted(
-    await store.transition({ ...expected(reserved), phase: "prepared", receipt }, assertCurrent),
-  );
+  const prepared = await custodyTransitions(store, assertCurrent)(reserved, "prepared", receipt);
   const { workspaceDir: _workspaceDir, ...entry } = registryEntry;
   await updateRegistry(entry);
   await updateRegistry({ ...entry, lastUsedAtMs: 2 });
@@ -342,9 +263,7 @@ it.each([
 ])("recovers a %s owner only toward original-daemon cleanup", async (cause) => {
   const { store } = await fixture();
   const reserved = accepted(await store.reserve(reservation, assertCurrent));
-  const prepared = accepted(
-    await store.transition({ ...expected(reserved), phase: "prepared", receipt }, assertCurrent),
-  );
+  const prepared = await custodyTransitions(store, assertCurrent)(reserved, "prepared", receipt);
   const recovery = createSandboxPersistentExecStore();
   await expect(
     recovery.confirmContainerExtinction(expected(prepared), {
@@ -364,15 +283,7 @@ it.each([
   expect(prepared.owner.startedAt).not.toBeNull();
   const stale = { ...prepared.owner, startedAt: prepared.owner.startedAt! + 1 };
   const setOwner = (owner: SandboxPersistentExecRecord["owner"]) =>
-    runOpenClawStateWriteTransaction(({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<DB>(db)
-          .updateTable("sandbox_persistent_execs")
-          .set({ owner_json: JSON.stringify({ owner }) })
-          .where("owner_key", "=", reservation.ownerKey),
-      );
-    });
+    setProcessOwner(prepared, owner);
   setOwner({ ...stale, namespace: "foreign-process-namespace" });
   expect((await recovery.claimRecovery(expected(prepared))).ok).toBe(false);
   const namespace: unknown[] = JSON.parse(prepared.owner.namespace!);

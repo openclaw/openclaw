@@ -2132,7 +2132,6 @@
 ["src/agents/sandbox.resolveSandboxContext.test.ts","../skills/loading/workspace-skill-sync.runtime.js","9a4bd3d63de2d9bfe4b9e997caee0af40a43d3a1038e57ee0e757a96380c16f5",1]
 ["src/agents/sandbox.resolveSandboxContext.test.ts","../skills/runtime/remote.js","54ec318d5e80fe681b6b35b23f889dea7026b30d8eafd1816bdbe2b35ed31c82",1]
 ["src/agents/sandbox.resolveSandboxContext.test.ts","./sandbox/browser.js","564ec69f73de6b3450a6e211930c998364ca965ceed0712e633828fb0f51187f",1]
-["src/agents/sandbox/browser.create.test-helpers.ts","./docker-mount-source.js","2f884f063d2075558caadd50d4097cfc8502d08be796af14be0b102ea31b293e",1]
 ["src/agents/sandbox/context.browser-state-owner.test.ts","../../skills/loading/workspace-skill-sync.runtime.js","8c3d264b70130a5cea7ebf55f163e8694a8bf90ca4c8c59c01bf7e3694786f3d",1]
 ["src/agents/sandbox/context.browser-state-owner.test.ts","./registry.js","a82b4a6c8989ea44d4f5629402eff1136e29c58522b90f26d616cb2be5f31eef",1]
 ["src/agents/sandbox/context.managed-custody.test.ts","./local-workspace.js","5468d158f4c17fbaa4e63a6dd6dadb552f13ba1fd256b55bbb02d6d9b5a8396d",1]
