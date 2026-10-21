@@ -75,6 +75,13 @@ export function registerSandboxedDelegatedCliTests(harness: SandboxedCliHarness)
       overrides: {},
     },
     {
+      name: "subagent-keyed child without a spawnedBy stamp",
+      sessionKey: "agent:main:subagent:sandbox-cli-keyonly",
+      entry: {},
+      cfg: sandboxedCliConfig({ sandboxMode: "all", cliModel: true }),
+      overrides: {},
+    },
+    {
       name: "visible spawned child",
       sessionKey: "agent:main:dashboard:sandbox-cli-visible",
       entry: { parentSessionKey: "agent:main:main", spawnedBy: "agent:main:main" },
