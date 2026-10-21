@@ -269,6 +269,95 @@ describe("doctor model catalog credential migration", () => {
     expect(loadPersistedSharedAuthProfileStore(state.env)).toBeNull();
   });
 
+  it.each([
+    { type: "api_key", agentId: "main", duringPrompt: false, local: false },
+    { type: "token", agentId: "helper", duringPrompt: false, local: false },
+    { type: "api_key", agentId: "helper", duringPrompt: true, local: false },
+    { type: "token", agentId: "main", duringPrompt: true, local: false },
+    { type: "api_key", agentId: "helper", duringPrompt: false, local: true },
+  ] as const)(
+    "keeps a $type SecretRef authoritative for $agentId (during prompt: $duringPrompt, local: $local)",
+    async ({ type, agentId, duringPrompt, local }) => {
+      const state = createState();
+      const agentDir = path.join(state.stateDir, "agents", agentId, "agent");
+      fs.mkdirSync(agentDir, { recursive: true });
+      const ref = { source: "env" as const, provider: "default", id: "FIXTURE_CUSTOM_KEY" };
+      const canonical =
+        type === "api_key"
+          ? { type, provider: "custom", keyRef: ref }
+          : { type, provider: "custom", tokenRef: ref };
+      const store = createAuthProfileStoreFixture({ "custom:default": canonical });
+      const installReference = () => saveAuthProfileStore(store, local ? agentDir : state.agentDir);
+      if (!duringPrompt) {
+        installReference();
+      }
+      fs.writeFileSync(
+        path.join(agentDir, "models.json"),
+        JSON.stringify({ providers: { custom: provider("stale-catalog-key") } }),
+      );
+      const params = migrationParams(state, {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: { agentDir: state.agentDir }, [agentId]: { agentDir } },
+        },
+      });
+      if (duringPrompt) {
+        params.prompter = {
+          ...createDoctorPrompter({ runtime: params.runtime, options: {} }),
+          confirmAutoFix: async () => {
+            installReference();
+            return true;
+          },
+        };
+      }
+
+      expect(await maybeMigrateModelCatalogCredentials(params)).toEqual({
+        detected: duringPrompt ? 1 : 0,
+        migrated: 0,
+        removed: 0,
+        warnings: [],
+      });
+      if (local) {
+        expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toEqual(store.profiles);
+        expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles ?? {}).toEqual({});
+      } else {
+        expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles).toEqual(store.profiles);
+      }
+      if (agentId !== "main" && !local) {
+        expect(loadPersistedAuthProfileStore(agentDir)?.profiles ?? {}).toEqual({});
+      }
+    },
+  );
+
+  it("imports an explicit config key beside an expired token reference without copying its catalog", async () => {
+    const state = createState();
+    const canonical = {
+      type: "token" as const,
+      provider: "custom",
+      tokenRef: { source: "env" as const, provider: "default", id: "FIXTURE_CUSTOM_KEY" },
+      expires: 1,
+    };
+    saveAuthProfileStore(
+      createAuthProfileStoreFixture({ "custom:old": canonical }),
+      state.agentDir,
+    );
+    fs.writeFileSync(
+      path.join(state.agentDir, "models.json"),
+      JSON.stringify({ providers: { custom: provider("stale-catalog-key") } }),
+    );
+
+    expect(
+      await maybeMigrateModelCatalogCredentials(
+        migrationParams(state, { models: { providers: { custom: provider("fresh-config-key") } } }),
+      ),
+    ).toEqual({ detected: 1, migrated: 1, removed: 0, warnings: [] });
+    expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles).toEqual({
+      "custom:old": canonical,
+      "custom:default": { type: "api_key", provider: "custom", key: "fresh-config-key" },
+    });
+  });
+
   it("refuses to overwrite an unreadable canonical auth store", async () => {
     const state = createState();
     const { agentDir } = state;

@@ -307,6 +307,32 @@ it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "ot
   },
 );
 
+it("releases account usage mounted after its profile row settles", () => {
+  const releaseUsage = vi.fn();
+  const registerAccountUsage = vi.fn(() => releaseUsage);
+  const providerCard = orderedCard(pair);
+  for (const profile of providerCard.profiles) {
+    profile.type = "api_key";
+  }
+  const { container, update } = mount(providerCard, props({ registerAccountUsage }));
+  const retainedRow = rowFor(container, "openai:one");
+  expect(registerAccountUsage).not.toHaveBeenCalled();
+
+  update({
+    ...providerCard,
+    profiles: [makeProfile("openai:one")],
+    profileOrders: { openai: ["openai:one"] },
+  });
+  expect(rowFor(container, "openai:one")).toBe(retainedRow);
+  expect(container.querySelector("openclaw-model-account-usage")).not.toBeNull();
+  expect(registerAccountUsage).toHaveBeenCalledTimes(1);
+  expect(releaseUsage).not.toHaveBeenCalled();
+
+  update({ ...providerCard, profiles: [], profileOrders: {} });
+  expect(container.querySelector("openclaw-model-account-usage")).toBeNull();
+  expect(releaseUsage).toHaveBeenCalledTimes(1);
+});
+
 it("releases a removed row's drag without handling the next Escape", () => {
   const onProfileOrderChange = vi.fn();
   const { container, update, grip, row, rows, hitTest, providerCard } = pointerFixture(

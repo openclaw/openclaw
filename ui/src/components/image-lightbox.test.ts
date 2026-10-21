@@ -22,6 +22,7 @@ vi.mock("@panzoom/panzoom", () => ({
   })),
 }));
 
+import "../lib/toast-host.tsx";
 import "./image-lightbox.tsx";
 
 type Lightbox = HTMLElementTagNameMap["openclaw-image-lightbox"];
@@ -298,6 +299,40 @@ it("retires detached work and reconnects without downloading", async () => {
   expect(modal.querySelector(".download-image")).not.toBeNull();
   expect(fetchImage).not.toHaveBeenCalled();
 });
+
+it.each([false, true])(
+  "reports failed downloads only while mounted (removed: %s)",
+  async (removed) => {
+    const toast = container.appendChild(document.createElement("openclaw-toast-host"));
+    toast.toast = null;
+    toast.active = false;
+    const original = createDeferred<Blob>();
+    const readOriginalBlob = vi.fn(() => original.promise);
+    const { modal } = await renderLightbox({ readOriginalBlob });
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      toast.remove();
+      vi.useRealTimers();
+    });
+    button(modal, ".download-image").click();
+    expect(readOriginalBlob).toHaveBeenCalledOnce();
+    if (removed) {
+      modal.remove();
+      await Promise.resolve();
+    }
+    original.reject(new Error("Image unavailable"));
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(toast.active).toBe(!removed);
+    expect(toast.toast).toEqual(
+      removed
+        ? null
+        : expect.objectContaining({
+            message: "Could not download this image. Try again.",
+          }),
+    );
+  },
+);
 
 it.each([
   ["data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'></svg>", "image/svg+xml", false],

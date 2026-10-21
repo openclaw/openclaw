@@ -646,7 +646,6 @@ src/config/patch-replace-paths.ts
 src/config/paths.ts
 src/config/plugin-auto-enable.channels.ts
 src/config/plugin-auto-enable.materialize.ts
-src/config/plugin-auto-enable.prefer-over.ts
 src/config/plugin-install-record-map.ts
 src/config/plugins-allowlist.ts
 src/config/provider-policy.ts
@@ -2327,6 +2326,7 @@ packages/gateway-protocol/src/schema/agent-database-admission.ts
 packages/gateway-protocol/src/schema/agent-summary-enums.ts
 packages/gateway-protocol/src/schema/agents-avatar-generate.ts
 packages/gateway-protocol/src/schema/agents-list-session-placement.ts
+packages/gateway-protocol/src/schema/agents-create.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/gateway-protocol/src/schema/background-preferences.ts
 packages/gateway-protocol/src/schema/board.ts

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -10,6 +11,7 @@ import {
 import type { CronJob } from "../api/types.ts";
 import { ciAutomationJobSpec, type CiAutomationOption } from "../lib/session-pr-automation-spec.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import {
@@ -353,7 +355,51 @@ suite.define(() => {
     const unselected = page
       .locator(".chat-pr")
       .filter({ has: page.locator(`a.chat-pr__link[href="${other.url}"]`) });
-    await openDesktopPullRequestPage(unselected, "monitoring");
+    try {
+      await openDesktopPullRequestPage(unselected, "monitoring");
+    } catch (error) {
+      await withTimeout(
+        page.evaluate(
+          ([selectedUrl, otherUrl]) => {
+            const findRow = (url: string) =>
+              [...document.querySelectorAll(".chat-pr")].find(
+                (row) => row.querySelector<HTMLAnchorElement>("a.chat-pr__link")?.href === url,
+              );
+            const selectedRow = findRow(selectedUrl);
+            const otherRow = findRow(otherUrl);
+            const selectedMenu = selectedRow?.querySelector<HTMLElement>(".chat-pr-menu");
+            const otherMenu = otherRow?.querySelector<HTMLElement>(".chat-pr-menu");
+            const selectedTrigger = selectedRow?.querySelector(".chat-pr__actions-trigger");
+            const otherTrigger = otherRow?.querySelector(".chat-pr__actions-trigger");
+            const visible = (element: Element | null | undefined) =>
+              element?.checkVisibility({ visibilityProperty: true }) ?? false;
+            return {
+              selectedMenuOpen: selectedMenu?.matches(":popover-open") ?? false,
+              selectedTriggerExpanded: selectedTrigger?.getAttribute("aria-expanded") === "true",
+              selectedMenuFocused: selectedMenu?.contains(document.activeElement) ?? false,
+              otherMenuPresent: Boolean(otherMenu),
+              otherMenuOpen: otherMenu?.matches(":popover-open") ?? false,
+              otherMenuInert: otherMenu?.inert ?? null,
+              otherTriggerExpanded: otherTrigger?.getAttribute("aria-expanded") === "true",
+              otherTriggerFocused: document.activeElement === otherTrigger,
+              otherMenuFocused: otherMenu?.contains(document.activeElement) ?? false,
+              otherBackVisible: visible(otherMenu?.querySelector('[data-value="back"]')),
+              otherMonitoringEntryVisible: visible(
+                otherMenu?.querySelector('[data-value="monitoring"]'),
+              ),
+              otherVisiblePages: [
+                ...(otherMenu?.querySelectorAll(".chat-pr-menu__page") ?? []),
+              ].filter(visible).length,
+            };
+          },
+          [pullRequest.url, other.url] as const,
+        ),
+        1_000,
+      )
+        .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+        .catch(() => undefined);
+      throw error;
+    }
     const otherToggle = unselected.getByRole("switch", { name: "Auto-merge when ready" });
     await expect.poll(() => otherToggle.isEnabled()).toBe(true);
     expect(await otherToggle.isChecked()).toBe(false);

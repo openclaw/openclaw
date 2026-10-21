@@ -13,6 +13,7 @@ import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 /* @vitest-environment jsdom */
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { trackSolidRoot } from "../../test-helpers/solid-cleanup.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createSkillLibrary } from "./library-state.ts";
 import { SkillLibrary, SkillLibraryDialogs } from "./library-view.tsx";
 import { connectedGateway, libraryEntry, libraryList, requestFor } from "./skills.test-support.ts";
@@ -76,6 +77,93 @@ it("disables import while disconnected without losing the local selection", () =
   flush();
   expect(submit.disabled).toBe(true);
   expect(library.state.importSelection).toHaveLength(1);
+});
+
+it("retains library controls and keyed rows through pending, failed, and retried reads", async () => {
+  const { library, request } = harness();
+  library.state.list = null;
+  const first = createDeferred<SkillsLibraryListResult>();
+  request.mockReturnValueOnce(first.promise);
+  const view = mountSolid(() => <SkillLibrary library={library} navigationActions={null} />);
+  const initial = library.load();
+  flush();
+  const search = view.container.querySelector<HTMLInputElement>('input[name="library-search"]')!;
+  search.focus();
+  expect(view.container.querySelector('[role="status"]')?.textContent).toContain("Loading");
+  expect(view.container.querySelector(".settings-row")).toBeNull();
+  library.create();
+  expect(library.state.draft).toBeNull();
+
+  const list = {
+    ...libraryList(false),
+    entries: [
+      libraryEntry(),
+      libraryEntry({ skillId: "second-skill", slug: "other-skill", name: "Other skill" }),
+    ],
+  };
+  first.resolve(list);
+  await initial;
+  await waitForFast(() => expect(view.container.textContent).toContain("existing-skill"));
+  const row = view.container.querySelector(".settings-row")!;
+  const refresh = () =>
+    Array.from(view.container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Refresh",
+    )!;
+  const failed = createDeferred<SkillsLibraryListResult>();
+  request.mockReturnValueOnce(failed.promise);
+  refresh().click();
+  flush();
+  expect(view.container.querySelector(".settings-row")).toBe(row);
+  expect(row.querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
+  expect(view.container.querySelector('input[name="library-search"]')).toBe(search);
+  search.value = "existing-skill";
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  expect(view.container.querySelectorAll(".settings-row")).toHaveLength(1);
+  expect(view.container.querySelector(".settings-row")).toBe(row);
+
+  failed.reject(new Error("Library list unavailable"));
+  await waitForFast(() =>
+    expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Library list unavailable",
+    ),
+  );
+  expect(view.container.querySelectorAll('[role="alert"]')).toHaveLength(1);
+  expect(view.container.querySelector(".settings-row")).toBe(row);
+  expect(document.activeElement).toBe(search);
+  expect(row.querySelector<HTMLButtonElement>("button")?.disabled).toBe(false);
+
+  library.state.error = "A later mutation conflict";
+  flush();
+  expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
+    "A later mutation conflict",
+  );
+  expect(view.container.querySelector(".settings-row")).toBe(row);
+  request.mockResolvedValueOnce({
+    ...list,
+    entries: [{ ...list.entries[0]!, description: "Updated library skill" }],
+  });
+  refresh().click();
+  await waitForFast(() => expect(row.textContent).toContain("Updated library skill"));
+  expect(view.container.querySelector(".settings-row")).toBe(row);
+  expect(view.container.querySelector('[role="alert"]')).toBeNull();
+  expect(request).toHaveBeenCalledTimes(3);
+
+  const retainedRefresh = createDeferred<SkillsLibraryListResult>();
+  request.mockReturnValueOnce(retainedRefresh.promise);
+  const pendingRefresh = library.load();
+  flush();
+  view.unmount();
+  const remounted = mountSolid(() => <SkillLibrary library={library} navigationActions={null} />);
+  flush();
+  expect(remounted.container.querySelector(".settings-row")?.textContent).toContain(
+    "Updated library skill",
+  );
+  expect(
+    remounted.container.querySelector<HTMLButtonElement>(".settings-row button")?.disabled,
+  ).toBe(true);
+  retainedRefresh.resolve(list);
+  await pendingRefresh;
 });
 
 it.each(["list", "save"] as const)("ignores stale %s failures", async (operation) => {

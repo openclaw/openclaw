@@ -74,6 +74,29 @@ state merely to reset a view that is gone. See the [rc.16 notes](lessons.md#rc16
 
 ## Order of work
 
+For the Solid 2 pass, use the [async and action recipes](async-and-actions.md)
+and report these counts in the touched production files before and after.
+Count the old pattern and its replacement separately; name justified survivors.
+
+| Item             | Audit                                                                                                                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Native handlers  | Conditional/prop handler expressions bound once versus stable callbacks that read current state.                             |
+| Lifecycle        | Component-level `onCleanup` versus paired `onSettled` setup/teardown; retain computation cleanup.                            |
+| Async reads      | Presentation loading/error/data flags versus owner-backed async reads under `Loading`/`Errored`; keep owner admission facts. |
+| Mutations        | Manual saving/rollback state versus `action`, optimistic values, affected facts, and reconciliation; retain owner authority. |
+| Code splitting   | Manual component import/signal loaders versus `lazy`; preserve original import timing.                                       |
+| Structured state | Immutable array/object signal updates versus store drafts or keyed projections; no writable owner mirror.                    |
+| JSX              | Hand-written `createComponent` in `.ts` versus JSX in `.tsx`.                                                                |
+| Context          | Wrappers that only rethrow missing providers versus default-less context.                                                    |
+| Sibling loading  | Independent asynchronous siblings versus an intentional `Reveal` group.                                                      |
+| Owner APIs       | `createRoot`/`runWithOwner`/`getOwner` outside foreign-DOM mounts and reactive primitives.                                   |
+
+An API appearing in the after column is not evidence by itself. Verify that
+async reads do not duplicate owner requests, errors are visible, optimistic
+proxies cannot become write authority, and `refresh` targets the actual
+derivation. A rejected action promise needs an explicit error consumer;
+`Errored` does not catch an ignored event-handler promise.
+
 1. Read the module, its owner, its callers, and its tests. Name the contract each
    piece serves before deleting anything.
 2. Convert the state model first (controller → `createThing`, copies → memos),

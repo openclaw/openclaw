@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { For, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import { normalizeCommandSpans } from "../../../src/shared/exec-approval-command-spans.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -248,7 +248,7 @@ function MobileExecApprovalBody(props: { request: ExecApprovalRequestPayload }) 
     };
   }
 
-  onCleanup(() => animation?.cancel());
+  onSettled(() => () => animation?.cancel());
 
   return (
     <>

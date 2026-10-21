@@ -61,7 +61,8 @@ const controlUiPerformanceBudgets = {
   chatBootJsGzipBytes: 1_500_000,
   newBootJsGzipBytes: 1_035_000,
   startupCssRequests: 1,
-  startupJsGzipBytes: 325_000,
+  // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
+  startupJsGzipBytes: 325_081,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,

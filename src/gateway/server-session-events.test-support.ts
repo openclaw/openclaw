@@ -201,6 +201,42 @@ function storedMessage(messageId: string, seq = 1) {
   };
 }
 
+function transcriptTarget(storePath: string) {
+  return { agentId: "main", sessionId: "sess-main", sessionKey: "agent:main:main", storePath };
+}
+
+function expectBroadcast(
+  broadcast: ReturnType<typeof vi.fn>,
+  payload: object,
+  event = "session.message",
+  recipients: unknown = expect.any(Set),
+) {
+  expect(broadcast).toHaveBeenCalledWith(
+    event,
+    expect.objectContaining(payload),
+    recipients,
+    expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
+  );
+}
+
+function expectAbsentFields(payload: unknown, fields: string) {
+  for (const field of fields.split(" ")) {
+    expect(payload, field).not.toHaveProperty(field);
+  }
+}
+
+function resetSessionEventMocks() {
+  vi.clearAllMocks();
+  listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
+  loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
+  loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
+  loadGatewaySessionRowMock.mockReturnValue(sessionRow);
+  readSessionMessageCountAsyncMock.mockReset().mockResolvedValue(undefined);
+  readSessionMessageByIdAsyncMock.mockReset();
+  runtimeConfigState.value = {};
+  sessionRow.key = "agent:main:main";
+}
+
 function fixedStoreRuntimeConfig(ownerAgentId: string, configuredAgentIds: string[]) {
   return {
     session: { store: "/tmp/shared.sqlite" },
@@ -241,15 +277,11 @@ const ownerGoal = {
   continuationTurns: 0,
 };
 
-const PRIVATE_SESSION_FIELDS =
-  "agentId session message owner goal status hasActiveRun activeRunIds model responseUsage".split(
-    " ",
-  );
-
 function expectPrivateSessionInvalidation(payload: unknown) {
-  for (const field of PRIVATE_SESSION_FIELDS) {
-    expect(payload, field).not.toHaveProperty(field);
-  }
+  expectAbsentFields(
+    payload,
+    "agentId session message owner goal status hasActiveRun activeRunIds model responseUsage",
+  );
 }
 
 async function emitAssistantTranscriptUpdate(
@@ -277,6 +309,8 @@ export {
   createTranscriptUpdateBroadcastHandler,
   emitAssistantTranscriptUpdate,
   expectPrivateSessionInvalidation,
+  expectAbsentFields,
+  expectBroadcast,
   fixedStoreRuntimeConfig,
   listAccessorSessionEntriesReadOnlyMock,
   loadAccessorSessionEntryReadOnlyMock,
@@ -286,8 +320,10 @@ export {
   projectChatDisplayMessageMock,
   readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
+  resetSessionEventMocks,
   runtimeConfigState,
   sessionRow,
   storedMessage,
   subscribePluginSessionsChanged,
+  transcriptTarget,
 };

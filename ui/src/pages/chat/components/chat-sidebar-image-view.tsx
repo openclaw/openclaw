@@ -10,6 +10,7 @@ import { createTimeout } from "../../../lib/reactive/timers.ts";
 import { isAbsolutePath } from "../../new-session/path.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
+import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { copyImageToClipboard, convertImageBlobToPng } from "./chat-image-actions.tsx";
 import type {
   AttachmentSidebarRuntime,
@@ -202,24 +203,11 @@ export function SidebarImage(props: {
                     return file().download(signal);
                   }}
                 />
-                <Show when={props.onViewSource}>
-                  {(source) => (
-                    <Menu
-                      id={`image-source-${id}`}
-                      label={t("chat.detailPanel.moreFileActions")}
-                      panelClass="sidebar-file-view__menu"
-                      trigger={<Icon name="moreHorizontal" />}
-                      triggerClass="session-panel-rail__button sidebar-file-view__action"
-                      items={[
-                        {
-                          id: "source",
-                          label: t("chat.detailPanel.viewSource"),
-                          icon: <Icon name="codeXml" />,
-                        },
-                      ]}
-                      onSelect={() => source()()}
-                    />
-                  )}
+                <Show when={props.onViewSource || props.controls.fileAttachment}>
+                  <FileSessionMenu
+                    attachment={props.controls.fileAttachment}
+                    onViewSource={props.onViewSource}
+                  />
                 </Show>
               </div>
             )}
@@ -289,6 +277,9 @@ export function SidebarFileFallback(props: {
               download={props.file.download}
               class="btn btn--sm sidebar-file-view__action session-panel-rail__button"
             />
+            <Show when={props.controls.fileAttachment}>
+              <FileSessionMenu attachment={props.controls.fileAttachment} />
+            </Show>
           </div>
         </div>
       </div>

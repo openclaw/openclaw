@@ -33,6 +33,7 @@ import {
 } from "./runtime/internal-hooks.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
+import { ToolInputError } from "./tools/common.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -438,6 +439,35 @@ async function executeClientTool(params: unknown) {
 }
 
 describe("toClientToolDefinitions – param coercion", () => {
+  it("preserves input-error cancellation after client execution preparation", async () => {
+    const controller = new AbortController();
+    const reason = new ToolInputError("client tool cancelled");
+    const recorder = { reserve: vi.fn(), complete: vi.fn(), discard: vi.fn() };
+    const definition = expectDefined(
+      toClientToolDefinitions([makeClientTool("search")], recorder)[0],
+      "client tool definition",
+    );
+    const prepare = expectDefined(getInternalToolExecutionPreparer(definition), "client preparer");
+    const prepared = await prepare({
+      toolCallId: "cancelled-client-call",
+      args: { query: "example" },
+      signal: controller.signal,
+    });
+    expect(prepared.kind).toBe("ready");
+    if (prepared.kind !== "ready") {
+      throw new Error("Client call did not reach preparation");
+    }
+    try {
+      controller.abort(reason);
+      await expect(prepared.execute()).rejects.toBe(reason);
+      expect(recorder.reserve).toHaveBeenCalledWith("cancelled-client-call", "search");
+      expect(recorder.discard).toHaveBeenCalledWith("cancelled-client-call", "search");
+      expect(recorder.complete).not.toHaveBeenCalled();
+    } finally {
+      prepared.dispose();
+    }
+  });
+
   it.each(["not-json", "42"])(
     "returns a visible error instead of dispatching malformed client arguments: %s",
     async (params) => {

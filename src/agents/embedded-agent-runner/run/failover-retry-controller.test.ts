@@ -21,17 +21,20 @@ vi.mock("../../../infra/backoff.js", async () => {
   return { ...actual, sleepWithAbort: mocks.sleepWithAbort };
 });
 
-import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
+import {
+  createRetryController,
+  type RetryRunParams,
+} from "./failover-retry-controller.test-support.js";
 
 const { sleepWithAbort: sleep, warn } = mocks;
 
-type ControllerInput = Parameters<typeof createEmbeddedRunFailoverRetryController>[0];
-
-type RunParams = ControllerInput["runInput"]["runParams"];
 type ControllerOptions = Partial<
-  Pick<RunParams, "abortSignal" | "onRetryWait" | "isFinalFallbackAttempt" | "retryTransientErrors">
+  Pick<
+    RetryRunParams,
+    "abortSignal" | "onRetryWait" | "isFinalFallbackAttempt" | "retryTransientErrors"
+  >
 > & {
-  advanceAuthProfile?: ControllerInput["preparedRuntime"]["advanceAttemptAuthProfile"];
+  advanceAuthProfile?: () => Promise<boolean>;
   fallbackConfigured?: boolean;
   budget?: number;
 };
@@ -41,26 +44,10 @@ function createController({
   budget,
   ...runParams
 }: ControllerOptions = {}) {
-  const controller = createEmbeddedRunFailoverRetryController({
-    runInput: {
-      runParams: { runId: "run:retry-test", ...runParams } as RunParams,
-      globalLane: "test",
-      agentDir: "/tmp/openclaw-failover-retry-controller-test",
-      fallbackConfigured,
-    },
-    preparedRuntime: {
-      provider: "openai",
-      modelId: "gpt-5.6-luna",
-      profileFailureStore: { version: 1, profiles: {} },
-      snapshot: () => ({
-        lastProfileId: "openai:p1",
-        pluginHarnessOwnsTransport: false,
-        agentHarness: { id: "embedded" },
-      }),
-      getApiKeyInfo: () => null,
-      advanceAttemptAuthProfile: advanceAuthProfile,
-    },
-    getSessionId: () => "session:failover-retry-controller-test",
+  const controller = createRetryController({
+    runParams,
+    fallbackConfigured,
+    runtime: { advanceAttemptAuthProfile: advanceAuthProfile },
   });
   if (budget !== undefined) {
     controller.observeAttempt({ providerRetryMaxRetries: budget });
@@ -243,6 +230,7 @@ it.each([
   expect(controller.rateLimitRetriesExhausted).toBe(1);
   await expect(rotate()).resolves.toBe(true);
   expect(advance).toHaveBeenCalledOnce();
+  expect(controller.transientRetryCount).toBe(1);
 });
 
 it.each([
@@ -325,18 +313,6 @@ it.each([false, true])("honors a floor beyond the native timer limit (abort=%s)"
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it("records the truncation when the window ends a budget that still has attempts", async () => {
-  const advanceTime = clock();
-  controller.observeAttempt({ providerRetryMaxRetries: 8 });
-  await checkRetry({ reason: "server_error" });
-  advanceTime(90_000);
-  await checkRetry({ reason: "server_error" }, false);
-  expect(controller.transientRetryCount).toBe(1);
-  const truncationLog = warn.mock.calls.at(-1)?.[0];
-  expect(truncationLog).toContain("transient retry window elapsed");
-  expect(truncationLog).toContain("after 1/8 retries");
-});
-
 it("does not truncate a provider wait to fit the remaining outage window", async () => {
   const advanceTime = clock(Date.parse("2026-01-01T00:00:00.000Z"));
   await checkRetry({ reason: "timeout" });
@@ -360,20 +336,13 @@ it("bounds transient retries across reasons and honors Retry-After", async () =>
   await checkRetry({ reason: "timeout", retryAfterMs: 30_000 });
   await checkRetry({ reason: "overloaded" }, false);
   expect(controller.transientRetryCount).toBe(2);
+  const truncationLog = warn.mock.calls.at(-1)?.[0];
+  expect(truncationLog).toContain("transient retry window elapsed");
+  expect(truncationLog).toContain("after 2/8 retries");
   expect(sleep.mock.calls).toEqual([
     [60_000, undefined],
     [30_000, undefined],
   ]);
-});
-
-it("keeps profile rotation separate from transient retry accounting", async () => {
-  const advance = vi.fn(async () => true);
-  controller = createController({ advanceAuthProfile: advance });
-  await expect(rotate()).resolves.toBe(true);
-  await checkRetry({ reason: "rate_limit" });
-  expect(advance).toHaveBeenCalledTimes(1);
-  expect(controller.transientRetryCount).toBe(1);
-  expect(sleep).toHaveBeenCalledTimes(1);
 });
 
 it("allows eight transient retries across failure reasons when the ceiling has room", async () => {

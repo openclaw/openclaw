@@ -28,7 +28,6 @@ import {
   readPolicyFile,
   readWorkspaceFile,
   requiredToolMetadata,
-  type PolicySettings,
 } from "./policy-runtime.js";
 import { policyHasRules } from "./policy-scope.js";
 import { policyContainerShapeFindings } from "./policy-shape.js";
@@ -217,13 +216,30 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     ...(unmigratedToolsFinding === undefined ? [] : [unmigratedToolsFinding]),
   ];
   policyFindings.push(...toolMetadataFindings(policyFile.ocDocName, evidence, requiredMetadata));
-  const attestationFindings = policyAttestationFindings(
-    policyFile.displayName,
-    policyHash,
-    evidence,
-    policyFindings,
-    settings,
-  );
+  const attestationFindings: HealthFinding[] = [];
+  const expected = settings.expectedAttestationHash?.trim();
+  if (expected) {
+    const current = createPolicyAttestation({
+      ok: policyFindings.length === 0,
+      checkedAt: new Date(0).toISOString(),
+      policyPath: policyFile.displayName,
+      policyHash,
+      evidence,
+      findings: policyFindings.map(toAttestedFinding),
+    });
+    if (current.attestationHash !== expected) {
+      attestationFindings.push({
+        checkId: CHECK_IDS.policyAttestationMismatch,
+        severity: "error",
+        message: "The current policy check no longer matches the accepted policy attestation.",
+        source: "policy",
+        path: "policy attestation",
+        target: "oc://policy/attestation/current",
+        requirement: "oc://openclaw.config/plugins/entries/policy/config/expectedAttestationHash",
+        fixHint: `Run policy check, review attestation ${current.attestationHash}, then update plugins.entries.policy.config.expectedAttestationHash and the supervisor/gateway accepted attestation.`,
+      });
+    }
+  }
   if (hasPolicyValidationFinding(policyFindings)) {
     findings.push(...policyFindings);
   } else if (attestationFindings.length > 0) {
@@ -299,42 +315,6 @@ function channelFindings(
       }),
     ];
   });
-}
-
-function policyAttestationFindings(
-  policyPath: string,
-  policyHash: string,
-  evidence: PolicyEvidence,
-  findings: readonly HealthFinding[],
-  settings: PolicySettings,
-): readonly HealthFinding[] {
-  const expected = settings.expectedAttestationHash?.trim();
-  if (!expected) {
-    return [];
-  }
-  const current = createPolicyAttestation({
-    ok: findings.length === 0,
-    checkedAt: new Date(0).toISOString(),
-    policyPath,
-    policyHash,
-    evidence,
-    findings: findings.map(toAttestedFinding),
-  });
-  if (current.attestationHash === expected) {
-    return [];
-  }
-  return [
-    {
-      checkId: CHECK_IDS.policyAttestationMismatch,
-      severity: "error",
-      message: "The current policy check no longer matches the accepted policy attestation.",
-      source: "policy",
-      path: "policy attestation",
-      target: "oc://policy/attestation/current",
-      requirement: "oc://openclaw.config/plugins/entries/policy/config/expectedAttestationHash",
-      fixHint: `Run policy check, review attestation ${current.attestationHash}, then update plugins.entries.policy.config.expectedAttestationHash and the supervisor/gateway accepted attestation.`,
-    },
-  ];
 }
 
 export function toAttestedFinding(finding: HealthFinding) {

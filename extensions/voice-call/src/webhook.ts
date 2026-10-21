@@ -805,23 +805,19 @@ export class VoiceCallWebhookServer {
   }
 
   private isRealtimeWebSocketUpgrade(pathname: string | null): boolean {
-    try {
-      const pattern = this.realtimeHandler?.getStreamPathPattern();
-      if (pathname === null || !pattern) {
-        return false;
-      }
-      const normalizedPattern = normalizeWebhookPath(pattern);
-      const normalizedPathname = normalizeWebhookPath(pathname);
-      if (normalizedPattern === "/") {
-        return true;
-      }
-      return (
-        normalizedPathname === normalizedPattern ||
-        normalizedPathname.startsWith(`${normalizedPattern}/`)
-      );
-    } catch {
+    const pattern = this.realtimeHandler?.getStreamPathPattern();
+    if (pathname === null || !pattern) {
       return false;
     }
+    const normalizedPattern = normalizeWebhookPath(pattern);
+    const normalizedPathname = normalizeWebhookPath(pathname);
+    if (normalizedPattern === "/") {
+      return true;
+    }
+    return (
+      normalizedPathname === normalizedPattern ||
+      normalizedPathname.startsWith(`${normalizedPattern}/`)
+    );
   }
 
   private getRealtimeTwimlParams(ctx: WebhookContext): URLSearchParams | null {

@@ -204,6 +204,24 @@ async function settleStalledOwner(stalled: StalledRun) {
   await stalled.operation.ownerSettlement;
 }
 
+async function expectTranscriptOnlyRecovery(
+  stalled: StalledRun,
+  recovery: FollowupRun | undefined,
+) {
+  expect(recovery).toMatchObject({
+    stalledTurnRecovery: true,
+    run: { suppressNextUserMessagePersistence: true, sessionKey: queueKey },
+  });
+  for (const key of ["transcriptPrompt", "images", "abortSignal"] as const) {
+    expect(recovery?.[key], key).toBeUndefined();
+  }
+  expect(stalled.recorder.hasPersisted()).toBe(true);
+  expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([
+    expect.objectContaining({ content: "what is good at the hotel restaurant?" }),
+  ]);
+  expect(getFollowupQueueDepth(queueKey)).toBe(0);
+}
+
 function createQueuedRequest(
   stalled: StalledRun,
   from: { senderId: string; to: string },
@@ -266,19 +284,8 @@ describe("runReplyAgent stalled turn continuation", () => {
     await settleStalledOwner(stalled);
     await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
     const recovery = drainedRuns.mock.calls[0]?.[0];
-    expect(recovery?.stalledTurnRecovery).toBe(true);
     expect(recovery?.prompt).toContain("previous turn stopped making progress");
-    // Replay safety: the inbound request is not re-sent or re-persisted.
-    expect(recovery?.run.suppressNextUserMessagePersistence).toBe(true);
-    expect(recovery?.transcriptPrompt).toBeUndefined();
-    expect(recovery?.images).toBeUndefined();
-    expect(recovery?.abortSignal).toBeUndefined();
-    expect(recovery?.run.sessionKey).toBe(queueKey);
-    expect(stalled.recorder.hasPersisted()).toBe(true);
-    expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([
-      expect.objectContaining({ content: "what is good at the hotel restaurant?" }),
-    ]);
-    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+    await expectTranscriptOnlyRecovery(stalled, recovery);
   });
 
   it.each(["followup", "collect"] as const)(
@@ -347,16 +354,7 @@ describe("runReplyAgent stalled turn continuation", () => {
       originatingTo: "12345",
       run: { senderId: "traveler" },
     });
-    expect(recovery?.run.suppressNextUserMessagePersistence).toBe(true);
-    expect(recovery?.transcriptPrompt).toBeUndefined();
-    expect(recovery?.images).toBeUndefined();
-    expect(recovery?.abortSignal).toBeUndefined();
-    expect(recovery?.run.sessionKey).toBe(queueKey);
-    expect(stalled.recorder.hasPersisted()).toBe(true);
-    expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([
-      expect.objectContaining({ content: "what is good at the hotel restaurant?" }),
-    ]);
-    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+    await expectTranscriptOnlyRecovery(stalled, recovery);
     expect(next).toBe(queued);
     expect(last).toBe(sameSenderLater);
   });

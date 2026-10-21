@@ -1,5 +1,7 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, Errored, For, Loading, onCleanup, Show } from "solid-js";
+import { createDeferred } from "@solidjs/signals";
+import type { JSX } from "@solidjs/web";
+import { createMemo, Errored, For, isPending, Loading, onCleanup, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasProviderBrandIcon } from "../../components/provider-icon-data.ts";
@@ -45,6 +47,11 @@ const INSTALLATION_STATUS = {
   unverified: { kind: "warn", labelKey: "modelProviders.installedAgents.status.unverified" },
 } as const;
 
+type InstalledInventory = {
+  agents: InstalledAgent[] | null;
+  failure?: { error: unknown };
+};
+
 type InstalledAgentsOptions = {
   gateway: GatewayPageBinding;
   context: ApplicationContext;
@@ -60,8 +67,10 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   let installed: InstalledAgent[] | null = null;
   let listClient: GatewayBrowserClient | null | undefined;
   let listEpoch = -1;
-  let listRead: Promise<{ error: unknown } | null> | null = null;
-  let finishListRead: ((outcome: { error: unknown } | null) => void) | undefined;
+  let inventory: { value: InstalledInventory | Promise<InstalledInventory> } = {
+    value: { agents: installed },
+  };
+  let finishListRead: ((outcome: InstalledInventory) => void) | undefined;
   const currentList = () =>
     listClient !== null &&
     listClient !== undefined &&
@@ -73,15 +82,18 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
       if (currentList()) {
         installed = result.agents;
       }
-      finishListRead?.(null);
+      finishListRead?.({ agents: installed });
       finishListRead = undefined;
     },
     onError: (error) => {
-      finishListRead?.(currentList() ? { error } : null);
+      finishListRead?.({
+        agents: installed,
+        ...(currentList() ? { failure: { error } } : {}),
+      });
       finishListRead = undefined;
     },
   });
-  onCleanup(listRequest.cancel);
+  onCleanup(cancel);
   /** Requested enabled state per agent while its config write is unsettled. */
   const pending = new Map<string, boolean>();
   const messages = new Map<string, ModelProviderRowMessage>();
@@ -116,8 +128,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   const projection = projectSource(null, {
     read: () => ({
       agents: installed,
-      read: listRead,
-      loading: listRequest.pending,
+      inventory,
       pending,
       messages,
       enablement,
@@ -143,9 +154,9 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   function cancel(): void {
     listRequest.cancel();
     // Retire the display even when the canceled transport never settles.
-    finishListRead?.(null);
+    finishListRead?.({ agents: installed });
     finishListRead = undefined;
-    listRead = null;
+    inventory = { value: { agents: installed } };
   }
 
   async function load(
@@ -159,8 +170,8 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
       notify();
       return;
     }
-    const completion = Promise.withResolvers<{ error: unknown } | null>();
-    listRead = completion.promise;
+    const completion = Promise.withResolvers<InstalledInventory>();
+    inventory = { value: completion.promise };
     finishListRead = completion.resolve;
     await listRequest.run(client);
   }
@@ -184,6 +195,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     if (!resetOptions.preserveVisibleData) {
       installed = null;
     }
+    inventory = { value: { agents: installed } };
     notify();
   }
 
@@ -442,88 +454,98 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         available: available(),
         blockedReason: blockedReason(),
       }));
-      const read = createMemo(() => ({ promise: view().read }), {
-        equals: (previous, next) => previous.promise === next.promise,
-      });
-      const outcome = createMemo(() =>
-        read().promise?.then((value) => {
-          if (value) {
-            throw value.error;
+      const InventorySection = (props: { checking: boolean; children?: JSX.Element }) => {
+        const label = () =>
+          t(
+            props.checking
+              ? "modelProviders.installedAgents.checking"
+              : "modelProviders.installedAgents.check",
+          );
+        return (
+          <SettingsSection
+            title={t("modelProviders.installedAgents.title")}
+            description={
+              <>
+                {t("modelProviders.installedAgents.description")}
+                <Show when={view().blockedReason}>
+                  <br />
+                  {view().blockedReason}
+                </Show>
+              </>
+            }
+            actions={
+              <openclaw-tooltip prop:content={label()}>
+                <button
+                  type="button"
+                  class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
+                  aria-label={label()}
+                  disabled={props.checking || view().pending.size > 0}
+                  onClick={() => {
+                    void load();
+                    retryDiscovery();
+                  }}
+                >
+                  <Icon name="refresh" />
+                </button>
+              </openclaw-tooltip>
+            }
+          >
+            {props.children}
+          </SettingsSection>
+        );
+      };
+      const InventoryContent = () => {
+        const read = createMemo(() => view().inventory);
+        // Refresh may retain rows, but must not hold scope retirement or live config updates.
+        const displayedInventory = createDeferred(() => read().value);
+        const checking = () => isPending(displayedInventory);
+        const outcome = createMemo(() => {
+          const failure = displayedInventory().failure;
+          if (failure) {
+            throw failure.error;
           }
           return null;
-        }),
-      );
-      const checkLabel = () =>
-        t(
-          view().loading
-            ? "modelProviders.installedAgents.checking"
-            : "modelProviders.installedAgents.check",
+        });
+        return (
+          <InventorySection checking={checking()}>
+            <Errored
+              fallback={(error) => (
+                <Show when={!checking()}>
+                  <div class="settings-row">
+                    <div class="settings-row__text">
+                      <span class="settings-row__desc provider-usage-error" role="alert">
+                        {modelProviderErrorMessage(error())}
+                      </span>
+                    </div>
+                    <div class="settings-row__control">
+                      <button class="btn btn--sm" onClick={() => void load()}>
+                        {t("common.retry")}
+                      </button>
+                    </div>
+                  </div>
+                </Show>
+              )}
+            >
+              {outcome()}
+            </Errored>
+            <Show when={view().agents !== null}>
+              <For
+                each={displayedInventory().agents ?? []}
+                keyed={(agent) => agent.id}
+                fallback={<SettingsEmpty message={t("modelProviders.installedAgents.empty")} />}
+              >
+                {(agent) => <AgentRow agent={agent()} />}
+              </For>
+            </Show>
+          </InventorySection>
         );
+      };
       return (
         <Show when={view().available}>
           <div class="model-providers__installed-agents">
-            <SettingsSection
-              title={t("modelProviders.installedAgents.title")}
-              description={
-                <>
-                  {t("modelProviders.installedAgents.description")}
-                  <Show when={view().blockedReason}>
-                    <br />
-                    {view().blockedReason}
-                  </Show>
-                </>
-              }
-              actions={
-                <openclaw-tooltip prop:content={checkLabel()}>
-                  <button
-                    type="button"
-                    class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
-                    aria-label={checkLabel()}
-                    disabled={view().loading || view().pending.size > 0}
-                    onClick={() => {
-                      void load();
-                      retryDiscovery();
-                    }}
-                  >
-                    <Icon name="refresh" />
-                  </button>
-                </openclaw-tooltip>
-              }
-            >
-              <Errored
-                fallback={(error) => (
-                  <Show when={!view().loading}>
-                    <div class="settings-row">
-                      <div class="settings-row__text">
-                        <span class="settings-row__desc provider-usage-error" role="alert">
-                          {modelProviderErrorMessage(error())}
-                        </span>
-                      </div>
-                      <div class="settings-row__control">
-                        <button
-                          class="btn btn--sm"
-                          disabled={view().loading}
-                          onClick={() => void load()}
-                        >
-                          {t("common.retry")}
-                        </button>
-                      </div>
-                    </div>
-                  </Show>
-                )}
-              >
-                <Loading on={read()}>{outcome()}</Loading>
-              </Errored>
-              <Show when={view().agents !== null}>
-                <For
-                  each={view().agents ?? []}
-                  keyed={(agent) => agent.id}
-                  fallback={<SettingsEmpty message={t("modelProviders.installedAgents.empty")} />}
-                >
-                  {(agent) => <AgentRow agent={agent()} />}
-                </For>
-              </Show>
-            </SettingsSection>
+            <Loading fallback={<InventorySection checking />}>
+              <InventoryContent />
+            </Loading>
           </div>
           <Show when={view().enablement}>
             <WizardLogin

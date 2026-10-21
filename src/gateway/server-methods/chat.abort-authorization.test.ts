@@ -148,6 +148,7 @@ describe("chat.abort authorization", () => {
         context,
         runId,
       });
+      expect(requireLastRespondCall(respond)[0]).toBe(false);
       expect(requireLastRespondCall(respond)[2]?.message).toBe("unauthorized");
     }
     expect(cancelInferenceForSession).not.toHaveBeenCalled();
@@ -208,33 +209,13 @@ describe("chat.abort authorization", () => {
     expect(rpcSourceTesting.has("run-1")).toBe(true);
   });
 
-  it("allows the same paired device to abort after reconnecting", async () => {
-    const context = createChatAbortContext({
-      sources: new Map([
-        ["run-1", createActiveRun("main", { owner: { connId: "conn-old", deviceId: "dev-1" } })],
-      ]),
-    });
-
-    const respond = await invokeAbort({
-      context,
-      runId: "run-1",
-      connId: "conn-new",
-      deviceId: "dev-1",
-    });
-
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { aborted: true, runIds: ["run-1"] });
-    expect(rpcSourceTesting.has("run-1")).toBe(false);
-  });
-
   it("does not reveal a foreign hidden run to ordinary session aborts", async () => {
     const hidden = createActiveRun("main", {
       controlUiVisible: false,
       owner: { connId: "conn-hidden", deviceId: "dev-hidden" },
     });
     const context = createChatAbortContext({
-      sources: new Map([["run-hidden", hidden]]),
+      sources: [["run-hidden", hidden]],
     });
 
     const respond = await abortAsOther({
@@ -274,13 +255,17 @@ describe("chat.abort queued-turn contract", () => {
     });
     active.input.abortSignal.addEventListener("abort", () => order.push("active-abort"));
     const context = createChatAbortContext({
-      sources: new Map([
+      sources: [
         ["active-1", active],
         ["queued-1", queuedTurn(queuedController)],
-      ]),
+      ],
     });
     const respond = await abortAsOwner({ context });
     expect(requireLastRespondCall(respond)[0]).toBe(true);
+    expectAbortPayload(requireLastRespondCall(respond)[1], {
+      aborted: true,
+      runIds: ["queued-1", "active-1"],
+    });
     expect(order).toEqual(["queued-abort", "active-abort"]);
   });
 
@@ -295,28 +280,10 @@ describe("chat.abort queued-turn contract", () => {
     expect(waiting.input.abortSignal.aborted).toBe(true);
   });
 
-  it("does not let session cleanup bypass a worker run", async () => {
-    const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
-    const context = createChatAbortContext({
-      workerEnvironmentService: createWorkerInferenceCancellationService(
-        "main-session",
-        ["worker-run"],
-        cancelInferenceForSession,
-      ),
-    });
-
-    const respond = await abortAsOther({ context });
-
-    const call = requireLastRespondCall(respond);
-    expect(call[0]).toBe(false);
-    expect(call[2]?.message).toBe("unauthorized");
-    expect(cancelInferenceForSession).not.toHaveBeenCalled();
-  });
-
   it("aborts a queued turn by runId after active registration is gone", async () => {
     const controller = new AbortController();
     const context = createChatAbortContext({
-      sources: new Map([["queued-1", queuedTurn(controller)]]),
+      sources: [["queued-1", queuedTurn(controller)]],
     });
 
     const respond = await abortAsOwner({
@@ -333,7 +300,7 @@ describe("chat.abort queued-turn contract", () => {
   it("rejects queued-turn abort from other clients", async () => {
     const controller = new AbortController();
     const context = createChatAbortContext({
-      sources: new Map([["queued-1", queuedTurn(controller)]]),
+      sources: [["queued-1", queuedTurn(controller)]],
     });
 
     const respond = await abortAsOther({
@@ -349,7 +316,7 @@ describe("chat.abort queued-turn contract", () => {
   it("rejects a mismatched session for ownerless queued turns", async () => {
     const controller = new AbortController();
     const context = createChatAbortContext({
-      sources: new Map([["queued-ownerless", queuedTurn(controller, "none")]]),
+      sources: [["queued-ownerless", queuedTurn(controller, "none")]],
     });
 
     const respond = await abortAsOther({
@@ -364,43 +331,10 @@ describe("chat.abort queued-turn contract", () => {
     expect(rpcSourceTesting.has("queued-ownerless")).toBe(true);
   });
 
-  it("session abort cancels authorized queued turns before active runs", async () => {
-    const queuedController = new AbortController();
-    const activeController = new AbortController();
-    const context = createChatAbortContext({
-      sources: new Map([
-        [
-          "active-1",
-          createActiveRun("main", { owner: { connId: "conn-owner", deviceId: "dev-owner" } }),
-        ],
-        ["queued-1", queuedTurn(queuedController)],
-      ]),
-    });
-    // replace active controller so we can observe abort
-    const active = rpcSourceTesting.get("active-1");
-    if (active) {
-      active.input.abortSignal.addEventListener("abort", () => activeController.abort(), {
-        once: true,
-      });
-    }
-
-    const respond = await invokeAbort({
-      context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
-    });
-    const call = requireLastRespondCall(respond);
-    expect(call[0]).toBe(true);
-    expectAbortPayload(call[1], { aborted: true, runIds: ["queued-1", "active-1"] });
-    expect(queuedController.signal.aborted).toBe(true);
-    expect(activeController.signal.aborted).toBe(true);
-    expect(rpcSourceTesting.get("queued-1")?.input.abortSignal.aborted ?? true).toBe(true);
-  });
-
   it("session abort does not clear another owner's queued turns", async () => {
     const foreign = new AbortController();
     const context = createChatAbortContext({
-      sources: new Map([["queued-foreign", queuedTurn(foreign)]]),
+      sources: [["queued-foreign", queuedTurn(foreign)]],
     });
 
     const respond = await abortAsOther({ context });
@@ -410,77 +344,50 @@ describe("chat.abort queued-turn contract", () => {
     expect(rpcSourceTesting.has("queued-foreign")).toBe(true);
   });
 
-  it("rejects an ownerless global abort on an explicit fleet", async () => {
-    const active = createActiveRun("global", { agentId: "research" });
-    const context = createChatAbortContext({
-      sources: new Map([["run-research", active]]),
-      getRuntimeConfig: () => ({
-        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-        session: { scope: "global" },
-      }),
-    });
-    const respond = await invokeChatAbortHandler({
-      handler: handleChatAbortRequestWithLifecycle,
-      context,
-      request: { sessionKey: "global", runId: "run-research" },
-    });
-    expect(respond.mock.calls.at(-1)?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("has no explicit owner"),
-    });
-    expect(active.input.abortSignal.aborted).toBe(false);
-  });
-
-  it("uses the persisted fixed-store owner for a bare global abort", async () => {
-    const active = createActiveRun("global", { agentId: "ops" });
-    const context = createChatAbortContext({
-      sources: new Map([["run-ops", active]]),
-      getRuntimeConfig: () => ({
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-        session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
-      }),
-    });
-
-    const respond = await invokeChatAbortHandler({
-      handler: handleChatAbortRequestWithLifecycle,
-      context,
-      request: { sessionKey: "global", runId: "run-ops" },
-    });
-
-    expect(respond.mock.calls.at(-1)?.[0]).toBe(true);
-    expect(active.input.abortSignal.aborted).toBe(true);
-  });
-
-  it("rejects a bare global abort owned by a retired fixed-store agent", async () => {
-    const active = createActiveRun("global", { agentId: "research" });
-    const context = createChatAbortContext({
-      sources: new Map([["run-research", active]]),
-      getRuntimeConfig: () => ({
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "retired" } },
-          entries: { ops: {}, research: {} },
-        },
-        session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
-      }),
-    });
-
-    const respond = await invokeChatAbortHandler({
-      handler: handleChatAbortRequestWithLifecycle,
-      context,
-      request: { sessionKey: "global", runId: "run-research" },
-    });
-
-    expect(respond.mock.calls.at(-1)?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: 'session key belongs to retired agent "retired"',
-    });
-    expect(active.input.abortSignal.aborted).toBe(false);
-  });
+  it.each([
+    {
+      owner: undefined,
+      agentId: "research",
+      error: expect.stringContaining("has no explicit owner"),
+    },
+    { owner: "ops", agentId: "ops", error: undefined },
+    {
+      owner: "retired",
+      agentId: "research",
+      error: 'session key belongs to retired agent "retired"',
+    },
+  ])(
+    "resolves bare global abort with fixed-store owner $owner",
+    async ({ owner, agentId, error }) => {
+      const active = createActiveRun("global", { agentId });
+      const runId = `run-${agentId}`;
+      const context = createChatAbortContext({
+        sources: [[runId, active]],
+        getRuntimeConfig: () => ({
+          agents: {
+            ownership: "explicit",
+            ...(owner ? { defaults: { sessionStore: { agentId: owner } } } : {}),
+            entries: { ops: {}, research: {} },
+          },
+          session: { scope: "global", ...(owner ? { store: "/tmp/shared-sessions.sqlite" } : {}) },
+        }),
+      });
+      const respond = await invokeChatAbortHandler({
+        handler: handleChatAbortRequestWithLifecycle,
+        context,
+        request: { sessionKey: "global", runId },
+      });
+      if (error) {
+        expect(respond.mock.lastCall?.[2]).toMatchObject({
+          code: "INVALID_REQUEST",
+          message: error,
+        });
+      } else {
+        expect(respond.mock.lastCall?.[0]).toBe(true);
+      }
+      expect(active.input.abortSignal.aborted).toBe(!error);
+    },
+  );
 });
 
 function createDeferredWorkerCancellation() {

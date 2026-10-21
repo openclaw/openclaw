@@ -13,6 +13,49 @@ import type { RespondFn } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+async function requestDraft(
+  operation: "create" | "save",
+  workspace: string,
+  params: Record<string, unknown> = {},
+  condition?: string,
+) {
+  const method = `claws.drafts.${operation}`;
+  const replies: Parameters<RespondFn>[] = [];
+  // SAFETY: These are the live socket fields read by draft authority.
+  const client = {
+    connId: "draft-author",
+    authenticatedUserProfile: {
+      profileId: "creator",
+      displayName: null,
+      hasAvatar: false,
+      updatedAt: 1,
+    },
+    connect: { role: "operator", scopes: ["operator.admin"] },
+    internal: { syntheticClient: condition === "synthetic", operatorRoleActor: { kind: "system" } },
+  } as GatewayClient;
+  await expectDefined(
+    clawsDraftsHandlers[method],
+    method,
+  )({
+    req: { type: "req", id: operation, method },
+    params: { agentId: "research", ...params },
+    client,
+    context: createDirectChatContext({
+      getRuntimeConfig: () => ({
+        agents: { entries: { research: { workspace } } },
+        gateway: { controlUi: { experimental: { claws: condition !== "labs-off" } } },
+      }),
+      getClientConnIds: () => new Set(condition === "disconnected" ? [] : ["draft-author"]),
+    }),
+    respond: (...args) => {
+      replies.push(args);
+    },
+    isWebchatConnect: () => false,
+  });
+  expect(replies).toHaveLength(1);
+  return replies[0]!;
+}
+
 describe("Claw draft human authority", () => {
   it("registers draft methods only for administrators", () => {
     for (const method of Object.keys(clawsDraftsHandlers)) {
@@ -40,48 +83,12 @@ describe("Claw draft human authority", () => {
       const original = JSON.stringify(document);
       const edited = original.replace('"my-claw"', '"my-edit"');
       await writeFile(draft.path, original);
-      // SAFETY: This fixture supplies the live connection fields read by draft authority.
-      const client = {
-        connId: "draft-author",
-        authenticatedUserProfile: {
-          profileId: "creator",
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-        connect: { role: "operator", scopes: ["operator.admin"] },
-        internal: { operatorRoleActor: { kind: "system" } },
-      } as GatewayClient;
-      const context = createDirectChatContext({
-        getRuntimeConfig: () => ({
-          agents: { entries: { research: { workspace } } },
-          gateway: { controlUi: { experimental: { claws: true } } },
-        }),
-        getClientConnIds: () => new Set(["draft-author"]),
-      });
-      const save = async (content: string) => {
-        const replies: Parameters<RespondFn>[] = [];
-        await expectDefined(
-          clawsDraftsHandlers["claws.drafts.save"],
-          "draft save",
-        )({
-          req: { type: "req", id: "save", method: "claws.drafts.save" },
-          params: {
-            agentId: "research",
-            draftId: draft.draftId,
-            content,
-            expectedRevision: clawDraftRevision(original),
-          },
-          client,
-          context,
-          respond: (...args) => {
-            replies.push(args);
-          },
-          isWebchatConnect: () => false,
+      const save = (content: string) =>
+        requestDraft("save", workspace, {
+          draftId: draft.draftId,
+          content,
+          expectedRevision: clawDraftRevision(original),
         });
-        expect(replies).toHaveLength(1);
-        return replies[0]!;
-      };
       expect(Buffer.byteLength(original)).toBe(size);
       const result = await save(edited);
       expect(result[0], JSON.stringify(result[2])).toBe(true);
@@ -95,45 +102,9 @@ describe("Claw draft human authority", () => {
   it.each(["synthetic", "disconnected", "labs-off"])(
     "refuses %s creation before touching the workspace",
     async (condition) => {
-      // SAFETY: This fixture supplies the exact socket fields read by the authority boundary.
-      const client = {
-        connId: "draft-author",
-        authenticatedUserProfile: {
-          profileId: "creator",
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-        connect: { role: "operator", scopes: ["operator.admin"] },
-        internal: {
-          syntheticClient: condition === "synthetic",
-          operatorRoleActor: { kind: "system" },
-        },
-      } as GatewayClient;
-      const replies: Parameters<RespondFn>[] = [];
-      const context = createDirectChatContext({
-        getRuntimeConfig: () => ({
-          agents: { entries: { research: { workspace: "/not-a-real-claw-draft-workspace" } } },
-          gateway: { controlUi: { experimental: { claws: condition !== "labs-off" } } },
-        }),
-        getClientConnIds: () => new Set(condition === "disconnected" ? [] : ["draft-author"]),
-      });
-      await expectDefined(
-        clawsDraftsHandlers["claws.drafts.create"],
-        "draft creation",
-      )({
-        req: { type: "req", id: "create", method: "claws.drafts.create" },
-        params: { agentId: "research" },
-        client,
-        context,
-        respond: (...args) => {
-          replies.push(args);
-        },
-        isWebchatConnect: () => false,
-      });
-      expect(replies).toHaveLength(1);
-      expect(replies[0]?.[0]).toBe(false);
-      expect(replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+      const reply = await requestDraft("create", "/not-a-real-claw-draft-workspace", {}, condition);
+      expect(reply[0]).toBe(false);
+      expect(reply[2]).toMatchObject({ code: "FORBIDDEN" });
     },
   );
 });

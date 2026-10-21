@@ -1,5 +1,25 @@
 # Team-shaped synthetic state
 
+## Async context allocation
+
+`async-store-measure.mjs` compares Node's native runner, the shared single-copy
+runner, and experimental parent-linked or indexed carriers. Run on an approved
+benchmark host with Node 26; it imports only the production helper and Node built-ins:
+
+```sh
+node scripts/perf/async-store-measure.mjs stock 26 200000
+node scripts/perf/async-store-measure.mjs single 26 200000
+node scripts/perf/async-store-measure.mjs linked 26 200000
+node scripts/perf/async-store-measure.mjs slots 26 200000
+```
+
+Repeat for 1, 8, 10, 20, 26, and 40 outer stores. Each invocation starts in a fresh
+process, warms 20,000 entries, samples collected allocations at 512-byte intervals,
+then measures unprofiled entry and oldest/middle/newest lookup time separately.
+The persistent carriers are experiments, not production context owners. These
+mechanism measurements do not establish Gateway GC or latency improvements; use
+the concurrent, swapped-core Gateway workload for acceptance.
+
 ## Workboard dashboard reads
 
 `workboard-read-measure.ts` exercises the real source Gateway and Workboard SQLite
@@ -451,16 +471,23 @@ It excludes `--activity-session` and `--activity-cron`. Catalog observations
 retain model rows for before/after option comparisons; use only synthetic
 catalogs. Compare warm session-scoped request counts and activity blocking time,
 keeping the initial catalogs separate from the activity window.
+Add `--activity-catalog-refresh` to request unchanged catalog renewal from a
+separate controller every third activity step. The fixture's live provider returns
+the same rows as its static catalog. Controller requests are recorded in `activity`
+and excluded from browser request counts. This isolates browser invalidation after
+explicit renewal; it does not prove which production action triggered a renewal.
 With `--open-details`, the final check reopens Details for the selected conversation
 after the activity window, then compares its session identity, label, model, status
 note, and thinking level with a fresh controller-side descriptor. It records this
-as an input-state comparison, then separately checks the rendered model in Details
-and the visible conversation header's label. The controller read is excluded
+as an input-state comparison, then separately checks the visible conversation
+header's label. The controller read is excluded
 from browser request counts; compare activity requests only between
 `activityStartedAtMs` and `activityEndedAtMs`. Request traces retain the preceding
 event's session key, reason, timestamp, and revision to distinguish event-driven
 reads from navigation or idle reads. Use `--request-stacks` for caller diagnosis,
 then omit it for paired timing.
+Failed attempts retain the available browser probe under `failure`, including
+failures in the final Details assertions; they are diagnostics, not accepted samples.
 
 For active-session loads, add `--activity-session <synthetic-key>` and configure
 that isolated Gateway with two loopback mock-provider models:
@@ -1031,9 +1058,11 @@ Gateway latency pairs; the baseline loader still selects the pinned owners.
 This runs paced cohorts after five minutes of warmup, with one real `read` tool
 and a streamed completion per turn, including the same synthetic reasoning
 signature and replay check as `attempt-retention`. Diagnostics and the Prometheus plugin are
-enabled. Session generations reset every twenty cohorts (including warmup) to
-bound intentional live transcript growth; `--reset-every-rounds 0` keeps history
-instead. The report records resets and completed cohorts. It does not exercise
+enabled. Warmup runs a fixed number of paced cohorts, rounded up from the warmup
+duration, so paired runs do equal work. Session generations reset every twenty
+cohorts, restarting that cadence at the first measured cohort, to bound intentional
+live transcript growth; `--reset-every-rounds 0` keeps history instead. The report
+records resets and completed cohorts. It does not exercise
 the image/output-limit recovery of `attempt-retention`. `--rounds` is ignored;
 an admitted cohort drains before the duration ends, so a slow cohort may overrun.
 
@@ -1139,6 +1168,25 @@ removal fails, discard the fixture before reuse as directed by the warning.
 These background turns contribute resource cost but are excluded
 from the foreground-turn denominator. The twenty foreground child sessions are
 direct `agent` calls.
+
+Add `--stress-session-store` to make each Code Mode cell load the preceding
+turn's value and commit a new value. The cell fails on a replay mismatch, including
+when a value disappears behind the bounded hydration window. Combine this with
+seeded long histories and `--reset-every-rounds 0` to measure repeated store
+replay on the same sessions. `--transcript-hydration-counts` observes the source
+worker reader and writes `HYDRATION_COUNT` records in the Gateway log with the
+session, full/bounded mode, decoded bytes/events, and caller stack; it never logs
+transcript content. Bounded reads return worker-decoded objects and therefore
+report zero main-thread decoded bytes. The observer requires `--entry src/entry.ts`
+and fails if the instrumented source shape changes.
+
+For the isolated store owner, alternate source roots with
+`node --expose-gc --import ./scripts/tsx.mjs --import ./scripts/perf/transcript-hydration-counts-preload.ts scripts/perf/code-mode-store-measure.ts /path/to/source`.
+This seeds a store value before 256 large messages, then binds six fresh runs
+with bounded SessionManagers. It verifies the value twice per run and reports
+first-load and same-run cached latency plus sampled main-thread allocation
+(including collected objects). Keep the first cold sample separate from the five
+warm samples, and use at least five alternating invocations per revision.
 
 `--stress-subagents` requires `memory-soak --stress-tools`. Each cohort adds one
 dedicated parent that uses Code Mode to call the real `sessions_spawn` tool with
@@ -1869,7 +1917,40 @@ counter hooks, and is not isolated bytes allocated by one assertion. Use matched
 instrumentation and the same paired host procedure for comparisons. The tiny
 fixture proves the path, not deployment capacity or production recheck rates.
 
+## State and agent database path resolution
+
+Measure the real path owners without opening a database:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/state-path-resolution-measure.ts \
+  --iterations 100000 --rounds 5
+```
+
+The JSON-lines output separates warm roots, alternating roots, explicit agent
+paths, and cold unique roots. Timing and allocation are separate passes; V8
+sampling includes objects collected by major and minor GC. A third, untimed pass
+counts exported `path.resolve` and `path.join` calls. These are owner-level
+operation counts, not Gateway calls per turn. Run both revisions with identical
+arguments, interleave samples, and compare with the `chat.send` allocation
+workload below before drawing an end-to-end conclusion.
+
 ## Allocated bytes per RPC or turn
+
+For a bounded chat-owner replay, run:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/gateway-agent-event-measure.ts \
+  --output /path/to/owned-benchmark/replay.json --samples 5 --turns 1000
+```
+
+This replays a lifecycle, read tool, 100 assistant deltas, and completion through
+the real chat handler with a deterministic clock. It records serialized frames,
+lifecycle-generation lookup demand, elapsed time, and sampled allocated bytes
+including collected objects after 100 warmup turns. Compare the frame artifacts
+byte-for-byte across revisions. Persistence and network delivery are disabled;
+the lookup callback only counts demand, so registry allocation and whole-Gateway
+cost still require the workload below. Run baseline/candidate pairs under the
+benchmark host's measurement policy; keep import/startup outside these samples.
 
 Use the same owned Gateway driver with `--allocations` and a named `--scenario`:
 
@@ -1909,10 +1990,38 @@ not imply event replay. These scenarios isolate RPC costs; they do not generate
 background session activity at production rates.
 
 Every measured scenario records per-method request-to-response p50/p99, call rate,
-and uncompressed wire response bytes. Handler and worker queue timings remain in
+and uncompressed wire response bytes. Transcript samples also report
+`chatDeltaDeliveryMs`: the Gateway-assigned chat-delta message timestamp to each
+subscriber receipt, including server delivery queues and client parsing. Both
+processes run on the same host; this is not internet latency. Handler and worker queue timings remain in
 Gateway diagnostics. Whole-window CPU/allocation divided by source-event or
 socket-delivery counts is a workload-normalized cost, not isolated encode/send
 cost. Use CPU profiles when attributing broadcast work.
+
+The default transcript-broadcast clients use direct loopback ingress, which does
+not negotiate compression. Add `--compressed` to use one synthetic trusted-proxy
+identity over loopback and exercise negotiated permessage-deflate. Add
+`--distinct-viewers` instead to use a separate admitted synthetic identity per
+client; this also enables compressed ingress. Both modes verify trusted-proxy
+authentication, negotiated compression, and the expected user-profile count.
+They configure only the generated Gateway fixture and use documentation-only
+forwarded addresses; no real proxy, account, or external connection is involved.
+Use the same mode on both sides of a comparison. These modes support
+`transcript-broadcast` and `memory-soak` without `--mixed-rpc` or
+`--operator-access-policy`.
+
+Use `--transport-counts` in a separate transcript-broadcast pass to attribute
+`Buffer.concat` calls and copied bytes by source call site, and count outbound
+`Socket._write`/`Socket._writev` submissions on the isolated Gateway port. Each
+sample records the counters beside its event counts; divide bytes and submissions
+by the validated source-event or delivery count as appropriate. Batched writes
+also record their segment count. These are native socket submissions, not kernel
+syscall counts, and exclude worker isolates and other socket ports. Stack capture
+adds substantial allocation and CPU overhead, so this mode rejects allocation,
+CPU, GC, and diagnostics profiling flags. Its timing and heap figures must not be
+used as acceptance results. Compare separate uninstrumented or equally profiled
+A/B runs for those metrics. The private diagnostics IPC acknowledgment bounds the
+counted workload; setup, warmup, and report serialization remain outside it.
 
 Add `--workload-cpu-profile` to capture the full measured workload in the Gateway
 main isolate. Each sample's `workloadCpuProfile` includes the full
@@ -1951,12 +2060,49 @@ happens after measurement. The sample preserves parsed payload content, not the
 original wire encoding or response envelope. Use it for offline content and
 serialized-payload comparison, accounting explicitly for expected dynamic fields
 such as timestamps and IDs. Exact uncompressed response-frame byte totals remain
-in the RPC metrics. Neither option changes defaults or generates additional RPCs.
+in the RPC metrics. For `--scenario sessions.list`, capture also writes
+`list-responses.json`: twenty filter, sort, pin, archive, and paging requests issued
+after measurement and removal of the harness-created parent/child sessions (unless
+using a preseeded history). Compare these payloads across revisions with identical fixtures,
+normalizing only recorded envelope timestamps, process-local `rowsRevision` tokens,
+and sandbox paths. Capture remains
+opt-in; the additional requests do not warm the measured workload.
+For `sessions.list` response comparisons, `--capture-responses` can run without
+allocation or CPU profiling.
+
+For a bounded owner probe without a Gateway, run
+`node --import ./scripts/tsx.mjs scripts/perf/session-list-order-measure.ts`.
+It reports five sampled allocation/thread-CPU observations for preparation per row
+and warm top-200 sorting over 5,000 rows, plus the selected keys for all three sorts.
+Use `--count-work` in a separate process for exact comparator, pin, activity, and
+key-normalization call counts. That pass enables coverage before loading the owner
+and excludes performance measurements. Run the same script on both revisions.
+
+For long RPC allocation windows, use `--warmup-operations` to warm fewer requests
+than the measured `--operations` count. For example, `--scenario sessions.list
+--warmup-operations 25000 --operations 100000 --rounds 1 --allocations --trace-gc
+--diagnostics --heap-sampling-interval 524288` keeps one uninterrupted measured
+window and bounds profile size. Record actual elapsed durations; operation counts
+are not time guarantees. Warmup defaults to the measured operation count. Heap
+sampling defaults remain 32 KiB for RPC/turn rounds and 512 KiB for memory soaks.
+Stopping a heap sample forces GC, so use one long round for natural-GC acceptance
+rather than aggregating short rounds separated by sample stops.
 
 Turn scenarios use `--runs` (forced
 to one for `chat.send`); `--chunks` controls streamed answer size. `plugins.reload`
 defaults to one operation per round; other RPC scenarios default to 100. Count
 the warmup when choosing reload batches: the admin RPC allows 30 calls per minute.
+Reload rounds honor `--round-interval-ms`; use single-operation rounds spaced
+by at least 2,400 ms for longer captures below that limit.
+The reload scenario retains the synthetic fixture's `plugins.allow` and
+`plugins.entries` configuration, then adds its no-op plugin. Configure bundled
+plugins there to include their metadata and runtime participation in the workload;
+the default team-shape fixture disables plugins. `plugin-inventory.json` records
+the actual runtime states before capture, including enabled plugins that remain
+unloaded under their lazy activation policy. The harness replaces `plugins.load`
+with its own synthetic plugin directory.
+With diagnostics enabled, `wholeReloadDiagnostics` retains one full-run event-loop
+histogram and GC totals; use its observation counts to qualify tail percentiles.
 Setup, startup
 recovery, subscription establishment, and one warmup round are outside capture.
 Each measured window includes completion and event drain, including the one-second

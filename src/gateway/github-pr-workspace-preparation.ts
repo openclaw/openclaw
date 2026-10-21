@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SessionGitHubActionParams } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
+import { canPrepareGitHubPullRequest } from "../agents/sandbox/github-publication.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
@@ -45,18 +46,12 @@ export async function performSessionGitHubPreparation(
   const { params, context } = options;
   const caller = getGatewayToolCallerIdentity();
   const sandbox = caller?.workspaceBaseRefreshSandbox;
-  if (
-    !caller ||
-    !sandbox?.enabled ||
-    !sandbox.backend ||
-    sandbox.workspaceSource !== "managed-worktree"
-  ) {
+  if (!caller || !canPrepareGitHubPullRequest(sandbox)) {
     throw new Error(
-      "Run prepare_pr from this conversation's sandboxed agent in a managed workspace.",
+      sandbox?.workspaceAccess === "ro"
+        ? "The workspace is read-only; prepare_pr requires a writable sandbox."
+        : "Run prepare_pr from this conversation's sandboxed agent in a managed workspace.",
     );
-  }
-  if (sandbox.workspaceAccess === "ro") {
-    throw new Error("The workspace is read-only; prepare_pr requires a writable sandbox.");
   }
   if (
     params.sessionKey !== caller.sessionKey ||
@@ -146,7 +141,16 @@ export async function performSessionGitHubPreparation(
         sandbox,
         pullRequest: { url, host, number, base, head },
         assertCurrent,
+        verifyCurrentPullRequest: async () => {
+          await assertExistingPullRequestWriteAccess({
+            pullRequest: inspected.result,
+            identity,
+            assertCurrent,
+          });
+        },
         signal: options.signal,
+        conflictsResolved: params.conflictsResolved,
+        baseCommit: params.expectedHeadCommit,
       });
     },
   );
@@ -155,14 +159,17 @@ export async function performSessionGitHubPreparation(
 }
 
 /** The caller retains current PR eligibility and session-action exclusion through this operation. */
-export async function prepareManagedPullRequestWorkspace(params: {
+async function prepareManagedPullRequestWorkspace(params: {
   owner: LocalWorkspaceOwner;
   storePath: string;
   identity: PreparedGitHubPublicationIdentity;
   sandbox: SandboxContext;
   pullRequest: Omit<SessionGitHubPullRequestBinding, "preparedHeadCommit">;
   assertCurrent: () => void;
+  verifyCurrentPullRequest: () => Promise<void>;
   signal?: AbortSignal;
+  conflictsResolved?: boolean;
+  baseCommit?: string;
 }) {
   const { owner } = params;
   const assertCurrent = () => {
@@ -249,15 +256,11 @@ export async function prepareManagedPullRequestWorkspace(params: {
       );
     }
   }
-  if (previous?.preparedHeadCommit) {
-    if (
-      previous.preparedHeadCommit !== previous.head.commit ||
-      previous.preparedHeadCommit !== params.pullRequest.head.commit
-    ) {
-      throw new Error(
-        "The original PR head advanced after preparation. Updating an already prepared workspace is not available yet; its existing source and edits were preserved.",
-      );
-    }
+  if (
+    previous &&
+    previous.preparedHeadCommit === previous.head.commit &&
+    previous.preparedHeadCommit === params.pullRequest.head.commit
+  ) {
     const reviewBase = await withWorktreeGitConfig(
       owner.worktree.path,
       true,
@@ -276,11 +279,20 @@ export async function prepareManagedPullRequestWorkspace(params: {
       headCommit: previous.preparedHeadCommit,
       headChanged: false,
       changedPaths: [],
+      conflictPaths: [],
       review: { mode: "local" as const, base: reviewBase },
     };
   }
-  // An interrupted first import retains its accepted source even if GitHub advances.
-  const binding: SessionGitHubPullRequestBinding = previous ?? structuredClone(params.pullRequest);
+  // Finish the accepted source before admitting another head, including after a restart.
+  const binding: SessionGitHubPullRequestBinding =
+    previous && previous.preparedHeadCommit !== previous.head.commit
+      ? previous
+      : {
+          ...structuredClone(params.pullRequest),
+          ...(previous?.preparedHeadCommit
+            ? { preparedHeadCommit: previous.preparedHeadCommit }
+            : {}),
+        };
   using resources = new DisposableStack();
   let reserved: Awaited<ReturnType<typeof prepareGitHubPublicationSession>> | undefined;
   const assertReserved = () => {
@@ -294,6 +306,10 @@ export async function prepareManagedPullRequestWorkspace(params: {
     }
   };
   const accept = async () => {
+    if (previous?.preparedHeadCommit) {
+      // Source fetches can outlive a remote head or permission observation.
+      await params.verifyCurrentPullRequest();
+    }
     assertReserved();
     const selected = await patchSessionEntryCore(
       scope,
@@ -327,46 +343,52 @@ export async function prepareManagedPullRequestWorkspace(params: {
     sandbox: params.sandbox,
     signal: params.signal,
     assertCurrent: assertReserved,
+    conflictsResolved: params.conflictsResolved,
+    baseCommit: params.baseCommit,
     source: {
       repository: binding.head.repository,
       branch: binding.head.branch,
       commit: binding.head.commit,
       githubHost: binding.host,
       review: { repository: binding.base.repository, commit: binding.base.commit },
+      initial: binding.preparedHeadCommit === undefined,
       emptySource,
-      resuming: previous !== undefined,
+      resuming: previous !== undefined && previous.preparedHeadCommit !== previous.head.commit,
       accept,
     },
   });
   assertReserved();
-  await patchSessionEntryCore(
-    scope,
-    (entry) => {
-      const worktree = assertEntry(entry);
-      if (!isDeepStrictEqual(worktree.githubPullRequest, binding)) {
-        throw new Error("The accepted PR source changed before preparation completed.");
-      }
-      return {
-        worktree: {
-          ...worktree,
-          githubPullRequest: { ...binding, preparedHeadCommit: binding.head.commit },
-        },
-      };
-    },
-    {
-      ...sessionEntryCommitGuardOptions(assertReserved),
-      requireWriteSuccess: true,
-      skipMaintenance: true,
-      preserveActivity: true,
-    },
-  );
+  if (integration.status !== "conflicts") {
+    await patchSessionEntryCore(
+      scope,
+      (entry) => {
+        const worktree = assertEntry(entry);
+        if (!isDeepStrictEqual(worktree.githubPullRequest, binding)) {
+          throw new Error("The accepted PR source changed before preparation completed.");
+        }
+        return {
+          worktree: {
+            ...worktree,
+            githubPullRequest: { ...binding, preparedHeadCommit: binding.head.commit },
+          },
+        };
+      },
+      {
+        ...sessionEntryCommitGuardOptions(assertReserved),
+        requireWriteSuccess: true,
+        skipMaintenance: true,
+        preserveActivity: true,
+      },
+    );
+  }
   assertCurrent();
   return {
-    status: "prepared" as const,
+    status: integration.status === "conflicts" ? ("conflicts" as const) : ("prepared" as const),
     url: binding.url,
     headCommit: binding.head.commit,
     headChanged: binding.head.commit !== params.pullRequest.head.commit,
     changedPaths: integration.changedPaths,
+    conflictPaths: integration.conflictPaths,
     ...(integration.review ? { review: integration.review } : {}),
   };
 }

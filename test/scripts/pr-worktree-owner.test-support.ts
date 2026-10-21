@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect } from "vitest";
@@ -121,7 +121,12 @@ fi
   };
 }
 
-export function expectProvisionSeed(f: ReturnType<typeof createProvisionOwnerFixture>, pr = 42) {
+type ProvisionCheckout = Pick<
+  ReturnType<typeof createProvisionOwnerFixture>,
+  "canonical" | "main" | "git"
+>;
+
+export function expectProvisionSeed(f: ProvisionCheckout, pr = 42) {
   const worktree = join(f.canonical, ".worktrees", `pr-${pr}`);
   expect(f.git(worktree, "symbolic-ref", "HEAD")).toBe(`refs/heads/temp/pr-${pr}`);
   expect(f.git(worktree, "rev-parse", "HEAD")).toBe(f.main);
@@ -130,15 +135,18 @@ export function expectProvisionSeed(f: ReturnType<typeof createProvisionOwnerFix
 }
 
 export function expectProvisionLeaseReleased(f: ReturnType<typeof createProvisionOwnerFixture>) {
-  const database = new DatabaseSync(
+  using database = new DatabaseSync(
     join(f.canonical, ".local", "pr-state", "state", "openclaw.sqlite"),
     { readOnly: true },
   );
-  try {
-    expect(database.prepare("SELECT count(*) AS leases FROM state_leases").get()).toEqual({
-      leases: 0,
-    });
-  } finally {
-    database.close();
-  }
+  expect(database.prepare("SELECT count(*) AS leases FROM state_leases").get()).toEqual({
+    leases: 0,
+  });
+}
+
+export function expectProvisionComplete(f: ReturnType<typeof createProvisionOwnerFixture>) {
+  expectProvisionSeed(f);
+  expectProvisionLeaseReleased(f);
+  expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
+  expect(existsSync(join(f.home, ".openclaw"))).toBe(false);
 }

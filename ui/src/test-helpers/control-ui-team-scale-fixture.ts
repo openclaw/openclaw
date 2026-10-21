@@ -73,6 +73,7 @@ type FixtureOptions = {
   liveRun?: boolean;
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
+  sidebarAvatars?: boolean;
   sessionEventChurn?: boolean;
   sessionEventDurationMs?: number;
   sessionEventAncestorRefs?: boolean;
@@ -112,7 +113,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     counts.people,
     now,
     {
-      avatars: options.sidebarLiveChurn,
+      avatars: options.sidebarLiveChurn || options.sidebarAvatars,
       sharing: options.closedMenuMembers,
     },
   );
@@ -150,7 +151,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         pinnedRows[(index - 8) % pinnedRows.length]!.key,
       ];
     }
-    if (options.sidebarLiveChurn) {
+    if (options.sidebarLiveChurn || options.sidebarAvatars) {
       assets.set(`/api/users/${person.id}/avatar`, {
         contentType: "image/svg+xml",
         body:
@@ -355,7 +356,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     ],
   };
   const sidebarEntries = [
-    "route:agents-home",
+    "route:sessions",
     ...pinnedKeys.map((key) => `session:${key}`),
     ...plugins.map((plugin) => `plugin:${plugin.pluginId}/overview`),
   ];

@@ -1,5 +1,5 @@
 import "./account-usage.tsx";
-import { createMemo, For, onCleanup, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
@@ -503,7 +503,7 @@ function ProviderProfileRow(
   let registeredId: string | undefined;
   const drag = createPointerDrag();
   let releaseUsage: (() => void) | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     releaseUsage?.();
     if (registeredId) {
       props.rowElements.delete(registeredId);

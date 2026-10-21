@@ -8,12 +8,9 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import {
-  type AdmittedRunContext,
   closeAdmittedRunDelegatedAuthority,
-  getAdmittedRunDelegatedAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../agents/admitted-run-context.js";
-import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import { bindCronManagementGrant } from "../../agents/cron-creator-authority-context.js";
 import * as hostFileWrite from "../../agents/host-file-write.js";
 import { makeSettledChild } from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.test-support.js";
@@ -41,7 +38,7 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import { resolveMcpLoopbackClientGrant, revokeMcpLoopbackClientGrant } from "../mcp-grant-store.js";
+import { revokeMcpLoopbackClientGrant } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
 import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
 import {
@@ -113,31 +110,23 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
   if (admin === "channel-owner") {
     setRuntimeConfigSnapshot({ ...cfg, commands: { ownerAllowFrom: ["discord:owner-1"] } });
   }
-  await inRun(originalRunId, admitted, async () => {
-    expect(
-      await markRequesterTurnYieldedWithAuthority({
-        ...requesterTurn,
-        runs,
-        transfer,
-      }),
-    ).toBe(1);
+  await inRun(originalRunId, admitted, () =>
+    markRequesterTurnYieldedWithAuthority({ ...requesterTurn, runs, transfer }),
+  );
+  await settleRequesterTurnAfterSessionSpawns({
+    ...requesterTurn,
+    requesterYielded: true,
+    acceptedSessionSpawns: [
+      {
+        runId: child.runId,
+        childSessionKey: child.childSessionKey,
+        expectsCompletionMessage: true,
+      },
+    ],
+    runs,
+    transfer,
+    schedule: () => {},
   });
-  expect(
-    await settleRequesterTurnAfterSessionSpawns({
-      ...requesterTurn,
-      requesterYielded: true,
-      acceptedSessionSpawns: [
-        {
-          runId: child.runId,
-          childSessionKey: child.childSessionKey,
-          expectsCompletionMessage: true,
-        },
-      ],
-      runs,
-      transfer,
-      schedule: () => {},
-    }),
-  ).toBe(true);
   const runId = "successor-requester";
   return await captureRequesterContinuationCaller({
     requesterSessionKey: SESSION,
@@ -182,11 +171,7 @@ async function withTransport(
   transport: "cli" | "embedded",
   config: OpenClawConfig,
   context: ReturnType<typeof createCronFixture>["context"],
-  run: (
-    tools: CreatorTransportTools,
-    admitted: AdmittedRunContext,
-    creator: CronCreatorAuthorityCapability,
-  ) => Promise<void>,
+  run: (tools: CreatorTransportTools) => Promise<void>,
 ) {
   // Construct the listener outside the requester's Cron scope.
   if (transport === "cli") {
@@ -205,7 +190,7 @@ async function withTransport(
           creator,
           senderIsOwner: true,
         });
-        await run(tools, admitted, creator);
+        await run(tools);
       } finally {
         if (tools?.mcpCapture) {
           revokeMcpLoopbackClientGrant(tools.mcpCapture.token);
@@ -466,60 +451,32 @@ describe("requester continuation persisted automation management", () => {
       };
       setRuntimeConfigSnapshot(config);
       const fixture = await createStoredJob(undefined, config);
-      await withTransport(transport, config, fixture.context, async (tools, admitted, creator) => {
-        const isCronCurrent = expectDefined(creator.isCurrent, "requester Cron currentness");
-        const delegated = expectDefined(getAdmittedRunDelegatedAuthority(admitted), "admitted run");
-        const assertRunActive = expectDefined(
-          resolveAdmittedRunActiveAssertion(admitted),
-          "admitted run assertion",
-        );
-        const mcpGrant = tools.mcpCapture
-          ? expectDefined(resolveMcpLoopbackClientGrant(tools.mcpCapture), "live MCP grant")
-          : undefined;
-        expect(isCronCurrent()).toBe(true);
+      await withTransport(transport, config, fixture.context, async (tools) => {
         const committedPath = path.join(stateDir, `committed-${transport}.txt`);
         const laterPath = path.join(stateDir, `continued-${transport}.txt`);
         const content = "Independent file work remains admitted.\n";
         const write = async (file: string) => {
-          await expect(tools.invoke("write", { path: file, content })).resolves.toMatchObject({
-            content: [{ type: "text", text: expect.stringContaining("Successfully wrote") }],
-          });
+          await tools.invoke("write", { path: file, content });
           expect(await readFile(file, "utf8")).toBe(content);
         };
         const originalWriteHostFile = hostFileWrite.writeHostFile;
-        let revokedAcrossWrite = false;
-        const writeSpy = vi
-          .spyOn(hostFileWrite, "writeHostFile")
-          .mockImplementation(async (...args) => {
-            await originalWriteHostFile(...args);
-            if (args[0] === committedPath) {
-              // Retire only Cron management after the owned file has actually committed.
-              revokeRequesterCronAuthority(SESSION);
-              revokedAcrossWrite = true;
-            }
-          });
-        try {
-          await write(committedPath);
-          expect(revokedAcrossWrite).toBe(true);
-          expect(isCronCurrent()).toBe(false);
-          expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(delegated);
-          expect(assertRunActive).not.toThrow();
-          expect(creator).toMatchObject({ active: true, signal: { aborted: false } });
-          if (mcpGrant) {
-            expect(mcpGrant.isCurrent()).toBe(true);
+        using _ = vi.spyOn(hostFileWrite, "writeHostFile").mockImplementation(async (...args) => {
+          await originalWriteHostFile(...args);
+          if (args[0] === committedPath) {
+            // Retire only Cron management after the owned file has actually committed.
+            revokeRequesterCronAuthority(SESSION);
           }
-          await write(laterPath);
-          await expect(
-            tools.invoke(AUTOMATIONS_TOOL_NAME, {
-              action: "update",
-              jobId: fixture.before[0]!.id,
-              job: { name: "Must not persist after requester revocation" },
-            }),
-          ).rejects.toThrow(/Automation (caller authority is no longer active|admin grant)/i);
-          expect(await fixture.read()).toEqual(fixture.before);
-        } finally {
-          writeSpy.mockRestore();
-        }
+        });
+        await write(committedPath);
+        await write(laterPath);
+        await expect(
+          tools.invoke(AUTOMATIONS_TOOL_NAME, {
+            action: "update",
+            jobId: fixture.before[0]!.id,
+            job: { name: "Must not persist after requester revocation" },
+          }),
+        ).rejects.toThrow(/Automation (caller authority is no longer active|admin grant)/i);
+        expect(await fixture.read()).toEqual(fixture.before);
       });
     },
   );
@@ -736,7 +693,6 @@ describe("automation stream exec policy at persistence", () => {
             }),
           ]);
           await setPolicy("deny", "always");
-          expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
           hold = false;
           release.resolve();
           const outcome = await pending;

@@ -166,6 +166,15 @@ function expectFailure(respond: ReturnType<typeof vi.fn>, error: Record<string, 
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
 }
 
+async function expectOpenFailure(
+  { opts, sessions, respond }: ReturnType<typeof makeOpts>,
+  error: Record<string, unknown> = {},
+) {
+  await runTerminal("terminal.open", opts);
+  expect(sessions.open).not.toHaveBeenCalled();
+  expectFailure(respond, error);
+}
+
 const uploadFile = { name: "report.pdf", contentBase64: "dGVzdA==" };
 
 function openedTerminal(sessionId: string) {
@@ -315,23 +324,17 @@ describe("terminal gateway policy", () => {
   });
 
   it("rejects catalog opens for missing providers", async () => {
-    const { opts, sessions, respond } = makeOpts(catalogParams("missing"));
-    await runTerminal("terminal.open", opts);
-    expect(sessions.open).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    await expectOpenFailure(makeOpts(catalogParams("missing")));
   });
 
   it("reports a missing explicit owner as invalid request", async () => {
-    const { opts, sessions, respond, resolveTerminalLaunchPolicy } = makeOpts();
-    resolveTerminalLaunchPolicy.mockReturnValue({
+    const fixture = makeOpts();
+    fixture.resolveTerminalLaunchPolicy.mockReturnValue({
       ok: false,
       block: { kind: "owner-required", message: "terminal requires an explicit owner" },
     });
 
-    await runTerminal("terminal.open", opts);
-
-    expect(sessions.open).not.toHaveBeenCalled();
-    expectFailure(respond, {
+    await expectOpenFailure(fixture, {
       code: ErrorCodes.INVALID_REQUEST,
       message: "terminal requires an explicit owner",
     });
@@ -389,42 +392,25 @@ describe("terminal gateway policy", () => {
     );
   });
 
-  it("rejects a catalog plan that finishes after the absolute open deadline", async () => {
+  it.each(["rewind", "forward"])("uses a monotonic deadline despite clock %s", async (jump) => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
       installTerminalCatalog(async () => {
-        // A wall-clock rewind must not extend the monotonic deadline.
-        vi.setSystemTime(-90_000);
-        vi.advanceTimersByTime(TERMINAL_OPEN_DEADLINE_MS);
-        return { kind: "local", argv: ["codex", "resume", "thread"] };
-      });
-      const { opts, sessions, respond } = makeOpts(catalogParams());
-
-      await runTerminal("terminal.open", opts);
-
-      expect(sessions.open).not.toHaveBeenCalled();
-      expectFailure(respond, { message: "terminal open timed out" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("opens a terminal despite a 90s wall-clock forward jump during catalog lookup", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    try {
-      installTerminalCatalog(async () => {
-        // A wall-clock jump must not expire a healthy monotonic deadline.
-        vi.setSystemTime(90_000);
+        vi.setSystemTime(jump === "rewind" ? -90_000 : 90_000);
+        if (jump === "rewind") {
+          vi.advanceTimersByTime(TERMINAL_OPEN_DEADLINE_MS);
+        }
         return localPlan();
       });
-      const { opts, sessions, respond } = makeOpts(catalogParams());
-
-      await runTerminal("terminal.open", opts);
-
-      expect(sessions.open).toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(true, expect.any(Object));
+      const fixture = makeOpts(catalogParams());
+      if (jump === "rewind") {
+        await expectOpenFailure(fixture, { message: "terminal open timed out" });
+      } else {
+        await runTerminal("terminal.open", fixture.opts);
+        expect(fixture.sessions.open).toHaveBeenCalled();
+        expect(fixture.respond).toHaveBeenCalledWith(true, expect.any(Object));
+      }
     } finally {
       vi.useRealTimers();
     }
@@ -523,15 +509,11 @@ describe("terminal gateway policy", () => {
     } else if (stage === "plugin") {
       policyMocks.applyPluginNodeInvokePolicy.mockResolvedValue({ ok: false, message });
     }
-    const { opts, sessions, respond } = makeOpts(catalogParams(catalogId, "node:node-1"), {
-      nodeRegistry: { get: () => (stage === "disconnected" ? undefined : nodeSession(command)) },
-    });
-    await runTerminal("terminal.open", opts);
-    expect(sessions.open).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      message ? expect.objectContaining({ message }) : expect.any(Object),
+    await expectOpenFailure(
+      makeOpts(catalogParams(catalogId, "node:node-1"), {
+        nodeRegistry: { get: () => (stage === "disconnected" ? undefined : nodeSession(command)) },
+      }),
+      message ? { message } : {},
     );
   });
 
@@ -626,10 +608,7 @@ describe("terminal gateway policy", () => {
   ] satisfies OpenClawConfig[])(
     "rejects reopening after an accepted policy tightening: %j",
     async (preparedConfig) => {
-      const { opts, sessions, respond } = makeOpts(undefined, { preparedConfig });
-      await runTerminal("terminal.open", opts);
-      expect(sessions.open).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+      await expectOpenFailure(makeOpts(undefined, { preparedConfig }));
     },
   );
 

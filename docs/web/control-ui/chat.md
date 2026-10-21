@@ -190,8 +190,13 @@ Tap an image to open the zoomable viewer. The existing preview stays visible
 while a sharper, screen-sized rendition loads. If that request fails, **Retry**
 loads it again without replacing the preview or opening another tab. Swiping to
 a gallery image loads that selection, not the rest of the gallery in advance.
-**Download image** fetches the original only when selected. Copy and download
-also remain available from the image's action menu when a preview cannot load.
+Hover over a managed image, or focus it with the keyboard, to reveal **Copy image**
+and **Download image** inside its lower-right corner. Devices without hover keep
+these controls visible. Selecting the image itself still opens the viewer.
+**Download image** fetches the original only when selected. A failed preview can
+still have an accessible original, so its action menu retains copy and download.
+When the Gateway confirms that the source is unavailable, the card omits these
+file actions and keeps its applicable recovery action, such as **Retry**.
 Third-party image URLs retain a secondary browser link because their servers
 may allow image display but block cross-origin downloads; this is not a recovery
 action for uploaded or managed previews.
@@ -519,7 +524,9 @@ The naming model is asked for a plain-text label of that message, not of injecte
 harness or project instructions, and not a copy of the input's JSON wrapper.
 They are generated separately from the agent's work, so a title is not a completion
 status or a report of tool access. Existing titles and manual names are left
-unchanged; click a title to rename it.
+unchanged; click a title to rename it. A connected conversation without a saved
+session record keeps its ordinary title. Renaming requires that record and the
+appropriate access.
 
 Worktree creation waits up to 30 seconds for a title, then proceeds while naming
 finishes in the background. A late title still updates the session without
@@ -561,12 +568,13 @@ Run-error banners offer **Refresh** to reload the conversation without resending
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">
+    - With the composer caret at the start, ArrowUp recalls earlier prompts and ArrowDown returns to your draft. Each new traversal includes newly loaded history; an active traversal keeps its order.
     - `chat.send` is **non-blocking**: it acknowledges admission with `{ runId, status: "started" }` and the response streams via `chat` events. An optional `messageSeq` identifies an already committed transcript position; it is omitted when input remains only in accepted custody. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
     - Chat uploads accept images, videos, and other files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links. Files appear in their final composer slots as soon as preparation starts, with a per-file progress fill and an in-place error icon if reading fails. Before sending, use **Remove attachment** at the corner of a staged attachment, including one still being prepared; the control supports touch and keyboard input in both Chat and New Session.
     - Opening a Markdown attachment (`.md`, `.markdown`, or a Markdown MIME type) in the side panel shows formatted headings, lists, tables, and code blocks. HTML attachments open a sandboxed page with a **Source** switch; other text attachments stay literal. HTML attachment previews accept up to 2 MiB of UTF-8 content; other text previews keep the 256 KiB limit. All retain the original download link; Markdown does not execute embedded HTML or automatically load remote images.
     - Same-origin PDF attachments up to 16 MiB open in a native reader that fills the side panel. Background download-link renewal keeps the reader’s page and zoom when the document is unchanged. Unavailable or oversized previews offer the original download instead; external PDFs and Office documents remain download-only.
     - Staged attachments scroll horizontally when they no longer fit. Faded edges show where more attachments remain, including after adding files or resizing the composer.
-    - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
+    - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion. A replayed receipt for an earlier input preserves any other active response, tool activity, and Stop target in the same conversation.
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
     - Long tool output uses 2,000-character text previews in history. Complete structured results keep their existing display limit so source cards and embedded views remain available. Choose **Show full output** to load the captured result on demand; copying or downloading from that view uses the full result. User and assistant text keep their separate display limits.
     - When a visible assistant message was truncated in `chat.history`, the Control UI automatically fetches the full display-normalized transcript entry through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. The preview remains visible while the entry loads; recovered text replaces it inline.

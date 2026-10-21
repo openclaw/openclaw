@@ -164,7 +164,7 @@ export function createApplicationTheme(
     try {
       const { createThemeCatalog } = await import("./theme-catalog.ts");
       if (!disposed) {
-        catalog = createThemeCatalog(gateway, publish);
+        catalog = createThemeCatalog(gateway, publish, listeners.publish);
         catalogLoadError = undefined;
       }
     } catch (error) {
