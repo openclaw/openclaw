@@ -28,8 +28,6 @@ Heartbeat-owned event wakes retain the same per-agent rate limits when recurring
 
 Transcript markers distinguish `[OpenClaw heartbeat poll]` from an exec completion, cron wake, or session event. Scheduled polls use the configured heartbeat session, which is the agent's main session by default. Targeted completion events return to the session that owns the work. Event markers retain their source provenance without copying internal instructions into chat history. Silent acknowledgment pairs remain hidden.
 
-Reminders that mention "heartbeat poll" or "heartbeat wake" in their text are delivered normally, including on the next ordinary turn after a skipped heartbeat. Those phrases are treated as internal wake noise only when they begin the event.
-
 For a WebChat-only conversation, an exec completion can reply directly to its original conversation without an external messaging target. If that conversation is reset or replaced while the completion is being prepared, the old turn cannot publish into the new conversation. Explicit `target: "none"` still suppresses delivery.
 
 Troubleshooting: [Automations](/automation/cron-jobs#troubleshooting)
