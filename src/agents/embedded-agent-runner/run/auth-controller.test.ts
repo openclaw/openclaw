@@ -84,6 +84,21 @@ function keyProfile(key: string) {
   return { type: "api_key" as const, provider: "custom-openai", key };
 }
 
+function oauthProfile(expires: number) {
+  return {
+    type: "oauth" as const,
+    provider: "custom-openai",
+    access: "access-token",
+    refresh: "refresh-token",
+    expires,
+  };
+}
+
+const disabledProfile = (disabledReason: "billing" | "rate_limit" | "auth_permanent") => ({
+  disabledUntil: Date.now() + 60_000,
+  disabledReason,
+});
+
 function expectProtected(value: string | undefined, plaintext: string): void {
   expect(value).not.toBe(plaintext);
   expect(looksLikeSecretSentinel(value ?? "")).toBe(true);
@@ -405,13 +420,7 @@ it.each([
       version: 1,
       profiles: {
         current: keyProfile("current-key"),
-        expired: {
-          type: "oauth",
-          provider: "custom-openai",
-          access: "expired-access",
-          refresh: "revoked-refresh",
-          expires: 0,
-        },
+        expired: oauthProfile(0),
         healthy: keyProfile("healthy-key"),
       },
       order: { "custom-openai": profileCandidates },
@@ -540,21 +549,8 @@ it.each(["billing", "auth_permanent"] as const)(
       fallbackConfigured: true,
       authStore: {
         version: 1,
-        profiles: {
-          [profileId]: {
-            type: "oauth",
-            provider: "custom-openai",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          },
-        },
-        usageStats: {
-          [profileId]: {
-            disabledUntil: Date.now() + 60_000,
-            disabledReason,
-          },
-        },
+        profiles: { [profileId]: oauthProfile(Date.now() + 60_000) },
+        usageStats: { [profileId]: disabledProfile(disabledReason) },
       },
     });
 
@@ -596,52 +592,31 @@ it("preserves selected-profile identity through auth exhaustion bookkeeping", as
   expect(harness.profileIndex).toBe(2);
 });
 
-it("only enables transient cooldown probing when every automatic profile is transiently cooled", () => {
-  const createStore = (
-    usageStats: NonNullable<AuthProfileStore["usageStats"]>,
-  ): AuthProfileStore => ({
-    version: 1,
-    profiles: {
-      first: keyProfile("first-key"),
-      second: keyProfile("second-key"),
-    },
-    usageStats,
-  });
-  const disabled = (disabledReason: "billing" | "rate_limit") => ({
-    disabledUntil: Date.now() + 60_000,
-    disabledReason,
-  });
-  const resolve = (
-    usageStats: NonNullable<AuthProfileStore["usageStats"]>,
-    lockedProfileId?: string,
-  ) =>
-    resolveEmbeddedAuthCooldownProbePolicy({
-      authStore: createStore(usageStats),
+it.each([
+  ["rate_limit", undefined, undefined, [], null],
+  ["billing", "billing", undefined, [], "billing"],
+  ["rate_limit", "rate_limit", undefined, ["first", "second"], "rate_limit"],
+  ["billing", "rate_limit", "first", ["second"], "rate_limit"],
+] as const)(
+  "probes automatic cooldowns (%s/%s, locked=%s)",
+  (first, second, lockedProfileId, ids, reason) => {
+    const result = resolveEmbeddedAuthCooldownProbePolicy({
+      authStore: {
+        version: 1,
+        profiles: { first: keyProfile("first-key"), second: keyProfile("second-key") },
+        usageStats: {
+          first: disabledProfile(first),
+          ...(second ? { second: disabledProfile(second) } : {}),
+        },
+      },
       profileCandidates: ["first", "second"],
       lockedProfileId,
       modelId: "test-model",
       allowTransientCooldownProbe: true,
     });
-
-  const partiallyAvailable = resolve({ first: disabled("rate_limit") });
-  expect([...partiallyAvailable.probeProfileIds]).toEqual([]);
-  expect(partiallyAvailable.unavailableReason).toBeNull();
-
-  const billingDisabled = resolve({ first: disabled("billing"), second: disabled("billing") });
-  expect([...billingDisabled.probeProfileIds]).toEqual([]);
-  expect(billingDisabled.unavailableReason).toBe("billing");
-
-  const rateLimited = resolve({ first: disabled("rate_limit"), second: disabled("rate_limit") });
-  expect([...rateLimited.probeProfileIds]).toEqual(["first", "second"]);
-  expect(rateLimited.unavailableReason).toBe("rate_limit");
-
-  const mixedPinnedState = resolve(
-    { first: disabled("billing"), second: disabled("rate_limit") },
-    "first",
-  );
-  expect([...mixedPinnedState.probeProfileIds]).toEqual(["second"]);
-  expect(mixedPinnedState.unavailableReason).toBe("rate_limit");
-});
+    expect([[...result.probeProfileIds], result.unavailableReason]).toEqual([ids, reason]);
+  },
+);
 
 it("preserves the transient cooldown probe for a rate-limited backup after a billing-disabled pin", async () => {
   const now = Date.now();
@@ -659,7 +634,7 @@ it("preserves the transient cooldown probe for a rate-limited backup after a bil
         backup: keyProfile("backup-key"),
       },
       usageStats: {
-        pinned: { disabledUntil: now + 60_000, disabledReason: "billing" },
+        pinned: disabledProfile("billing"),
         backup: { blockedUntil: now + 60_000 },
       },
     },

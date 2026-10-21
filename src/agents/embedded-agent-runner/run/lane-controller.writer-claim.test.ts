@@ -183,19 +183,11 @@ function recoveryLane(runId: string, recovery = true) {
         : { kind: "system", boundary: "fresh-request", state: "present" },
     },
   });
-  const params: RunEmbeddedAgentParams & { sessionFile: string } = {
-    agentId: "main",
+  const params = writerParams({
     runId,
-    sessionId,
-    sessionKey,
-    sessionFile: sessionKey,
-    sessionTarget: { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
     prompt: "Continue the interrupted request",
-    timeoutMs: 30_000,
-    workspaceDir: "/tmp",
     preparedRunAdmission: { ...prepared },
-    enqueue: async (task) => await task(),
-  };
+  });
   return {
     prepared,
     run: () => {
@@ -206,6 +198,19 @@ function recoveryLane(runId: string, recovery = true) {
       return controller.enqueueSession(() => controller.enqueueGlobal(async () => completedResult));
     },
   };
+}
+
+function pauseRecoveryAppend(runId: string) {
+  const lane = recoveryLane(runId);
+  const entered = createDeferred();
+  const release = createDeferred();
+  const append = noteWriter.appendSessionTranscriptNote;
+  vi.spyOn(noteWriter, "appendSessionTranscriptNote").mockImplementation(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return append(...args);
+  });
+  return { lane, entered: entered.promise, release: release.resolve, pending: lane.run() };
 }
 
 describe("embedded run durable writer admission", () => {
@@ -478,22 +483,13 @@ describe("embedded run durable writer admission", () => {
   it("rejects a recovery note when its prepared owner closes during the awaited append", async () => {
     const target = { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() };
     await replaceSessionEntry(target, { sessionId, updatedAt: 1, lifecycleRevision });
-    const lane = recoveryLane("closing-recovery");
-    const entered = createDeferred();
-    const release = createDeferred();
-    const append = noteWriter.appendSessionTranscriptNote;
-    vi.spyOn(noteWriter, "appendSessionTranscriptNote").mockImplementation(async (...args) => {
-      entered.resolve();
-      await release.promise;
-      return append(...args);
-    });
-    const pending = lane.run();
+    const { lane, entered, release, pending } = pauseRecoveryAppend("closing-recovery");
     const failure = expect(pending).rejects.toThrow(
       "prepared restart recovery is no longer active",
     );
-    await entered.promise;
+    await entered;
     lane.prepared.close();
-    release.resolve();
+    release();
     await failure;
     expect((await SessionManager.openAsync(target)).getEntries()).toEqual([]);
   });
@@ -504,23 +500,14 @@ describe("embedded run durable writer admission", () => {
       const target = { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() };
       await replaceSessionEntry(target, { sessionId, updatedAt: 1, lifecycleRevision });
       const databasePath = await preparePhysicalSessionStorePath(target);
-      const lane = recoveryLane("replaced-recovery");
-      const entered = createDeferred();
-      const release = createDeferred();
-      const append = noteWriter.appendSessionTranscriptNote;
-      vi.spyOn(noteWriter, "appendSessionTranscriptNote").mockImplementation(async (...args) => {
-        entered.resolve();
-        await release.promise;
-        return append(...args);
-      });
-      const pending = lane.run();
+      const { lane, entered, release, pending } = pauseRecoveryAppend("replaced-recovery");
       const failure = expect(pending).rejects.toThrow(/replaced|identity|source/i);
       const replacementPath = `${databasePath}.replacement`;
       const heldPath = `${databasePath}.held`;
       let replaced = false;
       try {
         await Promise.race([
-          entered.promise,
+          entered,
           pending.then(() => {
             throw new Error("Recovery skipped the pending note");
           }),
@@ -534,11 +521,11 @@ describe("embedded run durable writer admission", () => {
         renameSync(databasePath, heldPath);
         renameSync(replacementPath, databasePath);
         replaced = true;
-        release.resolve();
+        release();
         await failure;
         expect(readFileSync(databasePath)).toEqual(replacementBytes);
       } finally {
-        release.resolve();
+        release();
         await Promise.allSettled([pending]);
         if (replaced) {
           renameSync(databasePath, replacementPath);
@@ -610,21 +597,14 @@ describe("embedded run durable writer admission", () => {
   it.each([false, true])(
     "revalidates terminal writer cleanup at the worker grant (retired=%s)",
     async (retired) => {
-      const scope = { agentId: "main", sessionKey, storePath: fixture.storePath() };
-      await replaceSessionEntry(scope, {
-        lifecycleRevision,
-        sessionId,
-        updatedAt: 1,
-      } as InternalSessionEntry);
-      const claim = await claimAgentSessionWriter({
-        ...scope,
-        prompt: "terminal turn",
-        runId: "terminal-writer",
-        sessionId,
-        sessionTarget: { ...scope, sessionId },
-        timeoutMs: 30_000,
-        workspaceDir: "/tmp",
-      });
+      const scope = writerScope();
+      await replaceSessionEntry(scope, { ...sessionRevision, updatedAt: 1 });
+      const claim = await claimAgentSessionWriter(
+        writerParams({
+          prompt: "terminal turn",
+          runId: "terminal-writer",
+        }),
+      );
       expect(claim).toBeDefined();
 
       let current = true;
@@ -643,12 +623,7 @@ describe("embedded run durable writer admission", () => {
         expectedLifecycleRevision: lifecycleRevision,
         expectedSessionId: sessionId,
         expectedWriterRunId: "terminal-writer",
-        message: buildAssistantMessage({
-          model: { api: "openai-responses", provider: "openai", id: "gpt-test" },
-          content: [{ type: "text", text: "late terminal output" }],
-          stopReason: "stop",
-          usage: buildUsageWithNoCost({}),
-        }),
+        message: assistantMessage("late terminal output"),
       });
       expect(lateAppend).toMatchObject(
         retired ? { ok: true } : { ok: false, code: "session-rebound" },
@@ -708,16 +683,15 @@ describe("embedded run durable writer admission", () => {
             authority: { assertCurrent: assertExecutionCurrent, authorize: assertExecutionCurrent },
           },
           async () => {
-            const claim = await claimAgentSessionWriter({
-              ...scope,
-              prompt: "terminal memory turn",
-              runId: "terminal-memory-writer",
-              sessionId,
-              sessionTarget: { ...scope, sessionId },
-              replyOperation: operation,
-              timeoutMs: 30_000,
-              workspaceDir: "/tmp",
-            });
+            const claim = await claimAgentSessionWriter(
+              writerParams({
+                ...scope,
+                prompt: "terminal memory turn",
+                runId: "terminal-memory-writer",
+                sessionTarget: { ...scope, sessionId },
+                replyOperation: operation,
+              }),
+            );
             expect(claim).toBeDefined();
             cancelled = true;
             operation.abort("stop");
@@ -767,30 +741,14 @@ describe("embedded run durable writer admission", () => {
   );
 
   it("silently replaces a persisted claim whose prior run is no longer live", async () => {
-    await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
-      activeWriterRunId: "completed-run",
-      lifecycleRevision,
-      sessionId,
-      updatedAt: 1,
-    } as InternalSessionEntry);
+    await seedWriter("completed-run");
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
 
     // Cold admission registers its native lease; observe the warmed claim mutation separately.
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }),
-    ).toMatchObject({ activeWriterRunId: "completed-run" });
+    expect(readEntry()).toMatchObject({ activeWriterRunId: "completed-run" });
     const sql = observeHostDataSql();
     try {
-      await claimAgentSessionWriter({
-        agentId: "main",
-        prompt: "next turn",
-        runId: "run-next",
-        sessionId,
-        sessionKey,
-        sessionTarget: { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
-        timeoutMs: 30_000,
-        workspaceDir: "/tmp",
-      });
+      await claimAgentSessionWriter(writerParams({ prompt: "next turn", runId: "run-next" }));
       expect(
         sql.queries.filter((query) =>
           /session_nodes|session_entry_snapshots|session_participants|session_windows|\b(?:BEGIN|COMMIT|ROLLBACK|INSERT|UPDATE|DELETE)\b/i.test(
@@ -803,9 +761,7 @@ describe("embedded run durable writer admission", () => {
     }
 
     expect(warn).not.toHaveBeenCalled();
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }),
-    ).toMatchObject({ activeWriterRunId: "run-next" });
+    expect(readEntry()).toMatchObject({ activeWriterRunId: "run-next" });
   });
 
   it("silently replaces a stopped prior writer while keeping stale transcript writes fenced", async () => {

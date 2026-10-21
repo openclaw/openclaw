@@ -9,7 +9,10 @@ import {
   setCommandLaneConcurrency,
 } from "../../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
-import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
+import type {
+  CommandQueueEnqueueFn,
+  CommandQueueEnqueueOptions,
+} from "../../../process/command-queue.types.js";
 import { createReplyOperation } from "../../../sessions/session-controller.js";
 import { getSessionControllerOperation } from "../../../sessions/session-controller.state.js";
 import { testing } from "../../../sessions/session-controller.test-support.js";
@@ -46,6 +49,21 @@ function create(
   };
   return createLaneControllerFixture(params, { globalLane, configureRuntime: false });
 }
+
+function pauseSession(
+  { controller }: ReturnType<typeof create>,
+  options?: CommandQueueEnqueueOptions,
+  resume = async () => controller.throwIfAborted(),
+) {
+  const entered = createDeferred();
+  const finish = createDeferred();
+  const run = controller.enqueueSession(async () => {
+    entered.resolve();
+    await finish.promise;
+    await resume();
+  }, options);
+  return { entered: entered.promise, finish: finish.resolve, run };
+}
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
   vi.useFakeTimers();
@@ -60,31 +78,13 @@ afterEach(() => {
 
 describe("controller-owned execution guard", () => {
   it.each([
-    {
-      name: "same physical session",
-      otherId: false,
-      otherStore: false,
-      detached: false,
-      queued: true,
-    },
-    {
-      name: "different session ID",
-      otherId: true,
-      otherStore: false,
-      detached: false,
-      queued: false,
-    },
-    { name: "different store", otherId: false, otherStore: true, detached: false, queued: false },
-    {
-      name: "explicit detached run",
-      otherId: false,
-      otherStore: false,
-      detached: true,
-      queued: false,
-    },
-  ])(
-    "preserves sessionless admission for $name",
-    async ({ otherId, otherStore, detached, queued }) => {
+    ["same physical session", false, false, false, true],
+    ["different session ID", true, false, false, false],
+    ["different store", false, true, false, false],
+    ["explicit detached run", false, false, true, false],
+  ] as const)(
+    "preserves sessionless admission for %s",
+    async (_name, otherId, otherStore, detached, queued) => {
       const sessionId = "native-sessionless-owner";
       const storePath = "/synthetic/native-sessionless/sessions.sqlite";
       const first = create("native-sessionless-first", undefined, {
@@ -177,33 +177,28 @@ describe("controller-owned execution guard", () => {
       resetTriggered: false,
     });
     const caller = new AbortController();
-    const { controller, getParams } = create("nested", undefined, {
+    const state = create("nested", undefined, {
       replyOperation: operation,
       abortSignal: caller.signal,
     });
-    const entered = createDeferred();
-    const finish = createDeferred();
-    const nested = controller.enqueueSession(async () => {
-      entered.resolve();
-      await finish.promise;
-      controller.throwIfAborted();
-    });
+    const { controller, getParams } = state;
+    const { entered, finish, run: nested } = pauseSession(state);
     const reason = new Error("nested caller cancelled");
     const rejected = expect(nested).rejects.toBe(reason);
     try {
-      await entered.promise;
+      await entered;
       caller.abort(reason);
       expect(getParams().abortSignal?.reason).toBe(reason);
       expect(controller.abortSignal.reason).toBe(reason);
       expect(operation.abortSignal.aborted).toBe(false);
       expect(operation.result).toBeNull();
       expect(operation.watchdog.snapshot().phase).not.toBe("terminal");
-      finish.resolve();
+      finish();
       await rejected;
       expect(getSessionControllerOperation(key)).toBe(operation);
       expect(operation.result).toBeNull();
     } finally {
-      finish.resolve();
+      finish();
       await nested.catch(() => {});
       operation.complete();
     }
@@ -211,30 +206,26 @@ describe("controller-owned execution guard", () => {
 
   it("starts the preflight deadline after mailbox admission, not before its queue wait", async () => {
     const first = create("deadline-predecessor");
-    const firstEntered = createDeferred();
-    const firstFinish = createDeferred();
-    const predecessor = first.controller.enqueueSession(async () => {
-      firstEntered.resolve();
-      await firstFinish.promise;
-    });
-    await firstEntered.promise;
+    const {
+      entered: firstEntered,
+      finish: firstFinish,
+      run: predecessor,
+    } = pauseSession(first, undefined, async () => {});
+    await firstEntered;
     const second = create("deadline-successor");
-    const secondEntered = createDeferred();
-    const secondFinish = createDeferred();
-    const successor = second.controller.enqueueSession(
-      async () => {
-        secondEntered.resolve();
-        await secondFinish.promise;
-        second.controller.throwIfAborted();
-      },
-      { taskTimeoutMs: 25 },
-    );
+    const {
+      entered: secondEntered,
+      finish: secondFinish,
+      run: successor,
+    } = pauseSession(second, {
+      taskTimeoutMs: 25,
+    });
     const outcome = successor.catch((error: unknown) => error);
     try {
       vi.setSystemTime(2_000);
-      firstFinish.resolve();
+      firstFinish();
       await predecessor;
-      await secondEntered.promise;
+      await secondEntered;
       const operation = second.getParams().replyOperation;
       if (!operation) {
         throw new Error("Successor did not own a controller operation");
@@ -245,8 +236,8 @@ describe("controller-owned execution guard", () => {
       await operation.watchdog.tick();
       expect(second.controller.abortSignal.aborted).toBe(true);
     } finally {
-      firstFinish.resolve();
-      secondFinish.resolve();
+      firstFinish();
+      secondFinish();
       await Promise.allSettled([predecessor, outcome]);
     }
   });
@@ -315,18 +306,9 @@ describe("controller-owned execution guard", () => {
 
   it("retains successor custody after the deadline until the raw producer settles", async () => {
     const first = create("first");
-    const entered = createDeferred();
-    const raw = createDeferred();
-    const run = first.controller.enqueueSession(
-      async () => {
-        entered.resolve();
-        await raw.promise;
-        first.controller.throwIfAborted();
-      },
-      { taskTimeoutMs: 25 },
-    );
+    const { entered, finish, run } = pauseSession(first, { taskTimeoutMs: 25 });
     const failed = expect(run).rejects.toThrow();
-    await entered.promise;
+    await entered;
     const operation = first.getParams().replyOperation!;
     const dispatch = vi.fn(async () => "successor");
     const second = create("second").controller.enqueueSession(dispatch);
@@ -341,32 +323,26 @@ describe("controller-owned execution guard", () => {
     });
     await Promise.resolve();
     expect(settled).toBe(false);
-    raw.resolve();
+    finish();
     await failed;
     await expect(second).resolves.toBe("successor");
     expect(settled).toBe(true);
   });
 
   it("fences late preflight resumption before global admission without claiming timeout settlement", async () => {
-    const { controller, getParams } = create("late-preflight");
-    const entered = createDeferred();
-    const gate = createDeferred();
+    const state = create("late-preflight");
+    const { controller, getParams } = state;
     const execute = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-    const run = controller.enqueueSession(
-      async () => {
-        entered.resolve();
-        await gate.promise;
-        controller.throwIfAborted();
-        return controller.enqueueGlobal(execute);
-      },
-      { taskTimeoutMs: 25 },
-    );
+    const { entered, finish, run } = pauseSession(state, { taskTimeoutMs: 25 }, async () => {
+      controller.throwIfAborted();
+      await controller.enqueueGlobal(execute);
+    });
     const failed = expect(run).rejects.toThrow();
-    await entered.promise;
+    await entered;
     vi.setSystemTime(1_025);
     await getParams().replyOperation!.watchdog.tick();
     expect(getCommandLaneSnapshot(globalLane).activeCount).toBe(0);
-    gate.resolve();
+    finish();
     await failed;
     expect(execute).not.toHaveBeenCalled();
   });

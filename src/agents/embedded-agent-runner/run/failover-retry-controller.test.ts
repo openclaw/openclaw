@@ -21,17 +21,20 @@ vi.mock("../../../infra/backoff.js", async () => {
   return { ...actual, sleepWithAbort: mocks.sleepWithAbort };
 });
 
-import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
+import {
+  createRetryController,
+  type RetryRunParams,
+} from "./failover-retry-controller.test-support.js";
 
 const { sleepWithAbort: sleep, warn } = mocks;
 
-type ControllerInput = Parameters<typeof createEmbeddedRunFailoverRetryController>[0];
-
-type RunParams = ControllerInput["runInput"]["runParams"];
 type ControllerOptions = Partial<
-  Pick<RunParams, "abortSignal" | "onRetryWait" | "isFinalFallbackAttempt" | "retryTransientErrors">
+  Pick<
+    RetryRunParams,
+    "abortSignal" | "onRetryWait" | "isFinalFallbackAttempt" | "retryTransientErrors"
+  >
 > & {
-  advanceAuthProfile?: ControllerInput["preparedRuntime"]["advanceAttemptAuthProfile"];
+  advanceAuthProfile?: () => Promise<boolean>;
   fallbackConfigured?: boolean;
   budget?: number;
 };
@@ -41,26 +44,10 @@ function createController({
   budget,
   ...runParams
 }: ControllerOptions = {}) {
-  const controller = createEmbeddedRunFailoverRetryController({
-    runInput: {
-      runParams: { runId: "run:retry-test", ...runParams } as RunParams,
-      globalLane: "test",
-      agentDir: "/tmp/openclaw-failover-retry-controller-test",
-      fallbackConfigured,
-    },
-    preparedRuntime: {
-      provider: "openai",
-      modelId: "gpt-5.6-luna",
-      profileFailureStore: { version: 1, profiles: {} },
-      snapshot: () => ({
-        lastProfileId: "openai:p1",
-        pluginHarnessOwnsTransport: false,
-        agentHarness: { id: "embedded" },
-      }),
-      getApiKeyInfo: () => null,
-      advanceAttemptAuthProfile: advanceAuthProfile,
-    },
-    getSessionId: () => "session:failover-retry-controller-test",
+  const controller = createRetryController({
+    runParams,
+    fallbackConfigured,
+    runtime: { advanceAttemptAuthProfile: advanceAuthProfile },
   });
   if (budget !== undefined) {
     controller.observeAttempt({ providerRetryMaxRetries: budget });

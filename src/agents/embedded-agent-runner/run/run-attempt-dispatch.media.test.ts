@@ -32,6 +32,16 @@ async function preparePluginHarnessPromptImages(
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+function recorder<T, U = T>(initial: T, resolved?: U) {
+  const message = <F>(facts: F) => ({ role: "user", content: "inspect", __openclaw: facts });
+  const initialMessage = message(initial);
+  return {
+    message: initialMessage,
+    async resolveMessage() {
+      return resolved === undefined ? initialMessage : message(resolved);
+    },
+  };
+}
 describe("plugin harness prompt media", () => {
   let stateDir: string;
   let workspaceDir: string;
@@ -56,12 +66,7 @@ describe("plugin harness prompt media", () => {
     const result = await preparePluginHarnessPromptImages(
       {
         media,
-        userTurnTranscriptRecorder: {
-          message: { role: "user", content: "inspect", __openclaw: { media } },
-          async resolveMessage() {
-            return this.message;
-          },
-        },
+        userTurnTranscriptRecorder: recorder({ media }),
       } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0],
       workspaceDir,
     );
@@ -81,23 +86,13 @@ describe("plugin harness prompt media", () => {
     const input = {
       imageOrder: ["offloaded"],
       media: [documentFact, { url: `media://inbound/${mediaId}`, contentType: "image/png" }],
-      userTurnTranscriptRecorder: {
-        message: {
-          role: "user",
-          content: "stale initial facts",
-          __openclaw: { media: [documentFact] },
+      userTurnTranscriptRecorder: recorder(
+        { media: [documentFact] },
+        {
+          media: [{ path: imagePath, contentType: "image/png" }, documentFact],
+          mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
         },
-        async resolveMessage() {
-          return {
-            role: "user",
-            content: "inspect",
-            __openclaw: {
-              media: [{ path: imagePath, contentType: "image/png" }, documentFact],
-              mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
-            },
-          };
-        },
-      },
+      ),
     } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0];
     const result = await preparePluginHarnessPromptImages(input, workspaceDir);
 
@@ -210,22 +205,13 @@ describe("plugin harness prompt media", () => {
       images: [inlineImage],
       imageOrder: ["inline"],
       media,
-      userTurnTranscriptRecorder: {
-        async resolveMessage() {
-          return this.message;
+      userTurnTranscriptRecorder: recorder({
+        media,
+        mediaImageLayout: {
+          slots: [{ kind: "inline", factIndex: 1 }],
+          suppressedFactIndexes: [0],
         },
-        message: {
-          role: "user",
-          content: "compare",
-          __openclaw: {
-            media,
-            mediaImageLayout: {
-              slots: [{ kind: "inline", factIndex: 1 }],
-              suppressedFactIndexes: [0],
-            },
-          },
-        },
-      },
+      }),
     } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
 
     expect(result.images).toEqual([inlineImage]);
