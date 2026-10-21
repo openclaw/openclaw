@@ -20,10 +20,9 @@ it.each([
   async ({ start, revert, next, saved }) => {
     vi.useFakeTimers();
     const { store, request } = createPatchServer();
-    await store.request("config.set", {
-      raw: '{"count":1,"note":"original"}\n',
-      baseHash: "hash-1",
-    });
+    const setNote = (note: string, baseHash: string) =>
+      store.request("config.set", { raw: JSON.stringify({ count: 1, note }) + "\n", baseHash });
+    await setNote("original", "hash-1");
     const { runtimeConfig, publish, state } = await loadedConfig(request, true);
     const originalRaw = runtimeConfig.state.configRaw;
     if (start === "raw") {
@@ -31,10 +30,7 @@ it.each([
     } else {
       runtimeConfig.patchForm(["count"], 2);
     }
-    await store.request("config.set", {
-      raw: '{"count":1,"note":"external"}\n',
-      baseHash: "hash-2",
-    });
+    await setNote("external", "hash-2");
     publish(false);
     publish(true);
     await vi.advanceTimersByTimeAsync(0);

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ConfigPatchAck } from "./config-draft-model.ts";
 import {
@@ -9,7 +9,9 @@ import {
 } from "./config-suite.test-support.ts";
 import { createConfigServerMock } from "./config-test-harness.ts";
 
-function heldNoopRead(config: Record<string, unknown>) {
+beforeEach(() => vi.useFakeTimers());
+
+async function heldNoopRead(config: Record<string, unknown>) {
   const store = createConfigServerMock();
   const started = deferred();
   const release = deferred();
@@ -27,15 +29,14 @@ function heldNoopRead(config: Record<string, unknown>) {
     }
     return result;
   });
-  return { store, started, release, request };
+  return { store, started, release, ...(await loadedConfig(request)) };
 }
 
 it.each([false, true])(
   "runExternalMutation retires a held no-op read through refresh ownership (disconnect: %s)",
   async (disconnect) => {
-    vi.useFakeTimers();
-    const { store, started, release, request } = heldNoopRead({ count: 1 });
-    const { runtimeConfig, publish, state } = await loadedConfig(request);
+    const { store, started, release, ...harness } = await heldNoopRead({ count: 1 });
+    const { runtimeConfig, publish, state } = harness;
     const mutation = runtimeConfig.runExternalMutation(
       (client) => client.request<ConfigPatchAck>("config.patch", { raw: '{"count":1}' }),
       { configWriteAck: (value) => value },
@@ -83,7 +84,6 @@ it.each([false, true])(
 );
 
 it("runExternalMutation preserves a retained form conflict after a hashless no-op", async () => {
-  vi.useFakeTimers();
   const { store, request } = createPatchServer();
   const { runtimeConfig, state } = await loadedConfig(request, true);
   runtimeConfig.patchForm(["count"], 2);
@@ -110,9 +110,8 @@ it("runExternalMutation preserves a retained form conflict after a hashless no-o
 });
 
 it("runExternalMutation replays a disjoint form edit made during the no-op source read", async () => {
-  vi.useFakeTimers();
-  const { store, started, release, request } = heldNoopRead({ count: 1, enabled: true });
-  const { runtimeConfig, state } = await loadedConfig(request);
+  const { store, started, release, ...harness } = await heldNoopRead({ count: 1, enabled: true });
+  const { runtimeConfig, state } = harness;
   await store.request("config.set", { raw: '{"count":1,"enabled":true}', baseHash: "hash-1" });
   const mutation = runtimeConfig.runExternalMutation(
     (client) => client.request<ConfigPatchAck>("config.patch", { raw: '{"enabled":true}' }),

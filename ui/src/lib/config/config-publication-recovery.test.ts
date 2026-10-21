@@ -20,16 +20,13 @@ it.each(["Settings", "external"])(
       if (method === "config.set" && !recovered) {
         return firstWrite.promise;
       }
-      if (method === "config.get") {
-        if (readState === "failed") {
-          throw new Error("read unavailable");
-        }
-        return readState === "missing"
-          ? { exists: false, valid: true, config: {}, raw: null, hash: "missing" }
-          : { ...(await server.request(method, params)), exists: true };
+      if (method === "config.schema" || (method === "config.get" && readState === "failed")) {
+        throw new Error("read unavailable");
       }
-      if (method === "config.schema") {
-        throw new Error("schema unavailable");
+      if (method === "config.get") {
+        return readState === "missing"
+          ? { exists: false, valid: true }
+          : { ...(await server.request(method, params)), exists: true };
       }
       return server.request(method, params);
     });
@@ -62,16 +59,13 @@ it.each(["Settings", "external"])(
     await expect(queuedWrite).resolves.toMatchObject({ ok: false, error: recovery });
     await expect(externalWrite()).resolves.toMatchObject({ ok: false, error: recovery });
 
-    runtimeConfig.setRaw('{"count":42}');
+    const draft = { configRaw: '{"count":42}', configFormDirty: true };
+    runtimeConfig.setRaw(draft.configRaw);
     const discard = runtimeConfig.discardDraft();
     publish(false);
     await discard;
     await runtimeConfig.discardDraft();
-    expect(state).toMatchObject({
-      configRaw: '{"count":42}',
-      configFormDirty: true,
-      configRecoveryError: recovery,
-    });
+    expect(state).toMatchObject({ ...draft, configRecoveryError: recovery });
     await expect(externalWrite()).resolves.toMatchObject({
       ok: false,
       error: "Connection changed before the configuration update started.",
@@ -80,13 +74,12 @@ it.each(["Settings", "external"])(
     await vi.advanceTimersByTimeAsync(0);
     readState = "failed";
     await runtimeConfig.discardDraft();
-    expect(state).toMatchObject({ configRaw: '{"count":42}', configFormDirty: true });
+    expect(state).toMatchObject(draft);
 
     runtimeConfig.setRaw("{");
     runtimeConfig.patchForm(["count"], 4);
     runtimeConfig.setRaw(original);
     await runtimeConfig.refresh();
-    readState = "failed";
     publish(false);
     publish(true);
     await vi.advanceTimersByTimeAsync(0);
@@ -112,7 +105,6 @@ it.each(["Settings", "external"])(
     expect(state.configRecoveryError).toBeNull();
     runtimeConfig.patchForm(["count"], 5);
     await expect(runtimeConfig.save()).resolves.toBe(true);
-    expect(server.submissions).toHaveLength(1);
     expect(server.submissions.map(({ raw }) => JSON.parse(raw))).toEqual([{ count: 5 }]);
   },
 );
