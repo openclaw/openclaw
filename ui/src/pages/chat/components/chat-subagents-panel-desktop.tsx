@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal, createUniqueId, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -243,9 +244,16 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
           when={props.rows.length}
           fallback={
             (props.loading || (props.hasResult && !props.error)) && (
-              <div class="chat-subagents__empty" role="status">
-                {t(props.loading ? "common.loading" : "chat.subagentsPanel.empty")}
-              </div>
+              <Show
+                when={props.loading}
+                fallback={
+                  <div class="chat-subagents__empty" role="status">
+                    {t("chat.subagentsPanel.empty")}
+                  </div>
+                }
+              >
+                <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+              </Show>
             )
           }
         >

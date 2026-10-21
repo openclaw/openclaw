@@ -9,6 +9,7 @@ import {
   type PersonActivityRouting,
 } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { SessionOwnerAvatar } from "../../../components/solid/session-owner-chip.tsx";
 import { SettingsToggleRow } from "../../../components/solid/settings-ui.tsx";
 import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
@@ -255,9 +256,7 @@ function SharingPermissions(props: {
         <Show
           when={!props.data.loading || props.data.rows.length > 0}
           fallback={
-            <p class="chat-sharing-mobile__status" role="status">
-              {t("common.loading")}
-            </p>
+            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
           }
         >
           <For each={matches()} keyed={(row) => row.identity.id}>

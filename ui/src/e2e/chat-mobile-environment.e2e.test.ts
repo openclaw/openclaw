@@ -107,7 +107,7 @@ suite.define(() => {
         expect(module.requests()).toBe(0);
         await header.getByRole("button", { name: /Studio Mac.*Offline/i }).click();
         const moduleUrl = await module.request;
-        await host.getByRole("status").filter({ hasText: "Loading" }).waitFor();
+        await host.getByRole("status", { name: "Loading…", exact: true }).waitFor();
         await host.getByRole("button", { name: "Back", exact: true }).click();
         await host.getByRole("button", { name: "Close", exact: true }).click();
         await host.waitFor({ state: "hidden" });

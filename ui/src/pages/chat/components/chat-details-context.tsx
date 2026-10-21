@@ -1,4 +1,5 @@
 import { For, Loading, Show, createMemo, createSignal, lazy } from "solid-js";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
@@ -92,9 +93,11 @@ export function ChatDetailsContextContent(props: ChatDetailsContextContentProps)
           >
             <Loading
               fallback={
-                <p class="chat-context__note" role="status">
-                  {t("chat.sessionDetails.contextLoading")}
-                </p>
+                <PanelLoadingSkeleton
+                  variant="file-list"
+                  label={t("chat.sessionDetails.contextLoading")}
+                  compact
+                />
               }
             >
               <ChatContextBreakdown

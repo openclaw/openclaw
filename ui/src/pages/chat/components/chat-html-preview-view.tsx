@@ -16,16 +16,8 @@ export type PreviewProps = {
   sessionFileSource?: SessionFileSource;
 };
 
-export function HtmlPreviewLoading(props: { desktop?: boolean }) {
-  return (
-    <>
-      {props.desktop ? (
-        <PanelLoadingSkeleton variant="document" label={t("common.loading")} compact />
-      ) : (
-        <div role="status">{t("common.loading")}</div>
-      )}
-    </>
-  );
+export function HtmlPreviewLoading() {
+  return <PanelLoadingSkeleton variant="document" label={t("common.loading")} compact />;
 }
 
 export function HtmlPreview(props: PreviewProps) {
@@ -38,7 +30,7 @@ export function HtmlPreview(props: PreviewProps) {
           onRetry={props.onRetry}
         />
       ) : props.state ? (
-        <HtmlPreviewLoading desktop={props.desktop} />
+        <HtmlPreviewLoading />
       ) : undefined}
       <openclaw-chat-html-preview
         prop:desktop={props.desktop ?? false}

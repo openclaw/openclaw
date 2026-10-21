@@ -25,6 +25,7 @@ import type { SessionPlacementPresentation } from "../../../components/session-p
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { closeMenusWithin } from "../../../components/solid/menu.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending } from "../../../lib/session-display.ts";
@@ -99,7 +100,13 @@ export function ChatPaneMobileComposition(props: {
             />
           )}
         >
-          <Loading fallback={<p role="status">{t("common.loading")}</p>}>{render()}</Loading>
+          <Loading
+            fallback={
+              <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+            }
+          >
+            {render()}
+          </Loading>
         </Errored>
       </Show>
     );
@@ -209,7 +216,7 @@ export function ChatPaneMobileComposition(props: {
       render: retainPage(() => (
         <div id={peopleId()}>
           <Show when={props.header.mobilePeopleMentions?.status === "loading"}>
-            <p role="status">{t("common.loading")}</p>
+            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
           </Show>
           <Show
             when={

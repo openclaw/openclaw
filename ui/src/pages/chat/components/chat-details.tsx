@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -582,9 +583,11 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                         <Show when={sessionOpened()}>
                           <Loading
                             fallback={
-                              <div class="chat-details__muted" role="status">
-                                {t("common.loading")}
-                              </div>
+                              <PanelLoadingSkeleton
+                                variant="file-list"
+                                label={t("common.loading")}
+                                compact
+                              />
                             }
                           >
                             <ChatDetailsSession
@@ -621,9 +624,11 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                         <Show when={sessionOpened()}>
                           <Loading
                             fallback={
-                              <div class="chat-details__muted" role="status">
-                                {t("common.loading")}
-                              </div>
+                              <PanelLoadingSkeleton
+                                variant="file-list"
+                                label={t("common.loading")}
+                                compact
+                              />
                             }
                           >
                             <ChatDetailsMobileHostContent
@@ -642,9 +647,11 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                 <Show when={sessionOpened()}>
                   <Loading
                     fallback={
-                      <div class="chat-details__muted" role="status">
-                        {t("common.loading")}
-                      </div>
+                      <PanelLoadingSkeleton
+                        variant="file-list"
+                        label={t("common.loading")}
+                        compact
+                      />
                     }
                   >
                     <ChatDetailsDesktopComposition

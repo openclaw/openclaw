@@ -50,7 +50,7 @@ describe("pull request renderer loading", () => {
     view.update({ ...initial, pullRequests: [pullRequest()] });
     await waitForSolid(() => {
       expect(imports).toBe(1);
-      expect(view.container.querySelector('[role="status"]')?.textContent).toBe("Loading…");
+      expect(view.getByRole("status", { name: "Loading…" }).getAttribute("aria-busy")).toBe("true");
     });
     const onDismiss = vi.fn();
     const current = pullRequest({ number: 42, title: "Current work" });

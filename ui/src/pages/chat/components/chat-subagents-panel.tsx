@@ -2,6 +2,7 @@ import { Show, createMemo, createSignal } from "solid-js";
 import type { ChatInputRegion } from "../../../app/chat-input-owner.ts";
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
@@ -267,9 +268,16 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
               }
               empty={
                 (data().loading || (data().hasResult && !data().error)) && (
-                  <div class="chat-subagents__empty" role="status">
-                    {t(data().loading ? "common.loading" : "chat.subagentsPanel.empty")}
-                  </div>
+                  <Show
+                    when={data().loading}
+                    fallback={
+                      <div class="chat-subagents__empty" role="status">
+                        {t("chat.subagentsPanel.empty")}
+                      </div>
+                    }
+                  >
+                    <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+                  </Show>
                 )
               }
             />
@@ -312,9 +320,20 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
                   when={data().rows.length}
                   fallback={
                     (data().loading || (data().hasResult && !data().error)) && (
-                      <div class="chat-subagents__empty" role="status">
-                        {t(data().loading ? "common.loading" : "chat.subagentsPanel.empty")}
-                      </div>
+                      <Show
+                        when={data().loading}
+                        fallback={
+                          <div class="chat-subagents__empty" role="status">
+                            {t("chat.subagentsPanel.empty")}
+                          </div>
+                        }
+                      >
+                        <PanelLoadingSkeleton
+                          variant="file-list"
+                          label={t("common.loading")}
+                          compact
+                        />
+                      </Show>
                     )
                   }
                 >

@@ -15,6 +15,7 @@ import {
   type MenuEntry,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -379,20 +380,25 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
             <Show
               when={matches().length > 0}
               fallback={
-                <div class="chat-pane__sharing-empty" role="status">
-                  <span>
-                    {t(
-                      props.state?.loading
-                        ? "common.loading"
-                        : people().length === 0
-                          ? "chat.sessionSharing.noPeople"
-                          : "chat.sessionSharing.noPeopleFound",
-                    )}
-                  </span>
-                  <Show when={!props.state?.loading && people().length > 0 && query().trim()}>
-                    <span>{t("chat.sessionSharing.tryAnotherName")}</span>
-                  </Show>
-                </div>
+                <Show
+                  when={props.state?.loading}
+                  fallback={
+                    <div class="chat-pane__sharing-empty" role="status">
+                      <span>
+                        {t(
+                          people().length === 0
+                            ? "chat.sessionSharing.noPeople"
+                            : "chat.sessionSharing.noPeopleFound",
+                        )}
+                      </span>
+                      <Show when={people().length > 0 && query().trim()}>
+                        <span>{t("chat.sessionSharing.tryAnotherName")}</span>
+                      </Show>
+                    </div>
+                  }
+                >
+                  <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+                </Show>
               }
             >
               {view.children}
