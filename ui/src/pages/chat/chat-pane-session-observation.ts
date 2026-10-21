@@ -183,6 +183,15 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     observation: SessionRowObservation | null;
   } | null = null;
 
+  protected resumeConfirmedRouteWork(routeResolutionChanged?: boolean): void {
+    const state = this.state;
+    if (!routeResolutionChanged || this.routeResolutionPending || !state) {
+      return;
+    }
+    void replayPendingChatAbort(state);
+    void resumeStoredChatOutboxes(state);
+  }
+
   protected observedParentSessionRow(): GatewaySessionRow | null {
     const binding = this.parentSessionObservation;
     return binding?.matchesPane() && binding.observation?.isCurrent()
