@@ -176,6 +176,46 @@ export function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
   return call[0];
 }
 
+export function portUsage(
+  listeners: PortUsage["listeners"] = [],
+  overrides: Partial<PortUsage> = {},
+): PortUsage {
+  return {
+    port: 18789,
+    status: listeners.length ? "busy" : "free",
+    listeners,
+    hints: [],
+    ...overrides,
+  };
+}
+
+export function ownerLease(pid: number, state: "live" | "dead" = "live", startedAt = 1000) {
+  return {
+    owner: `owner-${pid}`,
+    pid,
+    host: "gateway-test-host",
+    startedAt,
+    port: 18789,
+    mode: "supervised" as const,
+    supervisor: { kind: "schtasks" as const, name: "OpenClaw Gateway" },
+    state,
+    expired: state === "dead",
+  };
+}
+
+export async function waitForRunningGateway(
+  options: Partial<
+    Parameters<typeof import("./restart-health.js").waitForGatewayHealthyRestart>[0]
+  > = {},
+) {
+  const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+  return waitForGatewayHealthyRestart({
+    service: makeGatewayService({ status: "running", pid: 8000 }),
+    port: 18789,
+    ...options,
+  });
+}
+
 const previousGatewayLockIdentity: GatewayLockIdentity = {
   pid: 4200,
   ownerId: "gateway-owner-old",

@@ -17,7 +17,6 @@ import {
 const loadConfig = vi.fn<() => OpenClawConfig>(makeTokenConfig);
 const writeGatewayRestartIntentSync = vi.fn();
 const clearGatewayRestartIntentSync = vi.fn();
-const appendGatewayLifecycleAudit = vi.fn();
 const MISSING_SERVICE_PROGRAM = "/openclaw-test-missing-runtime/node";
 const scheduledMessage = "restart scheduled, gateway will restart momentarily";
 function makeTokenConfig() {
@@ -29,15 +28,6 @@ const serviceSnapshot = {
   loadedText: "loaded",
   notLoadedText: "not loaded",
 };
-const createGatewayLifecycleMutationAudit = vi.fn(
-  (params: { action: string; source?: string }) => (mutation: { mode: string; pid?: number }) =>
-    appendGatewayLifecycleAudit({
-      action: params.action,
-      source: params.source ?? "cli",
-      ...mutation,
-    }),
-);
-
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => loadConfig(),
   loadConfig: () => loadConfig(),
@@ -62,25 +52,11 @@ vi.mock("../../infra/restart-intent.js", () => ({
 }));
 
 vi.mock("./lifecycle-audit.js", () => ({
-  appendGatewayLifecycleAudit: (params: unknown) => appendGatewayLifecycleAudit(params),
-  createGatewayLifecycleMutationAudit: (params: { action: string; source?: string }) =>
-    createGatewayLifecycleMutationAudit(params),
-  createServiceLifecycleMutationAudit: (params: { serviceNoun: string; action: string }) =>
-    params.serviceNoun === "Gateway" ? createGatewayLifecycleMutationAudit(params) : undefined,
-  appendServiceLifecycleRepairAudit: (params: {
-    serviceNoun: string;
-    action: string;
-    pid?: number;
-  }) => {
-    if (params.serviceNoun === "Gateway") {
-      appendGatewayLifecycleAudit({
-        action: params.action,
-        source: "cli",
-        mode: "service-repair",
-        ...(params.pid === undefined ? {} : { pid: params.pid }),
-      });
-    }
-  },
+  appendGatewayLifecycleAudit: vi.fn(),
+  createGatewayLifecycleMutationAudit: () => () => {},
+  createServiceLifecycleMutationAudit: (params: { serviceNoun: string }) =>
+    params.serviceNoun === "Gateway" ? () => {} : undefined,
+  appendServiceLifecycleRepairAudit: vi.fn(),
 }));
 
 // The runtime mock consumes the initialized lifecycle harness, not an early static import.
@@ -220,8 +196,6 @@ afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
   clearResponseMocks();
   mockSystemAccountHome();
-  appendGatewayLifecycleAudit.mockClear();
-  createGatewayLifecycleMutationAudit.mockClear();
   resetLifecycleRuntimeLogs();
   loadConfig.mockReset().mockReturnValue(makeTokenConfig());
   resetLifecycleServiceMocks();
