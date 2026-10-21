@@ -182,6 +182,52 @@ it.each(["connection", "plugin publication"])(
   },
 );
 
+it("recovers a catalog failure without replacing the Dreaming draft", async () => {
+  const recovery = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+  const { element, publishPluginGeneration } = createPage({
+    listCatalog: (call) =>
+      call === 0 ? Promise.reject(new Error("catalog unavailable")) : recovery.promise,
+  });
+  const frequency = dreamingInput(element);
+  frequency.value = "0 4 * * *";
+  frequency.focus();
+  await waitForSolid(() => expect(addonStatus(element, "Active memory")).toBe("Unknown"));
+  expect(dreamingInput(element)).toBe(frequency);
+  expect(frequency.value).toBe("0 4 * * *");
+
+  publishPluginGeneration(1);
+  recovery.resolve({ plugins: [engine("memory-core", true), addon("active-memory", true)] });
+  await waitAddon(element, "Active memory", true);
+  expect(dreamingInput(element)).toBe(frequency);
+  expect(frequency.value).toBe("0 4 * * *");
+  expect(document.activeElement).toBe(frequency);
+});
+
+it("retains catalog controls during a plugin publication refresh", async () => {
+  const refresh = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+  const { element, publishPluginGeneration } = createPage({
+    listCatalog: (call) =>
+      call === 0
+        ? Promise.resolve({ plugins: [engine("memory-core", true), addon("active-memory", true)] })
+        : refresh.promise,
+  });
+  await waitAddon(element, "Active memory", true);
+  const engineControl = element.querySelector<HTMLInputElement>('input[value="memory-core"]');
+  const addonControl = addonSwitch(element, "Active memory");
+  engineControl!.focus();
+
+  publishPluginGeneration(1);
+  flush();
+  expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
+  expect(addonSwitch(element, "Active memory")).toBe(addonControl);
+  expect(document.activeElement).toBe(engineControl);
+
+  refresh.resolve({ plugins: [engine("memory-core", true), addon("active-memory", false)] });
+  await waitAddon(element, "Active memory", false);
+  expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
+  expect(addonSwitch(element, "Active memory")).toBe(addonControl);
+});
+
 it("falls back to read-only add-on status rows without operator.admin", async () => {
   const { element } = createPage({
     catalog: [addon("active-memory", true), addon("memory-wiki", false)],
@@ -603,6 +649,29 @@ it("passes offline state when Overview is activated after disconnecting elsewher
   await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.connected).toBe(false));
 });
 
+it("makes a previously unsupported Dreaming schema unknown while a fresh probe is pending", async () => {
+  const refresh = deferred<unknown>();
+  const { element, lookupSchemaPath, publishPluginGeneration } = createPage({
+    lookupSchemaPath: (call) =>
+      call === 0
+        ? Promise.resolve({ schema: { additionalProperties: false }, children: [] })
+        : refresh.promise,
+  });
+  try {
+    await waitText(element, "Not available for this engine");
+    expect(element.querySelector('input[aria-label="Dreaming frequency"]')).toBeNull();
+
+    publishPluginGeneration(1);
+    await waitForSolid(() => {
+      expect(lookupSchemaPath).toHaveBeenCalledTimes(2);
+      expect(dreamingInput(element).isConnected).toBe(true);
+      expect(element.textContent).not.toContain("Not available for this engine");
+    });
+  } finally {
+    refresh.resolve({ schema: { type: "object" }, children: [{ key: "dreaming" }] });
+  }
+});
+
 it.each(["reconnect", "plugin publication"])(
   "re-probes after %s and drops the abandoned capability result",
   async (change) => {
@@ -622,7 +691,7 @@ it.each(["reconnect", "plugin publication"])(
       }
       await waitForSolid(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(2));
 
-      first.resolve({ type: "object", additionalProperties: false, properties: {} });
+      first.resolve({ schema: { type: "object", additionalProperties: false }, children: [] });
       await first.promise;
       flush();
       expect(element.textContent).not.toContain("Not available for this engine");

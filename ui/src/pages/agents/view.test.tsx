@@ -217,6 +217,54 @@ describe("renderAgents", () => {
     expect(nextWakeRow?.textContent).not.toContain(formatNextRun(nextWakeAtMs));
   });
 
+  it("shows a rejected agent jobs refresh beside retained jobs without hiding scheduler feedback", async () => {
+    const client = createTestGatewayClient(async () => {
+      throw new Error("Agent jobs could not be refreshed.");
+    });
+    const cronState = {
+      ...createInitialCronState({ client, connected: true }),
+      cronAgentId: "alpha",
+      cronError: "Scheduler status is unavailable.",
+      cronJobs: [createCronJob("retained-job", { name: "Retained reminder" })],
+    };
+    const container = document.createElement("div");
+    const renderCurrent = (): void => {
+      renderView(
+        {
+          selectedAgentId: "alpha",
+          cron: {
+            ...createProps().cron,
+            onRefresh: () => {
+              void loadCronJobsPage(cronState, { tableFilters: true }).then(renderCurrent);
+            },
+          },
+          readData: () => ({ ...createProps().readData(), agentsPanel: "cron", cron: cronState }),
+        },
+        container,
+      );
+    };
+    renderCurrent();
+    const scheduler = [...container.querySelectorAll(".settings-section")].find(
+      (section) =>
+        section.querySelector("h2")?.textContent === t("agents.cronPanel.schedulerTitle"),
+    );
+    const refresh = scheduler?.querySelector<HTMLButtonElement>("button");
+    expect(refresh).toBeInstanceOf(HTMLButtonElement);
+    refresh?.click();
+
+    await waitForSolid(() => {
+      const jobs = [...container.querySelectorAll(".settings-section")].find(
+        (section) =>
+          section.querySelector("h2")?.textContent === t("agents.cronPanel.agentJobsTitle"),
+      );
+      expect(jobs?.querySelector('[role="alert"]')?.textContent).toContain(
+        "Agent jobs could not be refreshed.",
+      );
+      expect(jobs?.textContent).toContain("Retained reminder");
+      expect(container.textContent).toContain("Scheduler status is unavailable.");
+    });
+  });
+
   it("loads and renders the selected agent's 51st cron job when Load more is clicked", async () => {
     const snapshotRevision = "agents-view-cron-fixture";
     const jobs = Array.from({ length: 50 }, (_, index) =>

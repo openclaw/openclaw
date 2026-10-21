@@ -1,5 +1,12 @@
 import type { SQLInputValue, SQLOutputValue } from "node:sqlite";
-import type { MessagePort } from "node:worker_threads";
+import type { MessagePort, Worker } from "node:worker_threads";
+
+export type PostgresBridge = {
+  port: MessagePort;
+  control: Int32Array;
+  worker: Worker;
+  requestId: number;
+};
 
 export type PostgresResult = {
   inTransaction: boolean;

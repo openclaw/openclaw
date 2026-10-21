@@ -13,6 +13,11 @@ function providerItems(raw: Record<string, unknown>) {
   });
 }
 
+function expectProvider(items: ReturnType<typeof providerItems>, acme: object) {
+  const item = items.find(({ id }) => id === "config:model-provider:acme");
+  expect(item?.details?.value).toMatchObject({ acme });
+}
+
 describe("Hermes provider source contracts", () => {
   it.each(["constructor", "__proto__", "toString", "hasOwnProperty"])(
     "preserves prototype-like provider IDs without inventing environment mappings: %s",
@@ -29,11 +34,7 @@ describe("Hermes provider source contracts", () => {
     [" CHAT_COMPLETIONS ", "openai-completions"],
   ])("imports Hermes transport alias %s as %s", (transport, api) => {
     const items = providerItems({ transport, default_model: "acme-model" });
-    expect(
-      items.find((item) => item.id === "config:model-provider:acme")?.details?.value,
-    ).toMatchObject({
-      acme: { api, models: [{ id: "acme-model", api }] },
-    });
+    expectProvider(items, { api, models: [{ id: "acme-model", api }] });
     expect(items.filter((item) => item.kind === "manual")).toEqual([]);
   });
 
@@ -50,23 +51,18 @@ describe("Hermes provider source contracts", () => {
       },
     };
     const items = buildConfigItems({ ctx, config, env: { ACME_TOKEN: "test-only-placeholder" } });
-    expect(
-      items.find((item) => item.id === "config:model-provider:acme")?.details?.value,
-    ).toMatchObject({
-      acme: {
-        api: "anthropic-messages",
-        models: [{ id: "acme-model", contextWindow: 262144 }],
-      },
+    expectProvider(items, {
+      api: "anthropic-messages",
+      models: [{ id: "acme-model", contextWindow: 262144 }],
     });
     expect(collectHermesProviderSecretBindings(config)).toEqual([
       { provider: "acme", envVar: "ACME_TOKEN" },
     ]);
-    expect(
-      providerItems({ api_mode: "chat_completions", transport: "anthropic_messages" })[0]?.details
-        ?.value,
-    ).toMatchObject({
-      acme: { api: "openai-completions" },
+    const precedence = providerItems({
+      api_mode: "chat_completions",
+      transport: "anthropic_messages",
     });
+    expectProvider(precedence, { api: "openai-completions" });
   });
 
   it("preserves list model metadata and removes Hermes catalog marker keys", () => {
@@ -78,25 +74,22 @@ describe("Hermes provider source contracts", () => {
         { name: "named-model", max_tokens: 2048 },
       ],
     });
-    expect(arrayItems[0]?.details?.value).toMatchObject({
-      acme: {
-        models: [
-          { id: "plain-model", contextWindow: 32768 },
-          { id: "vision-model", contextWindow: 65536, maxTokens: 4096, input: ["text", "image"] },
-          { id: "named-model", contextWindow: 32768, maxTokens: 2048 },
-        ],
-      },
+    expectProvider(arrayItems, {
+      models: [
+        { id: "plain-model", contextWindow: 32768 },
+        { id: "vision-model", contextWindow: 65536, maxTokens: 4096, input: ["text", "image"] },
+        { id: "named-model", contextWindow: 32768, maxTokens: 2048 },
+      ],
     });
-    expect(
+    expectProvider(
       providerItems({
         models: {
           "acme-model": {},
           __discovered_model_catalog__: true,
           __explicit_model_allowlist__: true,
         },
-      })[0]?.details?.value,
-    ).toMatchObject({
-      acme: { models: [{ id: "acme-model" }] },
-    });
+      }),
+      { models: [{ id: "acme-model" }] },
+    );
   });
 });

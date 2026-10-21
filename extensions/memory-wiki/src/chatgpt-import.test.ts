@@ -193,11 +193,9 @@ describe("ChatGPT import rollback recovery", () => {
     let checkedBeforeFirstVaultWrite = false;
     vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
       const targetPath = path.resolve(String(args[0]));
-      if (
-        !checkedBeforeFirstVaultWrite &&
-        (targetPath === path.resolve(rootDir) ||
-          targetPath.startsWith(`${path.resolve(rootDir)}${path.sep}`))
-      ) {
+      // The coordinator creates transient lock metadata before entering rollback.
+      // Initializing the vault itself must still follow its durable moving phase.
+      if (!checkedBeforeFirstVaultWrite && targetPath === path.resolve(rootDir)) {
         checkedBeforeFirstVaultWrite = true;
         await expect(readRun()).resolves.toMatchObject({ rollbackStartedAt: expect.any(String) });
       }
@@ -245,12 +243,17 @@ describe("ChatGPT import rollback recovery", () => {
     await fs.writeFile(path.join(run.rootDir, preserved?.recoveryPath ?? ""), imported, "utf8");
     run.reopen();
     rootControl.moves.mockClear();
-    const fileSpies = (["mkdtemp", "rm", "rmdir"] as const).map((method) => vi.spyOn(fs, method));
+    const fileSpies = (["mkdtemp", "rmdir"] as const).map((method) => vi.spyOn(fs, method));
+    const remove = vi.spyOn(fs, "rm");
     const compileCalls = compileControl.calls;
     const repeated = await run.rollback();
     expect(repeated.alreadyRolledBack).toBe(true);
     expect(repeated.preservedPaths).toStrictEqual(retried.preservedPaths);
     [rootControl.moves, ...fileSpies].forEach((spy) => expect(spy).not.toHaveBeenCalled());
+    // Releasing coordination may remove its sidecar, but never rollback data.
+    for (const [target] of remove.mock.calls) {
+      expect(target).toBe(path.join(run.rootDir, ".openclaw-wiki", "mutation.lock"));
+    }
     expect(compileControl.calls).toBe(compileCalls);
     await expectText(path.join(run.rootDir, preserved?.recoveryPath ?? ""), imported);
     await expect(run.readRun()).resolves.toMatchObject({

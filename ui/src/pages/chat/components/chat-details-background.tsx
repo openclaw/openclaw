@@ -1,7 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
-import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
@@ -13,6 +12,7 @@ import {
   ChatDetailsDesktopSection,
   createDetailsDesktopReveal,
 } from "./chat-details-desktop-section.tsx";
+import { ChatDetailsProcessRow } from "./chat-details-process-row.tsx";
 import { ChatDetailsSubagents, type ChatDetailsSubagentsProps } from "./chat-details-subagents.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatSubagentActivity } from "./chat-subagent-activity-lazy.tsx";
@@ -198,46 +198,6 @@ function DesktopBackgroundGroup(props: {
   );
 }
 
-function ProcessRow(props: { row: SessionProcessSummary; onOpen?: () => void }) {
-  const status = () => t(`chat.processesPanel.status.${props.row.status}`);
-  const lastLine = () => props.row.tail.trimEnd().split("\n").at(-1)?.trim() ?? "";
-  const description = () => [props.row.name, status(), lastLine()].filter(Boolean).join(". ");
-  const content = () => (
-    <>
-      <span class="chat-details__process-icon" data-status={props.row.status} aria-hidden="true">
-        <Icon name="terminal" />
-      </span>
-      <span class="chat-details__process-name">{props.row.name}</span>
-      <span class="chat-details__process-elapsed" aria-hidden="true">
-        <ElapsedTime startMs={props.row.startedAt} endMs={props.row.endedAt ?? null} />
-      </span>
-      <span class="chat-details__process-tail">{lastLine() || status()}</span>
-    </>
-  );
-  return (
-    <div role="listitem" data-process-id={props.row.processId}>
-      <Show
-        when={props.onOpen}
-        fallback={
-          <div class="chat-details__process" title={description()}>
-            {content()}
-          </div>
-        }
-      >
-        <button
-          type="button"
-          class="chat-details__process"
-          title={description()}
-          aria-label={description()}
-          onClick={() => props.onOpen?.()}
-        >
-          {content()}
-        </button>
-      </Show>
-    </div>
-  );
-}
-
 /** The subagents and background processes this session started, as two groups. */
 export function ChatDetailsBackground(
   props: Props,
@@ -399,8 +359,9 @@ function DetailsProcesses(
         <div role="list" aria-label={t("chat.sessionDetails.processes")}>
           <For each={visibleProcesses()} keyed={(row) => row.instanceId}>
             {(row) => (
-              <ProcessRow
+              <ChatDetailsProcessRow
                 row={row()}
+                hoverDescription
                 onOpen={props.details.onOpenProcesses ? openProcesses : undefined}
               />
             )}

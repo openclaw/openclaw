@@ -39,6 +39,7 @@ export type TeamShapeExtrasOptions = {
   projects: number;
   worktreeFiles?: number;
   nestedRepository?: boolean;
+  githubOptionsConnected?: boolean;
   now: number;
 };
 
@@ -142,6 +143,10 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
       executeFile("git", ["-C", repoRoot, ...args], { env: gitEnv });
     await fs.mkdir(repoRoot, { recursive: true });
     await git("init", "--initial-branch=main");
+    if (options.githubOptionsConnected) {
+      // The registry fingerprint includes the origin; set it before registration.
+      await git("remote", "add", "origin", "https://github.com/openclaw-fixture/soak.git");
+    }
     await fs.writeFile(path.join(repoRoot, "README.md"), `# Synthetic project ${index}\n`);
     await git("add", "README.md");
     await git("-c", "commit.gpgSign=false", "commit", "-m", "test: seed synthetic project");
@@ -382,6 +387,7 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
     approvals: options.approvals,
     cronJobs: jobs.length,
     projects: projectWorktrees.length,
+    githubOptionsConnected: options.githubOptionsConnected ?? false,
     worktreeFiles: options.worktreeFiles ?? 0,
     nestedRepository: options.nestedRepository ?? false,
     projectWorktrees,

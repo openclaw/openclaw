@@ -106,7 +106,9 @@ export function prepareSessionEventProjection(
     const audiences = new Map<
       string,
       {
-        row: NonNullable<ReturnType<ReturnType<typeof presentRecipient>["present"]>>;
+        row: NonNullable<
+          ReturnType<ReturnType<typeof presentRecipient>["presentation"]["present"]>
+        >;
         ancestors: ReturnType<typeof prepareSessionAncestor>[] | undefined;
         hiddenAncestors: string[];
         payloads: Map<string | undefined, ProjectedPayload>;
@@ -148,10 +150,11 @@ export function prepareSessionEventProjection(
         accessRevision = currentAccessRevision;
       }
       // Resolve each recipient's live authority before reusing this synchronous publication.
-      const presentation = presentRecipient(client, runProjector);
-      const audienceKey = presentation.audienceKey;
+      const recipient = presentRecipient(client, runProjector);
+      const audienceKey = recipient.audienceKey;
       let audience = audiences.get(audienceKey);
       if (!audience) {
+        const { presentation } = recipient;
         const row = presentation.present(record, enrichment);
         if (!row) {
           return undefined;

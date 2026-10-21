@@ -48,11 +48,14 @@ it("shows two prioritized processes and opens the full collection without mutati
       timer.textContent?.trim(),
     ),
   ).toEqual(["1s", "1s"]);
-  view.getByRole("button", { name: "running. Running. latest output" }).click();
+  const running = view.getByRole("button", { name: "running. Running. latest output" });
+  expect(running.getAttribute("title")).toBeNull();
+  running.click();
   view.getByRole("button", { name: "Show all" }).click();
   expect(onOpen).toHaveBeenCalledTimes(2);
   setPresented(false);
   flush();
+  running.click();
   view.getByRole("button", { name: "Show all" }).click();
   expect(onOpen).toHaveBeenCalledTimes(2);
   setData({ rows: [], error: "Unavailable", loading: false, refresh });

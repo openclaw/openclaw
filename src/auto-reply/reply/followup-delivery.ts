@@ -377,10 +377,24 @@ export async function resolveFollowupDeliveryDecision(params: {
     preserveUserFacingSessionState: accounting.preserveUserFacingSessionState,
     replyUsageState: accounting.replyUsageState,
   });
+  let sourceUsageFooter: ReplyPayload | undefined;
   if (responseUsageLine) {
-    payloads = appendUsageLine(payloads, responseUsageLine);
+    if (
+      sourcePolicy.sourceReplyDeliveryMode === "message_tool_only" &&
+      hasCompletedSourceReplyDeliveryEvidence(result)
+    ) {
+      sourceUsageFooter = markReplyPayloadForSourceSuppressionDelivery({
+        text: responseUsageLine,
+        isStatusNotice: true,
+      });
+    } else {
+      payloads = appendUsageLine(payloads, responseUsageLine);
+    }
   }
   payloads = renderFailurePayloads(payloads);
+  if (sourceUsageFooter) {
+    payloads = [...payloads, sourceUsageFooter];
+  }
   if (sourcePolicy.sourceReplyDeliveryMode === "message_tool_only") {
     payloads = payloads.filter(
       (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
