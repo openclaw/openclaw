@@ -139,7 +139,14 @@ export async function runSessionRegistryMaintenanceForStore(
   }
   let rowRevision = 0;
   const unsubscribe = sessionChanges.subscribeFacts((change) => {
-    if (sessionChangeScopeAffectsStoredRows(change)) {
+    if (
+      sessionChangeScopeAffectsStoredRows(change) &&
+      ("all" in change ||
+        change.factsInvalidated === true ||
+        change.facts?.kind === "entry" ||
+        change.facts?.kind === "replacement" ||
+        change.facts?.kind === "removed")
+    ) {
       rowRevision += 1;
     }
   });

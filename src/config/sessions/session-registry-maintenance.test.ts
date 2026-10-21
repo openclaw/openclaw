@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
@@ -221,6 +222,21 @@ it("defers cleanup when a live child is created after the ancestry read", async 
   );
   expect(read()?.sessionId).toBe(scope.sessionId);
   expect((await maintain(scope.storePath)).pruned).toBe(0);
+});
+
+it("prunes expired cron rows despite unrelated metadata-only publications", async () => {
+  const { scope, read } = await cronCase("unrelated-metadata");
+  spyRemoval().mockImplementationOnce((params) => {
+    sessionChanges.emit({
+      sessionKey: "agent:main:chat:unrelated",
+      storePath: scope.storePath,
+      scope: "session-entry",
+      facts: { kind: "unchanged" },
+    });
+    return applyRemoval(params);
+  });
+  expect(await maintain(scope.storePath)).toEqual({ ...emptySummary, pruned: 1 });
+  expect(read()).toBeUndefined();
 });
 
 it("summarizes a missing store without creating it", async () => {
