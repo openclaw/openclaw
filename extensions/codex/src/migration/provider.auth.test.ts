@@ -3,6 +3,7 @@
 import {
   closeCredentialReader,
   nativeCredentialReaderStart,
+  credentialReaderRequest,
   credentialStorage,
   createCodexFixture,
   createConfigRuntime,
@@ -316,73 +317,53 @@ describe("Codex migration credential inspection and persistence", () => {
     },
   );
 
-  it.each(["chatgpt", "chatgptAuthTokens"])(
-    "imports OAuth despite the startup account/updated announcement (%s)",
-    async (authMode) => {
-      const access = fakeJwt({ exp: 2_000_000_000 });
-      await writeAuth({
-        auth_mode: "chatgpt",
-        tokens: { access_token: access, refresh_token: "fixture-refresh" },
-      });
-      credentialStorage.startupAccountUpdate = authMode;
-
-      const credentials = await readCodexCliCredentialsAsync({
-        codexHome: fixture.codexHome,
-        allowKeychainPrompt: true,
-      });
-
-      expect(credentials?.oauth).toMatchObject({ access, refresh: "fixture-refresh" });
-    },
-  );
-
-  it.each([
-    { accountId: "native-account", notificationId: "native-account" },
-    { accountId: "native-account", notificationId: undefined },
-    { accountId: undefined, notificationId: "native-account" },
-  ])(
-    "keeps OAuth through a same-account announcement (credential id=$accountId, notification id=$notificationId)",
-    async ({ accountId, notificationId }) => {
-      const access = fakeJwt({ exp: 2_000_000_000 });
-      await writeAuth({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: access,
-          refresh_token: "fixture-refresh",
-          ...(accountId ? { account_id: accountId } : {}),
-        },
-      });
-      credentialStorage.startupAccountUpdate = "chatgpt";
-      credentialStorage.startupAccountUpdateId = notificationId;
-
-      const credentials = await readCodexCliCredentialsAsync({
-        codexHome: fixture.codexHome,
-        allowKeychainPrompt: true,
-      });
-
-      expect(credentials?.oauth).toMatchObject({ access, refresh: "fixture-refresh" });
-    },
-  );
-
-  it("discards OAuth when the announced native account differs mid-read", async () => {
-    const access = fakeJwt({ exp: 2_000_000_000 });
-    await writeAuth({
-      auth_mode: "chatgpt",
-      tokens: { access_token: access, refresh_token: "fixture-refresh", account_id: "inspected" },
+  it("imports OAuth after a startup account update invalidates the first read", async () => {
+    const access = nativeToken();
+    await writeOAuth(access);
+    credentialReaderRequest.mockImplementationOnce(() => {
+      credentialStorage.revision++;
     });
-    credentialStorage.startupAccountUpdate = "chatgpt";
-    credentialStorage.startupAccountUpdateId = "displaced";
+    const ctx = authContext();
+
+    const plan = await provider.plan(ctx);
+    expect(findItem(plan.items, "auth:openai").status).toBe("planned");
+    const result = await provider.apply(ctx, plan);
+
+    expect(findItem(result.items, "auth:openai").status).toBe("migrated");
+    expect(loadTargetAuthStore(fixture).profiles["openai:account-native-account"]).toMatchObject({
+      access,
+      refresh: "native-refresh",
+    });
+  });
+
+  it("discards credentials when account updates invalidate both reads", async () => {
+    await writeOAuth();
+    credentialReaderRequest.mockImplementation((method) => {
+      if (method === "config/read") {
+        credentialStorage.revision++;
+      }
+    });
 
     const credentials = await readCodexCliCredentialsAsync({
       codexHome: fixture.codexHome,
       allowKeychainPrompt: true,
     });
 
-    expect(credentials?.oauth).toBeUndefined();
+    expect(credentials).toBeUndefined();
+    expect(
+      credentialReaderRequest.mock.calls.filter(([method]) => method === "config/read"),
+    ).toHaveLength(2);
+    expect(closeCredentialReader).toHaveBeenCalledOnce();
   });
 
-  it("keeps the API key credential through a same-route account/updated", async () => {
-    await writeAuth({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-key" });
-    credentialStorage.startupAccountUpdate = "apiKey";
+  it("rereads credentials instead of accepting a displaced same-route snapshot", async () => {
+    await writeAuth({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-old-key" });
+    credentialReaderRequest.mockImplementation(async (method) => {
+      if (method === "account/read" && credentialStorage.revision === 0) {
+        await writeAuth({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-current-key" });
+        credentialStorage.revision++;
+      }
+    });
 
     const credentials = await readCodexCliCredentialsAsync({
       codexHome: fixture.codexHome,
@@ -390,36 +371,9 @@ describe("Codex migration credential inspection and persistence", () => {
       allowKeychainPrompt: true,
     });
 
-    expect(credentials?.apiKey).toMatchObject({ key: "fixture-key" });
-  });
-
-  it("discards OAuth when the account switches to an API key mid-read", async () => {
-    const access = fakeJwt({ exp: 2_000_000_000 });
-    await writeAuth({
-      auth_mode: "chatgpt",
-      tokens: { access_token: access, refresh_token: "fixture-refresh" },
+    expect(credentials).toEqual({
+      apiKey: { type: "api_key", provider: "openai", key: "fixture-current-key" },
     });
-    credentialStorage.startupAccountUpdate = "apiKey";
-
-    const credentials = await readCodexCliCredentialsAsync({
-      codexHome: fixture.codexHome,
-      allowKeychainPrompt: true,
-    });
-
-    expect(credentials?.oauth).toBeUndefined();
-  });
-
-  it("discards the API key credential when the account switches to ChatGPT mid-read", async () => {
-    await writeAuth({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-key" });
-    credentialStorage.startupAccountUpdate = "chatgpt";
-
-    const credentials = await readCodexCliCredentialsAsync({
-      codexHome: fixture.codexHome,
-      credentialKind: "api_key",
-      allowKeychainPrompt: true,
-    });
-
-    expect(credentials?.apiKey).toBeUndefined();
   });
 
   it("imports auth into the selected agent directory under the effective OpenClaw home", async () => {
