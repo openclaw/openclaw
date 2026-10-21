@@ -53,7 +53,11 @@ suite.define(() => {
           sessionInfo: { ...row, unread: true, sharingRole: "owner" },
         });
         const pane = page.locator(".chat-pane-cache__pane--active");
-        await pane.getByText("Snapshot conversation", { exact: true }).first().waitFor();
+        await pane
+          .getByText("Snapshot conversation", { exact: true })
+          .filter({ visible: true })
+          .first()
+          .waitFor();
         await pane.locator(".chat-header-session-menu__trigger").click();
         const rename = page.getByRole("menuitem", { name: "Rename…", exact: true });
         expect(await rename.isDisabled()).toBe(true);
