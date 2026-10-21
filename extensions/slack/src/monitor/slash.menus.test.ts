@@ -120,7 +120,9 @@ describe("Slack native command argument menus", () => {
 
   beforeAll(async () => {
     harness = createArgMenusHarness();
-    await registerCommands(harness.ctx, harness.account, trackEvent);
+    expect(await registerCommands(harness.ctx, harness.account, trackEvent)).toEqual({
+      mode: "native",
+    });
     argMenuHandler = requireHandler(harness.actions, /^openclaw_cmdarg/, "arg-menu action");
     argMenuOptionsHandler = requireHandler(harness.options, "openclaw_cmdarg", "arg-menu options");
   });

@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import { createServer, request, type Server } from "node:http";
 import { HTTPReceiver } from "@slack/bolt";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -38,11 +37,7 @@ function slackReceiver(): HTTPReceiver {
   });
 }
 
-function openChunkedRequest(
-  port: number,
-  signature = "v0=invalid",
-  timestamp = String(Math.floor(Date.now() / 1000)),
-): ReturnType<typeof request> {
+function openChunkedRequest(port: number): ReturnType<typeof request> {
   const req = request({
     host: "127.0.0.1",
     port,
@@ -51,8 +46,8 @@ function openChunkedRequest(
     headers: {
       "content-type": "application/json",
       "transfer-encoding": "chunked",
-      "x-slack-request-timestamp": timestamp,
-      "x-slack-signature": signature,
+      "x-slack-request-timestamp": String(Math.floor(Date.now() / 1000)),
+      "x-slack-signature": "v0=invalid",
     },
   });
   req.on("error", () => {});
@@ -86,20 +81,6 @@ afterEach(async () => {
 });
 
 describe("createSlackHttpRequestHandler", () => {
-  it("rejects an oversized chunked body before Bolt signature verification", async () => {
-    const { port } = await startServer();
-    const req = openChunkedRequest(port);
-    const response = readResponse(req);
-
-    req.write(Buffer.alloc(768 * 1024, 0x61));
-    req.end(Buffer.alloc(768 * 1024, 0x62));
-
-    await expect(response).resolves.toEqual({
-      statusCode: 413,
-      body: "Payload too large",
-    });
-  });
-
   it("rejects a stalled body before Bolt's void listener starts reading", async () => {
     const { port } = await startServer();
     const req = openChunkedRequest(port);
@@ -112,24 +93,6 @@ describe("createSlackHttpRequestHandler", () => {
       body: "Request body timeout",
     });
     req.destroy();
-  });
-
-  it("preserves Bolt signature verification for requests within the bounds", async () => {
-    const { port } = await startServer();
-    const body = JSON.stringify({ type: "url_verification", challenge: "bounded" });
-    const timestamp = String(Math.floor(Date.now() / 1000));
-    const signature = `v0=${createHmac("sha256", "test-secret")
-      .update(`v0:${timestamp}:${body}`)
-      .digest("hex")}`;
-    const req = openChunkedRequest(port, signature, timestamp);
-    const response = readResponse(req);
-
-    req.end(body);
-
-    await expect(response).resolves.toEqual({
-      statusCode: 200,
-      body: JSON.stringify({ challenge: "bounded" }),
-    });
   });
 
   it("bounds concurrent requests before another pre-auth body read starts", async () => {

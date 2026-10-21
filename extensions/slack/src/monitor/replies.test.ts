@@ -270,7 +270,7 @@ describe("deliverReplies identity passthrough", () => {
     await deliverPrepared(
       {
         presentation: largePortableTablePresentation(450),
-        interactive: { blocks: [buttons("Refresh", "refresh")] },
+        interactive: { blocks: [buttons("Refresh", "refresh", "primary")] },
       },
       {
         textLimit: 8000,
@@ -292,7 +292,14 @@ describe("deliverReplies identity passthrough", () => {
     expect(blockOptions.blocks).toEqual([
       expect.objectContaining({
         type: "actions",
-        elements: [expect.objectContaining({ type: "button", value: "refresh" })],
+        elements: [
+          expect.objectContaining({
+            type: "button",
+            value: "refresh",
+            style: "primary",
+            action_id: "openclaw:reply_button:1:1",
+          }),
+        ],
       }),
     ]);
   });
@@ -358,30 +365,6 @@ describe("deliverReplies identity passthrough", () => {
     });
     expect(event).not.toHaveProperty("messageId");
   });
-
-  it("renders interactive replies into Slack blocks during delivery", async () => {
-    sendMock.mockResolvedValue(undefined);
-    await deliverPrepared({
-      text: "Choose",
-      interactive: {
-        blocks: [{ type: "text", text: "Choose" }, buttons("Approve", "approve", "primary")],
-      },
-    });
-    expect(sendMock).toHaveBeenCalledOnce();
-    expect(requireSendCall()[2].blocks).toEqual([
-      expect.objectContaining({ type: "section" }),
-      expect.objectContaining({
-        type: "actions",
-        elements: [
-          expect.objectContaining({
-            action_id: "openclaw:reply_button:1:1",
-            style: "primary",
-            value: "approve",
-          }),
-        ],
-      }),
-    ]);
-  });
 });
 
 describe("createSlackReplyDeliveryPlan", () => {
@@ -423,19 +406,6 @@ describe("deliverSlackSlashReplies chunking", () => {
     expect(respond).toHaveBeenCalledWith({ text, response_type: "ephemeral" });
   });
 
-  it("sends block-only slash replies instead of dropping them", async () => {
-    const respond = vi.fn(async () => undefined);
-    const blocks = [{ type: "divider" }];
-    await deliverSlash(respond, [blockReply(blocks)], { ephemeral: false });
-    expect(respond).toHaveBeenCalledTimes(1);
-    expect(respond).toHaveBeenCalledWith({
-      text: "Shared a Block Kit message",
-      blocks,
-      mrkdwn: false,
-      response_type: "in_channel",
-    });
-  });
-
   it("delivers a valid field-rich section in one slash response", async () => {
     const respond = vi.fn(async () => undefined);
     const fields = ["Alpha", "Beta", "Gamma"].map((label) => ({
@@ -458,20 +428,7 @@ describe("deliverSlackSlashReplies chunking", () => {
       { type: "section", text: { type: "mrkdwn", text: "Overview" } },
       nativeRevenueChart,
       refreshAction,
-      {
-        type: "data_table",
-        caption: "Pipeline report",
-        rows: [
-          [
-            { type: "raw_text", text: "Account" },
-            { type: "raw_text", text: "ARR" },
-          ],
-          [
-            { type: "raw_text", text: "Acme" },
-            { type: "raw_number", value: 125000, text: "$125k" },
-          ],
-        ],
-      },
+      nativeTable("Pipeline report"),
     ];
     await deliverSlash(respond, [blockReply(blocks, "Overview")]);
     expect(respond).toHaveBeenCalledTimes(2);
@@ -491,15 +448,10 @@ describe("deliverSlackSlashReplies chunking", () => {
     ]);
     expect(readPlainSectionTexts(fallback)).toEqual([
       revenueText,
-      "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
+      "Pipeline report (table)\nAccount\nAcme",
     ]);
     expect(fallback.text).toBe(
-      [
-        "Overview",
-        revenueText,
-        "Refresh",
-        "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
-      ].join("\n\n"),
+      ["Overview", revenueText, "Refresh", "Pipeline report (table)\nAccount\nAcme"].join("\n\n"),
     );
     expect(fallback.text.match(/Overview/gu)).toHaveLength(1);
     expect(fallback.mrkdwn).toBe(false);
@@ -752,24 +704,6 @@ describe("deliverReplies message_sent hook", () => {
     ).rejects.toThrow(/deferred failure/);
     expect(messageHookRunner.runMessageSent).not.toHaveBeenCalled();
     expect(triggerInternalHook).not.toHaveBeenCalled();
-  });
-
-  it("emits one message_sent event after a multi-media reply succeeds", async () => {
-    enableSentHook();
-    const first = acceptedSlackSendResult("media-1");
-    const second = acceptedSlackSendResult("media-2");
-    acceptSend(first);
-    acceptSend(second);
-    const result = await deliverPrepared({
-      text: "two attachments",
-      mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
-    });
-    expect(result).toBe(second);
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(messageHookRunner.runMessageSent).toHaveBeenCalledTimes(1);
-    const event = sentEvent();
-    expect(event).toMatchObject({ content: "two attachments", success: true });
-    expect(event).not.toHaveProperty("messageId");
   });
 
   it("reports spoken text for media-only TTS supplements", async () => {

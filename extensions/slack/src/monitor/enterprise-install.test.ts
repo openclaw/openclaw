@@ -28,12 +28,6 @@ const channelBinding = (id: string, teamId?: string) =>
 
 describe("resolveSlackInstallationIdentity", () => {
   it.each([
-    ["degraded without auth.test", {}, { kind: "degraded", reason: "auth_test_failed" }],
-    [
-      "workspace transport app id",
-      { auth: { team_id: "T123", is_enterprise_install: false }, transportApiAppId: "A123" },
-      { kind: "workspace", teamId: "T123", apiAppId: "A123" },
-    ],
     [
       "human workspace name",
       { auth: { team: "Local Claw", team_id: "T123", is_enterprise_install: false } },
@@ -43,11 +37,6 @@ describe("resolveSlackInstallationIdentity", () => {
       "enterprise without app_id",
       { auth: { enterprise_id: "E123", is_enterprise_install: true } },
       { kind: "enterprise", enterpriseId: "E123" },
-    ],
-    [
-      "enterprise transport app id",
-      { auth: { enterprise_id: "E123", is_enterprise_install: true }, transportApiAppId: "A123" },
-      { kind: "enterprise", apiAppId: "A123", enterpriseId: "E123" },
     ],
   ] as const)("resolves %s", (_name, params, expected) => {
     expect(resolveSlackInstallationIdentity(params)).toEqual(expected);

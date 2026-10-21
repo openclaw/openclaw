@@ -488,45 +488,84 @@ describe("Slack relay proxy environment", () => {
     vi.unstubAllEnvs();
   });
 
-  it("bypasses the proxy with destination-only auth and acknowledgement under NO_PROXY", async () => {
-    const fixture = await createRelayProxyFixture();
-    vi.stubEnv("HTTPS_PROXY", fixture.proxyUrl);
-    vi.stubEnv("NO_PROXY", "127.0.0.1");
-    const ack = expectRelayAck(fixture.relay, "proxied-delivery");
-    const monitor = startRelayMonitor(fixture);
-    try {
-      await expect(ack).resolves.toEqual({ type: "ack", delivery_id: "proxied-delivery" });
-      expect(fixture.connects).toEqual([]);
-      expect(fixture.upgrades).toEqual([relayUpgrade("direct")]);
-      expect(monitor.acceptRelayEvent).toHaveBeenCalledWith({
-        deliveryId: "proxied-delivery",
-        message: expect.objectContaining({ channel: "C1", text: "hello" }),
+  it.each(["direct", "authenticated", "tls"] as const)(
+    "keeps destination auth private and acknowledges via %s",
+    async (route) => {
+      const fixture = await createRelayProxyFixture({
+        tls: route === "tls",
+        credentials: route === "authenticated" ? PROXY_TEST_CREDENTIALS : undefined,
       });
-    } finally {
-      monitor.abortController.abort();
-      await monitor.monitor;
-      await fixture.close();
-    }
-  });
+      if (route === "tls") {
+        const caFile = path.join(tempDirs.make("slack-relay-proxy-ca-"), "proxy-ca.pem");
+        fs.writeFileSync(caFile, PROXY_TEST_TLS_CERT, "utf8");
+        vi.stubEnv("HTTPS_PROXY", `https://${fixture.proxyHost}`);
+        vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+        vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
+      } else if (route === "authenticated") {
+        const { username, password } = PROXY_TEST_CREDENTIALS;
+        vi.stubEnv("HTTPS_PROXY", `http://${username}:${password}@${fixture.proxyHost}`);
+      } else {
+        vi.stubEnv("HTTPS_PROXY", fixture.proxyUrl);
+        vi.stubEnv("NO_PROXY", "127.0.0.1");
+      }
+      const ack = expectRelayAck(fixture.relay, "delivery");
+      const monitor = startRelayMonitor(fixture);
+      try {
+        await expect(ack).resolves.toEqual({ type: "ack", delivery_id: "delivery" });
+        expect(fixture.connects).toEqual(
+          route === "direct"
+            ? []
+            : [
+                {
+                  target: fixture.target,
+                  authorizationPresent: false,
+                  proxyAuthorization: route === "authenticated" ? "valid" : "missing",
+                },
+              ],
+        );
+        expect(fixture.upgrades).toEqual([relayUpgrade(route === "direct" ? "direct" : "proxy")]);
+        expect(fixture.relayConnections()).toBe(1);
+        expect(fixture.proxySecureConnections()).toBe(route === "tls" ? 1 : 0);
+        expect(monitor.acceptRelayEvent).toHaveBeenCalledExactlyOnceWith({
+          deliveryId: "delivery",
+          message: expect.objectContaining({ channel: "C1", text: "hello" }),
+        });
+      } finally {
+        await stopProxy(monitor, fixture);
+      }
+    },
+  );
 
-  it("reports invalid proxy configuration without a direct relay connection", async () => {
-    const fixture = await createRelayProxyFixture();
-    vi.stubEnv("HTTPS_PROXY", "socks5://proxy.example.test:1080");
-    const firstStatus = deferred<Record<string, unknown>>();
-    const monitor = startRelayMonitor(fixture, (status) => firstStatus.resolve(status));
-    try {
-      await expect(firstStatus.promise).resolves.toMatchObject({
-        connected: false,
-        lifecycle: "recovering",
-        lastError: expect.stringContaining("Unsupported proxy protocol"),
-      });
-      expect(fixture.upgrades).toEqual([]);
-    } finally {
-      await monitor.stop();
-      await fixture.close();
-    }
-    expect(await monitor.stopped).toMatchObject({ name: "AbortError" });
-  });
+  it.each(["invalid protocol", "untrusted certificate"] as const)(
+    "recovers from %s without connecting directly or sending CONNECT",
+    async (failure) => {
+      const fixture = await createRelayProxyFixture({ tls: true });
+      const untrusted = failure === "untrusted certificate";
+      vi.stubEnv(
+        "HTTPS_PROXY",
+        untrusted ? `https://${fixture.proxyHost}` : "socks5://proxy.example.test:1080",
+      );
+      vi.stubEnv("OPENCLAW_PROXY_ACTIVE", undefined);
+      vi.stubEnv("OPENCLAW_PROXY_CA_FILE", undefined);
+      const firstStatus = deferred<Record<string, unknown>>();
+      const monitor = startRelayMonitor(fixture, (status) => firstStatus.resolve(status));
+      try {
+        await expect(firstStatus.promise).resolves.toMatchObject({
+          connected: false,
+          lifecycle: "recovering",
+          lastError: expect.stringContaining(
+            untrusted ? "DEPTH_ZERO_SELF_SIGNED_CERT" : "Unsupported proxy protocol",
+          ),
+        });
+        expect(fixture.proxySecureConnections()).toBe(0);
+        expect(fixture.connects).toEqual([]);
+        expect(fixture.relayConnections()).toBe(0);
+        expect(fixture.upgrades).toEqual([]);
+      } finally {
+        await stopProxy(monitor, fixture, { name: "AbortError" });
+      }
+    },
+  );
 
   it("aborts a stalled CONNECT without an unhandled socket error", async () => {
     const fixture = await createRelayProxyFixture({ stall: true });
@@ -542,27 +581,6 @@ describe("Slack relay proxy environment", () => {
       monitor.abortController.abort();
       await monitor.monitor;
       await fixture.close();
-    }
-  });
-
-  it("sends proxy URL credentials as Proxy-Authorization and acks through the tunnel", async () => {
-    const fixture = await createRelayProxyFixture({ credentials: PROXY_TEST_CREDENTIALS });
-    vi.stubEnv(
-      "HTTPS_PROXY",
-      `http://${PROXY_TEST_CREDENTIALS.username}:${PROXY_TEST_CREDENTIALS.password}@${fixture.proxyHost}`,
-    );
-    const ack = expectRelayAck(fixture.relay, "authenticated-delivery");
-    const monitor = startRelayMonitor(fixture);
-    try {
-      await expect(ack).resolves.toEqual({ type: "ack", delivery_id: "authenticated-delivery" });
-      expect(fixture.connects).toEqual([
-        { target: fixture.target, authorizationPresent: false, proxyAuthorization: "valid" },
-      ]);
-      expect(fixture.relayConnections()).toBe(1);
-      expect(fixture.upgrades).toEqual([relayUpgrade("proxy")]);
-      expect(monitor.acceptRelayEvent).toHaveBeenCalledTimes(1);
-    } finally {
-      await stopProxy(monitor, fixture);
     }
   });
 
@@ -606,50 +624,4 @@ describe("Slack relay proxy environment", () => {
       }
     },
   );
-
-  it("dials an https:// proxy over TLS trusted through the managed-proxy CA file", async () => {
-    const fixture = await createRelayProxyFixture({ tls: true });
-    const caDir = tempDirs.make("slack-relay-proxy-ca-");
-    const caFile = path.join(caDir, "proxy-ca.pem");
-    fs.writeFileSync(caFile, PROXY_TEST_TLS_CERT, "utf8");
-    vi.stubEnv("HTTPS_PROXY", `https://${fixture.proxyHost}`);
-    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
-    const ack = expectRelayAck(fixture.relay, "tls-proxied-delivery");
-    const monitor = startRelayMonitor(fixture);
-    try {
-      await expect(ack).resolves.toEqual({ type: "ack", delivery_id: "tls-proxied-delivery" });
-      expect(fixture.proxySecureConnections()).toBe(1);
-      expect(fixture.connects).toEqual([
-        { target: fixture.target, authorizationPresent: false, proxyAuthorization: "missing" },
-      ]);
-      expect(fixture.upgrades).toEqual([relayUpgrade("proxy")]);
-    } finally {
-      await stopProxy(monitor, fixture);
-    }
-  });
-
-  it("rejects an untrusted https:// proxy certificate before sending CONNECT", async () => {
-    const fixture = await createRelayProxyFixture({ tls: true });
-    vi.stubEnv("HTTPS_PROXY", `https://${fixture.proxyHost}`);
-    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", undefined);
-    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", undefined);
-    const firstStatus = deferred<Record<string, unknown>>();
-    const monitor = startRelayMonitor(fixture, (status) => firstStatus.resolve(status));
-    try {
-      await expect(firstStatus.promise).resolves.toMatchObject({
-        connected: false,
-        lifecycle: "recovering",
-        lastError: expect.stringContaining("DEPTH_ZERO_SELF_SIGNED_CERT"),
-      });
-      // Some TLS servers expose failed handshakes before their public connection
-      // event. The verification error proves the dial reached certificate checks.
-      expect(fixture.proxySecureConnections()).toBe(0);
-      expect(fixture.connects).toEqual([]);
-      expect(fixture.relayConnections()).toBe(0);
-      expect(fixture.upgrades).toEqual([]);
-    } finally {
-      await stopProxy(monitor, fixture, { name: "AbortError" });
-    }
-  });
 });

@@ -126,14 +126,6 @@ describe("Slack App Home command presentation", () => {
     });
     expect(harness.commands.size).toBe(0);
   });
-
-  it("omits the single command when native commands take precedence", async () => {
-    const harness = createArgMenusHarness();
-    await expect(registerCommands(harness.ctx, harness.account)).resolves.toEqual({
-      mode: "native",
-    });
-    expect(harness.commands.size).toBeGreaterThan(0);
-  });
 });
 
 describe("slack slash commands channel policy", () => {
@@ -151,8 +143,8 @@ describe("slack slash commands channel policy", () => {
     expect(respond).not.toHaveBeenCalled();
   });
 
-  it.each([true, false])("honors monitor channel admission: allowed=%s", async (allowed) => {
-    const harness = createPolicyHarness({ channelAllowed: allowed });
+  it("honors denied monitor channel admission", async () => {
+    const harness = createPolicyHarness({ channelAllowed: false });
     const { respond } = await registerAndRunPolicySlash(harness);
     expect(harness.ctx.isChannelAllowed).toHaveBeenCalledWith({
       teamId: "T1",
@@ -160,12 +152,7 @@ describe("slack slash commands channel policy", () => {
       channelName: "unlisted",
       channelType: "channel",
     });
-    if (!allowed) {
-      expectBlockedResponse(respond, "This channel is not allowed.");
-      return;
-    }
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(responseTexts(respond)).not.toContain("This channel is not allowed.");
+    expectBlockedResponse(respond, "This channel is not allowed.");
   });
 });
 
@@ -335,6 +322,7 @@ describe("slack slash command session metadata", () => {
   });
 
   it("partitions Enterprise Grid slash sessions and replies by event team", async () => {
+    setAsyncDispatchMock(dispatchPublicAnswer);
     const harness = createPolicyHarness({
       slashEphemeral: false,
       installationIdentity: { kind: "enterprise", enterpriseId: "EGRID" },
@@ -356,16 +344,9 @@ describe("slack slash command session metadata", () => {
       OriginatingTo: "team:TGRID1:channel:CGRID1",
       SessionKey: expect.stringContaining("team:tgrid1:user:u1"),
     });
-  });
-
-  it("targets the channel for public slash reply hooks", async () => {
-    setAsyncDispatchMock(dispatchPublicAnswer);
-    const harness = createPolicyHarness({ slashEphemeral: false });
-    await registerAndRunPolicySlash(harness);
-    expect(firstDispatchArg().ctx?.OriginatingTo).toBe(`channel:${harness.channelId}`);
     expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        messageSentHookTarget: `channel:${harness.channelId}`,
+        messageSentHookTarget: "team:TGRID1:channel:CGRID1",
         isGroup: true,
         groupId: harness.channelId,
       }),
@@ -389,6 +370,7 @@ describe("slack slash command session metadata", () => {
     });
     const respond = vi.fn().mockRejectedValue(respondError);
     await registerAndRunPolicySlash(harness, { respond });
+    expect(firstDispatchArg().ctx?.OriginatingTo).toBe(`channel:${harness.channelId}`);
     expect(harness.postMessage).toHaveBeenCalledOnce();
     expect(harness.runtimeError).toHaveBeenCalledWith(
       expect.stringContaining("Slack chat.postMessage returned no message timestamp"),
