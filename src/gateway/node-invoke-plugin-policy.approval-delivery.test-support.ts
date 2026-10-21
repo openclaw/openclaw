@@ -1,17 +1,13 @@
 import { expect, it, vi, type TestContext } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestApprovalFixture } from "./exec-approval-manager.test-support.js";
-import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import {
   createApprovalRequestPolicy,
   createContext,
-  createNodeSession,
   createOperatorClient,
-  DEMO_COMMAND,
-  DEMO_PARAMS,
+  createRuntimeClient,
   expectApprovalResolution,
   expectSinglePendingApproval,
   invokeDemoPolicy,
@@ -61,33 +57,18 @@ export function registerNodePolicyApprovalDeliveryTests() {
     await fixture.run(async () => {
       context.forwardPluginApprovalRequest = handleRequested;
       context.validateAgentRuntimeApprovalAuthority = () => true;
-      const operationalRunInstance = createOperationalRunInstanceRef("run-node-policy");
       const { record, pending: resultPromise } = await fixture.request(() =>
-        applyPluginNodeInvokePolicy({
+        invokeDemoPolicy(
           context,
-          client: {
-            ...createOperatorClient(),
-            internal: {
-              agentRuntimeIdentity: {
-                kind: "agentRuntime",
-                agentId: "main",
-                sessionKey: "agent:main:telegram:direct:alice",
-                operationalRunInstance,
-                delegatedAuthority: {
-                  kind: "local",
-                  operationalRunInstance,
-                  lifecycleGeneration: "test-generation",
-                  claimId: "test-claim",
-                },
-              },
-            },
+          createRuntimeClient("run-node-policy", "agent:main:telegram:direct:alice", {
+            lifecycleGeneration: "test-generation",
+            claimId: "test-claim",
+          }),
+          {
+            sessionKey: "agent:main:spoofed",
+            turnSource: { channel: "tui", to: "terminal", accountId: "default", threadId: 7 },
           },
-          nodeSession: createNodeSession(),
-          command: DEMO_COMMAND,
-          params: DEMO_PARAMS,
-          sessionKey: "agent:main:spoofed",
-          turnSource: { channel: "tui", to: "terminal", accountId: "default", threadId: 7 },
-        }),
+        ),
       );
       expect(record.request).toMatchObject({
         turnSourceChannel: "tui",

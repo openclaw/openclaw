@@ -62,9 +62,10 @@ export function pendingSurface(
 }
 
 export function createCatalogFixture(
-  paired: PairedDevice[],
+  devices: Partial<PairedDevice> | PairedDevice[] = {},
   connections: Partial<NodeSession>[] = [],
 ) {
+  const paired = Array.isArray(devices) ? devices : [pairedDevice(devices)];
   const bindings = new Map<string, DevicePairingBinding>();
   for (const device of paired) {
     const { binding } = prepareDevicePairingBinding(device.deviceId, device);

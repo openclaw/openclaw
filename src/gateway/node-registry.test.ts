@@ -194,6 +194,36 @@ function registerNode(registry: NodeRegistry, opts: Parameters<typeof makeClient
   return frames;
 }
 
+function registerPairedNode(
+  registry: NodeRegistry,
+  frames: string[] = [],
+  opts: Parameters<typeof makeClient>[3] = {},
+  connId = "conn-1",
+  pairing = pairingA,
+) {
+  return registerNodeSession(registry, makeClient(connId, "node-1", frames, opts), pairing);
+}
+
+function reportPresence(
+  registry: NodeRegistry,
+  overrides: Partial<Parameters<NodeRegistry["updatePresenceActivity"]>[0]> = {},
+) {
+  return registry.updatePresenceActivity({
+    nodeId: "node-1",
+    connId: "conn-1",
+    idleSeconds: 0,
+    observedAtMs: 100_000,
+    ...overrides,
+  });
+}
+
+function registerAccessibleNode(registry: NodeRegistry, connId = "conn-1", nodeId = "node-1") {
+  return registerNodeSession(
+    registry,
+    makeClient(connId, nodeId, [], { permissions: { accessibility: true } }),
+  );
+}
+
 function registerPairingWait() {
   const pairing = createDeferred<{ identity: string; generation: string }>();
   const registry = createNodeRegistry({ resolveCurrentPairingState: () => pairing.promise });
@@ -357,14 +387,10 @@ describe("gateway/node-registry", () => {
       createPrivateRegistry({
         resolveCurrentPairingState,
       });
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], {
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        commands: ["system.run"],
-      }),
-      pairingA,
-    );
+    registerPairedNode(registry, [], {
+      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+      commands: ["system.run"],
+    });
     registerNodeSession(registry, makeClient("conn-unrelated", "node-unrelated"), pairingA);
     const runtime = createDeviceWorkerRuntime({
       getPairedDevice: async () => ({
@@ -414,11 +440,7 @@ describe("gateway/node-registry", () => {
       const node = await transport.getCurrentNode("node-1");
       return node ? [node] : [];
     };
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], { clientId, commands: ["system.run"] }),
-      pairingA,
-    );
+    registerPairedNode(registry, [], { clientId, commands: ["system.run"] });
 
     await expect(readNodes()).resolves.toEqual([]);
     expect(
@@ -460,11 +482,10 @@ describe("gateway/node-registry", () => {
       expect.objectContaining({ pairingGeneration: "generation-b" }),
     ]);
 
-    registerNodeSession(
-      registry,
-      makeClient("conn-2", "node-1", [], { clientId, commands: ["system.run"] }),
-      { pairingIdentity: "identity-a", pairingGeneration: "generation-b" },
-    );
+    registerPairedNode(registry, [], { clientId, commands: ["system.run"] }, "conn-2", {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-b",
+    });
     await expect(readNodes()).resolves.toEqual([]);
     expect(
       publishRunner(registry, { enabled: true, capacity: { total: 2, available: 2 } }),
@@ -486,21 +507,11 @@ describe("gateway/node-registry", () => {
     const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
       createPrivateRegistry();
     setNodeRunnerStateChangedListener(registry, runnerStateChanged);
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], {
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        commands: ["system.run"],
-      }),
-      pairingA,
-    );
-    const publish = (workerHost: NodeWorkerHostDeclaration) =>
-      updateNodeRunnerInventory({
-        registry,
-        nodeId: "node-1",
-        connId: "conn-1",
-        declaration: { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE], workerHost },
-      });
+    registerPairedNode(registry, [], {
+      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+      commands: ["system.run"],
+    });
+    const publish = (workerHost: NodeWorkerHostDeclaration) => publishRunner(registry, workerHost);
     const retained = {
       enabled: true as const,
       capacity: { total: 2, available: 2 },
@@ -617,11 +628,7 @@ describe("gateway/node-registry", () => {
       const frames: string[] = [];
       const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
         createPrivateRegistry();
-      registerNodeSession(
-        registry,
-        makeClient("conn-1", "node-1", frames, { clientId, commands: ["system.run"] }),
-        pairingA,
-      );
+      registerPairedNode(registry, frames, { clientId, commands: ["system.run"] });
       expect(
         publishRunner(registry, { enabled: true, capacity: { total: 2, available: 2 } }),
       ).toEqual({ changed: true });
@@ -745,7 +752,7 @@ describe("gateway/node-registry", () => {
       const resolveCurrentPairingState = vi.fn(() => pairing.promise);
       const registry = createNodeRegistry({ resolveCurrentPairingState });
       const frames: string[] = [];
-      registerNodeSession(registry, makeClient("conn-1", "node-1", frames), pairingA);
+      registerPairedNode(registry, frames);
       let authorityActive = true;
       const isDispatchAuthorized = vi.fn(() => authorityActive);
       const onDispatchReady = vi.fn();
@@ -787,11 +794,7 @@ describe("gateway/node-registry", () => {
       const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
         createPrivateRegistry({ resolveCurrentPairingState });
       const frames: string[] = [];
-      registerNodeSession(
-        registry,
-        makeClient("conn-1", "node-1", frames, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST }),
-        pairingA,
-      );
+      registerPairedNode(registry, frames, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
       const workerHost = {
         enabled: true as const,
         capacity: { total: 1, available: 1 },
@@ -829,14 +832,10 @@ describe("gateway/node-registry", () => {
       const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
         createPrivateRegistry();
       const frames: string[] = [];
-      registerNodeSession(
-        registry,
-        makeClient("conn-1", "node-1", frames, {
-          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-          commands: [NODE_WORKER_WORKSPACE_RETAIN_COMMAND],
-        }),
-        pairingA,
-      );
+      registerPairedNode(registry, frames, {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: [NODE_WORKER_WORKSPACE_RETAIN_COMMAND],
+      });
       publishRunner(registry, { enabled: true, capacity: { total: 1, available: 1 } });
       const proof = expectDefined((await transport.listCurrentNodes())[0], "runner proof");
       const dispatched = createDeferred();
@@ -1734,35 +1733,28 @@ describe("gateway/node-registry", () => {
 
   it("sends raw event payload JSON without changing the envelope shape", () => {
     const registry = createTestNodeRegistry();
-    const frames: string[] = [];
-    registerNodeSession(registry, makeClient("conn-1", "node-1", frames), {});
+    const frames = registerNode(registry);
     const payload = serializeEventPayload({ foo: "bar" });
-    const nullPayload = serializeEventPayload(null);
-    const falsePayload = serializeEventPayload(false);
-    const zeroPayload = serializeEventPayload(0);
-    const emptyStringPayload = serializeEventPayload("");
-
-    expect(registry.sendEventRaw("node-1", "chat", payload)).toBe(true);
-    expect(registry.sendEventRaw("node-1", "nullish", nullPayload)).toBe(true);
-    expect(registry.sendEventRaw("node-1", "flag", falsePayload)).toBe(true);
-    expect(registry.sendEventRaw("node-1", "count", zeroPayload)).toBe(true);
-    expect(registry.sendEventRaw("node-1", "empty", emptyStringPayload)).toBe(true);
+    for (const [event, value] of [
+      ["chat", { foo: "bar" }],
+      ["nullish", null],
+      ["flag", false],
+      ["count", 0],
+      ["empty", ""],
+    ] as const) {
+      expect(registry.sendEventRaw("node-1", event, serializeEventPayload(value))).toBe(true);
+    }
     expect(registry.sendEventRaw("missing-node", "chat", payload)).toBe(false);
     expect(registry.sendEventRaw("node-1", "heartbeat", null)).toBe(true);
-    expect(
-      registry.sendEventRaw(
-        "node-1",
-        "chat",
-        "not-json" as unknown as Parameters<NodeRegistry["sendEventRaw"]>[2],
-      ),
-    ).toBe(false);
-    expect(
-      registry.sendEventRaw(
-        "node-1",
-        "chat",
-        '{"x":1},"seq":999' as unknown as Parameters<NodeRegistry["sendEventRaw"]>[2],
-      ),
-    ).toBe(false);
+    for (const invalid of ["not-json", '{"x":1},"seq":999']) {
+      expect(
+        registry.sendEventRaw(
+          "node-1",
+          "chat",
+          invalid as unknown as Parameters<NodeRegistry["sendEventRaw"]>[2],
+        ),
+      ).toBe(false);
+    }
 
     expect(frames).toEqual([
       '{"type":"event","event":"chat","payload":{"foo":"bar"}}',
@@ -1951,12 +1943,7 @@ describe("gateway/node-registry", () => {
     const session = registerNodeSession(registry, client, {});
     expect(session.caps).toEqual([]);
     expect(session.commands).toEqual([]);
-    registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 0,
-      observedAtMs: 100_000,
-    });
+    reportPresence(registry);
     expect(registry.getActiveNode()?.nodeId).toBe("node-1");
 
     const updated = registry.updateSurface("node-1", {
@@ -1965,17 +1952,14 @@ describe("gateway/node-registry", () => {
       permissions: { microphone: true, camera: true },
     });
 
-    expect(updated?.caps).toEqual(["talk"]);
-    expect(updated?.commands).toEqual(["talk.ptt.start", "computer.act", "screen.snapshot"]);
-    expect(updated?.computerUse).toEqual(computerUse);
-    expect(updated?.permissions).toEqual({ microphone: true, camera: false });
-    expect(client.connect.caps).toEqual(["talk"]);
-    expect((client.connect as { commands?: string[] }).commands).toEqual([
-      "talk.ptt.start",
-      "computer.act",
-      "screen.snapshot",
+    const surface = [["talk"], ["talk.ptt.start", "computer.act", "screen.snapshot"], computerUse];
+    expect([updated?.caps, updated?.commands, updated?.computerUse, updated?.permissions]).toEqual([
+      ...surface,
+      { microphone: true, camera: false },
     ]);
-    expect(client.connect.computerUse).toEqual(computerUse);
+    expect([client.connect.caps, client.connect.commands, client.connect.computerUse]).toEqual(
+      surface,
+    );
     expect(session.lastActiveAtMs).toBeUndefined();
     expect(session.presenceUpdatedAtMs).toBeUndefined();
     expect(registry.getActiveNode()).toBeUndefined();
@@ -1991,22 +1975,13 @@ describe("gateway/node-registry", () => {
       const registry = createNodeRegistry();
       const frames: string[] = [];
       const chunks: string[] = [];
-      registerNodeSession(
-        registry,
-        makeClient("conn-1", "node-1", frames, {
-          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-          commands: ["system.run"],
-          permissions: { accessibility: true },
-          declaredPermissions: { accessibility: true },
-        }),
-        pairingA,
-      );
-      registry.updatePresenceActivity({
-        nodeId: "node-1",
-        connId: "conn-1",
-        idleSeconds: 0,
-        observedAtMs: 100_000,
+      registerPairedNode(registry, frames, {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+        permissions: { accessibility: true },
+        declaredPermissions: { accessibility: true },
       });
+      reportPresence(registry);
       expect(registry.getForPairingGeneration("node-1", "generation-b")).toBeUndefined();
       expect(registry.getForPairingGeneration("node-1", "generation-a")?.connId).toBe("conn-1");
       await expect(
@@ -2194,32 +2169,14 @@ describe("gateway/node-registry", () => {
 describe("node registry presence", () => {
   it("recomputes active context when a same-id connection replaces reported presence", () => {
     const registry = createNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-old", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    registry.updatePresenceActivity({
-      nodeId: "node-1",
+    registerAccessibleNode(registry, "conn-old");
+    reportPresence(registry, {
       connId: "conn-old",
-      idleSeconds: 0,
-      observedAtMs: 100_000,
     });
 
-    registerNodeSession(
-      registry,
-      makeClient("conn-new", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
+    registerAccessibleNode(registry, "conn-new");
 
-    expect(
-      registry.updatePresenceActivity({
-        nodeId: "node-1",
-        connId: "conn-old",
-        idleSeconds: 0,
-        observedAtMs: 100_000,
-      }),
-    ).toBeNull();
+    expect(reportPresence(registry, { connId: "conn-old" })).toBeNull();
     expect(registry.getActiveNode()).toBeUndefined();
     expect(getCurrentActiveNodeContext()).toBeNull();
     expect(registry.unregister("conn-old")).toBeNull();
@@ -2243,12 +2200,11 @@ describe("node registry presence", () => {
         updatedAt: 0,
       };
       registerNodeSession(registry, client, {});
-      registry.updatePresenceActivity({
+      reportPresence(registry, {
         nodeId,
         connId: nodeId,
         idleSeconds,
         source: "app",
-        observedAtMs: 100_000,
       });
     }
 
@@ -2277,10 +2233,9 @@ describe("node registry presence", () => {
     profile.profileId = "alice";
     expect(getCurrentActiveNodeContext("bob")).toBeNull();
     expect(getCurrentActiveNodeContext("alice")).toBeNull();
-    registry.updatePresenceActivity({
+    reportPresence(registry, {
       nodeId: "bob-mac",
       connId: "bob-mac",
-      idleSeconds: 0,
       source: "app",
       observedAtMs: 110_000,
     });
@@ -2290,23 +2245,14 @@ describe("node registry presence", () => {
 
   it("does not advance a bounded estimate on saturated idle keepalives", () => {
     const registry = createNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    const first = registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 2_592_000,
-      saturated: true,
+    registerAccessibleNode(registry);
+    const sample = { idleSeconds: 2_592_000, saturated: true };
+    const first = reportPresence(registry, {
+      ...sample,
       observedAtMs: 3_000_000_000,
     });
-    const keepalive = registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 2_592_000,
-      saturated: true,
+    const keepalive = reportPresence(registry, {
+      ...sample,
       observedAtMs: 3_000_180_000,
     });
 
@@ -2317,26 +2263,12 @@ describe("node registry presence", () => {
 
   it("clears presence only for the current connection and selects the next active Mac", () => {
     const registry = createNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    registerNodeSession(
-      registry,
-      makeClient("conn-2", "node-2", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 10,
-      observedAtMs: 100_000,
-    });
-    registry.updatePresenceActivity({
+    registerAccessibleNode(registry);
+    registerAccessibleNode(registry, "conn-2", "node-2");
+    reportPresence(registry, { idleSeconds: 10 });
+    reportPresence(registry, {
       nodeId: "node-2",
       connId: "conn-2",
-      idleSeconds: 0,
       observedAtMs: 105_000,
     });
 

@@ -47,32 +47,22 @@ describe("private worker launch wire", () => {
     });
     await once(client, "open");
     [socket] = await connected;
-    nodeRegistry.register(
-      {
-        connId,
-        socket: gatewayTestTextTransport(socket),
-        usesSharedGatewayAuth: false,
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: {
-            id: GATEWAY_CLIENT_IDS.NODE_HOST,
-            version: "test",
-            platform: "test",
-            mode: "node",
-          },
-          device: {
-            id: nodeId,
-            publicKey: "fixture",
-            signature: "fixture",
-            signedAt: 1,
-            nonce: "fixture",
-          },
-          commands: [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND],
-        },
-      },
-      { pairingIdentity: "fixture-pairing", pairingGeneration: "fixture-generation" },
-    );
+    const nodeClient = makeClient(connId, nodeId, [], {
+      socket: gatewayTestTextTransport(socket),
+      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+      version: "test",
+      platform: "test",
+      commands: [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND],
+    });
+    Object.assign(nodeClient.connect.device!, {
+      publicKey: "fixture",
+      signature: "fixture",
+      nonce: "fixture",
+    });
+    nodeRegistry.register(nodeClient, {
+      pairingIdentity: "fixture-pairing",
+      pairingGeneration: "fixture-generation",
+    });
     updateNodeRunnerInventory({
       registry: nodeRegistry,
       nodeId,

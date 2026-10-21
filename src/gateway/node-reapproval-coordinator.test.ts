@@ -58,6 +58,10 @@ async function setupPairedNode(baseDir: string): Promise<void> {
   );
 }
 
+async function expectPending(baseDir: string, expected: object) {
+  expect((await listNodePairing(baseDir)).pending).toEqual([expect.objectContaining(expected)]);
+}
+
 describe("node reapproval coordinator", () => {
   beforeAll(() => tempDirs.setup());
 
@@ -75,42 +79,30 @@ describe("node reapproval coordinator", () => {
       scheduler,
     );
     const pending = await requestNodePairing(nodeInput(), baseDir);
-
-    const matchingConnect = await beginNodePairingConnect("node-1", baseDir);
-    await expect(
-      coordinator.request({
-        input: nodeInput(),
-        cleanupClaim: matchingConnect.cleanupClaim,
+    const reconnect = async (surface = "screen") => {
+      const { cleanupClaim } = await beginNodePairingConnect("node-1", baseDir);
+      const result = await coordinator.request({
+        input: nodeInput(surface),
+        cleanupClaim,
         baseDir,
-      }),
-    ).resolves.toMatchObject({
+      });
+      if (cleanupClaim) {
+        await releaseNodePairingCleanupClaim(cleanupClaim);
+      }
+      return result;
+    };
+    await expect(reconnect()).resolves.toMatchObject({
       request: { requestId: pending.request.requestId },
       created: false,
     });
-    if (matchingConnect.cleanupClaim) {
-      await releaseNodePairingCleanupClaim(matchingConnect.cleanupClaim);
-    }
-
-    const changedConnect = await beginNodePairingConnect("node-1", baseDir);
-    await expect(
-      coordinator.request({
-        input: nodeInput("microphone"),
-        cleanupClaim: changedConnect.cleanupClaim,
-        baseDir,
-      }),
-    ).resolves.toMatchObject({
+    await expect(reconnect("microphone")).resolves.toMatchObject({
       request: { caps: ["camera", "microphone"] },
       created: true,
     });
-    if (changedConnect.cleanupClaim) {
-      await releaseNodePairingCleanupClaim(changedConnect.cleanupClaim);
-    }
 
     coordinator.updateConfig({ ...limit, maxAttempts: 1, exemptLoopback: true });
     await expect(request("location")).resolves.toBeNull();
-    expect((await listNodePairing(baseDir)).pending).toEqual([
-      expect.objectContaining({ caps: ["camera", "microphone"] }),
-    ]);
+    await expectPending(baseDir, { caps: ["camera", "microphone"] });
     await expect(request("microphone")).resolves.toMatchObject({
       request: { caps: ["camera", "microphone"] },
       created: false,
@@ -147,9 +139,7 @@ describe("node reapproval coordinator", () => {
     await expect(latest).resolves.toMatchObject({
       request: { caps: ["camera", "location"] },
     });
-    expect((await listNodePairing(baseDir)).pending).toEqual([
-      expect.objectContaining({ caps: ["camera", "location"] }),
-    ]);
+    await expectPending(baseDir, { caps: ["camera", "location"] });
 
     coordinator.dispose();
   });
@@ -168,9 +158,7 @@ describe("node reapproval coordinator", () => {
       request: { caps: ["camera", "screen"] },
       created: false,
     });
-    expect((await listNodePairing(baseDir)).pending).toEqual([
-      expect.objectContaining({ caps: ["camera", "screen"] }),
-    ]);
+    await expectPending(baseDir, { caps: ["camera", "screen"] });
 
     coordinator.dispose();
   });
@@ -184,18 +172,10 @@ describe("node reapproval coordinator", () => {
     expect(first.cleanupClaim).toBeDefined();
     expect(staleCleanup.cleanupClaim).toBeDefined();
     expect(latest.cleanupClaim).toBeDefined();
-    const input = nodeInput();
-
-    const firstReuse = coordinator.request({
-      input,
-      cleanupClaim: first.cleanupClaim,
-      baseDir,
-    });
-    const latestReuse = coordinator.request({
-      input,
-      cleanupClaim: latest.cleanupClaim,
-      baseDir,
-    });
+    const reuse = (cleanupClaim: typeof first.cleanupClaim) =>
+      coordinator.request({ input: nodeInput(), cleanupClaim, baseDir });
+    const firstReuse = reuse(first.cleanupClaim);
+    const latestReuse = reuse(latest.cleanupClaim);
     const cleanup = coordinator.finalizeCleanup(staleCleanup.cleanupClaim!);
 
     await expect(firstReuse).resolves.toMatchObject({
@@ -206,9 +186,7 @@ describe("node reapproval coordinator", () => {
       created: false,
     });
     await expect(cleanup).resolves.toEqual([]);
-    expect((await listNodePairing(baseDir)).pending).toEqual([
-      expect.objectContaining({ requestId: pending.request.requestId }),
-    ]);
+    await expectPending(baseDir, { requestId: pending.request.requestId });
 
     coordinator.dispose();
   });

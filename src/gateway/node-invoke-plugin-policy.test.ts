@@ -6,7 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import {
@@ -31,6 +30,8 @@ import {
   createDemoPolicy,
   createNodeSession,
   createOperatorClient,
+  createPolicyApprovalFixture,
+  createRuntimeClient,
   DEMO_COMMAND,
   DEMO_PARAMS,
   DEMO_PLUGIN_ID,
@@ -250,12 +251,7 @@ describe("applyPluginNodeInvokePolicy", () => {
       const controller = new AbortController();
 
       try {
-        const result = await applyPluginNodeInvokePolicy({
-          context,
-          client: null,
-          nodeSession: createNodeSession(),
-          command: DEMO_COMMAND,
-          params: DEMO_PARAMS,
+        const result = await invokeDemoPolicy(context, null, {
           timeoutMs: 1_000,
           deadlineAtMs: 1_250,
           signal: controller.signal,
@@ -296,12 +292,8 @@ describe("applyPluginNodeInvokePolicy", () => {
       };
     });
 
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
+    const result = await invokeDemoPolicy(context, null, {
       nodeSession,
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
       onNodeCommandDispatched: () => dispatchOrder.push("dispatched"),
     });
 
@@ -318,12 +310,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     ]);
     const { context, invoke } = createContext();
 
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
+    const result = await invokeDemoPolicy(context, null, {
       timeoutMs: 1_000,
       resolveRemainingTimeoutMs: () => 0,
     });
@@ -342,12 +329,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     ]);
     const { context, invoke } = createContext();
 
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
+    const result = await invokeDemoPolicy(context, null, {
       isInvocationCurrent: async () => false,
     });
 
@@ -368,29 +350,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     const { context, invoke } = createContext({
       validateAgentRuntimeApprovalAuthority: () => authorityActive,
     });
-    const operationalRunInstance = createOperationalRunInstanceRef("run-node-policy-race");
-    const resultPromise = applyPluginNodeInvokePolicy({
-      context,
-      client: {
-        ...createOperatorClient(),
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey: "agent:main:test",
-            operationalRunInstance,
-            delegatedAuthority: {
-              kind: "local",
-              operationalRunInstance,
-              lifecycleGeneration: "generation",
-              claimId: "claim",
-            },
-          },
-        },
-      },
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
+    const resultPromise = invokeDemoPolicy(context, createRuntimeClient("run-node-policy-race"), {
       isInvocationCurrent: async () => {
         await pairingCheck;
         return true;
@@ -416,12 +376,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     let approvalActive = true;
     const { promise: pairingCheck, resolve: releasePairingCheck } = createDeferred();
     const { context, invoke } = createContext();
-    const resultPromise = applyPluginNodeInvokePolicy({
-      context,
-      client: createOperatorClient(),
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient(), {
       isInvocationCurrent: async () => {
         await pairingCheck;
         return true;
@@ -529,14 +484,9 @@ describe("applyPluginNodeInvokePolicy", () => {
   });
 
   it("sanitizes node-policy approval titles at creation like the RPC ingress", async (testContext) => {
-    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
-      approvalKind: "plugin",
-    });
+    const fixture = createPolicyApprovalFixture(testContext);
     const { manager } = fixture;
     await fixture.run(async () => {
-      const getApprovalClientConnIds = createApprovalClientLookup([
-        createOperatorClient("conn-owner-approval"),
-      ]);
       setDangerousDemoCommandRegistry([
         // Bidi override + zero-width space: reviewer-spoofing characters.
         createApprovalRequestPolicy({
@@ -546,28 +496,20 @@ describe("applyPluginNodeInvokePolicy", () => {
           agentId: "agent​x",
         }),
       ]);
-      const { context } = createContext({
-        pluginApprovalManager: manager,
-        getApprovalClientConnIds,
+      const { record, pending: resultPromise } = await fixture.request();
+      expect(record.request).toMatchObject({
+        title: "Deploy\\u{202E}yolped",
+        description: "safe\\u{200B}text",
+        toolName: "tool\\u{202E}run",
+        agentId: "agent\\u{200B}x",
       });
-      const { record, pending: resultPromise } = await expectSinglePendingApproval(
-        manager,
-        context,
-        () => fixture.track(invokeDemoPolicy(context, createOperatorClient())),
-      );
-      expect(record.request.title).toBe("Deploy\\u{202E}yolped");
-      expect(record.request.description).toBe("safe\\u{200B}text");
-      // Metadata is interpolated into channel approval text lines.
-      expect(record.request.toolName).toBe("tool\\u{202E}run");
-      expect(record.request.agentId).toBe("agent\\u{200B}x");
 
       await expectApprovalResolution(resultPromise, manager, record);
     });
   });
 
   it("limits explicitly one-shot node-policy approvals to allow-once or deny", async (testContext) => {
-    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
-      approvalKind: "plugin",
+    const fixture = createPolicyApprovalFixture(testContext, {
       resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
     });
     const { manager } = fixture;
@@ -575,17 +517,7 @@ describe("applyPluginNodeInvokePolicy", () => {
       setDangerousDemoCommandRegistry([
         createApprovalRequestPolicy({ allowedDecisions: ["allow-once"] }),
       ]);
-      const { context } = createContext({
-        pluginApprovalManager: manager,
-        getApprovalClientConnIds: createApprovalClientLookup([
-          createOperatorClient("conn-owner-approval"),
-        ]),
-      });
-      const { record, pending: resultPromise } = await expectSinglePendingApproval(
-        manager,
-        context,
-        () => fixture.track(invokeDemoPolicy(context, createOperatorClient())),
-      );
+      const { record, pending: resultPromise } = await fixture.request();
       expect(record.request.allowedDecisions).toEqual(["allow-once", "deny"]);
       expect(await manager.resolve(record.id, "allow-always")).toBe(false);
       expect(await manager.listPendingRecords()).toHaveLength(1);
@@ -609,12 +541,7 @@ describe("applyPluginNodeInvokePolicy", () => {
       forwardPluginApprovalRequest,
     });
 
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: createOperatorClient(),
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
+    const result = await invokeDemoPolicy(context, createOperatorClient(), {
       sessionKey: "agent:main:spoofed",
       turnSource: {
         channel: "telegram",
@@ -640,25 +567,13 @@ describe("applyPluginNodeInvokePolicy", () => {
   });
 
   it("caps plugin policy approval timeouts through the shared approval policy", async (testContext) => {
-    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
-      approvalKind: "plugin",
-    });
+    const fixture = createPolicyApprovalFixture(testContext);
     const { manager } = fixture;
     await fixture.run(async () => {
       setDangerousDemoCommandRegistry([
         createApprovalRequestPolicy({ timeoutMs: Number.MAX_SAFE_INTEGER }),
       ]);
-      const { context } = createContext({
-        pluginApprovalManager: manager,
-        getApprovalClientConnIds: createApprovalClientLookup([
-          createOperatorClient("conn-owner-approval"),
-        ]),
-      });
-      const { record, pending: resultPromise } = await expectSinglePendingApproval(
-        manager,
-        context,
-        () => fixture.track(invokeDemoPolicy(context, createOperatorClient())),
-      );
+      const { record, pending: resultPromise } = await fixture.request();
       expect(record.expiresAtMs - record.createdAtMs).toBe(MAX_PLUGIN_APPROVAL_TIMEOUT_MS);
 
       await expectApprovalResolution(resultPromise, manager, record);
@@ -666,24 +581,12 @@ describe("applyPluginNodeInvokePolicy", () => {
   });
 
   it("fails closed when the allow-once claim cannot be consumed", async (testContext) => {
-    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
-      approvalKind: "plugin",
-    });
+    const fixture = createPolicyApprovalFixture(testContext);
     const { manager } = fixture;
     await fixture.run(async () => {
       vi.spyOn(manager, "consumeAllowOnce").mockResolvedValue(false);
       setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
-      const { context } = createContext({
-        pluginApprovalManager: manager,
-        getApprovalClientConnIds: createApprovalClientLookup([
-          createOperatorClient("conn-owner-approval"),
-        ]),
-      });
-      const { record, pending: resultPromise } = await expectSinglePendingApproval(
-        manager,
-        context,
-        () => fixture.track(invokeDemoPolicy(context, createOperatorClient())),
-      );
+      const { record, pending: resultPromise } = await fixture.request();
       expect(await manager.resolve(record.id, "allow-once")).toBe(true);
 
       await expect(resultPromise).resolves.toStrictEqual({
@@ -727,10 +630,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     const { context } = createContext();
 
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
-      nodeSession: createNodeSession(),
+    const result = await invokeDemoPolicy(context, null, {
       command: "safe.echo",
       params: { value: "hello" },
     });
@@ -739,9 +639,7 @@ describe("applyPluginNodeInvokePolicy", () => {
   });
 
   it("keeps approval payload fields on UTF-16 boundaries", async (testContext) => {
-    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
-      approvalKind: "plugin",
-    });
+    const fixture = createPolicyApprovalFixture(testContext);
     const { manager } = fixture;
     await fixture.run(async () => {
       setDangerousDemoCommandRegistry([
@@ -750,17 +648,7 @@ describe("applyPluginNodeInvokePolicy", () => {
           description: `${"b".repeat(255)}🚀tail`,
         }),
       ]);
-      const { context } = createContext({
-        pluginApprovalManager: manager,
-        getApprovalClientConnIds: createApprovalClientLookup([
-          createOperatorClient("conn-owner-approval"),
-        ]),
-      });
-      const { record, pending: resultPromise } = await expectSinglePendingApproval(
-        manager,
-        context,
-        () => fixture.track(invokeDemoPolicy(context, createOperatorClient())),
-      );
+      const { record, pending: resultPromise } = await fixture.request();
       expect(record.request.title).toBe("a".repeat(79));
       expect(record.request.description).toBe("b".repeat(255));
 
@@ -790,32 +678,10 @@ it.each([true, false])(
     const { context, invoke } = createContext({
       validateAgentRuntimeApprovalAuthority: () => true,
     });
-    const operationalRunInstance = createOperationalRunInstanceRef("source-policy-run");
     const client = bound
-      ? {
-          ...createOperatorClient(),
-          internal: {
-            agentRuntimeIdentity: {
-              kind: "agentRuntime" as const,
-              agentId: "main",
-              sessionKey: "agent:main:main",
-              operationalRunInstance,
-              delegatedAuthority: {
-                kind: "local" as const,
-                operationalRunInstance,
-                lifecycleGeneration: "generation",
-                claimId: "claim",
-              },
-            },
-          },
-        }
+      ? createRuntimeClient("source-policy-run", "agent:main:main")
       : createOperatorClient();
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client,
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
+    const result = await invokeDemoPolicy(context, client, {
       turnSource: source,
     });
     expect(result?.ok).toBe(true);

@@ -1,22 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import { createTestApprovalFixture } from "./exec-approval-manager.test-support.js";
-import {
-  applyPluginNodeInvokePolicy,
-  type PluginNodeInvokePrivateTransport,
-} from "./node-invoke-plugin-policy.js";
+import type { PluginNodeInvokePrivateTransport } from "./node-invoke-plugin-policy.js";
 import {
   createContext,
   createDemoPolicy,
   createNodeSession,
   createOperatorClient,
+  createRuntimeClient,
   DEMO_COMMAND,
   DEMO_PARAMS,
   expectSinglePendingApproval,
+  invokeDemoPolicy,
   nodeCommandsConfig,
   setDangerousDemoCommandRegistry,
 } from "./node-invoke-plugin-policy.test-helpers.js";
@@ -78,12 +76,8 @@ describe("private node policy transport", () => {
         context,
         () =>
           fixture.track(
-            applyPluginNodeInvokePolicy({
-              context,
-              client: reviewer,
+            invokeDemoPolicy(context, reviewer, {
               nodeSession: node,
-              command: DEMO_COMMAND,
-              params: DEMO_PARAMS,
               privateTransport,
               deadlineAtMs: performance.now() + 5_000,
               onNodeCommandDispatched,
@@ -109,16 +103,7 @@ describe("private node policy transport", () => {
     const { context, invoke } = createContext();
     const privateTransport = createPrivateTransport();
 
-    await expect(
-      applyPluginNodeInvokePolicy({
-        context,
-        client: null,
-        nodeSession: createNodeSession(),
-        command: DEMO_COMMAND,
-        params: DEMO_PARAMS,
-        privateTransport,
-      }),
-    ).resolves.toMatchObject({
+    await expect(invokeDemoPolicy(context, null, { privateTransport })).resolves.toMatchObject({
       ok: false,
       code: "PLUGIN_POLICY_MISSING",
       details: { nodeCommandDispatched: false },
@@ -162,34 +147,16 @@ describe("private node policy transport", () => {
           return await ctx.invokeNode();
         }),
       ]);
-      const operationalRunInstance = createOperationalRunInstanceRef("private-policy-run");
-
       await expect(
-        applyPluginNodeInvokePolicy({
+        invokeDemoPolicy(
           context,
-          client: {
-            ...createOperatorClient(),
-            internal: {
-              agentRuntimeIdentity: {
-                kind: "agentRuntime",
-                agentId: "main",
-                sessionKey: "agent:main:private-policy",
-                operationalRunInstance,
-                delegatedAuthority: {
-                  kind: "local",
-                  operationalRunInstance,
-                  lifecycleGeneration: "generation",
-                  claimId: "claim",
-                },
-              },
-            },
+          createRuntimeClient("private-policy-run", "agent:main:private-policy"),
+          {
+            nodeSession: node,
+            privateTransport,
+            isApprovalAuthorityActive: () => approvalCurrent,
           },
-          nodeSession: node,
-          command: DEMO_COMMAND,
-          params: DEMO_PARAMS,
-          privateTransport,
-          isApprovalAuthorityActive: () => approvalCurrent,
-        }),
+        ),
       ).resolves.toMatchObject({ ok: false, details: { nodeCommandDispatched: false } });
       expect(privateTransport.invoke).not.toHaveBeenCalled();
       expect(invoke).not.toHaveBeenCalled();
@@ -227,12 +194,8 @@ describe("private node policy transport", () => {
       const onNodeCommandDispatched = vi.fn();
 
       await expect(
-        applyPluginNodeInvokePolicy({
-          context,
-          client: null,
+        invokeDemoPolicy(context, null, {
           nodeSession: node,
-          command: DEMO_COMMAND,
-          params: DEMO_PARAMS,
           privateTransport,
           isApprovalAuthorityActive: () => approvalCurrent,
           onNodeCommandDispatched,

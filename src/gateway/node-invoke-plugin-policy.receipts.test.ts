@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-decision.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -10,6 +9,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
+import { createRuntimeClient } from "./node-invoke-plugin-policy.test-helpers.js";
 import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
@@ -33,29 +33,23 @@ function createNode(commands = [COMMAND]): NodeSession {
 }
 
 function createClient(runId: string): GatewayClient {
-  const operationalRunInstance = createOperationalRunInstanceRef(runId);
+  const client = createRuntimeClient(runId, "agent:main:test", {
+    lifecycleGeneration: "test-generation",
+    claimId: "test-claim",
+  });
+  const identity = client.internal?.agentRuntimeIdentity;
+  if (!identity) {
+    throw new Error("Missing test runtime identity");
+  }
+  identity.executionIdentity = createExecutionIdentityAdmissionToken(runId, {
+    contextId: `context-${runId}`,
+    executionId: `execution-${runId}`,
+    now: 100,
+  });
   return {
+    ...client,
     connId: "caller-conn",
     connect: { client: { id: "caller" }, scopes: ["operator.admin"] },
-    internal: {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime",
-        agentId: "main",
-        sessionKey: "agent:main:test",
-        operationalRunInstance,
-        delegatedAuthority: {
-          kind: "local",
-          operationalRunInstance,
-          lifecycleGeneration: "test-generation",
-          claimId: "test-claim",
-        },
-        executionIdentity: createExecutionIdentityAdmissionToken(runId, {
-          contextId: `context-${runId}`,
-          executionId: `execution-${runId}`,
-          now: 100,
-        }),
-      },
-    },
   } as unknown as GatewayClient;
 }
 
