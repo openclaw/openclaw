@@ -53,35 +53,24 @@ export function testVideoGenerationDeadlines({
       vi.useFakeTimers();
       const startedAt = Date.now();
       const release = vi.fn(async () => {});
+      const completed =
+        providerId === "runway"
+          ? { status: "SUCCEEDED", output: [videoUrl] }
+          : { status: "completed", outputs: { video_url: videoUrl } };
       postJsonRequestMock.mockImplementation(async () => {
         await new Promise((resolve) => {
           setTimeout(resolve, 10_000);
         });
-        return {
-          response: Response.json({ id: "task-1", status: pendingStatus }),
-          release,
-        };
+        return { response: Response.json({ id: "task-1", status: pendingStatus }), release };
       });
       fetchWithTimeoutMock.mockImplementation(async (url) => {
         if (url === videoUrl) {
           return new Response(videoBytes, { headers: { "content-type": "video/mp4" } });
         }
         const ready = Date.now() - startedAt >= readyAfterMs;
-        return Response.json({
-          id: "task-1",
-          status: ready ? (providerId === "runway" ? "SUCCEEDED" : "completed") : pendingStatus,
-          ...(ready
-            ? providerId === "runway"
-              ? { output: [videoUrl] }
-              : { outputs: { video_url: videoUrl } }
-            : {}),
-        });
+        return Response.json({ id: "task-1", ...(ready ? completed : { status: pendingStatus }) });
       });
-
-      let outcome:
-        | { result: VideoGenerationResult; error?: never }
-        | { error: unknown; result?: never }
-        | undefined;
+      let outcome: { result: VideoGenerationResult } | { error: unknown } | undefined;
       void provider
         .generateVideo({ provider: providerId, model, prompt: "A blue cube", cfg: {}, timeoutMs })
         .then(
@@ -99,10 +88,11 @@ export function testVideoGenerationDeadlines({
           result: { videos: [{ mimeType: "video/mp4", buffer: videoBytes }] },
         });
       } else {
-        expect(outcome?.error).toBeInstanceOf(Error);
-        expect(outcome?.error).toMatchObject({
-          message: expect.stringContaining(`timed out after ${timeoutMs}ms`),
-        });
+        expect(outcome).toHaveProperty("error", expect.any(Error));
+        expect(outcome).toHaveProperty(
+          "error.message",
+          expect.stringContaining(`timed out after ${timeoutMs}ms`),
+        );
         expect(fetchWithTimeoutMock.mock.calls.some(([url]) => url === videoUrl)).toBe(false);
       }
       expect(postJsonRequestMock).toHaveBeenCalledOnce();
