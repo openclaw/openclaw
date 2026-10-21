@@ -120,6 +120,26 @@ async function settleFrames() {
   });
 }
 
+it.each([true, false])(
+  "preserves footer-only resize intent while following: %s",
+  async (following) => {
+    const { host, thread } = following
+      ? await mountFollowingFixture()
+      : await mountEndFollowFixture(200);
+    host.followEnabled = following;
+    if (!following) {
+      await expect.poll(() => thread.scrollTop).toBe(200);
+    }
+    const before = thread.scrollTop;
+    // An asynchronously resized footer changes padding without rendering transcript rows.
+    host.viewportPadding = 69;
+    thread.parentElement!.style.paddingBottom = "69px";
+    await expect.poll(() => thread.style.paddingBottom).toBe("69px");
+    await settleFrames();
+    expect(thread.scrollTop).toBe(following ? before + 9 : before);
+  },
+);
+
 async function resizeViewport(host: EndFollowFixture, thread: HTMLElement, height: number) {
   host.viewportHeight = height;
   host.requestRender();
