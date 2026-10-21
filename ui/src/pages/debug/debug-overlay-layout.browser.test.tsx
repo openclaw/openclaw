@@ -1,12 +1,11 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal } from "solid-js";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { DebugOverlayFrame } from "./debug-overlay-frame-view.tsx";
 
 const key = "openclaw.debug-overlay.position";
-let dispose: (() => void) | undefined;
 
 async function frameAnimation(panel: HTMLElement) {
   // Runs after the layout's own frame callback, which the preceding render queued.
@@ -21,14 +20,13 @@ async function frameAnimation(panel: HTMLElement) {
 beforeEach(() => localStorage.removeItem(key));
 
 afterEach(() => {
-  dispose?.();
-  dispose = undefined;
   localStorage.removeItem(key);
   vi.restoreAllMocks();
 });
 
-describe.runIf("__vitest_browser__" in globalThis)("System busyness frame animation", () => {
-  it("keeps a running mode animation when a same-mode render leaves its target unchanged", async () => {
+it.runIf("__vitest_browser__" in globalThis)(
+  "keeps a running mode animation when a same-mode render leaves its target unchanged",
+  async () => {
     const [state, setState] = createSignal<{ mode: "expanded" | "minimized"; body: JSX.Element }>({
       mode: "minimized",
       body: <div>Diagnostics</div>,
@@ -41,7 +39,7 @@ describe.runIf("__vitest_browser__" in globalThis)("System busyness frame animat
         onToggleMode={vi.fn()}
       />
     ));
-    dispose = mounted.unmount;
+    onTestFinished(mounted.unmount);
     const panel = mounted.container.querySelector<HTMLElement>("aside")!;
     const renderFrame = (mode: "expanded" | "minimized", body: JSX.Element) => {
       setState({ mode, body });
@@ -67,5 +65,5 @@ describe.runIf("__vitest_browser__" in globalThis)("System busyness frame animat
     expect(current).toBe(animation);
     animation.finish();
     await expect(animation.finished).resolves.toBe(animation);
-  });
-});
+  },
+);
