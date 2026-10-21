@@ -57,6 +57,22 @@ const logger = { info: vi.fn(), warn: vi.fn() };
 const nowMs = Date.parse("2026-07-02T10:00:00.000Z");
 const consolidationDefaults = { maxPriorEntryLossFraction: 0.25, nowMs, logger };
 const promotionDefaults = { minScore: 0, minRecallCount: 0, minUniqueQueries: 0, nowMs };
+type ConsolidationInput = Parameters<typeof consolidateMemory>[0];
+function consolidateCandidate(
+  promoted: PromotionCandidate,
+  output: string,
+  existingMemory = "# Memory\n",
+  overrides: Partial<ConsolidationInput> = {},
+) {
+  return consolidateMemory({
+    subagent: createSubagent(output),
+    existingMemory,
+    candidates: [promoted],
+    ...consolidationDefaults,
+    ...overrides,
+  });
+}
+
 const recallResult = {
   path: "memory/2026-07-01.md",
   startLine: 1,
@@ -178,14 +194,7 @@ describe("memory consolidation", () => {
     async ({ snippet, previous }) => {
       const promoted = { ...candidate("owner"), snippet };
       const output = decisionOutput(promoted);
-      await expect(
-        consolidateMemory({
-          subagent: createSubagent(output),
-          existingMemory: previous,
-          candidates: [promoted],
-          ...consolidationDefaults,
-        }),
-      ).resolves.toBeNull();
+      await expect(consolidateCandidate(promoted, output, previous)).resolves.toBeNull();
     },
   );
 
@@ -203,12 +212,7 @@ describe("memory consolidation", () => {
       ],
     });
     const existingMemory = "# Memory\n\n- Keep this fact.\n";
-    const plan = await consolidateMemory({
-      subagent: createSubagent(output),
-      existingMemory,
-      candidates: [promoted],
-      ...consolidationDefaults,
-    });
+    const plan = await consolidateCandidate(promoted, output, existingMemory);
     expect(plan).not.toBeNull();
     const applied = applyMemoryConsolidationPlan({
       existingMemory,
@@ -250,14 +254,7 @@ describe("memory consolidation", () => {
         })),
       });
       await expect(
-        consolidateMemory({
-          subagent: createSubagent(output),
-          existingMemory: "# Memory\n",
-          candidates: [promoted],
-          maxPriorEntryLossFraction: 0.25,
-          nowMs: 1_000,
-          logger,
-        }),
+        consolidateCandidate(promoted, output, undefined, { nowMs: 1_000 }),
       ).resolves.toBeNull();
     },
   );
@@ -267,12 +264,11 @@ describe("memory consolidation", () => {
     const previousEntry = resultEntryFor(promoted);
     const output = decisionOutput(promoted, "merged", [previousEntry]);
 
-    const plan = await consolidateMemory({
-      subagent: createSubagent(output),
-      existingMemory: `# Memory\n\n${previousEntry}\n- Two.\n- Three.\n- Four.\n`,
-      candidates: [promoted],
-      ...consolidationDefaults,
-    });
+    const plan = await consolidateCandidate(
+      promoted,
+      output,
+      `# Memory\n\n${previousEntry}\n- Two.\n- Three.\n- Four.\n`,
+    );
     expect(plan).not.toBeNull();
     if (!plan) {
       return;
@@ -280,15 +276,14 @@ describe("memory consolidation", () => {
     const applied = applyMemoryConsolidationPlan({
       existingMemory: `# Memory\n\n${previousEntry}\n- Two.\n- Three.\n- Four.\n`,
       plan,
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-      maxPriorEntryLossFraction: 0.25,
+      ...consolidationDefaults,
     });
     expect(applied).toMatchObject({ added: 0, merged: 1, superseded: 0 });
     expect(
       applyMemoryConsolidationPlan({
         existingMemory: `# Memory\n\n${previousEntry}\n- Two.\n- Three.\n- Four.\n`,
         plan,
-        nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
+        nowMs,
         memoryFileMaxChars: (applied?.content.length ?? 1) - 1,
         maxPriorEntryLossFraction: 0.25,
       }),
@@ -297,7 +292,7 @@ describe("memory consolidation", () => {
       applyMemoryConsolidationPlan({
         existingMemory: "# Memory\n\n- User prefers green tea.\n- Two.\n",
         plan,
-        nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
+        nowMs,
         maxPriorEntryLossFraction: 0.25,
       }),
     ).toBeNull();
@@ -308,12 +303,11 @@ describe("memory consolidation", () => {
     const output = decisionOutput(promoted, "merged", ["- Unrelated fact."]);
 
     await expect(
-      consolidateMemory({
-        subagent: createSubagent(output),
-        existingMemory: "# Memory\n\n- Unrelated fact.\n- Two.\n- Three.\n- Four.\n",
-        candidates: [promoted],
-        ...consolidationDefaults,
-      }),
+      consolidateCandidate(
+        promoted,
+        output,
+        "# Memory\n\n- Unrelated fact.\n- Two.\n- Three.\n- Four.\n",
+      ),
     ).resolves.toBeNull();
   });
 
@@ -322,14 +316,12 @@ describe("memory consolidation", () => {
     const output = decisionOutput(promoted, "merged", ["- User prefers green tea."]);
 
     await expect(
-      consolidateMemory({
-        subagent: createSubagent(output),
-        existingMemory:
-          "# Memory\n\n- User prefers green tea.\n- User prefers green tea.\n- Two.\n- Three.\n- Four.\n",
-        candidates: [promoted],
-        ...consolidationDefaults,
-        maxPriorEntryLossFraction: 0.5,
-      }),
+      consolidateCandidate(
+        promoted,
+        output,
+        "# Memory\n\n- User prefers green tea.\n- User prefers green tea.\n- Two.\n- Three.\n- Four.\n",
+        { maxPriorEntryLossFraction: 0.5 },
+      ),
     ).resolves.toBeNull();
   });
 
@@ -352,14 +344,7 @@ describe("memory consolidation", () => {
     ].join("\n");
     const output = decisionOutput(promoted, "superseded", ["- Unrelated adjacent fact."]);
 
-    await expect(
-      consolidateMemory({
-        subagent: createSubagent(output),
-        existingMemory: previous,
-        candidates: [promoted],
-        ...consolidationDefaults,
-      }),
-    ).resolves.toBeNull();
+    await expect(consolidateCandidate(promoted, output, previous)).resolves.toBeNull();
   });
 
   it("falls back to append-only promotion when the consolidation model fails", async () => {

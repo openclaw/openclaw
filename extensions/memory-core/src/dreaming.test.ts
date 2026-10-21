@@ -1,4 +1,3 @@
-// Memory Core tests cover dreaming plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -127,6 +126,14 @@ function createDreamingTestContext(
   return { api, harness, logger };
 }
 
+async function startDreaming(
+  api: DreamingPluginApiTestDouble,
+  harness: ReturnType<typeof createCronHarness>,
+) {
+  registerShortTermPromotionDreamingForTest(api);
+  await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+}
+
 function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
   return mock.mock.calls.map(([message]) => (typeof message === "string" ? message : ""));
 }
@@ -153,8 +160,7 @@ function expectCronSchedule(
   expr: string,
   tz?: string,
 ): void {
-  expect(schedule?.kind).toBe("cron");
-  expect(schedule?.expr).toBe(expr);
+  expect(schedule).toMatchObject({ kind: "cron", expr });
   expect(schedule?.tz).toBe(tz);
 }
 
@@ -225,8 +231,7 @@ describe("dreaming service reconciliation", () => {
       code: "AGENT_SELECTION_REQUIRED",
     });
     const add = vi.spyOn(harness.cron, "add").mockRejectedValue(ownerRequired);
-    registerShortTermPromotionDreamingForTest(api);
-    await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+    await startDreaming(api, harness);
     await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS * 3);
 
     expect(logger.error).not.toHaveBeenCalled();
@@ -273,8 +278,7 @@ describe("dreaming service reconciliation", () => {
         },
       },
     });
-    registerShortTermPromotionDreamingForTest(api);
-    await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+    await startDreaming(api, harness);
     expect(harness.jobs).toHaveLength(1);
     expect(harness.addCalls).toHaveLength(1);
     const jobId = expectDefined(harness.jobs[0], "managed dreaming job").id;
@@ -364,46 +368,35 @@ describe("dreaming service reconciliation", () => {
       }),
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
-      const originalId = expectDefined(harness.jobs[0], "original dreaming job").id;
+    await startDreaming(api, harness);
+    const originalId = expectDefined(harness.jobs[0], "original dreaming job").id;
 
-      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS / 2);
-      await triggerDreamingServiceStop(api);
-      registerShortTermPromotionDreamingForTest(successorApi);
-      await triggerDreamingServiceStart(successorApi, {
-        config: successorApi.config,
-        getCron: () => harness.cron,
-      });
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS / 2);
+    await triggerDreamingServiceStop(api);
+    await startDreaming(successorApi, harness);
 
-      expect(harness.addCalls).toHaveLength(1);
-      expect(harness.updateCalls).toEqual([
-        {
-          id: originalId,
-          patch: {
-            schedule: { kind: "cron", expr: "45 8 * * *", tz: "America/Los_Angeles" },
-          },
-        },
-      ]);
-      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS * 2);
-
-      expect(harness.listCalls).toBe(4);
-      expect(harness.updateCalls).toHaveLength(1);
-      expect(harness.jobs).toHaveLength(1);
-      expect(harness.jobs[0]).toMatchObject({
+    expect(harness.addCalls).toHaveLength(1);
+    expect(harness.updateCalls).toEqual([
+      {
         id: originalId,
-        schedule: { kind: "cron", expr: "45 8 * * *", tz: "America/Los_Angeles" },
-      });
+        patch: {
+          schedule: { kind: "cron", expr: "45 8 * * *", tz: "America/Los_Angeles" },
+        },
+      },
+    ]);
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS * 2);
 
-      await triggerDreamingServiceStop(successorApi);
-      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
-      expect(harness.listCalls).toBe(4);
-    } finally {
-      await triggerDreamingServiceStop(api);
-      await triggerDreamingServiceStop(successorApi);
-      vi.useRealTimers();
-    }
+    expect(harness.listCalls).toBe(4);
+    expect(harness.updateCalls).toHaveLength(1);
+    expect(harness.jobs).toHaveLength(1);
+    expect(harness.jobs[0]).toMatchObject({
+      id: originalId,
+      schedule: { kind: "cron", expr: "45 8 * * *", tz: "America/Los_Angeles" },
+    });
+
+    await triggerDreamingServiceStop(successorApi);
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+    expect(harness.listCalls).toBe(4);
   });
 
   it.each([true])(
@@ -518,30 +511,25 @@ describe("dreaming service reconciliation", () => {
     });
     const before = structuredClone(harness.jobs);
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+    await startDreaming(api, harness);
 
-      expect(harness.addCalls).toHaveLength(0);
-      if (hasLegacy) {
-        expect(harness.jobs).toEqual(before);
-        expect(harness.mutationCalls).toEqual([]);
-        expectLogContains(logger.warn, "openclaw doctor --fix");
-        return;
-      }
-      expect(harness.removeCalls).toEqual(["job-duplicate"]);
-      expect(harness.updateCalls).toHaveLength(1);
-      expect(harness.updateCalls[0]?.id).toBe("job-oldest");
-      expectCronSchedule(harness.updateCalls[0]?.patch.schedule, "*/3 * * * *");
-      expect(harness.jobs).toHaveLength(1);
-      expect(harness.jobs[0]).toMatchObject({
-        id: "job-oldest",
-        declarationKey: "memory-core:memory-dreaming-promotion",
-      });
-      expect(logger.warn).not.toHaveBeenCalled();
-    } finally {
-      await triggerDreamingServiceStop(api).catch(() => undefined);
+    expect(harness.addCalls).toHaveLength(0);
+    if (hasLegacy) {
+      expect(harness.jobs).toEqual(before);
+      expect(harness.mutationCalls).toEqual([]);
+      expectLogContains(logger.warn, "openclaw doctor --fix");
+      return;
     }
+    expect(harness.removeCalls).toEqual(["job-duplicate"]);
+    expect(harness.updateCalls).toHaveLength(1);
+    expect(harness.updateCalls[0]?.id).toBe("job-oldest");
+    expectCronSchedule(harness.updateCalls[0]?.patch.schedule, "*/3 * * * *");
+    expect(harness.jobs).toHaveLength(1);
+    expect(harness.jobs[0]).toMatchObject({
+      id: "job-oldest",
+      declarationKey: "memory-core:memory-dreaming-promotion",
+    });
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it("keeps scheduler maintenance out of user, heartbeat, and cron reply hooks", async () => {
@@ -549,11 +537,7 @@ describe("dreaming service reconciliation", () => {
       config: createDreamingConfig({ enabled: true, frequency: "0 2 * * *", timezone: "UTC" }),
     });
 
-    registerShortTermPromotionDreamingForTest(api);
-    await triggerDreamingServiceStart(api, {
-      config: api.config,
-      getCron: () => harness.cron,
-    });
+    await startDreaming(api, harness);
 
     expect(harness.listCalls).toBe(1);
 
@@ -570,11 +554,7 @@ describe("dreaming service reconciliation", () => {
       config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
     });
 
-    registerShortTermPromotionDreamingForTest(api);
-    await triggerDreamingServiceStart(api, {
-      config: api.config,
-      getCron: () => harness.cron,
-    });
+    await startDreaming(api, harness);
 
     const sessionKey = "agent:main:main";
     enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
@@ -608,11 +588,7 @@ describe("dreaming service reconciliation", () => {
       config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
     });
 
-    registerShortTermPromotionDreamingForTest(api);
-    await triggerDreamingServiceStart(api, {
-      config: api.config,
-      getCron: () => harness.cron,
-    });
+    await startDreaming(api, harness);
 
     enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
       sessionKey: "agent:main:main",
@@ -640,57 +616,47 @@ describe("dreaming service reconciliation", () => {
     vi.useFakeTimers();
     const { api, harness, logger } = createDreamingTestContext();
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerDreamingServiceStart(api, { config: api.config });
-      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS * 2);
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, { config: api.config });
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS * 2);
 
-      expect(harness.listCalls).toBe(0);
-      expect(logger.debug).not.toHaveBeenCalled();
-      expect(logger.warn).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      await triggerDreamingServiceStop(api);
-      vi.useRealTimers();
-    }
+    expect(harness.listCalls).toBe(0);
+    expect(logger.debug).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("recovers unavailable cron on the regular interval without a heartbeat or repeated warnings", async () => {
     vi.useFakeTimers();
     const { api, harness, logger } = createDreamingTestContext();
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      let cronAvailable = false;
-      await triggerDreamingServiceStart(api, {
-        config: api.config,
-        getCron: () => (cronAvailable ? harness.cron : undefined),
-      });
+    registerShortTermPromotionDreamingForTest(api);
+    let cronAvailable = false;
+    await triggerDreamingServiceStart(api, {
+      config: api.config,
+      getCron: () => (cronAvailable ? harness.cron : undefined),
+    });
 
-      expect(harness.addCalls).toHaveLength(0);
-      expectLogContains(logger.debug, "cron service not yet available at service start");
+    expect(harness.addCalls).toHaveLength(0);
+    expectLogContains(logger.debug, "cron service not yet available at service start");
 
-      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
-      expect(harness.addCalls).toHaveLength(0);
-      expectLogContains(logger.warn, "cron service unavailable");
-      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
-      expect(logger.warn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+    expect(harness.addCalls).toHaveLength(0);
+    expectLogContains(logger.warn, "cron service unavailable");
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
 
-      cronAvailable = true;
-      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+    cronAvailable = true;
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
 
-      expect(harness.addCalls).toHaveLength(1);
-      const addCall = requireAddCall(harness, 0);
-      expect(addCall.name).toBe("Memory Dreaming Promotion");
-      expectCronSchedule(addCall.schedule, "15 4 * * *", "UTC");
-      expect(addCall.sessionTarget).toBe("isolated");
-      const payload = requireAgentTurnPayload(addCall.payload);
-      expect(payload.message).toBe(constants.DREAMING_SYSTEM_EVENT_TEXT);
-      expect(payload.lightContext).toBe(true);
-    } finally {
-      await triggerDreamingServiceStop(api);
-      vi.useRealTimers();
-    }
+    expect(harness.addCalls).toHaveLength(1);
+    const addCall = requireAddCall(harness, 0);
+    expect(addCall.name).toBe("Memory Dreaming Promotion");
+    expectCronSchedule(addCall.schedule, "15 4 * * *", "UTC");
+    expect(addCall.sessionTarget).toBe("isolated");
+    const payload = requireAgentTurnPayload(addCall.payload);
+    expect(payload.message).toBe(constants.DREAMING_SYSTEM_EVENT_TEXT);
+    expect(payload.lightContext).toBe(true);
   });
 
   it("removes only declared dreaming jobs when disabled cron reconciliation becomes available", async () => {
@@ -722,29 +688,24 @@ describe("dreaming service reconciliation", () => {
       initialJobs: [legacyJob, managedJob],
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      let cronAvailable = false;
-      await triggerDreamingServiceStart(api, {
-        config: api.config,
-        getCron: () => (cronAvailable ? harness.cron : undefined),
-      });
+    registerShortTermPromotionDreamingForTest(api);
+    let cronAvailable = false;
+    await triggerDreamingServiceStart(api, {
+      config: api.config,
+      getCron: () => (cronAvailable ? harness.cron : undefined),
+    });
 
-      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
-      expect(harness.removeCalls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+    expect(harness.removeCalls).toHaveLength(0);
 
-      cronAvailable = true;
-      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+    cronAvailable = true;
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
 
-      expect(harness.removeCalls).toEqual(["job-managed"]);
-      expect(harness.jobs).toEqual([legacyJob]);
-      expect(harness.addCalls).toHaveLength(0);
-      expectLogContains(logger.info, "removed 1 managed dreaming cron job");
-      expectLogContains(logger.warn, "openclaw doctor --fix");
-    } finally {
-      await triggerDreamingServiceStop(api);
-      vi.useRealTimers();
-    }
+    expect(harness.removeCalls).toEqual(["job-managed"]);
+    expect(harness.jobs).toEqual([legacyJob]);
+    expect(harness.addCalls).toHaveLength(0);
+    expectLogContains(logger.info, "removed 1 managed dreaming cron job");
+    expectLogContains(logger.warn, "openclaw doctor --fix");
   });
 
   it("does not recreate startup cron from stale enabled config after runtime config disables dreaming", async () => {
@@ -753,31 +714,26 @@ describe("dreaming service reconciliation", () => {
       cronOptions: { listThrowsForFirstCalls: 1 },
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      let cronAvailable = false;
-      await triggerDreamingServiceStart(api, {
-        config: api.config,
-        getCron: () => (cronAvailable ? harness.cron : undefined),
-      });
+    registerShortTermPromotionDreamingForTest(api);
+    let cronAvailable = false;
+    await triggerDreamingServiceStart(api, {
+      config: api.config,
+      getCron: () => (cronAvailable ? harness.cron : undefined),
+    });
 
-      api.config = createDreamingConfig({
-        enabled: false,
-        frequency: "15 4 * * *",
-        timezone: "UTC",
-      });
-      cronAvailable = true;
+    api.config = createDreamingConfig({
+      enabled: false,
+      frequency: "15 4 * * *",
+      timezone: "UTC",
+    });
+    cronAvailable = true;
 
-      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
-      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
 
-      expectLogContains(logger.error, "dreaming cron reconcile failed");
-      expect(harness.listCalls).toBe(2);
-      expect(harness.addCalls).toHaveLength(0);
-    } finally {
-      await triggerDreamingServiceStop(api);
-      vi.useRealTimers();
-    }
+    expectLogContains(logger.error, "dreaming cron reconcile failed");
+    expect(harness.listCalls).toBe(2);
+    expect(harness.addCalls).toHaveLength(0);
   });
 
   it("uses the product default instead of startup plugin config when live config is removed", async () => {
@@ -795,11 +751,7 @@ describe("dreaming service reconciliation", () => {
       runtime: { config: { current: runtimeCurrentConfig } },
     });
 
-    registerShortTermPromotionDreamingForTest(api);
-    await triggerDreamingServiceStart(api, {
-      config: api.config,
-      getCron: () => harness.cron,
-    });
+    await startDreaming(api, harness);
 
     const sessionKey = "agent:main:main";
     enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
@@ -836,11 +788,7 @@ describe("dreaming service reconciliation", () => {
       ),
     });
 
-    registerShortTermPromotionDreamingForTest(api);
-    await triggerDreamingServiceStart(api, {
-      config: api.config,
-      getCron: () => harness.cron,
-    });
+    await startDreaming(api, harness);
 
     const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
     await beforeAgentReply(
@@ -913,8 +861,7 @@ describe("dreaming service reconciliation", () => {
           { agents: { defaults: { workspace: workspaceDir } } },
         ),
       });
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+      await startDreaming(api, harness);
       const payload = requireAgentTurnPayload(requireAddCall(harness, 0).payload);
       await getBeforeAgentReplyHandler(api.on)(
         { cleanedBody: payload.message },
@@ -993,8 +940,7 @@ describe("dreaming service reconciliation", () => {
             { agents: { defaults: { workspace: workspaceDir } } },
           ),
         });
-        registerShortTermPromotionDreamingForTest(api);
-        await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+        await startDreaming(api, harness);
         await getBeforeAgentReplyHandler(api.on)(
           { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
           { trigger: "cron", agentId: "main", workspaceDir },
@@ -1035,8 +981,7 @@ describe("dreaming service reconciliation", () => {
       ),
     });
 
-    registerShortTermPromotionDreamingForTest(api);
-    await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+    await startDreaming(api, harness);
 
     await getBeforeAgentReplyHandler(api.on)(
       { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
