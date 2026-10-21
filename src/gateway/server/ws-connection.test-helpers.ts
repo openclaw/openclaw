@@ -10,6 +10,7 @@ import { GatewayClientRegistry } from "./client-registry.js";
 import type { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 
 type AttachGatewayWsConnectionParams = Parameters<typeof attachGatewayWsConnectionHandler>[0];
+type SendCallback = (error?: Error) => void;
 
 export type GatewayWsTestSocket = ReturnType<typeof createGatewayWsTestSocket>;
 
@@ -54,11 +55,7 @@ export function createGatewayWsTestSocket(
     readyState: 1,
     bufferedAmount: 0,
     send: vi.fn(
-      (
-        data: string | Buffer,
-        options?: { binary: false } | ((err?: Error) => void),
-        cb?: (err?: Error) => void,
-      ) => {
+      (data: string | Buffer, options?: { binary: false } | SendCallback, cb?: SendCallback) => {
         params.onSend?.(String(data));
         (typeof options === "function" ? options : cb)?.();
       },
