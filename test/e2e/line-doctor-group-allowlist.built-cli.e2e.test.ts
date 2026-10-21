@@ -20,11 +20,17 @@ beforeAll(() => {
   expect(inspectControlUiRootAssets(uiRoot, null)).toMatchObject({ kind: "ready" });
 });
 
-afterEach(async () => {
-  await Promise.all(instances.splice(0).map((instance) => instance.cleanup()));
-});
+afterEach(() => Promise.all(instances.splice(0).map((instance) => instance.cleanup())));
 
 async function runDoctor(line: Record<string, unknown>, accessGroups?: Record<string, unknown>) {
+  const channel = {
+    enabled: true,
+    channelAccessToken: "synthetic-line-token",
+    channelSecret: "synthetic-line-secret",
+    groupPolicy: "allowlist",
+    dmPolicy: "disabled",
+    ...line,
+  };
   const instance = await createOpenClawTestInstance({
     name: "line-doctor-group-allowlist",
     state: { scenario: "external-service" },
@@ -32,21 +38,11 @@ async function runDoctor(line: Record<string, unknown>, accessGroups?: Record<st
       gateway: { mode: "local" },
       plugins: { allow: ["line"], entries: { line: { enabled: true } } },
       ...(accessGroups ? { accessGroups } : {}),
-      channels: {
-        line: {
-          enabled: true,
-          channelAccessToken: "synthetic-line-token",
-          channelSecret: "synthetic-line-secret",
-          groupPolicy: "allowlist",
-          dmPolicy: "disabled",
-          ...line,
-        },
-      },
+      channels: { line: channel },
     },
   });
   instances.push(instance);
 
-  // Keep the helper's isolated paths and startup guards, without host credentials.
   const retainedEnv = new Set(Object.keys(instance.state.envVars));
   const inheritedEnv = /^(?:PATH|SystemRoot|WINDIR|VITEST|OPENCLAW_TEST_MINIMAL_GATEWAY)$/u;
   for (const key of Object.keys(instance.env)) {
@@ -58,9 +54,7 @@ async function runDoctor(line: Record<string, unknown>, accessGroups?: Record<st
   expect(await instance.entrypoint()).toEqual([expect.stringMatching(/^dist\/index\.m?js$/u)]);
 
   const result = await instance.cli(doctorArgs);
-  const output = stripVTControlCharacters(result.stdout + result.stderr)
-    .replace(/[│┃]/gu, " ")
-    .replace(/\s+/gu, " ");
+  const output = stripVTControlCharacters(result.stdout + result.stderr).replace(/[│┃\s]+/gu, " ");
   expect(result, output).toMatchObject({ code: 0, signal: null });
   expect(output).not.toMatch(/(?:Building Control|Rebuilding stale) UI assets/u);
   const config = JSON.parse(await fs.readFile(instance.configPath, "utf8")) as {
@@ -69,11 +63,7 @@ async function runDoctor(line: Record<string, unknown>, accessGroups?: Record<st
   };
   expect(config.accessGroups, output).toEqual(accessGroups);
   expect(config.channels.line, output).not.toHaveProperty("groupAllowFrom");
-  expect(config.channels.line, output).toMatchObject({
-    groupPolicy: "allowlist",
-    dmPolicy: "disabled",
-    ...line,
-  });
+  expect(config.channels.line, output).toMatchObject(channel);
   expect(config.channels.line.groups, output).toEqual(line.groups);
   expect("allowFrom" in config.channels.line, output).toBe("allowFrom" in line);
   return output;
@@ -89,9 +79,7 @@ it("keeps DM senders out of the group allowlist and explains the missing group l
 });
 
 it("warns when every per-group sender entry normalizes to empty", async () => {
-  const output = await runDoctor({
-    groups: { [groupId]: { allowFrom: [" ", "line:user:"] } },
-  });
+  const output = await runDoctor({ groups: { [groupId]: { allowFrom: [" ", "line:user:"] } } });
 
   expect(output).toContain("all group messages will be silently dropped");
   expect(output).toContain(`group "${groupId}" resolves to an empty sender allowlist`);
