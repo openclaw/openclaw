@@ -9,6 +9,7 @@ import {
 
 const BASE_SHA = "1".repeat(40);
 const HEAD_SHA = "2".repeat(40);
+const MERGE_BASE_SHA = "3".repeat(40);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -45,7 +46,32 @@ describe("release:prepush", () => {
   });
 
   it("keeps the normal zero-delta cut auditable", () => {
-    expect(() => assertAuditBounds(HEAD_SHA, HEAD_SHA)).not.toThrow();
+    expect(assertAuditBounds(HEAD_SHA, HEAD_SHA)).toBe(HEAD_SHA);
+  });
+
+  it("uses the audited merge base for gates on a divergent release branch", async () => {
+    const runCommand = vi.fn().mockResolvedValue(0);
+    const status = await runReleasePrepush(
+      { base: "origin/main", dryRun: false, push: false },
+      {
+        assertCleanWorktree: vi.fn(),
+        assertAuditBounds: vi.fn().mockReturnValue(MERGE_BASE_SHA),
+        createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
+        currentBranch: vi.fn(),
+        pushValidatedHead: vi.fn(),
+        refreshMain: vi.fn(),
+        removeValidationCheckout: vi.fn(),
+        resolveCommit: vi.fn((ref) => (ref === "HEAD" ? HEAD_SHA : BASE_SHA)),
+        runCommand,
+      },
+    );
+    expect(status).toBe(0);
+    expect(runCommand.mock.calls.map(([command]) => [command.bin, command.args])).toEqual([
+      ["pnpm", ["install", "--frozen-lockfile"]],
+      ["pnpm", ["check:changed", "--base", MERGE_BASE_SHA, "--head", HEAD_SHA]],
+      ["pnpm", ["deadcode:knip"]],
+      ["node", ["scripts/test-projects.mts", "--changed", MERGE_BASE_SHA]],
+    ]);
   });
 
   it("pins changed static/type checks, dead-code analysis, and changed tests", () => {
@@ -67,7 +93,7 @@ describe("release:prepush", () => {
       { base: "origin/main", dryRun: false, push: false },
       {
         assertCleanWorktree: vi.fn(),
-        assertAuditBounds: vi.fn(),
+        assertAuditBounds: vi.fn().mockReturnValue(BASE_SHA),
         createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
         currentBranch: vi.fn(),
         pushValidatedHead: vi.fn(),
@@ -95,7 +121,7 @@ describe("release:prepush", () => {
         { base: "origin/main", dryRun: false, push: false },
         {
           assertCleanWorktree,
-          assertAuditBounds: vi.fn(),
+          assertAuditBounds: vi.fn().mockReturnValue(BASE_SHA),
           createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
           currentBranch: vi.fn(),
           pushValidatedHead: vi.fn(),
@@ -117,7 +143,7 @@ describe("release:prepush", () => {
       { base: "origin/main", dryRun: false, push: true },
       {
         assertCleanWorktree: vi.fn(),
-        assertAuditBounds: vi.fn(),
+        assertAuditBounds: vi.fn().mockReturnValue(BASE_SHA),
         createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
         currentBranch,
         pushValidatedHead,
@@ -147,7 +173,7 @@ describe("release:prepush", () => {
       },
       {
         assertCleanWorktree: vi.fn(),
-        assertAuditBounds: vi.fn(),
+        assertAuditBounds: vi.fn().mockReturnValue(BASE_SHA),
         createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
         currentBranch,
         pushValidatedHead,

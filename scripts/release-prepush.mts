@@ -18,7 +18,7 @@ type ReleasePrepushCommand = {
 
 type ReleasePrepushDependencies = {
   assertCleanWorktree: () => void;
-  assertAuditBounds: (baseSha: string, headSha: string) => void;
+  assertAuditBounds: (baseSha: string, headSha: string) => string;
   createValidationCheckout: (headSha: string) => string;
   currentBranch: () => string;
   pushValidatedHead: (headSha: string, branch: string) => void;
@@ -49,14 +49,15 @@ export function assertCleanWorktree(): void {
   }
 }
 
-export function assertAuditBounds(baseSha: string, headSha: string): void {
+export function assertAuditBounds(baseSha: string, headSha: string): string {
   if (baseSha === headSha) {
-    return;
+    return baseSha;
   }
   const mergeBase = git(["merge-base", baseSha, headSha]);
   if (!/^[a-f0-9]{40}$/u.test(mergeBase)) {
     throw new Error("release:prepush base and HEAD do not share an auditable merge base");
   }
+  return mergeBase;
 }
 
 export function currentBranch(): string {
@@ -191,10 +192,20 @@ export async function runReleasePrepush(
   }
   const baseSha = dependencies.resolveCommit(options.base);
   const headSha = dependencies.resolveCommit(headRef);
-  dependencies.assertAuditBounds(baseSha, headSha);
+  const comparisonBaseSha = dependencies.assertAuditBounds(baseSha, headSha);
+
+  if (comparisonBaseSha !== baseSha) {
+    console.error(
+      `[release:prepush] authoritative main ${baseSha}; changed-gate merge base ${comparisonBaseSha}`,
+    );
+  }
 
   if (options.dryRun) {
-    for (const command of buildReleasePrepushPlan(baseSha, headSha, "<detached-checkout>")) {
+    for (const command of buildReleasePrepushPlan(
+      comparisonBaseSha,
+      headSha,
+      "<detached-checkout>",
+    )) {
       console.log([command.bin, ...command.args].join(" "));
     }
     return 0;
@@ -202,7 +213,7 @@ export async function runReleasePrepush(
 
   const validationCheckout = dependencies.createValidationCheckout(headSha);
   try {
-    for (const command of buildReleasePrepushPlan(baseSha, headSha, validationCheckout)) {
+    for (const command of buildReleasePrepushPlan(comparisonBaseSha, headSha, validationCheckout)) {
       const status = await dependencies.runCommand(command);
       if (status !== 0) {
         console.error(`[release:prepush] failed: ${command.name}`);
