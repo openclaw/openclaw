@@ -7,7 +7,7 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../components/panel-toggle-contract.ts";
-import "../components/modal-dialog.ts";
+import "../components/modal-dialog.tsx";
 import { TEST_LINK_READER, testLinkPreview } from "../test-helpers/link-reader.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { postNativeUpdate, startNativeLinkRouting } from "./native-link-routing.ts";

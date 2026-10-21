@@ -1,7 +1,7 @@
 import { Show } from "solid-js";
 import { ConnectCommand } from "../../components/solid/connect-command.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { formatTimeMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ConnectMachineSetupState } from "./connect-machine-dialog.ts";

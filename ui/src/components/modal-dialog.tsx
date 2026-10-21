@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createComponent, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { composedParent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -490,19 +490,16 @@ export const ModalDialog = defineSolidBridge<ModalDialogProperties, ModalDialogM
   "openclaw-modal-dialog",
   (props, host) => {
     const policy = createModalPolicy(host);
-    return createComponent(ModalDialogContent, {
-      bindDialog: policy.bindDialog,
-      bindOverlayContainer: policy.bindOverlayContainer,
-      get label() {
-        return props.label;
-      },
-      get description() {
-        return props.description;
-      },
-      get children() {
-        return props.children;
-      },
-    });
+    return (
+      <ModalDialogContent
+        bindDialog={policy.bindDialog}
+        bindOverlayContainer={policy.bindOverlayContainer}
+        label={props.label}
+        description={props.description}
+      >
+        {props.children}
+      </ModalDialogContent>
+    );
   },
   {
     properties: {

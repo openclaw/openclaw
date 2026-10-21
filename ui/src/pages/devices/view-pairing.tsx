@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";

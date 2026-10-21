@@ -205,7 +205,7 @@ describe("OpenClaw shell context lifecycle", () => {
   setupSidebarTest();
 
   it("restores a modal toast to a late-mounted shell after its navigation drawer closes", async () => {
-    await import("../components/modal-dialog.ts");
+    await import("../components/modal-dialog.tsx");
     vi.stubGlobal("requestIdleCallback", vi.fn());
     vi.stubGlobal("matchMedia", () => ({
       matches: true,

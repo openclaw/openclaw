@@ -4,7 +4,7 @@ import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import type { ModelSetupWizardState } from "./state.ts";
@@ -13,7 +13,7 @@ import { WIZARD_COPY } from "./wizard-copy.ts";
 registerModelSetupEnglish();
 
 export type WizardViewProps = {
-  onDialogRef?: (element: import("../../components/modal-dialog.ts").OpenClawModalDialog) => void;
+  onDialogRef?: (element: import("../../components/modal-dialog.tsx").OpenClawModalDialog) => void;
   mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
   refreshWarning: string | null;
