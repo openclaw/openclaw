@@ -1126,6 +1126,10 @@ one new input under the operator's current authority; it does not restore the
 failed dispatch's authority or replace the session. Active work and pending final
 delivery retain their existing ownership checks.
 
+If a CLI runtime cannot enforce the required restart-safe tools, recovery keeps
+the cycle as a tombstone before refusing in-place continuation. The operator can
+then use **Resume in new session** without losing the interrupted transcript.
+
 Definitive revocation of the original operator's authority remains terminal for
 that input: recovery records one visible interruption instead of retrying it.
 When no other recovery or delivery custody remains, send a new authenticated
