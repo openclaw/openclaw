@@ -29,6 +29,21 @@ import type { TelegramDraftStream } from "./draft-stream.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import type * as TelegramEditModule from "./send-edit.js";
 
+function expectText(text: string | undefined, included: string[], excluded: string[] = []) {
+  for (const value of included) {
+    expect(text).toContain(value);
+  }
+  for (const value of excluded) {
+    expect(text).not.toContain(value);
+  }
+}
+
+const repairPlan = [
+  { step: "Inspect", status: "completed" as const },
+  { step: "Repair", status: "in_progress" as const },
+  { step: "Verify", status: "pending" as const },
+];
+
 describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
   it("keeps a full plan and recent activity after failed named tool items", () => {
     const richMessages = true;
@@ -59,22 +74,15 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
           ),
           ...commandLines,
         ],
-        plan: [
-          { step: "Inspect", status: "completed" },
-          { step: "Repair", status: "in_progress" },
-          { step: "Verify", status: "pending" },
-        ],
+        plan: repairPlan,
       },
       { richMessages, toolProgress: true, maxLines: 5, maxLineChars: 300 },
     );
-    expect(preview.text).toContain("Inspect");
-    expect(preview.text).toContain("Repair");
-    expect(preview.text).toContain("Verify");
-    expect(preview.text).toContain("command 7");
-    expect(preview.text).not.toContain("command 0");
-    expect(preview.text).not.toContain("Automations");
-    expect(preview.text).not.toContain("Browser");
-    expect(preview.text).not.toContain("Custom Command Runner");
+    expectText(
+      preview.text,
+      ["Inspect", "Repair", "Verify", "command 7"],
+      ["command 0", "Automations", "Browser", "Custom Command Runner"],
+    );
   });
 
   it("shows a fresh named failure before newer activity replaces it", () => {
@@ -85,26 +93,21 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
       name: "read",
       status: "failed",
     })!;
-    const plan = [
-      { step: "Inspect", status: "completed" as const },
-      { step: "Repair", status: "in_progress" as const },
-      { step: "Verify", status: "pending" as const },
-    ];
     const options = { richMessages, toolProgress: true, maxLines: 3, maxLineChars: 300 };
-    const initial = renderTelegramProgressDraftPreview({ lines: [failed], plan }, options);
-    expect(initial.text).toContain("Read");
-    expect(initial.text).toContain("Repair");
+    const initial = renderTelegramProgressDraftPreview(
+      { lines: [failed], plan: repairPlan },
+      options,
+    );
+    expectText(initial.text, ["Read", "Repair"]);
 
     const after = renderTelegramProgressDraftPreview(
       {
         lines: [failed, buildChannelProgressDraftLine({ event: "tool", name: "browser" })!],
-        plan,
+        plan: repairPlan,
       },
       options,
     );
-    expect(after.text).not.toContain("Read");
-    expect(after.text).toContain("Browser");
-    expect(after.text).toContain("Repair");
+    expectText(after.text, ["Browser", "Repair"], ["Read"]);
   });
 
   // The real compositor, renderer and transport expose short sends, stopped
@@ -160,23 +163,21 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
         dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
           async ({ dispatcherOptions, replyOptions }) => {
             queuedReplyOptions = replyOptions;
-            await replyOptions?.onAssistantMessageStart?.();
-            await replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
-            await draft?.flush();
+            const updatePlan = async (
+              update: Parameters<NonNullable<NonNullable<typeof replyOptions>["onPlanUpdate"]>>[0],
+            ) => {
+              await replyOptions?.onAssistantMessageStart?.();
+              await replyOptions?.onPlanUpdate?.(update);
+              await draft?.flush();
+            };
+            await updatePlan({ phase: "update", steps: [] });
             expect(send).not.toHaveBeenCalled();
 
-            await replyOptions?.onAssistantMessageStart?.();
-            await replyOptions?.onPlanUpdate?.({
-              phase: "update",
-              explanation: "Working",
-              steps: [],
-            });
-            await draft?.flush();
+            await updatePlan({ phase: "update", explanation: "Working", steps: [] });
             expect(send).toHaveBeenCalledOnce();
             expect([...visible.values()]).toEqual(["<b>Working</b>"]);
 
-            await replyOptions?.onAssistantMessageStart?.();
-            await replyOptions?.onPlanUpdate?.({
+            await updatePlan({
               phase: "update",
               explanation: "1/2 complete",
               steps: [
@@ -184,26 +185,21 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
                 { step: "Repair", status: "in_progress" },
               ],
             });
-            await draft?.flush();
             expect(send).toHaveBeenCalledOnce();
-            expect([...visible.values()][0]).toContain("[x] Inspect");
-            expect([...visible.values()][0]).not.toContain("Working");
+            expectText([...visible.values()][0], ["[x] Inspect"], ["Working"]);
 
             await replyOptions?.onAssistantMessageStart?.();
             await replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
             await vi.advanceTimersByTimeAsync(4_000);
             expect(visible.size).toBe(0);
 
-            await replyOptions?.onAssistantMessageStart?.();
-            await replyOptions?.onPlanUpdate?.({
+            await updatePlan({
               phase: "update",
               explanation: "Resumed",
               steps: [{ step: "Resume work", status: "in_progress" }],
             });
-            await draft?.flush();
             expect(send).toHaveBeenCalledTimes(2);
-            expect([...visible.values()][0]).toContain("<b>Resumed</b>");
-            expect([...visible.values()][0]).toContain("Resume work (in progress)");
+            expectText([...visible.values()][0], ["<b>Resumed</b>", "Resume work (in progress)"]);
 
             await replyOptions?.onAssistantMessageStart?.();
             await replyOptions?.onItemEvent?.({
@@ -213,9 +209,11 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
               status: "blocked",
             });
             await draft?.flush();
-            expect([...visible.values()][0]).toContain("Resume work (in progress)");
-            expect([...visible.values()][0]).toContain("Progress Card");
-            expect([...visible.values()][0]).toContain("blocked");
+            expectText([...visible.values()][0], [
+              "Resume work (in progress)",
+              "Progress Card",
+              "blocked",
+            ]);
 
             await replyOptions?.onBlockReplyQueued?.({ text: "Checking the result" });
             await dispatcherOptions.deliver({ text: "Checking the result" }, { kind: "block" });
@@ -239,15 +237,11 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             await replyOptions?.onReasoningEnd?.();
             await draft?.flush();
             const resumedCard = [...visible.values()].find((text) => text.includes("Exec"));
-            expect(resumedCard).toContain("Resume work (in progress)");
-            expect(resumedCard).toContain("blocked");
+            expectText(resumedCard, ["Resume work (in progress)", "blocked"]);
 
-            await replyOptions?.onAssistantMessageStart?.();
-            await replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
-            await draft?.flush();
+            await updatePlan({ phase: "update", steps: [] });
             const toolCard = [...visible.values()].find((text) => text.includes("Exec"));
-            expect(toolCard).not.toContain("Resumed");
-            expect(toolCard).not.toContain("Resume work");
+            expectText(toolCard, [], ["Resumed", "Resume work"]);
 
             await replyOptions?.onAssistantMessageStart?.();
             if (finalDelivery === "message-tool") {

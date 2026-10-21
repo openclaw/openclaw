@@ -1,10 +1,5 @@
 import path from "node:path";
 import type { PluginHookReplyPayloadSendingEvent } from "openclaw/plugin-sdk/core";
-import {
-  addTestHook,
-  createEmptyPluginRegistry,
-  initializeGlobalHookRunner,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import type { ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
@@ -14,7 +9,10 @@ import * as webMedia from "openclaw/plugin-sdk/web-media";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import type { ReplyResolverOptions } from "./bot-message-dispatch.telegram-http.test-support.js";
-import { createTelegramDispatchHttpFixture } from "./bot-message-dispatch.telegram-http.test-support.js";
+import {
+  createTelegramDispatchHttpFixture,
+  installTelegramDispatchHook,
+} from "./bot-message-dispatch.telegram-http.test-support.js";
 import { apiThrottler } from "./bot.runtime.js";
 import { deliverReplies, deliverStructuredReplies } from "./bot/delivery.replies.js";
 import { resolveTelegramTestUpload } from "./send.telegram-http.test-support.js";
@@ -58,12 +56,9 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     acceptedCalls,
     emitToolStart,
     dispatchProgressTurn,
-    waitForBotApiCall: waitForCall,
   } = http;
   afterEach(() => vi.restoreAllMocks());
 
-  const callsFor = (method: string) => calls.filter((call) => call.method === method);
-  const texts = () => [...visibleMessages.values()];
   const dispatch = (
     events: Parameters<typeof dispatchProgressTurn>[0],
     scenario: Partial<NonNullable<Parameters<typeof dispatchProgressTurn>[1]>>,
@@ -71,11 +66,12 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   const reject = (description: string, error_code = 400) => ({ error_code, description });
   const tool = (options: ReplyResolverOptions, toolCallId: string, name = "exec") =>
     emitToolStart(options, { name, phase: "start", toolCallId });
-  const deletedIds = () => callsFor("deleteMessage").map((call) => Number(call.fields.message_id));
+  const deletedIds = () =>
+    http.callsFor("deleteMessage").map((call) => Number(call.fields.message_id));
   const eventually = <T>(read: () => T) => expect.poll(read, { timeout: 5_000 });
   async function startTool(options: ReplyResolverOptions, toolCallId: string) {
     await tool(options, toolCallId);
-    await waitForCall((call) => call.method === "sendMessage");
+    await http.waitForMethod("sendMessage");
   }
   async function retainProgress({
     accept = true,
@@ -131,7 +127,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     } finally {
       db.close();
     }
-    expect(texts()).toEqual([DELIVERY_WARNING]);
+    expect(http.texts()).toEqual([DELIVERY_WARNING]);
     const notice = calls.find((call) => call.fields.text === DELIVERY_WARNING);
     expect([notice?.fields.reply_markup, notice?.fields.disable_notification]).toEqual([
       undefined,
@@ -180,7 +176,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
             await startTool(options, "delegate");
             if (outcome === "stopped") {
               await tool(options, "inspect", "read");
-              await waitForCall((call) => call.method === "editMessageText");
+              await http.waitForMethod("editMessageText");
             }
           }
         },
@@ -193,14 +189,14 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       );
       expect(adopted).toBe(false);
       if (missingReceipt) {
-        expect(texts()).toEqual([waitingText]);
+        expect(http.texts()).toEqual([waitingText]);
         expect(calls.some((call) => String(call.fields.text).includes("Pending delegation"))).toBe(
           true,
         );
       } else if (outcome === "stopped") {
-        expect(texts()).toContain(waitingText);
+        expect(http.texts()).toContain(waitingText);
       } else if (outcome === "media") {
-        const document = acceptedCalls.find((call) => call.method === "sendDocument");
+        const document = http.acceptedFor("sendDocument")[0];
         const upload = resolveTelegramTestUpload(document!.fields, "document");
         expect(await upload.text()).toBe("delegated report bytes");
         expect(document?.fields.caption).toContain(waitingText);
@@ -217,15 +213,14 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     async (outcome) => {
       const text = outcome === "empty-hook" ? outcome : "fail";
       if (outcome === "empty-hook") {
-        const registry = createEmptyPluginRegistry();
-        addTestHook({
-          registry,
-          pluginId: "http-outcome-policy",
-          hookName: "reply_payload_sending",
-          handler: (event: PluginHookReplyPayloadSendingEvent) =>
-            event.payload.text === text ? { payload: { ...event.payload, text: "" } } : undefined,
-        });
-        initializeGlobalHookRunner(registry);
+        installTelegramDispatchHook(
+          {
+            hookName: "reply_payload_sending",
+            handler: (event: PluginHookReplyPayloadSendingEvent) =>
+              event.payload.text === text ? { payload: { ...event.payload, text: "" } } : undefined,
+          },
+          "http-outcome-policy",
+        );
       } else {
         http.respondToCall = (call) =>
           call.method === "sendMessage" &&
@@ -256,7 +251,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
           calls.some((call) => call.method === "sendMessage" && call.fields.text === text),
         ).toBe(true);
       }
-      expect(texts()).toEqual([]);
+      expect(http.texts()).toEqual([]);
     },
   );
 
@@ -289,7 +284,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
 
     expect(floodedAt).toHaveLength(3);
     expect(floodedAt[2]! - floodedAt[0]!).toBeGreaterThanOrEqual(10_000);
-    expect(texts()).toEqual(["The command failed."]);
+    expect(http.texts()).toEqual(["The command failed."]);
     expect(calls.some((call) => String(call.fields.text).startsWith(DELIVERY_WARNING))).toBe(false);
   });
 
@@ -303,8 +298,8 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       finalReply: { text: "A".repeat(80) + "B".repeat(40), isError: true },
     });
     await vi.advanceTimersByTimeAsync(4_100);
-    await waitForCall((call) => call.method === "deleteMessage");
-    expect(texts().slice(1)).toEqual(["A".repeat(80), "B".repeat(40)]);
+    await http.waitForMethod("deleteMessage");
+    expect(http.texts().slice(1)).toEqual(["A".repeat(80), "B".repeat(40)]);
     expect(
       calls.filter((call) => call.fields.text === "No response generated. Please try again."),
     ).toEqual([]);
@@ -344,23 +339,23 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       }
       await vi.advanceTimersByTimeAsync(4_100);
       if (!accept) {
-        await eventually(texts).toEqual([waitingText]);
+        await eventually(http.texts).toEqual([waitingText]);
         expect(deletedIds()).toEqual([progressMessageId]);
         return;
       }
       expect([...visibleMessages.entries()]).toEqual([
         [progressMessageId, expect.stringContaining(commentary)],
       ]);
-      expect(texts()[0]).toContain("Finish delegated work");
-      expect(callsFor("deleteMessage")).toEqual([]);
+      expect(http.texts()[0]).toContain("Finish delegated work");
+      expect(http.callsFor("deleteMessage")).toEqual([]);
       expect(calls.some((call) => call.fields.text === waitingText)).toBe(false);
 
       draft?.push(childEvent("Delegated verification", "child"));
-      await eventually(() => texts()[0]).toContain("Delegated verification");
+      await eventually(() => http.texts()[0]).toContain("Delegated verification");
       draft?.retire();
       await eventually(() => [...visibleMessages.keys()]).toEqual([]);
       expect(deletedIds()).toEqual([progressMessageId]);
-      expect(callsFor("sendMessage")).toHaveLength(1);
+      expect(http.callsFor("sendMessage")).toHaveLength(1);
     },
   );
 
@@ -473,27 +468,27 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       async (options) => {
         await preamble(options, "compaction", "Incomplete preamble", "update");
         await vi.advanceTimersByTimeAsync(1_500);
-        expect(texts()).toEqual([]);
+        expect(http.texts()).toEqual([]);
         await preamble(options, "compaction", "Checking the retained context.");
         await options?.onPlanUpdate?.({
           phase: "update",
           steps: [{ step: "Retain the current goal", status: "in_progress" }],
         });
         await options?.onCompactionStart?.();
-        await waitForCall((call) => String(call.fields.text).includes("Compacting context"));
+        await http.waitForContaining("Compacting context");
         progressId = [...visibleMessages.keys()][0];
         snapshots.push(visibleMessages.get(progressId!)!);
         expect(visibleMessages.get(progressId!)).toContain("Checking the retained context.");
         expect(visibleMessages.get(progressId!)).toContain("Retain the current goal");
         await preamble(options, "compaction", "", "start");
         await options?.onCompactionEnd?.({ completed: false });
-        await waitForCall((call) => String(call.fields.text).includes("Compaction incomplete"));
+        await http.waitForContaining("Compaction incomplete");
         snapshots.push(visibleMessages.get(progressId!)!);
         expect(visibleMessages.get(progressId!)).not.toContain("Checking the retained context.");
         expect(visibleMessages.get(progressId!)).toContain("Retain the current goal");
         await options?.onCompactionStart?.();
         await options?.onCompactionEnd?.({ completed: true });
-        await waitForCall((call) => String(call.fields.text).includes("Compaction complete"));
+        await http.waitForContaining("Compaction complete");
         snapshots.push(visibleMessages.get(progressId!)!);
       },
       { finalReply: { text: "Compaction finished." } },
@@ -503,7 +498,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       expect.stringContaining("Compaction incomplete"),
       expect.stringContaining("Compaction complete"),
     ]);
-    expect(texts()).toEqual(["Compaction finished."]);
+    expect(http.texts()).toEqual(["Compaction finished."]);
     expect(JSON.stringify(acceptedCalls)).not.toContain("Incomplete preamble");
     const finalAt = acceptedCalls.findIndex(
       (call) => call.method === "sendMessage" && call.fields.text === "Compaction finished.",
@@ -520,7 +515,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       async (options) => {
         await options?.onBlockReply?.({ text: "< / internal", isReasoning: true });
         await vi.advanceTimersByTimeAsync(1_500);
-        expect(texts()).toEqual([]);
+        expect(http.texts()).toEqual([]);
         await options?.onReasoningStream?.({
           text: "<think>Checking independent evidence before answering.</think>",
           isReasoningSnapshot: true,
@@ -535,7 +530,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
         ],
       },
     );
-    expect(texts()).toEqual(["Before &lt;think&gt;literal tag text after"]);
+    expect(http.texts()).toEqual(["Before &lt;think&gt;literal tag text after"]);
     expect(JSON.stringify(acceptedCalls)).not.toContain("internal");
     expect(JSON.stringify(acceptedCalls)).not.toContain("A durable conclusion");
   });
@@ -584,7 +579,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       expect(
         await resolveTelegramTestUpload(call.fields, source === "raw" ? "voice" : "audio").text(),
       ).toBe("independent audio bytes");
-      expect(texts()).toEqual([caption]);
+      expect(http.texts()).toEqual([caption]);
     },
   );
 });
