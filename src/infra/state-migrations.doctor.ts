@@ -1501,12 +1501,9 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
         env,
         mode: params.mode,
         requiredness: detected.stateSchema.hasLegacy ? "required" : "conditional",
+        integrityCheck: params.integrityCheck,
       }),
-      createRetiredCoreStateStep({
-        stateDir,
-        env,
-        mode: params.mode,
-      }),
+      createRetiredCoreStateStep({ stateDir, env, mode: params.mode }),
     ],
     remaining: [
       ...eagerStateSteps,
