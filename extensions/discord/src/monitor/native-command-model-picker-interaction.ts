@@ -247,7 +247,6 @@ async function handleDiscordModelPickerInteraction(
   const quickModels = await readDiscordModelPickerRecentModels({
     scope: preferenceScope,
     allowedModelRefs,
-    limit: 5,
   });
   const recordReply = async (commandText: string, replyText: string, replyId: string) =>
     await recordDeliveredCommandExchange({
@@ -569,7 +568,6 @@ async function handleDiscordModelPickerInteraction(
           await recordDiscordModelPickerRecentModel({
             scope: preferenceScope,
             modelRef: resolvedModelRef,
-            limit: 5,
           }).catch(() => undefined);
         }
 

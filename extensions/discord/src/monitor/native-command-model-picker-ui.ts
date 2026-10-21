@@ -227,7 +227,6 @@ export async function replyWithDiscordModelPickerProviders(params: {
   const quickModels = await readDiscordModelPickerRecentModels({
     scope: resolveDiscordModelPickerPreferenceScope(params),
     allowedModelRefs: buildDiscordModelPickerAllowedModelRefs(data),
-    limit: 5,
   });
   const parsedCurrentRef = splitDiscordModelRef(currentModel);
   const initialProvider =
