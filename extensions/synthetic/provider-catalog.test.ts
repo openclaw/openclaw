@@ -15,6 +15,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 const endpoint = "https://api.synthetic.new/openai/v1/models";
+const provider = await registerSingleProviderPlugin(plugin);
 const liveModel = {
   id: "hf:Qwen/Qwen3.8-27B",
   name: "Qwen/Qwen3.8-27B",
@@ -32,23 +33,22 @@ const liveModel = {
   },
 };
 
-function context(config: ProviderCatalogContext["config"] = {}): ProviderCatalogContext {
+function context(baseUrl?: string): ProviderCatalogContext {
   const auth = { apiKey: "SYNTHETIC_API_KEY", discoveryApiKey: "fixture-discovery-key" };
   return {
-    config,
+    config: baseUrl ? { models: { providers: { synthetic: { baseUrl, models: [] } } } } : {},
     env: {},
     resolveProviderApiKey: () => auth,
     resolveProviderAuth: () => ({ ...auth, mode: "api_key", source: "profile" }),
   };
 }
 
-function respond(data: unknown[]) {
+const respond = (data: unknown[]) =>
   fetchGuard.mockResolvedValueOnce({
     response: Response.json({ data }),
     finalUrl: endpoint,
     release: vi.fn(),
   });
-}
 
 afterEach(() => {
   fetchGuard.mockReset();
@@ -71,7 +71,6 @@ it("discovers new models and refreshes known metadata without changing the infer
     { ...liveModel, id: "invalid-limits", context_length: -1 },
     { ...liveModel, id: "retired-model", deprecated: true },
   ]);
-  const provider = await registerSingleProviderPlugin(plugin);
   const result = await provider.catalog?.run(context());
   expect(result).toMatchObject({
     provider: {
@@ -94,10 +93,9 @@ it("discovers new models and refreshes known metadata without changing the infer
     },
   });
   const request = fetchGuard.mock.calls[0]?.[0];
+  const headers = new Headers(request.init.headers);
   expect(request.url).toBe(endpoint);
-  expect(new Headers(request.init.headers).get("authorization")).toBe(
-    "Bearer fixture-discovery-key",
-  );
+  expect(headers.get("authorization")).toBe("Bearer fixture-discovery-key");
 });
 
 it.each(["failure", "unusable"])("does not substitute seeds for %s discovery", async (mode) => {
@@ -106,45 +104,28 @@ it.each(["failure", "unusable"])("does not substitute seeds for %s discovery", a
   } else {
     respond([{ id: "missing-metadata" }]);
   }
-  const provider = await registerSingleProviderPlugin(plugin);
+  const modelIdCatalog = { baseUrl: SYNTHETIC_BASE_URL, modelIds: ["missing-metadata"] };
   await expect(provider.catalog?.run(context())).resolves.toEqual(
     mode === "failure"
-      ? {
-          providers: {},
-          outcomes: [{ provider: "synthetic", status: "unavailable" }],
-        }
+      ? { providers: {}, outcomes: [{ provider: "synthetic", status: "unavailable" }] }
       : {
           provider: { ...buildSyntheticProvider(), apiKey: "SYNTHETIC_API_KEY", models: [] },
-          outcomes: [
-            {
-              provider: "synthetic",
-              status: "ready",
-              modelIdCatalog: { baseUrl: SYNTHETIC_BASE_URL, modelIds: ["missing-metadata"] },
-            },
-          ],
+          outcomes: [{ provider: "synthetic", status: "ready", modelIdCatalog }],
         },
   );
 });
 
 it("does not send a custom proxy credential to Synthetic's fixed model endpoint", async () => {
-  const provider = await registerSingleProviderPlugin(plugin);
-  const proxy = { baseUrl: "https://proxy.example/anthropic", models: [] };
-  const result = await provider.catalog?.run(
-    context({ models: { providers: { synthetic: proxy } } }),
-  );
-  expect(result).toMatchObject({
-    provider: { baseUrl: "https://proxy.example/anthropic", api: "anthropic-messages" },
-  });
+  const result = await provider.catalog?.run(context("https://proxy.example/anthropic"));
+  const expected = { baseUrl: "https://proxy.example/anthropic", api: "anthropic-messages" };
+  expect(result).toMatchObject({ provider: expected });
   expect(fetchGuard).not.toHaveBeenCalled();
 });
 
 it("keeps static discovery network-free and live discovery credential-gated", async () => {
-  const provider = await registerSingleProviderPlugin(plugin);
-  await expect(provider.staticCatalog?.run(context())).resolves.toEqual({
-    provider: buildSyntheticProvider(),
-  });
-  await expect(
-    provider.catalog?.run({ ...context(), resolveProviderApiKey: () => ({ apiKey: undefined }) }),
-  ).resolves.toBeNull();
+  const staticResult = await provider.staticCatalog?.run(context());
+  expect(staticResult).toEqual({ provider: buildSyntheticProvider() });
+  const anonymous = { ...context(), resolveProviderApiKey: () => ({ apiKey: undefined }) };
+  await expect(provider.catalog?.run(anonymous)).resolves.toBeNull();
   expect(fetchGuard).not.toHaveBeenCalled();
 });
