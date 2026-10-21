@@ -10,7 +10,12 @@ import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "../../../config/config.js";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { readInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
@@ -57,6 +62,7 @@ import { withParentExecutionIdentity } from "./execution-identity-spawn-context.
 import "./subagent-spawn-model.mocks.shared.js";
 import { makeGatewayContext } from "./subagent-spawn.in-process-gateway.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
+import { createConfigOverride } from "./subagent-spawn.test-helpers.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
 vi.mock("../../runtime-plugins.js", () => ({
@@ -113,6 +119,37 @@ function parentAuthority() {
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   return { parentToken, operationalRunInstance, authority };
 }
+
+type ThinkingContext = Parameters<typeof spawnSubagentDirect>[1] & {
+  requesterThinkingExplicit?: boolean;
+};
+type ThinkingCase = [
+  string,
+  ThinkingContext,
+  SessionEntry["thinkingLevel"],
+  string | undefined,
+  string?,
+  string?,
+];
+const automatic: ThinkingContext = {
+  requesterThinkingLevel: "high",
+  requesterThinkingExplicit: false,
+};
+const thinkingCases: ThinkingCase[] = [
+  [
+    "inherits explicit active effort",
+    { requesterThinkingLevel: "ultra", requesterThinkingExplicit: true },
+    "medium",
+    "ultra",
+  ],
+  ["inherits legacy active effort", { requesterThinkingLevel: "ultra" }, "medium", "ultra"],
+  ["ignores automatic effort and stale preference", automatic, "medium", undefined],
+  ["ignores automatic effort without a preference", automatic, undefined, undefined],
+  ["does not persist an unselected model default", {}, undefined, undefined],
+  ["prefers explicit spawn effort", automatic, undefined, "low", "low"],
+  ["inherits persisted effort", {}, "off", "off"],
+  ["inherits configured effort", {}, undefined, "high", undefined, "high"],
+];
 
 async function waitForAssertion(assertion: () => void, timeoutMs = 2_000): Promise<void> {
   let lastError: unknown;
@@ -178,6 +215,54 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       stateDir = "";
     }
   });
+
+  it.each(thinkingCases)(
+    "%s",
+    async (name, context, saved, expected, thinking, thinkingDefault) => {
+      await writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify(
+          createConfigOverride({
+            agents: {
+              defaults: { workspace: stateDir, ...(thinkingDefault ? { thinkingDefault } : {}) },
+              entries: { main: { workspace: stateDir } },
+            },
+          }),
+        ),
+      );
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
+      await captureRuntimeConfigAsyncReader()();
+      if (saved !== undefined) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: "agent:main:main" },
+          {
+            sessionId: "thinking-parent",
+            thinkingLevel: saved,
+          },
+        );
+      }
+      subagentSpawnTesting.setDepsForTest({
+        dispatchGatewayMethodInProcess: async <T>(
+          method: string,
+          params: Record<string, unknown>,
+        ) => {
+          expect(method).toBe("agent");
+          return { runId: params.idempotencyKey, status: "accepted" } as T;
+        },
+      });
+      const result = await inGateway(() =>
+        spawnSubagentDirect(
+          { task: `provenance: ${name}`, thinking },
+          { agentSessionKey: "agent:main:main", ...context },
+        ),
+      );
+      expect(result.status).toBe("accepted");
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: result.childSessionKey! })?.thinkingLevel,
+      ).toBe(expected);
+    },
+  );
 
   it("launches queued collectors after the parent admission lease is released", async ({
     signal,
@@ -630,10 +715,10 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     );
 
     expect(await markSubagentRunTerminated({ runId: firstRunId, reason: "manual kill" })).toBe(1);
-    const killedEntry = expectDefined(subagentRuns.get(firstRunId!), "killed collector");
-    const killedSnapshot = structuredClone(killedEntry);
-    const killedExecution = structuredClone(killedEntry.execution);
-    const killedReconciliation = structuredClone(killedEntry.killReconciliation);
+    const killedSnapshot = structuredClone(
+      expectDefined(subagentRuns.get(firstRunId), "killed collector"),
+    );
+    const killedExecution = killedSnapshot.execution;
     expect(killedSnapshot).toMatchObject({
       endedReason: "subagent-killed",
       execution: {
@@ -651,13 +736,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         ),
       ).toBe(true);
       expect(launchCount).toBe(2);
-      expect(subagentRuns.get(firstRunId!)?.collectorCompletion).toMatchObject({
-        status: "killed",
-      });
-      expect(subagentRuns.get(firstRunId!)?.swarmLaunchPending).toBe(false);
-      expect(subagentRuns.get(firstRunId!)?.queuedLaunch).toBeUndefined();
-      expect(subagentRuns.get(firstRunId!)?.execution).toEqual(killedExecution);
-      expect(subagentRuns.get(firstRunId!)?.killReconciliation).toEqual(killedReconciliation);
       expect(subagentRuns.get(firstRunId!)).toEqual({
         ...killedSnapshot,
         swarmLaunchPending: false,
