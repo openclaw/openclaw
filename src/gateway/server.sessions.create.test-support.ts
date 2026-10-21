@@ -213,3 +213,21 @@ export async function withFixedOwnerSessionStore(
 }
 
 export { sessionDiffBaselineMocks, dashboardTitleGenerationMocks, dashboardTitleScheduleMocks };
+
+export async function holdSessionCreateWriter(storePath: string) {
+  const { resolveSqliteStoreScope, runExclusiveSqliteSessionWrite } =
+    await import("../config/sessions/session-accessor.sqlite-scope.js");
+  const { createDeferredCore } = await import("../shared/deferred.js");
+  const entered = createDeferredCore();
+  const releaseWriter = createDeferredCore();
+  const heldWriter = runExclusiveSqliteSessionWrite(
+    resolveSqliteStoreScope(storePath, { agentId: "main" }),
+    async () => {
+      entered.resolve();
+      await releaseWriter.promise;
+    },
+    "session.transcript.batch",
+  );
+  await entered.promise;
+  return { releaseWriter, heldWriter };
+}
