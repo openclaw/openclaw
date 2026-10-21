@@ -270,6 +270,7 @@ const members = schemaValidation(Sharing.SessionMembersListResultSchema);
 const evidence = schemaValidation(Sharing.SessionMembersListEvidenceResultSchema);
 const sharingEvent = schemaValidation(Sharing.SessionSharingEventSchema);
 const evidenceEvent = schemaValidation(Sharing.SessionSharingEvidenceEventSchema);
+const accessChangedEvent = schemaValidation(Sharing.SessionAccessChangedEventSchema);
 
 const baseEvent = {
   action: "visibility",
@@ -279,6 +280,36 @@ const baseEvent = {
   ts: 1,
 } as const;
 describe("session sharing protocol", () => {
+  const accessEvent = {
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    sessionId: "session-instance",
+    access: "revoked",
+  } as const;
+
+  it("accepts connection-specific session access observations", () => {
+    for (const access of ["revoked", "read-only", "read-write"]) {
+      accessChangedEvent.accepts({ ...accessEvent, access });
+    }
+  });
+
+  it.each(["agentId", "sessionKey", "sessionId", "access"] as const)(
+    "requires %s in a session access event",
+    (missing) => {
+      const incomplete = Object.fromEntries(
+        Object.entries(accessEvent).filter(([key]) => key !== missing),
+      );
+      accessChangedEvent.rejects(incomplete);
+    },
+  );
+
+  it("rejects unknown access states and extra session access event fields", () => {
+    accessChangedEvent.rejects(
+      { ...accessEvent, access: "allowed" },
+      { ...accessEvent, actor: "owner" },
+    );
+  });
+
   it("accepts additive visibility and membership payloads", () => {
     const list = {
       ...target,

@@ -36,6 +36,7 @@ import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { getAcceptedChatHistorySession } from "./chat-history-state.ts";
+import { readChatSessionAccess } from "./chat-pane-state.ts";
 import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -396,6 +397,11 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         listLoading: state.sessionsLoading,
         sessionKey: `${resolveChatAgentId(state) ?? ""}\0${state.sessionKey}`,
         session: row,
+        access: readChatSessionAccess(this.context.gateway.snapshot, {
+          sessionKey: row.key,
+          agentId,
+          sessionId: row.sessionId,
+        }),
       })
     ) {
       return;

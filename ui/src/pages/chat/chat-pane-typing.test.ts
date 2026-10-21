@@ -570,6 +570,7 @@ describe("chat pane typing presence", () => {
     "generation",
     "role",
     "visibility",
+    "access",
     "solo",
   ])("discards a queued preview after %s changes its target", (change) => {
     vi.useFakeTimers();
@@ -597,6 +598,16 @@ describe("chat pane typing presence", () => {
         break;
       case "visibility":
         row.visibility = "draft";
+        break;
+      case "access":
+        pane.context.gateway.snapshot.sessionAccess = [
+          {
+            agentId: "work",
+            sessionKey: state.sessionKey,
+            sessionId: row.sessionId!,
+            access: "revoked",
+          },
+        ];
         break;
       case "solo":
         pane.presence.update({ presence: [{ ts: 1, user: { id: "owner" } }] });

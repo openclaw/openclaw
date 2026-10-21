@@ -1,5 +1,5 @@
-import type { GatewaySessionRow } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { GatewaySessionRow, SessionAccessChangedEvent } from "../../api/types.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { isChatControlCommand, isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
@@ -8,6 +8,7 @@ import {
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
+import { uiConversationMatches } from "../../lib/sessions/session-key.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
@@ -105,6 +106,23 @@ export function applySelectedSessionProjection(
   return true;
 }
 
+export function readChatSessionAccess(
+  snapshot: Pick<ApplicationGatewaySnapshot, "hello" | "sessionAccess">,
+  target: { sessionKey: string; agentId?: string | null; sessionId?: string | null },
+): SessionAccessChangedEvent["access"] | undefined {
+  return snapshot.sessionAccess?.find(
+    (fact) =>
+      fact.sessionId === target.sessionId &&
+      uiConversationMatches(
+        snapshot,
+        target.sessionKey,
+        fact.sessionKey,
+        fact.agentId,
+        target.agentId,
+      ),
+  )?.access;
+}
+
 const MAX_TRACKED_SESSION_ROWS = 256;
 
 export class SessionParticipationTracker {
@@ -116,12 +134,16 @@ export class SessionParticipationTracker {
 
   resolve(params: {
     catalog: boolean;
+    access?: SessionAccessChangedEvent["access"];
     listLoading: boolean;
     sessionKey: string;
     session: Pick<GatewaySessionRow, "sharingRole" | "visibility"> | undefined;
   }): boolean {
     if (params.catalog) {
       return false;
+    }
+    if (params.access === "revoked" || params.access === "read-only") {
+      return true;
     }
     if (params.session) {
       const blocked =
@@ -144,10 +166,9 @@ export class SessionParticipationTracker {
     // filtering, search, pagination, and deletion all remove a row the caller
     // can still write to, so inferring a block would wrongly disable a valid
     // session. Block only on a positively observed restricted state above.
-    // During an in-flight refresh, hold the last known block so a restricted
-    // session does not flicker enabled; a completed absence never blocks. The
-    // redaction case (a session hidden from a non-owner) is handled once the
-    // explicit revocation signal lands (openclaw/openclaw#112760).
+    // During an in-flight refresh, hold the last known row restriction so a
+    // restricted session does not flicker enabled; a completed absence never blocks.
+    // Explicit connection restrictions are checked before consulting rows.
     return params.listLoading && this.lastBlocked.get(params.sessionKey) === true;
   }
 }

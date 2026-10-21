@@ -1,6 +1,9 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ModelCatalogTarget,
   ModelsSnapshotEvent,
+  SessionAccessChangedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayEventFrame } from "../api/gateway.ts";
@@ -67,6 +70,60 @@ export function notifyGatewayObservers<T>(
       console.error(`[gateway] ${errorLabel} handler error:`, error);
     }
   }
+}
+
+/** Keep one negative fact per conversation in the admitted connection. */
+export function projectGatewaySessionAccess(
+  snapshot: ApplicationGatewaySnapshot,
+  payload: unknown,
+): readonly SessionAccessChangedEvent[] | undefined {
+  const { agentId, sessionKey, sessionId, access } = asOptionalRecord(payload) ?? {};
+  if (
+    !hasNonEmptyString(agentId) ||
+    !hasNonEmptyString(sessionKey) ||
+    !hasNonEmptyString(sessionId) ||
+    (access !== "revoked" && access !== "read-only" && access !== "read-write")
+  ) {
+    return undefined;
+  }
+  const remaining = (snapshot.sessionAccess ?? []).filter(
+    (fact) =>
+      // Publications already carry the Gateway's canonical, owner-qualified target.
+      fact.agentId !== agentId ||
+      fact.sessionKey !== sessionKey ||
+      (access === "read-write" && fact.sessionId !== sessionId),
+  );
+  // Restoration retires only this incarnation's restriction; ordinary access checks still apply.
+  return access === "read-write"
+    ? remaining
+    : [...remaining, { agentId, sessionKey, sessionId, access }];
+}
+
+export function projectGatewayUsagePublications(
+  snapshot: Pick<ApplicationGatewaySnapshot, "usagePublications">,
+  payload: unknown,
+): ApplicationGatewaySnapshot["usagePublications"] {
+  const publication = asOptionalRecord(payload);
+  const agentId = publication?.agentId;
+  const usageUpdatedAt = publication?.usageUpdatedAt;
+  if (
+    typeof agentId === "string" &&
+    typeof usageUpdatedAt === "number" &&
+    usageUpdatedAt > (snapshot.usagePublications?.[agentId]?.usageUpdatedAt ?? 0)
+  ) {
+    return {
+      ...snapshot.usagePublications,
+      [agentId]: {
+        usageUpdatedAt,
+        committedAt:
+          publication?.usageRefreshFailed === true
+            ? (snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
+            : usageUpdatedAt,
+        usageRefreshFailed: publication?.usageRefreshFailed === true || undefined,
+      },
+    };
+  }
+  return undefined;
 }
 
 export function createGatewayEventLog() {

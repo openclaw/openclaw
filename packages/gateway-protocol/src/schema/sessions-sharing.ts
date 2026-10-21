@@ -125,6 +125,14 @@ export const SessionMemberMutationResultSchema = closedObject({
   identityId: NonEmptyString,
 });
 
+/** Connection-specific observation; a positive state does not grant permission. */
+export const SessionAccessChangedEventSchema = closedObject({
+  agentId: NonEmptyString,
+  sessionKey: NonEmptyString,
+  sessionId: NonEmptyString,
+  access: stringLiteralUnion(["revoked", "read-only", "read-write"]),
+});
+
 const SessionSharingEventTargetFields = {
   action: SessionSharingActionSchema,
   sessionKey: NonEmptyString,
@@ -171,5 +179,6 @@ export type SessionMembersListEvidenceResult = Static<
 export type SessionMemberAddParams = Static<typeof SessionMemberAddParamsSchema>;
 export type SessionMemberRemoveParams = Static<typeof SessionMemberRemoveParamsSchema>;
 export type SessionMemberMutationResult = Static<typeof SessionMemberMutationResultSchema>;
+export type SessionAccessChangedEvent = Static<typeof SessionAccessChangedEventSchema>;
 export type SessionSharingEvent = Static<typeof SessionSharingEventSchema>;
 export type SessionSharingEvidenceEvent = Static<typeof SessionSharingEvidenceEventSchema>;
