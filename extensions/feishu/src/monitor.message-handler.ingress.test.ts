@@ -11,6 +11,7 @@ import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { createFeishuTestEvent } from "./bot.test-support.js";
@@ -78,6 +79,7 @@ function createHarness(params: {
   lifecycles: ReadonlyMap<string, FeishuIngressLifecycle>;
   claims: readonly dedup.FeishuMessageProcessingClaim[];
   adoptTurn: boolean;
+  accountId?: string;
 }) {
   let onFlush: DebouncerOptions["onFlush"] | undefined;
   let onError: DebouncerOptions["onError"] | undefined;
@@ -115,7 +117,7 @@ function createHarness(params: {
   const handler = createFeishuMessageReceiveHandler({
     cfg: {},
     channelRuntime,
-    accountId: "default",
+    accountId: params.accountId ?? "default",
     runtime: { ...createNonExitingRuntimeEnv(), error: runtimeError } satisfies RuntimeEnv,
     chatHistories: new Map(),
     handleMessage,
@@ -178,8 +180,57 @@ function createBatch(names: [string, string]) {
   return { transports, claims, events, harness };
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawStateDatabaseAsync();
+});
+
+it("drops the current bot before debounce and processing claims", async () => {
+  const harness = createHarness({ lifecycles: new Map(), claims: [], adoptTurn: false });
+  const event = (senderOpenId: string) =>
+    createFeishuTestEvent({
+      messageId: "om_reused",
+      senderOpenId,
+      senderType: "bot",
+      chatId: "oc_chat_1",
+    });
+  await harness.handler(event("ou-bot"));
+  expect(harness.entries).toEqual([]);
+  expect(harness.claim).not.toHaveBeenCalled();
+  await harness.handler(event("ou_other_bot"));
+  expect(harness.entries).toHaveLength(1);
+  await harness.flush();
+  expect(harness.handleMessage).toHaveBeenCalledTimes(1);
+  expect(harness.handleMessage.mock.calls[0]?.[0].event.sender.sender_id.open_id).toBe(
+    "ou_other_bot",
+  );
+});
+
+it("keeps same-id media variants distinct at receive time", async () => {
+  const harness = createHarness({
+    lifecycles: new Map(),
+    claims: [],
+    adoptTurn: false,
+    accountId: "receive-media-dedupe",
+  });
+  const audioEvent = (fileKey: string) =>
+    createFeishuTestEvent({
+      messageId: "msg-audio-receive-reused-id",
+      senderOpenId: "ou-audio-receive-dedup",
+      messageType: "audio",
+      content: JSON.stringify({ file_key: fileKey, duration: 1200 }),
+    });
+  const first = audioEvent("file_audio_receive_first");
+  const second = audioEvent("file_audio_receive_second");
+  for (const event of [first, second, audioEvent("file_audio_receive_first")]) {
+    await harness.handler(event);
+    await harness.flush();
+  }
+  expect(harness.handleMessage).toHaveBeenCalledTimes(2);
+  expect(harness.handleMessage.mock.calls.map(([call]) => call.event)).toEqual([first, second]);
+  expect(
+    harness.handleMessage.mock.calls.map(([call]) => typeof call.processingClaim?.commit),
+  ).toEqual(["function", "function"]);
 });
 
 describe("Feishu durable ingress debounce lifecycle", () => {
