@@ -15,6 +15,7 @@ vi.mock("../security/config-regex.js", { spy: true });
 vi.mock("../logging/config.js", () => ({
   readLoggingConfig: () => ({ redactPatterns: ["ordinary"] }),
 }));
+// mock-isolation: Capture log output without creating real logger state or sinks.
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ isEnabled: () => true, info: output, warn: output }),
 }));
