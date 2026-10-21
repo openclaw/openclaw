@@ -2,13 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CapabilityModelProviderCandidate } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
 import {
   createImageWebMediaRuntime,
-  createImageTestConfig,
-  makeImageModelDefinition,
   createRequiredImageTool,
   ONE_PIXEL_PNG_B64,
   testing,
@@ -38,34 +37,51 @@ vi.mock("../../media-understanding/image-runtime.js", () => ({
   describeImagesWithModelPayloadTransform: genericDescribe,
 }));
 
+function makeVisionModel(id: string) {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  } satisfies ModelDefinitionConfig;
+}
+
+function modelConfig(
+  provider: string,
+  primary: string,
+  definition: ModelProviderConfig,
+  mode?: "replace",
+): OpenClawConfig {
+  return {
+    agents: { defaults: { model: { primary } } },
+    models: { mode, providers: { [provider]: definition } },
+  };
+}
+
 function createUserReportedConfig(params?: { includeApiKey?: boolean }): OpenClawConfig {
-  return createImageTestConfig(
-    { model: { primary: USER_PRIMARY } },
-    {
-      [USER_PROVIDER]: {
-        baseUrl: "https://example.com/v1",
-        api: "openai-completions",
-        ...(params?.includeApiKey !== false ? { apiKey: CONFIG_API_KEY } : {}),
-        models: [makeImageModelDefinition(USER_MODEL)],
-      },
-    },
-  );
+  return modelConfig(USER_PROVIDER, USER_PRIMARY, {
+    baseUrl: "https://example.com/v1",
+    api: "openai-completions",
+    ...(params?.includeApiKey !== false ? { apiKey: CONFIG_API_KEY } : {}),
+    models: [makeVisionModel(USER_MODEL)],
+  });
 }
 
 function createBedrockSdkConfig(): OpenClawConfig {
-  const config = createImageTestConfig(
-    { model: { primary: `${BEDROCK_PROVIDER}/text-1` } },
+  return modelConfig(
+    BEDROCK_PROVIDER,
+    `${BEDROCK_PROVIDER}/text-1`,
     {
-      [BEDROCK_PROVIDER]: {
-        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-        auth: "aws-sdk",
-        api: "bedrock-converse-stream",
-        models: [makeImageModelDefinition(BEDROCK_VISION_MODEL)],
-      },
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      auth: "aws-sdk",
+      api: "bedrock-converse-stream",
+      models: [makeVisionModel(BEDROCK_VISION_MODEL)],
     },
+    "replace",
   );
-  config.models = { ...config.models, mode: "replace" };
-  return config;
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -164,18 +180,21 @@ async function executeImage(params: {
   configuredProvider?: string;
   paths?: string[];
 }) {
-  const config = createImageTestConfig({
-    imageModel: { primary: "selected/vision", fallbacks: params.fallbacks },
-  });
-  if (params.configuredProvider) {
-    config.models = {
-      providers: {
-        [params.configuredProvider]: {
-          baseUrl: "https://example.invalid/v1",
-          models: [{ ...makeImageModelDefinition("vision"), name: "Vision", maxTokens: 4096 }],
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: {
+        imageModel: {
+          primary: "selected/vision",
+          ...(params.fallbacks ? { fallbacks: params.fallbacks } : {}),
         },
       },
-    };
+    },
+  };
+  if (params.configuredProvider) {
+    config.models = modelConfig(params.configuredProvider, "selected/vision", {
+      baseUrl: "https://example.invalid/v1",
+      models: [{ ...makeVisionModel("vision"), name: "Vision", maxTokens: 4096 }],
+    }).models;
   }
   const tool = createRequiredImageTool({
     config,
