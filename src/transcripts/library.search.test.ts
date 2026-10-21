@@ -25,6 +25,11 @@ function fixture() {
   return createTranscriptLibraryStoreFixture(tempDirs.make("transcript-library-search-"));
 }
 
+const emptySummary = (target: ReturnType<typeof session>) =>
+  summarizeTranscripts({ session: target, utterances: [] });
+const selectors = (result: Awaited<ReturnType<typeof listTranscriptLibrary>>) =>
+  result.sessions.map((entry) => entry.selector);
+
 describe("transcript library search", () => {
   it("searches stored notes and speech once per capture with stable filtered pagination", async () => {
     const { store } = fixture();
@@ -41,10 +46,7 @@ describe("transcript library search", () => {
       await store.appendUtteranceForSession(target, { text: phrase });
       await store.appendUtteranceForSession(target, { text: phrase });
     }
-    await store.writeSummary(
-      { ...summarizeTranscripts({ session: notes, utterances: [] }), decisions: [phrase] },
-      notes,
-    );
+    await store.writeSummary({ ...emptySummary(notes), decisions: [phrase] }, notes);
     const filters = {
       query: phrase.toUpperCase(),
       providerId: source.providerId,
@@ -55,15 +57,15 @@ describe("transcript library search", () => {
       limit: 1,
     };
     const first = await listTranscriptLibrary(store, filters);
-    expect(first.sessions.map((entry) => entry.selector)).toEqual([
-      transcriptSessionSelector(speech),
-    ]);
-    expect(first.nextCursor).toEqual(expect.any(String));
+    expect(first).toMatchObject({
+      sessions: [{ selector: transcriptSessionSelector(speech) }],
+      nextCursor: expect.any(String),
+    });
     const second = await listTranscriptLibrary(store, { ...filters, cursor: first.nextCursor! });
-    expect(second.sessions.map((entry) => entry.selector)).toEqual([
-      transcriptSessionSelector(notes),
-    ]);
-    expect(second.nextCursor).toBeNull();
+    expect(second).toMatchObject({
+      sessions: [{ selector: transcriptSessionSelector(notes) }],
+      nextCursor: null,
+    });
     expect(
       (await listTranscriptLibrary(store, { ...filters, accountId: "personal" })).sessions,
     ).toEqual([]);
@@ -73,24 +75,16 @@ describe("transcript library search", () => {
     const { store, database } = fixture();
     const target = session("historical-notes");
     await store.writeSession(target);
-    await store.writeSummary(
-      {
-        ...summarizeTranscripts({ session: target, utterances: [] }),
-        overview: "Separate overview",
-      },
-      target,
-    );
+    await store.writeSummary({ ...emptySummary(target), overview: "Separate overview" }, target);
     const db = database();
     const summary = meetingTranscriptDb(db)
       .updateTable("meeting_transcript_summaries")
       .where("session_id", "=", target.sessionId)
       .where("session_started_at", "=", target.startedAt);
     executeSqliteQuerySync(db, summary.set({ markdown: null }));
-    expect(
-      (await listTranscriptLibrary(store, { query: "SEPARATE OVERVIEW" })).sessions.map(
-        (entry) => entry.selector,
-      ),
-    ).toEqual([transcriptSessionSelector(target)]);
+    expect(selectors(await listTranscriptLibrary(store, { query: "SEPARATE OVERVIEW" }))).toEqual([
+      transcriptSessionSelector(target),
+    ]);
     executeSqliteQuerySync(
       db,
       summary.set({
@@ -99,10 +93,8 @@ describe("transcript library search", () => {
         ...deriveMeetingTranscriptSummaryColumns(null),
       }),
     );
-    expect(
-      (await listTranscriptLibrary(store, { query: "CANONICAL DECISION" })).sessions.map(
-        (entry) => entry.selector,
-      ),
-    ).toEqual([transcriptSessionSelector(target)]);
+    expect(selectors(await listTranscriptLibrary(store, { query: "CANONICAL DECISION" }))).toEqual([
+      transcriptSessionSelector(target),
+    ]);
   });
 });

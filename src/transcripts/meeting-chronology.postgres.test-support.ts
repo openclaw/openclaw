@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
+import { once } from "node:events";
 import { parentPort, setEnvironmentData, threadId, Worker, workerData } from "node:worker_threads";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -39,30 +40,20 @@ async function runChronologyHost(input: { path: string; connection: string }): P
     admitSqliteSchema(anchor);
     setEnvironmentData("openclaw.test.state.connection", input.connection);
     const url = new URL(import.meta.url);
-    const activeWorker = new Worker(url, {
+    worker = new Worker(url, {
       execArgv: resolveRuntimeWorkerThreadExecArgv(url),
       workerData: {
         path: input.path,
         admissions: captureSqliteDatabaseAdmissions(undefined, { location: input.path }),
       },
     });
-    worker = activeWorker;
-    activeWorker.on(
-      "message",
-      (message: ChronologyProof | { error: string } | { namespace: string }) => {
-        process.send?.(message);
-      },
-    );
-    await new Promise<void>((resolve, reject) => {
-      activeWorker.once("error", reject);
-      activeWorker.once("exit", (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`Meeting chronology worker exited ${code}`));
-        }
-      });
+    worker.on("message", (message: ChronologyProof | { error: string } | { namespace: string }) => {
+      process.send?.(message);
     });
+    const [code] = await once(worker, "exit");
+    if (code !== 0) {
+      throw new Error(`Meeting chronology worker exited ${code}`);
+    }
   } finally {
     try {
       await worker?.terminate();
