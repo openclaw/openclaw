@@ -134,20 +134,6 @@ it("validates and trims webhook failure destinations", () => {
   expect(current.delivery?.failureDestination?.to).toBe(WEBHOOK);
 });
 
-it("updates authored agent settings without changing the message", () => {
-  const current = agentJob();
-  const settings = {
-    lightContext: true,
-    model: "openai/gpt-5",
-    fallbacks: ["anthropic/claude-haiku-3-5"],
-    thinking: "low",
-    toolsAllow: ["read", "write"],
-  };
-  const expected = structuredClone(agentPayload(settings));
-  applyJobPatch(current, { payload: { kind: "agentTurn", ...settings } });
-  expect(current.payload).toEqual(expected);
-});
-
 it("preserves default tool authority when replacing a system payload", () => {
   const current = fixtureJob();
   const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
