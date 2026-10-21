@@ -1,10 +1,10 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/provider-auth";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
-import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { runMuseLogin } from "./muse-login.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
@@ -34,7 +34,7 @@ process.stdout.write('Open this page to sign in:\\n  https://auth.meta.com/oauth
       META_API_KEY: "must-not-be-used",
     },
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    prompter: createWizardPrompter({ deviceCode: vi.fn() }),
+    prompter: createTestWizardPrompter({ deviceCode: vi.fn() }),
     isRemote: false,
     openUrl: vi.fn(async () => {
       await writeFile(path.join(directory, "approve"), "yes");

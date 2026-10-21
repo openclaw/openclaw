@@ -44,14 +44,19 @@ test.skipIf(process.platform !== "linux").for([false, true])(
       () => apiResult,
       (error: unknown) => error,
     );
-    const spawned = expectDefined(spawn.mock.results.find((call) => call.type === "return"));
+    const spawned = expectDefined(
+      spawn.mock.results.find((call) => call.type === "return"),
+      "spawned command",
+    );
     const child = spawned.value.nodeChildProcess;
-    const lines = createInterface({ input: expectDefined(child.stdout) });
+    const lines = createInterface({ input: expectDefined(child.stdout, "command stdout") });
     const ready = once(lines, "line");
     try {
       const [line]: string[] = await withinTest(ready, signal);
-      const descendantPid = Number(expectDefined(line?.match(/^NATIVE_EXEC_READY:(\d+)$/))[1]);
-      const rootPid = expectDefined(child.pid);
+      const descendantPid = Number(
+        expectDefined(line?.match(/^NATIVE_EXEC_READY:(\d+)$/), "ready descendant PID")[1],
+      );
+      const rootPid = expectDefined(child.pid, "command PID");
       expect(nativeKill(descendantPid, 0)).toBe(true);
       expect(isChildProcessTreeAlive(child)).toBe(true);
       vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
