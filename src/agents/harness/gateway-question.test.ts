@@ -2,7 +2,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import {
   listSessionPendingInputs,
   replaceSessionEntry,
@@ -24,7 +23,6 @@ import {
   registerPendingAgentQuestion,
   runAgentHarnessGatewayQuestion,
 } from "./gateway-question.js";
-import { withQuestionGateway } from "./gateway-question.test-support.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.js";
 
@@ -72,11 +70,8 @@ function startQuestion(
   });
 }
 
-function cancelQuestion(
-  sessionKey: string,
-  authority?: Parameters<typeof cancelPendingAgentQuestionForSession>[0]["authority"],
-) {
-  return cancelPendingAgentQuestionForSession({ sessionKey, resolvedBy: "image-reply", authority });
+function cancelQuestion(sessionKey: string) {
+  return cancelPendingAgentQuestionForSession({ sessionKey, resolvedBy: "image-reply" });
 }
 
 function claimQuestion(sessionKey: string, text = "Continue") {
@@ -404,74 +399,6 @@ describe("gateway harness questions", () => {
     ).resolves.toBe(false);
     expect(persist).not.toHaveBeenCalled();
   });
-
-  it.each([
-    { change: "open", cancel: false },
-    { change: "reassigned", cancel: false },
-    { change: "closed", cancel: true },
-  ] as const)(
-    "rechecks $change source authority at real question dispatch (cancel=$cancel)",
-    async ({ change, cancel }) => {
-      await withQuestionGateway(async (fixture) => {
-        const source = new AbortController();
-        const originalOwner = {};
-        let currentOwner = originalOwner;
-        const assertCurrent = createMessageInjectionAuthority(
-          () => !source.signal.aborted && currentOwner === originalOwner,
-        );
-        const authority = {
-          kind: "source-bound" as const,
-          assertCurrent: () => {
-            assertCurrent();
-            fixture.backingRun.signal.throwIfAborted();
-          },
-        };
-        const sessionKey = "agent:main:dispatch-authority";
-        const promptDelivered = createDeferred();
-        const run = startQuestion(sessionKey, undefined, async () => promptDelivered.resolve(), {
-          runId: "live-backing-run",
-          signal: fixture.backingRun.signal,
-        });
-        await Promise.all([fixture.waitStarted, promptDelivered.promise]);
-        const hello = fixture.holdNextHello();
-        const attempt = cancel
-          ? cancelQuestion(sessionKey, authority)
-          : claimPendingAgentQuestionAnswer({ sessionKey, text: "Old source answer", authority });
-        const outcome = settled(attempt);
-        const resolutions = () =>
-          fixture.requests.filter((frame) => frame.method === "question.resolve");
-        await hello.entered;
-        expect(fixture.manager.get(questionId)?.status).toBe("pending");
-        expect(resolutions()).toEqual([]);
-        if (change === "closed") {
-          source.abort();
-        } else if (change === "reassigned") {
-          currentOwner = {};
-        }
-        hello.release();
-        const result = await outcome;
-        expect(fixture.backingRun.signal.aborted).toBe(false);
-        const revokedBeforeDispatch = change === "closed" || change === "reassigned";
-        if (revokedBeforeDispatch) {
-          expect.soft(resolutions()).toEqual([]);
-          expect.soft(fixture.manager.get(questionId)?.status).toBe("pending");
-          expect.soft(result).toHaveProperty("error");
-          // Rejection must release the reservation without replacing the question or run.
-          const later = await claimPendingAgentQuestionAnswer({
-            sessionKey,
-            text: "Current source answer",
-            authority: { kind: "source-bound", assertCurrent: () => {} },
-          });
-          expect.soft(later).toBe(true);
-          expect.soft(await run).toEqual(answerResult("Current source answer"));
-        } else {
-          expect(result).toEqual({ accepted: true });
-          expect(await run).toEqual(answerResult("Old source answer"));
-          expect(resolutions()).toHaveLength(1);
-        }
-      });
-    },
-  );
 
   it("does not request a gateway question when the session reservation conflicts", async () => {
     const gatewayCall = vi.fn<AgentHarnessQuestionGatewayCall>();

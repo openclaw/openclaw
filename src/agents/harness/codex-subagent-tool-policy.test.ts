@@ -17,61 +17,59 @@ const codex = await loadBundledPluginFacade<{
   ) => Record<string, unknown>;
 }>({ pluginId: "codex", artifactBasename: "test-api.js" });
 const tempDirs = useSessionStoreTempDirs(afterAll, "codex-child-policy-");
+const prepare = (params: Parameters<typeof preparePluginHarnessToolPolicies>[0]) =>
+  preparePluginHarnessToolPolicies(
+    { agentId: "main", provider: "openai", modelId: "test-model", ...params },
+    codex.CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
+    codex.CODEX_NATIVE_TOOL_REQUIREMENTS,
+  );
+const threadConfig = (pluginHarnessToolPolicyRestricted: boolean) =>
+  codex.buildCodexRuntimeThreadConfigForRun(
+    { modelId: "test-model", pluginHarnessToolPolicyRestricted },
+    undefined,
+    { nativeCodeModeEnabled: true, hostSystemAgentActive: false },
+  );
 
 describe("Codex subagent native tool policy", () => {
   it("preserves native tools for OpenClaw admin/status-only denial", async () => {
     const deny = ["agents_list", "openclaw", "session_status", "progress_card"];
-    const policy = await preparePluginHarnessToolPolicies(
-      {
-        sessionKey: "agent:main:main",
-        sessionId: "policy-root",
-        agentId: "main",
-        provider: "openai",
-        modelId: "test-model",
-        config: { tools: { deny } },
-      },
-      codex.CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
-      codex.CODEX_NATIVE_TOOL_REQUIREMENTS,
-    );
+    const policy = await prepare({
+      sessionKey: "agent:main:main",
+      sessionId: "policy-root",
+      config: { tools: { deny } },
+    });
     for (const tool of deny) {
       expect(isToolAllowedByPolicies(tool, policy.runtimePolicies), tool).toBe(false);
     }
     expect(policy.toolPolicyRestricted).toBe(false);
-    const config = codex.buildCodexRuntimeThreadConfigForRun(
-      { modelId: "test-model", pluginHarnessToolPolicyRestricted: policy.toolPolicyRestricted },
-      undefined,
-      { nativeCodeModeEnabled: true, hostSystemAgentActive: false },
-    );
+    const config = threadConfig(policy.toolPolicyRestricted);
     expect(config["features.code_mode"]).toBe(true);
     expect(config["agents.enabled"]).toBeUndefined();
   });
 
   it.each([
-    { name: "hidden child", key: "subagent", config: {}, restricted: true },
-    { name: "visible child", key: "dashboard", config: {}, restricted: true },
+    { name: "hidden child", key: "subagent", config: {} },
+    { name: "visible child", key: "dashboard", config: {} },
     {
       name: "leaf at the depth cap",
       key: "subagent",
       config: { agents: { defaults: { subagents: { maxSpawnDepth: 1 } } } },
-      restricted: true,
     },
-    { name: "session send deny", config: { tools: { deny: ["sessions_send"] } }, restricted: true },
+    { name: "session send deny", config: { tools: { deny: ["sessions_send"] } } },
     {
       name: "inherited session send deny",
       config: {},
       inheritedToolDeny: ["sessions_send"],
-      restricted: true,
     },
-    { name: "exec deny", config: { tools: { deny: ["exec"] } }, restricted: true },
-    { name: "unknown deny", config: { tools: { deny: ["unknown_tool"] } }, restricted: true },
-    { name: "finite allowlist", config: { tools: { allow: ["read"] } }, restricted: true },
-    { name: "inherited exec deny", config: {}, inheritedToolDeny: ["exec"], restricted: true },
+    { name: "exec deny", config: { tools: { deny: ["exec"] } } },
+    { name: "unknown deny", config: { tools: { deny: ["unknown_tool"] } } },
+    { name: "finite allowlist", config: { tools: { allow: ["read"] } } },
+    { name: "inherited exec deny", config: {}, inheritedToolDeny: ["exec"] },
   ] satisfies Array<{
     name: string;
     key?: string;
     config: OpenClawConfig;
     inheritedToolDeny?: string[];
-    restricted: boolean;
   }>)("preserves the effective policy for $name", async (testCase) => {
     const sessionKey = `agent:main:${testCase.key ?? "subagent"}:policy-child`;
     const store = path.join(tempDirs.make(), "sessions.json");
@@ -85,30 +83,19 @@ describe("Codex subagent native tool policy", () => {
         inheritedToolDeny: testCase.inheritedToolDeny,
       },
     );
-    const policy = await preparePluginHarnessToolPolicies(
-      {
-        sessionKey,
-        sessionId: "policy-child",
-        agentId: "main",
-        provider: "openai",
-        modelId: "test-model",
-        config: { ...testCase.config, session: { store } },
-      },
-      codex.CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
-      codex.CODEX_NATIVE_TOOL_REQUIREMENTS,
-    );
+    const policy = await prepare({
+      sessionKey,
+      sessionId: "policy-child",
+      config: { ...testCase.config, session: { store } },
+    });
     // Direct OpenClaw denial and native restriction must agree on the denied effect.
     for (const tool of ["gateway", "openclaw", "sessions_send", "conversations_turn"]) {
       expect(isToolAllowedByPolicies(tool, policy.runtimePolicies), tool).toBe(false);
     }
-    const config = codex.buildCodexRuntimeThreadConfigForRun(
-      { modelId: "test-model", pluginHarnessToolPolicyRestricted: policy.toolPolicyRestricted },
-      undefined,
-      { nativeCodeModeEnabled: true, hostSystemAgentActive: false },
-    );
-    expect(config["features.code_mode"]).toBe(!testCase.restricted);
+    const config = threadConfig(policy.toolPolicyRestricted);
+    expect(config["features.code_mode"]).toBe(false);
     for (const key of ["agents.enabled", "features.multi_agent", "features.multi_agent_v2"]) {
-      expect(config[key], key).toBe(testCase.restricted ? false : undefined);
+      expect(config[key], key).toBe(false);
     }
   });
 });

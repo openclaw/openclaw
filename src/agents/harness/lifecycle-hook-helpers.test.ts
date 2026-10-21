@@ -25,11 +25,19 @@ function finalize(
   return runAgentHarnessBeforeAgentFinalizeHook({ event, ctx: context, hookRunner });
 }
 function finalizer(result: unknown, event: Parameters<typeof finalize>[1] = EVENT, context = ctx) {
-  const hookRunner = {
-    hasHooks: () => true,
-    runBeforeAgentFinalize: vi.fn().mockResolvedValue(result),
-  };
+  const hookRunner = finalizeRunner(result);
+  hookRunner.runBeforeAgentFinalize.mockResolvedValue(result);
   return () => finalize(hookRunner as never, event, context);
+}
+function finalizeRunner(...results: unknown[]) {
+  const runBeforeAgentFinalize = vi.fn();
+  for (const result of results) {
+    runBeforeAgentFinalize.mockResolvedValueOnce(result);
+  }
+  return {
+    hasHooks: () => true,
+    runBeforeAgentFinalize,
+  };
 }
 function retry<Key>(instruction: string, idempotencyKey: Key) {
   return { instruction, idempotencyKey, maxAttempts: 1 };
@@ -78,75 +86,48 @@ describe("agent harness lifecycle hook helpers", () => {
     },
   );
 
-  it("resolves after agent_end hooks settle", async () => {
+  it.each([false, true])("dispatches agent_end with unrefTimeout=%s", async (unrefTimeout) => {
     const { promise: agentEndSettled, resolve: releaseHook } = Promise.withResolvers<void>();
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
       runAgentEnd: vi.fn(() => agentEndSettled),
     };
 
-    const run = awaitAgentHarnessAgentEndHook({
-      ctx,
-      event: EVENT,
-      hookRunner: hookRunner as never,
-    });
+    const params = { ctx, event: EVENT, hookRunner: hookRunner as never };
+    const run = unrefTimeout
+      ? runAgentHarnessAgentEndHook(params)
+      : awaitAgentHarnessAgentEndHook(params);
     let resolved = false;
-    void run.then(() => {
-      resolved = true;
-    });
+    if (run) {
+      void run.then(() => {
+        resolved = true;
+      });
+    }
 
     await Promise.resolve();
     expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
     expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
       EVENT,
       expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
-      { unrefTimeout: false },
+      { unrefTimeout },
     );
     expect(resolved).toBe(false);
     releaseHook();
-    await expect(run).resolves.toBeUndefined();
-    expect(resolved).toBe(true);
-  });
-
-  it("can leave agent_end timeouts unref'd for fire-and-forget callers", async () => {
-    const hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
-      runAgentEnd: vi.fn(async () => undefined),
-    };
-
-    runAgentHarnessAgentEndHook({
-      ctx,
-      event: EVENT,
-      hookRunner: hookRunner as never,
-    });
-    await Promise.resolve();
-
-    expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
-      EVENT,
-      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
-      { unrefTimeout: true },
-    );
+    if (!unrefTimeout) {
+      await expect(run).resolves.toBeUndefined();
+      expect(resolved).toBe(true);
+    }
   });
 
   it("keys finalize retry budgets by context run id when the event omits run id", async () => {
-    const hookRunner = {
-      hasHooks: () => true,
-      runBeforeAgentFinalize: vi.fn().mockResolvedValue({
-        action: "revise",
-        retry: retry("revise from context run", "stable"),
-      }),
-    };
-    const eventWithoutRunId = {
-      ...EVENT,
-      runId: undefined,
-      sessionId: "shared-session",
-    };
-
-    const run = () =>
-      finalize(hookRunner as never, eventWithoutRunId, {
+    const run = finalizer(
+      { action: "revise", retry: retry("revise from context run", "stable") },
+      { ...EVENT, runId: undefined, sessionId: "shared-session" },
+      {
         runId: "run-from-context",
         sessionKey: "agent:main:shared-session",
-      });
+      },
+    );
     await expect(run()).resolves.toEqual({ action: "revise", reason: "revise from context run" });
     await expect(run()).resolves.toEqual({ action: "continue" });
   });
@@ -209,19 +190,10 @@ describe("agent harness lifecycle hook helpers", () => {
     const sharedPrefix = "x".repeat(180);
     const firstInstruction = `${sharedPrefix} first`;
     const secondInstruction = `${sharedPrefix} second`;
-    const hookRunner = {
-      hasHooks: () => true,
-      runBeforeAgentFinalize: vi
-        .fn()
-        .mockResolvedValueOnce({
-          action: "revise",
-          retry: retry(firstInstruction, { invalid: true }),
-        })
-        .mockResolvedValueOnce({
-          action: "revise",
-          retry: retry(secondInstruction, { invalid: true }),
-        }),
-    };
+    const hookRunner = finalizeRunner(
+      { action: "revise", retry: retry(firstInstruction, { invalid: true }) },
+      { action: "revise", retry: retry(secondInstruction, { invalid: true }) },
+    );
 
     await expect(finalize(hookRunner as never)).resolves.toEqual({
       action: "revise",

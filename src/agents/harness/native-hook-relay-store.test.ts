@@ -17,7 +17,6 @@ import {
   writeNativeHookRelayBridgeRecord,
 } from "./native-hook-relay-store.js";
 
-let testRoot = "";
 let primaryStateDbPath = "";
 let secondaryStateDbPath = "";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -29,7 +28,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 beforeEach(() => {
-  testRoot = tempDirs.make("openclaw-native-hook-relay-store-");
+  const testRoot = tempDirs.make("openclaw-native-hook-relay-store-");
   primaryStateDbPath = path.join(testRoot, "primary.sqlite");
   secondaryStateDbPath = path.join(testRoot, "secondary.sqlite");
 });
@@ -69,6 +68,18 @@ function renew(record: NativeHookRelayBridgeRecord, updatedAtMs?: number) {
 function remove(record: NativeHookRelayBridgeRecord) {
   return deleteNativeHookRelayBridgeRecordIfOwned({ ...record, stateDbPath: primaryStateDbPath });
 }
+function prune(
+  isPidDead: Parameters<typeof pruneNativeHookRelayBridgeRecords>[0]["isPidDead"],
+  nowMs = 10_000,
+  currentPid = 100,
+) {
+  return pruneNativeHookRelayBridgeRecords({
+    currentPid,
+    isPidDead,
+    nowMs,
+    stateDbPath: primaryStateDbPath,
+  });
+}
 
 describe("native hook relay store", () => {
   it("persists bridge records and closes their worker without caller-thread SQLite", async () => {
@@ -94,14 +105,13 @@ describe("native hook relay store", () => {
     expect(await remove(replacement)).toBe(true);
     expect(await renew(replacement)).toBe(true);
     expect(
-      await pruneNativeHookRelayBridgeRecords({
-        currentPid: replacement.pid,
-        isPidDead: () => {
+      await prune(
+        () => {
           throw new Error("Expired rows do not need a PID probe");
         },
-        nowMs: 30_001,
-        stateDbPath: primaryStateDbPath,
-      }),
+        30_001,
+        replacement.pid,
+      ),
     ).toEqual([{ relayId: replacement.relayId, pid: replacement.pid, reason: "expired" }]);
     expect(await read(replacement.relayId)).toBeUndefined();
     await closeOpenClawStateDatabaseByPathAsync(primaryStateDbPath);
@@ -134,13 +144,7 @@ describe("native hook relay store", () => {
     }
     const isPidDead = vi.fn((pid: number) => pid === dead.pid);
 
-    const pruned = await pruneNativeHookRelayBridgeRecords({
-      currentPid: 100,
-      isPidDead,
-      nowMs: 10_000,
-      stateDbPath: primaryStateDbPath,
-    });
-
+    const pruned = await prune(isPidDead);
     expect(pruned).toHaveLength(2);
     expect(pruned).toEqual(
       expect.arrayContaining([
@@ -151,17 +155,13 @@ describe("native hook relay store", () => {
     expect(new Set(isPidDead.mock.calls.map(([pid]) => pid))).toStrictEqual(
       new Set([dead.pid, live.pid, unknown.pid]),
     );
-    expect(await read(expired.relayId)).toBeUndefined();
-    expect(await read(dead.relayId)).toBeUndefined();
-    expect(await read(live.relayId)).toStrictEqual(live);
-    expect(await read(unknown.relayId)).toStrictEqual(unknown);
+    expect(
+      await Promise.all([expired, dead, live, unknown].map(({ relayId }) => read(relayId))),
+    ).toStrictEqual([undefined, undefined, live, unknown]);
   });
 
   it("preserves a replacement published during dead-pid planning", async () => {
-    const stale = bridgeRecord("relay-prune-race", {
-      pid: 201,
-      token: "secret-token",
-    });
+    const stale = bridgeRecord("relay-prune-race", { pid: 201, token: "secret-token" });
     const replacement = bridgeRecord("relay-prune-race", {
       pid: 202,
       port: 18_790,
@@ -170,15 +170,10 @@ describe("native hook relay store", () => {
     });
     await write(stale, 1_000);
 
-    const pruned = await pruneNativeHookRelayBridgeRecords({
-      currentPid: 100,
-      isPidDead: async (pid) => {
-        expect(pid).toBe(stale.pid);
-        await write(replacement, 2_000);
-        return true;
-      },
-      nowMs: 10_000,
-      stateDbPath: primaryStateDbPath,
+    const pruned = await prune(async (pid) => {
+      expect(pid).toBe(stale.pid);
+      await write(replacement, 2_000);
+      return true;
     });
 
     expect(pruned).toStrictEqual([]);
@@ -186,10 +181,7 @@ describe("native hook relay store", () => {
   });
 
   it("isolates records by the exact state database path", async () => {
-    const primary = bridgeRecord("relay-isolated", {
-      pid: 100,
-      token: "config-token",
-    });
+    const primary = bridgeRecord("relay-isolated", { pid: 100, token: "config-token" });
     const secondary = bridgeRecord("relay-isolated", {
       pid: 200,
       port: 18_790,
