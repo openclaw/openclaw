@@ -19,6 +19,7 @@ const boundary = vi.hoisted(() => ({
   }),
 }));
 
+// mock-isolation: Capture lifetime callbacks without registering synthetic paths in the real agent database owner.
 vi.mock("../../state/openclaw-agent-db-lifecycle.js", () => ({
   registerOpenClawAgentDatabaseAsyncResource: (resource: AgentLifetimeResource) => {
     boundary.agentResources.add(resource);
@@ -28,6 +29,7 @@ vi.mock("../../state/openclaw-agent-db-lifecycle.js", () => ({
     };
   },
 }));
+// mock-isolation: Exercise request retirement without opening the shared-state database or its process-wide cache.
 vi.mock("../../state/openclaw-state-db-cache.js", () => ({
   captureOpenClawStateDatabaseReadAdmission: () => ({
     identity: { key: "synthetic-state" },
