@@ -20,11 +20,7 @@ const eligibleMac = {
   connected: true,
   commands: ["canvas.present", "canvas.hide", "canvas.navigate"],
 };
-
-const actions = [
-  { args: { action: "present" }, command: "canvas.present" },
-  { args: { action: "navigate", url: "/widget" }, command: "canvas.navigate" },
-] as const;
+const localUrl = "openclaw://widget/local";
 
 function expectInvoke(params: Record<string, unknown>, opts: unknown = expect.any(Object)) {
   expect(mocks.callGatewayTool).toHaveBeenCalledWith(
@@ -41,7 +37,11 @@ describe("Canvas presenter tool", () => {
     mocks.listNodes.mockResolvedValue([eligibleMac]);
   });
 
-  it.each(actions)("invokes $command with the default deadline", async ({ args, command }) => {
+  it.each([
+    [{ action: "present" }, "canvas.present", undefined],
+    [{ action: "navigate", url: "/widget" }, "canvas.navigate", "/widget"],
+    [{ action: "navigate", target: localUrl }, "canvas.navigate", localUrl],
+  ] as const)("invokes %j with the default deadline", async (args, command, url) => {
     const result = await createCanvasTool().execute("tool-call", args);
 
     expect(mocks.listNodes).toHaveBeenCalledWith({ timeoutMs: undefined });
@@ -49,22 +49,18 @@ describe("Canvas presenter tool", () => {
       { nodeId: "mac-1", command, timeoutMs: 30_000, idempotencyKey: expect.any(String) },
       { timeoutMs: 40_000 },
     );
-    expect(result.details).toMatchObject({ ok: true, node: "mac-1" });
+    expect(result.details).toEqual({ ok: true, node: "mac-1", ...(url ? { url } : {}) });
+    if (url) {
+      expectInvoke({ command, params: { url } });
+    }
   });
 
   it("preserves present placement and hosted target parameters", async () => {
     const url = "/__openclaw__/canvas/documents/cv_1/index.html";
+    const placement = { x: "10.5", y: "-2", width: "640", height: "480" };
     const result = await createCanvasTool({ agentSessionKey: "agent:main:panel" }).execute(
       "tool-call",
-      {
-        action: "present",
-        target: url,
-        x: "10.5",
-        y: "-2",
-        width: "640",
-        height: "480",
-        timeoutMs: "1500",
-      },
+      { action: "present", target: url, ...placement, timeoutMs: "1500" },
     );
 
     expectInvoke(
@@ -79,17 +75,6 @@ describe("Canvas presenter tool", () => {
       },
       { timeoutMs: 11_500 },
     );
-    expect(result.details).toEqual({ ok: true, node: "mac-1", url });
-  });
-
-  it("accepts target as the navigate URL alias", async () => {
-    const url = "openclaw://widget/local";
-    const result = await createCanvasTool().execute("tool-call", {
-      action: "navigate",
-      target: url,
-    });
-
-    expectInvoke({ command: "canvas.navigate", params: { url } });
     expect(result.details).toEqual({ ok: true, node: "mac-1", url });
   });
 
@@ -114,13 +99,7 @@ describe("Canvas presenter tool", () => {
 
   it("rejects an explicit legacy non-macOS Canvas node", async () => {
     mocks.listNodes.mockResolvedValue([
-      {
-        ...eligibleMac,
-        nodeId: "legacy-android",
-        displayName: "Old Canvas",
-        platform: "android",
-        commands: ["canvas.present"],
-      },
+      { ...eligibleMac, nodeId: "legacy-android", platform: "android" },
       eligibleMac,
     ]);
 
@@ -132,16 +111,12 @@ describe("Canvas presenter tool", () => {
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("rejects malformed presenter arguments before invoking a node", async () => {
-    const tool = createCanvasTool();
-
-    await expect(tool.execute("tool-call", { action: "present", width: "640px" })).rejects.toThrow(
-      "width must be a finite number",
-    );
-    await expect(tool.execute("tool-call", { action: "navigate" })).rejects.toThrow("url required");
-    await expect(tool.execute("tool-call", { action: "removed" })).rejects.toThrow(
-      "Unknown action: removed",
-    );
+  it.each([
+    [{ action: "present", width: "640px" }, "width must be a finite number"],
+    [{ action: "navigate" }, "url required"],
+    [{ action: "removed" }, "Unknown action: removed"],
+  ] as const)("rejects %j before invoking a node", async (args, error) => {
+    await expect(createCanvasTool().execute("tool-call", args)).rejects.toThrow(error);
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 });
