@@ -78,14 +78,18 @@ const controlUiPrecompressedAssetExtensions = new Set([
 
 const compressBrotli = promisify(brotliCompress);
 
+function isControlUiPrecompressedAsset(fileName: string) {
+  return (
+    fileName.startsWith("assets/") &&
+    controlUiPrecompressedAssetExtensions.has(path.extname(fileName).toLowerCase())
+  );
+}
+
 export async function createControlUiPrecompressedAssetVariants(
   fileName: string,
   source: string | Uint8Array,
 ): Promise<Array<{ fileName: string; source: Buffer }>> {
-  if (
-    !fileName.startsWith("assets/") ||
-    !controlUiPrecompressedAssetExtensions.has(path.extname(fileName).toLowerCase())
-  ) {
+  if (!isControlUiPrecompressedAsset(fileName)) {
     return [];
   }
   const body = typeof source === "string" ? Buffer.from(source) : source;
@@ -583,7 +587,9 @@ function controlUiBuildOutputPlugin(
           lastProgressAt = now;
         }
       };
-      const outputs = Object.values(bundle);
+      const outputs = Object.values(bundle).filter((output) =>
+        isControlUiPrecompressedAsset(output.fileName),
+      );
       for (let index = 0; index < outputs.length; index += 4) {
         // Bound native compression memory and join every writer before failed-build cleanup.
         const results = await Promise.allSettled(
@@ -731,6 +737,8 @@ export default function controlUiViteConfig(
       target: ["chrome147", "firefox150", "safari26.2"],
       outDir: options.outDir ?? outDir,
       emptyOutDir: true,
+      // The canonical sidecar performance report already measures shipped compressed bytes.
+      reportCompressedSize: false,
       // Release packages omit maps; keep generating them without advertising dead URLs.
       // Source builds retain automatic debugger discovery.
       sourcemap: buildInfo.release ? "hidden" : true,

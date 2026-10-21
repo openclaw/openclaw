@@ -13,14 +13,17 @@ import type {
   ExecApprovalRequest,
   ExecApprovalRequestPayload,
 } from "../app/exec-approval.ts";
+import { registerApprovalsEnglish } from "../i18n/locales/en-approvals.ts";
 import { formatCountdown } from "../lib/format.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
+
+registerEnglishCatalog(registerApprovalsEnglish);
 
 declare module "@solidjs/web" {
   namespace JSX {

@@ -712,6 +712,7 @@ it("retains default Review content and collapsed files while switching tabs, foc
     sessionKey: state.sessionKey,
     agentId: "main",
     scope: "all",
+    poll: true,
   });
   expect(state.sidebarContent).toBeNull();
   state.sidebarContent = { kind: "markdown", content: "Transient Review selection" };

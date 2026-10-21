@@ -110,7 +110,8 @@ export async function validateUpdateCandidateCanary(params: {
   };
   const recordStep = async (step: UpdateStepResult) => {
     steps.push(step);
-    await reportReceipt(onStep, step);
+    // Cleanup receipts report completed work; they cannot revoke the candidate result.
+    await (step.name.endsWith("-cleanup") ? onStep?.(step) : reportReceipt(onStep, step));
   };
   let candidateSchemaVersions: schemaVersions.OpenClawSchemaVersions | undefined;
   let gatewayRestartCompletion = false;

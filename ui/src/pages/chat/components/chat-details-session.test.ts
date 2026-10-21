@@ -291,6 +291,7 @@ it("admits only the latest visible native summary inputs and retires detached wo
     agentId: "main",
     scope: "all",
     summaryOnly: true,
+    poll: true,
   });
   select("accepted");
   first.resolve({ ...result, additions: 999 });
@@ -304,6 +305,7 @@ it("admits only the latest visible native summary inputs and retires detached wo
     agentId: "main",
     scope: "all",
     summaryOnly: true,
+    poll: true,
   });
 
   const button = element.querySelector(".chat-details__all-changes");
