@@ -14,7 +14,9 @@ const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/process-
   "openclaw/plugin-sdk/process-runtime",
 );
 
-beforeEach(() => runCommand.mockReset());
+beforeEach(() => {
+  runCommand.mockReset();
+});
 
 function mockStatus(payload: unknown, code: number | null = 0) {
   const termination = code === null ? "timeout" : "exit";

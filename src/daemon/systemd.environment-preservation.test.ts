@@ -29,7 +29,9 @@ vi.mock("./runtime-paths.js", async (importOriginal) => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-beforeEach(() => vi.mocked(execFileUtf8).mockReset());
+beforeEach(() => {
+  vi.mocked(execFileUtf8).mockReset();
+});
 afterEach(() => vi.restoreAllMocks());
 
 function mockSystemdManagerSnapshot(
