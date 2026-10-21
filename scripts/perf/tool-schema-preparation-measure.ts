@@ -109,6 +109,7 @@ function catalog(): Entry[] {
     ) {
       throw new Error("Every tool needs a string name and object parameters");
     }
+    const value = isRecord(entry) && "value" in entry ? entry.value : descriptor.value;
     return {
       tool: {
         name: descriptor.name,
@@ -117,7 +118,7 @@ function catalog(): Entry[] {
         parameters: descriptor.parameters,
         execute: async () => ({ content: [], details: {} }),
       },
-      value: descriptor.value ?? {},
+      value: value === undefined ? {} : value,
     };
   });
 }
