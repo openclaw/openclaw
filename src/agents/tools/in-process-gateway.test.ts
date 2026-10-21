@@ -69,8 +69,9 @@ const runtimeIdentity = {
     operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
   },
 } as const;
-function onGateway<T>(resolve: () => GatewayRequestContext, run: () => Promise<T>) {
-  return withGatewayToolCallerIdentity({ ...mainCaller, gatewayContextResolver: resolve }, run);
+type Caller = NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]>;
+function asCaller<T>(identity: Partial<Caller>, run: () => Promise<T>) {
+  return withGatewayToolCallerIdentity({ ...mainCaller, ...identity }, run);
 }
 function gatewayBinding() {
   const admitted = { gateway: "admitted" } as unknown as GatewayRequestContext;
@@ -86,7 +87,7 @@ function gatewayBinding() {
       current = replacement;
     },
     resolve: () => current,
-    run: <T>(run: () => Promise<T>) => onGateway(() => current, run),
+    run: <T>(run: () => Promise<T>) => asCaller({ gatewayContextResolver: () => current }, run),
   };
 }
 type Request = Parameters<typeof callAgentToolGatewayRequest>[0];
@@ -389,9 +390,8 @@ describe("trusted in-process Gateway session creation", () => {
   it("refuses creation transport before forwarding admitted operator authority", async () => {
     mocks.hasContext = false;
     await expect(
-      withGatewayToolCallerIdentity(
+      asCaller(
         {
-          ...mainCaller,
           operatorAuthority: createAdmittedRunOperatorAuthority({
             profileId: "operator",
             scopes: ["operator.write"],
@@ -502,7 +502,7 @@ describe("request-shaped in-process Gateway dispatch", () => {
         await options.onSignalAbort();
         throw new Error("primary aborted");
       });
-      const pending = withGatewayToolCallerIdentity(
+      const pending = asCaller(
         {
           ...(replaced ? mainCaller : foregroundCaller),
           ...(!replaced
@@ -630,11 +630,8 @@ describe("built-in Gateway foreground authority", () => {
     async (boundary) => {
       const held = holdCommit();
       let current = true;
-      const pending = withGatewayToolCallerIdentity(
-        {
-          ...foregroundCaller,
-          receiptAuthority: () => current,
-        },
+      const pending = asCaller(
+        { ...foregroundCaller, receiptAuthority: () => current },
         async () => {
           if (boundary === "dispatch") {
             current = false;
@@ -686,12 +683,8 @@ function createCaller(request: Parameters<typeof callAgentToolGatewayRequest>[0]
       current = false;
     },
     invoke: () =>
-      withGatewayToolCallerIdentity(
-        {
-          ...foregroundCaller,
-          receiptAuthority: () => current,
-        },
-        () => callAgentToolGatewayRequest(request),
+      asCaller({ ...foregroundCaller, receiptAuthority: () => current }, () =>
+        callAgentToolGatewayRequest(request),
       ),
   };
 }
