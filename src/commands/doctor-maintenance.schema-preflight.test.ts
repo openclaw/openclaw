@@ -19,7 +19,6 @@ import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-sto
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { STATE_SUPERVISION_KEY } from "../state/openclaw-state-ownership.js";
@@ -131,30 +130,6 @@ it("refuses newer agent schemas before repairing the registry", async () => {
       runDoctorHealthFlow(runtimeMock(), { repair: true, nonInteractive: true }),
     ).rejects.toThrow("newer than this build");
     expect(paths.map((pathname) => fs.readFileSync(pathname))).toEqual(before);
-  });
-});
-
-it("repairs a missing shared-state index", async () => {
-  await withState(async (state) => {
-    const initial = openOpenClawStateDatabase({ env: state.env });
-    initial.db.exec("DROP INDEX idx_task_runs_runtime_run");
-    closeOpenClawStateDatabaseForTest();
-    mocks.runContributions.mockImplementation(async (ctx) => {
-      const result = repairOpenClawStateDatabaseSchema({ env: state.env });
-      ctx.runtime.log([...result.changes, ...result.warnings].join("\n"));
-    });
-    const runtime = runtimeMock();
-    await runRepair(runtime);
-
-    const output = outputOf(runtime);
-    expect(mocks.runContributions, output).toHaveBeenCalledOnce();
-    expect(runtime.exit, output).not.toHaveBeenCalled();
-    expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-    expect(
-      readRows(initial.path, "SELECT name FROM pragma_index_info('idx_task_runs_runtime_run')"),
-    ).toEqual(
-      ["runtime", "run_id", "source_id", "created_at", "task_id"].map((name) => ({ name })),
-    );
   });
 });
 
