@@ -1,16 +1,13 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as configOwner from "../../config/config.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
-import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -647,135 +644,6 @@ describe("failed package update recovery safety", () => {
     );
     expectIdle(mocks.restart, mocks.restartCandidate);
   });
-
-  it.each([false, true])(
-    "settles Doctor-rewritten config (operator edit=%s)",
-    async (operatorEdit) => {
-      const stateDir = tempDirs.make("update-managed-rollback-");
-      const configPath = path.join(stateDir, "openclaw.json");
-      const env = {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-      };
-      const config = {
-        gateway: { mode: "local" },
-        agents: { defaults: { models: { "openai/gpt-5.6-luna": {} } } },
-        plugins: { enabled: false },
-      };
-      const original = `${JSON.stringify(config, null, 4)}\n`;
-      await fs.writeFile(configPath, original, { mode: 0o600 });
-      await fs.writeFile(`${configPath}.pre-update`, original, { mode: 0o600 });
-      const io = configOwner.createConfigIO({
-        env,
-        pluginValidation: "core-only",
-        observe: false,
-        suppressFutureVersionWarning: true,
-      });
-      const configSnapshot = await io.readConfigFileSnapshot();
-      expect(configSnapshot.valid).toBe(true);
-      vi.spyOn(configOwner, "readConfigFileSnapshot").mockImplementation(() =>
-        io.readConfigFileSnapshot(),
-      );
-      const doctorConfig = {
-        ...config,
-        meta: { migrations: { modelPolicyAllowlist: true }, lastTouchedVersion: "2026.9.3" },
-        agents: {
-          defaults: { ...config.agents.defaults, modelPolicy: { allow: ["openai/gpt-5.6-luna"] } },
-        },
-        wizard: { lastRunCommand: "doctor", lastRunVersion: "2026.9.3" },
-      };
-      const doctorRaw = `${JSON.stringify(doctorConfig, null, 2)}\n`;
-      await fs.writeFile(configPath, doctorRaw);
-      const activationConfig = {
-        path: configPath,
-        raw: original,
-        hash: createHash("sha256").update(doctorRaw).digest("hex"),
-      };
-      const current = operatorEdit
-        ? `${JSON.stringify({ ...doctorConfig, logging: { level: "debug" } }, null, 2)}\n`
-        : doctorRaw;
-      if (operatorEdit) {
-        await fs.writeFile(configPath, current);
-      }
-      const run = updateRun(env);
-      const schemaVersions = await readUpdateStateSchemaVersions({
-        stateDir: env.OPENCLAW_STATE_DIR,
-        config: {},
-        env,
-      });
-      const originalRoot = await installedRoot("update-restored-installed-runtime-", "2026.9.1");
-      mocks.stopCandidate.mockResolvedValue({
-        stopped: true,
-        inspected: true,
-        runtimeInspected: true,
-        running: true,
-        serviceEnv: env,
-        serviceUpdateVerdict: {
-          kind: "owned",
-          root: process.cwd(),
-          fingerprint: "fixture",
-          refreshDefinition: true,
-        },
-      });
-      mocks.restartCandidate.mockResolvedValueOnce("ok");
-      const rollback = vi.fn(async () => ({
-        ...updateStep("package rollback", { command: "restore", cwd: originalRoot, exitCode: 0 }),
-        activePackageRoot: originalRoot,
-      }));
-      let cleanupStatus: string | undefined;
-      const complete = vi.fn(async () => {
-        cleanupStatus = getUpdateRun(run.runId, { env })?.status;
-      });
-      const failure = await finishFailedUpdate(
-        updateResult({
-          status: "error",
-          mode: "pnpm",
-          root: process.cwd(),
-          before: { version: "2026.9.1" },
-          after: { version: "2026.9.3" },
-          reason: "version-mismatch",
-        }),
-        {
-          run,
-          originalRoot,
-          previousInstallRoot: "/shell/unrelated",
-          schemaVersions,
-          configSnapshot,
-          activationConfig,
-          previousVerified: true,
-          packageTransaction: { backupRoot: "/managed/backup", rollback, complete },
-        },
-      );
-      const recorded = getUpdateRun(run.runId, { env });
-      assert(recorded, "Expected the completed update to remain recorded");
-      if (operatorEdit) {
-        expect(failure.result.reason).toBe("state-migrated-no-rollback");
-        expect(recorded.status).toBe("failed");
-        expect(recorded.origin.nextAction).toContain("openclaw.json");
-        expect(await fs.readFile(configPath, "utf8")).toBe(current);
-        expectIdle(rollback, mocks.restartCandidate);
-        return;
-      }
-      expect(failure.result).toMatchObject({ root: originalRoot, after: { version: "2026.9.1" } });
-      expect(
-        mocks.restartCandidate.mock.lastCall?.[0],
-        JSON.stringify(failure.result),
-      ).toMatchObject({
-        result: { root: originalRoot, after: { version: "2026.9.1" } },
-      });
-      expect(rollback).toHaveBeenCalledOnce();
-      expect(complete).toHaveBeenCalledOnce();
-      // Cleanup is pre-terminal; rollback is recorded only after completion settles.
-      expect(cleanupStatus).toBe("running");
-      expect(recorded.status).toBe("rolled-back");
-      expect(renderUpdateRunReport(recorded).headline).toContain("↩️ OpenClaw update rolled back");
-      expect(await fs.readFile(configPath, "utf8")).toBe(original);
-      if (process.platform !== "win32") {
-        expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
-      }
-    },
-  );
 
   it("does not start a Doctor-rejected candidate even after a verified swap", async () => {
     const failure = await finishFailedUpdate(

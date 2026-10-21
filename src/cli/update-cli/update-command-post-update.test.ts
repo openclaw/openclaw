@@ -627,6 +627,9 @@ describe("successful update finalization ordering", () => {
             };
           },
         );
+        const complete = vi.fn(async () => {
+          expect(getUpdateRun(run.runId, { env: serviceEnv })?.status).toBe("running");
+        });
         const finishing = finishSuccessfulPackageSwitch(
           {
             packageRoot,
@@ -641,7 +644,7 @@ describe("successful update finalization ordering", () => {
                 packageTransaction: {
                   backupRoot: "/tmp/previous-openclaw",
                   rollback: vi.fn(),
-                  complete: vi.fn(async () => undefined),
+                  complete,
                 },
               }
             : {},
@@ -674,6 +677,9 @@ describe("successful update finalization ordering", () => {
             outcome === "rolled-back" ? "rolled-back" : restartFailed ? "failed" : "succeeded",
           downtimeMs,
         });
+        if (outcome === "rolled-back") {
+          expect(complete).toHaveBeenCalledOnce();
+        }
       },
     );
 
