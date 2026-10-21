@@ -5586,7 +5586,6 @@
 ["src/gateway/server-lifetime-sidecars.test.ts","./github-oauth-lifecycle.js","d8d3b12f0f50ea64ae5f9b4230d1316d48ab6488bc3fab923245e656838d0075",1]
 ["src/gateway/server-maintenance.delivery-queue.test.ts","../infra/delivery-queue-sqlite.js","cb4b68553c055280ca40e39081c806680f979925051e5aebbed76c0997668cc8",1]
 ["src/gateway/server-maintenance.delivery-queue.test.ts","../infra/outbound/delivery-queue-media-spool.js","fcd9c5b2310ed05071740eff752f8e8a7c326e1df1f1d38924c737fd2a6d891a",1]
-["src/gateway/server-maintenance.telemetry.test.ts","../agents/worktrees/owner-protection.js","bb84e72966ca9f70b8ebd518e528e422c90458e081adfb7a78ee0820377aa85f",1]
 ["src/gateway/server-maintenance.telemetry.test.ts","../infra/delivery-queue-sqlite.js","529c18b51e4ea83e2b09f8198c9c73d3724c83d1fb90edc926b06b6dcd30759f",1]
 ["src/gateway/server-maintenance.telemetry.test.ts","../infra/outbound/delivery-queue-media-spool.js","dee3a2620b0bb928366938beb1b4925dd7b74421b8dc5b351245b52057201087",1]
 ["src/gateway/server-maintenance.telemetry.test.ts","../infra/telemetry.js","c2a0e43bc1fceb877dfcb882832d8eceb8d0d381ada53adc903f5ea8e242391d",1]
