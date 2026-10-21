@@ -29,11 +29,10 @@ import {
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
 import { MobilePanelLauncher } from "./chat-panel-launcher-mobile.tsx";
-import { closeEmptyMobileHost } from "./chat-sidebar-region-close.ts";
 import { SidebarRegionDivider } from "./chat-sidebar-region-divider.tsx";
 import {
   SidebarRegionHeader,
-  retireSidebarClosePresentation,
+  closeEmptyMobileHost,
   PanelTypeOption,
   SidebarPanelLauncher,
   sidebarPanelType,
@@ -725,10 +724,11 @@ export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
         return true;
       },
     },
-    propertyChanged: (host, key) => {
-      retireSidebarClosePresentation(host);
-      regionOperations.get(host)?.inputsChanged(key);
-    },
-    disconnected: retireSidebarClosePresentation,
+    propertyChanged: (host, key) => regionOperations.get(host)?.inputsChanged(key),
   },
 );
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-chat-sidebar-region": RegionElement;
+  }
+}

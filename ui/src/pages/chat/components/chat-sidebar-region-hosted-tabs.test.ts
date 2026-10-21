@@ -415,17 +415,17 @@ it("closes hosted resources sequentially while presenting close-all progress", a
   });
   await region.updateComplete;
   shell.querySelector<HTMLButtonElement>('button[aria-label="Panel position"]')!.click();
-  await waitForSolid(() => expect(shell.querySelector('[data-value="close-all"]')).not.toBeNull());
+  await vi.waitFor(() => expect(shell.querySelector('[data-value="close-all"]')).not.toBeNull());
   shell.querySelector<HTMLElement>('[data-value="close-all"]')!.click();
-  await waitForSolid(() => expect(panel.closeHostedTab).toHaveBeenCalledOnce());
-  await waitForSolid(() =>
+  await vi.waitFor(() => expect(panel.closeHostedTab).toHaveBeenCalledOnce());
+  await vi.waitFor(() =>
     expect(shell.querySelector<HTMLButtonElement>('button[aria-label="New tab"]')!.disabled).toBe(
       true,
     ),
   );
   expect(finishCloseAll).not.toHaveBeenCalled();
   confirmation.resolve();
-  await waitForSolid(() => expect(finishCloseAll).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(finishCloseAll).toHaveBeenCalledOnce());
   expect(region.callbacks!.closeSlot).toHaveBeenCalledWith("browser");
 });
 
@@ -446,17 +446,17 @@ it("retires close-all feedback on native scope replacement before a held close c
   panel.closeHostedTab.mockImplementation(() => confirmation.promise);
   await region.updateComplete;
   shell.querySelector<HTMLButtonElement>('button[aria-label="Panel position"]')!.click();
-  await waitForSolid(() => expect(shell.querySelector('[data-value="close-all"]')).not.toBeNull());
+  await vi.waitFor(() => expect(shell.querySelector('[data-value="close-all"]')).not.toBeNull());
   shell.querySelector<HTMLElement>('[data-value="close-all"]')!.click();
-  await waitForSolid(() => expect(panel.closeHostedTab).toHaveBeenCalledOnce());
-  await waitForSolid(() =>
+  await vi.waitFor(() => expect(panel.closeHostedTab).toHaveBeenCalledOnce());
+  await vi.waitFor(() =>
     expect(shell.querySelector<HTMLButtonElement>('button[aria-label="New tab"]')!.disabled).toBe(
       true,
     ),
   );
   region.panelIdPrefix = "replacement-scope";
   await region.updateComplete;
-  await waitForSolid(() =>
+  await vi.waitFor(() =>
     expect(shell.querySelector<HTMLButtonElement>('button[aria-label="New tab"]')!.disabled).toBe(
       false,
     ),

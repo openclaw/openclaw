@@ -1,13 +1,4 @@
-import {
-  For,
-  Show,
-  createMemo,
-  createUniqueId,
-  action,
-  createOptimistic,
-  onSettled,
-  mapArray,
-} from "solid-js";
+import { For, Show, createMemo, createUniqueId, createSignal, onSettled, mapArray } from "solid-js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { readPanelHostedTabs, type PanelHostedTab } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -41,12 +32,30 @@ import {
 } from "../sidebar-layout.ts";
 import { ChatPanelHeaderActions } from "./chat-header-panel-actions.tsx";
 import { DesktopFrameControls } from "./chat-sidebar-desktop-frame-controls.tsx";
-import { closeEmptyMobileHost } from "./chat-sidebar-region-close.ts";
 import type {
   SidebarPanelDefinition,
   RegionProps,
   RegionElement,
 } from "./chat-sidebar-region-types.ts";
+
+/** Complete a single close without interfering with Close all's retained launcher. */
+export function closeEmptyMobileHost(
+  props: Pick<RegionProps, "mobileHost" | "layout">,
+  scopeKey: string | undefined,
+): boolean {
+  if (
+    !props.mobileHost ||
+    props.mobileHost.scopeKey !== scopeKey ||
+    props.mobileHost.destination.area !== "panels" ||
+    props.mobileHost.destination.page ||
+    sidebarSidePanels(props.layout).length ||
+    props.layout.newTab
+  ) {
+    return false;
+  }
+  props.mobileHost.close();
+  return true;
+}
 
 type SidebarRegionHeaderProps = RegionProps & {
   host: RegionElement;
@@ -261,58 +270,25 @@ function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {
   );
 }
 
-const closePresentations = new WeakMap<RegionElement, () => void>();
-
-/** Native scope changes release feedback before the old reactive tree can be parked. */
-export function retireSidebarClosePresentation(host: RegionElement) {
-  closePresentations.get(host)?.();
-}
-
 export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
   const desktop = () => props.presentation === "desktop";
-  const presentation = createMemo(() => {
-    const scope = props.panelIdPrefix;
-    const mobileScope = props.mobileHost?.scopeKey;
-    const [closing, setClosing] = createOptimistic(false);
+  const panelScope = createMemo(() => props.panelIdPrefix);
+  const mobileHostScope = createMemo(() => props.mobileHost?.scopeKey);
+  const closeScope = createMemo(() => {
+    const initialScope = panelScope();
+    const initialMobileScope = mobileHostScope();
+    const [closing, setClosing] = createSignal(false);
     return {
       closing,
       setClosing,
       current: () =>
         props.host.isConnected &&
-        props.host.panelIdPrefix === scope &&
-        props.host.mobileHost?.scopeKey === mobileScope,
+        props.host.panelIdPrefix === initialScope &&
+        props.host.mobileHost?.scopeKey === initialMobileScope,
     };
   });
-  const closing = () => presentation().closing();
-  let activeClose:
-    | { current: () => boolean; retired: ReturnType<typeof Promise.withResolvers<void>> }
-    | undefined;
-  const retireIfChanged = () => {
-    if (activeClose && !activeClose.current()) {
-      activeClose.retired.resolve();
-      activeClose = undefined;
-    }
-  };
-  onSettled(() => {
-    const host = props.host;
-    closePresentations.set(host, retireIfChanged);
-    return () => {
-      activeClose?.retired.resolve();
-      if (closePresentations.get(host) === retireIfChanged) {
-        closePresentations.delete(host);
-      }
-    };
-  });
-  const presentClose = action(function* (
-    view: ReturnType<typeof presentation>,
-    pending: Promise<void>,
-    retired: Promise<void>,
-  ) {
-    if (view.current()) {
-      view.setClosing(true);
-    }
-    yield Promise.race([pending, retired]);
-  });
+  const closing = () => closeScope().closing();
+  let activeClose: ReturnType<typeof closeScope> | undefined;
   const state = createMemo(() => {
     props.hostedRevision();
     const column = props.layout.columns[0];
@@ -508,23 +484,15 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     return !hasPanel(panel.id);
   }
   async function closeAll() {
-    const view = presentation();
-    retireIfChanged();
-    if (activeClose || !view.current() || !props.callbacks?.newTab) {
+    const view = closeScope();
+    if (activeClose?.current() || !view.current() || !props.callbacks?.newTab) {
       return;
     }
-    const request = { current: view.current, retired: Promise.withResolvers<void>() };
-    activeClose = request;
-    const pending = performCloseAll(request.current).finally(() => {
-      if (activeClose === request) {
-        activeClose = undefined;
-      }
-    });
-    // Admission and each intermediate close stay with the plain owner.
-    await Promise.resolve();
-    await presentClose(view, pending, request.retired.promise);
-  }
-  async function performCloseAll(current: () => boolean) {
+    activeClose = view;
+    // This owner must publish and settle every close before admitting the next one.
+    // Keeping its busy state outside an action lets those intermediate commits finish.
+    view.setClosing(true);
+    const current = view.current;
     try {
       const panels = sidebarSidePanels(props.layout).filter(
         (panel) => panel.slot !== "conversation",
@@ -559,6 +527,13 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
       props.callbacks?.newTab?.finishCloseAll();
     } catch (error) {
       showToast({ message: formatUiError(error) });
+    } finally {
+      if (activeClose === view) {
+        activeClose = undefined;
+      }
+      if (view.current()) {
+        view.setClosing(false);
+      }
     }
   }
   const hostedActions = () =>
