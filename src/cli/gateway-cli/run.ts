@@ -59,6 +59,11 @@ import {
   formatGatewayPidList,
 } from "../../infra/gateway-processes.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
+import {
+  isTailscaleBackendAuthenticationRequiredError,
+  isTailscaleServeAuthenticationRequiredError,
+  waitForTailscaleBackendRunning,
+} from "../../infra/tailscale-backend-ready.js";
 import { isTailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
@@ -796,6 +801,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   let triageAttempted = false;
   const triageStartupFailure = async (error: unknown, signal?: AbortSignal) => {
     if (
+      isTailscaleBackendAuthenticationRequiredError(error) ||
       triageAttempted ||
       !bootRecorded ||
       signal?.aborted ||
@@ -821,6 +827,27 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
     triageAttempted = true;
     return await triageGatewayStartupFailure(defaultRuntime, error, signal);
+  };
+  const recoverStartupFailure = async (
+    error: unknown,
+    signal: AbortSignal,
+  ): Promise<"completed" | "failed" | void> => {
+    if (isTailscaleServeAuthenticationRequiredError(error)) {
+      if (effectiveTailscaleMode !== "serve" || !startupRecoverySupervisor || signal.aborted) {
+        return;
+      }
+      gatewayLog.warn(
+        "Tailscale Serve needs operator sign-in or device approval; Gateway startup is parked until the local backend recovers",
+      );
+      const running = await waitForTailscaleBackendRunning({
+        bin: error.statusCommand.bin,
+        prefix: [...error.statusCommand.prefix],
+        signal,
+        info: (message) => gatewayLog.info(message),
+      });
+      return running ? "completed" : undefined;
+    }
+    return await triageStartupFailure(error, signal);
   };
   const beginBoot = async (startedAtMs: number) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
@@ -870,8 +897,8 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       healthHost,
       beginBoot,
       completeBoot,
+      onRestartStartupFailure: recoverStartupFailure,
       onProcessResourcesSettled: hooks.onProcessResourcesSettled,
-      onRestartStartupFailure: triageStartupFailure,
       start: async (startOptions = {}) => {
         const { requestHotReloadRecovery, ...startupOptions } = startOptions;
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
@@ -895,8 +922,14 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     requestExitAfterOneShotOutput(defaultRuntime, code);
   };
 
-  const { detectRespawnSupervisor } = await import("../../infra/supervisor-markers.js");
+  const { detectRespawnSupervisor, detectGatewayRespawnSupervisorIdentity } =
+    await import("../../infra/supervisor-markers.js");
   const supervisor = detectRespawnSupervisor(process.env);
+  const startupRecoverySupervisor = detectGatewayRespawnSupervisorIdentity(
+    process.env,
+    process.platform,
+    { includeLinuxOpenClawGatewayServiceMarker: true },
+  );
   try {
     await runGatewayLoopWithSupervisedLockRecovery({
       startLoop,
