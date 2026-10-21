@@ -26,10 +26,7 @@ import {
 } from "../../agents/model-catalog-lookup.js";
 import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
-import {
-  resolveScheduledToolCallerContext,
-  resolveScheduledToolPolicyContext,
-} from "../../agents/scheduled-tool-policy.js";
+import { resolveScheduledToolCallerContext } from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveAgentLifecycleTerminalMetadata } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
@@ -43,9 +40,12 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import {
+  mintCronPromptExecutionContext,
+  resolveCronJobToolPolicyContext,
+} from "../execution-context-admission.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { prepareCronRunInference } from "../run-inference.js";
-import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { isCommandStyleCronMessage } from "./command-style-prompt.js";
@@ -117,16 +117,10 @@ export function createCronPromptExecutor(
     isCommandStyleCronMessage(params.agentPayload?.message ?? ""))
       ? "lightweight"
       : undefined;
-  const scheduledToolPolicy = resolveScheduledToolPolicyContext({
-    toolsAllow: params.agentPayload?.toolsAllow,
-    scheduledToolPolicy: resolveCronScheduledToolPolicy({
-      toolsAllow: params.agentPayload?.toolsAllow,
-      scheduledToolPolicy: params.job.scheduledToolPolicy,
-      owner: params.job.owner,
-    }),
-    callerOrigin: params.job.toolsAllowProvenance?.callerOrigin,
-    execTarget: params.job.toolsAllowExecTarget,
-  });
+  const scheduledToolPolicy = resolveCronJobToolPolicyContext(
+    params.job,
+    params.agentPayload?.toolsAllow,
+  );
   const { sourceDelivery, runId } = params;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
   if (scheduledToolPolicy?.mode === "account") {
@@ -209,7 +203,9 @@ export function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
+    const scheduledExecution = await mintCronPromptExecutionContext(params, { runId, trigger });
     const cronAdmission = prepareCronRunAdmission({
+      scheduledExecution,
       operatorAuthority: params.operatorAuthority,
       admissionSource: params.admissionSource,
       deliveryAttemptFence: params.deliveryAttemptFence,
