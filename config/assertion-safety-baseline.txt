@@ -265,7 +265,6 @@ extensions/feishu/src/accounts.ts	2
 extensions/feishu/src/bitable.ts	1
 extensions/feishu/src/bot-content.ts	1
 extensions/feishu/src/bot-identity-cache.ts	1
-extensions/feishu/src/bot-name.ts	2
 extensions/feishu/src/bot.ts	7
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
