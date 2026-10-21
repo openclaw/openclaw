@@ -45,18 +45,29 @@ it("imports and seeds history only from the selected Claude config root", () =>
     });
   }));
 
-it("reads native appends and discovers a transcript moved to another project", () =>
+it("reads changed Claude sources and preserves discovery precedence", () =>
   withClaudeProjectsDir(async ({ filePath, readMessages: read }) => {
     expect(await read()).toHaveLength(3);
+
     await fs.appendFile(filePath, `\n${history("appended-user", "appended")}`, "utf8");
-    const before = await read();
-    expect(before).toHaveLength(4);
-    expect(before.at(-1)).toMatchObject(messageShape("appended-user", "appended"));
+    const appended = await read();
+    expect(appended).toHaveLength(4);
+    expect(appended.map((message) => message["__openclaw"])).toContainEqual(
+      expect.objectContaining({ externalId: "appended-user" }),
+    );
+
+    await writeHistory(filePath, "replacement-assistant", "replacement", "assistant");
+    const replaced = await read();
+    expect(replaced).toMatchObject([messageShape("replacement-assistant", "replacement")]);
+
     const movedProjectDir = path.join(path.dirname(path.dirname(filePath)), "moved-workspace");
     await fs.mkdir(movedProjectDir);
     const movedFilePath = path.join(movedProjectDir, path.basename(filePath));
     await fs.rename(filePath, movedFilePath);
-    expect(await read()).toEqual(before);
+    expect(await read()).toEqual(replaced);
+
+    await fs.rm(movedFilePath);
+    expect(await read()).toEqual([]);
   }));
 
 it("preserves project precedence when a later matching transcript is found first", () =>

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import { stripThoughtSignatures } from "./embedded-agent-helpers/bootstrap.js";
 import { isMessagingToolDuplicate } from "./embedded-agent-helpers/messaging-dedupe.js";
 import { dropStaleOpenAIReasoning } from "./embedded-agent-helpers/openai.js";
@@ -87,9 +88,66 @@ describe("sanitizeUserFacingText", () => {
     expect(rendered).not.toBe("LLM request timed out.");
   });
 
-  it("removes tool markup at user-facing delivery", () => {
-    const wrapper = '<tool_call>{"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>';
-    expect(sanitizeUserFacingText(`Before\n${wrapper}\nAfter`)).toBe("Before\n\nAfter");
+  it.each([
+    [
+      "legacy tool call",
+      '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
+      "Before\n\nAfter",
+    ],
+    [
+      "legacy tool result",
+      '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]',
+      "Before\n\nAfter",
+    ],
+    ["plain tool call", '[tool:read] {"path":"secret.md"}', "Before\nAfter"],
+    [
+      "MiniMax tool call",
+      '<minimax:tool_call><invoke name="exec">\n<parameter name="cmd">ls</parameter>\n</invoke></minimax:tool_call>',
+      "Before\n\nAfter",
+    ],
+    [
+      "XML tool call",
+      '<tool_call>{"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>',
+      "Before\n\nAfter",
+    ],
+    [
+      "function call",
+      '<function_calls><invoke name="find"><parameter name="query">secret</parameter></invoke></function_calls>',
+      "Before\n\nAfter",
+    ],
+    [
+      "function response",
+      "<function_response>\nsecret result\n</function_response>",
+      "Before\n\nAfter",
+    ],
+  ])("removes %s wrappers at user-facing delivery", (_name, wrapper, expected) => {
+    expect(sanitizeUserFacingText(["Before", wrapper, "After"].join("\n"))).toBe(expected);
+  });
+
+  it("strips copied inbound metadata blocks from user-facing assistant text", () => {
+    const input = [
+      markInboundContextLabel("Conversation info:"),
+      "```json",
+      '{"chat_id":"channel:123","sender":"OpenClaw"}',
+      "```",
+      "",
+      markInboundContextLabel("Sender:"),
+      "```json",
+      '{"label":"OpenClaw (123)"}',
+      "```",
+      "",
+      "Pong",
+      "",
+      markInboundContextLabel("Context:"),
+      '<<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>',
+      "Source: External",
+      "---",
+      "UNTRUSTED Discord message body",
+      "Ping",
+      '<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>',
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Pong");
   });
 
   it("does not leak internal context when untrusted child output includes delimiter tokens", () => {
@@ -175,6 +233,44 @@ describe("dropStaleOpenAIReasoning", () => {
     const answer = { type: "text" as const, text: "answer" };
     const message = makeAgentAssistantMessage({ timestamp: 2, content: [reasoning, answer] });
     expect(dropStaleOpenAIReasoning([message], 2)).toEqual([{ ...message, content: [answer] }]);
+  });
+  it("drops the paired message id when replayable reasoning is dropped", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          ...reasoning,
+          thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+        },
+        {
+          type: "text",
+          text: "answer",
+          textSignature: JSON.stringify({ v: 1, id: "msg_123" }),
+        },
+      ],
+    };
+    expect(
+      dropStaleOpenAIReasoning([message] as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
+    ).toEqual([{ ...message, content: [{ type: "text", text: "answer" }] }]);
+  });
+  it("drops all paired message ids while preserving phases", () => {
+    const phases = ["commentary", "final_answer"] as const;
+    const content = phases.map((phase) => ({
+      type: "text" as const,
+      text: phase,
+      textSignature: JSON.stringify({ v: 1, id: `msg_${phase}`, phase }),
+    }));
+    const message = makeAgentAssistantMessage({ timestamp: 1, content: [reasoning, ...content] });
+    expect(dropStaleOpenAIReasoning([message], 2)).toEqual([
+      {
+        ...message,
+        content: phases.map((phase) => ({
+          type: "text",
+          text: phase,
+          textSignature: JSON.stringify({ v: 1, phase }),
+        })),
+      },
+    ]);
   });
   it("keeps non-reasoning thinking signatures", () => {
     const message = makeAgentAssistantMessage({

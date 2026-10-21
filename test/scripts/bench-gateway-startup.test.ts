@@ -387,7 +387,7 @@ server.listen(port, "127.0.0.1", () => {
     for (const [args, error] of [
       ["--installed-cpu-diagnostic", "--installed-cpu-diagnostic requires --installed-cohort"],
       ["--case default --case default", 'Duplicate --case "default"'],
-    ]) {
+    ] as const) {
       expect(() => parseOptions(args)).toThrow(error);
     }
     for (const flag of [

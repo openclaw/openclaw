@@ -336,6 +336,7 @@ pack "$artifact_dir" install-smoke-root "$TARGET_SHA" "$WORKFLOW_SHA" "$IMAGE_RE
   });
 
   const ready = job("root_dockerfile_image_ready");
+  expect(ready.needs).toEqual(["preflight", "root_dockerfile_image"]);
   const verify = step(ready, "Verify root Dockerfile image preparation");
   expect(verify.env).toEqual({
     PREPARE_RESULT: "${{ needs.root_dockerfile_image.result }}",
@@ -547,6 +548,7 @@ it("binds independent installer producer-consumer pairs to immutable artifact tu
     const producerScope = `needs.${producerName}.outputs`;
     const consumerName = `installer_smoke_${group}`;
     const producer = job(producerName);
+    expect(producer.needs, producerName).toEqual(["preflight"]);
     expect(producer["timeout-minutes"], producerName).toBe(45);
     expect(producer.outputs, producerName).toEqual({
       ...imageOutputs,
@@ -570,6 +572,7 @@ echo "workflow_sha=$WORKFLOW_SHA"`);
     });
 
     const consumer = job(consumerName);
+    expect(consumer["timeout-minutes"], consumerName).toBe(group === "update" ? 120 : 60);
 
     const binding = step(consumer, `Validate ${label} image artifact binding`);
     expect(binding.env, consumerName).toMatchObject({
@@ -737,6 +740,8 @@ pnpm install`);
 
 it("packages candidate code only in an isolated image and verifies the sealed payload", () => {
   const producer = job("installer_smoke_candidate_payload");
+  expect(producer.needs).toEqual(["preflight"]);
+  expect(producer["timeout-minutes"]).toBe(75);
   expect(producer.outputs).toMatchObject({
     artifact_digest: reference("steps.payload_upload.outputs", "artifact-digest"),
     artifact_id: reference("steps.payload_upload.outputs", "artifact-id"),
@@ -784,7 +789,22 @@ expected_artifact_name="install-smoke-candidate-payload-\${TARGET_SHA}-\${ARTIFA
 
 it("drains every independent producer and consumer without sibling failure suppression", () => {
   const aggregate = job("installer_smoke");
+  for (const group of ["update", "nonroot"]) {
+    expect(job(`installer_smoke_${group}`).needs).toEqual([
+      "preflight",
+      "installer_smoke_candidate_payload",
+      `installer_smoke_${group}_image`,
+    ]);
+  }
+
   expect(aggregate.if).toContain("always()");
+  expect(aggregate.needs).toEqual(
+    `preflight root_dockerfile_image root_dockerfile_image_ready installer_smoke_candidate_payload
+installer_smoke_update_image installer_smoke_update installer_smoke_nonroot_image installer_smoke_nonroot`.split(
+      /\s+/,
+    ),
+  );
+  expect(aggregate["timeout-minutes"]).toBe(5);
   const verify = step(aggregate, "Verify installer smoke groups");
   const results = {
     CANDIDATE_PAYLOAD_RESULT: "${{ needs.installer_smoke_candidate_payload.result }}",

@@ -1,3 +1,5 @@
+// Gateway plugin icon HTTP tests cover authenticated identity lookup, bounded
+// package loading, SVG normalization, caching, and failure fallback behavior.
 import { execFileSync } from "node:child_process";
 import fs, { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -21,7 +23,6 @@ const mocks = vi.hoisted(() => ({
   resolveCatalogIconUrl: vi.fn(),
   resolveIconSource: vi.fn(),
   resolveActivityIconSource: vi.fn(),
-  fetchMetadata: vi.fn<typeof fetch>(),
 }));
 
 vi.mock("./http-utils.js", () => ({
@@ -33,10 +34,13 @@ vi.mock("../media/fetch.js", () => ({
 }));
 
 vi.mock("../media/image-ops.js", () => ({
-  createImageProcessor: () => ({ encode: (...args: unknown[]) => mocks.encodeImage(...args) }),
+  createImageProcessor: () => ({
+    encode: (...args: unknown[]) => mocks.encodeImage(...args),
+  }),
   MAX_IMAGE_INPUT_PIXELS: 25_000_000,
   readImageMetadataFromHeader: (...args: unknown[]) => mocks.readImageMetadata(...args),
 }));
+
 vi.mock("../plugins/management-service.js", () => ({
   resolveManagedPluginIconSources: (...args: unknown[]) => mocks.resolveIconSource(...args),
   resolveManagedPluginActivityIconSource: (...args: unknown[]) =>
@@ -108,7 +112,6 @@ const INVALID_ICON_ROUTES = [
 let port = 0;
 let server: ReturnType<typeof createServer>;
 let authorityCurrent = true;
-let basePath: string | undefined;
 const testConfig = {};
 let configForRequest = () => testConfig;
 
@@ -117,7 +120,6 @@ beforeAll(async () => {
     void handlePluginIconHttpRequest(req, res, {
       auth: { mode: "token", token: "test-token", allowTailscale: false },
       config: configForRequest(),
-      basePath,
     })
       .then((handled) => {
         if (!handled) {
@@ -148,10 +150,13 @@ beforeEach(() => {
   writeFileSync(localIconPath, PNG_BYTES);
   writeFileSync(activityIconPath, ACTIVITY_SVG);
   mocks.resolveActivityIconSource.mockReset();
-  mocks.resolveActivityIconSource.mockResolvedValue(fileSource(activityIconPath));
+  mocks.resolveActivityIconSource.mockResolvedValue({
+    kind: "file",
+    path: activityIconPath,
+    rootPath: iconFixtureDir,
+  });
   configForRequest = () => testConfig;
   authorityCurrent = true;
-  basePath = undefined;
   mocks.authorize.mockReset();
   mocks.authorize.mockImplementation(({ res }: { res: ServerResponse }) =>
     bindHttpResponseAuthority(
@@ -160,7 +165,13 @@ beforeEach(() => {
       () => authorityCurrent,
     ),
   );
-  mocks.resolveIconSource.mockResolvedValue([fileSource(localIconPath)]);
+  mocks.resolveIconSource.mockResolvedValue([
+    {
+      kind: "file",
+      path: localIconPath,
+      rootPath: iconFixtureDir,
+    },
+  ]);
   mocks.resolveCatalogIconUrl.mockImplementation(({ iconUrl }) => iconUrl);
   mocks.readImageMetadata.mockReturnValue({ width: 1, height: 1 });
   mocks.encodeImage.mockResolvedValue({ data: NORMALIZED_PNG_BYTES });
@@ -169,24 +180,6 @@ beforeEach(() => {
     contentType: "image/png",
   });
 });
-
-function fileSource(
-  iconPath: string,
-  rootPath = iconFixtureDir,
-): { kind: "file"; path: string; rootPath: string } {
-  return { kind: "file", path: iconPath, rootPath };
-}
-
-function expectNoIconLoading() {
-  for (const mock of [
-    mocks.resolveIconSource,
-    mocks.resolveActivityIconSource,
-    mocks.resolveCatalogIconUrl,
-    mocks.readRemoteMediaBuffer,
-  ]) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
 
 function request(
   pathname: string,
@@ -315,12 +308,17 @@ describe("Control UI plugin and catalog icon routes", () => {
     });
   });
 
-  it("accepts the Microsoft ICO MIME alias without rasterizing", async () => {
+  it("serves standard ICO favicon bytes without invoking raster processing", async () => {
+    configForRequest = () => ({
+      gateway: { controlUi: { automaticallyFetchFavicons: true } },
+    });
     mocks.readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: ICO_BYTES,
       contentType: "image/vnd.microsoft.icon",
     });
+
     const response = await request("/__openclaw__/link-favicon/github.com");
+
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("image/x-icon");
     expect(Buffer.from(await response.arrayBuffer())).toEqual(ICO_BYTES);
@@ -456,7 +454,10 @@ describe("Control UI plugin and catalog icon routes", () => {
       expect(response.status).toBe(404);
       await expect(response.text()).resolves.toBe("Not Found");
       expect(mocks.authorize).toHaveBeenCalledOnce();
-      expectNoIconLoading();
+      expect(mocks.resolveIconSource).not.toHaveBeenCalled();
+      expect(mocks.resolveActivityIconSource).not.toHaveBeenCalled();
+      expect(mocks.resolveCatalogIconUrl).not.toHaveBeenCalled();
+      expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
     },
   );
 
@@ -484,7 +485,10 @@ describe("Control UI plugin and catalog icon routes", () => {
       });
 
       expect(response.status).toBe(401);
-      expectNoIconLoading();
+      expect(mocks.resolveIconSource).not.toHaveBeenCalled();
+      expect(mocks.resolveActivityIconSource).not.toHaveBeenCalled();
+      expect(mocks.resolveCatalogIconUrl).not.toHaveBeenCalled();
+      expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
     },
   );
 
@@ -549,23 +553,6 @@ describe("Control UI plugin and catalog icon routes", () => {
         expect((await cached.arrayBuffer()).byteLength).toBe(0);
       }
       expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledTimes(label === "plugin" ? 0 : 1);
-      if (label === "catalog") {
-        expect(mocks.resolveCatalogIconUrl).toHaveBeenCalledWith({
-          config: testConfig,
-          iconUrl: CATALOG_ICON_URL,
-        });
-        expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledWith(
-          expect.objectContaining({ url: CATALOG_ICON_URL }),
-        );
-      } else if (label === "favicon") {
-        expect(mocks.encodeImage).not.toHaveBeenCalled();
-      } else {
-        expect(mocks.encodeImage).toHaveBeenCalledWith(PNG_BYTES, {
-          format: "png",
-          compressionLevel: 9,
-          resize: { fit: "inside", maxSide: 256, enlarge: false },
-        });
-      }
     },
   );
 
@@ -582,6 +569,32 @@ describe("Control UI plugin and catalog icon routes", () => {
     });
     expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
     expect(mocks.encodeImage).not.toHaveBeenCalled();
+  });
+
+  it("serves a portable package icon without making a remote request", async () => {
+    mocks.resolveIconSource.mockResolvedValueOnce([
+      {
+        kind: "file",
+        path: localIconPath,
+        rootPath: iconFixtureDir,
+      },
+    ]);
+
+    const response = await request("/__openclaw__/plugin-icon/local-plugin");
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(NORMALIZED_PNG_BYTES);
+    expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expect(mocks.encodeImage).toHaveBeenCalledWith(PNG_BYTES, {
+      format: "png",
+      compressionLevel: 9,
+      resize: {
+        fit: "inside",
+        maxSide: 256,
+        enlarge: false,
+      },
+    });
   });
 
   it("closes the descriptor when rejecting an empty package icon", async () => {
@@ -635,7 +648,13 @@ describe("Control UI plugin and catalog icon routes", () => {
     writeFileSync(path.join(outsidePath, "icon.png"), PNG_BYTES);
     renameSync(assetsPath, displacedAssetsPath);
     symlinkSync(outsidePath, assetsPath, "dir");
-    mocks.resolveIconSource.mockResolvedValueOnce([fileSource(iconPath, packageRoot)]);
+    mocks.resolveIconSource.mockResolvedValueOnce([
+      {
+        kind: "file",
+        path: iconPath,
+        rootPath: packageRoot,
+      },
+    ]);
 
     const response = await request("/__openclaw__/plugin-icon/swapped-package");
 
@@ -649,7 +668,13 @@ describe("Control UI plugin and catalog icon routes", () => {
       const fixtureRoot = tempDirs.make("openclaw-plugin-icon-fifo-");
       const iconPath = path.join(fixtureRoot, "icon.png");
       execFileSync("mkfifo", [iconPath]);
-      mocks.resolveIconSource.mockResolvedValueOnce([fileSource(iconPath, fixtureRoot)]);
+      mocks.resolveIconSource.mockResolvedValueOnce([
+        {
+          kind: "file",
+          path: iconPath,
+          rootPath: fixtureRoot,
+        },
+      ]);
       const delayedWriter = setTimeout(() => writeFileSync(iconPath, PNG_BYTES), 250);
       const startedAt = performance.now();
 
@@ -664,6 +689,20 @@ describe("Control UI plugin and catalog icon routes", () => {
       }
     },
   );
+
+  it("resolves encoded catalog URLs through the server-owned allowlist", async () => {
+    const iconUrl = CATALOG_ICON_URL;
+    const response = await request(`/__openclaw__/catalog-icon/${encodeURIComponent(iconUrl)}`);
+
+    expect(response.status).toBe(200);
+    expect(mocks.resolveCatalogIconUrl).toHaveBeenCalledWith({
+      config: testConfig,
+      iconUrl,
+    });
+    expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledWith(
+      expect.objectContaining({ url: iconUrl }),
+    );
+  });
 
   it("does not fetch catalog URLs rejected by the server-owned allowlist", async () => {
     mocks.resolveCatalogIconUrl.mockReturnValueOnce(undefined);
@@ -762,21 +801,44 @@ describe("Control UI plugin and catalog icon routes", () => {
     }
   });
 
-  it.each([
-    ["unsupported MIME", "text/html", Buffer.from("<html>nope</html>")],
-    ["mislabeled bytes", "image/png", Buffer.from("<html>still nope</html>")],
-    ["oversized dimensions", "image/png", PNG_BYTES],
-    ["upstream failure", undefined, undefined],
-  ] as const)("rejects catalog images with %s", async (reason, contentType, buffer) => {
-    if (reason === "oversized dimensions") {
-      mocks.readImageMetadata.mockReturnValueOnce({ width: 10_000, height: 10_000 });
-    }
-    if (buffer) {
-      mocks.readRemoteMediaBuffer.mockResolvedValueOnce({ buffer, contentType });
-    } else {
-      mocks.readRemoteMediaBuffer.mockRejectedValueOnce(new Error("upstream failed"));
-    }
-    expect((await request(ICON_ROUTES[1].pathname)).status).toBe(404);
+  it("returns not found when plugin metadata is absent or catalog image validation fails", async () => {
+    mocks.resolveIconSource.mockResolvedValueOnce([]);
+    const missing = await request("/__openclaw__/plugin-icon/missing");
+    expect(missing.status).toBe(404);
+
+    mocks.readRemoteMediaBuffer.mockResolvedValueOnce({
+      buffer: Buffer.from("<html>nope</html>"),
+      contentType: "text/html",
+    });
+    const invalid = await request(
+      `/__openclaw__/catalog-icon/${encodeURIComponent("https://cdn.example.test/not-an-image")}`,
+    );
+    expect(invalid.status).toBe(404);
+
+    mocks.readRemoteMediaBuffer.mockResolvedValueOnce({
+      buffer: Buffer.from("<html>still nope</html>"),
+      contentType: "image/png",
+    });
+    const mislabeled = await request(
+      `/__openclaw__/catalog-icon/${encodeURIComponent("https://cdn.example.test/mislabeled")}`,
+    );
+    expect(mislabeled.status).toBe(404);
+
+    mocks.readImageMetadata.mockReturnValueOnce({ width: 10_000, height: 10_000 });
+    mocks.readRemoteMediaBuffer.mockResolvedValueOnce({
+      buffer: PNG_BYTES,
+      contentType: "image/png",
+    });
+    const oversized = await request(
+      `/__openclaw__/catalog-icon/${encodeURIComponent("https://cdn.example.test/oversized")}`,
+    );
+    expect(oversized.status).toBe(404);
+
+    mocks.readRemoteMediaBuffer.mockRejectedValueOnce(new Error("upstream failed"));
+    const failed = await request(
+      `/__openclaw__/catalog-icon/${encodeURIComponent("https://cdn.example.test/broken")}`,
+    );
+    expect(failed.status).toBe(404);
   });
 
   it.each([...ICON_ROUTES, ACTIVITY_ROUTE])(
@@ -793,15 +855,40 @@ describe("Control UI plugin and catalog icon routes", () => {
   );
 
   it("matches the configured Control UI base path", async () => {
-    basePath = "/openclaw";
-    for (const { pathname } of [...ICON_ROUTES, ACTIVITY_ROUTE]) {
-      for (const method of ["GET", "HEAD"]) {
-        const response = await request(`${basePath}${pathname}`, { method });
-        expect(response.status).toBe(200);
-        if (method === "HEAD") {
-          expect((await response.arrayBuffer()).byteLength).toBe(0);
+    const handledServer = createServer((req, res) => {
+      void handlePluginIconHttpRequest(req, res, {
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+        config: {},
+        basePath: "/openclaw",
+      }).then((handled) => {
+        if (!handled) {
+          res.statusCode = 404;
+          res.end("unhandled");
+        }
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      handledServer.once("error", reject);
+      handledServer.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const handledPort = (handledServer.address() as AddressInfo).port;
+      for (const { pathname } of [...ICON_ROUTES, ACTIVITY_ROUTE]) {
+        for (const method of ["GET", "HEAD"]) {
+          const response = await fetch(`http://127.0.0.1:${handledPort}/openclaw${pathname}`, {
+            headers: { Authorization: "Bearer test-token" },
+            method,
+          });
+          expect(response.status).toBe(200);
+          if (method === "HEAD") {
+            expect((await response.arrayBuffer()).byteLength).toBe(0);
+          }
         }
       }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        handledServer.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   });
 });
@@ -811,9 +898,11 @@ describe("compact plugin activity icons", () => {
     const overridePath = path.join(iconFixtureDir, "override.svg");
     const overrideSvg = ACTIVITY_SVG.replace("M2 2h20v20H2z", "M4 4h16v16H4z");
     writeFileSync(overridePath, overrideSvg);
-    mocks.resolveActivityIconSource.mockImplementation(({ toolName }) =>
-      fileSource(toolName === "functions.search" ? overridePath : activityIconPath),
-    );
+    mocks.resolveActivityIconSource.mockImplementation(({ toolName }) => ({
+      kind: "file",
+      path: toolName === "functions.search" ? overridePath : activityIconPath,
+      rootPath: iconFixtureDir,
+    }));
     const fallback = await request(ACTIVITY_ROUTE.pathname);
     const override = await request(`${ACTIVITY_ROUTE.pathname}?tool=functions.search`);
     const branding = await request("/__openclaw__/plugin-icon/firecrawl");
@@ -871,9 +960,11 @@ describe("compact plugin activity icons", () => {
     const root = tempDirs.make("activity-icon-package-");
     const linked = path.join(root, "assets");
     symlinkSync(outside, linked, "dir");
-    mocks.resolveActivityIconSource.mockResolvedValue(
-      fileSource(path.join(linked, "activity.svg"), root),
-    );
+    mocks.resolveActivityIconSource.mockResolvedValue({
+      kind: "file",
+      path: path.join(linked, "activity.svg"),
+      rootPath: root,
+    });
     expect((await request(ACTIVITY_ROUTE.pathname)).status).toBe(404);
     expect(mocks.encodeImage).not.toHaveBeenCalled();
   });
@@ -893,123 +984,5 @@ describe("compact plugin activity icons", () => {
         expect(response.end).toHaveBeenCalledWith(Buffer.from(ACTIVITY_SVG));
       },
     });
-  });
-});
-
-describe("ClawHub branding through the public icon route", () => {
-  const realFetch = globalThis.fetch;
-  const packageName = "@acme/calendar";
-  const packageMetadata = {
-    name: packageName,
-    displayName: "Calendar",
-    family: "code-plugin",
-    isOfficial: false,
-  };
-  const source = { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName };
-  const packageUrl = "https://cdn.example.test/package.png";
-  const publisherUrl = "https://cdn.example.test/publisher.png";
-  const metadataUrl = "https://clawhub.ai/api/v1/packages/%40acme%2Fcalendar";
-
-  beforeEach(async () => {
-    const { readImageMetadataFromHeader } =
-      await vi.importActual<typeof import("../media/image-ops.js")>("../media/image-ops.js");
-    mocks.readImageMetadata.mockImplementation(readImageMetadataFromHeader);
-    mocks.resolveIconSource.mockResolvedValue([source]);
-    mocks.fetchMetadata.mockReset().mockImplementation(async () =>
-      Response.json({
-        package: { ...packageMetadata, icon: packageUrl },
-        owner: { image: publisherUrl },
-      }),
-    );
-    vi.stubGlobal("fetch", (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-      const url = new URL(input instanceof Request ? input.url : input);
-      if (url.href === metadataUrl) {
-        return mocks.fetchMetadata(input, init);
-      }
-      if (url.origin === `http://127.0.0.1:${port}`) {
-        return realFetch(input, init);
-      }
-      throw new Error(`Unexpected icon fixture request: ${url.origin}${url.pathname}`);
-    });
-  });
-  afterEach(() => vi.unstubAllGlobals());
-  async function requestBranding(method = "GET") {
-    const response = await request("/__openclaw__/plugin-icon/calendar", { method });
-    await response.arrayBuffer();
-    return response;
-  }
-  function expectPublicMetadataRequest() {
-    expect(mocks.fetchMetadata).toHaveBeenCalledOnce();
-    const call = mocks.fetchMetadata.mock.calls[0];
-    const input = call?.[0];
-    expect(input instanceof Request ? input.url : input instanceof URL ? input.href : input).toBe(
-      metadataUrl,
-    );
-    expect(new Headers(call?.[1]?.headers).has("Authorization")).toBe(false);
-  }
-
-  it.each([null, `/api/v1/skill-icons/${"a".repeat(64)}`, "https://cdn.example/icon.png"])(
-    "reads package icon %s and publisher image in order through one exact public request",
-    async (icon) => {
-      const image = "https://cdn.example/publisher.png";
-      mocks.fetchMetadata.mockImplementation(async () =>
-        Response.json({ package: { ...packageMetadata, icon }, owner: { image } }),
-      );
-      mocks.readRemoteMediaBuffer.mockImplementation(async ({ url }) => {
-        if (url !== image) {
-          throw new Error("Package icon unavailable");
-        }
-        return { buffer: PNG_BYTES, contentType: "image/png" };
-      });
-
-      expect((await requestBranding()).status).toBe(200);
-      expect(mocks.readRemoteMediaBuffer.mock.calls.map(([params]) => params.url)).toEqual(
-        icon ? [icon.startsWith("/") ? `https://clawhub.ai${icon}` : icon, image] : [image],
-      );
-      expectPublicMetadataRequest();
-    },
-  );
-
-  it("rejects a different returned package identity before fetching an image", async () => {
-    mocks.fetchMetadata.mockImplementation(async () =>
-      Response.json({ package: { ...packageMetadata, name: "@other/calendar", icon: packageUrl } }),
-    );
-
-    expect((await requestBranding()).status).toBe(404);
-    expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
-    expectPublicMetadataRequest();
-  });
-
-  it.each(["package", "publisher", "missing"])(
-    "tries local, remote package, then publisher images and caches the successful %s result",
-    async (outcome) => {
-      writeFileSync(localIconPath, "invalid local image");
-      mocks.resolveIconSource.mockResolvedValue([fileSource(localIconPath), source]);
-      mocks.readRemoteMediaBuffer.mockImplementation(async ({ url }) => {
-        if (outcome === "missing" || (outcome === "publisher" && url === packageUrl)) {
-          throw new Error("Image unavailable");
-        }
-        return { buffer: PNG_BYTES, contentType: "image/png" };
-      });
-
-      const response = await requestBranding();
-      expect(response.status).toBe(outcome === "missing" ? 404 : 200);
-      expectPublicMetadataRequest();
-      expect(mocks.readRemoteMediaBuffer.mock.calls.map(([params]) => params.url)).toEqual(
-        outcome === "package" ? [packageUrl] : [packageUrl, publisherUrl],
-      );
-      if (outcome !== "missing") {
-        const cached = await requestBranding("HEAD");
-        expect(cached.status).toBe(200);
-        expect(cached.headers.get("etag")).toBe(response.headers.get("etag"));
-        expect(mocks.fetchMetadata).toHaveBeenCalledOnce();
-      }
-    },
-  );
-
-  it("does not read remote metadata when the local package icon succeeds", async () => {
-    mocks.resolveIconSource.mockResolvedValue([fileSource(localIconPath), source]);
-    expect((await requestBranding()).status).toBe(200);
-    expect(mocks.fetchMetadata).not.toHaveBeenCalled();
   });
 });

@@ -6,7 +6,6 @@ import {
   type ErrorShape,
   type MentionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -36,46 +35,6 @@ import { usersMentionableHandlers } from "./server-methods/users-mentionable.js"
 export const SESSION_KEY = "agent:main:dashboard:mention-test";
 export const SESSION_ID = "mention-test-session";
 const handlers = { ...mentionHandlers, ...usersMentionableHandlers };
-
-export function pauseMentionOperation<Args extends unknown[], Value>(
-  operation: (...args: Args) => Promise<Value>,
-  afterRelease?: (result: Value, args: Args) => void,
-  beforeOperation = false,
-) {
-  const ready = createDeferred();
-  const release = createDeferred();
-  const pause = async () => {
-    ready.resolve();
-    await release.promise;
-  };
-  return {
-    async run(this: void, ...args: Args) {
-      if (beforeOperation) {
-        await pause();
-      }
-      const result = await operation(...args);
-      if (!beforeOperation) {
-        await pause();
-      }
-      afterRelease?.(result, args);
-      return result;
-    },
-    async interleave<T>(pending: Promise<T>, change: () => void | Promise<void>, message: string) {
-      try {
-        await awaitGateBeforeSettlement(ready.promise, pending, message);
-        const changing = change();
-        if (changing) {
-          await changing;
-        }
-        release.resolve();
-        return await pending;
-      } finally {
-        release.resolve();
-        await Promise.allSettled([pending]);
-      }
-    },
-  };
-}
 
 export function expectMentionError(
   result: unknown,

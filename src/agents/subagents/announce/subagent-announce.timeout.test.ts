@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { deliverSubagentAnnouncement } from "./subagent-announce-delivery.js";
 import {
-  announceTesting,
-  outputTesting,
-  setSubagentAnnounceDeliveryDepsForTest,
-} from "./subagent-announce-overrides.test-support.js";
+  captureSubagentCompletionReply,
+  readLatestSubagentOutputWithRetry,
+} from "./subagent-announce-output.js";
+import * as announceRuntime from "./subagent-announce.runtime.js";
+import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type GatewayCall = {
   method?: string;
@@ -15,11 +15,8 @@ type GatewayCall = {
 };
 
 const gatewayCalls: GatewayCall[] = [];
-let sessionStore: Record<string, SessionEntry | undefined> = {};
-const storePath = "/tmp/sessions-main.json";
-const configOverride = {
-  session: { mainKey: "main", scope: "per-sender", store: storePath },
-} as const;
+let sessionStore: Record<string, Record<string, unknown>> = {};
+const configOverride = { session: { mainKey: "main", scope: "per-sender" } } as const;
 const isActive = vi.fn((_sessionId: string) => false);
 const waitForEnd = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
 let chatHistoryMessages: Array<Record<string, unknown>> = [];
@@ -27,6 +24,10 @@ let chatHistoryMessages: Array<Record<string, unknown>> = [];
 async function callGateway(request: GatewayCall) {
   gatewayCalls.push(request);
   return request.method === "chat.history" ? { messages: chatHistoryMessages } : {};
+}
+
+function createGatewayCallModuleMock() {
+  return { callGateway: vi.fn(callGateway) };
 }
 
 function createTimeoutHistoryWithNoReply() {
@@ -44,6 +45,8 @@ function createTimeoutHistoryWithNoReply() {
   ];
 }
 
+// mock-isolation: Timeout fixtures supply Gateway history and delivery replies without a live Gateway.
+vi.mock("../../../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("../../../sessions/session-controller.queries.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../sessions/session-controller.queries.js")>()),
   isSessionRunActive: (sessionId: string) => isActive(sessionId),
@@ -59,6 +62,17 @@ vi.mock("../spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
   getSubagentDepthFromSessionStoreInWorker: async () => 0,
 }));
+// mock-isolation: timeout tests replace the complete transport runtime with deterministic adapters.
+vi.mock("./subagent-announce-delivery.runtime.js", () =>
+  createSubagentAnnounceDeliveryRuntimeMock({
+    callGateway: async (request: unknown) => callGateway(request as GatewayCall),
+    getRuntimeConfig: () => configOverride,
+    loadSessionStore: () => sessionStore,
+    resolveMainSessionKey: () => "agent:main:main",
+    resolveSessionStorePathCore: () => "/tmp/sessions-main.json",
+    isSessionRunActive: (sessionId: string) => isActive(sessionId),
+  }),
+);
 // mock-isolation: The fixture controls delivery deadlines and requester records without starting transport or session-store work.
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: async (
@@ -92,6 +106,25 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     entry: sessionStore[sessionKey],
   }),
   loadSessionEntryByKey: (sessionKey: string) => sessionStore[sessionKey],
+}));
+vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-announce.runtime.js")>()),
+  callSubagentLifecycleGateway: createGatewayCallModuleMock().callGateway,
+  dispatchGatewayMethodInProcess: async (
+    method: string,
+    params: Record<string, unknown>,
+    options?: { expectFinal?: boolean; timeoutMs?: number },
+  ) =>
+    callGateway({
+      method,
+      params,
+      expectFinal: options?.expectFinal,
+      timeoutMs: options?.timeoutMs,
+    }),
+  getRuntimeConfig: () => configOverride,
+  readSessionMessagesAsync: vi.fn(async () => []),
+  readSubagentSessionEntry: (_storePath: string, sessionKey: string) => sessionStore[sessionKey],
+  resolveSessionStorePathCore: () => "/tmp/sessions-main.json",
 }));
 // mock-isolation: Timeout scenarios use synthetic requester state instead of the live subagent registry.
 vi.mock("../registry/subagent-registry-read.js", () => ({
@@ -156,23 +189,6 @@ describe("subagent announce timeout config", () => {
     sessionStore = {};
     isActive.mockReset().mockReturnValue(false);
     waitForEnd.mockReset().mockResolvedValue(true);
-    const gatewayDeps = { callGateway, getRuntimeConfig: () => configOverride };
-    announceTesting.setDepsForTest(gatewayDeps);
-    outputTesting.setDepsForTest({
-      ...gatewayDeps,
-      readSessionMessagesAsync: async () => [],
-      readSubagentSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
-      resolveSessionStorePathCore: () => storePath,
-    });
-    setSubagentAnnounceDeliveryDepsForTest({
-      ...gatewayDeps,
-      loadSessionEntry: (scope) => sessionStore[scope.sessionKey],
-    });
-  });
-  afterEach(() => {
-    setSubagentAnnounceDeliveryDepsForTest();
-    outputTesting.setDepsForTest();
-    announceTesting.setDepsForTest();
   });
 
   it("regression, keeps child announce internal when requester is a cron run session", async () => {
@@ -215,7 +231,7 @@ describe("subagent announce timeout config", () => {
   });
 
   it("keeps delete-mode timeout retryable while the embedded child request is still active", async () => {
-    sessionStore["agent:main:subagent:worker"] = { sessionId: "child-session", updatedAt: 1 };
+    sessionStore["agent:main:subagent:worker"] = { sessionId: "child-session" };
     isActive.mockReturnValue(true);
     waitForEnd.mockResolvedValue(false);
 
@@ -285,5 +301,74 @@ describe("subagent announce timeout config", () => {
     await timeout("progress", { terminalReply: { disposition: "empty" } });
     expect(completionEvent()?.result).toEqual(expected);
     expect(completionEvent()?.result).not.toContain("private tool output");
+  });
+});
+
+describe("captureSubagentCompletionReply", () => {
+  const sessionKey = "agent:main:subagent:child";
+  const sessionTarget = {
+    agentId: "main",
+    sessionKey,
+    sessionId: "child",
+    storePath: "/tmp/sessions-main.json",
+  };
+  const readMessages = vi.mocked(announceRuntime.readSessionMessagesAsync);
+  const capture = (waitForReply?: boolean) =>
+    captureSubagentCompletionReply(sessionKey, { sessionTarget, waitForReply });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    readMessages.mockReset().mockResolvedValue([]);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("returns immediate assistant output without polling", async () => {
+    readMessages.mockResolvedValue([textAssistant("Immediate completion")]);
+    await expect(capture()).resolves.toBe("Immediate completion");
+    expect(readMessages).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("captures the final assistant reply at the deadline", async () => {
+    const startedAt = performance.now();
+    readMessages.mockImplementation(async () =>
+      performance.now() - startedAt >= 50 ? [textAssistant("Requester-visible final result")] : [],
+    );
+    const pending = capture();
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBe("Requester-visible final result");
+    expect(performance.now() - startedAt).toBe(50);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("charges slow output reads against the bounded retry deadline", async () => {
+    const startedAt = performance.now();
+    readMessages.mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 30);
+      });
+      return [];
+    });
+    const pending = capture();
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBeUndefined();
+    expect(readMessages).toHaveBeenCalledTimes(3);
+    expect(performance.now() - startedAt).toBe(98);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not poll when waiting is disabled", async () => {
+    await expect(capture(false)).resolves.toBeUndefined();
+    expect(readMessages).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not read output with an exhausted retry budget", async () => {
+    const readHistory = vi.mocked(announceRuntime.callSubagentLifecycleGateway).mockClear();
+    await expect(
+      readLatestSubagentOutputWithRetry({ sessionKey, maxWaitMs: 0 }),
+    ).resolves.toBeUndefined();
+    expect(readHistory).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

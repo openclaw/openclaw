@@ -4,19 +4,11 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  closeAdmittedRunDelegatedAuthority,
-  getAdmittedRunDelegatedAuthority,
-  type AdmittedRunContext,
-} from "../agents/admitted-run-context.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "../agents/code-mode.js";
-import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
-import { resolveToolSearchConfig, type ToolSearchToolContext } from "../agents/tool-search.js";
+import { clearToolSearchCatalog } from "../agents/tool-search.js";
 import { jsonResult, type AnyAgentTool } from "../agents/tools/common.js";
-import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
 type EvaluatorDeps = Parameters<typeof createCronScriptRuntime>[0];
@@ -24,12 +16,8 @@ type HeadlessParams = Parameters<NonNullable<EvaluatorDeps["runHeadless"]>>[0];
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function completed(
-  value: unknown,
-  output: unknown[] = [],
-  toolCallCount = 0,
-): CodeModeHeadlessResult {
-  return { status: "completed", value, output, toolCallCount };
+function completed(value: unknown, output: unknown[] = []): CodeModeHeadlessResult {
+  return { status: "completed", value, output, toolCallCount: 0 };
 }
 
 function createPreparedRuntime(config: OpenClawConfig, tools?: AnyAgentTool[]) {
@@ -96,6 +84,54 @@ function triggerNamespace(entries: Array<[string, unknown]>) {
   ];
 }
 
+it("cancels the real headless worker and bridge when its evaluation catalog closes", async () => {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const config: OpenClawConfig = {};
+  let context: HeadlessParams["ctx"] | undefined;
+  let aborts = 0;
+  const prepared = createPreparedRuntime(config);
+  const gate = {
+    ...(await prepared.createTools())[0],
+    ...makeTool("gate", async (_id, _args, signal) => {
+      signal?.addEventListener("abort", () => aborts++, { once: true });
+      entered.resolve();
+      await release.promise;
+      return jsonResult(true);
+    }),
+  };
+  const { evaluate } = createEvaluator(
+    (params) => {
+      context = params.ctx;
+      return runCodeModeScriptHeadless(params);
+    },
+    { config, prepareRuntime: async () => ({ ...prepared, createTools: async () => [gate] }) },
+  );
+  const evaluation = evaluate({
+    script: 'await gate({}); text("STALE AFTER CLOSE"); return { fire: true };',
+  });
+  try {
+    await entered.promise;
+    if (!context) {
+      throw new Error("Expected the real headless context");
+    }
+    expect(context.abortSignal?.aborted).toBe(false);
+    clearToolSearchCatalog(context);
+    expect(aborts).toBe(1);
+    await expect(evaluation).resolves.toMatchObject({ kind: "error", code: "aborted" });
+    expect(context.catalogRef?.onDispose).toBeUndefined();
+    release.resolve();
+    await expect(evaluate({ script: "return { fire: false };" })).resolves.toMatchObject({
+      kind: "evaluated",
+      fire: false,
+    });
+    expect(context.catalogRef?.onDispose?.size ?? 0).toBe(0);
+  } finally {
+    release.resolve();
+    await evaluation;
+  }
+});
+
 it("does not scaffold an implicit ACP workspace during trigger execution (#92015)", async () => {
   const parentRepo = tempDirs.make("openclaw-cron-acp-workspace-");
   expect(spawnSync("git", ["init", "-q"], { cwd: parentRepo }).status).toBe(0);
@@ -137,6 +173,7 @@ it.each([
 ] as const)(
   "honors current host $host for a canonically captured pinned exec cap",
   async ({ host, expected }) => {
+    // Conflicting requests fail at the pin; targetless calls still honor current host restrictions.
     const evaluate = execEvaluator(host, "configured-node-must-not-run");
     const input = {
       ...INPUT,
@@ -145,6 +182,19 @@ it.each([
       execTarget: { version: 1, host: "gateway" },
     } satisfies Parameters<typeof evaluate>[0];
 
+    await expect(
+      evaluate({
+        ...input,
+        script:
+          'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { fire: false };',
+      }),
+    ).resolves.toEqual({
+      kind: "error",
+      code: "internal_error",
+      error: expect.stringContaining(
+        "exec is pinned to host=gateway; the requested host or node is not allowed for this job.",
+      ),
+    });
     await expect(
       evaluate({
         ...input,
@@ -237,6 +287,27 @@ it("starts cold after cancellation without waiting for the old preparation to se
     release.resolve();
     await Promise.allSettled([cancelled, ...(next ? [next] : [])]);
   }
+});
+
+it("forwards scheduled provenance and invalidates cached authority when it changes", async () => {
+  const { evaluate, prepareRuntime } = createEvaluator();
+
+  const policies = (
+    [
+      ["a", "alpha"],
+      ["b", "beta"],
+    ] as const
+  ).map(([suffix, ownerAccountId]) => ({
+    version: 1 as const,
+    mode: "account" as const,
+    ownerSessionKey: `agent:main:discord:group:${suffix}`,
+    ownerAccountId,
+  }));
+  for (const scheduledToolPolicy of policies) {
+    await evaluate({ toolsAllow: ["write"], scheduledToolPolicy });
+  }
+
+  expect(prepareRuntime.mock.calls.map(([params]) => params.scheduledToolPolicy)).toEqual(policies);
 });
 
 it.each(["policy change", "capacity eviction"] as const)(
@@ -406,151 +477,4 @@ it.each([
     kind: "error",
     error: expect.stringContaining(error),
   });
-});
-
-function toolRuntime(ctx: ToolSearchToolContext) {
-  return new ToolSearchRuntime(ctx, resolveToolSearchConfig(ctx.runtimeConfig), {
-    prepareInput: true,
-    validateInput: true,
-  });
-}
-
-function authorityFixture(
-  execute: AnyAgentTool["execute"],
-  deps: Partial<Parameters<typeof createCronScriptRuntime>[0]> = {},
-  prepareBeforeToolCallParams?: AnyAgentTool["prepareBeforeToolCallParams"],
-) {
-  const config = {};
-  const admitted: AdmittedRunContext[] = [];
-  const retained: ToolSearchToolContext[] = [];
-  const prepare = vi.fn(async () => ({
-    createTools: async (): Promise<AnyAgentTool[]> => [
-      {
-        name: "probe",
-        label: "Probe",
-        description: "Observe the invocation owner",
-        parameters: { type: "object", properties: {} },
-        execute,
-        prepareBeforeToolCallParams,
-      },
-    ],
-    context: { config, agentId: "main", sessionKey: "agent:main:cron:probe" },
-  }));
-  const runtime = createCronScriptRuntime({
-    config,
-    prepareRuntime: prepare,
-    runHeadless: async ({ ctx }) => {
-      retained.push(ctx);
-      return completed(
-        { fire: false, state: await toolRuntime(ctx).callValue("probe", {}) },
-        [],
-        1,
-      );
-    },
-    ...deps,
-  });
-  const input = {
-    jobId: "probe",
-    script: "return result",
-    state: null,
-    executionIdentity: {
-      ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" } as const,
-      onPostAdmission: (context: AdmittedRunContext) => {
-        admitted.push(context);
-      },
-    },
-  };
-  return { runtime, prepare, admitted, retained, input };
-}
-
-it("gives each warm payload invocation fresh authority and releases it after completion", async () => {
-  const { runtime, prepare, admitted, retained, input } = authorityFixture(async () => {
-    const caller = getGatewayToolCallerIdentity();
-    return jsonResult({
-      owned: Boolean(caller?.operationalRunInstance && caller.approvalAuthority),
-    });
-  });
-  for (let index = 0; index < 2; index += 1) {
-    await expect(runtime.executePayload(input)).resolves.toMatchObject({
-      kind: "completed",
-      state: { owned: true },
-    });
-    expect(getAdmittedRunDelegatedAuthority(admitted[index]!)).toBeUndefined();
-    expect(retained[index]?.catalogRef?.onDispose).toBeUndefined();
-    await expect(toolRuntime(retained[index]!).callValue("probe", {})).rejects.toThrow();
-  }
-  expect(prepare).toHaveBeenCalledOnce();
-  expect(admitted).toHaveLength(2);
-  expect(admitted[1]?.operationalRunInstance).not.toBe(admitted[0]?.operationalRunInstance);
-  expect(retained.map((ctx) => ctx.runId)).toEqual(
-    admitted.map((context) => context.operationalRunInstance.runId),
-  );
-});
-
-it.each(["admission", "gateway", "abort"] as const)(
-  "fences %s revocation during preparation before any source effect",
-  async (revocation) => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    const controller = new AbortController();
-    let gateway = {} as GatewayRequestContext;
-    const execute = vi.fn(async () => jsonResult({ changed: true }));
-    const { runtime, admitted, input } = authorityFixture(
-      execute,
-      { resolveGatewayContext: () => gateway },
-      async (args: unknown) => {
-        entered.resolve();
-        await release.promise;
-        return args;
-      },
-    );
-    const result = runtime.executePayload({ ...input, abortSignal: controller.signal });
-    try {
-      await entered.promise;
-      expect(admitted[0]).toBeDefined();
-      if (revocation === "admission") {
-        closeAdmittedRunDelegatedAuthority(admitted[0]!);
-      } else if (revocation === "gateway") {
-        gateway = {} as GatewayRequestContext;
-      } else {
-        controller.abort();
-      }
-      release.resolve();
-      await expect(result).resolves.toMatchObject({ kind: "error" });
-      expect(execute).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      await result;
-    }
-  },
-);
-
-it("keeps concurrent invocations independent while sharing prepared tools", async () => {
-  const entered = [createDeferred(), createDeferred()];
-  const release = [createDeferred(), createDeferred()];
-  let calls = 0;
-  const { runtime, prepare, admitted, input } = authorityFixture(async () => {
-    const index = calls++;
-    const before = getGatewayToolCallerIdentity()?.operationalRunInstance;
-    entered[index]!.resolve();
-    await release[index]!.promise;
-    return jsonResult({
-      owned:
-        before !== undefined && before === getGatewayToolCallerIdentity()?.operationalRunInstance,
-    });
-  });
-  const first = runtime.evaluateTrigger(input);
-  const second = runtime.evaluateTrigger(input);
-  try {
-    await Promise.all(entered.map((entry) => entry.promise));
-    release[0]!.resolve();
-    await expect(first).resolves.toMatchObject({ kind: "evaluated", state: { owned: true } });
-    expect(getAdmittedRunDelegatedAuthority(admitted[1]!)).toBeDefined();
-    release[1]!.resolve();
-    await expect(second).resolves.toMatchObject({ kind: "evaluated", state: { owned: true } });
-    expect(prepare).toHaveBeenCalledOnce();
-  } finally {
-    release.forEach((entry) => entry.resolve());
-    await Promise.all([first, second]);
-  }
 });

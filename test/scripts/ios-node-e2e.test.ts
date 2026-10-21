@@ -1,8 +1,17 @@
-import type { ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
+import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.js";
-import { runNodeScript } from "../helpers/run-node-script.js";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { withinTest } from "../helpers/promise.js";
+
+type ScriptResult = {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+};
 
 type GatewayFrame = {
   id: string;
@@ -16,6 +25,7 @@ type Report = {
 };
 type PayloadMode = "empty" | "invalid-payload-json" | "primitive-device-info" | "valid";
 
+let server: Server | undefined;
 let wss: WebSocketServer | undefined;
 
 afterEach(async () => {
@@ -25,6 +35,12 @@ afterEach(async () => {
     });
   }
   wss = undefined;
+  if (server) {
+    await new Promise<void>((resolve, reject) => {
+      server?.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+  server = undefined;
 });
 
 function invokePayload(command: string, mode: PayloadMode): unknown {
@@ -44,7 +60,8 @@ async function listenGateway(params: {
   mode: PayloadMode;
   invokeParams: InvokeParams[];
 }): Promise<string> {
-  wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  server = createServer();
+  wss = new WebSocketServer({ server });
   wss.on("connection", (ws: WebSocket) => {
     ws.on("message", (data) => {
       const frame = JSON.parse(rawDataToString(data)) as GatewayFrame;
@@ -85,9 +102,9 @@ async function listenGateway(params: {
     });
   });
   await new Promise<void>((resolve) => {
-    wss?.once("listening", resolve);
+    server?.listen(0, "127.0.0.1", resolve);
   });
-  const address = wss.address();
+  const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("test websocket server did not get a TCP address");
   }
@@ -105,24 +122,43 @@ async function runGateway(mode: PayloadMode, signal: AbortSignal, status: number
 
 const gatewayArgs = (url = "ws://127.0.0.1:9") => ["--url", url, "--token", "token", "--json"];
 
-async function runScriptRaw(args: readonly string[], signal: AbortSignal) {
-  let child: ChildProcess | undefined;
-  const { error, ...result } = await runNodeScript(
+async function runScriptRaw(args: readonly string[], signal: AbortSignal): Promise<ScriptResult> {
+  const child = spawn(
+    process.execPath,
     ["--import", "tsx", "scripts/dev/ios-node-e2e.ts", ...args],
-    process.env,
-    undefined,
-    {
-      signal,
-      executable: process.execPath,
-      onReady(spawned) {
-        child = spawned;
-      },
-    },
+    { stdio: "pipe" },
   );
-  if (error) {
-    throw error;
+  const stdout = createBoundedChildOutput();
+  const stderr = createBoundedChildOutput();
+  child.stdout.on("data", (chunk) => stdout.append(chunk));
+  child.stderr.on("data", (chunk) => stderr.append(chunk));
+  let spawnError: Error | undefined;
+  child.once("error", (error) => {
+    spawnError = error;
+  });
+  // Retain close from launch so abort cleanup joins the process and both output pipes.
+  const closed = new Promise<ScriptResult>((resolve) => {
+    child.once("close", (status, childSignal) => {
+      resolve({
+        status,
+        signal: childSignal,
+        stdout: stdout.text(),
+        stderr: stderr.text(),
+      });
+    });
+  });
+  try {
+    const result = await withinTest(closed, signal);
+    if (spawnError) {
+      throw spawnError;
+    }
+    return result;
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+    await closed;
   }
-  return { ...result, signal: child?.signalCode ?? null };
 }
 
 describe("ios-node-e2e", () => {

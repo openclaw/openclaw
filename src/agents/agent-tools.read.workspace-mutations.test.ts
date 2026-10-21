@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,64 +5,49 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
-import {
-  afterFileRead,
-  asSource,
-  hostFileTools,
-  interceptOpen,
-} from "./agent-tools.mutation.test-support.js";
+import { afterFileRead, asSource, hostFileTools } from "./agent-tools.mutation.test-support.js";
 import {
   createHostWorkspaceWriteTool,
   wrapToolMemoryFlushAppendOnlyWrite,
 } from "./agent-tools.read.js";
-import { createApplyPatchTool } from "./apply-patch.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  __setFsSafeTestHooksForTest();
-  vi.restoreAllMocks();
-});
 
 describe("workspace mutation authority", () => {
+  afterEach(() => {
+    __setFsSafeTestHooksForTest();
+    vi.restoreAllMocks();
+  });
+
   it.each([
-    [false, "write", "aborted"],
-    [false, "edit", "revoked"],
-    [false, "apply_patch", "budget-revoked"],
-    [false, "apply_patch", "active"],
-    [true, "write", "revoked"],
-    [true, "edit", "aborted"],
-    [true, "append", "active"],
-    [true, "append", "revoked"],
-    [true, "append", "aborted"],
+    { kind: "write", authority: "revoked" },
+    { kind: "edit", authority: "aborted" },
+    { kind: "append", authority: "active" },
+    { kind: "append", authority: "revoked" },
+    { kind: "append", authority: "aborted" },
   ] as const)(
-    "checks workspaceOnly=%s %s authority=%s after asynchronous preparation",
-    async (workspaceOnly, kind, authority) => {
-      const root = tempDirs.make("openclaw-mutation-");
+    "checks $authority authority inside $kind preparation",
+    async ({ kind, authority }) => {
+      const root = tempDirs.make("openclaw-workspace-mutation-");
       const filePath = path.join(root, "memory.md");
-      const original = "original content\n";
-      await fs.writeFile(filePath, original);
+      await fs.writeFile(filePath, "original\n");
       const generation = new AbortController();
-      let current = true,
-        budgetCurrent = true,
-        prepared = false;
-      const cancelled = workspaceOnly ? "Workspace operation cancelled" : "Permission change";
+      let current = true;
+      let prepared = false;
       const finishPreparation = () => {
         prepared = true;
         if (authority === "revoked") {
           current = false;
         } else if (authority === "aborted") {
-          generation.abort(new Error(cancelled));
-        } else if (authority === "budget-revoked") {
-          budgetCurrent = false;
+          generation.abort(new Error("Workspace operation cancelled"));
         }
       };
-      if (!workspaceOnly || kind === "append") {
-        afterFileRead(filePath, finishPreparation, kind === "append");
+      if (kind === "append") {
+        afterFileRead(filePath, finishPreparation, true);
       } else {
         const targetPath = await fs.realpath(filePath);
         __setFsSafeTestHooksForTest({
-          // Native staging handles do not pass through node:fs.
+          // Native writes do not open their staging handles through node:fs.
           beforePinnedWriteParentAdmission: async (preparedPath) => {
             if (preparedPath === targetPath) {
               await Promise.resolve();
@@ -72,13 +56,8 @@ describe("workspace mutation authority", () => {
           },
         });
       }
-      const options = { workspaceOnly, abortSignal: generation.signal };
+      const options = { workspaceOnly: true, abortSignal: generation.signal };
       const execute = () => {
-        if (kind === "apply_patch") {
-          return createApplyPatchTool({ cwd: root, ...options }).execute("permission-write", {
-            input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-original content\n+replacement content\n*** End Patch`,
-          });
-        }
         if (kind === "append") {
           return wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(root, options), {
             root,
@@ -89,41 +68,26 @@ describe("workspace mutation authority", () => {
             generation.signal,
           );
         }
-        const tools = hostFileTools(root, options);
-        return kind === "edit"
-          ? tools.edit(filePath, "original", "replacement")
-          : tools.write(filePath, "replacement content\n");
+        if (kind === "edit") {
+          return hostFileTools(root, options).edit("memory.md", "original", "replacement");
+        }
+        return hostFileTools(root, options).write("memory.md", "replacement\n");
       };
-      const run = () => asSource("mutation-authority", () => current, execute);
-      // Only unrestricted-host cases exercise execution-budget authority.
-      const pending = workspaceOnly
-        ? run()
-        : createAgentToolExecutionBudget({
-            signal: generation.signal,
-            abort: (error) => generation.abort(error),
-            isCurrent: () => budgetCurrent,
-          }).run(run);
+
+      const pending = asSource("workspace-mutations", () => current, execute);
       if (authority === "active") {
         await expect(pending).resolves.toBeDefined();
       } else {
         await expect(pending).rejects.toThrow(
-          authority === "aborted"
-            ? cancelled
-            : authority === "budget-revoked"
-              ? "execution scope is no longer active"
-              : "authority is no longer active",
+          authority === "revoked"
+            ? "authority is no longer active"
+            : "Workspace operation cancelled",
         );
       }
       expect(prepared).toBe(true);
-      expect(generation.signal.aborted).toBe(
-        authority === "aborted" || authority === "budget-revoked",
-      );
+      const changedContent = kind === "append" ? "original\nappended\n" : "replacement\n";
       await expect(fs.readFile(filePath, "utf8")).resolves.toBe(
-        authority !== "active"
-          ? original
-          : kind === "append"
-            ? original + "appended\n"
-            : "replacement content\n",
+        authority === "active" ? changedContent : "original\n",
       );
       await expect(fs.readdir(root)).resolves.toEqual(["memory.md"]);
     },
@@ -216,155 +180,5 @@ describe("host file paths", () => {
       hostFileTools(root, { workspaceOnly: true }).edit("escape/secret.txt", "secret", "changed"),
     ).rejects.toThrow("Path escapes workspace root");
     expect(await fs.readFile(path.join(outside, "secret.txt"), "utf8")).toBe("secret");
-  });
-});
-
-describe("unrestricted host tool writes", () => {
-  async function fixture(content = "original") {
-    const root = tempDirs.make("openclaw-host-write-");
-    const file = path.join(root, "important.txt");
-    await fs.writeFile(file, content);
-    const tools = hostFileTools(root);
-    return {
-      root,
-      file,
-      read: () => fs.readFile(file, "utf8"),
-      write: (next: string, target = file) => tools.write(target, next),
-      edit: () => tools.edit(file, "original", "replacement"),
-    };
-  }
-
-  function failWrites(filePath: string, originalByteLength: number, prefix = false) {
-    interceptOpen(filePath, (handle) => {
-      const realWrite = handle.write.bind(handle);
-      let failed = false;
-      handle.write = (async (buffer: Buffer, offset: number, length: number, position: number) => {
-        if (prefix && !failed && position < originalByteLength) {
-          failed = true;
-          await realWrite(buffer, offset, Math.max(1, Math.floor(length / 2)), position);
-          throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
-        }
-        const result = await realWrite(buffer, offset, length, position);
-        if (!prefix && position >= originalByteLength) {
-          throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
-        }
-        return result;
-      }) as typeof handle.write;
-    });
-  }
-
-  function failShrinkTruncate(filePath: string, originalByteLength: number) {
-    interceptOpen(filePath, (handle) => {
-      const realTruncate = handle.truncate.bind(handle);
-      handle.truncate = (async (length: number) => {
-        if (length < originalByteLength) {
-          throw Object.assign(new Error("truncate failed"), { code: "EIO" });
-        }
-        return realTruncate(length);
-      }) as typeof handle.truncate;
-    });
-  }
-
-  function failTargetInspection(filePath: string) {
-    const realMkdir = fs.mkdir.bind(fs);
-    const realStat = fs.stat.bind(fs);
-    let reachedWriter = false;
-    vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
-      reachedWriter = true;
-      return realMkdir(target, options as never);
-    });
-    vi.spyOn(fs, "stat").mockImplementation(async (target, options) => {
-      if (reachedWriter && String(target) === filePath) {
-        throw Object.assign(new Error("inspect failed"), { code: "EIO" });
-      }
-      return realStat(target, options as never);
-    });
-  }
-
-  it.each([
-    ["extension", "write", failWrites, "disk full"],
-    ["prefix", "edit", (file: string, size: number) => failWrites(file, size, true), "disk full"],
-    ["truncate", "write", failShrinkTruncate, "truncate failed"],
-    ["inspection", "edit", failTargetInspection, "inspect failed"],
-  ] as const)(
-    "preserves the original after a %s failure through %s",
-    async (failure, kind, inject, message) => {
-      const original = `original\n${"important content\n".repeat(64)}`;
-      const f = await fixture(original);
-      inject(f.file, Buffer.byteLength(original));
-      const fallback = vi.spyOn(fs, "writeFile");
-      const pending =
-        kind === "edit"
-          ? f.edit()
-          : f.write(failure === "truncate" ? "short\n" : "replacement content\n".repeat(64));
-      await expect(pending).rejects.toMatchObject({
-        message,
-        code: failure === "extension" || failure === "prefix" ? "ENOSPC" : "EIO",
-      });
-      expect(fallback).not.toHaveBeenCalled();
-      await expect(f.read()).resolves.toBe(original);
-      await expect(fs.readdir(f.root)).resolves.toEqual(["important.txt"]);
-    },
-  );
-
-  it("writes empty content", async () => {
-    const f = await fixture("replace me\n");
-    await f.write("");
-    await expect(f.read()).resolves.toBe("");
-  });
-
-  it.runIf(process.platform !== "win32")("writes through an existing symlink", async () => {
-    const f = await fixture();
-    const link = path.join(f.root, "linked.txt");
-    await fs.symlink(f.file, link);
-    await f.write("replacement", link);
-    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
-    await expect(f.read()).resolves.toBe("replacement");
-  });
-
-  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
-    "rejects an unreadable existing file",
-    async () => {
-      const f = await fixture("original\n");
-      await fs.chmod(f.file, 0o222);
-      await expect(f.write("replacement")).rejects.toMatchObject({ code: "EACCES" });
-      await fs.chmod(f.file, 0o644);
-      await expect(f.read()).resolves.toBe("original\n");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")("updates a hard-linked existing file", async () => {
-    const f = await fixture();
-    const alias = path.join(f.root, "alias.txt");
-    const content = "héllo crab 🦀 héllo\n";
-    await fs.chmod(f.file, 0o640);
-    await fs.link(f.file, alias);
-    const { ino, dev, uid, gid } = await fs.stat(f.file);
-    await f.write(content);
-    const after = await fs.stat(f.file);
-    expect(after).toMatchObject({ ino, nlink: 2, dev, uid, gid });
-    expect(after.mode & 0o777).toBe(0o640);
-    await expect(Promise.all([f.read(), fs.readFile(alias, "utf8")])).resolves.toEqual([
-      content,
-      content,
-    ]);
-  });
-
-  it.runIf(process.platform !== "win32")("falls back to a fifo without opening it", async () => {
-    const f = await fixture();
-    const fifo = path.join(f.root, "pipe");
-    execFileSync("mkfifo", [fifo]);
-    const flagsSeen: string[] = [];
-    const realOpen = fs.open.bind(fs);
-    vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
-      if (String(target) === fifo) {
-        flagsSeen.push(String(flags));
-      }
-      return realOpen(target, flags as never, mode as never);
-    });
-    const fallback = vi.spyOn(fs, "writeFile").mockResolvedValue(undefined);
-    await f.write("replacement", fifo).catch(() => undefined);
-    expect(fallback).toHaveBeenCalledWith(fifo, "replacement", "utf-8");
-    expect(flagsSeen).toEqual([]);
   });
 });

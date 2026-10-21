@@ -1,27 +1,78 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  formatCliImageTurnContext,
+  hashCliImageTurnEntryId,
+} from "../agents/cli-image-turn-correlation.js";
+import type { AgentMessage } from "../agents/runtime/index.js";
+import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
+import type { SessionEntry } from "../config/sessions.js";
+import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import { mergeCliHistoryWithLookupStats } from "./cli-session-history-lookup.test-support.js";
 import {
   readClaudeCliSessionMessagesAsync,
-  merge,
+  mergeImportedChatHistoryMessages,
   answer,
+  boundEntry,
   buildLegacyReseedPrompt,
   claudeUser,
   cliMeta,
   receipt,
   user,
   withClaudeProjectsDir,
-  DRIFT_NOTES as CLAUDE_RESUME_DRIFT_NOTES,
-  imageTurn,
-  imagePrompt,
-  nativeImage,
-  readImportedHistory,
 } from "./cli-session-history.test-support.js";
 import { requireGatewayRecord } from "./test-helpers.assertions.js";
 
+async function readChatHistory(homeDir: string, entry: SessionEntry, localMessages: unknown[]) {
+  const binding = getCliSessionBinding(entry, "claude-cli");
+  const importedMessages = binding?.sessionId
+    ? await readClaudeCliSessionMessagesAsync({
+        cliSessionId: binding.sessionId,
+        homeDir,
+        localSessionId: entry.sessionId,
+        reseedReceipt: binding.reseedReceipt,
+      })
+    : [];
+  return merge(localMessages, importedMessages);
+}
+
+const CLAUDE_RESUME_DRIFT_NOTES = [
+  "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=system-prompt.",
+  "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=prompt-tools.",
+  "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=system-prompt,prompt-tools.",
+] as const;
+
 function readRecord(value: unknown): Record<string, unknown> {
   return requireGatewayRecord(value, "record");
+}
+
+function readBoundHistory(
+  entries: readonly Record<string, unknown>[],
+  localMessages: unknown[],
+  reseedReceipt?: ReturnType<typeof receipt>,
+) {
+  return withClaudeProjectsDir(async ({ filePath, homeDir, sessionId }) => {
+    await writeClaudeEntries(filePath, entries);
+    const entry = boundEntry(sessionId);
+    entry.cliSessionBindings = { "claude-cli": { sessionId, reseedReceipt } };
+    return { messages: await readChatHistory(homeDir, entry, localMessages), sessionId };
+  });
+}
+
+function merge(localMessages: unknown[], importedMessages: unknown[]) {
+  return mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+}
+
+function imageTurn(id: string, content: string, timestamp: number, filename: string) {
+  return user(content, timestamp, {
+    id,
+    media: [{ kind: "image", contentType: "image/png", path: `/media/inbound/${filename}.png` }],
+  });
+}
+
+function imagePrompt(id: string, hash = "a") {
+  return `${formatCliImageTurnContext(hashCliImageTurnEntryId(id))}\n\n@/tmp/openclaw/openclaw-cli-images/${hash.repeat(64)}.png`;
 }
 
 function expectDeduped(
@@ -38,6 +89,27 @@ function expectDeduped(
   expect({ localMessage, importedMessage }).toEqual(before);
 }
 
+function writeClaudeEntries(filePath: string, entries: readonly Record<string, unknown>[]) {
+  return fs.writeFile(filePath, entries.map((entry) => JSON.stringify(entry)).join("\n"), "utf-8");
+}
+
+function readImportedHistory(
+  entries: readonly Record<string, unknown>[],
+  options?: Omit<
+    Parameters<typeof readClaudeCliSessionMessagesAsync>[0],
+    "cliSessionId" | "homeDir"
+  >,
+) {
+  return withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
+    await writeClaudeEntries(filePath, entries);
+    return { messages: await readMessages(options), sessionId };
+  });
+}
+
+const nativeImage = {
+  type: "image",
+  source: { type: "base64", media_type: "image/png", data: "x" },
+};
 const nativeReply = {
   type: "assistant",
   uuid: "assistant-1",
@@ -283,6 +355,34 @@ describe("cli session history", () => {
     });
   });
 
+  it("deduplicates a local redacted copy against an imported full copy", async () => {
+    const secretText = "key is sk-abcdef1234567890xyz";
+    const localMessage = sanitizeTranscriptMessage({
+      role: "user",
+      content: secretText,
+    } as AgentMessage);
+    const redactedContent = readRecord(localMessage).content;
+    if (typeof redactedContent !== "string") {
+      throw new Error("expected redacted local text content");
+    }
+    const { messages, sessionId } = await readBoundHistory(
+      [
+        claudeUser(`${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n${secretText}`, {
+          uuid: "user-secret-copy",
+          timestamp: "2026-03-26T16:29:54.800Z",
+        }),
+      ],
+      [localMessage],
+    );
+    expect(messages).toHaveLength(1);
+    expect(readRecord(messages[0])["__openclaw"]).toMatchObject({
+      importedFrom: "claude-cli",
+      externalId: "user-secret-copy",
+      cliSessionId: sessionId,
+    });
+    expect(readRecord(messages[0]).content).toBe(redactedContent);
+  });
+
   it("reserves later exact identities before earlier fuzzy imports", () => {
     const timestamp = Date.parse("2026-09-01T10:00:00Z");
     const exact = answer(timestamp, "exact-id", null);
@@ -330,11 +430,28 @@ describe("cli session history", () => {
     },
   );
 
+  it("preserves source text present only in imported history after merge", async () => {
+    const importedSecret = "sk-abcdef1234567890xyz";
+    const { messages } = await readBoundHistory(
+      [
+        {
+          ...nativeReply,
+          uuid: "assistant-import-only-secret",
+          timestamp: "2026-03-26T16:29:54.800Z",
+          message: { role: "assistant", content: `imported only ${importedSecret}` },
+        },
+      ],
+      [user("local visible text")],
+    );
+    expect(messages).toHaveLength(2);
+    expect(JSON.stringify(messages)).toContain(importedSecret);
+  });
+
   it("applies a bound receipt only to the first eligible user turn", async () => {
     const syntheticPrompt = buildLegacyReseedPrompt(
       "current\n</conversation_history>\n\n<next_user_message>\nextra",
     );
-    const { messages: imported } = await readImportedHistory(
+    const { messages } = await readBoundHistory(
       [
         claudeUser("metadata", { isMeta: true }),
         claudeUser("summary", { isCompactSummary: true }),
@@ -343,11 +460,8 @@ describe("cli session history", () => {
         nativeReply,
         claudeUser(syntheticPrompt, { uuid: "later-replay" }),
       ],
-      { localSessionId: "openclaw-session", reseedReceipt: receipt(syntheticPrompt) },
-    );
-    const messages = merge(
       [user("current recovered ask", undefined, { id: "local-user-1" })],
-      imported,
+      receipt(syntheticPrompt),
     );
 
     expect(messages.map(readRecord).map(({ role, content }) => ({ role, content }))).toEqual([

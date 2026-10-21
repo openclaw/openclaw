@@ -183,7 +183,7 @@ describe("buildCompactAnnounceStatsLine", () => {
       updatedAt: 0,
       totalTokens: 500,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: 1 as const,
     }));
     testing.setDepsForTest({
       getRuntimeConfig: () => ({ session: { store: "memory" } }),

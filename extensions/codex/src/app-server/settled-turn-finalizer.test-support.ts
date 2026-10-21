@@ -23,7 +23,9 @@ import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 
 export { registerCodexEventProjectorTestLifecycle } from "./event-projector.test-harness.js";
 
-export async function createCodexSettledFinalizerTestFixture() {
+export async function createCodexSettledFinalizerTestFixture(
+  options: { failedTool?: boolean; terminalStatus?: "failed" | "completed" } = {},
+) {
   const runBounded = vi
     .spyOn(boundedTurn, "runBoundedCodexAppServerTurn")
     .mockImplementation(vi.fn<typeof boundedTurn.runBoundedCodexAppServerTurn>());
@@ -67,6 +69,7 @@ export async function createCodexSettledFinalizerTestFixture() {
   const projector = await createProjector(params);
   const emit = (...args: Parameters<typeof forCurrentTurn>) =>
     projector.handleNotification(forCurrentTurn(...args));
+  const completed = options.terminalStatus === "completed";
   const { durationMs, ...command } = createNativeCommandItem({
     id: "command-settled",
     command: "printf 'settled'",
@@ -78,21 +81,23 @@ export async function createCodexSettledFinalizerTestFixture() {
   await emit("item/completed", {
     item: {
       ...command,
-      status: "completed",
-      aggregatedOutput: "settled",
-      exitCode: 0,
+      status: options.failedTool ? "failed" : "completed",
+      aggregatedOutput: options.failedTool ? "command failed" : "settled",
+      exitCode: options.failedTool ? 1 : 0,
       durationMs,
     },
   });
   await emit("turn/completed", {
     turn: {
       id: TURN_ID,
-      status: "failed",
+      status: options.terminalStatus ?? "failed",
       items: [],
-      error: { message: "Provider overloaded", codexErrorInfo: "serverOverloaded" },
+      error: completed
+        ? null
+        : { message: "Provider overloaded", codexErrorInfo: "serverOverloaded" },
     },
   });
-  expect(projector.settledTurnFailureFinalizationAllowed).toBe(true);
+  expect(projector.settledTurnFailureFinalizationAllowed).toBe(!completed);
   const attempt = projector.buildResult(buildEmptyToolTelemetry());
   await projector.closeProjection();
   attempt.settledTurnFinalizationContext = new CodexSettledTurnContext(

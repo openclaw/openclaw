@@ -2,7 +2,10 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
-import type { PluginWebFetchProviderEntry } from "../plugins/types.js";
+import type {
+  PluginWebFetchProviderEntry,
+  PluginWebSearchProviderEntry,
+} from "../plugins/types.js";
 import type { BundledExplicitWebProviderParams } from "../plugins/web-provider-public-artifacts.explicit.js";
 import { listSecretResolutionErrorOwners } from "./runtime-degraded-state.js";
 import {
@@ -169,40 +172,14 @@ function createProviderSecretRefConfig(
   provider: ProviderUnderTest,
   envRefId: string,
 ): OpenClawConfig {
-  return searchConfig({ [providerPluginId(provider)]: envRef(envRefId) }, provider);
-}
-
-function searchConfig(
-  keys: Record<string, unknown> = {},
-  provider?: string,
-  extra: Record<string, unknown> = {},
-): OpenClawConfig {
   return asConfig({
-    ...webTool("search", { enabled: true, ...(provider ? { provider } : {}) }),
-    ...(Object.keys(keys).length
-      ? pluginEntries(
-          Object.fromEntries(
-            Object.entries(keys).map(([id, key]) => [
-              id,
-              createWebCredentialEntry("webSearch", key, { enabled: true }),
-            ]),
-          ),
-        )
-      : {}),
-    ...extra,
+    ...webTool("search", { enabled: true, provider }),
+    ...pluginEntries({
+      [providerPluginId(provider)]: createWebCredentialEntry("webSearch", envRef(envRefId), {
+        enabled: true,
+      }),
+    }),
   });
-}
-
-function useExternalSearch(id: string) {
-  const pluginId = "external.search";
-  fallbackSearch.mockReturnValue([
-    { ...createTestProvider({ provider: "brave", pluginId, order: 10 }), id },
-  ]);
-  installedPlugins.mockReturnValue({
-    [pluginId]: { source: "npm", spec: "@openclaw/external-search" },
-  });
-  manifestOwner.mockReturnValue(undefined);
-  return pluginId;
 }
 
 function readProviderKey(config: OpenClawConfig, provider: ProviderUnderTest): unknown {
@@ -255,6 +232,25 @@ describe("runtime web tools resolution", () => {
     clearSecretsRuntimeSnapshotState();
   });
 
+  it("keeps web search inactive when only web fetch is configured", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: firecrawlConfig(envRef("FIRECRAWL_API_KEY"), { provider: "firecrawl" }),
+      env: {
+        FIRECRAWL_API_KEY: "firecrawl-runtime-key", // pragma: allowlist secret
+      },
+    });
+
+    expect(metadata.search.selectedProvider).toBeUndefined();
+    expect(metadata.search.providerSource).toBe("none");
+    expect(metadata.fetch).toMatchObject({
+      selectedProvider: "firecrawl",
+      selectedProviderKeySource: "secretRef",
+    });
+    expect(explicitSearch).not.toHaveBeenCalled();
+    expect(bundledSearch).not.toHaveBeenCalled();
+    expect(fallbackSearch).not.toHaveBeenCalled();
+  });
+
   it("skips fetch provider discovery when web fetch only configures runtime limits", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
@@ -273,52 +269,37 @@ describe("runtime web tools resolution", () => {
     expect(fallbackFetch).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "discovers fetch SecretRefs with supplied registry=%s",
-    async (supplied) => {
-      const manifestRegistry = supplied
-        ? {
-            plugins: [
-              createPluginManifestRecordFixture({
-                id: "firecrawl",
-                contracts: { webFetchProviders: ["firecrawl"] },
-              }),
-            ],
-          }
-        : undefined;
-      const { metadata, context } = await runRuntimeWebTools({
-        manifestRegistry,
-        config: firecrawlConfig(envRef("FIRECRAWL_API_KEY"), { provider: "firecrawl" }),
-        env: {
-          FIRECRAWL_API_KEY: supplied ? "firecrawl-key" : "firecrawl-runtime-key", // pragma: allowlist secret
-        },
-      });
+  it("keeps active fetch provider SecretRefs on the discovery path", async () => {
+    const manifestRegistry = {
+      plugins: [
+        createPluginManifestRecordFixture({
+          id: "firecrawl",
+          contracts: { webFetchProviders: ["firecrawl"] },
+        }),
+      ],
+    };
+    const { metadata, context } = await runRuntimeWebTools({
+      manifestRegistry,
+      config: firecrawlConfig(envRef("FIRECRAWL_API_KEY"), { provider: "firecrawl" }),
+      env: {
+        FIRECRAWL_API_KEY: "firecrawl-key", // pragma: allowlist secret
+      },
+    });
 
-      expect(metadata.fetch).toMatchObject({
-        providerSource: "configured",
-        selectedProvider: "firecrawl",
-        selectedProviderKeySource: "secretRef",
-      });
-      expect(metadata.search).toMatchObject({
-        selectedProvider: undefined,
-        providerSource: "none",
-      });
-      expect(explicitSearch).not.toHaveBeenCalled();
-      expect(bundledSearch).not.toHaveBeenCalled();
-      expect(fallbackSearch).not.toHaveBeenCalled();
-      if (manifestRegistry) {
-        expect(explicitArtifactCalls(explicitFetch, context.env)).toContainEqual({
-          onlyPluginIds: ["firecrawl"],
-          env: context.env,
-          manifestRecords: manifestRegistry.plugins,
-        });
-      }
-    },
-  );
+    expect(metadata.fetch).toMatchObject({
+      providerSource: "configured",
+      selectedProvider: "firecrawl",
+    });
+    expect(explicitArtifactCalls(explicitFetch, context.env)).toContainEqual({
+      onlyPluginIds: ["firecrawl"],
+      env: context.env,
+      manifestRecords: manifestRegistry.plugins,
+    });
+  });
 
   it("does not auto-select a keyless provider when no credentials are configured", async () => {
     const { metadata } = await runRuntimeWebTools({
-      config: searchConfig(),
+      config: asConfig({ ...webTool("search", { enabled: true }) }),
     });
 
     expect(metadata.search.selectedProvider).toBeUndefined();
@@ -387,7 +368,16 @@ describe("runtime web tools resolution", () => {
   });
 
   it("retains a stale web credential for a plugin id containing a dot", async () => {
-    const pluginId = useExternalSearch("dotted");
+    const pluginId = "external.search";
+    const dottedProvider: PluginWebSearchProviderEntry = {
+      ...createTestProvider({ provider: "brave", pluginId, order: 10 }),
+      id: "dotted",
+    };
+    fallbackSearch.mockReturnValue([dottedProvider]);
+    installedPlugins.mockReturnValue({
+      [pluginId]: { source: "npm", spec: "@openclaw/external-search" },
+    });
+    manifestOwner.mockReturnValue(undefined);
     const sourceConfig = asConfig({
       tools: { web: { search: { enabled: true, provider: "dotted" } } },
       ...pluginEntries({
@@ -470,7 +460,16 @@ describe("runtime web tools resolution", () => {
   });
 
   it("does not reuse a web credential after its plugin routing config changes", async () => {
-    const pluginId = useExternalSearch("external");
+    const pluginId = "external.search";
+    const provider: PluginWebSearchProviderEntry = {
+      ...createTestProvider({ provider: "brave", pluginId, order: 10 }),
+      id: "external",
+    };
+    fallbackSearch.mockReturnValue([provider]);
+    installedPlugins.mockReturnValue({
+      [pluginId]: { source: "npm", spec: "@openclaw/external-search" },
+    });
+    manifestOwner.mockReturnValue(undefined);
     const config = (baseUrl: string) =>
       asConfig({
         tools: { web: { search: { enabled: true, provider: "external" } } },
@@ -497,9 +496,16 @@ describe("runtime web tools resolution", () => {
 
   it("auto-detects the next provider when a higher-priority ref is unresolved", async () => {
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
-      config: searchConfig({
-        brave: envRef("MISSING_BRAVE_API_KEY_REF"),
-        google: envRef("GEMINI_API_KEY_REF"),
+      config: asConfig({
+        ...webTool("search", { enabled: true }),
+        ...pluginEntries({
+          brave: createWebCredentialEntry("webSearch", envRef("MISSING_BRAVE_API_KEY_REF"), {
+            enabled: true,
+          }),
+          google: createWebCredentialEntry("webSearch", envRef("GEMINI_API_KEY_REF"), {
+            enabled: true,
+          }),
+        }),
       }),
       env: {
         GEMINI_API_KEY_REF: "gemini-runtime-key", // pragma: allowlist secret
@@ -522,7 +528,14 @@ describe("runtime web tools resolution", () => {
 
   it("isolates unresolved auto-detected providers during cold start", async () => {
     const { metadata, degradedOwners } = await runRuntimeWebTools({
-      config: searchConfig({ google: envRef("MISSING_GEMINI_API_KEY_REF") }),
+      config: asConfig({
+        ...webTool("search", { enabled: true }),
+        ...pluginEntries({
+          google: createWebCredentialEntry("webSearch", envRef("MISSING_GEMINI_API_KEY_REF"), {
+            enabled: true,
+          }),
+        }),
+      }),
       allowUnavailableSecretOwners: true,
     });
 
@@ -538,7 +551,8 @@ describe("runtime web tools resolution", () => {
 
   it("auto-detects Gemini from the Google model provider key after env fallbacks", async () => {
     const { metadata, resolvedConfig } = await runRuntimeWebTools({
-      config: searchConfig({}, undefined, {
+      config: asConfig({
+        ...webTool("search", { enabled: true }),
         models: { providers: { google: { apiKey: "google-provider-runtime-key" } } },
       }),
     });
@@ -553,7 +567,8 @@ describe("runtime web tools resolution", () => {
 
   it("does not mirror provider env fallback over configured fallback SecretRefs", async () => {
     const { metadata, resolvedConfig } = await runRuntimeWebTools({
-      config: searchConfig({}, undefined, {
+      config: asConfig({
+        ...webTool("search", { enabled: true }),
         models: { providers: { google: { apiKey: envRef("GOOGLE_PROVIDER_REF") } } },
       }),
       env: {

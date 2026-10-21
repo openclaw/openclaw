@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { validateMentionsListResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
@@ -30,7 +31,6 @@ import {
   listMentionInbox as listInbox,
   dismissMentionInbox as dismiss,
   mentionRoles,
-  pauseMentionOperation,
 } from "./mention-inbox.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { identifiedClient, soloClient } from "./server-methods/sessions-sharing.test-support.js";
@@ -38,16 +38,30 @@ import { identifiedClient, soloClient } from "./server-methods/sessions-sharing.
 afterEach(() => vi.restoreAllMocks());
 
 const storedSnapshot = () => readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db);
-type Fixture = Parameters<Parameters<typeof withInbox>[0]>[0];
-const messageIds = async (f: Fixture, client = f.bobClient, inbox = f.inbox) =>
-  (await f.items(client, inbox)).map((item) => item.messageId);
-const pushCurrency = (f: Fixture) =>
-  f.push.mock.calls.map(([notification]) => notification.isCurrent());
+
+function pauseOperation<Args extends unknown[], Result>(
+  operation: (...args: Args) => Promise<Result>,
+  afterRelease?: (result: Result, args: Args) => void,
+) {
+  const ready = createDeferred();
+  const release = createDeferred();
+  return {
+    ready: ready.promise,
+    release: release.resolve,
+    async run(this: void, ...args: Args) {
+      const result = await operation(...args);
+      ready.resolve();
+      await release.promise;
+      afterRelease?.(result, args);
+      return result;
+    },
+  };
+}
 
 function holdMentionRead() {
-  const held = pauseMentionOperation(mentionWorker.readMentionSnapshot);
-  vi.spyOn(mentionWorker, "readMentionSnapshot").mockImplementationOnce(held.run);
-  return held;
+  const held = pauseOperation(mentionWorker.readMentionSnapshot);
+  const spy = vi.spyOn(mentionWorker, "readMentionSnapshot").mockImplementationOnce(held.run);
+  return { ...held, restore: () => spy.mockRestore() };
 }
 
 it("recovers the same authenticated reader after the profile catalog becomes ready", () =>
@@ -90,17 +104,24 @@ it("merges a foreign dismissal between snapshot and mutation while keeping queue
     const peer = f.openInbox("foreign-writer");
     await peer.invalidateAsync();
     const held = holdMentionRead();
-    const pending = Promise.all([f.post("queued-first"), f.post("queued-second")]);
-    await held.interleave(
-      pending,
-      async () => {
-        expect((await dismiss(peer, f.bobClient, [original.id])).ok).toBe(true);
-      },
-      "Mutation did not prepare its snapshot",
-    );
-    expect(await messageIds(f)).toEqual(["message-queued-second", "message-queued-first"]);
-    await f.push.mock.calls[0]![0].prepare();
-    expect(f.push.mock.calls[0]![0].isCurrent()).toBe(false);
+    const first = f.post("queued-first");
+    const second = f.post("queued-second");
+    try {
+      await awaitGateBeforeSettlement(held.ready, first, "Mutation did not prepare its snapshot");
+      expect((await dismiss(peer, f.bobClient, [original.id])).ok).toBe(true);
+      held.release();
+      await Promise.all([first, second]);
+      expect((await f.items()).map((item) => item.messageId)).toEqual([
+        "message-queued-second",
+        "message-queued-first",
+      ]);
+      await f.push.mock.calls[0]![0].prepare();
+      expect(f.push.mock.calls[0]![0].isCurrent()).toBe(false);
+    } finally {
+      held.release();
+      await Promise.allSettled([first, second]);
+      held.restore();
+    }
   }));
 
 it.each(["mentions.list", "mentions.dismiss"])(
@@ -111,15 +132,17 @@ it.each(["mentions.list", "mentions.dismiss"])(
       const original = (await f.items())[0]!;
       const held = holdMentionRead();
       const pending = f.call(method, method === "mentions.dismiss" ? { ids: [original.id] } : {});
-      const result = await held.interleave(
-        pending,
-        () => {
-          Object.assign(f.bobClient, { invalidated: true });
-        },
-        "RPC did not prepare its snapshot",
-      );
-      expectMentionError(result, "FORBIDDEN");
-      expect(await f.items(f.bobSecond)).toEqual([original]);
+      try {
+        await awaitGateBeforeSettlement(held.ready, pending, "RPC did not prepare its snapshot");
+        Object.assign(f.bobClient, { invalidated: true });
+        held.release();
+        expectMentionError(await pending, "FORBIDDEN");
+        expect(await f.items(f.bobSecond)).toEqual([original]);
+      } finally {
+        held.release();
+        await pending;
+        held.restore();
+      }
     });
   },
 );
@@ -133,46 +156,50 @@ it.each([false, true])(
       f.broadcast.mockClear();
       const readHead = mentionStore.getMentionStoreHeadAdmission;
       let staleHead: mentionStore.MentionStoreHead | undefined;
-      vi.spyOn(mentionStore, "getMentionStoreHeadAdmission").mockImplementation(
-        (databasePath) => staleHead ?? readHead(databasePath),
-      );
-      const held = pauseMentionOperation(
-        mentionWorker.commitMentionChanges,
-        (_result, [, mutation]) => {
-          if (lost) {
-            // Native commit can outlive its worker's last head publication.
-            staleHead = { ...mutation.expectedHead };
-            throw new SqliteWorkerError("synthetic lost Mention Inbox reply", "outcome-unknown");
-          }
-        },
-      );
+      const head = vi
+        .spyOn(mentionStore, "getMentionStoreHeadAdmission")
+        .mockImplementation((databasePath) => staleHead ?? readHead(databasePath));
+      const held = pauseOperation(mentionWorker.commitMentionChanges, (_result, [, mutation]) => {
+        if (lost) {
+          // Native commit can outlive its worker's last head publication.
+          staleHead = { ...mutation.expectedHead };
+          throw new SqliteWorkerError("synthetic lost Mention Inbox reply", "outcome-unknown");
+        }
+      });
       const spy = vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(held.run);
       const pending = f.post("awaiting-receipt");
-      await held.interleave(
-        pending,
-        () => {
-          expect(f.push).not.toHaveBeenCalled();
-          expect(f.broadcast).not.toHaveBeenCalled();
-        },
-        "Mutation did not commit",
-      );
-      expect(f.push).toHaveBeenCalledTimes(lost ? 0 : 1);
-      const snapshots = vi.spyOn(mentionWorker, "readMentionSnapshot");
-      expect(await messageIds(f)).toEqual(["message-awaiting-receipt", "message-original"]);
-      if (lost) {
-        expect(snapshots.mock.calls[0]?.[1]).toBe(-1);
-      }
-      staleHead = undefined;
-      snapshots.mockRestore();
-      expect(
-        spy.mock.calls.filter(([, mutation]) =>
-          mutation.changes.some(
-            ([, source]) => source?.message?.content.messageId === "message-awaiting-receipt",
+      try {
+        await awaitGateBeforeSettlement(held.ready, pending, "Mutation did not commit");
+        expect(f.push).not.toHaveBeenCalled();
+        expect(f.broadcast).not.toHaveBeenCalled();
+        held.release();
+        await pending;
+        expect(f.push).toHaveBeenCalledTimes(lost ? 0 : 1);
+        const snapshots = vi.spyOn(mentionWorker, "readMentionSnapshot");
+        expect((await f.items()).map((item) => item.messageId)).toEqual([
+          "message-awaiting-receipt",
+          "message-original",
+        ]);
+        if (lost) {
+          expect(snapshots.mock.calls[0]?.[1]).toBe(-1);
+        }
+        staleHead = undefined;
+        snapshots.mockRestore();
+        expect(
+          spy.mock.calls.filter(([, mutation]) =>
+            mutation.changes.some(
+              ([, source]) => source?.message?.content.messageId === "message-awaiting-receipt",
+            ),
           ),
-        ),
-      ).toHaveLength(1);
-      await f.post("awaiting-receipt");
-      expect(f.push).toHaveBeenCalledTimes(lost ? 0 : 1);
+        ).toHaveLength(1);
+        await f.post("awaiting-receipt");
+        expect(f.push).toHaveBeenCalledTimes(lost ? 0 : 1);
+      } finally {
+        held.release();
+        await pending;
+        spy.mockRestore();
+        head.mockRestore();
+      }
     });
   },
 );
@@ -181,20 +208,32 @@ it("refuses a pending mention write after the recipient loses access", () =>
   withInbox(
     async (f) => {
       await f.items();
-      const held = pauseMentionOperation(mentionWorker.commitMentionChanges, undefined, true);
-      vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(held.run);
+      const prepared = createDeferred();
+      const release = createDeferred();
+      const commit = mentionWorker.commitMentionChanges;
+      vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(async (...args) => {
+        prepared.resolve();
+        await release.promise;
+        return commit(...args);
+      });
       const pending = f.post("revoked-before-commit");
-      await held.interleave(
-        pending,
-        () => {
-          setUserProfileRole(f.bob.id, "denied");
-          invalidateOperatorRolePolicy(f.bob.id);
-        },
-        "Mention did not prepare its write",
-      );
-      expect(storedSnapshot()?.sources ?? []).toEqual([]);
-      expect(f.push).not.toHaveBeenCalled();
-      expectMentionError(await listInbox(f.inbox, f.bobClient), "FORBIDDEN");
+      try {
+        await awaitGateBeforeSettlement(
+          prepared.promise,
+          pending,
+          "Mention did not prepare its write",
+        );
+        setUserProfileRole(f.bob.id, "denied");
+        invalidateOperatorRolePolicy(f.bob.id);
+        release.resolve();
+        await pending;
+        expect(storedSnapshot()?.sources ?? []).toEqual([]);
+        expect(f.push).not.toHaveBeenCalled();
+        expectMentionError(await listInbox(f.inbox, f.bobClient), "FORBIDDEN");
+      } finally {
+        release.resolve();
+        await pending;
+      }
     },
     mentionRoles({ denied: { agents: [], scopes: [], sessions: { others: "none" } } }),
   ));
@@ -206,7 +245,7 @@ it("drains accepted committed input during disposal while refusing new input", (
     await f.post("refused-after-dispose");
     await Promise.all([accepted, disposal]);
     const restarted = f.openInbox("after-disposal");
-    expect(await messageIds(f, f.bobClient, restarted)).toEqual([
+    expect((await f.items(f.bobClient, restarted)).map((item) => item.messageId)).toEqual([
       "message-accepted-before-dispose",
     ]);
     expect(f.push).toHaveBeenCalledOnce();
@@ -231,20 +270,22 @@ it("settles an accepted dismissal after the Gateway scheduler closes", () =>
     const pending = dismiss(f.inbox, f.bobClient, [item.id]);
     let disposal: Promise<void> | undefined;
     try {
-      await held.interleave(
+      await awaitGateBeforeSettlement(
+        held.ready,
         pending,
-        () => {
-          f.scheduler.beginClose();
-          disposal = f.inbox.dispose();
-        },
         "Dismissal did not prepare its snapshot",
       );
-      await disposal;
+      f.scheduler.beginClose();
+      disposal = f.inbox.dispose();
+      held.release();
+      await Promise.all([pending, disposal]);
       expect(storedSnapshot()?.sources).toEqual([
         expect.objectContaining({ recipients: [[f.bob.id, null]] }),
       ]);
     } finally {
+      held.release();
       await Promise.allSettled([pending, disposal]);
+      held.restore();
     }
   }));
 
@@ -477,7 +518,7 @@ it.each(["dismissal", "new input"] as const)(
   },
 );
 
-it("serves and dismisses prepared mentions without host database reads", () =>
+it("targets only the named person, synchronizes dismissal, and does not replay consumed input", () =>
   withInbox(async (f) => {
     for (const client of f.clients) {
       await read(f.inbox, client);
@@ -485,12 +526,40 @@ it("serves and dismisses prepared mentions without host database reads", () =>
     await f.post();
     const sql = observeHostDataSql();
     try {
-      await f.call("mentions.list", {});
-      const first = (await f.items())[0]!;
+      const result = await f.call("mentions.list", {});
+      expect(result.ok && validateMentionsListResult(result.payload)).toBe(true);
+      const first = (await f.items())[0];
+      expect(first).toMatchObject({
+        senderProfileId: f.alice.id,
+        senderLabel: "Alice",
+        sessionTitle: "Design review",
+        excerpt: "@Bob review this change",
+      });
+      expect(await f.items(f.aliceClient)).toEqual([]);
+      expect(await f.items(f.carolClient)).toEqual([]);
+      expect(f.broadcast.mock.calls.map((call) => [...call[2]])).toEqual([
+        ["bob-one"],
+        ["bob-two"],
+      ]);
+      expect(f.push.mock.calls[0]?.[0]).toMatchObject({ recipientProfileId: f.bob.id });
+      expect(f.push.mock.calls[0]?.[0].isCurrent()).toBe(true);
+      if (!first) {
+        throw new Error("Recipient did not receive the mention");
+      }
+
+      await f.call("mentions.dismiss", { ids: [first.id, "unknown-mention"] }, f.aliceClient);
+      expect(await f.items()).toHaveLength(1);
+      await f.call("mentions.dismiss", { ids: [` ${first.id} `] });
+      expect(await f.items()).toHaveLength(1);
       await f.call("mentions.dismiss", { ids: [first.id] });
-      await f.items(f.bobSecond);
+      expect(await f.items(f.bobSecond)).toEqual([]);
+      expect(f.push.mock.calls[0]?.[0].isCurrent()).toBe(false);
       await f.post();
+      expect(await f.items()).toEqual([]);
+      expect(f.push).toHaveBeenCalledTimes(1);
       await f.post("source-two");
+      expect(await f.items()).toHaveLength(1);
+      expect(f.push).toHaveBeenCalledTimes(2);
       expect(
         sql.queries.filter((query) =>
           /config_machine_state|\bselect\b[\s\S]*\bsession_nodes\b/i.test(query),
@@ -501,9 +570,12 @@ it("serves and dismisses prepared mentions without host database reads", () =>
     }
   }));
 
-it("rejects raw or unavailable identities instead of fabricating a successful empty Inbox", () =>
+it("never exposes a recipient selector, a raw identity, or a fabricated successful empty Inbox", () =>
   withInbox(async (f) => {
     await f.post();
+    expect(
+      (await f.call("mentions.list", { profileId: f.bob.id }, f.aliceClient)).error?.code,
+    ).toBe("INVALID_REQUEST");
     const raw = { ...soloClient(), connId: "raw", authenticatedUserId: f.bob.id };
     expectMentionError(await listInbox(f.inbox, raw), "FORBIDDEN");
     expectMentionError(
@@ -597,20 +669,32 @@ it("keeps recipients independent when they share a committed message", () =>
     expect(bob.id).not.toBe(carol.id);
     bob.excerpt = "Changed by a caller";
     expect(await f.items(f.carolClient)).toEqual([carol]);
-    const held = pauseMentionOperation(mentionWorker.commitMentionChanges);
-    vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(held.run);
+    const held = pauseOperation(mentionWorker.commitMentionChanges);
+    const spy = vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(held.run);
     const dismissal = dismiss(f.inbox, f.bobClient, [bob.id]);
-    const result = await held.interleave(
-      dismissal,
-      () => {
-        expect(pushCurrency(f)).toEqual([true, true]);
-      },
-      "Dismissal did not reach its committed receipt",
-    );
-    expect(result.ok).toBe(true);
+    try {
+      await awaitGateBeforeSettlement(
+        held.ready,
+        dismissal,
+        "Dismissal did not reach its committed receipt",
+      );
+      expect(f.push.mock.calls.map(([notification]) => notification.isCurrent())).toEqual([
+        true,
+        true,
+      ]);
+      held.release();
+      expect((await dismissal).ok).toBe(true);
+    } finally {
+      held.release();
+      await dismissal;
+      spy.mockRestore();
+    }
     expect(await f.items()).toEqual([]);
     expect(await f.items(f.carolClient)).toEqual([carol]);
-    expect(pushCurrency(f)).toEqual([false, true]);
+    expect(f.push.mock.calls.map(([notification]) => notification.isCurrent())).toEqual([
+      false,
+      true,
+    ]);
     await f.post("shared-source", { recipientProfileIds: [f.bob.id, f.carol.id] });
     expect(f.push).toHaveBeenCalledTimes(2);
   }));
@@ -630,6 +714,27 @@ it.each([
     expect((await f.call("users.mentionable", { sessionKey: SESSION_KEY }, client)).ok).toBe(
       visible,
     );
+  }, cfg);
+});
+
+it("fences delayed push preparation on role revocation, session replacement, and disposal", async () => {
+  const cfg = mentionRoles({ denied: { agents: [], scopes: [], sessions: { others: "none" } } });
+  await withInbox(async (f) => {
+    await f.post();
+    const delayed = f.push.mock.calls[0]?.[0];
+    expect(delayed?.isCurrent()).toBe(true);
+    setUserProfileRole(f.bob.id, "denied");
+    invalidateOperatorRolePolicy(f.bob.id);
+    await Promise.resolve();
+    expect(delayed?.isCurrent()).toBe(false);
+    expectMentionError(await listInbox(f.inbox, f.bobClient), "FORBIDDEN");
+    setUserProfileRole(f.bob.id, "reader");
+    invalidateOperatorRolePolicy(f.bob.id);
+    await f.replaceSessionIdentity();
+    expect(await f.items()).toEqual([]);
+    expect(delayed?.isCurrent()).toBe(false);
+    await f.inbox.dispose();
+    expect(delayed?.isCurrent()).toBe(false);
   }, cfg);
 });
 
@@ -673,16 +778,24 @@ it("enforces the global bound and keeps evicted sources consumed", () =>
         writeMentionStoreChanges(db, { ...stored.head, nextSequence: 1_000 }, sources),
       );
       const firstRecipient = identifiedClient(profiles[0]!);
-      expect(await messageIds(f, firstRecipient)).toContain("message-0");
+      expect((await f.items(firstRecipient)).some((item) => item.messageId === "message-0")).toBe(
+        true,
+      );
       await post(1_000);
       const retained = await Promise.all(profiles.map((id) => read(f.inbox, identifiedClient(id))));
       expect(retained.reduce((sum, snapshot) => sum + snapshot.items.length, 0)).toBe(10_000);
       expect(
-        retained.flatMap((snapshot) => snapshot.items.map((item) => item.messageId)),
-      ).toContain("message-1000");
-      expect(await messageIds(f, firstRecipient)).not.toContain("message-0");
+        retained
+          .flatMap((snapshot) => snapshot.items)
+          .some((item) => item.messageId === "message-1000"),
+      ).toBe(true);
+      expect((await f.items(firstRecipient)).some((item) => item.messageId === "message-0")).toBe(
+        false,
+      );
       await post(0);
-      expect(await messageIds(f, firstRecipient)).not.toContain("message-0");
+      expect((await f.items(firstRecipient)).some((item) => item.messageId === "message-0")).toBe(
+        false,
+      );
     },
     {},
     { notifications: false },
