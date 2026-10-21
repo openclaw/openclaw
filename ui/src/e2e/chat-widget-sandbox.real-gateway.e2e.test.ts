@@ -79,7 +79,6 @@ function canvasDocument(
       title,
       html: buildWidgetDocument(title, body, options),
       cspSandbox: "scripts",
-      surface: "assistant_message",
     },
     { stateDir: gatewayOwner().stateDir },
   );

@@ -1,16 +1,32 @@
+import { homedir as osHomedir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveCopilotAuth, tokenFingerprint } from "./auth-bridge.js";
 
 const FAKE_HOME = "/fake-home";
-const fakeHomeDir = () => FAKE_HOME;
 const COPILOT_DEFAULT_AGENT_ID = "copilot";
 const COPILOT_TOKEN_PROFILE_ERROR =
   "[copilot-attempt] gitHubToken auth requires profileId+profileVersion (pool keying safety; per Q5/Q1 decisions)";
 
 function resolveAuth(input: Parameters<typeof resolveCopilotAuth>[0] = {}) {
-  return resolveCopilotAuth({ agentId: "agent-1", env: {}, homeDir: fakeHomeDir, ...input });
+  return resolveCopilotAuth({ agentId: "agent-1", ...input });
 }
+
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  homedir: vi.fn(),
+}));
+
+beforeEach(() => {
+  vi.stubEnv("GITHUB_TOKEN", undefined);
+  vi.stubEnv("OPENCLAW_GITHUB_TOKEN", undefined);
+  vi.stubEnv("COPILOT_GITHUB_TOKEN", undefined);
+  vi.stubEnv("GH_TOKEN", undefined);
+  vi.stubEnv("OPENCLAW_HOME", undefined);
+  vi.mocked(osHomedir).mockReset().mockReturnValue(FAKE_HOME);
+});
+
+afterEach(() => vi.unstubAllEnvs());
 
 function resolveAgentId(agentId: string | undefined): string {
   return resolveAuth({ agentId }).agentId;
@@ -76,9 +92,8 @@ describe("resolveCopilotAuth - copilotHome resolution", () => {
   });
 
   it("respects OPENCLAW_HOME env var as the home root", () => {
-    const result = resolveAuth({
-      env: { OPENCLAW_HOME: "/custom/openclaw" },
-    });
+    vi.stubEnv("OPENCLAW_HOME", "/custom/openclaw");
+    const result = resolveAuth();
     expect(result.copilotHome).toBe(
       resolve(join("/custom/openclaw", ".openclaw", "agents", "agent-1", "copilot")),
     );
@@ -105,9 +120,9 @@ describe("resolveCopilotAuth - copilotHome resolution", () => {
 
 describe("resolveCopilotAuth - auth mode resolution", () => {
   it("returns useLoggedInUser when auth.useLoggedInUser=true (ignoring gitHubToken)", () => {
+    vi.stubEnv("OPENCLAW_GITHUB_TOKEN", "env-token");
     const result = resolveAuth({
       auth: { useLoggedInUser: true, gitHubToken: "should-be-ignored" },
-      env: { OPENCLAW_GITHUB_TOKEN: "env-token" },
     });
     expect(result.authMode).toBe("useLoggedInUser");
     expect(result.gitHubToken).toBeUndefined();
@@ -189,24 +204,22 @@ describe("resolveCopilotAuth - contract-resolved auth (resolvedApiKey + authProf
   });
 
   it("contract resolvedApiKey takes precedence over env fallback", () => {
+    vi.stubEnv("OPENCLAW_GITHUB_TOKEN", "env-should-be-ignored");
+    vi.stubEnv("COPILOT_GITHUB_TOKEN", "copilot-env-should-be-ignored");
+    vi.stubEnv("GH_TOKEN", "gh-env-should-be-ignored");
+    vi.stubEnv("GITHUB_TOKEN", "github-env-should-be-ignored");
     const result = resolveAuth({
       resolvedApiKey: "contract-token",
       authProfileId: "p",
-      env: {
-        OPENCLAW_GITHUB_TOKEN: "env-should-be-ignored",
-        COPILOT_GITHUB_TOKEN: "copilot-env-should-be-ignored",
-        GH_TOKEN: "gh-env-should-be-ignored",
-        GITHUB_TOKEN: "github-env-should-be-ignored",
-      },
     });
     expect(result.gitHubToken).toBe("contract-token");
     expect(result.authProfileId).toBe("p");
   });
 
   it("falls back to env when resolvedApiKey is absent", () => {
+    vi.stubEnv("GITHUB_TOKEN", "env-only");
     const result = resolveAuth({
       authProfileId: "p",
-      env: { GITHUB_TOKEN: "env-only" },
     });
     expect(result.gitHubToken).toBe("env-only");
     expect(result.authProfileId).toBe("env:GITHUB_TOKEN");
@@ -215,9 +228,8 @@ describe("resolveCopilotAuth - contract-resolved auth (resolvedApiKey + authProf
 
 describe("resolveCopilotAuth - env var fallbacks", () => {
   it("falls back to GITHUB_TOKEN with synthesised profile id + fingerprint", () => {
-    const result = resolveAuth({
-      env: { GITHUB_TOKEN: "env-token-123" },
-    });
+    vi.stubEnv("GITHUB_TOKEN", "env-token-123");
+    const result = resolveAuth();
     expect(result.authMode).toBe("gitHubToken");
     expect(result.gitHubToken).toBe("env-token-123");
     expect(result.authProfileId).toBe("env:GITHUB_TOKEN");
@@ -225,14 +237,11 @@ describe("resolveCopilotAuth - env var fallbacks", () => {
   });
 
   it("OPENCLAW_GITHUB_TOKEN takes precedence over COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN", () => {
-    const result = resolveAuth({
-      env: {
-        OPENCLAW_GITHUB_TOKEN: "openclaw-tok",
-        COPILOT_GITHUB_TOKEN: "copilot-tok",
-        GH_TOKEN: "gh-tok",
-        GITHUB_TOKEN: "github-tok",
-      },
-    });
+    vi.stubEnv("OPENCLAW_GITHUB_TOKEN", "openclaw-tok");
+    vi.stubEnv("COPILOT_GITHUB_TOKEN", "copilot-tok");
+    vi.stubEnv("GH_TOKEN", "gh-tok");
+    vi.stubEnv("GITHUB_TOKEN", "github-tok");
+    const result = resolveAuth();
     expect(result).toMatchObject({
       gitHubToken: "openclaw-tok",
       authProfileId: "env:OPENCLAW_GITHUB_TOKEN",
@@ -241,38 +250,34 @@ describe("resolveCopilotAuth - env var fallbacks", () => {
   });
 
   it("COPILOT_GITHUB_TOKEN takes precedence over GH_TOKEN and GITHUB_TOKEN", () => {
-    const result = resolveAuth({
-      env: {
-        COPILOT_GITHUB_TOKEN: "copilot-tok",
-        GH_TOKEN: "gh-tok",
-        GITHUB_TOKEN: "github-tok",
-      },
-    });
+    vi.stubEnv("COPILOT_GITHUB_TOKEN", "copilot-tok");
+    vi.stubEnv("GH_TOKEN", "gh-tok");
+    vi.stubEnv("GITHUB_TOKEN", "github-tok");
+    const result = resolveAuth();
     expect(result.gitHubToken).toBe("copilot-tok");
     expect(result.authProfileId).toBe("env:COPILOT_GITHUB_TOKEN");
   });
 
   it("GH_TOKEN takes precedence over GITHUB_TOKEN", () => {
-    const result = resolveAuth({
-      env: {
-        GH_TOKEN: "gh-tok",
-        GITHUB_TOKEN: "github-tok",
-      },
-    });
+    vi.stubEnv("GH_TOKEN", "gh-tok");
+    vi.stubEnv("GITHUB_TOKEN", "github-tok");
+    const result = resolveAuth();
     expect(result.gitHubToken).toBe("gh-tok");
     expect(result.authProfileId).toBe("env:GH_TOKEN");
   });
 
   it("token rotation in env changes the pool fingerprint (cache-busting)", () => {
-    const a = resolveAuth({ env: { GITHUB_TOKEN: "v1" } });
-    const b = resolveAuth({ env: { GITHUB_TOKEN: "v2" } });
+    vi.stubEnv("GITHUB_TOKEN", "v1");
+    const a = resolveAuth();
+    vi.stubEnv("GITHUB_TOKEN", "v2");
+    const b = resolveAuth();
     expect(a.authProfileVersion).not.toBe(b.authProfileVersion);
   });
 
   it("explicit auth.gitHubToken wins over env tokens", () => {
+    vi.stubEnv("OPENCLAW_GITHUB_TOKEN", "env-tok");
     const result = resolveAuth({
       auth: { gitHubToken: "explicit", profileId: "p", profileVersion: "v" },
-      env: { OPENCLAW_GITHUB_TOKEN: "env-tok" },
     });
     expect(result.authMode).toBe("gitHubToken");
     expect(result.gitHubToken).toBe("explicit");
@@ -281,56 +286,35 @@ describe("resolveCopilotAuth - env var fallbacks", () => {
   });
 
   it("ignores empty-string env tokens (treated as absent)", () => {
-    const result = resolveAuth({
-      env: {
-        GITHUB_TOKEN: "",
-        OPENCLAW_GITHUB_TOKEN: "",
-        COPILOT_GITHUB_TOKEN: "",
-        GH_TOKEN: "",
-      },
-    });
+    vi.stubEnv("GITHUB_TOKEN", "");
+    vi.stubEnv("OPENCLAW_GITHUB_TOKEN", "");
+    vi.stubEnv("COPILOT_GITHUB_TOKEN", "");
+    vi.stubEnv("GH_TOKEN", "");
+    const result = resolveAuth();
     expect(result.authMode).toBe("useLoggedInUser");
   });
 });
 
 describe("resolveCopilotAuth - defaults wiring", () => {
-  beforeEach(() => {
-    vi.stubEnv("GITHUB_TOKEN", undefined);
-    vi.stubEnv("OPENCLAW_GITHUB_TOKEN", undefined);
-    vi.stubEnv("COPILOT_GITHUB_TOKEN", undefined);
-    vi.stubEnv("GH_TOKEN", undefined);
-    vi.stubEnv("OPENCLAW_HOME", undefined);
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("uses process.env when env is not injected", () => {
-    process.env.GITHUB_TOKEN = "from-process-env";
-    const result = resolveCopilotAuth({
-      agentId: "agent-1",
-      homeDir: fakeHomeDir,
-    });
+  it("uses the process token environment", () => {
+    vi.stubEnv("GITHUB_TOKEN", "from-process-env");
+    const result = resolveCopilotAuth({ agentId: "agent-1" });
     expect(result.authMode).toBe("gitHubToken");
     expect(result.gitHubToken).toBe("from-process-env");
   });
 
-  it("uses os.homedir() when homeDir is not injected", () => {
+  it("uses os.homedir() for the home root", () => {
     const result = resolveCopilotAuth({ agentId: "agent-1" });
     expect(result.copilotHome.endsWith(join(".openclaw", "agents", "agent-1", "copilot"))).toBe(
       true,
     );
   });
 
-  it("falls back to process.cwd() if homeDir throws", () => {
-    const result = resolveCopilotAuth({
-      agentId: "agent-1",
-      env: {},
-      homeDir: () => {
-        throw new Error("no home");
-      },
+  it("falls back to process.cwd() if os.homedir() throws", () => {
+    vi.mocked(osHomedir).mockImplementationOnce(() => {
+      throw new Error("no home");
     });
+    const result = resolveCopilotAuth({ agentId: "agent-1" });
     expect(result.copilotHome.includes(join(".openclaw", "agents", "agent-1", "copilot"))).toBe(
       true,
     );

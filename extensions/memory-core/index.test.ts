@@ -13,8 +13,8 @@ import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { buildMemoryPromptSection } from "./src/memory-tool-contract.js";
 import {
   getMemoryManagerLifecycle,
-  hasMemoryIndexingBeenLive,
   markMemoryIndexingLive,
+  retainMemoryIndexingAgents,
 } from "./src/memory/lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 
@@ -477,26 +477,24 @@ describe("memory-core plugin runtime registration", () => {
     if (!service) {
       throw new Error("Expected the memory index service");
     }
-    expect(hasMemoryIndexingBeenLive()).toBe(false);
+    expect(retainMemoryIndexingAgents(["main", "research"])).toEqual([]);
     await service.start(context);
     expect(backgroundTasks).toEqual([]);
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
 
     // A watched manager opened by a search or turn makes later restarts restore it.
-    markMemoryIndexingLive();
+    markMemoryIndexingLive("main");
     await service.stop?.(context);
     await service.start(context);
     await Promise.all(backgroundTasks);
-    expect(getMemorySearchManagerMock.mock.calls).toEqual([
-      [{ cfg: config, agentId: "main" }],
-      [{ cfg: config, agentId: "research" }],
-    ]);
+    expect(getMemorySearchManagerMock.mock.calls).toEqual([[{ cfg: config, agentId: "main" }]]);
   });
 
   it.each(["memory-core", "honcho", "none"])(
     "starts configured indexes only for the selected memory slot: %s",
     async (owner) => {
-      markMemoryIndexingLive();
+      markMemoryIndexingLive("main");
+      markMemoryIndexingLive("research");
       const config = indexConfig(owner);
       const { services, backgroundTasks, context } = indexFixture(config);
       for (const service of services) {
@@ -519,7 +517,7 @@ describe("memory-core plugin runtime registration", () => {
   ])(
     "drains managers after tracked activation rejects ($cleanupOwner, cleanup failure: $cleanupFails)",
     async ({ cleanupOwner, cleanupFails }) => {
-      markMemoryIndexingLive();
+      markMemoryIndexingLive("main");
       const activationFailure = new Error("plugin retired after activation");
       const cleanupFailure = new Error("memory manager cleanup failed");
       const config = indexConfig();

@@ -1,4 +1,13 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+} from "solid-js";
 import { SettingsRow, SettingsSection } from "../components/solid/settings-ui.tsx";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -7,9 +16,13 @@ import { CustomPluginUiDisabled } from "./control-ui-disabled.solid.tsx";
 
 export function PluginManager() {
   const context = useApplication();
-  const [reloading, setReloading] = createSignal(false);
-  const [reloadError, setReloadError] = createSignal("");
+  const [reloading, setReloading] = createOptimistic(false);
+  const [reloadRead, setReloadRead] = createSignal<Promise<void> | null>(null);
   const source = projectOwner(context.plugins, (runtime) => runtime);
+  const reload = action(function* () {
+    setReloading(true);
+    yield source.read().reload();
+  });
   const replacements = createMemo(() => source.read().registrations("replacements"));
   const surfaces = createMemo(() => [
     ...new Set(replacements().map((entry) => entry.value.surface)),
@@ -35,19 +48,12 @@ export function PluginManager() {
                     class="btn btn--sm oc-action oc-action-secondary"
                     type="button"
                     disabled={reloading()}
-                    onClick={() =>
-                      void (async () => {
-                        setReloading(true);
-                        setReloadError("");
-                        try {
-                          await source.read().reload();
-                        } catch (error) {
-                          setReloadError(error instanceof Error ? error.message : String(error));
-                        } finally {
-                          setReloading(false);
-                        }
-                      })()
-                    }
+                    onClick={() => {
+                      const read = reload();
+                      // The settings surface can disappear before this action settles.
+                      void read.catch(() => undefined);
+                      void setReloadRead(read);
+                    }}
                   >
                     {t("pluginUi.reload")}
                   </button>
@@ -111,11 +117,30 @@ export function PluginManager() {
               />
             )}
           </For>
-          <Show when={reloadError()}>
-            <SettingsRow title={reloadError()} role="alert" carapace />
-          </Show>
+          <For each={!reloading() && reloadRead() ? [reloadRead()!] : []}>
+            {(read) => (
+              <Errored
+                fallback={(error) => {
+                  const message = () => {
+                    const value = error();
+                    return value instanceof Error ? value.message : String(value);
+                  };
+                  return <SettingsRow title={message()} role="alert" carapace />;
+                }}
+              >
+                <Loading>
+                  <ReloadCompletion read={read} />
+                </Loading>
+              </Errored>
+            )}
+          </For>
         </SettingsSection>
       </Show>
     </openclaw-plugin-manager>
   );
+}
+
+function ReloadCompletion(props: { read: Promise<void> }) {
+  const completion = createMemo(() => props.read.then(() => null));
+  return <>{completion()}</>;
 }

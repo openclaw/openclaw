@@ -140,21 +140,18 @@ it.each(["timer maintenance", "startup catch-up"] as const)(
     await saveCronStore(store.storePath, { version: 1, jobs });
 
     const order: string[] = [];
-    const enqueueSystemEvent = vi.fn(() => {
+    const enqueueSessionEvent = vi.fn(() => {
       const persisted = openOpenClawStateDatabase()
         .db.prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
         .get(cronStoreKey(store.storePath), malformed.id) as { enabled: number };
       expect(persisted.enabled).toBe(0);
       order.push("notify");
     });
-    const requestHeartbeat = vi.fn(() => {
-      expect(order.at(-1)).toBe("notify");
-      order.push("heartbeat");
-    });
+    const requestHeartbeat = vi.fn();
     const state = createCronServiceState({
       storePath: store.storePath,
       nowMs: () => now,
-      enqueueSystemEvent,
+      enqueueSessionEvent,
       requestHeartbeat,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
@@ -164,7 +161,8 @@ it.each(["timer maintenance", "startup catch-up"] as const)(
       await onTimer(state);
     }
 
-    expect(order).toEqual(["notify", "heartbeat"]);
+    expect(order).toEqual(["notify"]);
+    expect(requestHeartbeat).not.toHaveBeenCalled();
     expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
     expect(
       (await loadCronStore(store.storePath)).jobs.find((job) => job.id === malformed.id),
@@ -173,7 +171,7 @@ it.each(["timer maintenance", "startup catch-up"] as const)(
 );
 
 it("records failure diagnostics and auto-disables on the tenth consecutive failure", async () => {
-  const enqueueSystemEvent = vi.fn();
+  const enqueueSessionEvent = vi.fn();
   const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
     async () => undefined,
   );
@@ -193,7 +191,7 @@ it("records failure diagnostics and auto-disables on the tenth consecutive failu
   const { state, job, apply, deferredNotifications } = outcomeFixture(
     startedAt,
     { state: { consecutiveErrors: 8 }, failureAlert: { after: 10, cooldownMs: 0 } },
-    { enqueueSystemEvent, sendCronFailureAlert, log },
+    { enqueueSessionEvent, sendCronFailureAlert, log },
   );
   apply({ status: "error", error: "ninth failure", diagnostics: structuredClone(diagnostics) });
   expect(job.enabled).toBe(true);
@@ -231,26 +229,26 @@ it("records failure diagnostics and auto-disables on the tenth consecutive failu
   expect(sendCronFailureAlert.mock.calls[0]?.[0].payload.text).toContain(
     'Automation "outcome" was auto-disabled after 10 consecutive run failures.',
   );
-  expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  expect(enqueueSessionEvent).not.toHaveBeenCalled();
 });
 
 it.each([
   { name: "alerts disabled for the job", overrides: { failureAlert: false } },
   { name: "no failure route", overrides: { delivery: { mode: "none" } } },
 ] as const)("keeps the owning-agent notice with $name", async ({ overrides }) => {
-  const enqueueSystemEvent = vi.fn();
+  const enqueueSessionEvent = vi.fn();
   const sendCronFailureAlert = vi.fn(async () => undefined);
   const { state, job, apply, deferredNotifications } = outcomeFixture(
     startedAt,
     { ...overrides, state: { consecutiveErrors: 9 } } as Partial<CronJob>,
-    { enqueueSystemEvent, sendCronFailureAlert, defaultAgentId: "main" },
+    { enqueueSessionEvent, sendCronFailureAlert, defaultAgentId: "main" },
   );
 
   apply({ status: "error", error: "tenth failure" });
   expect(job.state.autoDisabled?.reason).toBe("consecutive-failures");
   expect(deferredNotifications.map(({ kind }) => kind)).toEqual(["auto-disabled"]);
   await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
-  expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+  expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining("was auto-disabled after 10 consecutive run failures"),
     expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
   );

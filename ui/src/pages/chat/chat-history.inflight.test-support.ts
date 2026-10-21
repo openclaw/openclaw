@@ -14,7 +14,9 @@ import type { handleAgentEvent } from "./tool-stream.ts";
 
 export type TestState = ChatHistoryHost & Parameters<typeof handleAgentEvent>[0];
 
-export function createState(result: ChatHistoryResult): TestState {
+export function createState(
+  result: ChatHistoryResult,
+): TestState & ReturnType<typeof makeChatHost> {
   const host = makeChatHost({
     requestHandlers: { "chat.history": result },
     sessionKey: "main",

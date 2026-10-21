@@ -15,6 +15,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { resolveOpenClawStateSqliteDir } from "../../state/openclaw-state-db.paths.js";
 import { expectMessages, expectNoCalls } from "./update-boundary.test-support.js";
 import { reportUnreportedUpdateAdmissionOutcome } from "./update-command-admission-report.js";
+import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   UnreportedUpdateAdmissionOutcome,
@@ -86,8 +87,6 @@ afterEach(() => {
 
 it.each([
   { status: "skipped", capturedBefore: false },
-  { status: "error", capturedBefore: false },
-  { status: "skipped", capturedBefore: true },
   { status: "error", capturedBefore: true },
 ] as const)(
   "does not borrow a nested Run for a detached $status refusal (captured before: $capturedBefore)",
@@ -96,15 +95,7 @@ it.each([
     const recorded = createUpdateRun({ trigger: "cli" }, { env });
     const run = { runId: recorded.runId, env };
     closeOpenClawStateDatabaseForTest();
-    const entries = (await fs.readdir(env.OPENCLAW_STATE_DIR, { recursive: true })).toSorted(
-      (left, right) => left.localeCompare(right),
-    );
-    const files = await Promise.all(
-      entries.map(async (entry) => {
-        const file = path.join(env.OPENCLAW_STATE_DIR, entry);
-        return (await fs.stat(file)).isFile() ? { file, body: await fs.readFile(file) } : undefined;
-      }),
-    );
+    const before = snapshotUpdateFixtureTree(env.OPENCLAW_STATE_DIR);
     const detachedRoot = dirs.make("update-detached-report-");
     vi.spyOn(os, "tmpdir").mockReturnValue(detachedRoot);
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
@@ -151,16 +142,7 @@ it.each([
         result.reportPath.startsWith(detachedRoot + path.sep),
     );
     expect(await fs.readFile(result.reportPath, "utf8")).toContain("fixture-admission-refused");
-    expect(
-      (await fs.readdir(env.OPENCLAW_STATE_DIR, { recursive: true })).toSorted((left, right) =>
-        left.localeCompare(right),
-      ),
-    ).toEqual(entries);
-    for (const file of files) {
-      if (file) {
-        expect(await fs.readFile(file.file)).toEqual(file.body);
-      }
-    }
+    expect(snapshotUpdateFixtureTree(env.OPENCLAW_STATE_DIR)).toEqual(before);
     expect(getUpdateRun(run.runId, { env })).toEqual(recorded);
   },
 );

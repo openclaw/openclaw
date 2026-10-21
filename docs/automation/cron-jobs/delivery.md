@@ -81,7 +81,7 @@ services. Leaving the policy unset keeps strict behavior.
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; OpenClaw also accepts the Telegram-owned `-1001234567890:123` shorthand. Direct RPC/config callers may pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
-For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
+For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. Changing the agent, delivery mode, channel, account, or recipient clears the previous topic when you save. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
 
 On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
 
@@ -109,6 +109,35 @@ including current cancellation and tool-policy withdrawal.
 When an agent creates an isolated reminder from an active chat, OpenClaw stores the preserved live delivery target for the fallback announce route. If it must recover a saved route, it reads the selected agent’s session store—even when the session key is the unqualified `global` alias. Explicit delivery targets still take precedence. Internal session keys may be lowercase; provider delivery targets are not reconstructed from those keys when current chat context is available.
 
 Implicit announce delivery uses configured channel allowlists to validate and reroute stale targets. DM pairing-store approvals are not fallback automation recipients; set `delivery.to` or configure the channel `allowFrom` entry when a scheduled job should proactively send to a DM.
+
+### Owner delivery and direct messages
+
+Set `delivery.target: "owner"` (`--delivery-target owner`) when a job should
+resolve a positively identified owner DM at delivery time. This does not follow
+the last group conversation or guess a recipient when owner identity is
+ambiguous. `delivery.directPolicy: "block"` (`--direct-policy block`) blocks
+direct/DM delivery for that job; the default is `allow`.
+
+A missing owner route does not skip execution. The job still runs, and ordinary
+delivery settlement records the unavailable destination without falling back to
+the last conversation. An explicit DM block remains intentional non-delivery.
+
+```bash
+openclaw automations edit <job-id> \
+  --announce --channel telegram --delivery-target owner
+```
+
+These policies support agent-turn jobs in any supported session, including `main`, and
+non-main command or script jobs with chat delivery. Owner targeting cannot
+be combined with `--to`, `--thread-id`, or `--webhook`. Setting it on an existing
+job clears the previous explicit recipient and thread. Selecting a new explicit
+recipient replaces owner targeting. Use `--clear-delivery-target` or
+`--clear-direct-policy` to remove the stored policy.
+
+Use `payload.includeReasoning: true` (`--include-reasoning`) on an agent-turn
+job only when reasoning returned by the agent should accompany a meaningful result.
+Reasoning alone does not create a notification; omitting this setting keeps ordinary
+final-output delivery.
 
 ### Failure notifications
 

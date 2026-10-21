@@ -159,9 +159,44 @@ describe("ClawRouter cold prepared catalog", () => {
     const prepared = await prepareWorkspaceBuildGroup([input], "static", {
       preferBuiltPluginArtifacts: true,
     });
+    const metadata = prepared.pluginGeneration.pluginMetadataSnapshot;
+    // The local catalog server stands in for the provider-owned endpoint. Match the
+    // fixture's manifest route to that endpoint without relaxing production policy.
+    const withLocalEndpoint = (plugin: (typeof metadata.plugins)[number]) => {
+      const catalog = plugin.modelCatalog;
+      const provider = catalog?.providers?.clawrouter;
+      if (plugin.id !== "clawrouter" || !catalog || !provider) {
+        return plugin;
+      }
+      return {
+        ...plugin,
+        modelCatalog: {
+          ...catalog,
+          providers: {
+            ...catalog.providers,
+            clawrouter: { ...provider, baseUrl },
+          },
+        },
+      };
+    };
+    const pluginMetadataSnapshot = {
+      ...metadata,
+      plugins: metadata.plugins.map(withLocalEndpoint),
+      manifestRegistry: {
+        ...metadata.manifestRegistry,
+        plugins: metadata.manifestRegistry.plugins.map(withLocalEndpoint),
+      },
+      byPluginId: new Map(
+        [...metadata.byPluginId].map(([id, plugin]) => [id, withLocalEndpoint(plugin)]),
+      ),
+    };
+    expect(pluginMetadataSnapshot.byPluginId.get("clawrouter")).toMatchObject({
+      modelCatalog: { discovery: { clawrouter: "runtime" }, runtimeAugment: true },
+    });
     const value = createPreparedModelCatalogWorkerInput({
       agentFacts: prepared.agentFacts[0]!,
-      pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+      pluginMetadataSnapshot,
+      preferBuiltPluginArtifacts: true,
     });
     if (refreshedAuth) {
       // The new credential must enter through the worker's durable auth refresh,
@@ -210,7 +245,7 @@ describe("ClawRouter cold prepared catalog", () => {
       cfg: config,
       agentId,
       snapshot: result.snapshot,
-      metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+      metadataSnapshot: pluginMetadataSnapshot,
       preparedAuthStore: result.authStore,
       preparedRuntimeAuthModes: result.authModes,
     });

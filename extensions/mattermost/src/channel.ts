@@ -105,12 +105,6 @@ function hasMattermostPresentationNavigation(presentation: MessagePresentation):
   );
 }
 
-function readMattermostPayloadData(payload: {
-  channelData?: Record<string, unknown>;
-}): Record<string, unknown> | undefined {
-  return asOptionalRecord(payload.channelData?.mattermost);
-}
-
 type MattermostDirectoryListParams = Parameters<
   NonNullable<NonNullable<ChannelPlugin["directory"]>["listGroups"]>
 >[0];
@@ -316,7 +310,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const mediaUrl = resolveMattermostSendAttachmentMedia(ctx.params);
     const attachmentText =
       typeof ctx.params.attachmentText === "string" ? ctx.params.attachmentText : undefined;
-    const existingMattermostData = readMattermostPayloadData(payload);
+    const existingMattermostData = asOptionalRecord(payload.channelData?.mattermost);
     return {
       ...payload,
       ...(mediaUrl ? { mediaUrl, mediaUrls: [mediaUrl] } : {}),
@@ -460,14 +454,19 @@ function parseMattermostReactActionParams(params: Record<string, unknown>) {
   };
 }
 
+function hasUnsupportedMattermostAttachmentPayload(record: Record<string, unknown>): boolean {
+  return ["buffer", "base64"].some((key) => {
+    const value = record[key];
+    return typeof value === "string" ? Boolean(value.trim()) : value != null;
+  });
+}
+
 function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): string | undefined {
   const sourceKeys = ["media", "mediaUrl", "path", "filePath", "fileUrl"];
   const candidates = sourceKeys.map((key) => readStringParam(params, key));
   candidates.push(...(readStringArrayParam(params, "mediaUrls") ?? []));
 
-  let hasUnsupportedAttachmentPayload = Boolean(
-    readStringParam(params, "buffer") ?? readStringParam(params, "base64"),
-  );
+  let hasUnsupportedAttachmentPayload = hasUnsupportedMattermostAttachmentPayload(params);
   if (Array.isArray(params.attachments)) {
     for (const attachment of params.attachments) {
       if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
@@ -476,9 +475,7 @@ function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): 
       const record = attachment as Record<string, unknown>;
       candidates.push(...sourceKeys.map((key) => readStringParam(record, key)));
       candidates.push(readStringParam(record, "url"));
-      hasUnsupportedAttachmentPayload ||= Boolean(
-        readStringParam(record, "buffer") ?? readStringParam(record, "base64"),
-      );
+      hasUnsupportedAttachmentPayload ||= hasUnsupportedMattermostAttachmentPayload(record);
     }
   }
 
@@ -566,7 +563,7 @@ const mattermostOutbound: ChannelOutboundAdapter = {
     };
   },
   sendPayload: async (ctx) => {
-    const mattermostData = readMattermostPayloadData(ctx.payload);
+    const mattermostData = asOptionalRecord(ctx.payload.channelData?.mattermost);
     const buttons = Array.isArray(mattermostData?.presentationButtons)
       ? mattermostData.presentationButtons
       : undefined;

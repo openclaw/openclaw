@@ -197,7 +197,12 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     ) {
       this.repository.dismissedIds = dismissed;
     }
-    if (!result.rateLimited || result.pullRequests.length > 0 || repositoryChanged) {
+    if (
+      result.discardPrevious ||
+      !result.rateLimited ||
+      result.pullRequests.length > 0 ||
+      repositoryChanged
+    ) {
       const previousSummary = scope.context.sessions.pullRequestSummary(sessionKey);
       scope.context.sessions.setPullRequestSummary(
         sessionKey,

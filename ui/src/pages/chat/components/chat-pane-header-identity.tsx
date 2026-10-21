@@ -12,12 +12,13 @@ import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
 import "../../../components/workspace-icon.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending, resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -25,6 +26,8 @@ import {
 } from "../../../lib/sessions/session-key.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import type { ChatPaneHeaderProps, ChatPaneParentSession } from "./chat-pane-header.types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 function revealLabel(platform: string | null): string {
   if (platform === "darwin") {
@@ -48,6 +51,25 @@ export function resolveChatPaneParentSession(
   return parent ? { key: parent.key, title: resolveSessionDisplayName(parent.key, parent) } : null;
 }
 
+function CrumbSeparator(props: { merged: boolean }) {
+  return (
+    <span class="chat-pane__crumb-sep" aria-hidden="true">
+      {props.merged ? (
+        "/"
+      ) : (
+        <svg width="4" height="20" viewBox="0 0 4 20" fill="none">
+          <path
+            d="M3.3 4.7.7 15.3"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linecap="round"
+          />
+        </svg>
+      )}
+    </span>
+  );
+}
+
 export function IdentityCrumbs(props: ChatPaneHeaderProps) {
   const hasProject = () => !props.catalog && Boolean(props.workspaceLabel);
   const status = () =>
@@ -65,20 +87,7 @@ export function IdentityCrumbs(props: ChatPaneHeaderProps) {
       </Show>
       <div class="chat-pane__session-trail">
         <Show when={hasProject()}>
-          <span class="chat-pane__crumb-sep" aria-hidden="true">
-            {props.mergedChrome ? (
-              "/"
-            ) : (
-              <svg width="4" height="20" viewBox="0 0 4 20" fill="none">
-                <path
-                  d="M3.3 4.7.7 15.3"
-                  stroke="currentColor"
-                  stroke-width="1.4"
-                  stroke-linecap="round"
-                />
-              </svg>
-            )}
-          </span>
+          <CrumbSeparator merged={props.mergedChrome} />
         </Show>
         <Show when={props.parentSession}>
           {(parent) => (
@@ -92,20 +101,7 @@ export function IdentityCrumbs(props: ChatPaneHeaderProps) {
               >
                 <span class="chat-pane__parent-session-text">{parent().title}</span>
               </button>
-              <span class="chat-pane__crumb-sep" aria-hidden="true">
-                {props.mergedChrome ? (
-                  "/"
-                ) : (
-                  <svg width="4" height="20" viewBox="0 0 4 20" fill="none">
-                    <path
-                      d="M3.3 4.7.7 15.3"
-                      stroke="currentColor"
-                      stroke-width="1.4"
-                      stroke-linecap="round"
-                    />
-                  </svg>
-                )}
-              </span>
+              <CrumbSeparator merged={props.mergedChrome} />
             </>
           )}
         </Show>
@@ -232,21 +228,22 @@ export function ProjectCrumb(props: ChatPaneHeaderProps) {
   const id = `chat-workspace-${++nextWorkspaceMenuId}`;
   const copied = () => props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   const items = createMemo(() => {
-    const copyActions: MenuItem[] = [
-      ...(props.workspaceRoot
+    const copyActions: MenuItem[] = (
+      [
+        ["copy-path", "listTree", props.workspaceRoot, "chat.sessionHeader.copyPath"],
+        ["copy-branch", "gitBranch", props.branch, "chat.sessionHeader.copyBranch"],
+      ] as const
+    ).flatMap(([action, icon, value, label]) =>
+      value
         ? [
             {
-              id: "copy-path",
+              id: action,
               icon: (
                 <span class="session-menu__icon" aria-hidden="true">
-                  <Icon name="listTree" />
+                  <Icon name={icon} />
                 </span>
               ),
-              label: t(
-                props.copiedAction === "copy-path"
-                  ? "chat.sessionHeader.copied"
-                  : "chat.sessionHeader.copyPath",
-              ),
+              label: t(props.copiedAction === action ? "chat.sessionHeader.copied" : label),
               details: (
                 <span class="session-menu__icon" aria-hidden="true">
                   <Icon name="copy" />
@@ -254,30 +251,8 @@ export function ProjectCrumb(props: ChatPaneHeaderProps) {
               ),
             },
           ]
-        : []),
-      ...(props.branch
-        ? [
-            {
-              id: "copy-branch",
-              icon: (
-                <span class="session-menu__icon" aria-hidden="true">
-                  <Icon name="gitBranch" />
-                </span>
-              ),
-              label: t(
-                props.copiedAction === "copy-branch"
-                  ? "chat.sessionHeader.copied"
-                  : "chat.sessionHeader.copyBranch",
-              ),
-              details: (
-                <span class="session-menu__icon" aria-hidden="true">
-                  <Icon name="copy" />
-                </span>
-              ),
-            },
-          ]
-        : []),
-    ];
+        : [],
+    );
     return [
       ...copyActions,
       ...(props.canReveal && props.workspaceRoot
@@ -309,9 +284,12 @@ export function ProjectCrumb(props: ChatPaneHeaderProps) {
       label={t("chat.sessionHeader.workspaceAria", { workspace: props.workspaceLabel ?? "" })}
       triggerClass={`chat-pane__workspace-chip${!copied() && !props.workspaceIcon ? " chat-pane__workspace-chip--fallback-icon" : ""}`}
       triggerAttributes={{
-        title: props.mergedChrome
-          ? undefined
-          : (props.workspaceRoot ?? props.workspaceLabel ?? undefined),
+        title:
+          props.workspaceLabel === t("sessionHovercard.workspaceLabel")
+            ? props.workspaceLabel
+            : props.mergedChrome
+              ? undefined
+              : (props.workspaceRoot ?? props.workspaceLabel ?? undefined),
       }}
       items={items()}
       onSelect={(item) => {

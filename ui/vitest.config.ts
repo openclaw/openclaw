@@ -94,6 +94,7 @@ const webkitTestFiles = [
   "src/components/decision-model-picker.browser.test.tsx",
   "src/components/agent-select-opening.browser.test.ts",
   "src/components/app-sidebar-agent-menu-scroll.browser.test.ts",
+  "src/components/app-sidebar-rail-menus.browser.test.ts",
   "src/components/agent-emoji-picker.browser.test.ts",
   "src/components/appearance-picker.browser.test.ts",
   "src/components/confirm-dialog.browser.test.ts",

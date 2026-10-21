@@ -4,14 +4,11 @@ import { streamOpenAIResponses } from "../providers/openai-responses.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import { buildOpenAIResponsesParams } from "./openai-responses-params-internal.js";
 import { createModel, userMessage } from "./openai-responses-prompt-observer.test-support.js";
-import {
-  convertProviderResponsesMessages,
-  convertResponsesMessages,
-} from "./openai-responses-replay-messages-internal.js";
+import { convertProviderResponsesMessages } from "./openai-responses-replay-messages-internal.js";
 
 const context: Context = {
   systemPrompt: "Synthetic instructions",
-  messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+  messages: [userMessage("Hello")],
 };
 
 const baseModel = createModel({
@@ -92,7 +89,6 @@ describe("Responses prompt role", () => {
         { type: "message", role: "user" },
       ];
       expect(convertProviderResponsesMessages(model, context, new Set())).toMatchObject(expected);
-      expect(convertResponsesMessages(model, context, new Set())).toMatchObject(expected);
       expect(buildOpenAIResponsesParams(model, context, undefined).input).toMatchObject(expected);
     },
   );

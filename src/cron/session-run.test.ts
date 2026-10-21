@@ -42,6 +42,8 @@ vi.mock("./isolated-agent/run-delivery-trace.js", async (importOriginal) => ({
 vi.mock("../gateway/cron-operator-source.js", () => ({
   restoreCronOperatorSource: fixture.restore,
 }));
+// mock-isolation: These receipt/prompt contracts use a job with no saved scratch.
+vi.mock("./scratch-read.js", () => ({ readCronScratchSnapshot: async () => undefined }));
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -139,6 +141,36 @@ function restoredSource(): RestoredGatewayOperatorAuthority {
   };
 }
 
+async function prepareLivePrompt(
+  params: Parameters<typeof runCronSessionTurn>[0],
+  beforePrepare?: () => void,
+) {
+  const terminal = createDeferred<SessionEventOutcome>();
+  const enqueued = createDeferred<SessionEventOptions>();
+  fixture.enqueue.mockImplementation((_text, options) => {
+    enqueued.resolve(options);
+    return {
+      id: "event",
+      cancel: () => false,
+      accepted: Promise.resolve({ ok: true }),
+      settled: terminal.promise,
+    };
+  });
+  const run = runCronSessionTurn(params);
+  try {
+    const options = await awaitGateBeforeSettlement(
+      enqueued.promise,
+      run,
+      "settled before enqueue",
+    );
+    beforePrepare?.();
+    return await options.scheduledAutomation?.preparePrompt?.(params.cfg);
+  } finally {
+    terminal.resolve({ status: "completed", executionStarted: true, delivered: false });
+    await run;
+  }
+}
+
 describe("scheduled session prompts", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -154,11 +186,9 @@ describe("scheduled session prompts", () => {
   it("submits the job identity and localized current time with the scheduled instructions", async () => {
     const params = input();
     params.cfg = { agents: { defaults: { userTimezone: "America/Los_Angeles" } } };
-    await runCronSessionTurn(params);
-    vi.setSystemTime(new Date("2026-10-20T16:10:00Z"));
-    const text = await fixture.enqueue.mock.calls[0]?.[1].scheduledAutomation?.preparePrompt?.(
-      params.cfg,
-    );
+    const text = await prepareLivePrompt(params, () => {
+      vi.setSystemTime(new Date("2026-10-20T16:10:00Z"));
+    });
     expect(text).toContain("[cron:job-1 test] Check the report.");
     expect(text).toMatch(/Current time: .*9:00.*\(America\/Los_Angeles\)/);
     expect(text).toContain("Reference UTC: 2026-10-20 16:00 UTC");
@@ -236,10 +266,7 @@ describe("scheduled session prompts", () => {
       const params = input();
       params.sessionKey = sessionKey;
       params.job.sessionTarget = `session:${sessionKey}`;
-      await runCronSessionTurn(params);
-      const text = await fixture.enqueue.mock.calls[0]?.[1].scheduledAutomation?.preparePrompt?.(
-        params.cfg,
-      );
+      const text = await prepareLivePrompt(params);
       expect(text).toContain(`Source: ${source}`);
       expect(text).toMatch(
         /<<<EXTERNAL_UNTRUSTED_CONTENT id="[^"]+">>>[\s\S]*Check the report\.[\s\S]*<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[^"]+">>>[\s\S]*This is an unattended scheduled run/,
@@ -254,10 +281,7 @@ describe("scheduled session prompts", () => {
     params.sessionKey = "agent:main:hook:gmail:message";
     params.job.sessionTarget = `session:${params.sessionKey}`;
     params.cfg = { hooks: { gmail: { allowUnsafeExternalContent: true } } };
-    await runCronSessionTurn(params);
-    const text = await fixture.enqueue.mock.calls[0]?.[1].scheduledAutomation?.preparePrompt?.(
-      params.cfg,
-    );
+    const text = await prepareLivePrompt(params);
     expect(text).toContain("[cron:job-1 test] Check the report.");
     expect(text).not.toContain("EXTERNAL_UNTRUSTED_CONTENT");
     expect(text).not.toContain("the job's instructions win");

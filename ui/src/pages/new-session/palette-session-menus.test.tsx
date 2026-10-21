@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { mount } from "../../test-helpers/palette-session-draft.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -205,4 +206,52 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   await host.updateComplete;
   const restoredAlpha = get(content, '[data-machine="local"][data-project="alpha"]');
   expectArrow(beta, "ArrowUp", restoredAlpha);
+});
+
+it("retains focused place choices through a quiet cloud catalog refresh failure", async () => {
+  const refresh = createDeferred<unknown>();
+  const readCatalog = vi.fn<() => Promise<unknown>>().mockResolvedValue({
+    environments: [],
+    profiles: [{ id: "aws", providerId: "crabbox" }],
+  });
+  const { host } = await mount({
+    scopes: ["operator.admin", "operator.read", "operator.write"],
+    methods: ["agents.list", "environments.list", "projects.list", "sessions.create"],
+    request: async (method) => {
+      if (method === "projects.list") {
+        return { projects: [] };
+      }
+      if (method === "environments.list") {
+        return readCatalog();
+      }
+      return {};
+    },
+  });
+  await openSettings(host);
+  const draft = expectDefined(host.draft.settingsView(), "palette settings").options.draft;
+  await draft.gateway.refreshCloudProfiles();
+  get(host, ".palette-session-settings__workspace").click();
+  await waitForSolid(() =>
+    expect(host.querySelector(".palette-session-settings__search")).not.toBeNull(),
+  );
+  const search = get(host, ".palette-session-settings__search");
+  const choice = get(host, '[data-machine="cloud:aws"]');
+  search.focus();
+  readCatalog.mockReturnValue(refresh.promise);
+  const pending = draft.gateway.refreshCloudProfiles();
+  await waitForSolid(() =>
+    expect(host.querySelector('.palette-session-settings__choices [role="status"]')).not.toBeNull(),
+  );
+  expect(get(host, '[data-machine="cloud:aws"]')).toBe(choice);
+  expect(document.activeElement).toBe(search);
+  refresh.reject(new Error("Catalog temporarily unavailable"));
+  await pending;
+  await waitForSolid(() =>
+    expect(host.querySelector('.palette-session-settings__choices [role="status"]')).toBeNull(),
+  );
+  expect(get(host, '[data-machine="cloud:aws"]')).toBe(choice);
+  expect(get(host, ".palette-session-settings__search")).toBe(search);
+  expect(document.activeElement).toBe(search);
+  expect(draft.gateway.cloudProfiles.map((profile) => profile.id)).toEqual(["aws"]);
+  expect(host.querySelector('.palette-session-settings [role="alert"]')).toBeNull();
 });

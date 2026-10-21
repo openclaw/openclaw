@@ -2518,6 +2518,18 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Upload synthetic single-widget chrome failure evidence
+        if: failure() && matrix.task == 'control-ui' && hashFiles('.artifacts/control-ui-e2e/single-widget-chrome-*/widget-chrome*') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: single-widget-chrome-${{ strategy.job-index }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/control-ui-e2e/single-widget-chrome-*/widget-chrome-state.json
+            .artifacts/control-ui-e2e/single-widget-chrome-*/widget-chrome.png
+            .artifacts/control-ui-e2e/single-widget-chrome-*/widget-chrome-trace.zip
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload synthetic desktop Picture-in-Picture proof
         if: always() && matrix.task == 'control-ui' && hashFiles('.artifacts/control-ui-e2e/desktop-picture-in-picture-*/native-pip-after-tab-switch.png') != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

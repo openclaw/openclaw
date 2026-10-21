@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
+import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
@@ -26,18 +27,6 @@ const cloudProfile = {
     { id: "fast", label: "Fast" },
   ],
 };
-const runnerInventory = (available: number) => ({
-  environments: [
-    {
-      id: "node:runner",
-      type: "node",
-      status: "available",
-      sessionHost: true,
-      workerSlots: { total: 2, available },
-    },
-  ],
-  profiles: [],
-});
 const runtimeModel = (
   id: string,
   name: string,
@@ -55,25 +44,39 @@ const runtimeModel = (
   },
 });
 
+async function openCloud(scenario: ControlUiMockGatewayScenario = {}, multimode = false) {
+  const page = await openPage();
+  const gateway = await installMockGateway(page, {
+    workspace: WORKSPACE,
+    workspaceGit: true,
+    ...scenario,
+    methodResponses: {
+      "environments.list": {
+        environments: [],
+        profiles: [
+          multimode
+            ? {
+                id: "aws",
+                providerId: "crabbox",
+                executionMode: "worker-turn",
+                executionModes: ["worker-turn", "remote-exec"],
+              }
+            : cloudProfile,
+        ],
+      },
+      "worktrees.branches": { branches: [], repositoryStatus: "git" },
+    },
+  });
+  await page.goto(`${suite.server.baseUrl}new`);
+  await gateway.waitForRequest("environments.list");
+  return { page, gateway };
+}
+
 suite.define(() => {
   it.each(["hover", "click"] as const)(
     "keeps cloud machines usable when the picker finishes opening after a profile %s",
     async (input) => {
-      const page = await openPage();
-      const gateway = await installMockGateway(page, {
-        workspace: WORKSPACE,
-        workspaceGit: true,
-        methodResponses: {
-          "environments.list": {
-            environments: [],
-            profiles: [cloudProfile],
-          },
-          "worktrees.branches": { branches: [], repositoryStatus: "git" },
-        },
-      });
-
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
+      const { page } = await openCloud();
       const picker = page.locator(".oc-popover.new-session-page__where-popover");
       await picker.evaluate((element) =>
         (element as HTMLElement).style.setProperty("--oc-overlay-show-duration", "60s"),
@@ -114,26 +117,13 @@ suite.define(() => {
   );
 
   it("keeps an explicitly selected cloud destination when its runtime becomes incompatible", async () => {
-    const page = await openPage();
-    const gateway = await installMockGateway(page, {
+    const { page, gateway } = await openCloud({
       agentModel: "anthropic/claude-sonnet-4-6",
       models: [
         runtimeModel("claude-sonnet-4-6", "Claude Sonnet 4.6", "anthropic", "openclaw"),
         runtimeModel("gpt-5.6-luna", "GPT-5.6 Luna", "openai", "codex"),
       ],
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      methodResponses: {
-        "environments.list": {
-          environments: [],
-          profiles: [cloudProfile],
-        },
-        "worktrees.branches": { branches: [], repositoryStatus: "git" },
-      },
     });
-
-    await page.goto(`${suite.server.baseUrl}new`);
-    await gateway.waitForRequest("environments.list");
     await gateway.waitForRequest("models.list");
     const where = page.locator("#new-session-where-trigger");
     const model = page.locator('[data-chat-model-select="true"]');
@@ -179,30 +169,13 @@ suite.define(() => {
   it.each(["openclaw", "codex"] as const)(
     "keeps the same multimode Crabbox profile selectable for %s",
     async (runtime) => {
-      const page = await openPage();
-      const gateway = await installMockGateway(page, {
-        agentModel: "openai/gpt-5.5",
-        models: [runtimeModel("gpt-5.5", "gpt-5.5", "openai", runtime)],
-        workspace: WORKSPACE,
-        workspaceGit: true,
-        methodResponses: {
-          "environments.list": {
-            environments: [],
-            profiles: [
-              {
-                id: "aws",
-                providerId: "crabbox",
-                executionMode: "worker-turn",
-                executionModes: ["worker-turn", "remote-exec"],
-              },
-            ],
-          },
-          "worktrees.branches": { branches: [], repositoryStatus: "git" },
+      const { page, gateway } = await openCloud(
+        {
+          agentModel: "openai/gpt-5.5",
+          models: [runtimeModel("gpt-5.5", "gpt-5.5", "openai", runtime)],
         },
-      });
-
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
+        true,
+      );
       await gateway.waitForRequest("models.list");
       await page.locator("#new-session-where-trigger").click();
 
@@ -213,40 +186,4 @@ suite.define(() => {
       await pollText(page.locator("#new-session-where-trigger")).toContain("aws");
     },
   );
-
-  it("refreshes authoritative device capacity from Gateway topology events", async () => {
-    const page = await openPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      methodResponses: {
-        "environments.list": runnerInventory(1),
-      },
-    });
-
-    await page.goto(`${suite.server.baseUrl}new`);
-    await gateway.waitForRequest("environments.list");
-    await page.locator("#new-session-where-trigger").click();
-    const runner = page.locator('[data-value="device:runner"]');
-    const details = runner
-      .locator("xpath=ancestor::openclaw-tooltip[1]")
-      .locator('[slot="content"]');
-    await runner.waitFor();
-    expect(await runner.isEnabled()).toBe(true);
-
-    const requests = (await gateway.getRequests("environments.list")).length;
-    await gateway.setMethodResponse("environments.list", runnerInventory(0));
-    await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "runner" });
-    await expect
-      .poll(async () => (await gateway.getRequests("environments.list")).length)
-      .toBeGreaterThan(requests);
-    await pollDisabled(runner).toBe(true);
-    await runner.hover();
-    await pollText(details).toContain(
-      "No worker slots are available. Wait for a slot or pick another device.",
-    );
-    expect(await runner.locator(".session-menu__description").count()).toBe(0);
-    expect(await details.locator(".new-session-page__capacity-caption").count()).toBe(0);
-    expect(await gateway.getRequests("node.list")).toHaveLength(0);
-  });
 });

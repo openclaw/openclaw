@@ -66,7 +66,7 @@ describe("CronService startup catch-up repair scoping", () => {
       nowMs: () => now,
     });
     const expectNoExecution = () => {
-      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(state.deps.runSessionEvent).not.toHaveBeenCalled();
       expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
     };
 
@@ -114,12 +114,12 @@ describe("CronService startup catch-up repair scoping", () => {
 
     const deferred = state.store?.jobs.find((job) => job.id === "daily-overflow");
 
-    expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
+    expect(deferred?.state.nextRunAtMs).toBe(startNow + 145_000);
     expect(deferred?.state.nextRunAtMs).not.toBe(tomorrowNaturalSlot);
-    expect(deferred?.state.startupCatchupAtMs).toBe(startNow + 5_000);
+    expect(deferred?.state.startupCatchupAtMs).toBe(startNow + 145_000);
 
     await status(state);
-    expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
+    expect(deferred?.state.nextRunAtMs).toBe(startNow + 145_000);
 
     state.stopped = true;
     now = startNow + 3_000;
@@ -128,10 +128,10 @@ describe("CronService startup catch-up repair scoping", () => {
     await start(restartedState);
 
     const restarted = restartedState.store?.jobs.find((job) => job.id === "daily-overflow");
-    expect(restarted?.state.nextRunAtMs).toBe(startNow + 5_000);
-    expect(restarted?.state.startupCatchupAtMs).toBe(startNow + 5_000);
+    expect(restarted?.state.nextRunAtMs).toBe(startNow + 145_000);
+    expect(restarted?.state.startupCatchupAtMs).toBe(startNow + 145_000);
 
-    now = startNow + 5_005;
+    now = startNow + 145_005;
     await onTimer(restartedState);
 
     const completed = restartedState.store?.jobs.find((job) => job.id === "daily-overflow");
@@ -160,7 +160,7 @@ describe("CronService startup catch-up repair scoping", () => {
       "cron:date-limit-1:auto-disabled",
       "cron:date-limit-2:auto-disabled",
     ]);
-    const enqueueSystemEvent = vi.fn((_text: string, context?: { contextKey?: string }) => {
+    const enqueueSessionEvent = vi.fn((_text: string, context?: { contextKey?: string }) => {
       if (context?.contextKey && deferredAutoDisableReasons.has(context.contextKey)) {
         if (!order.includes("persist")) {
           const rows = openOpenClawStateDatabase()
@@ -181,21 +181,10 @@ describe("CronService startup catch-up repair scoping", () => {
         order.push("notify");
       }
     });
-    const requestHeartbeat = vi.fn(
-      (request: { source?: string; intent?: string; reason?: string }) => {
-        if (order.at(-1) === "notify") {
-          expect(request).toMatchObject({
-            source: "notifications-event",
-            intent: "immediate",
-            reason: "wake",
-          });
-          order.push("heartbeat");
-        }
-      },
-    );
+    const requestHeartbeat = vi.fn();
     const state = makeState(store.storePath, {
       nowMs: () => now,
-      enqueueSystemEvent,
+      enqueueSessionEvent,
       requestHeartbeat,
       maxMissedJobsPerRestart: 1,
       missedJobStaggerMs: 5_000,
@@ -214,7 +203,8 @@ describe("CronService startup catch-up repair scoping", () => {
         consecutiveErrors: 1,
       });
     }
-    expect(order).toEqual(["persist", "notify", "heartbeat", "notify", "heartbeat"]);
+    expect(order).toEqual(["persist", "notify", "notify"]);
+    expect(requestHeartbeat).not.toHaveBeenCalled();
     const persisted = (await loadCronStore(store.storePath)).jobs;
     for (const job of deferred) {
       const saved = persisted.find(({ id }) => id === job.id);

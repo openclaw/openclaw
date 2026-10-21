@@ -110,7 +110,6 @@ function makeJob(overrides: Partial<CronJob>): CronJob {
     createdAtMs: now,
     updatedAtMs: now,
     schedule: { kind: "at", at: new Date(now + 3600000).toISOString() },
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "test" },
     state: { nextRunAtMs: now + 3600000 },
     ...overrides,
@@ -213,6 +212,31 @@ it("shows declaration metadata and existing run status", () => {
   );
 });
 
+it.each([true, false])(
+  "shows configured job policies, including explicit %s, without scratch content",
+  (value) => {
+    const job = {
+      ...makeJob({
+        activeHours: { start: "22:00", end: "06:00", timezone: "America/Los_Angeles" },
+        idleOnly: value,
+        delivery: { mode: "announce", target: "owner", directPolicy: "block" },
+        payload: {
+          kind: "agentTurn",
+          message: "Check",
+          skipIfScratchEmpty: value,
+          includeReasoning: value,
+        },
+      }),
+      scratch: { content: "private checklist sentinel" },
+    };
+    const policies = `policies: active hours=22:00-06:00 @ America/Los_Angeles; idle only=${value}; delivery target=owner; direct policy=block; skip if scratch empty=${value}; include reasoning=${value}`;
+    for (const logs of Object.values(renderJob(job))) {
+      expectText(logs, policies);
+      expect(logs.join("\n")).not.toContain("private checklist sentinel");
+    }
+  },
+);
+
 it("sanitizes every stored cron show value at the terminal boundary", () => {
   const control = "\u001B]0;cron-show-injection\u0007";
   const injected = (value: string) => `${control}${value}\r\nforged-row\tfield`;
@@ -225,6 +249,7 @@ it("sanitizes every stored cron show value at the terminal boundary", () => {
     agentId: injected("agent"),
     sessionTarget: injected("session") as CronJob["sessionTarget"],
     payload: { kind: "agentTurn", message: "test", model: injected("model") },
+    activeHours: { start: "09:00", end: "17:00", timezone: injected("local") },
     state: {
       lastError: injected("last-error"),
       lastDeliveryStatus: "not-delivered",

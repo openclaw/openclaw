@@ -11,7 +11,6 @@ import type {
 import {
   createTalkSessionController,
   recordTalkObservabilityEvent,
-  type TalkEvent,
   type TalkEventInput,
   type TalkSessionController,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -44,8 +43,6 @@ export interface MediaStreamConfig {
   onTranscriptionReady?: (callId: string, streamSid: string) => void;
   onSpeechStart?: (callId: string, streamSid: string) => void;
   onDisconnect?: (callId: string, streamSid: string) => void;
-  /** Callback for common Talk events emitted by the telephony STT/TTS adapter. */
-  onTalkEvent?: (callId: string, streamSid: string, event: TalkEvent) => void;
 }
 
 interface StreamSession {
@@ -366,10 +363,7 @@ export class MediaStreamHandler {
           turnIdPrefix: `${streamSid}:turn`,
         },
         {
-          onEvent: (event) => {
-            recordTalkObservabilityEvent(event);
-            this.config.onTalkEvent?.(callSid, streamSid, event);
-          },
+          onEvent: recordTalkObservabilityEvent,
         },
       ),
     };

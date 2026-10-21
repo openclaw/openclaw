@@ -34,6 +34,9 @@ export function setupFailureAlertSuite() {
     const mocks = {
       sendCronFailureAlert: vi.fn<NonNullable<Deps["sendCronFailureAlert"]>>(async () => undefined),
       enqueueSystemEvent: vi.fn(),
+      enqueueSessionEvent: vi.fn<NonNullable<Deps["enqueueSessionEvent"]>>(async () => ({
+        ok: true,
+      })),
       requestHeartbeat: vi.fn(),
       runCronFailureRepair: vi.fn<NonNullable<Deps["runCronFailureRepair"]>>(async () => undefined),
       runIsolatedAgentJob: vi.fn<JobRunner>(async () => runResult),

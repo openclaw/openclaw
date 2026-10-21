@@ -56,7 +56,9 @@ export function createCronRegressionState(
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
+    enqueueSessionEvent: vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>(),
     requestHeartbeat: vi.fn(),
+    runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });
   fixtureStates.get(path.dirname(path.resolve(deps.storePath)))?.add(state);

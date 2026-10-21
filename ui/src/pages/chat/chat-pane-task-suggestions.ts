@@ -11,6 +11,7 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -21,6 +22,8 @@ import type {
   TaskSuggestionAcceptance,
   TaskSuggestionStartMode,
 } from "./components/chat-task-suggestions.tsx";
+
+registerChatSessionEnglish();
 
 type TaskSuggestionOperation =
   | { action: "dismiss"; resolved: boolean }

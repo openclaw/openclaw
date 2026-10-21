@@ -5,7 +5,6 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -14,7 +13,6 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type { NodeWorkerSupervisorIdentity } from "../worker/node-supervisor-protocol.js";
 import type {
   NodeWorkerLaunchClaim,
@@ -35,6 +33,7 @@ import {
   type NodeWorkerLaunchRow,
   type NodeWorkerTerminalState,
 } from "./node-worker-launch-receipt.js";
+import { ensureNodeWorkerLaunchSchema } from "./node-worker-launch-schema.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import { settleNodeWorkerActiveTurns } from "./node-worker-turn-settlement.worker.js";
 
@@ -52,39 +51,8 @@ type LaunchSchema = ReturnType<typeof getAdmittedSqliteSchemaFacts>;
 type LaunchTable = keyof NodeWorkerLaunchDatabase;
 type LaunchIdentity = Pick<NodeWorkerLaunchReceipt, "launchId" | "planHash">;
 
-const NODE_WORKER_LAUNCH_SCHEMA_END = "\n  WHERE completed_at_ms IS NOT NULL;";
 const TERMINAL_RECEIPT_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const TERMINAL_PRUNE_BATCH_LIMIT = 256;
-
-const launchSchemaEnsurers = new Map(
-  (
-    [
-      "node_worker_launches",
-      "node_worker_launch_boots",
-      "node_worker_launch_containers",
-      "node_worker_launch_cleanup",
-      "node_worker_launch_process_scopes",
-    ] as const
-  ).map((table) => [
-    table,
-    createSqliteSchemaEnsurer(
-      () =>
-        getOpenClawStateFeatureSchemaSql(table, {
-          endMarker: table === "node_worker_launches" ? NODE_WORKER_LAUNCH_SCHEMA_END : undefined,
-        }),
-      {
-        tables: [table],
-        indexes:
-          table === "node_worker_launches" ? ["idx_node_worker_launches_terminal_completed"] : [],
-      },
-    ),
-  ]),
-);
-
-const ensureNodeWorkerLaunchSchema = (
-  database: EngineConnection,
-  table: Exclude<keyof NodeWorkerLaunchDatabase, "node_worker_turns">,
-): void => launchSchemaEnsurers.get(table)!(database);
 
 function query(database: EngineConnection) {
   return getNodeSqliteKysely<NodeWorkerLaunchDatabase>(database);

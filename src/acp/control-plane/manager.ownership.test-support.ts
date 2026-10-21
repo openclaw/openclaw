@@ -2,10 +2,8 @@ import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import {
-  AcpSessionManager,
-  baseCfg,
-  createRuntime,
-  hoisted,
+  type AcpSessionManager,
+  managerFixture,
   mockMutableSession,
   mockParentedAcpSessionEntries,
   readySessionMeta,
@@ -26,19 +24,9 @@ export function gate() {
   };
 }
 
-type TurnOptions = Partial<
-  Pick<
-    Parameters<AcpSessionManager["runTurn"]>[0],
-    | "text"
-    | "signal"
-    | "admittedRunContext"
-    | "cfg"
-    | "agentId"
-    | "sessionKey"
-    | "onBeforePrompt"
-    | "onLifecycle"
-    | "onEvent"
-  >
+type TurnOptions = Omit<
+  Partial<Parameters<AcpSessionManager["runTurn"]>[0]>,
+  "provenance" | "mode" | "requestId" | "attachments" | "onElicitation"
 >;
 
 export function createAcceptedFixture({
@@ -46,9 +34,8 @@ export function createAcceptedFixture({
   parented = false,
   meta = {},
 }: { sessionKey?: string; parented?: boolean; meta?: Partial<SessionAcpMeta> } = {}) {
-  const runtime = createRuntime();
-  hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: runtime.runtime });
   const metadata = { currentMeta: readySessionMeta(meta) };
+  const { runtimeState, ...fixture } = managerFixture(sessionKey, metadata.currentMeta);
   mockMutableSession(sessionKey, metadata);
   if (parented) {
     mockParentedAcpSessionEntries({
@@ -57,35 +44,22 @@ export function createAcceptedFixture({
       state: metadata,
     });
   }
-  const manager = new AcpSessionManager();
-  const target = { cfg: baseCfg, sessionKey };
   const run = (requestId = "turn", options: TurnOptions = {}) =>
-    manager.runTurn({
-      ...target,
-      provenance: "system",
-      mode: "prompt",
-      text: "work",
-      requestId,
-      ...options,
-    });
+    fixture.run({ text: "work", requestId, ...options });
   return {
-    ...runtime,
-    manager,
-    target,
+    ...runtimeState,
+    ...fixture,
     persisted: metadata,
     run,
     setOption: (key: string, value: string) =>
-      manager.setSessionConfigOption({ ...target, key, value }),
-    async recordedEvents() {
-      return (await listSessionStateEventsSince(sessionKey, "codex", 0, 200)).events;
-    },
+      fixture.manager.setSessionConfigOption({ ...fixture.target, key, value }),
+    recordedEvents: async () =>
+      (await listSessionStateEventsSince(sessionKey, "codex", 0, 200)).events,
     startTurn(requestId: string, options: TurnOptions = {}) {
       const events: AcpRuntimeEvent[] = [];
       const turn = run(requestId, {
         text: requestId,
-        onEvent: (event) => {
-          events.push(event);
-        },
+        onEvent: (event) => void events.push(event),
         ...options,
       });
       return { turn, events };

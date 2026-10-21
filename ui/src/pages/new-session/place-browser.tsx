@@ -64,7 +64,7 @@ export function PlaceBrowser(props: {
               case "ArrowUp":
                 event.preventDefault();
                 props.params.browser.moveHighlight(event.key === "ArrowDown" ? 1 : -1);
-                requestAnimationFrame(() => {
+                onSettled(() => {
                   const path = props.params.browser.highlightedEntry()?.path;
                   if (path) {
                     options.get(path)?.scrollIntoView({ block: "nearest" });

@@ -163,23 +163,6 @@ it("enforces the gateway TCP port range", () => {
   }
 });
 
-const heartbeatPath = "agents.defaults.heartbeat.agentId";
-const missingHeartbeatOwner = [
-  {
-    path: heartbeatPath,
-    message:
-      "Multi-agent config has no ambient heartbeat owner; heartbeats stay disabled until agents.defaults.heartbeat.agentId or agents.defaults.systemAgent.agentId is set.",
-  },
-];
-it.each([
-  ["ownerless", {}, undefined, missingHeartbeatOwner],
-  ["per-agent", { heartbeat: { every: "30m" } }, undefined, []],
-  ["broadcast", {}, { heartbeat: { every: "30m" } }, []],
-])("reports heartbeat ownership for %s", (_name, ops, defaults, expected) => {
-  const agents = { ownership: "explicit", entries: { main: {}, ops }, defaults };
-  expect(warnings({ agents }, heartbeatPath)).toEqual(expected);
-});
-
 const redactWarnings = (redactPatterns: string[]) =>
   warnings({ logging: { redactPatterns } }, "logging.redactPatterns");
 

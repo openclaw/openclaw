@@ -1123,6 +1123,11 @@ installed Node, Vite, and dependencies. The temporary base's CSS sidecars are
 normalized through the candidate's pinned compressor before comparison. The
 report identifies both revisions and the toolchain. There is no manually updated
 CSS baseline, and the cumulative ceilings still bound a series of small changes.
+If a base already exceeds a size ceiling, the head may hold or reduce that
+surface, but growth beyond 64 bytes of gzip build variance fails the check.
+Request counts have no variance allowance. Locale comparisons track each locale
+separately, so shrinking one catalog cannot hide growth in another. Absolute
+checks and newly introduced violations fail locally and in GitHub Actions.
 
 Run the same comparison locally after installing dependencies:
 

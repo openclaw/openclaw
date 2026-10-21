@@ -235,70 +235,6 @@ function resolveNextXaiDeviceCodePollDelayMs(intervalMs: number, deadlineMs: num
   return Math.min(Math.max(intervalMs, XAI_DEVICE_CODE_MIN_INTERVAL_MS), remainingMs);
 }
 
-async function pollXaiDeviceCodeToken(
-  params: {
-    tokenEndpoint: string;
-    deviceCode: string;
-    expiresInMs: number;
-    intervalMs: number;
-  } & XaiOAuthFetchOptions,
-): Promise<XaiOAuthTokenResponse> {
-  const deadlineMs = performance.now() + params.expiresInMs;
-  let intervalMs = params.intervalMs;
-
-  while (performance.now() < deadlineMs) {
-    const result = await fetchXaiOAuth(
-      requireTrustedXaiOAuthEndpoint(params.tokenEndpoint, "token endpoint"),
-      params,
-      {
-        grant_type: XAI_DEVICE_CODE_GRANT_TYPE,
-        client_id: XAI_OAUTH_CLIENT_ID,
-        device_code: params.deviceCode,
-      },
-    );
-    const { response } = result;
-    let body: unknown;
-    try {
-      body = (await readResponseBody(result, { fatalUtf8: true })).json;
-    } catch {
-      body = null;
-    }
-    if (response.ok) {
-      return parseXaiOAuthTokenResponse(body, {
-        requireRefreshToken: true,
-      });
-    }
-
-    const error = readStringValue(asOptionalRecord(body)?.error);
-    if (error === "authorization_pending" || error === "slow_down") {
-      if (error === "slow_down") {
-        intervalMs += XAI_DEVICE_CODE_SLOW_DOWN_INCREMENT_MS;
-      }
-      await waitForXaiDeviceCodePoll(
-        resolveNextXaiDeviceCodePollDelayMs(intervalMs, deadlineMs),
-        params.signal,
-      );
-      continue;
-    }
-    if (error === "access_denied" || error === "authorization_denied") {
-      throw new Error("xAI device authorization was denied");
-    }
-    if (error === "expired_token") {
-      throw new Error("xAI device code expired. Re-run the login.");
-    }
-
-    throw new Error(
-      formatXaiOAuthError({
-        context: "xAI device token exchange",
-        status: response.status,
-        body,
-      }),
-    );
-  }
-
-  throw new Error("xAI device authorization timed out");
-}
-
 async function waitForXaiDeviceCodePoll(delayMs: number, signal?: AbortSignal): Promise<void> {
   try {
     await sleepWithAbort(delayMs, signal);
@@ -439,13 +375,63 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
     }
 
     progress.update("Waiting for xAI device authorization...");
-    const tokens = await pollXaiDeviceCodeToken({
-      tokenEndpoint,
-      deviceCode,
-      expiresInMs,
-      intervalMs,
-      ...requestOptions,
-    });
+    const pollXaiDeviceCodeToken = async (): Promise<XaiOAuthTokenResponse> => {
+      const deadlineMs = performance.now() + expiresInMs;
+      let pollIntervalMs = intervalMs;
+
+      while (performance.now() < deadlineMs) {
+        const result = await fetchXaiOAuth(
+          requireTrustedXaiOAuthEndpoint(tokenEndpoint, "token endpoint"),
+          requestOptions,
+          {
+            grant_type: XAI_DEVICE_CODE_GRANT_TYPE,
+            client_id: XAI_OAUTH_CLIENT_ID,
+            device_code: deviceCode,
+          },
+        );
+        const { response: tokenResponse } = result;
+        let body: unknown;
+        try {
+          body = (await readResponseBody(result, { fatalUtf8: true })).json;
+        } catch {
+          body = null;
+        }
+        if (tokenResponse.ok) {
+          return parseXaiOAuthTokenResponse(body, {
+            requireRefreshToken: true,
+          });
+        }
+
+        const error = readStringValue(asOptionalRecord(body)?.error);
+        if (error === "authorization_pending" || error === "slow_down") {
+          if (error === "slow_down") {
+            pollIntervalMs += XAI_DEVICE_CODE_SLOW_DOWN_INCREMENT_MS;
+          }
+          await waitForXaiDeviceCodePoll(
+            resolveNextXaiDeviceCodePollDelayMs(pollIntervalMs, deadlineMs),
+            requestOptions.signal,
+          );
+          continue;
+        }
+        if (error === "access_denied" || error === "authorization_denied") {
+          throw new Error("xAI device authorization was denied");
+        }
+        if (error === "expired_token") {
+          throw new Error("xAI device code expired. Re-run the login.");
+        }
+
+        throw new Error(
+          formatXaiOAuthError({
+            context: "xAI device token exchange",
+            status: tokenResponse.status,
+            body,
+          }),
+        );
+      }
+
+      throw new Error("xAI device authorization timed out");
+    };
+    const tokens = await pollXaiDeviceCodeToken();
     const identity = resolveXaiOAuthIdentity(tokens);
     const provider = ctx.credentialOnly
       ? buildXaiProvider("openai-responses", "oauth")

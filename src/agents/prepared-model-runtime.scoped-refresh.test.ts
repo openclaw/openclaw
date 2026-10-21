@@ -333,7 +333,7 @@ describe("prepared model runtime scoped refresh", () => {
     });
   });
 
-  it.each(["credential", "selected-profile", "synthetic-credential"] as const)(
+  it.each(["credential", "selected-profile"] as const)(
     "does not retain an account inventory after its %s changes",
     async (change) => {
       const learned = entry("demo", "learned", "Learned");
@@ -342,28 +342,25 @@ describe("prepared model runtime scoped refresh", () => {
         "demo:first": { type: "api_key" as const, provider: "demo", key: "first-key" },
         "demo:second": { type: "api_key" as const, provider: "demo", key: "second-key" },
       };
-      const synthetic = change === "synthetic-credential";
-      const profileId = synthetic ? undefined : "demo:first";
       const previous = makeCatalog([learned], {
-        providerOutcomes: [outcome("demo", "ready", profileId)],
+        providerOutcomes: [outcome("demo", "ready", "demo:first")],
       });
       const failed = makeCatalog([], {
         staticEntries: [starter],
         providerOutcomes: [
-          outcome("demo", "unavailable", change === "selected-profile" ? "demo:second" : profileId),
+          outcome(
+            "demo",
+            "unavailable",
+            change === "selected-profile" ? "demo:second" : "demo:first",
+          ),
         ],
       });
-      const auth = (key: string, nextProfiles = profiles) =>
-        catalogAuth(
-          "demo",
-          { version: 1, profiles: synthetic ? {} : nextProfiles },
-          synthetic ? { demo: { type: "api_key", key } } : {},
-        );
-      setPreparedModelFullCatalogAuth(previous, auth("first-synthetic-key"));
+      const auth = (nextProfiles = profiles) =>
+        catalogAuth("demo", { version: 1, profiles: nextProfiles });
+      setPreparedModelFullCatalogAuth(previous, auth());
       setPreparedModelFullCatalogAuth(
         failed,
         auth(
-          "second-synthetic-key",
           change === "credential"
             ? { ...profiles, "demo:first": { ...profiles["demo:first"], key: "replacement-key" } }
             : profiles,

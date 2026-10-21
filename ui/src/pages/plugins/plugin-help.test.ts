@@ -41,7 +41,7 @@ it.each(["plugin", "route", "connection", "disconnect"])(
     if (change === "plugin") {
       help.update(installedModel("second"));
     } else if (change === "route") {
-      setPathname("/agents");
+      setPathname("/sessions");
     } else if (change === "connection") {
       setGatewayToken("replacement-operator");
       help.update(installedModel("first"));

@@ -438,6 +438,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
 
     it("bounds cron completion receipts without pruning pending or other owners", () => {
       const database = openTestDatabase();
+      const completionReads: number[] = [];
       const completeBounded = (suffix: string, queueName = QUEUE) => {
         const id = `${boundedCronRetention.idPrefix}${suffix}`;
         seedDeliveryQueueEntry({
@@ -450,7 +451,20 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
           },
           stateDir,
         });
-        completeDeliveryQueueEntryInDatabase(database, queueName, id);
+        const reads = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(database.db),
+          ["queue"],
+          (sql) =>
+            sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"')
+              ? "queue"
+              : null,
+        );
+        try {
+          completeDeliveryQueueEntryInDatabase(database, queueName, id);
+          completionReads.push(reads.counts.queue);
+        } finally {
+          reads.restore();
+        }
         return id;
       };
       const permanentId = `${boundedCronRetention.idPrefix}permanent-owner`;
@@ -490,7 +504,12 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       const second = completeBounded("b");
       const third = completeBounded("c");
 
-      expect(getDeliveryQueueEntryStatus(QUEUE, first, stateDir)).toBeUndefined();
+      expect(
+        requireNativeSqliteDatabase(database.db)
+          .prepare("SELECT 1 FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+          .get(QUEUE, first),
+      ).toBeUndefined();
+      expect(completionReads).toEqual([1, 1, 1, 1]);
       expect(getDeliveryQueueEntryStatus(QUEUE, second, stateDir)).toBe("completed");
       expect(getDeliveryQueueEntryStatus(QUEUE, third, stateDir)).toBe("completed");
       expect(getDeliveryQueueEntryStatus(QUEUE, permanentId, stateDir)).toBe("completed");
@@ -534,7 +553,11 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         });
         completeDeliveryQueueEntryInDatabase(database, QUEUE, currentId);
 
-        expect(getDeliveryQueueEntryStatus(QUEUE, expiredId, stateDir)).toBeUndefined();
+        expect(
+          requireNativeSqliteDatabase(database.db)
+            .prepare("SELECT 1 FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+            .get(QUEUE, expiredId),
+        ).toBeUndefined();
         expect(getDeliveryQueueEntryStatus(QUEUE, currentId, stateDir)).toBe("completed");
         expect(getDeliveryQueueEntryStatus(QUEUE, otherOwnerId, stateDir)).toBe("completed");
       } finally {

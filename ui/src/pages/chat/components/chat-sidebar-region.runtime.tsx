@@ -58,7 +58,6 @@ function Region(props: RegionProps, host: RegionElement) {
   let sideHeader: HTMLElement | null = null;
   let localBack: HTMLElement | undefined;
   const tabFocus = createTabFocus();
-  const focusActiveSideTab = tabFocus.focusActive;
   const operations = {
     readMobileChromeHeight: () =>
       (props.mobileHost?.destination.area === "panels"
@@ -68,7 +67,7 @@ function Region(props: RegionProps, host: RegionElement) {
       panelHosts.get(slot) ??
       props.panelDefinitions.find((definition) => definition.slot === slot)?.panelHost ??
       null,
-    focusActiveSideTab,
+    focusActiveSideTab: tabFocus.focusActive,
     inputsChanged(key: keyof RegionProps) {
       if (key === "elements") {
         bindHostedTabsRoot();
@@ -161,7 +160,7 @@ function Region(props: RegionProps, host: RegionElement) {
     focusedSurface = header;
     const restoreFocus = () => {
       if (props.layout.open && focusedSurface === header && header?.isConnected) {
-        focusActiveSideTab();
+        tabFocus.focusActive();
       }
     };
     const scope = props.panelIdPrefix;
@@ -262,7 +261,7 @@ function Region(props: RegionProps, host: RegionElement) {
           const now = document.activeElement;
           const moved = now instanceof HTMLElement && now !== document.body && now !== origin;
           if (props.sideFocusLocked && !moved) {
-            focusActiveSideTab();
+            tabFocus.focusActive();
           }
         });
       }
@@ -426,10 +425,14 @@ function Region(props: RegionProps, host: RegionElement) {
           {(panel) => {
             // The semantic key owns this container until that panel is removed.
             const initialPanelId = untrack(() => panel().id);
-            onCleanup(() => panelElements.delete(initialPanelId));
             return (
               <div
-                ref={(element) => panelElements.set(initialPanelId, element)}
+                ref={[
+                  elementRef((element) => {
+                    panelElements.set(initialPanelId, element);
+                    return () => panelElements.delete(initialPanelId);
+                  }),
+                ]}
                 id={`${props.panelIdPrefix}-${encodeURIComponent(panel().slot)}`}
                 class="side-panel__panel"
                 role="region"

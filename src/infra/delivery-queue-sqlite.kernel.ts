@@ -311,7 +311,15 @@ export function completeLoadedDeliveryQueueEntryInDatabase(
     throw deliveryQueueEntryNotFoundError(queueName, id);
   }
   if (typeof retention === "object") {
-    getDeliveryQueueEntryOwnersInDatabase(database, [queueName], id);
+    runSqliteImmediateTransactionSync(
+      database.db,
+      () =>
+        pruneDeliveryQueueTombstones(database.db, Date.now(), {
+          queueName,
+          idPrefix: retention.idPrefix,
+        }),
+      { databaseLabel: "openclaw-state", operationLabel: "read delivery queue status" },
+    );
   }
 }
 
@@ -476,7 +484,15 @@ export function terminalizePendingDeliveryQueueEntryInDatabase(
     return { status: "not_pending" };
   }
   if (typeof retention === "object") {
-    getDeliveryQueueEntryOwnersInDatabase(database, [queueName], id);
+    runSqliteImmediateTransactionSync(
+      database.db,
+      () =>
+        pruneDeliveryQueueTombstones(database.db, Date.now(), {
+          queueName,
+          idPrefix: retention.idPrefix,
+        }),
+      { databaseLabel: "openclaw-state", operationLabel: "read delivery queue status" },
+    );
   }
   return { status: "terminalized", retained: retention !== undefined };
 }

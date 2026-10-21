@@ -44,9 +44,16 @@ function contextWithRequest(request: Parameters<typeof createTestGatewayClient>[
     gateway,
     agents: { state: { agentsList: null }, subscribe: () => () => {} },
     runtimeConfig: {
-      state: { configForm: null, configSnapshot: null },
+      state: {
+        configForm: null,
+        configSnapshot: null,
+        client: gateway.snapshot.client,
+        connected: true,
+      },
       ensureLoaded: vi.fn(async () => undefined),
       refresh: vi.fn(async () => undefined),
+      patch: vi.fn(async () => true),
+      lookupSchemaPath: vi.fn(async () => ({ children: [{ key: "dreaming" }] })),
       subscribe: (listener: () => void) => registerListener(configListeners, listener),
     },
   } as unknown as ApplicationContext;
@@ -56,7 +63,7 @@ function contextWithRequest(request: Parameters<typeof createTestGatewayClient>[
     },
     setConfig(config: Record<string, unknown>) {
       context.runtimeConfig.state.configForm = config;
-      context.runtimeConfig.state.configSnapshot = { config };
+      context.runtimeConfig.state.configSnapshot = { config, hash: "synthetic-config-hash" };
       configListeners.forEach((listener) => listener());
     },
   });
@@ -146,6 +153,77 @@ function click(container: HTMLElement, selector: string) {
   button!.click();
   flush();
 }
+
+it.each(["rejected", "declined"] as const)(
+  "shows a %s toggle write through its receipt and permits retry",
+  async (outcome) => {
+    const page = await createPage();
+    page.context.setConfig({});
+    const pending = deferred<boolean>();
+    const patch = vi.mocked(page.context.runtimeConfig.patch);
+    patch.mockReturnValueOnce(pending.promise);
+    page.state.setEnabled(false);
+    flush();
+    click(page.container, ".exec-approval-actions button");
+    await waitForSolid(() => expect(page.text(".exec-approval-actions button")).toBe("Saving…"));
+    expect(page.toggle.onConfirm()).toBeUndefined();
+    await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
+    if (outcome === "rejected") {
+      pending.reject(new Error("synthetic patch failure"));
+    } else {
+      pending.resolve(false);
+    }
+    await waitForSolid(() => expect(page.query(".exec-approval-error")).not.toBeNull());
+    expect(page.toggle.open).toBe(true);
+    expect(page.query<HTMLButtonElement>(".exec-approval-actions button")?.disabled).toBe(false);
+    const retry = deferred<boolean>();
+    patch.mockReturnValueOnce(retry.promise);
+    click(page.container, ".exec-approval-actions button");
+    await waitForSolid(() => expect(page.text(".exec-approval-actions button")).toBe("Saving…"));
+    expect(page.query(".exec-approval-error")).toBeNull();
+    retry.resolve(true);
+    await waitForSolid(() => expect(page.toggle.open).toBe(false));
+    expect(patch).toHaveBeenCalledTimes(2);
+    expect(page.query(".exec-approval-error")).toBeNull();
+  },
+);
+
+it.each(["reconnect", "agent", "client", "access", "unmount"] as const)(
+  "releases the admitted toggle receipt immediately on %s retirement",
+  async (replacement) => {
+    const page = await createPage();
+    page.context.setConfig({});
+    const pending = deferred<boolean>();
+    const patch = vi.mocked(page.context.runtimeConfig.patch);
+    patch.mockReturnValueOnce(pending.promise);
+    page.state.setEnabled(false);
+    flush();
+    const completion = page.toggle.onConfirm();
+    const settled = vi.fn();
+    void completion?.then(settled);
+    await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
+    if (replacement === "reconnect") {
+      page.context.emit({ phase: "reconnecting", hello: null });
+    } else if (replacement === "agent") {
+      page.setAgentId("support");
+    } else if (replacement === "client") {
+      page.context.emit({ client: emptyClient() });
+    } else if (replacement === "access") {
+      page.context.emit({ hello: gatewayHelloForMethods([], []) });
+    } else {
+      page.unmount();
+    }
+    await waitForSolid(() => expect(settled).toHaveBeenCalledOnce());
+    if (replacement === "reconnect") {
+      expect(page.toggle.open).toBe(true);
+    } else if (replacement !== "unmount") {
+      expect(page.toggle.open).toBe(false);
+    }
+    pending.reject(new Error("retired transport failure"));
+    await Promise.resolve();
+    expect(page.query(".exec-approval-error")).toBeNull();
+  },
+);
 
 function wikiOverview(title = "Original title") {
   return {
@@ -371,8 +449,11 @@ it("retains diary, preview and toggle drafts through reconnect while rejecting o
   flush();
   expect(page.dreaming).toMatchObject({
     dreamDiaryContent: "Retained diary",
-    wikiPreview: { page: { path: "retained.md" }, loading: true },
+    wikiPreview: { page: { path: "retained.md" } },
   });
+  expect(page.text(".dreams-diary__preview-body .dreams-diary__empty-text")).toBe(
+    "Loading wiki page…",
+  );
   expect(page.toggle).toMatchObject({ open: true, disabled: true });
   expect(page.query<HTMLButtonElement>(".exec-approval-actions button")?.disabled).toBe(true);
   refresh = true;
@@ -384,7 +465,10 @@ it("retains diary, preview and toggle drafts through reconnect while rejecting o
   expect(page.request.mock.calls.filter(([method]) => method === "wiki.get")).toHaveLength(2);
   stale.resolve({ title: "Old", path: "retained.md", content: "Stale preview" });
   await preview;
-  expect(page.dreaming.wikiPreview).toMatchObject({ page: { content: "" }, loading: true });
+  expect(page.dreaming.wikiPreview).toMatchObject({ page: { content: "" } });
+  expect(page.text(".dreams-diary__preview-body .dreams-diary__empty-text")).toBe(
+    "Loading wiki page…",
+  );
   expect(page.toggle.open).toBe(true);
   freshPreview.resolve({ title: "Fresh", path: "retained.md", content: "Fresh preview" });
   await page.waitText(PREVIEW_TEXT, "Fresh preview");
@@ -455,6 +539,37 @@ it.each(["support-only", ""])("loads scoped wiki preview content %j", async (con
   expect(page.text(".dreams-diary__preview-hint")).toContain("6001");
   click(page.container, ".dreams-diary__preview-footer button");
   expect(page.dreaming.wikiPreview).toBeNull();
+});
+
+it("keeps the preview dialog and focused close control when its read fails, then opens a fresh page", async () => {
+  const failure = deferred<unknown>();
+  let fail = true;
+  const page = await createPage({
+    "wiki.get": () =>
+      fail ? failure.promise : { title: "Fresh", path: "fresh.md", content: "Fresh wiki content" },
+  });
+  click(page.container, "#dreams-tab-diary");
+  const pending = page.dreaming.onOpenWikiPage("failed.md");
+  flush();
+  const dialog = page.query("openclaw-modal-dialog");
+  expect(dialog).not.toBeNull();
+  await waitForSolid(() => expect(dialog?.querySelector("dialog")?.dataset.phase).toBe("open"));
+  const close = page.query<HTMLButtonElement>(".dreams-diary__preview-footer button")!;
+  close.focus();
+  expect(document.activeElement).toBe(close);
+  failure.reject(new Error("Wiki request failed"));
+  await pending;
+  await page.waitText(".dreams-diary__error", "Wiki request failed");
+  expect(page.query("openclaw-modal-dialog")).toBe(dialog);
+  expect(page.query(".dreams-diary__preview-footer button")).toBe(close);
+  expect(document.activeElement).toBe(close);
+  close.click();
+  flush();
+  expect(page.query("openclaw-modal-dialog")).toBeNull();
+  fail = false;
+  await page.dreaming.onOpenWikiPage("fresh.md");
+  await page.waitText(PREVIEW_TEXT, "Fresh wiki content");
+  expect(page.query(".dreams-diary__error")).toBeNull();
 });
 
 it("updates the mounted view across tab selection and owner notifications", async () => {

@@ -1,12 +1,13 @@
-import childProcess, { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs, { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   ProcessInspectionError,
   readCodexAppServerProcessCommand,
 } from "../transport-process-snapshot.ts";
+import { installProcfsFixture } from "./transport-process-fixture.test-support.mjs";
 
 const scratch = mkdtempSync(path.join(os.tmpdir(), "codex-blocked-command-"));
 const fifo = path.join(scratch, "cmdline");
@@ -14,18 +15,14 @@ const marker = path.join(scratch, "ambient-preload");
 const preload = path.join(scratch, "preload.cjs");
 writeFileSync(preload, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded");`);
 execFileSync("mkfifo", [fifo]);
-const controller = spawn(
-  process.execPath,
-  [
-    "-e",
-    `const fs = require("node:fs");
+const controllerCode = `const fs = require("node:fs");
 const fd = fs.openSync(process.argv[1], "r+");
 process.stdout.write("ready");
-setTimeout(() => { fs.writeSync(fd, Buffer.from("codex\\0app-server\\0")); fs.closeSync(fd); }, 2500);`,
-    fifo,
-  ],
-  { env: {}, stdio: ["ignore", "pipe", "inherit"] },
-);
+setTimeout(() => { fs.writeSync(fd, Buffer.from("codex\\0app-server\\0")); fs.closeSync(fd); }, 2500);`;
+const controller = spawn(process.execPath, ["-e", controllerCode, fifo], {
+  env: {},
+  stdio: ["ignore", "pipe", "inherit"],
+});
 const controllerClosed = new Promise((resolve) => {
   controller.once("close", resolve);
 });
@@ -36,68 +33,43 @@ try {
   });
   const commandPath = `/proc/${process.pid}/cmdline`;
   const originalOpen = fs.openSync;
-  const originalExecFile = childProcess.execFile;
-  let inspectorClosed = false;
-  let inspectorUsed = false;
+  const result = { inspectorClosed: false, inspectorUsed: false };
   // A blocking FIFO models cmdline's kernel waits; the controller runs independently.
-  fs.openSync = (file, ...args) =>
-    file === commandPath ? originalOpen(fifo, "r") : originalOpen(file, ...args);
-  childProcess.execFile = (file, args, ...rest) => {
-    const evalIndex = args.indexOf("-e");
-    if (file === process.execPath && evalIndex >= 0) {
-      const injected = `const fixtureFs = require("node:fs");
+  installProcfsFixture(
+    (file, ...args) =>
+      file === commandPath ? originalOpen(fifo, "r") : originalOpen(file, ...args),
+    `const fixtureFs = require("node:fs");
 const fixtureOpen = fixtureFs.openSync;
 fixtureFs.openSync = (file, ...args) => file === ${JSON.stringify(commandPath)}
   ? fixtureOpen(${JSON.stringify(fifo)}, "r") : fixtureOpen(file, ...args);
-`;
-      const injectedArgs = args.slice();
-      injectedArgs[evalIndex + 1] = injected + injectedArgs[evalIndex + 1];
-      const inspector = originalExecFile(file, injectedArgs, ...rest);
-      inspectorUsed = true;
+`,
+    (inspector) => {
+      result.inspectorUsed = true;
       inspector.once("close", () => {
-        inspectorClosed = true;
+        result.inspectorClosed = true;
       });
-      return inspector;
-    }
-    return originalExecFile(file, args, ...rest);
-  };
-  Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-  syncBuiltinESMExports();
+    },
+  );
   process.env.NODE_OPTIONS = `--require=${preload}`;
   process.env.BUN_OPTIONS = `--preload=${preload}`;
   const started = performance.now();
-  let firstHeartbeatMs;
-  const heartbeat = new Promise((resolve) => {
-    setTimeout(() => {
-      firstHeartbeatMs = performance.now() - started;
-      resolve();
-    }, 100);
-  });
-  let outcome;
+  const heartbeat = delay(100).then(() => performance.now() - started);
   try {
     await readCodexAppServerProcessCommand(
       { pid: process.pid, ppid: process.ppid, pgid: process.pid, state: "S", startedAt: "fixture" },
       performance.now() + 1000,
     );
-    outcome = { status: "fulfilled" };
+    result.outcome = { status: "fulfilled" };
   } catch (error) {
     if (!(error instanceof ProcessInspectionError)) {
       throw error;
     }
-    outcome = { status: "rejected", reason: error.reason };
+    result.outcome = { status: "rejected", reason: error.reason };
   }
-  const inspectionMs = performance.now() - started;
-  await Promise.all([heartbeat, controllerClosed]);
-  console.log(
-    JSON.stringify({
-      outcome,
-      firstHeartbeatMs,
-      inspectionMs,
-      inspectorUsed,
-      inspectorClosed,
-      ambientPreloadExecuted: fs.existsSync(marker),
-    }),
-  );
+  result.inspectionMs = performance.now() - started;
+  [result.firstHeartbeatMs] = await Promise.all([heartbeat, controllerClosed]);
+  result.ambientPreloadExecuted = fs.existsSync(marker);
+  console.log(JSON.stringify(result));
 } finally {
   controller.kill("SIGKILL");
   await controllerClosed;

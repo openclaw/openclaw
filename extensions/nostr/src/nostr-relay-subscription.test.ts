@@ -10,22 +10,16 @@ function createHarness() {
   const subscribeMany = vi.fn(
     (_relays: string[], _filter: unknown, nextHandlers: RelayHandlers) => {
       handlers.push(nextHandlers);
+      const close = (reason: string) =>
+        nextHandlers.onclose?.([{ url: "wss://test.example", reason }]);
       nextHandlers.abort?.addEventListener(
         "abort",
-        () =>
-          nextHandlers.onclose?.([
-            {
-              url: "wss://test.example",
-              reason: String(nextHandlers.abort?.reason ?? "aborted"),
-            },
-          ]),
+        () => close(String(nextHandlers.abort?.reason ?? "aborted")),
         { once: true },
       );
       return {
         close: vi.fn(async (reason?: string) => {
-          nextHandlers.onclose?.([
-            { url: "wss://test.example", reason: reason ?? "closed by caller" },
-          ]);
+          close(reason ?? "closed by caller");
         }),
       };
     },
@@ -46,48 +40,49 @@ function createHarness() {
 }
 
 describe("Nostr relay subscriptions", () => {
-  afterEach(() => vi.useRealTimers());
+  let harness: ReturnType<typeof createHarness>;
+  const setup = () => (harness = createHarness());
+  afterEach(async () => {
+    try {
+      await harness.group.close("test complete");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("confirms backfill only after every relay reports real EOSE", async () => {
-    const { group, handlers, onBackfillComplete, subscribeMany } = createHarness();
-
+    const { handlers, onBackfillComplete, subscribeMany } = setup();
     handlers[0]?.oneose?.();
     handlers[1]?.oneose?.();
     await Promise.resolve();
 
     expect(subscribeMany.mock.calls.every(([relays]) => relays.length === 1)).toBe(true);
     expect(onBackfillComplete).toHaveBeenCalledWith(["wss://one.example", "wss://two.example"]);
-    await group.close("test complete");
   });
 
   it("does not confirm timeout-synthesized EOSE", async () => {
     vi.useFakeTimers();
-    const { group, handlers, onBackfillComplete } = createHarness();
-
+    const { handlers, onBackfillComplete } = setup();
     await vi.advanceTimersByTimeAsync(10_000);
     handlers[0]?.oneose?.();
     handlers[1]?.oneose?.();
     await Promise.resolve();
 
     expect(onBackfillComplete).not.toHaveBeenCalled();
-    await group.close("test complete");
   });
 
   it("lets same-turn close veto the pool's synthetic EOSE", async () => {
-    const { group, handlers, onBackfillComplete } = createHarness();
-
+    const { handlers, onBackfillComplete } = setup();
     handlers[0]?.oneose?.();
     handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay closed" }]);
     handlers[1]?.oneose?.();
     await Promise.resolve();
 
     expect(onBackfillComplete).not.toHaveBeenCalled();
-    await group.close("test complete");
   });
 
   it("does not report locally requested closes as relay failures", async () => {
-    const { abortController, group, onClose } = createHarness();
-
+    const { abortController, group, onClose } = setup();
     abortController.abort("closed by caller");
     await group.close("closed by caller");
 
@@ -95,11 +90,9 @@ describe("Nostr relay subscriptions", () => {
   });
 
   it("still reports closes initiated by the relay", async () => {
-    const { group, handlers, onClose } = createHarness();
-
+    const { handlers, onClose } = setup();
     handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay unavailable" }]);
 
     expect(onClose).toHaveBeenCalledWith("wss://one.example", ["relay unavailable"]);
-    await group.close("test complete");
   });
 });

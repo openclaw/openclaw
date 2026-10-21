@@ -60,6 +60,7 @@ import {
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
+import { refreshConfigReloadSkills } from "./config-reload-skills.js";
 import type {
   GatewayConfigReloader,
   GatewayHotReloadApplication,
@@ -525,8 +526,7 @@ export function startGatewayConfigReloader(
           }
           if (options.runtimeApplied !== false && (changedPaths.length > 0 || pluginLifecycle)) {
             try {
-              const { refreshSkillsDiscovery } = await import("../skills/runtime/refresh.js");
-              await refreshSkillsDiscovery({ config: currentConfig, reason: "config-change" });
+              await refreshConfigReloadSkills(currentConfig);
             } catch (error) {
               opts.log.warn(
                 `config applied, but skills discovery refresh failed: ${String(error)}`,

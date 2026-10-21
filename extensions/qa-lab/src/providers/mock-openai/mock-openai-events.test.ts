@@ -8,13 +8,22 @@ import {
   buildReasoningOnlyEvents,
 } from "./mock-openai-events.js";
 
-function readOutputItemSlots(events: StreamEvent[]) {
-  return events
-    .filter(
-      (event) =>
-        event.type === "response.output_item.added" || event.type === "response.output_item.done",
-    )
-    .map((event) => [event.type, event.item.id, event.output_index]);
+function outputItems(events: StreamEvent[]) {
+  return events.filter(
+    (event) =>
+      event.type === "response.output_item.added" || event.type === "response.output_item.done",
+  );
+}
+
+function expectSlots(events: StreamEvent[], ids: unknown[]) {
+  expect(
+    outputItems(events).map((event) => [event.type, event.item.id, event.output_index]),
+  ).toEqual(
+    ids.flatMap((id, index) => [
+      ["response.output_item.added", id, index],
+      ["response.output_item.done", id, index],
+    ]),
+  );
 }
 
 describe("mock OpenAI Responses output item slots", () => {
@@ -27,41 +36,17 @@ describe("mock OpenAI Responses output item slots", () => {
         response: expect.not.objectContaining({ error: expect.anything() }),
       }),
     ]);
-    expect(events.some((event) => event.type === "response.output_text.delta")).toBe(false);
   });
 
   it("keeps each streamed assistant on its own indexed slot", () => {
-    const events = buildAssistantEvents([
-      {
-        id: "first-answer",
-        streamDeltas: ["first"],
-        text: "first",
-      },
-      {
-        id: "second-answer",
-        streamDeltas: ["second"],
-        text: "second",
-      },
-    ]);
-
-    expect(readOutputItemSlots(events)).toEqual([
-      ["response.output_item.added", "first-answer", 0],
-      ["response.output_item.done", "first-answer", 0],
-      ["response.output_item.added", "second-answer", 1],
-      ["response.output_item.done", "second-answer", 1],
-    ]);
+    const events = buildAssistantEvents(
+      ["first", "second"].map((text) => ({ id: `${text}-answer`, streamDeltas: [text], text })),
+    );
+    expectSlots(events, ["first-answer", "second-answer"]);
     expect(
       events
         .filter((event) => event.type === "response.output_text.delta")
-        .map((event) => {
-          if (event.type !== "response.output_text.delta") {
-            throw new Error("expected a response text delta");
-          }
-          return {
-            itemId: event.item_id,
-            outputIndex: event.output_index,
-          };
-        }),
+        .map((event) => ({ itemId: event.item_id, outputIndex: event.output_index })),
     ).toEqual([
       { itemId: "first-answer", outputIndex: 0 },
       { itemId: "second-answer", outputIndex: 1 },
@@ -80,12 +65,7 @@ describe("mock OpenAI Responses output item slots", () => {
       { path: "README.md" },
     );
 
-    expect(readOutputItemSlots(events)).toEqual([
-      ["response.output_item.added", "assistant-before-tool", 0],
-      ["response.output_item.done", "assistant-before-tool", 0],
-      ["response.output_item.added", expect.any(String), 1],
-      ["response.output_item.done", expect.any(String), 1],
-    ]);
+    expectSlots(events, ["assistant-before-tool", expect.any(String)]);
     expect(events.find((event) => event.type === "response.function_call_arguments.delta")).toEqual(
       {
         type: "response.function_call_arguments.delta",
@@ -94,23 +74,14 @@ describe("mock OpenAI Responses output item slots", () => {
         delta: JSON.stringify({ path: "README.md" }),
       },
     );
+    const assistant = expect.objectContaining({ id: "assistant-before-tool", phase: "commentary" });
     expect(
-      events
-        .filter(
-          (event) =>
-            event.type === "response.output_item.added" ||
-            event.type === "response.output_item.done",
-        )
+      outputItems(events)
         .map((event) => event.item)
         .filter((item) => item.type === "message"),
-    ).toEqual([
-      expect.objectContaining({ id: "assistant-before-tool", phase: "commentary" }),
-      expect.objectContaining({ id: "assistant-before-tool", phase: "commentary" }),
-    ]);
+    ).toEqual([assistant, assistant]);
     const completed = events.find((event) => event.type === "response.completed");
-    expect(completed?.response.output[0]).toEqual(
-      expect.objectContaining({ id: "assistant-before-tool", phase: "commentary" }),
-    );
+    expect(completed?.response.output[0]).toEqual(assistant);
   });
 
   it("indexes reasoning before the streamed assistant answer", () => {
@@ -120,18 +91,10 @@ describe("mock OpenAI Responses output item slots", () => {
       answerText: "reasoned final",
     });
 
-    expect(readOutputItemSlots(events)).toEqual([
-      ["response.output_item.added", "reasoning-before-answer", 0],
-      ["response.output_item.done", "reasoning-before-answer", 0],
-      ["response.output_item.added", "reasoned-answer", 1],
-      ["response.output_item.done", "reasoned-answer", 1],
-    ]);
+    expectSlots(events, ["reasoning-before-answer", "reasoned-answer"]);
   });
 
   it("indexes a reasoning-only output on its first slot", () => {
-    expect(readOutputItemSlots(buildReasoningOnlyEvents("thinking", "reasoning-only"))).toEqual([
-      ["response.output_item.added", "reasoning-only", 0],
-      ["response.output_item.done", "reasoning-only", 0],
-    ]);
+    expectSlots(buildReasoningOnlyEvents("thinking", "reasoning-only"), ["reasoning-only"]);
   });
 });

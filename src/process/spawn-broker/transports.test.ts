@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
+import { text } from "node:stream/consumers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runCommandBuffered, runExec } from "../exec.js";
 import { prepareOomScoreAdjustedSpawn } from "../linux-oom-score.js";
@@ -8,9 +9,7 @@ import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost } from "./host.js";
 import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
-const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
-
-describe.skipIf(skipBrokerTests)("Gateway spawn transports", () => {
+describe.skipIf(!supportsSpawnBrokerCommandTransport())("Gateway spawn transports", () => {
   let broker: ReturnType<typeof createSpawnBrokerHost>;
 
   beforeAll(async () => {
@@ -18,9 +17,7 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transports", () => {
     await broker.ready();
   });
 
-  afterAll(async () => {
-    await broker?.close();
-  });
+  afterAll(() => broker?.close());
 
   it.runIf(process.platform === "linux").each([
     { name: "adjusted", enabled: true, missing: false },
@@ -42,60 +39,47 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transports", () => {
       await expect(child.ready()).rejects.toMatchObject({ code: "ENOENT" });
     } else {
       await child.ready();
-      let output = "";
-      child.stdout!.on("data", (chunk) => {
-        output += chunk;
-      });
+      const output = text(child.stdout!);
       expect(await once(child, "close")).toEqual([0, null]);
-      expect(output.trim()).toBe(enabled ? "1000" : original.trim());
+      expect((await output).trim()).toBe(enabled ? "1000" : original.trim());
       expect(child.spawnfile).toBe("/bin/cat");
     }
     expect(await readFile(scorePath, "utf8")).toBe(original);
   });
 
-  it.each(["exec", "buffered", "adapter", "one-shot"] as const)(
-    "routes %s commands to the scope's process owner",
-    async (transport) => {
-      await runWithSpawnBroker(transport === "one-shot" ? undefined : broker, async () => {
-        const args = ["-e", "process.stdout.write(String(process.ppid))"];
-        let output = "";
-        if (transport === "buffered") {
-          const result = await runCommandBuffered([process.execPath, ...args]);
-          expect(result.termination).toBe("exit");
-          output = result.stdout.toString();
-        } else if (transport === "adapter") {
-          const { adapter, ready } = await createChildAdapter({
-            argv: [process.execPath, ...args],
-            stdinMode: "pipe-closed",
-            exactEnv: true,
-          });
-          adapter.onStdout((chunk) => {
-            output += chunk;
-          });
-          adapter.onStderr(() => {});
-          try {
-            await ready;
-            await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
-          } finally {
-            adapter.dispose();
-          }
-        } else {
-          output = (await runExec(process.execPath, args, { logOutput: false })).stdout;
-        }
-        expect(Number(output)).toBe(transport === "one-shot" ? process.pid : broker.pid);
-      });
-    },
-  );
+  it.each(["exec", "buffered", "adapter", "one-shot"] as const)("routes %s", async (transport) => {
+    await runWithSpawnBroker(transport === "one-shot" ? undefined : broker, async () => {
+      const args = ["-e", "process.stdout.write(String(process.ppid))"];
+      let output = "";
+      if (transport === "buffered") {
+        const result = await runCommandBuffered([process.execPath, ...args]);
+        expect(result.termination).toBe("exit");
+        output = result.stdout.toString();
+      } else if (transport === "adapter") {
+        const { adapter, ready } = await createChildAdapter({
+          argv: [process.execPath, ...args],
+          stdinMode: "pipe-closed",
+          exactEnv: true,
+        });
+        adapter.onStdout((chunk) => {
+          output += chunk;
+        });
+        const result = await ready.then(() => adapter.wait()).finally(() => adapter.dispose());
+        expect(result).toEqual({ code: 0, signal: null });
+      } else {
+        output = (await runExec(process.execPath, args, { logOutput: false })).stdout;
+      }
+      expect(Number(output)).toBe(transport === "one-shot" ? process.pid : broker.pid);
+    });
+  });
 
   it("preserves runExec launch error metadata across asynchronous readiness", async () => {
     const command = "/openclaw-nonexistent-spawn-broker-command";
-    const options = { logOutput: false };
-    const local = await runExec(command, [], options).catch((error: unknown) => error);
-    const remote = await runWithSpawnBroker(broker, () =>
-      runExec(command, [], options).catch((error: unknown) => error),
-    );
+    const run = () => runExec(command, [], { logOutput: false }).catch((error: unknown) => error);
+    const local = await run();
+    const remote = await runWithSpawnBroker(broker, run);
     expect(local).toBeInstanceOf(Error);
-    expect(remote).toMatchObject({ code: "ENOENT", failed: true, stdout: "", stderr: "" });
-    expect(remote).toMatchObject({ message: (local as Error).message });
+    const message = (local as Error).message;
+    expect(remote).toMatchObject({ code: "ENOENT", failed: true, stdout: "", stderr: "", message });
   });
 });

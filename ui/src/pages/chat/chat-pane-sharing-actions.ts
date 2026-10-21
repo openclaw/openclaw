@@ -9,6 +9,7 @@ import type {
 } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -29,6 +30,8 @@ import {
   type ChatSessionSharingProps,
   type ChatSessionSharingState,
 } from "./components/chat-session-sharing.solid.tsx";
+
+registerChatSessionEnglish();
 
 const SESSION_MEMBERS_LIST_METHOD = "session.members.listEvidence";
 

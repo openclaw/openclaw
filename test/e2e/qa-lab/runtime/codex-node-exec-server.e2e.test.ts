@@ -60,6 +60,12 @@ const REQUEST_TIMEOUT_MS = 120_000;
 const WAIT_OPTIONS = { timeout: 60_000, interval: 100 };
 const WORKER_COMMAND_ARGS = new Set(["worker", "--internal-worker-session"]);
 const WORKER_OR_CODEX_COMMAND_ARGS = new Set([...WORKER_COMMAND_ARGS, "codex"]);
+const SCENARIO_MARKERS = [
+  ["recovery", RECOVERY_MARKER],
+  ["repeat", REPEAT_MARKER],
+  ["disconnect", DISCONNECT_MARKER],
+  ["success", SUCCESS_MARKER],
+] as const;
 let receipts: FixtureReceiptChannel;
 
 beforeAll(async () => {
@@ -155,17 +161,9 @@ function readProofScenario(body: Record<string, unknown>): ProofScenario | undef
       continue;
     }
     const userText = JSON.stringify(entry);
-    if (userText.includes(RECOVERY_MARKER)) {
-      return "recovery";
-    }
-    if (userText.includes(REPEAT_MARKER)) {
-      return "repeat";
-    }
-    if (userText.includes(DISCONNECT_MARKER)) {
-      return "disconnect";
-    }
-    if (userText.includes(SUCCESS_MARKER)) {
-      return "success";
+    const scenario = SCENARIO_MARKERS.find(([, marker]) => userText.includes(marker));
+    if (scenario) {
+      return scenario[0];
     }
   }
   return undefined;
@@ -750,9 +748,10 @@ describe("Codex paired-device exec-server carrier", () => {
         );
         const nodePid = node.child.pid;
         expect(nodePid).toBeTruthy();
-        const children = await nodeChildCommands(nodePid!);
         expect(
-          children.filter((command) => launchCommandHasArg(command, WORKER_COMMAND_ARGS)),
+          (await nodeChildCommands(nodePid!)).filter((command) =>
+            launchCommandHasArg(command, WORKER_COMMAND_ARGS),
+          ),
         ).toEqual([]);
 
         const repeated = await startTurn(requester, REPEAT_MARKER);
@@ -890,19 +889,6 @@ describe("Codex paired-device exec-server carrier", () => {
           signal,
         );
         expect(provider.httpHits).toBe(3);
-        console.info(
-          JSON.stringify({
-            proof: "codex-paired-device-remote-exec",
-            gatewayUrl: gateway.baseUrl,
-            nodeId,
-            deniedRunId: denied.runId,
-            allowedRunId: allowed.runId,
-            repeatedRunId: repeated.runId,
-            interruptedRunId: interrupted.runId,
-            recoveredRunId: recovered.runId,
-            httpHits: provider.httpHits,
-          }),
-        );
       };
       await runQaGatewayFixture(runProof, async () => {
         const connectionCleanup = await Promise.allSettled([

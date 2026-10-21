@@ -159,6 +159,9 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     forwardWhenSourceDeliverySuppressed?: boolean;
     requiresToolSummaryVisibility?: boolean;
   }) => {
+    if (state.sendPolicyDenied) {
+      return false;
+    }
     if (
       params.replyOptions?.progressRequiresReply === true &&
       !isRequiredReplyExpectation(state.replyOperationRunState.replyCompletion?.expectation)
@@ -176,7 +179,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     return (
       !state.suppressAutomaticSourceDelivery ||
       (allowSuppressedSourceProgressCallbacks &&
-        !state.sendPolicyDenied &&
         options?.forwardWhenSourceDeliverySuppressed === true)
     );
   };

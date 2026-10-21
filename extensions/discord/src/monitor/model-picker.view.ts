@@ -143,10 +143,8 @@ function buildBucketSelectRow(params: {
   buckets: DiscordModelPickerBucket[];
   currentBucketId: string | undefined;
   provider?: string;
-  runtime?: string;
   runtimeToken?: string;
   providerPage?: number;
-  modelIndex?: number;
 }): DiscordModelPickerRow | null {
   const { buckets, currentBucketId, ...state } = params;
   if (buckets.length <= 1) {

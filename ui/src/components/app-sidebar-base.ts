@@ -265,6 +265,12 @@ export abstract class AppSidebarBase {
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
     this.sessionOwnerFilter.set(ownerId, involvingMe);
+    if (this.sidebarSnapshot) {
+      // Keep the cached rows, but let explicit intent select the replacement query.
+      const selected = this.sessionOwnerFilter.read();
+      this.sidebarSnapshot.ownerId = selected.ownerId;
+      this.sidebarSnapshot.involvingMe = selected.involvingMe;
+    }
   };
 
   pluginNavigation() {

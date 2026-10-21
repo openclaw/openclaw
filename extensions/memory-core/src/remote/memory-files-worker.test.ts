@@ -1,10 +1,10 @@
 import { PassThrough, Writable } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { MemoryFileWatcher } from "../memory/file-watcher.js";
 import { MemoryWatchPolicy } from "../memory/watch-policy.js";
 import { serveMemoryFiles } from "./memory-files-worker.js";
+import { memoryWatchFixture, request } from "./memory-worker.test-support.js";
 
 const observer = await vi.hoisted(async () => {
   const { createMemoryObservationHarness } = await import("../memory/watcher-test-support.js");
@@ -14,161 +14,115 @@ vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
   ...(await original<typeof import("openclaw/plugin-sdk/file-access-runtime")>()),
   watch: observer.watch,
 }));
-let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
-const request =
-  JSON.stringify({
-    agentId: "main",
-    settings: {
-      extraPaths: [],
-      multimodal: { enabled: false, modalities: [], maxFileBytes: 10485760 },
-      sync: { watchDebounceMs: 10 },
-    },
-  }) + "\n";
-beforeEach(async () => {
-  observer.reset();
-  state = await createOpenClawTestState({ label: "memory-files-watch" });
-  vi.useFakeTimers();
-});
-afterEach(async () => {
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-  await state.cleanup();
-});
+const fixture = memoryWatchFixture(() => observer.reset(), "memory-files-watch");
+function start(output: Writable) {
+  const input = new PassThrough();
+  const worker = serveMemoryFiles({
+    workspace: fixture.state.workspaceDir,
+    input,
+    output,
+    watch: true,
+  });
+  const finished = vi.fn();
+  void worker.then(finished, finished);
+  fixture.cleanup(async () => {
+    input.end();
+    await worker.catch(() => {});
+    output.destroy();
+  });
+  return { input, worker, finished };
+}
+function observeClose() {
+  const closing = createDeferred<{ retired: Promise<void> }>();
+  // oxlint-disable-next-line typescript/unbound-method -- Called with the intercepted owner.
+  const original = MemoryFileWatcher.prototype.close;
+  vi.spyOn(MemoryFileWatcher.prototype, "close").mockImplementation(function (
+    this: MemoryFileWatcher,
+  ) {
+    const retired = original.call(this);
+    closing.resolve({ retired });
+    return retired;
+  });
+  return closing.promise;
+}
+const requestLine = JSON.stringify(request) + "\n";
 
 it("revokes remote admission while startup is awaiting filesystem discovery", async () => {
-  const input = new PassThrough();
   const output = new PassThrough();
-  const entered = createDeferred<void>();
-  const resume = createDeferred<void>();
-  const closing = createDeferred<void>();
+  const entered = createDeferred<AbortSignal>();
+  const resume = fixture.barrier();
+  const closing = observeClose();
   // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted owner.
   const original = MemoryWatchPolicy.prototype.observations;
-  let admissionSignal: AbortSignal | undefined;
   vi.spyOn(MemoryWatchPolicy.prototype, "observations").mockImplementation(async function (
     this: MemoryWatchPolicy,
     signal,
   ) {
     const groups = await original.call(this, signal);
-    admissionSignal = signal;
-    entered.resolve();
+    entered.resolve(signal);
     await resume.promise;
     return groups;
   });
-  // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted owner.
-  const originalClose = MemoryFileWatcher.prototype.close;
-  vi.spyOn(MemoryFileWatcher.prototype, "close").mockImplementation(function (
-    this: MemoryFileWatcher,
-  ) {
-    closing.resolve();
-    return originalClose.call(this);
-  });
-  const worker = serveMemoryFiles({ workspace: state.workspaceDir, input, output, watch: true });
-  try {
-    input.write(request);
-    await entered.promise;
-    input.end();
-    await closing.promise;
-    expect(admissionSignal?.aborted).toBe(true);
-    let joined = false;
-    void worker.then(() => {
-      joined = true;
-    });
-    await Promise.resolve();
-    expect(joined).toBe(false);
-    resume.resolve();
-    await worker;
-    expect(observer.watch).not.toHaveBeenCalled();
-    expect(output.read()).toBeNull();
-  } finally {
-    resume.resolve();
-    input.end();
-    await worker;
-    output.destroy();
-  }
+  const { input, worker, finished } = start(output);
+  input.write(requestLine);
+  const admissionSignal = await entered.promise;
+  input.end();
+  await closing;
+  expect(admissionSignal.aborted).toBe(true);
+  await Promise.resolve();
+  expect(finished).not.toHaveBeenCalled();
+  resume.resolve();
+  await worker;
+  expect(observer.watch).not.toHaveBeenCalled();
+  expect(output.read()).toBeNull();
 });
 
 it.each(["input end", "output error"] as const)(
   "joins observation and backpressured stdout after %s",
   async (ending) => {
-    const input = new PassThrough();
     const ready = createDeferred<void>();
     const written = createDeferred<void>();
-    const physical = createDeferred<void>();
-    const retired = createDeferred<void>();
-    const closing = createDeferred<void>();
+    const physical = fixture.barrier();
+    const drain = fixture.barrier();
+    const closing = observeClose();
     observer.created = () => ready.resolve();
     observer.closeBarrier = physical.promise;
-    let blocked = true;
     let events = "";
-    const callbacks: Array<(error?: Error | null) => void> = [];
     const output = new Writable({
       highWaterMark: 1,
       write(chunk: Buffer, _encoding, callback) {
         events += chunk.toString("utf8");
         written.resolve();
-        if (blocked) {
-          callbacks.push(callback);
-        } else {
-          callback();
-        }
+        void drain.promise.then(() => callback());
       },
     });
-    // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted owner.
-    const originalClose = MemoryFileWatcher.prototype.close;
-    vi.spyOn(MemoryFileWatcher.prototype, "close").mockImplementation(function (
-      this: MemoryFileWatcher,
-    ) {
-      closing.resolve();
-      const pending = originalClose.call(this);
-      void pending.then(retired.resolve, retired.reject);
-      return pending;
-    });
-    const worker = serveMemoryFiles({ workspace: state.workspaceDir, input, output, watch: true });
-    let finished = false;
-    void worker.then(
-      () => {
-        finished = true;
-      },
-      () => {
-        finished = true;
-      },
-    );
-    try {
-      input.write(request);
-      await ready.promise;
-      observer.observations[0]!.dirty();
-      expect(events).toBe("");
-      await vi.advanceTimersByTimeAsync(10);
-      await written.promise;
-      expect(events).toBe('"change"\n');
-      expect(output.writableNeedDrain).toBe(true);
-      const failure = new Error("Memory stdout failed");
-      if (ending === "output error") {
-        output.destroy(failure);
-      } else {
-        input.end();
-      }
-      await closing.promise;
-      expect(finished).toBe(false);
-      physical.resolve();
-      await retired.promise;
-      if (ending === "input end") {
-        expect(finished).toBe(false);
-        blocked = false;
-        callbacks.splice(0).forEach((callback) => callback());
-        await worker;
-        expect(output.writableLength).toBe(0);
-      } else {
-        await expect(worker).rejects.toMatchObject({ errors: [failure] });
-      }
-      expect(observer.observations[0]!.close).toHaveBeenCalledOnce();
-    } finally {
-      physical.resolve();
-      blocked = false;
-      callbacks.splice(0).forEach((callback) => callback());
+    const { input, worker, finished } = start(output);
+    input.write(requestLine);
+    await ready.promise;
+    observer.observations[0]!.dirty();
+    expect(events).toBe("");
+    await vi.advanceTimersByTimeAsync(10);
+    await written.promise;
+    expect(events).toBe('"change"\n');
+    expect(output.writableNeedDrain).toBe(true);
+    const failure = new Error("Memory stdout failed");
+    if (ending === "output error") {
+      output.destroy(failure);
+    } else {
       input.end();
-      await worker.catch(() => {});
-      output.destroy();
     }
+    const { retired } = await closing;
+    expect(finished).not.toHaveBeenCalled();
+    physical.resolve();
+    await retired;
+    if (ending === "input end") {
+      expect(finished).not.toHaveBeenCalled();
+      drain.resolve();
+      await worker;
+      expect(output.writableLength).toBe(0);
+    } else {
+      await expect(worker).rejects.toMatchObject({ errors: [failure] });
+    }
+    expect(observer.observations[0]!.close).toHaveBeenCalledOnce();
   },
 );
