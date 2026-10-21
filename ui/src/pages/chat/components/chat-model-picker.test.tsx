@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { findMenuShortcut } from "../../../components/menu-shortcuts.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import {
@@ -91,12 +92,15 @@ it.each([false, true])(
     const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
     search.value = "Model 298";
     search.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
     expect(visibleRows().map((row) => row.dataset.chatModelOption)).toEqual(["fixture/model-298"]);
     expect(more.hidden).toBe(true);
     search.value = "";
     search.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
     expect(visibleRows()).toHaveLength(9);
     more.click();
+    flush();
     expect(visibleRows()).toHaveLength(300);
     expect(more.hidden).toBe(true);
   },
@@ -180,4 +184,106 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", async () => {
       '[data-chat-model-provider-group="claude-cli"] .chat-controls__auth-meta-label',
     )?.textContent,
   ).toBe("Claude Max");
+});
+
+it("derives rank and keyboard choices across model, target, and account rows", async () => {
+  const selectTarget = vi.fn();
+  const selectAccount = vi.fn();
+  const params = pickerProps({
+    open: true,
+    modelOptions: [
+      option("needle", "provider", { label: "Provider match" }),
+      option("fixture", "disabled", { label: "Needle disabled", disabled: true }),
+      option("fixture", "model", { label: "Needle model" }),
+    ],
+    selectedModelValue: "needle/provider",
+    targetGroups: [
+      {
+        id: "target",
+        label: "Target",
+        status: "ready",
+        errorLabel: "",
+        options: [{ value: "remote", label: "Needle target" }],
+      },
+    ],
+    onTargetSelect: selectTarget,
+    accountSection: {
+      onClose() {},
+      viewProps: (startIndex) => ({
+        selectionKind: "automatic",
+        disabled: false,
+        selectedIdentity: "Current account",
+        options: [{ value: "current", label: "Needle account" }],
+        currentValue: "current",
+        open: false,
+        error: null,
+        startIndex,
+        onToggle() {},
+        onSelect: selectAccount,
+      }),
+    },
+  });
+  const { container, update } = mountPicker(params);
+  await waitForMenu(container);
+  const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
+  search.value = "needle";
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  const ranked = () =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]:not([hidden])"),
+    ].toSorted((a, b) => Number(a.dataset.chatModelRank) - Number(b.dataset.chatModelRank));
+  expect(ranked().map((row) => row.dataset.chatModelOption)).toEqual([
+    "fixture/disabled",
+    "fixture/model",
+    "target:target:remote",
+    "account:current",
+    "needle/provider",
+  ]);
+  const model = ranked()[1]!;
+  const details = container.querySelector<HTMLDetailsElement>("details")!;
+  expect(findMenuShortcut(details, "1")).toBe(model);
+  expect(findMenuShortcut(details, "2")).toBe(ranked()[2]);
+  // Account and selected rows consume positions without advertising a global shortcut.
+  expect(findMenuShortcut(details, "3")).toBeUndefined();
+  expect(findMenuShortcut(details, "4")).toBeUndefined();
+  expect(model.hasAttribute("data-chat-model-highlighted")).toBe(true);
+  expect(search.getAttribute("aria-activedescendant")).toBe(model.id);
+  expect(
+    model
+      .querySelector("[data-chat-model-shortcut]")
+      ?.getAttribute("data-chat-model-shortcut-number"),
+  ).toBe("1");
+  search.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  flush();
+  const target = ranked()[2]!;
+  expect(search.getAttribute("aria-activedescendant")).toBe(target.id);
+  update({
+    ...params,
+    modelOptions: [option("fixture", "new", { label: "Needle new" }), ...params.modelOptions],
+  });
+  expect(container.querySelector(modelControlSelector("highlighted"))).toBe(target);
+  search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  expect(selectTarget).toHaveBeenCalledWith("target", "remote");
+  expect(selectAccount).not.toHaveBeenCalled();
+});
+
+it("restores the selected keyboard choice when an unfiltered picker reopens", async () => {
+  const onModelSelect = vi.fn();
+  const { container } = mountPicker({
+    open: true,
+    modelOptions: [option("fixture", "current"), option("fixture", "other")],
+    onModelSelect,
+  });
+  await waitForMenu(container);
+  const details = container.querySelector<HTMLDetailsElement>("details")!;
+  const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
+  details.open = false;
+  details.dispatchEvent(new Event("toggle"));
+  flush();
+  details.open = true;
+  details.dispatchEvent(new Event("toggle"));
+  flush();
+  search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  expect(onModelSelect).toHaveBeenCalledWith("fixture/current", "main", undefined);
 });

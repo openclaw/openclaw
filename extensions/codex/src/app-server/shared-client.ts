@@ -514,9 +514,6 @@ async function acquireSharedCodexAppServerClient(
       abandonSignal,
       "codex app-server authentication timed out",
     );
-    if (entry.closeError) {
-      throw entry.closeError;
-    }
     // Later leases of the same keyed client may carry fresher config; the
     // runtime install itself stays one-per-physical-client.
     ensureCodexAppServerClientRuntime(client, {
@@ -987,7 +984,6 @@ function captureSharedClientRegistration(client: CodexAppServerClient): () => bo
     state.clients.get(entry.key) === entry &&
     entry.client === client &&
     !entry.closeWhenIdle &&
-    !entry.closeError &&
     !client.getCloseError();
 }
 

@@ -4,9 +4,8 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 export async function museEnvironment(
   apiKey?: string,
-  env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ env: NodeJS.ProcessEnv; credentialSource: string }> {
-  const inherited = { ...process.env, ...env };
+  const inherited = { ...process.env };
   const managedHome = path.join(resolveStateDir(inherited), "muse");
   const authPath = path.join(managedHome, "muse", "auth.json");
   let credentialSource: string;

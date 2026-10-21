@@ -8,9 +8,14 @@ import {
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
+  legacyModelContextEventSql,
+  legacyModelNavigationSql,
+} from "../../config/sessions/session-model-context-legacy.test-support.js";
+import {
   projectModelContextEventSql,
   projectModelContextNavigationSql,
   projectResetBoundaryNavigationSql,
+  projectPostgresModelContextRowsSql,
 } from "../../config/sessions/session-model-context-projection.js";
 import {
   copyRetainedTranscriptPayload,
@@ -70,7 +75,20 @@ const fixtures = [
   { type: "custom", id: "retained", data: { opaque: "λ🦞", nested: [true, null] } },
   { type: "compaction", summary: "private summary", firstKeptEntryId: "kept" },
   { type: "branch_summary", summary: "private branch summary", fromId: "from" },
+  { type: "reset", firstKeptEntryId: "kept", reason: "reset" },
+  { type: "unknown", unknown: { content: "preserved" }, timestamp: null },
+  messageEvent({ role: null, content: null, providerReplay: null }),
+  messageEvent({ content: [{ type: "toolCall" }], providerReplay: {} }),
+  messageEvent({ role: "unknown", content: [null, 17, "text", { type: "unknown" }] }),
 ].map((event, index) => Object.assign({ id: `entry-${index}`, parentId: "old-parent" }, event));
+const exactJsonFixtures = [
+  '{"type":"reset","timestamp":1.00}',
+  '{"type":"reset","timestamp":1e-7}',
+  '{"type":"reset","reason":"\\uD83E\\uDD9E \\u03bb \\n \\\""}',
+  '{"type":"message","message":{"role":"user","content":"日本語 🦞","__openclaw":{"upstreamUserText":"private","runId":"kept"}}}',
+  '{"type":"message","message":{"role":"toolResult","details":{"openclawSyntheticMissingToolResult":1.00},"content":[],"providerReplay":{"type":"checkpoint","number":1e20}}}',
+  '{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":null,"name":{"unknown":1.00}}],"unknown":null}}',
+];
 const passthrough = ["{ malformed", "null", "true", "17", '"text"', "[]"];
 const schema = `CREATE TABLE transcript_events (
   session_id TEXT NOT NULL, seq INTEGER PRIMARY KEY, event_json TEXT, event_zstd BYTEA,
@@ -101,14 +119,73 @@ it.skipIf(typeof connection !== "string")(
             admitSqliteSchema(db);
           }
           const insert = createTranscriptEventInserter(db, "conformance");
-          [...fixtures.map((event) => JSON.stringify(event)), ...passthrough].forEach(
-            (eventJson, seq) => insert({ seq, eventJson, createdAt: 1 }),
-          );
+          [
+            ...fixtures.map((event) => JSON.stringify(event)),
+            ...passthrough,
+            ...exactJsonFixtures,
+          ].forEach((eventJson, seq) => insert({ seq, eventJson, createdAt: 1 }));
         }
         const event =
           /* kysely-allow-raw: The fixture table owns this fixed JSON column. */ sql.ref<string>(
             "event_json",
           );
+        const validRows = table(postgres).where((eb) =>
+          eb.or([
+            eb("seq", "<", fixtures.length),
+            eb("seq", ">=", fixtures.length + passthrough.length),
+          ]),
+        );
+        const legacy = executeSqliteQuerySync(
+          postgres,
+          validRows
+            .select([
+              "seq",
+              legacyModelNavigationSql(
+                postgres,
+                event,
+                /* kysely-allow-raw: The original query extracted its discriminant from JSONB. */ sql`${event}::jsonb ->> 'type'`,
+              ).as("navigation_json"),
+              /* kysely-allow-raw: Frozen legacy model-byte expression is the independent oracle. */ sql<number>`octet_length(${legacyModelContextEventSql(postgres, event, sql.lit(0))})`.as(
+                "model_bytes",
+              ),
+              /* kysely-allow-raw: Frozen legacy retained-byte expression is the independent oracle. */ sql<number>`octet_length(${legacyModelContextEventSql(postgres, event, sql.lit(1))})`.as(
+                "retained_bytes",
+              ),
+            ])
+            .orderBy("seq"),
+        ).rows;
+        const native = () =>
+          executeSqliteQuerySync(
+            postgres,
+            getNodeSqliteKysely(postgres)
+              .selectFrom(
+                projectPostgresModelContextRowsSql(
+                  validRows.select(["seq", "event_json", "navigation_json"]),
+                ).as("context"),
+              )
+              .selectAll(),
+          ).rows;
+        expect(native()).toEqual(legacy);
+        // Existing stored envelopes bypass canonical JSON parsing even when its text is unavailable.
+        remote
+          .prepare("UPDATE transcript_events SET navigation_json = ?, event_json = ? WHERE seq = 0")
+          .run(
+            JSON.stringify({
+              model: JSON.parse(legacy[0]!.navigation_json),
+              modelBytes: legacy[0]!.model_bytes,
+              modelWithoutCheckpointBytes: legacy[0]!.retained_bytes,
+            }),
+            "{ unavailable",
+          );
+        try {
+          expect(native()).toEqual(legacy);
+        } finally {
+          remote
+            .prepare(
+              "UPDATE transcript_events SET navigation_json = NULL, event_json = ? WHERE seq = 0",
+            )
+            .run(JSON.stringify(fixtures[0]));
+        }
         for (const omit of [0, 1]) {
           for (const notice of [false, true]) {
             const projections = databases.map((db) =>
@@ -150,6 +227,7 @@ it.skipIf(typeof connection !== "string")(
             table(db)
               .select(projectResetBoundaryNavigationSql(db, event).as("reset"))
               .where("seq", ">=", fixtures.length)
+              .where("seq", "<", fixtures.length + passthrough.length)
               .orderBy("seq"),
           ).rows;
           expect(rows.map((row) => row.reset)).toEqual(passthrough);

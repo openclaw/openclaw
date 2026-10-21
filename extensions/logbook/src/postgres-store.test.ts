@@ -162,7 +162,7 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
     expect(observations(1)).toEqual([expect.objectContaining({ text: "second" })]);
     replace([card({ title: "Old" })]);
     replace([card()]);
-    expect(() => replace([card({ title: "Invalid", keyframeId: 999_999 })])).toThrow();
+    expect(() => replace([card({ title: "Invalid", startMs: 0.5 })])).toThrow();
     expect(execute({ type: "countCardsForDay", input: { day: DAY } })).toBe(1);
     expect(execute({ type: "cardsForDay", input: { day: DAY } })).toEqual([
       expect.objectContaining({ title: "Coding", distractions: card().distractions }),
@@ -187,7 +187,7 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
     const id = frame(-1000, false, day);
     const file = path.join(dataDir, "frames", day, "-1000-false.jpg");
     const span = { day, startMs: -1000, endMs: 0 };
-    replace([card({ ...span, keyframeId: id })], span);
+    replace([card(span)], span);
     expect(execute({ type: "pruneFrames", input: { olderThanMs: 0 } })).toBe(1);
     expect(existsSync(file)).toBe(false);
     expect(execute({ type: "frameById", input: { id } })).toBeNull();

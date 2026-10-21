@@ -1,6 +1,6 @@
 import { Value } from "typebox/value";
 import { expect, it, vi } from "vitest";
-import type { BoardCommand, BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
+import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createGatewayMethodDescriptorsFromHandlers,
   createGatewayMethodRegistry,
@@ -29,7 +29,7 @@ function inGateway(context: GatewayRequestContext, run: () => Promise<void>) {
 
 function recorder(boardSnapshot: BoardSnapshot = snapshot) {
   const calls: Array<[string, Record<string, unknown>]> = [];
-  const commands: Array<{ sessionKey: string; command: BoardCommand }> = [];
+  const commands: unknown[] = [];
   const callGateway: InProcessGatewayCaller = async <T>(
     method: string,
     params: Record<string, unknown>,
@@ -47,10 +47,6 @@ function recorder(boardSnapshot: BoardSnapshot = snapshot) {
     tool: createDashboardTool({
       agentSessionKey: snapshot.sessionKey,
       callGateway,
-      emitCommand: (command) => {
-        commands.push(command);
-        return 2;
-      },
     }),
     calls,
     commands,
@@ -287,10 +283,17 @@ it.each([
   ["set_presentation", { presentation: "expanded" }, { kind: "set_chat_dock", dock: "hidden" }],
 ])("emits board.command for %s", async (action, args, command) => {
   const harness = recorder();
-  const result = await harness.tool.execute("command", { action, ...args });
-  expect(harness.calls).toEqual([]);
-  expect(harness.commands).toEqual([{ sessionKey: "agent:main:main", command }]);
-  expect(result.details).toEqual({ ok: true, delivered: 2 });
+  const gateway = createGatewayAffinityHarness(0);
+  gateway.context.getClientConnIds = () => new Set(["control-ui-1", "control-ui-2"]);
+  gateway.broadcastToConnIds.mockImplementation((_event: string, payload: unknown) => {
+    harness.commands.push(payload);
+  });
+  await inGateway(gateway.context, async () => {
+    const result = await harness.tool.execute("command", { action, ...args });
+    expect(harness.calls).toEqual([]);
+    expect(harness.commands).toEqual([{ sessionKey: "agent:main:main", command }]);
+    expect(result.details).toEqual({ ok: true, delivered: 2 });
+  });
 });
 
 it("reports commands as unavailable when no Control UI is connected", async () => {

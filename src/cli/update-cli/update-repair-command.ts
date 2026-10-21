@@ -58,7 +58,7 @@ import {
   resolveTargetVersion,
   type UpdateFinalizeOptions,
 } from "./shared.js";
-import { updateFinalizeCommand } from "./update-command-finalize.js";
+import { updateFinalizeCommand, type UpdateCoreCompletion } from "./update-command-finalize.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import { updateMaintenanceError } from "./update-maintenance-error.js";
@@ -345,6 +345,7 @@ function reportRepairResult(
   if (opts.json) {
     defaultRuntime.writeJson({
       status: retained ? "warning" : "ok",
+      coreUpdate: (retained ? "pending" : "completed") satisfies UpdateCoreCompletion,
       mode: "repair",
       restart: false,
       reconciledRuns,

@@ -5,6 +5,7 @@ import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner
 import { resolveIsConfigReadOnly, resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
 import type {
   LegacyStateMigrationStepReceipt,
@@ -29,7 +30,6 @@ import {
 } from "./doctor-config-preflight-legacy-config.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import { assertDoctorPreflightMigrationsComplete } from "./doctor-config-preflight-migrations.js";
-import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
 import { createDoctorPluginMigrationPreparation } from "./doctor-config-preflight-plugin-migrations.js";
 import { runDoctorPluginConvergence } from "./doctor-config-preflight-plugin-verification.js";
 import * as cronMigration from "./doctor-config-preflight.cron.js";
@@ -157,6 +157,7 @@ async function runDoctorConfigPreflightOperation(
     pluginMetadata.run({ config: configSnapshot.sourceConfig ?? configSnapshot.config ?? {} }, () =>
       planAutomaticConfigRepair(configSnapshot),
     );
+  // Updater-managed rewrites may leave plugin validation stale until convergence.
   const planAdmittedConfigRepair = (
     configSnapshot: ConfigFileSnapshot,
     prepared: Awaited<ReturnType<typeof planAutomaticConfigRepair>> = null,
@@ -166,7 +167,7 @@ async function runDoctorConfigPreflightOperation(
     canPlanAutomaticConfigRepair(configSnapshot) &&
     !skipLegacyParentConfigWrite &&
     (options.repairPrefixedConfig === true ||
-      !shouldSkipPluginValidationForDoctorConfigPreflight()) &&
+      !isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS)) &&
     !resolveIsConfigReadOnly(process.env) &&
     !resolveFutureConfigActionBlock({ action: "normalize legacy config", snapshot: configSnapshot })
       ? (prepared ?? planScopedConfigRepair(configSnapshot))
@@ -179,7 +180,7 @@ async function runDoctorConfigPreflightOperation(
         includePluginMetadata: options.preparePluginMetadataSnapshot === true,
         measure: options.measure,
         observe: options.observe,
-        skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
+        skipPluginValidation: isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS),
         prepareSnapshot: getSnapshotPreparation(options.doctorOnlyStateMigrations === true),
         ...(await pluginMigrations.snapshotOptions()),
       }),

@@ -75,6 +75,11 @@ Related model-config surfaces:
 
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
+If repeated utility-model failures stop session-observer assessments, the watching
+Control UI chat shows one warning for that run, naming the model and suggesting a
+capable utility model or `utilityModel.fallbacks`. The explicit route stays selected;
+the next run tries it again. Model-free activity headlines remain available.
+
 Title generation requests thinking off where supported. Custom OpenAI-compatible
 endpoints with an inferred Z.AI (`zai`) thinking format keep the provider's default
 unless an explicit thinking format, supported off effort, or reasoning-effort mapping

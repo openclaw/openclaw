@@ -29,7 +29,10 @@ export function createRestoredRequesterActivator(config: {
     assertCurrent: () => void,
     startupTrace?: GatewayStartupTrace,
   ) => Promise<void>;
-  recoverInterruptedRuns: (entries: readonly SubagentRunRecord[]) => Promise<void>;
+  recoverInterruptedRuns: (
+    entries: readonly SubagentRunRecord[],
+    startupTrace?: GatewayStartupTrace,
+  ) => Promise<void>;
 }) {
   // Repeated activation retries transfers without enqueuing restored collectors again.
   let groups: Array<{ entries: SubagentRunRecord[]; resumed: boolean }> | undefined;
@@ -191,10 +194,8 @@ export function createRestoredRequesterActivator(config: {
             config.resumeRuns(currentEntries(), assertCurrent, startupTrace),
           );
           assertCurrent();
-          await measureStartup(startupTrace, "sidecars.subagent-interrupted", () =>
-            config.recoverInterruptedRuns(currentEntries()),
-          );
-          assertCurrent();
+          // Source custody and ordered reservations are ready; the sweeper owns orphan settlement.
+          void config.recoverInterruptedRuns(currentEntries(), startupTrace);
           group.resumed = true;
         }
         if (failures.length > 0) {

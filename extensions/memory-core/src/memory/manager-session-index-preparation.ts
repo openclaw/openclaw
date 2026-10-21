@@ -18,7 +18,7 @@ export type SessionIndexPreparation = Omit<
   resetAtLine?: number;
   entry: Pick<MemoryIndexPreparationInput["entry"], "path" | "mtimeMs">;
 };
-export type SessionIndexLine = {
+type SessionIndexLine = {
   text: string;
   lineNo: number;
   endOfLine: boolean;

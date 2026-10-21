@@ -221,10 +221,13 @@ def resolve_simulator_device(name)
   # the supported device types; with_screenshot_simulator creates our device.
   stdout, stderr, status = Open3.capture3("xcrun", "simctl", "list", "runtimes", "--json")
   UI.user_error!("Failed to list Watch simulator runtimes: #{stderr.strip}") unless status.success?
-  runtime = JSON.parse(stdout).fetch("runtimes")
-    .select { |entry| entry["isAvailable"] && entry.fetch("identifier").include?(".watchOS-") }
+  runtimes = JSON.parse(stdout).fetch("runtimes").select { |entry| entry.fetch("identifier").include?(".watchOS-") }
+  runtime = runtimes.select { |entry| entry["isAvailable"] }
     .max_by { |entry| Gem::Version.new(entry.fetch("version")) }
-  UI.user_error!("No available watchOS runtime. Install one for the selected Xcode with: xcodebuild -downloadPlatform watchOS") unless runtime
+  unless runtime
+    UI.important("Watch runtime inventory: #{JSON.generate(runtimes.map { |entry| entry.slice("identifier", "version", "isAvailable") })}")
+    return nil
+  end
 
   devices = runtime.fetch("supportedDeviceTypes")
   device = devices.find { |entry| entry.fetch("name") == name } ||
@@ -282,42 +285,69 @@ def require_exclusive_screenshot_simulator!(udid, diagnostics)
 end
 
 def repair_watch_screenshot_runtime!(runtime)
-  images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j")).values
+  version = runtime ? runtime.split(".watchOS-").last.tr("-", ".") : sh("xcrun", "--sdk", "watchsimulator", "--show-sdk-version").strip
+  runtime ||= "com.apple.CoreSimulator.SimRuntime.watchOS-#{version.tr(".", "-")}"
+  images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
     .select { |image| image["runtimeIdentifier"] == runtime }
-  UI.user_error!("Cannot repair #{runtime}: expected one registered disk image, found #{images.length}.") unless images.length == 1
+  report_watch_runtime_images(runtime, images)
+  UI.user_error!("Cannot repair #{runtime}: expected at most one registered disk image, found #{images.length}.") if images.length > 1
 
-  version = sh("xcrun", "--sdk", "watchsimulator", "--show-sdk-version").strip
-  sh("xcrun", "simctl", "runtime", "delete", images.first.fetch("identifier"))
+  sh("xcrun", "simctl", "runtime", "delete", images.first.fetch("identifier")) unless images.empty?
   sh("xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", version)
-  restored = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j")).values.find do |image|
-    image["runtimeIdentifier"] == runtime && image["state"] == "Ready" &&
-      image["runtimeBundlePath"] && File.directory?(image["runtimeBundlePath"])
+  images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
+    .select { |image| image["runtimeIdentifier"] == runtime }
+  report_watch_runtime_images(runtime, images)
+  restored = images.any? do |image|
+    image["state"] == "Ready" && image["runtimeBundlePath"] && File.directory?(image["runtimeBundlePath"])
   end
   UI.user_error!("watchOS #{version} download did not restore a mounted runtime for #{runtime}.") unless restored
 end
 
-def create_screenshot_simulator(template)
-  command = ["xcrun", "simctl", "create", template.fetch("name"), template.fetch("deviceTypeIdentifier"), template.fetch("runtime")]
-  sh(*command).strip
-rescue StandardError => error
-  # Hosted CoreSimulator can advertise a runtime whose disk image is gone.
-  raise unless ENV["CI"] == "true" && template.fetch("runtime").include?(".watchOS-") && error.message.include?("runtime path not found")
+def report_watch_runtime_images(runtime, images)
+  facts = images.map do |image|
+    image.slice("state", "version", "build").merge("mountedPathExists" => !!(image["runtimeBundlePath"] && File.directory?(image["runtimeBundlePath"])))
+  end
+  UI.important("Watch runtime images for #{runtime}: #{JSON.generate(facts)}")
+end
 
-  UI.important("Watch runtime path is missing; replacing its disk image and retrying creation once.")
-  repair_watch_screenshot_runtime!(template.fetch("runtime"))
-  begin
-    sh(*command).strip
-  rescue StandardError => retry_error
-    UI.user_error!("Watch simulator creation failed after one runtime repair: #{retry_error.message}")
+def create_screenshot_simulator(template)
+  sh("xcrun", "simctl", "create", template.fetch("name"), template.fetch("deviceTypeIdentifier"), template.fetch("runtime")).strip
+end
+
+def create_watch_screenshot_simulator(name)
+  # Runtime availability can change during the phone/tablet captures. One repair
+  # covers resolution and creation together; boot and capture are never retried.
+  2.times do |attempt|
+    template = resolve_simulator_device(name)
+    if template
+      begin
+        return [template, create_screenshot_simulator(template)]
+      rescue StandardError => error
+        raise unless ENV["CI"] == "true" && error.message.include?("runtime path not found")
+        reason = error.message
+      end
+    else
+      reason = "No available watchOS runtime. Install one for the selected Xcode with: xcodebuild -downloadPlatform watchOS"
+    end
+    UI.user_error!(reason) unless ENV["CI"] == "true"
+    UI.user_error!("Watch simulator creation failed after one runtime repair: #{reason}") unless attempt.zero?
+
+    UI.important("Watch runtime unavailable; repairing once before simulator creation.")
+    repair_watch_screenshot_runtime!(template && template.fetch("runtime"))
   end
 end
 
-def with_screenshot_simulator(template, diagnostics: nil)
+def with_screenshot_simulator(template = nil, watch_name: nil, diagnostics: nil)
   require_idle_screenshot_simulators!
-  name = template.fetch("name")
-  udid = screenshot_phase(diagnostics, "create", device: name) do
-    create_screenshot_simulator(template)
+  udid = screenshot_phase(diagnostics, "create", device: watch_name || template.fetch("name")) do
+    if watch_name
+      template, identifier = create_watch_screenshot_simulator(watch_name)
+      identifier
+    else
+      create_screenshot_simulator(template)
+    end
   end
+  name = template.fetch("name")
   UI.user_error!("simctl create did not return a simulator UUID.") unless udid.match?(/\A[\da-fA-F]{8}(?:-[\da-fA-F]{4}){3}-[\da-fA-F]{12}\z/)
 
   begin
@@ -325,7 +355,11 @@ def with_screenshot_simulator(template, diagnostics: nil)
       sh("xcrun", "simctl", "bootstatus", udid, "-b")
       require_exclusive_screenshot_simulator!(udid, diagnostics)
     end
-    result = yield udid
+    if ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] == "1"
+      screenshot_phase(diagnostics, "simulator-idle", device: name, udid: udid) { sleep(120) }
+      require_exclusive_screenshot_simulator!(udid, diagnostics)
+    end
+    result = yield udid, template
     require_exclusive_screenshot_simulator!(udid, diagnostics)
     result
   ensure
@@ -585,11 +619,11 @@ def capture_watch_screenshot(diagnostics: nil)
   UI.user_error!("Watch screenshot build did not produce #{app_path}.") unless File.exist?(app_path)
   watch_app_identifier = bundle_identifier_for_product(app_path)
   screenshot_mode_bundle_identifiers = [watch_app_identifier]
-  device = resolve_simulator_device(watch_snapshot_device)
-  device_name = device.fetch("name")
-  output_path = File.join(output_dir, "#{device_name}-01-now-face.png")
+  output_path = nil
 
-  with_screenshot_simulator(device, diagnostics: diagnostics) do |udid|
+  with_screenshot_simulator(watch_name: watch_snapshot_device, diagnostics: diagnostics) do |udid, device|
+    device_name = device.fetch("name")
+    output_path = File.join(output_dir, "#{device_name}-01-now-face.png")
     screenshot_phase(diagnostics, "watch-capture", device: device_name, udid: udid) do
       sh(shell_join(["xcrun", "simctl", "install", udid, app_path]))
       write_watch_screenshot_mode_defaults(udid, screenshot_mode_bundle_identifiers)
@@ -2435,6 +2469,9 @@ platform :ios do
         ],
         log_path: File.join(log_directory, "build.log")
       )
+    end
+    if ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] == "1"
+      screenshot_phase(diagnostics, "host-idle") { sleep(60) }
     end
 
     # SnapshotHelper.swift consumes these files from SIMULATOR_HOST_HOME.

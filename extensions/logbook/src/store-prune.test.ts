@@ -87,14 +87,13 @@ function seedFrames(expired: number) {
       endMs: expired + 2,
       drafts: [1, expired + 1].map((id) => ({
         day,
-        startMs: 0,
-        endMs: expired + 2,
+        startMs: id - 1,
+        endMs: id,
         title: `Card ${id}`,
         summary: "Retained card",
         detail: "",
         category: "coding",
         distractions: [],
-        keyframeId: id,
       })),
     },
   });

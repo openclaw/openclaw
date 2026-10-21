@@ -6,6 +6,7 @@ import { expect, it, vi } from "vitest";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import * as doctorConfigFlow from "../commands/doctor-config-flow.js";
+import { mockDoctorServicePlatform } from "../commands/doctor-maintenance.state-owner.test-support.js";
 import { collectSecurityWarnings } from "../commands/doctor-security.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -172,10 +173,10 @@ async function runManagedRepair(
       outcome.startsWith("clean-stopped-") || outcome === "update-no-restart-stopped";
     const inconclusiveActivation =
       outcome.startsWith("clean-stopped-") && outcome !== "clean-stopped-repair";
-    const platform =
-      outcome === "clean-stopped-manager-unknown"
-        ? vi.spyOn(process, "platform", "get").mockReturnValue("linux")
-        : undefined;
+    const linuxService = outcome === "clean-stopped-manager-unknown";
+    if (linuxService) {
+      mockDoctorServicePlatform("linux");
+    }
     let running = !initiallyStopped;
     if (initiallyStopped) {
       releaseOpenClawAgentDatabaseLease(leaseId, { env });
@@ -509,7 +510,9 @@ async function runManagedRepair(
       archiveRepair?.mockRestore();
       archiveTransform?.mockRestore();
       releaseOpenClawAgentDatabaseLease(leaseId, { env });
-      platform?.mockRestore();
+      if (linuxService) {
+        vi.restoreAllMocks();
+      }
     }
   });
 }
