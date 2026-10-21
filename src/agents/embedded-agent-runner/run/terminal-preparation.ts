@@ -1,6 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { stripHeartbeatToken } from "../../../auto-reply/heartbeat.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -13,6 +11,7 @@ import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import {
+  filterAgentRunTerminalPayloadsForPresentation,
   prepareAgentRunTerminalReply,
   sanitizeAgentRunTerminalReply,
 } from "../../agent-run-terminal-reply.js";
@@ -361,9 +360,9 @@ export function prepareEmbeddedRunTerminal(input: {
     !attempt.didSendDeterministicApprovalPrompt &&
     !attempt.lastToolError &&
     (attempt.toolMetas?.length ?? 0) === 0;
-  const payloadsForVisibleCompletion = filterPresentationHiddenAcknowledgements({
+  const payloadsForVisibleCompletion = filterAgentRunTerminalPayloadsForPresentation({
     payloads: recoveredFinalAssistantPayloadsAfterPromptTimeout ?? payloadsWithToolMedia,
-    isHeartbeatTrigger: runParams.trigger === "heartbeat",
+    isHeartbeatTrigger: runParams.trigger === "heartbeat" && !runParams.continuesConversation,
   });
   const attemptToolSummary = buildTraceToolSummary(attempt);
   // Cron execution denials must not look like successful silent completions.
@@ -408,23 +407,6 @@ export function prepareEmbeddedRunTerminal(input: {
     failureSignal,
     terminalToolFailure,
   };
-}
-
-function filterPresentationHiddenAcknowledgements(input: {
-  payloads: EmbeddedAgentRunResult["payloads"];
-  isHeartbeatTrigger: boolean;
-}): EmbeddedAgentRunResult["payloads"] {
-  if (input.isHeartbeatTrigger || !input.payloads) {
-    return input.payloads;
-  }
-  return input.payloads.filter((payload) => {
-    const text = payload.text;
-    if (!text) {
-      return true;
-    }
-    const presentation = stripHeartbeatToken(text, { mode: "message" });
-    return !(presentation.shouldSkip && !resolveSendableOutboundReplyParts(payload).hasMedia);
-  });
 }
 
 function replacePartialAssistantPayload(input: {

@@ -54,22 +54,16 @@ describe("prepareEmbeddedRunTerminal", () => {
       visible: false,
     },
     {
-      name: "visible text beside the acknowledgement token",
-      payload: { text: "HEARTBEAT_OK Everything is ready." },
-      heartbeat: undefined,
-      visible: true,
-    },
-    {
-      name: "media beside the acknowledgement token",
-      payload: { text: "HEARTBEAT_OK", mediaUrl: "https://example.invalid/chart.png" },
-      heartbeat: undefined,
-      visible: true,
-    },
-    {
       name: "a real heartbeat acknowledgement",
       payload: { text: "HEARTBEAT_OK" },
       heartbeat: { continuesConversation: false },
       visible: true,
+    },
+    {
+      name: "a heartbeat-transported conversation continuation",
+      payload: { text: "HEARTBEAT_OK" },
+      heartbeat: { continuesConversation: true },
+      visible: false,
     },
   ])("keeps $name aligned with reply presentation", async ({ payload, heartbeat, visible }) => {
     payloadMocks.buildEmbeddedRunPayloads.mockReturnValueOnce([payload]);
