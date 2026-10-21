@@ -21,6 +21,9 @@ describe("system-presence", () => {
   function connectDevice(deviceId: string, fields: Parameters<typeof upsertPresence>[1]) {
     upsertPresence(deviceId, { deviceId, reason: "connect", ...fields });
   }
+  const findDevice = (deviceId: string) =>
+    listSystemPresence().find((entry) => entry.deviceId === deviceId);
+  const operators = () => listSystemPresence().filter((entry) => entry.roles?.includes("operator"));
 
   it("keeps a replacement connection private until its own delivery commits", () => {
     const key = randomUUID();
@@ -45,16 +48,9 @@ describe("system-presence", () => {
   it("merges roles and scopes for the same device", () => {
     const deviceId = randomUUID();
 
-    connectDevice(deviceId, {
-      host: "openclaw",
-      roles: ["operator"],
-      scopes: ["operator.admin"],
-    });
-
+    connectDevice(deviceId, { host: "openclaw", roles: ["operator"], scopes: ["operator.admin"] });
     connectDevice(deviceId, { roles: ["node"], scopes: ["system.run"] });
-
-    const entry = listSystemPresence().find((e) => e.deviceId === deviceId);
-    expect(entry).toMatchObject({
+    expect(findDevice(deviceId)).toMatchObject({
       roles: ["operator", "node"],
       scopes: ["operator.admin", "system.run"],
     });
@@ -66,7 +62,6 @@ describe("system-presence", () => {
       { deviceId: "DEVICE", instanceId: "tab" },
       { instanceId: "INSTANCE" },
     ]) {
-      const rows = () => listSystemPresence().filter((entry) => entry.roles?.includes("operator"));
       const connect = (connectionId: string, watchedSessions: string[]) =>
         upsertPresence(connectionId, {
           deviceId: connectionId === "first" ? identity.deviceId : identity.deviceId?.toLowerCase(),
@@ -83,25 +78,25 @@ describe("system-presence", () => {
 
       connect("first", ["one"]);
       disconnect("first");
-      expect(rows()).toMatchObject([{ connectionId: "first", reason: "disconnect" }]);
+      expect(operators()).toMatchObject([{ connectionId: "first", reason: "disconnect" }]);
       connect("second", ["two"]);
-      expect(rows()).toMatchObject([{ connectionId: "second", reason: "connect" }]);
+      expect(operators()).toMatchObject([{ connectionId: "second", reason: "connect" }]);
       connect("third", ["three"]);
-      expect(rows()).toEqual([
-        expect.objectContaining({ connectionId: "second", watchedSessions: ["two"] }),
-        expect.objectContaining({ connectionId: "third", watchedSessions: ["three"] }),
+      expect(operators()).toMatchObject([
+        { connectionId: "second", watchedSessions: ["two"] },
+        { connectionId: "third", watchedSessions: ["three"] },
       ]);
       disconnect("second");
-      expect(rows()).toMatchObject([{ connectionId: "third", watchedSessions: ["three"] }]);
+      expect(operators()).toMatchObject([{ connectionId: "third", watchedSessions: ["three"] }]);
       disconnect("third");
-      expect(rows()).toMatchObject([
+      expect(operators()).toMatchObject([
         { connectionId: "third", reason: "disconnect", watchedSessions: undefined },
       ]);
       expect(listSystemPresence().find((entry) => entry.roles?.includes("node"))).toMatchObject({
         reason: "connect",
       });
       vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-      expect(rows()).toEqual([]);
+      expect(operators()).toEqual([]);
     }
     upsertPresence("anonymous-first", {
       connectionId: "anonymous-first",
@@ -113,9 +108,7 @@ describe("system-presence", () => {
       roles: ["operator"],
       reason: "connect",
     });
-    expect(listSystemPresence().filter((entry) => entry.roles?.includes("operator"))).toHaveLength(
-      2,
-    );
+    expect(operators()).toHaveLength(2);
   });
 
   it("clears retained input activity on explicit null", () => {
@@ -125,8 +118,7 @@ describe("system-presence", () => {
     updateSystemPresence({ ...beacon, lastInputSeconds: null });
 
     const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
-    expect(entry?.host).toBe("desk");
-    expect(entry?.lastInputSeconds).toBeUndefined();
+    expect(entry).toMatchObject({ host: "desk", lastInputSeconds: undefined });
   });
 
   it("parses node presence text and normalizes the update key", () => {
@@ -137,7 +129,7 @@ describe("system-presence", () => {
     const instanceId = "  Mixed-Case-Node  ";
     const update = updateSystemPresence({ text, instanceId });
 
-    expect({ key: update.key, changedKeys: update.changedKeys, next: update.next }).toEqual({
+    expect(update).toEqual({
       key: "mixed-case-node",
       changedKeys: ["host", "ip", "version", "mode", "reason"],
       next: {
@@ -221,7 +213,7 @@ describe("system-presence", () => {
     vi.useFakeTimers();
     const deviceId = randomUUID();
     connectDevice(deviceId, { host: "stale-host", mode: "ui" });
-    const original = listSystemPresence().find((entry) => entry.deviceId === deviceId)!;
+    const original = findDevice(deviceId)!;
     expect(original).toBeDefined();
 
     vi.advanceTimersByTime(5 * 60 * 1000 + 1);
@@ -230,7 +222,7 @@ describe("system-presence", () => {
     expect(entries.map((entry) => entry.deviceId)).not.toContain(deviceId);
     expect(entries.map((entry) => entry.reason)).toContain("self");
     connectDevice(deviceId, { host: "returned-host", mode: "ui" });
-    const returned = listSystemPresence().find((entry) => entry.deviceId === deviceId)!;
+    const returned = findDevice(deviceId)!;
     expect(getSystemPresenceKey(returned)).not.toBe(getSystemPresenceKey(original));
   });
 });

@@ -74,6 +74,35 @@ async function repository(root: string): Promise<string> {
   return repo;
 }
 
+async function fixture(prefix: string) {
+  const root = tempDirs.make(`openclaw-${prefix}-`);
+  return { root, repo: await repository(root) };
+}
+
+const inspect = (checkoutPath: string, options?: GitWorkerOperationOptions) =>
+  runGitWorkerOperation(
+    { type: "worktree.cleanup-inspection", input: { kind: "nested-repository", checkoutPath } },
+    options,
+  );
+const size = (repoRoot: string, options?: GitWorkerOperationOptions, ref = "HEAD") =>
+  runGitWorkerOperation({ type: "worktree.git-size", input: { repoRoot, ref } }, options);
+const snapshot = (
+  repoRoot: string,
+  worktreeId: string,
+  options: GitWorkerOperationOptions = { onEffect: () => undefined },
+  checkoutPath = repoRoot,
+  provisionedPaths: string[] = [],
+) =>
+  runGitWorkerOperation(
+    {
+      type: "worktree.snapshot",
+      input: { worktreeId, checkoutPath, repoRoot, reason: "fixture", provisionedPaths },
+    },
+    options,
+  );
+const snapshotRefExists = async (repo: string, id: string) =>
+  (await gitResult(repo, ["show-ref", "--verify", `refs/openclaw/snapshots/${id}`])).code === 0;
+
 async function partialClone(root: string) {
   const source = await repository(root);
   const origin = path.join(root, "origin.git");
@@ -280,8 +309,7 @@ describe("Git operation host lifecycle", () => {
   });
 
   it("bounds ignored dependency output during snapshot without losing private staged inputs", async () => {
-    const root = tempDirs.make("openclaw-ignored-inventory-");
-    const repo = await repository(root);
+    const { repo } = await fixture("ignored-inventory");
     await fs.writeFile(path.join(repo, ".gitignore"), "dependencies/\nmedia/\nprivate.txt\n");
     await git(repo, "add", ".gitignore");
     await git(repo, "commit", "-m", "ignore generated and private files");
@@ -307,23 +335,9 @@ describe("Git operation host lifecycle", () => {
       }
       return await realRun(cwd, args, options);
     });
-    const snapshot = await runGitWorkerOperation(
-      {
-        type: "worktree.snapshot",
-        input: {
-          worktreeId: "bounded-ignored",
-          checkoutPath: repo,
-          repoRoot: repo,
-          reason: "fixture",
-          provisionedPaths: [],
-        },
-      },
-      {
-        onEffect: () => undefined,
-      },
-    );
-    expect(await git(repo, "show", `${snapshot.snapshotRef}:${input}`)).toBe("retain task input");
-    const tree = await git(repo, "ls-tree", "-r", "--name-only", snapshot.snapshotRef);
+    const result = await snapshot(repo, "bounded-ignored");
+    expect(await git(repo, "show", `${result.snapshotRef}:${input}`)).toBe("retain task input");
+    const tree = await git(repo, "ls-tree", "-r", "--name-only", result.snapshotRef);
     expect(tree).not.toContain("dependencies/");
     expect(tree).not.toContain("private.txt");
     expect(ignoredReads).toBeGreaterThan(0);
@@ -332,49 +346,28 @@ describe("Git operation host lifecycle", () => {
   it.skipIf(!supportsRawPathBytes)(
     "inspects ignored raw-byte directories without following symlinks",
     async () => {
-      const root = tempDirs.make("openclaw-ignored-directory-bytes-");
-      const repo = await repository(root);
+      const { root, repo } = await fixture("ignored-directory-bytes");
       await fs.writeFile(path.join(repo, ".gitignore"), "dependencies/\n");
       const dependencies = path.join(repo, "dependencies");
       await fs.mkdir(dependencies);
       const external = path.join(root, "external");
       await fs.mkdir(path.join(external, ".git"), { recursive: true });
       await fs.symlink(external, path.join(dependencies, "link"), "dir");
-      const inspect = () =>
-        runGitWorkerOperation({
-          type: "worktree.cleanup-inspection",
-          input: { kind: "nested-repository", checkoutPath: repo },
-        });
-      expect(await inspect()).toEqual({ retainedReason: undefined });
+      expect(await inspect(repo)).toEqual({ retainedReason: undefined });
       const rawDirectory = Buffer.concat([Buffer.from(`${dependencies}/`), Buffer.from([0xff])]);
       await fs.mkdir(rawDirectory);
       await fs.symlink("missing-git-metadata", Buffer.concat([rawDirectory, Buffer.from("/.git")]));
-      expect(await inspect()).toEqual({ retainedReason: "nested-repository" });
-      await expect(
-        runGitWorkerOperation(
-          {
-            type: "worktree.snapshot",
-            input: {
-              worktreeId: "raw-nested",
-              checkoutPath: repo,
-              repoRoot: repo,
-              reason: "fixture",
-              provisionedPaths: [],
-            },
-          },
-          {
-            onEffect: () => undefined,
-          },
-        ),
-      ).rejects.toThrow("nested git repositories cannot be snapshotted losslessly");
+      expect(await inspect(repo)).toEqual({ retainedReason: "nested-repository" });
+      await expect(snapshot(repo, "raw-nested")).rejects.toThrow(
+        "nested git repositories cannot be snapshotted losslessly",
+      );
     },
   );
 
   it.skipIf(process.platform === "win32")(
     "resolves unknown dirent types through runtime fixtures during cleanup inspection",
     async () => {
-      const root = tempDirs.make("openclaw-unknown-dirent-");
-      const repo = await repository(root);
+      const { repo } = await fixture("unknown-dirent");
       await fs.writeFile(path.join(repo, ".gitignore"), "dependencies/\n");
       const rawDirectory = Buffer.concat([
         Buffer.from(`${repo}/dependencies/`),
@@ -400,8 +393,7 @@ describe("Git operation host lifecycle", () => {
   );
 
   it("still refuses an ignored inventory exceeding the cap after directory collapsing", async () => {
-    const root = tempDirs.make("openclaw-ignored-inventory-limit-");
-    const repo = await repository(root);
+    const { repo } = await fixture("ignored-inventory-limit");
     await fs.writeFile(path.join(repo, ".gitignore"), "*.ignored\n");
     for (let index = 0; index < 64; index++) {
       await fs.writeFile(path.join(repo, `private-file-${index}.ignored`), "");
@@ -417,17 +409,11 @@ describe("Git operation host lifecycle", () => {
             : options,
         ),
     );
-    await expect(
-      runGitWorkerOperation({
-        type: "worktree.cleanup-inspection",
-        input: { kind: "nested-repository", checkoutPath: repo },
-      }),
-    ).rejects.toThrow("output limit exceeded");
+    await expect(inspect(repo)).rejects.toThrow("output limit exceeded");
   });
 
   it("serves branch metadata while two independent diffs wait for Git", async () => {
-    const root = tempDirs.make("openclaw-git-worker-read-priority-");
-    const repo = await repository(root);
+    const { root, repo } = await fixture("git-worker-read-priority");
     const peerRoot = path.join(root, "peer");
     await fs.mkdir(peerRoot);
     const peer = await repository(peerRoot);
@@ -506,8 +492,7 @@ describe("Git operation host lifecycle", () => {
   it.each(["cleanup-inspection", "snapshot"] as const)(
     "serves worktree preparation while %s waits for Git, without overlapping maintenance",
     async (maintenance) => {
-      const root = tempDirs.make("openclaw-git-worker-worktree-priority-");
-      const repo = await repository(root);
+      const { root, repo } = await fixture("git-worker-worktree-priority");
       const peerRoot = path.join(root, "peer");
       await fs.mkdir(peerRoot);
       const peer = await repository(peerRoot);
@@ -527,26 +512,9 @@ describe("Git operation host lifecycle", () => {
         return await realRun(cwd, args, options);
       });
       const startMaintenance = () =>
-        runGitWorkerOperation(
-          maintenance === "snapshot"
-            ? {
-                type: "worktree.snapshot",
-                input: {
-                  worktreeId: "held-maintenance",
-                  checkoutPath: repo,
-                  repoRoot: repo,
-                  reason: "fixture",
-                  provisionedPaths: [],
-                },
-              }
-            : {
-                type: "worktree.cleanup-inspection",
-                input: { kind: "nested-repository", checkoutPath: repo },
-              },
-          {
-            onEffect: () => undefined,
-          },
-        );
+        maintenance === "snapshot"
+          ? snapshot(repo, "held-maintenance")
+          : inspect(repo, { onEffect: () => undefined });
       const first = settle(startMaintenance());
       const pending: Promise<unknown>[] = [first];
       try {
@@ -557,10 +525,7 @@ describe("Git operation host lifecycle", () => {
         );
         pending.push(settle(startMaintenance()));
         const preparation = Promise.all([
-          runGitWorkerOperation({
-            type: "worktree.git-size",
-            input: { repoRoot: peer, ref: "HEAD" },
-          }),
+          size(peer),
           runGitWorkerOperation({
             type: "worktree.provisioning-inspection",
             input: { sourceRoot: peer },
@@ -641,8 +606,8 @@ describe("Git operation host lifecycle", () => {
       vi.stubEnv("GIT_TRACE2_EVENT", trace);
       const abort = new AbortController();
       const pending = settle(
-        runGitWorkerOperation(
-          { type: "worktree.git-size", input: { repoRoot: clone, ref: commit } },
+        size(
+          clone,
           {
             signal: abort.signal,
             git:
@@ -653,6 +618,7 @@ describe("Git operation host lifecycle", () => {
                   }
                 : undefined,
           },
+          commit,
         ),
       );
       let gitPid: number | undefined;
@@ -698,28 +664,24 @@ describe("Git operation host lifecycle", () => {
   );
 
   it("captures caller Git policy before a queued sizing request can be changed", async () => {
-    const root = tempDirs.make("openclaw-caller-git-admission-");
-    const repo = await repository(root);
+    const { repo } = await fixture("caller-git-admission");
     const entered = createDeferredCore();
     const release = createDeferredCore();
     let held = false;
     const first = settle(
-      runGitWorkerOperation(
-        { type: "worktree.git-size", input: { repoRoot: repo, ref: "HEAD" } },
-        {
-          git: {
-            text: async (cwd, args, options) => {
-              if (!held) {
-                held = true;
-                entered.resolve();
-                await release.promise;
-              }
-              return await gitExec.executeGitCommandBytes(cwd, args, options);
-            },
-            buffered: gitExec.executeGitCommandBuffered,
+      size(repo, {
+        git: {
+          text: async (cwd, args, options) => {
+            if (!held) {
+              held = true;
+              entered.resolve();
+              await release.promise;
+            }
+            return await gitExec.executeGitCommandBytes(cwd, args, options);
           },
+          buffered: gitExec.executeGitCommandBuffered,
         },
-      ),
+      }),
     );
     const pending: Promise<unknown>[] = [first];
     try {
@@ -739,12 +701,7 @@ describe("Git operation host lifecycle", () => {
           return await gitExec.executeGitCommandBuffered(cwd, args, options);
         },
       };
-      const second = settle(
-        runGitWorkerOperation(
-          { type: "worktree.git-size", input: { repoRoot: repo, ref: "HEAD" } },
-          { git: executors },
-        ),
-      );
+      const second = settle(size(repo, { git: executors }));
       pending.push(second);
       executors.text = executors.buffered = async () => {
         throw new Error("queued caller replaced Git policy");
@@ -764,8 +721,7 @@ describe("Git operation host lifecycle", () => {
   it.each(["text", "buffered"] as const)(
     "revalidates authority before caller %s execution and preserves the host error",
     async (transport) => {
-      const root = tempDirs.make("openclaw-caller-git-authority-");
-      const repo = await repository(root);
+      const { root, repo } = await fixture("caller-git-authority");
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const revoked = new Error("caller Git authority revoked");
@@ -777,30 +733,27 @@ describe("Git operation host lifecycle", () => {
         await release.promise;
       };
       const pending = settle(
-        runGitWorkerOperation(
-          { type: "worktree.git-size", input: { repoRoot: repo, ref: "HEAD" } },
-          {
-            assertCurrent: () => {
-              if (!current) {
-                throw revoked;
+        size(repo, {
+          assertCurrent: () => {
+            if (!current) {
+              throw revoked;
+            }
+          },
+          git: {
+            text: async (cwd, args, options) => {
+              if (transport === "text") {
+                await waitForRevocation();
               }
+              return await gitExec.executeGitCommandBytes(cwd, args, options);
             },
-            git: {
-              text: async (cwd, args, options) => {
-                if (transport === "text") {
-                  await waitForRevocation();
-                }
-                return await gitExec.executeGitCommandBytes(cwd, args, options);
-              },
-              buffered: async (cwd, args, options) => {
-                if (transport === "buffered") {
-                  await waitForRevocation();
-                }
-                return await gitExec.executeGitCommandBuffered(cwd, args, options);
-              },
+            buffered: async (cwd, args, options) => {
+              if (transport === "buffered") {
+                await waitForRevocation();
+              }
+              return await gitExec.executeGitCommandBuffered(cwd, args, options);
             },
           },
-        ),
+        }),
       );
       try {
         await waitForLifecyclePoint(
@@ -827,8 +780,7 @@ describe("Git operation host lifecycle", () => {
   it.each(["worker-error", "cancel"] as const)(
     "removes only its snapshot temporary directory after %s",
     async (ending) => {
-      const root = tempDirs.make("openclaw-git-worker-temporary-");
-      const repo = await repository(root);
+      const { root, repo } = await fixture("git-worker-temporary");
       const neighbor = path.join(root, "neighbor.txt");
       await fs.writeFile(neighbor, "keep");
       const entered = createDeferredCore();
@@ -850,19 +802,13 @@ describe("Git operation host lifecycle", () => {
       };
       let completed = 0;
       const pending = settle(
-        runGitWorkerOperation(
-          {
-            type: "worktree.snapshot",
-            input: {
-              worktreeId: "temporary-lifecycle",
-              checkoutPath: repo,
-              repoRoot: repo,
-              reason: "fixture",
-              // A provisioned path that became tracked must fail the worker's snapshot validation.
-              provisionedPaths: ending === "worker-error" ? ["README.md"] : [],
-            },
-          },
+        snapshot(
+          repo,
+          "temporary-lifecycle",
           { signal: abort.signal, onEffect },
+          repo,
+          // A provisioned path that became tracked must fail snapshot validation.
+          ending === "worker-error" ? ["README.md"] : [],
         ),
       ).then((result) => {
         completed++;
@@ -891,15 +837,7 @@ describe("Git operation host lifecycle", () => {
         }
         expect(await exists(temporaryDirectory)).toBe(false);
         expect((await fs.readFile(neighbor)).length).toBe(4);
-        expect(
-          (
-            await gitResult(repo, [
-              "show-ref",
-              "--verify",
-              "refs/openclaw/snapshots/temporary-lifecycle",
-            ])
-          ).code,
-        ).not.toBe(0);
+        expect(await snapshotRefExists(repo, "temporary-lifecycle")).toBe(false);
       } finally {
         release.resolve();
         abort.abort();
@@ -911,8 +849,7 @@ describe("Git operation host lifecycle", () => {
   it.each(["authority", "HEAD", "abort", "restart"] as const)(
     "preserves the checkout when snapshot publication is interrupted by %s",
     async (changed) => {
-      const root = tempDirs.make("openclaw-git-worker-authority-");
-      const repo = await repository(root);
+      const { root, repo } = await fixture("git-worker-authority");
       const checkout = path.join(root, "worktree");
       await git(repo, "worktree", "add", "-b", "snapshot-source", checkout);
       await fs.writeFile(path.join(checkout, "README.md"), "dirty snapshot\n");
@@ -935,17 +872,9 @@ describe("Git operation host lifecycle", () => {
       const revoked = new Error("snapshot authority revoked");
       const abort = new AbortController();
       const pending = settle(
-        runGitWorkerOperation(
-          {
-            type: "worktree.snapshot",
-            input: {
-              worktreeId: "revoked-snapshot",
-              checkoutPath: checkout,
-              repoRoot: repo,
-              reason: "fixture",
-              provisionedPaths: [],
-            },
-          },
+        snapshot(
+          repo,
+          "revoked-snapshot",
           {
             signal: abort.signal,
             assertCurrent: () => {
@@ -963,6 +892,7 @@ describe("Git operation host lifecycle", () => {
               return undefined;
             },
           },
+          checkout,
         ),
       );
       let successor: Promise<void> | undefined;
@@ -1008,15 +938,7 @@ describe("Git operation host lifecycle", () => {
         expect(await fs.readFile(path.join(checkout, "README.md"), "utf8")).toBe(
           "dirty snapshot\n",
         );
-        expect(
-          (
-            await gitResult(repo, [
-              "show-ref",
-              "--verify",
-              "refs/openclaw/snapshots/revoked-snapshot",
-            ])
-          ).code,
-        ).not.toBe(0);
+        expect(await snapshotRefExists(repo, "revoked-snapshot")).toBe(false);
         expect(await exists(temporaryDirectory)).toBe(false);
       } finally {
         current = false;
