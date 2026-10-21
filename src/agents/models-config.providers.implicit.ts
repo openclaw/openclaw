@@ -14,7 +14,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
-  recordProviderCatalogModels,
   withProviderCatalogExpiry,
   withProviderCatalogDiscoveryBudget,
 } from "../plugins/provider-catalog-expiry.js";
@@ -231,7 +230,6 @@ async function resolvePluginImplicitProviders(
           `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
         );
         const outcomes: ProviderCatalogOutcome[] = [];
-        let acceptedRuntimeCatalog = false;
         const normalizedResult = await withProviderCatalogExpiry(
           async () => {
             let result;
@@ -252,7 +250,6 @@ async function resolvePluginImplicitProviders(
                 timeoutMs:
                   ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
               });
-              acceptedRuntimeCatalog = Boolean(result);
             }
             if (useStaticCatalog || (!result && provider.staticCatalog)) {
               if (preparedStatic) {
@@ -264,7 +261,7 @@ async function resolvePluginImplicitProviders(
           },
           (acceptedProviders) => Object.keys(acceptedProviders ?? {}),
         );
-        return { provider, normalizedResult, acceptedRuntimeCatalog, includeProvider, outcomes };
+        return { provider, normalizedResult, includeProvider, outcomes };
       }),
     });
     // Settle admitted hooks before propagating failure; completion order must not change
@@ -276,8 +273,7 @@ async function resolvePluginImplicitProviders(
       if (!result) {
         continue;
       }
-      const { provider, normalizedResult, acceptedRuntimeCatalog, includeProvider, outcomes } =
-        result;
+      const { provider, normalizedResult, includeProvider, outcomes } = result;
       for (const outcome of outcomes) {
         ctx.onProviderCatalogOutcome?.(outcome);
       }
@@ -290,12 +286,6 @@ async function resolvePluginImplicitProviders(
           (selectedProviderIds && !selectedProviderIds.has(normalizeProviderId(providerId)))
         ) {
           continue;
-        }
-        if (acceptedRuntimeCatalog) {
-          recordProviderCatalogModels(
-            providerId,
-            implicitProvider.models.map(({ id }) => id),
-          );
         }
         const existing =
           discovered[providerId] ??
