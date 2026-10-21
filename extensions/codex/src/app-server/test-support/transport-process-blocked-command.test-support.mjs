@@ -54,18 +54,18 @@ fixtureFs.openSync = (file, ...args) => file === ${JSON.stringify(commandPath)}
   process.env.BUN_OPTIONS = `--preload=${preload}`;
   const started = performance.now();
   const heartbeat = delay(100).then(() => performance.now() - started);
-  result.outcome = await readCodexAppServerProcessCommand(
-    { pid: process.pid, ppid: process.ppid, pgid: process.pid, state: "S", startedAt: "fixture" },
-    performance.now() + 1000,
-  ).then(
-    () => ({ status: "fulfilled" }),
-    (error) => {
-      if (!(error instanceof ProcessInspectionError)) {
-        throw error;
-      }
-      return { status: "rejected", reason: error.reason };
-    },
-  );
+  try {
+    await readCodexAppServerProcessCommand(
+      { pid: process.pid, ppid: process.ppid, pgid: process.pid, state: "S", startedAt: "fixture" },
+      performance.now() + 1000,
+    );
+    result.outcome = { status: "fulfilled" };
+  } catch (error) {
+    if (!(error instanceof ProcessInspectionError)) {
+      throw error;
+    }
+    result.outcome = { status: "rejected", reason: error.reason };
+  }
   result.inspectionMs = performance.now() - started;
   [result.firstHeartbeatMs] = await Promise.all([heartbeat, controllerClosed]);
   result.ambientPreloadExecuted = fs.existsSync(marker);

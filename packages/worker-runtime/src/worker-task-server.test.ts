@@ -58,7 +58,11 @@ it.each([false, true])("joins retirement (cleanup rejects: %s)", async (rejectCl
     taskPort.emit("message", { taskId: 2 });
     taskPort.emit("message", { closeResource: true, resourcePort: lateReceipt });
     expect(callCounts(lateReceipt.close, handler, host.onMessage)).toEqual([1, 1, 1]);
-    void (rejectCleanup ? cleanup.reject(new Error("host cleanup failed")) : cleanup.resolve());
+    if (rejectCleanup) {
+      cleanup.reject(new Error("host cleanup failed"));
+    } else {
+      cleanup.resolve();
+    }
     await closed.promise;
     expect(callCounts(host.onRetire, closeTask, parent.close)).toEqual([1, 1, 1]);
     expect(callCounts(taskMessages, parent.postMessage, host.onIdle)).toEqual([0, 0, 0]);

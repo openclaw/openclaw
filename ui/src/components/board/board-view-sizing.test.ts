@@ -39,11 +39,15 @@ describe("board widget sizing", () => {
   });
 
   it("lets a dashboard document fit tall HTML content without an inner scroll viewport", async () => {
-    const mediaQuery = window.matchMedia(FINE_POINTER_QUERY);
     vi.spyOn(window, "matchMedia").mockImplementation((media) => ({
-      ...mediaQuery,
       media,
       matches: media === FINE_POINTER_QUERY,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent: () => true,
     }));
     const view = await mount();
     view.fitAutoContent = true;

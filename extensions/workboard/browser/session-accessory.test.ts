@@ -69,20 +69,18 @@ it("refreshes only the visible session and ignores stale lookups after navigatio
   const sessionKey = "agent:main:workboard-card";
   const card = createWorkboardCard({ status: "review", sessionKey });
   const revision = { epoch: "test", revision: 1 };
-  const { container, context, mounted, dispose, request, emit, listeners } = mountAccessory(
-    sessionKey,
-    { cards: [card], revision },
-  );
+  const fixture = mountAccessory(sessionKey, { cards: [card], revision });
+  const { container, context, mounted, dispose, request, listeners } = fixture;
   await vi.advanceTimersByTimeAsync(0);
   expect(container.textContent).toContain(card.title);
-  emit("plugin.workboard.changed", { ...revision, revision: 2, cardsRevision: 1 });
+  fixture.emit("plugin.workboard.changed", { ...revision, revision: 2, cardsRevision: 1 });
   await vi.advanceTimersByTimeAsync(0);
   expect(request).toHaveBeenCalledOnce();
   request.mockResolvedValueOnce({
     cards: [{ ...card, title: "Renamed" }],
     revision: { ...revision, revision: 3 },
   });
-  emit("plugin.workboard.changed", { ...revision, revision: 3, cardsRevision: 3 });
+  fixture.emit("plugin.workboard.changed", { ...revision, revision: 3, cardsRevision: 3 });
   await vi.advanceTimersByTimeAsync(0);
   expect(container.textContent).toContain("Renamed");
   expect(request).toHaveBeenLastCalledWith("workboard.cards.list", {
@@ -97,7 +95,7 @@ it("refreshes only the visible session and ignores stale lookups after navigatio
   await vi.advanceTimersByTimeAsync(0);
   expect(container.querySelector("a")).toBeNull();
   const count = request.mock.calls.length;
-  emit("plugin.workboard.changed", { ...revision, revision: 4 });
+  fixture.emit("plugin.workboard.changed", { ...revision, revision: 4 });
   await vi.advanceTimersByTimeAsync(0);
   expect(request).toHaveBeenCalledTimes(count);
   dispose();
