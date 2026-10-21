@@ -12,7 +12,7 @@ import { logCodeModeFailure } from "./code-mode-diagnostic.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
+import { applyLoggingConfig, getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
 import { getDefaultRedactPatterns } from "./redact.js";
 import { loggingState } from "./state.js";
