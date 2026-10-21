@@ -2179,6 +2179,7 @@ function latencySummary(latenciesMs: number[]) {
   return {
     count: sorted.length,
     p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
+    p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null,
     p99Ms: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
   };
 }
