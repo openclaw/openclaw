@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
@@ -201,18 +201,9 @@ async function finishFailedUpdate(
       result,
       root: originalRoot ?? result.root ?? "/repo",
       configSnapshot: options.configSnapshot ?? {
-        path: "/fixture/openclaw.json",
+        ...createTestConfigSnapshot({}, {}, "/fixture/openclaw.json"),
         exists: false,
         raw: null,
-        parsed: {},
-        sourceConfig: asResolvedSourceConfig({}),
-        resolved: asResolvedSourceConfig({}),
-        valid: true,
-        runtimeConfig: asRuntimeConfig({}),
-        config: asRuntimeConfig({}),
-        issues: [],
-        warnings: [],
-        legacyIssues: [],
       },
       updateStepTimeoutMs: 1000,
       opts: { json, run },
