@@ -55,6 +55,20 @@ function useInProcessSpawns(beforeDispatch?: (params: Record<string, unknown>) =
   });
 }
 
+function inspectChildCredit(profiles: string[] | undefined, checkActor = false) {
+  return vi.fn(({ sessionKey }: Record<string, unknown>) => {
+    if (typeof sessionKey !== "string") {
+      throw new Error("Expected a child dispatch key");
+    }
+    const child = loadSessionEntryReadOnly({ agentId: "main", sessionKey });
+    expect(child?.inheritedGitContributorProfileIds).toEqual(profiles);
+    expect(child?.participants ?? []).toEqual([]);
+    if (checkActor) {
+      expect(child?.createdActor).toEqual({ type: "agent", id: "main" });
+    }
+  });
+}
+
 it("preserves a nonowner CLI requester's credit through mediated spawn", async () => {
   const { cfg, admitted, admission, parent } = await fixture.createBoundParent();
   try {
@@ -62,15 +76,7 @@ it("preserves a nonowner CLI requester's credit through mediated spawn", async (
       { agentId: "main", sessionKey: fixture.parentSessionKey },
       { inheritedGitContributorProfileIds: ["unrelated-a", "unrelated-b"] },
     );
-    const inspectChild = vi.fn(({ sessionKey }: Record<string, unknown>) => {
-      if (typeof sessionKey !== "string") {
-        throw new Error("Expected a child dispatch key");
-      }
-      const child = loadSessionEntryReadOnly({ agentId: "main", sessionKey });
-      expect(child?.inheritedGitContributorProfileIds).toEqual(["verified-cli-requester"]);
-      expect(child?.participants ?? []).toEqual([]);
-      expect(child?.createdActor).toEqual({ type: "agent", id: "main" });
-    });
+    const inspectChild = inspectChildCredit(["verified-cli-requester"], true);
     // Only model dispatch is external: grant projection, tool construction, and child writes are real.
     useInProcessSpawns(inspectChild);
     const context = buildCliMcpGrantContext({
@@ -330,14 +336,7 @@ it("inherits accepted human credit when participant persistence is still queued"
   const agentId = "main";
   const sessionKey = fixture.parentSessionKey;
   // Dispatch sees initial child credit, before acceptance records its agent participant.
-  const inspectChild = vi.fn(({ sessionKey: childKey }: Record<string, unknown>) => {
-    if (typeof childKey !== "string") {
-      throw new Error("Expected a child dispatch key");
-    }
-    const child = loadSessionEntryReadOnly({ agentId, sessionKey: childKey });
-    expect(child?.inheritedGitContributorProfileIds).toEqual(["human-requester"]);
-    expect(child?.participants ?? []).toEqual([]);
-  });
+  const inspectChild = inspectChildCredit(["human-requester"]);
   useInProcessSpawns(inspectChild);
   const storePath = resolveOpenClawAgentSqlitePath({ agentId });
   const scope = { agentId, sessionKey, storePath };
@@ -397,16 +396,7 @@ it.each(["requester-c", undefined])(
         inheritedGitContributorProfileIds: ["unrelated-a", "unrelated-b"],
       },
     );
-    const inspected = vi.fn(({ sessionKey: childKey }: Record<string, unknown>) => {
-      if (typeof childKey !== "string") {
-        throw new Error("missing child key");
-      }
-      const child = loadSessionEntryReadOnly({ agentId: "main", sessionKey: childKey });
-      expect(child?.inheritedGitContributorProfileIds).toEqual(
-        gitContributorProfileId ? ["requester-c"] : undefined,
-      );
-      expect(child?.participants ?? []).toEqual([]);
-    });
+    const inspected = inspectChildCredit(gitContributorProfileId ? ["requester-c"] : undefined);
     useInProcessSpawns(inspected);
     const result = await spawnSubagentDirect(
       { task: "isolated Discord task", context: "isolated" },

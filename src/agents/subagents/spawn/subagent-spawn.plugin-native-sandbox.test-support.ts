@@ -1,20 +1,18 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
-import { runWithReplyNativeSubagents } from "../../../auto-reply/reply/dispatch-native-subagent.js";
-import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
 } from "../../../config/sessions/session-accessor.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
-import {
-  nativeSubagentRuntime,
-  withNativeSubagentRuntimeGuard,
-} from "../../../plugins/runtime/native-subagent-context.js";
+import { nativeSubagentRuntime } from "../../../plugins/runtime/native-subagent-context.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { enqueueSwarmRun, holdQueuedSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { holdQueuedSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
+import {
+  holdNativeCapacity,
+  nativeReplyFixture,
+} from "./subagent-spawn.plugin-native-rewrite.test-support.js";
 import {
   createSpawnOperatorSource,
   recordSpawnBoundaryFinal,
@@ -61,44 +59,18 @@ export function registerNativePluginSandboxCases(options: NativePluginSpawnTestO
         },
       });
       const inReply = (run: () => Promise<void>) =>
-        withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
-          runWithReplyNativeSubagents(
-            {
-              cfg: bound.cfg,
-              ctx: buildTestCtx({
-                Body: "sandbox requester input",
-                SessionKey: parentSessionKey,
-                CommandAuthorized: true,
-              }),
-              params: {
-                replyOptions: {
-                  runId: parentRunId,
-                  operatorAuthority: source.authority,
-                  toolsAllow: ["sessions_spawn", "agents_wait"],
-                  userTurnTranscriptRecorder: recorder,
-                },
-              },
-              sessionAgentId: "main",
-              sessionKey: parentSessionKey,
-              sessionStoreEntry: {
-                sessionKey: parentSessionKey,
-                entry: expectDefined(
-                  loadSessionEntry({ storePath: bound.storePath, sessionKey: parentSessionKey }),
-                  "requester entry",
-                ),
-              },
-              getPreDispatchAbortSignal: () => undefined,
-              assertProgressCurrent: source.authority.assertCurrent,
-              assertCurrentBindingRoute: async () => source.authority.assertCurrent(),
-              turnAdoption: { assertCurrent: source.authority.assertCurrent, adopt },
-            },
-            () =>
-              withNativeSubagentRuntimeGuard(
-                { pluginId: "native-test", assertCurrent: source.authority.assertCurrent },
-                run,
-              ),
+        nativeReplyFixture(
+          bound,
+          context,
+          expectDefined(
+            loadSessionEntry({ storePath: bound.storePath, sessionKey: parentSessionKey }),
+            "requester entry",
           ),
-        );
+          recorder,
+          "sandbox requester input",
+          adopt,
+          ["sessions_spawn", "agents_wait"],
+        )(source, parentRunId, run);
       const transcript = () =>
         loadTranscriptEvents({
           agentId: "main",
@@ -110,22 +82,7 @@ export function registerNativePluginSandboxCases(options: NativePluginSpawnTestO
       const capacity = "sandbox-capacity";
       try {
         if (tool === "sessions_spawn") {
-          const started = createDeferred();
-          enqueueSwarmRun({
-            groupId: JSON.stringify([
-              "main",
-              parentSessionKey,
-              "swarm:" + parentSessionKey + ":" + parentRunId,
-            ]),
-            runId: capacity,
-            maxConcurrent: 1,
-            activeRunIds: [],
-            start: async () => {
-              started.resolve();
-            },
-            onStartFailure: () => true,
-          });
-          await started.promise;
+          await holdNativeCapacity(bound, capacity);
         } else {
           options.runEmbeddedAgent.mockImplementationOnce(async (params) => {
             await recordSpawnBoundaryFinal({
@@ -134,13 +91,7 @@ export function registerNativePluginSandboxCases(options: NativePluginSpawnTestO
               runId: params.runId,
               text: "private child result",
             });
-            return {
-              payloads: [{ text: "private child result" }],
-              meta: {
-                durationMs: 1,
-                terminalReply: { disposition: "visible", text: "private child result" },
-              },
-            };
+            return visibleResult("private child result");
           });
           await inReply(async () => {
             const child = await nativeSubagentRuntime.spawn({

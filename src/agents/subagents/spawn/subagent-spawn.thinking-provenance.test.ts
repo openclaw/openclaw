@@ -6,19 +6,13 @@ import {
   createConfigOverride,
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
-  supportedSpawnModelChoice,
 } from "./subagent-spawn.test-helpers.js";
 
-const hoisted = vi.hoisted(() => ({
+const mocks = {
   callGatewayMock: vi.fn(),
   loadSessionStoreMock: vi.fn(),
-  prepareModelChoiceMock: vi.fn<typeof supportedSpawnModelChoice>(),
   updateSessionStoreMock: vi.fn(),
-  registerSubagentRunMock: vi.fn(),
-  startQueuedSubagentRunMock: vi.fn(),
-  settleFailedQueuedSubagentLaunchMock: vi.fn(),
-  emitSessionLifecycleEventMock: vi.fn(),
-}));
+};
 
 type SpawnSubagentTestContext = Parameters<
   typeof import("./subagent-spawn.js").spawnSubagentDirect
@@ -60,7 +54,7 @@ const thinkingCases: readonly ThinkingProvenanceCase[] = [
 
 beforeAll(async () => {
   ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
-    ...hoisted,
+    ...mocks,
     getRuntimeConfig: () => configOverride,
     resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) => cfg.agents?.entries?.[agentId],
     sessionStorePath: "/tmp/subagent-thinking-provenance-session-store.json",
@@ -69,13 +63,10 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await resetSubagentRegistryForTests();
-  for (const mock of Object.values(hoisted)) {
+  for (const mock of Object.values(mocks)) {
     mock.mockReset();
   }
-  hoisted.prepareModelChoiceMock.mockImplementation(supportedSpawnModelChoice);
-  hoisted.startQueuedSubagentRunMock.mockResolvedValue(true);
-  hoisted.settleFailedQueuedSubagentLaunchMock.mockResolvedValue(true);
-  installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
+  installAcceptedSubagentGatewayMock(mocks.callGatewayMock);
 });
 
 it.each(thinkingCases)("%s", async (name, context, saved, expected, thinking, thinkingDefault) => {
@@ -88,11 +79,11 @@ it.each(thinkingCases)("%s", async (name, context, saved, expected, thinking, th
       entries: { main: { workspace: "/tmp/workspace-main" } },
     },
   });
-  hoisted.loadSessionStoreMock.mockReturnValue({
+  mocks.loadSessionStoreMock.mockReturnValue({
     "agent:main:main": saved === undefined ? {} : { thinkingLevel: saved },
   });
   let captured: Record<string, Record<string, unknown>> = {};
-  installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+  installSessionStoreCaptureMock(mocks.updateSessionStoreMock, {
     onStore: (store) => {
       captured = store;
     },

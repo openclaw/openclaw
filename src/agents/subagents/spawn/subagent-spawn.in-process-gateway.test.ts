@@ -87,6 +87,33 @@ function externalCliClient(): GatewayRequestOptions["client"] {
   } as GatewayRequestOptions["client"];
 }
 
+function inGateway<T>(callback: () => T, context = makeGatewayContext()): T {
+  return withPluginRuntimeGatewayRequestScope(
+    { context, client: externalCliClient(), isWebchatConnect: () => false },
+    callback,
+  );
+}
+
+function spawn(
+  params: Parameters<typeof spawnSubagentDirect>[0],
+  context: Parameters<typeof spawnSubagentDirect>[1] = {
+    agentSessionKey: "agent:main:main",
+    requesterRunId: "parent-run",
+  },
+) {
+  return spawnSubagentDirect({ context: "isolated", lightContext: true, ...params }, context);
+}
+
+function parentAuthority() {
+  const parentToken = createExecutionIdentityAdmissionToken("parent-run", {
+    contextId: "parent-context",
+    executionId: "parent-execution",
+  });
+  const operationalRunInstance = createOperationalRunInstanceRef("parent-run");
+  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  return { parentToken, operationalRunInstance, authority };
+}
+
 async function waitForAssertion(assertion: () => void, timeoutMs = 2_000): Promise<void> {
   let lastError: unknown;
   for (let elapsed = 0; elapsed <= timeoutMs; elapsed += 10) {
@@ -226,46 +253,23 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     try {
       expect(parentAdmission).not.toBeNull();
       spawning = parentAdmission!.run(() =>
-        withPluginRuntimeGatewayRequestScope(
-          {
-            context: gatewayContext,
-            client: externalCliClient(),
-            isWebchatConnect: () => false,
-          },
-          () => {
-            spawnedWork = [
-              spawnSubagentDirect(
-                {
-                  task: "first collector",
-                  collect: true,
-                  context: "isolated",
-                  lightContext: true,
-                  groupId: "swarm-queued-launch",
-                  swarmLaunchReplayKey: "code-mode:agentSpawn:1",
-                },
-                {
-                  agentSessionKey: "agent:main:main",
-                  requesterRunId: "parent-run",
-                },
-              ),
-              spawnSubagentDirect(
-                {
-                  task: "second collector",
-                  collect: true,
-                  context: "isolated",
-                  lightContext: true,
-                  groupId: "swarm-queued-launch",
-                  swarmLaunchReplayKey: "code-mode:agentSpawn:2",
-                },
-                {
-                  agentSessionKey: "agent:main:main",
-                  requesterRunId: "parent-run",
-                },
-              ),
-            ];
-            return Promise.all(spawnedWork);
-          },
-        ),
+        inGateway(() => {
+          spawnedWork = [
+            spawn({
+              task: "first collector",
+              collect: true,
+              groupId: "swarm-queued-launch",
+              swarmLaunchReplayKey: "code-mode:agentSpawn:1",
+            }),
+            spawn({
+              task: "second collector",
+              collect: true,
+              groupId: "swarm-queued-launch",
+              swarmLaunchReplayKey: "code-mode:agentSpawn:2",
+            }),
+          ];
+          return Promise.all(spawnedWork);
+        }, gatewayContext),
       );
       const results = await withinTest(spawning, signal);
       parentAdmission!.release();
@@ -361,31 +365,23 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         return { runId: params.idempotencyKey, status: "accepted" } as T;
       },
     });
-    const results = await withPluginRuntimeGatewayRequestScope(
-      {
-        context: makeGatewayContext(),
-        client: externalCliClient(),
-        isWebchatConnect: () => false,
-      },
-      () =>
-        Promise.all(
-          ["main", "worker"].map((requesterAgentIdOverride) =>
-            spawnSubagentDirect(
-              {
-                task: "collect independently",
-                collect: true,
-                context: "isolated",
-                lightContext: true,
-                groupId: "shared",
-              },
-              {
-                agentSessionKey: "global",
-                requesterAgentIdOverride,
-                requesterRunId: `parent-${requesterAgentIdOverride}`,
-              },
-            ),
+    const results = await inGateway(() =>
+      Promise.all(
+        ["main", "worker"].map((requesterAgentIdOverride) =>
+          spawn(
+            {
+              task: "collect independently",
+              collect: true,
+              groupId: "shared",
+            },
+            {
+              agentSessionKey: "global",
+              requesterAgentIdOverride,
+              requesterRunId: `parent-${requesterAgentIdOverride}`,
+            },
           ),
         ),
+      ),
     );
     try {
       expect(results).toMatchObject([{ status: "accepted" }, { status: "accepted" }]);
@@ -405,12 +401,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
   });
 
   it("consumes the exact private parent token in the child Gateway identity", async () => {
-    const parentToken = createExecutionIdentityAdmissionToken("parent-run", {
-      contextId: "parent-context",
-      executionId: "parent-execution",
-    });
-    const operationalRunInstance = createOperationalRunInstanceRef("parent-run");
-    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const { parentToken, operationalRunInstance, authority } = parentAuthority();
     let childIdentity: AgentRuntimeIdentity | undefined;
     subagentSpawnTesting.setDepsForTest({
       dispatchGatewayMethodInProcess: async <T>(
@@ -424,27 +415,21 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     });
 
     try {
-      const result = await withPluginRuntimeGatewayRequestScope(
-        {
-          context: makeGatewayContext(),
-          client: externalCliClient(),
-          isWebchatConnect: () => false,
-        },
-        () =>
-          withGatewayToolCallerIdentity(
-            {
-              agentId: "main",
-              sessionKey: "agent:main:main",
-              operationalRunInstance,
-              executionIdentityToken: parentToken,
-              receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
-            },
-            () =>
-              spawnSubagentDirect(
-                { task: "inspect lineage", context: "isolated", lightContext: true },
-                withParentExecutionIdentity({ agentSessionKey: "agent:main:main" }, parentToken),
-              ),
-          ),
+      const result = await inGateway(() =>
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            operationalRunInstance,
+            executionIdentityToken: parentToken,
+            receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+          },
+          () =>
+            spawn(
+              { task: "inspect lineage" },
+              withParentExecutionIdentity({ agentSessionKey: "agent:main:main" }, parentToken),
+            ),
+        ),
       );
 
       expect(result.error).toBeUndefined();
@@ -481,12 +466,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
   });
 
   it("revalidates the worker capability at the child Gateway admission boundary", async () => {
-    const parentToken = createExecutionIdentityAdmissionToken("parent-run", {
-      contextId: "parent-context",
-      executionId: "parent-execution",
-    });
-    const operationalRunInstance = createOperationalRunInstanceRef("parent-run");
-    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const { parentToken, operationalRunInstance, authority } = parentAuthority();
     const turnClaim = {
       sessionId: "parent-session-id",
       runId: "parent-run",
@@ -544,35 +524,29 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     });
 
     try {
-      const result = await withPluginRuntimeGatewayRequestScope(
-        {
-          context: makeGatewayContext(),
-          client: externalCliClient(),
-          isWebchatConnect: () => false,
-        },
-        () =>
-          capability.run((current) =>
-            withGatewayToolCallerIdentity(
-              {
-                agentId: current.agentId,
-                sessionKey: current.sessionKey,
-                operationalRunInstance: current.operationalRunInstance,
-                executionIdentityToken: current.executionIdentityToken,
-                receiptAuthority: current.receiptAuthority,
-                requesterOrigin: current.requesterOrigin,
-                workerTurnClaim: current.turnClaim,
-                workerTurnExecutionIdentityCapability: capability,
-              },
-              () =>
-                spawnSubagentDirect(
-                  { task: "inspect worker lineage", context: "isolated", lightContext: true },
-                  withParentExecutionIdentity(
-                    { agentSessionKey: current.sessionKey },
-                    current.executionIdentityToken,
-                  ),
+      const result = await inGateway(() =>
+        capability.run((current) =>
+          withGatewayToolCallerIdentity(
+            {
+              agentId: current.agentId,
+              sessionKey: current.sessionKey,
+              operationalRunInstance: current.operationalRunInstance,
+              executionIdentityToken: current.executionIdentityToken,
+              receiptAuthority: current.receiptAuthority,
+              requesterOrigin: current.requesterOrigin,
+              workerTurnClaim: current.turnClaim,
+              workerTurnExecutionIdentityCapability: capability,
+            },
+            () =>
+              spawn(
+                { task: "inspect worker lineage" },
+                withParentExecutionIdentity(
+                  { agentSessionKey: current.sessionKey },
+                  current.executionIdentityToken,
                 ),
-            ),
+              ),
           ),
+        ),
       );
 
       expect(result.status).toBe("accepted");
@@ -618,40 +592,26 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     const parentAdmission = tryBeginGatewayRootWorkAdmission();
     expect(parentAdmission).not.toBeNull();
     const results = await parentAdmission!.run(() =>
-      withPluginRuntimeGatewayRequestScope(
-        {
-          context: gatewayContext,
-          client: externalCliClient(),
-          isWebchatConnect: () => false,
-        },
+      inGateway(
         () =>
           Promise.all([
             // Arrival order may differ from Promise.all result order.
             firstDispatch.promise.then(() =>
-              spawnSubagentDirect(
-                {
-                  task: "queued collector",
-                  collect: true,
-                  context: "isolated",
-                  lightContext: true,
-                  groupId: "swarm-cancel-launch",
-                  swarmLaunchReplayKey: "code-mode:agentSpawn:cancelled",
-                },
-                { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
-              ),
-            ),
-            spawnSubagentDirect(
-              {
-                task: "in-flight collector",
+              spawn({
+                task: "queued collector",
                 collect: true,
-                context: "isolated",
-                lightContext: true,
                 groupId: "swarm-cancel-launch",
-                swarmLaunchReplayKey: "code-mode:agentSpawn:next",
-              },
-              { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+                swarmLaunchReplayKey: "code-mode:agentSpawn:cancelled",
+              }),
             ),
+            spawn({
+              task: "in-flight collector",
+              collect: true,
+              groupId: "swarm-cancel-launch",
+              swarmLaunchReplayKey: "code-mode:agentSpawn:next",
+            }),
           ]),
+        gatewayContext,
       ),
     );
     parentAdmission!.release();
@@ -745,18 +705,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       throw new Error("state db unavailable");
     });
 
-    const result = await withPluginRuntimeGatewayRequestScope(
-      {
-        context: gatewayContext,
-        client: externalCliClient(),
-        isWebchatConnect: () => false,
-      },
-      () =>
-        spawnSubagentDirect(
-          { task: "keep remote ownership", context: "isolated", lightContext: true },
-          { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
-        ),
-    );
+    const result = await inGateway(() => spawn({ task: "keep remote ownership" }), gatewayContext);
 
     expect(result.status).toBe("error");
     expect(result.error ?? "").toContain("Failed to register subagent run");

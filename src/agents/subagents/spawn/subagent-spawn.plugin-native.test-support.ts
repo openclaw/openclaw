@@ -1,8 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { runWithReplyNativeSubagents } from "../../../auto-reply/reply/dispatch-native-subagent.js";
-import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -11,23 +9,26 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../../plugins/hook-runner-global.js";
-import { addTestHook, createMockPluginRegistry } from "../../../plugins/hooks.test-fixtures.js";
+import { createMockPluginRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
-import {
-  nativeSubagentRuntime,
-  withNativeSubagentRuntimeGuard,
-} from "../../../plugins/runtime/native-subagent-context.js";
+import { nativeSubagentRuntime } from "../../../plugins/runtime/native-subagent-context.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
   readAdmittedRunOperatorAuthority,
   resolvePreparedRunAdmission,
 } from "../../admitted-run-context.js";
-import { resolveAgentWorkspaceDir } from "../../agent-scope.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { enqueueSwarmRun, holdQueuedSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import { registerNativePluginRewriteCases } from "./subagent-spawn.plugin-native-rewrite.test-support.js";
+import { holdQueuedSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
+import {
+  holdNativeCapacity,
+  installNativeToolHook,
+  nativeReplyFixture,
+  nativeRequestSource,
+  registerNativePluginRewriteCases,
+} from "./subagent-spawn.plugin-native-rewrite.test-support.js";
 import { registerNativePluginSandboxCases } from "./subagent-spawn.plugin-native-sandbox.test-support.js";
 import {
   createSpawnOperatorSource,
@@ -52,22 +53,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
     const bound = await createBoundParent(source.authority);
     const { parentSessionKey, parentRunId } = bound;
     const { context, runtime } = await createBoundGateway(bound);
-    const capacityStarted = createDeferred();
-    enqueueSwarmRun({
-      groupId: JSON.stringify([
-        "main",
-        parentSessionKey,
-        `swarm:${parentSessionKey}:${parentRunId}`,
-      ]),
-      runId: "plugin-capacity",
-      maxConcurrent: 1,
-      activeRunIds: [],
-      start: async () => {
-        capacityStarted.resolve();
-      },
-      onStartFailure: () => true,
-    });
-    await capacityStarted.promise;
+    await holdNativeCapacity(bound, "plugin-capacity");
     const failures: unknown[] = [];
     let childRunId: string | undefined;
     try {
@@ -77,29 +63,10 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
           const { createRequestNativeSubagentRuntime } =
             await import("../../plugin-native-subagent.js");
           const makeNative = (pluginId = "native-test", sessionId = "parent-session") =>
-            createRequestNativeSubagentRuntime(
-              {
-                options: {
-                  config: bound.cfg,
-                  agentId: "main",
-                  sessionKey: parentSessionKey,
-                  sessionId,
-                  runId: parentRunId,
-                  workspaceDir: resolveAgentWorkspaceDir(bound.cfg, "main"),
-                  senderIsOwner: true,
-                  allowGatewaySubagentBinding: true,
-                  runtimeToolAllowlist: ["sessions_spawn", "agents_wait", "read"],
-                  inheritRuntimeToolAllowlist: true,
-                },
-                operatorAuthority: source.authority,
-                assertCurrent: source.authority.assertCurrent,
-                async prepareSpawn(assertCurrent) {
-                  assertCurrent();
-                  return bound.admitted;
-                },
-              },
-              { pluginId, assertCurrent: source.authority.assertCurrent },
-            );
+            createRequestNativeSubagentRuntime(nativeRequestSource(bound, source, { sessionId }), {
+              pluginId,
+              assertCurrent: source.authority.assertCurrent,
+            });
           const native = makeNative();
           const request = {
             requestId: "review",
@@ -117,14 +84,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
               await release.promise;
             }
           });
-          const hooks = createMockPluginRegistry([]);
-          addTestHook({
-            registry: hooks,
-            pluginId: "test-plugin",
-            hookName: "before_tool_call",
-            handler: beforeSpawn,
-          });
-          initializeGlobalHookRunner(hooks);
+          installNativeToolHook("test-plugin", beforeSpawn);
           const pending = Promise.allSettled([
             native.spawn(request),
             native.spawn(request),
@@ -209,16 +169,11 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
           await entered.promise;
           source.revoke();
           release.resolve();
-          expect(await revoked).toEqual([
-            {
-              status: "rejected",
-              reason: expect.objectContaining({ message: "operator source revoked" }),
-            },
-            {
-              status: "rejected",
-              reason: expect.objectContaining({ message: "operator source revoked" }),
-            },
-          ]);
+          const refusal = {
+            status: "rejected",
+            reason: expect.objectContaining({ message: "operator source revoked" }),
+          };
+          expect(await revoked).toEqual([refusal, refusal]);
           expect(subagentRuns.size).toBe(2);
           bound.admission.close();
           bound.parent.cleanup();
@@ -265,22 +220,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
         loadSessionEntry({ storePath: bound.storePath, sessionKey: parentSessionKey }),
         "parent session",
       );
-      const capacityStarted = createDeferred();
-      enqueueSwarmRun({
-        groupId: JSON.stringify([
-          "main",
-          parentSessionKey,
-          `swarm:${parentSessionKey}:${parentRunId}`,
-        ]),
-        runId: "host-capacity",
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: async () => {
-          capacityStarted.resolve();
-        },
-        onStartFailure: () => true,
-      });
-      await capacityStarted.promise;
+      await holdNativeCapacity(bound, "host-capacity");
       const modelStarted = createDeferred();
       const finishModel = createDeferred();
       runEmbeddedAgent.mockImplementationOnce(async (params) => {
@@ -301,13 +241,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
           runId: params.runId,
           text: "host child complete",
         });
-        return {
-          payloads: [{ text: "host child complete" }],
-          meta: {
-            durationMs: 1,
-            terminalReply: { disposition: "visible", text: "host child complete" },
-          },
-        };
+        return visibleResult("host child complete");
       });
       let adopted = false;
       const adopt = vi.fn(async () => {
@@ -335,49 +269,14 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
           expect(adopted).toBe(true);
         },
       });
-      const inReply = (
-        requestSource: ReturnType<typeof createSpawnOperatorSource>,
-        turnRunId: string,
-        run: () => Promise<void>,
-        withOperatorAuthority = true,
-      ) =>
-        withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
-          runWithReplyNativeSubagents(
-            {
-              cfg: bound.cfg,
-              ctx: buildTestCtx({
-                Body: "The actual finalized input",
-                SessionKey: parentSessionKey,
-                CommandAuthorized: true,
-              }),
-              params: {
-                replyOptions: {
-                  runId: turnRunId,
-                  operatorAuthority: withOperatorAuthority ? requestSource.authority : undefined,
-                  toolsAllow: ["sessions_spawn", "agents_wait", "read"],
-                  userTurnTranscriptRecorder: recorder,
-                },
-              },
-              sessionAgentId: "main",
-              sessionKey: parentSessionKey,
-              sessionStoreEntry: { sessionKey: parentSessionKey, entry },
-              getPreDispatchAbortSignal: () => undefined,
-              assertProgressCurrent: requestSource.authority.assertCurrent,
-              assertCurrentBindingRoute: async () => {
-                requestSource.authority.assertCurrent();
-              },
-              turnAdoption: {
-                assertCurrent: requestSource.authority.assertCurrent,
-                adopt,
-              },
-            },
-            () =>
-              withNativeSubagentRuntimeGuard(
-                { pluginId: "native-test", assertCurrent: requestSource.authority.assertCurrent },
-                run,
-              ),
-          ),
-        );
+      const inReply = nativeReplyFixture(
+        bound,
+        context,
+        entry,
+        recorder,
+        "The actual finalized input",
+        adopt,
+      );
       const failures: unknown[] = [];
       try {
         await expect(
@@ -539,7 +438,6 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
   it("native plugin facade refuses a denied spawn before preparing or creating a child", async () => {
     const source = createSpawnOperatorSource();
     const bound = await createBoundParent(source.authority);
-    const { parentSessionKey, parentRunId } = bound;
     const { context, runtime } = await createBoundGateway(bound);
     const failures: unknown[] = [];
     try {
@@ -551,19 +449,10 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
           const prepareSpawn = vi.fn(async () => bound.admitted);
           const native = createRequestNativeSubagentRuntime(
             {
-              options: {
-                config: bound.cfg,
-                agentId: "main",
-                sessionKey: parentSessionKey,
-                sessionId: "parent-session",
-                runId: parentRunId,
-                workspaceDir: resolveAgentWorkspaceDir(bound.cfg, "main"),
-                senderIsOwner: true,
+              ...nativeRequestSource(bound, source, {
                 runtimeToolAllowlist: ["read"],
-                inheritRuntimeToolAllowlist: true,
-              },
-              operatorAuthority: source.authority,
-              assertCurrent: source.authority.assertCurrent,
+                allowGatewaySubagentBinding: undefined,
+              }),
               prepareSpawn,
             },
             { pluginId: "native-test", assertCurrent: source.authority.assertCurrent },
