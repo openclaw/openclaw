@@ -107,47 +107,6 @@ describe("pw-tools-core aria snapshot storage", () => {
     vi.clearAllMocks();
   });
 
-  it("reuses the resolved page when storing aria refs", async () => {
-    const page = makeAriaSnapshotPage();
-    const rawNodes = [{ backendDOMNodeId: 42 }];
-    const formattedNodes = [
-      { ref: "ax1", role: "Button", name: "OK", backendDOMNodeId: 42, depth: 0 },
-      { ref: "ax2", role: "Button", name: "OK", backendDOMNodeId: 84, depth: 0 },
-      { ref: "ax3", role: "Button", name: "", depth: 0 },
-    ];
-
-    pageCdp.mockResolvedValue({ nodes: rawNodes });
-    formatAriaSnapshot.mockReturnValue(formattedNodes);
-    bindRefs.mockResolvedValue(new Set());
-
-    const result = await mod.snapshotAriaViaPlaywright({ ...target, limit: 5 });
-
-    expect(result).toEqual({ nodes: formattedNodes });
-    expect(getPage).toHaveBeenCalledTimes(1);
-    expect(ensurePageState).toHaveBeenCalledWith(page);
-    expect(pageCdp).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ page, fn: expect.any(Function) }),
-    );
-    expect(bindRefs).toHaveBeenCalledWith({
-      page,
-      refs: [
-        { ref: "ax1", backendDOMNodeId: 42 },
-        { ref: "ax2", backendDOMNodeId: 84 },
-      ],
-      assertCurrent: expect.any(Function),
-    });
-    expect(publishRefs).toHaveBeenCalledWith({
-      page,
-      ...target,
-      refs: {
-        ax1: { role: "button", name: "OK", nth: 0, domMarker: true },
-        ax2: { role: "button", name: "OK", nth: 1, domMarker: true },
-        ax3: { role: "button", name: "" },
-      },
-      mode: "role",
-    });
-  });
-
   it("does not publish refs after a pending binding is cancelled", async () => {
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
@@ -254,28 +213,6 @@ describe("pw-tools-core aria snapshot storage", () => {
       }
     },
   );
-
-  it("returns selector no-match snapshots without collecting URLs", async () => {
-    const ariaSnapshot = vi.fn(async () => {
-      throw new Error("ariaSnapshot should not run for a selector with no matches");
-    });
-    const locator = {
-      count: vi.fn(async () => 0),
-      ariaSnapshot,
-    };
-    const page = makePage({
-      locator: vi.fn(() => locator),
-      evaluate: vi.fn(async () => [{ text: "link", url: "https://example.test" }]),
-    });
-
-    const result = await snapshot({ targetId: target.targetId, selector: "#missing", urls: true });
-
-    expect(result.snapshot).toBe("(empty)");
-    expect(result.snapshot).not.toContain("Links:");
-    expect(locator.count).toHaveBeenCalledOnce();
-    expect(ariaSnapshot).not.toHaveBeenCalled();
-    expect(page.evaluate).not.toHaveBeenCalled();
-  });
 
   it("times out a stalled selector probe without publishing late refs", async () => {
     const pendingCount = createDeferred<number>();

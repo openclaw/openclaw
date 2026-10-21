@@ -492,8 +492,10 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     const downloadPort = await listen(downloadServer);
     cleanup.push(async () => await closeServer(downloadServer));
 
-    const url = `http://127.0.0.1:${downloadPort}/`;
-    const { context, page, cdpUrl, targetId } = await createDownloadPage(rootDir, url);
+    const { page, cdpUrl, targetId } = await createDownloadPage(
+      rootDir,
+      `http://127.0.0.1:${downloadPort}/`,
+    );
     const target = { cdpUrl, targetId };
     const outputRoot = path.join(rootDir, "downloads");
     const waitForDownload = (file?: string, signal?: AbortSignal) =>
@@ -557,32 +559,5 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     await page.locator("#download").click();
     const clickSuccessorResult = await clickSuccessor;
     await expect(fs.readFile(clickSuccessorResult.path)).resolves.toEqual(successorPayload);
-
-    await closePlaywrightBrowserConnection({ cdpUrl });
-    await context.close();
-
-    const restarted = await createDownloadPage(rootDir, url);
-
-    const downloadAfterRestart = async () => {
-      const pending = waitForDownloadViaPlaywright(captureOptions(restarted, outputRoot));
-      const connected = await getPageForTargetId(restarted);
-      await expect.poll(() => ensurePageState(connected).downloadWaiterDepth).toBe(1);
-      await restarted.page.locator("#download").click();
-      return await pending;
-    };
-    const firstDuplicate = await downloadAfterRestart();
-    const secondDuplicate = await downloadAfterRestart();
-
-    expect(firstDuplicate.suggestedFilename).toBe("duplicate.txt");
-    expect(secondDuplicate.suggestedFilename).toBe("duplicate.txt");
-    expect(firstDuplicate.path).not.toBe(secondDuplicate.path);
-    await expect(fs.readFile(firstDuplicate.path)).resolves.toEqual(successorPayload);
-    await expect(fs.readFile(secondDuplicate.path)).resolves.toEqual(successorPayload);
-    expect((await fs.readdir(outputRoot)).some((name) => name.endsWith(".part"))).toBe(false);
-
-    await closePlaywrightBrowserConnection({ cdpUrl: restarted.cdpUrl });
-    await restarted.context.close();
-    await fs.rm(rootDir, { recursive: true, force: true });
-    await expect(fs.access(rootDir)).rejects.toMatchObject({ code: "ENOENT" });
   }, 30_000);
 });

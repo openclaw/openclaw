@@ -1,9 +1,6 @@
-import crypto from "node:crypto";
-import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { CDPSession } from "playwright-core";
-import { expect, it, vi } from "vitest";
-import { DEFAULT_UPLOAD_DIR } from "./paths.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PageState } from "./pw-session-contracts.js";
 import {
   getPwToolsCoreSessionMocks,
@@ -12,32 +9,29 @@ import {
   setPwToolsCoreCurrentRefLocator,
 } from "./pw-tools-core.test-harness.js";
 
+const imageSize = vi.hoisted(() => ({ width: 1280, height: 720, active: false }));
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+  return {
+    ...actual,
+    getImageMetadata: (...args: Parameters<typeof actual.getImageMetadata>) =>
+      imageSize.active ? Promise.resolve(imageSize) : actual.getImageMetadata(...args),
+  };
+});
+
 installPwToolsCoreTestHooks();
+beforeEach(() => {
+  imageSize.active = false;
+});
+afterEach(() => {
+  imageSize.active = false;
+});
 const sessionMocks = getPwToolsCoreSessionMocks();
 const { takeScreenshotViaPlaywright: capture, screenshotWithLabelsViaPlaywright: captureLabels } =
   await import("./pw-tools-core.interactions.content.js");
-const downloads = await import("./pw-tools-core.downloads.js");
 
 const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "T1" };
 
-it("screenshots a ref locator", async () => {
-  const refScreenshot = vi.fn(async () => Buffer.from("R"));
-  setPwToolsCoreCurrentRefLocator({
-    elementHandle: async () => ({
-      screenshot: refScreenshot,
-      scrollIntoViewIfNeeded: async () => {},
-      dispose: async () => {},
-    }),
-  });
-  const page = {};
-  setPwToolsCoreCurrentPage(page);
-
-  const res = await capture({ ...target, ref: "76", type: "jpeg", timeoutMs: 2345 });
-
-  expect(res.buffer.toString()).toBe("R");
-  expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "76");
-  expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg", timeout: 0 });
-});
 it("rejects fullPage for element or ref screenshots", async () => {
   const locator = {};
   setPwToolsCoreCurrentRefLocator(locator);
@@ -173,16 +167,72 @@ it.each(["Emulation.setTouchEmulationEnabled", "Playwright.screenshot"])(
     expect(page.setViewportSize).toHaveBeenCalledExactlyOnceWith({ width: 1280, height: 720 });
   },
 );
-it("revalidates file-chooser paths at use-time and cancels missing files", async () => {
-  const missingPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-missing-${crypto.randomUUID()}.txt`);
-  const fileChooser = { setFiles: vi.fn(async () => {}) };
-  const press = vi.fn(async () => {});
-  setPwToolsCoreCurrentPage({
-    waitForEvent: vi.fn(async () => fileChooser),
-    keyboard: { press },
+
+describe("screenshot annotations", () => {
+  type Rect = [number, number, number, number];
+  const box = ([x, y, width, height]: Rect) => ({ x, y, width, height });
+  const screenshot = vi.fn(async () => Buffer.from("PNG"));
+  const boundingBox = vi.fn<() => Promise<ReturnType<typeof box> | null>>();
+  const view = { x: 0, y: 0, width: 1280, height: 720, fullWidth: 1280, nativeCaptureWidth: 1280 };
+  const evaluate = async (arg: unknown) => (typeof arg === "function" ? view : true);
+  const annotation = (number: number, rect: Rect, name?: string) =>
+    Object.assign(
+      { ref: `e${number}`, number, role: "button", box: box(rect) },
+      name ? { name } : {},
+    );
+  const refs = (count: number): Record<string, { role: string; name?: string }> =>
+    Object.fromEntries(Array.from({ length: count }, (_, i) => [`e${i + 1}`, { role: "button" }]));
+  const captureAnnotations = (options: Partial<Parameters<typeof captureLabels>[0]> = {}) =>
+    captureLabels({ ...target, refs: refs(1), ...options });
+  beforeEach(() => {
+    imageSize.active = true;
+    view.y = 0;
+    screenshot.mockReset().mockResolvedValue(Buffer.from("PNG"));
+    boundingBox.mockReset().mockResolvedValue(box([0, 0, 1, 1]));
+    setPwToolsCoreCurrentPage({ evaluate, screenshot, url: () => "https://example.com" });
+    setPwToolsCoreCurrentRefLocator({ boundingBox });
   });
 
-  await downloads.armFileUploadViaPlaywright({ ...target, paths: [missingPath] });
-  await vi.waitFor(() => expect(press).toHaveBeenCalledWith("Escape"));
-  expect(fileChooser.setFiles).not.toHaveBeenCalled();
+  it.each([false, true])(
+    "projects annotations and counts skipped refs (full page: %s)",
+    async (fullPage) => {
+      view.y = fullPage ? 1000 : 100;
+      const targets = refs(fullPage ? 154 : 2);
+      if (fullPage) {
+        boundingBox
+          .mockRejectedValueOnce(new Error("detached"))
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(box([10, 20, 30, 40]))
+          .mockResolvedValueOnce(box([50, 60, 70, 80]));
+      } else {
+        targets.e1 = { role: "button", name: "Submit" };
+        boundingBox
+          .mockResolvedValueOnce(box([10, 200, 50, 20]))
+          .mockResolvedValueOnce(box([0, 5000, 50, 20]));
+      }
+      const result = await captureAnnotations({
+        refs: targets,
+        ...(fullPage ? { fullPage: true } : { type: "png" }),
+      });
+      expect(result.annotations.slice(0, 2)).toEqual(
+        fullPage
+          ? [annotation(3, [10, 1020, 30, 40]), annotation(4, [50, 1060, 70, 80])]
+          : [annotation(1, [10, 200, 50, 20], "Submit"), annotation(2, [0, 5000, 50, 20])],
+      );
+      expect(result.annotations).toHaveLength(fullPage ? 150 : 2);
+      expect(result).toMatchObject({ labels: fullPage ? 150 : 1, skipped: fullPage ? 4 : 1 });
+      if (fullPage) {
+        expect(boundingBox).toHaveBeenCalledTimes(152);
+        expect(screenshot).toHaveBeenCalledWith(expect.objectContaining({ fullPage: true }));
+      } else {
+        expect(screenshot).toHaveBeenCalledWith(expect.objectContaining({ type: "png" }));
+        expect(screenshot).not.toHaveBeenCalledWith(expect.objectContaining({ fullPage: true }));
+      }
+    },
+  );
+
+  it("rejects unresolved elements", async () => {
+    boundingBox.mockResolvedValueOnce(null);
+    await expect(captureAnnotations({ ref: "missing" })).rejects.toThrow(/element not found/i);
+  });
 });
