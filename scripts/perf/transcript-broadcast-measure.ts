@@ -2904,8 +2904,7 @@ async function connectClient(index: number) {
     throw new Error("connect did not return a valid hello snapshot");
   }
   if (
-    client.ws.extensions.includes("permessage-deflate") !==
-    (proxyViewers || values["operator-access-policy"])
+    client.ws.extensions.includes("permessage-deflate") !== (proxyViewers || trustedProxyScenario)
   ) {
     throw new Error("Gateway compression negotiation did not match the requested ingress");
   }
