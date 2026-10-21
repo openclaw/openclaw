@@ -107,55 +107,37 @@ describe("mergeAttemptToolMediaPayloads", () => {
     expectSuppressionDelivery(mediaReply);
   });
 
-  it("ignores host-owned provenance outside the delivered tool media set", () => {
-    const [mediaReply] = mergeForMessageTool({
-      toolMediaUrls: ["/tmp/tool.png"],
-      hostOwnedToolMediaUrls: ["/tmp/forged.png"],
-    });
-
-    expect(mediaReply).toMatchObject(media("/tmp/tool.png"));
-    expect(getReplyPayloadMetadata(mediaReply ?? {})).toBeUndefined();
-  });
-
-  it("keeps generic and host-owned media in separate delivery payloads", () => {
-    const [genericReply, hostOwnedReply] = mergeForMessageTool({
-      toolMediaUrls: ["/tmp/reply.opus", "/tmp/generated.png"],
-      hostOwnedToolMediaUrls: ["/tmp/generated.png"],
-      toolAudioAsVoice: true,
-    });
-    expectUnmarked(genericReply, media("/tmp/reply.opus", { audioAsVoice: true }));
-    expectOwned(hostOwnedReply);
-  });
-
-  it("does not mark text-bearing source replies as host-owned", () => {
+  it.each([
+    { name: "unmatched host provenance", text: undefined, host: ["/tmp/forged.png"] },
+    { name: "text without host provenance", text: "hidden final", host: undefined },
+  ])("does not grant suppression delivery to $name", ({ text, host }) => {
     const [reply] = mergeForMessageTool({
-      payloads: [{ text: "hidden final" }],
+      payloads: text ? [{ text }] : undefined,
       toolMediaUrls: ["/tmp/generated.png"],
+      hostOwnedToolMediaUrls: host,
     });
-    expectUnmarked(reply, media("/tmp/generated.png", { text: "hidden final" }));
+    expectUnmarked(reply, media("/tmp/generated.png", text ? { text } : {}));
   });
 
-  it("keeps host-owned media deliverable beside suppressed assistant text", () => {
-    const [textReply, mediaReply] = mergeForMessageTool({
-      payloads: [{ text: "Done" }],
-      toolMediaUrls: ["/tmp/generated.png"],
+  it.each([
+    { name: "generic media", text: undefined, generic: true },
+    { name: "suppressed text", text: "Done", generic: false },
+    { name: "generic media and text", text: "Done", generic: true },
+  ])("splits host-owned media from $name", ({ text, generic }) => {
+    const payloads = text ? [{ text }] : undefined;
+    const [reply, owned] = mergeForMessageTool({
+      payloads,
+      toolMediaUrls: generic ? ["/tmp/reply.opus", "/tmp/generated.png"] : ["/tmp/generated.png"],
       hostOwnedToolMediaUrls: ["/tmp/generated.png"],
+      toolAudioAsVoice: generic || undefined,
     });
-
-    expectUnmarked(textReply, { text: "Done" });
-    expectOwned(mediaReply);
-  });
-
-  it("merges generic media with assistant text while splitting host-owned media", () => {
-    const [textReply, mediaReply] = mergeForMessageTool({
-      payloads: [{ text: "Done" }],
-      toolMediaUrls: ["/tmp/reply.opus", "/tmp/generated.png"],
-      hostOwnedToolMediaUrls: ["/tmp/generated.png"],
-      toolAudioAsVoice: true,
-    });
-
-    expectUnmarked(textReply, media("/tmp/reply.opus", { text: "Done", audioAsVoice: true }));
-    expectOwned(mediaReply);
+    expectUnmarked(
+      reply,
+      generic
+        ? media("/tmp/reply.opus", { ...(text ? { text } : {}), audioAsVoice: true })
+        : { text },
+    );
+    expectOwned(owned);
   });
 
   it("uses exact structured Markdown references to select tool media", () => {
