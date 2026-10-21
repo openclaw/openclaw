@@ -4,12 +4,12 @@ import type { SessionsResolveResult } from "../../../../packages/gateway-protoco
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createApplicationRouter } from "../../app-routes.ts";
-import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import { loadRoute, routeLocation as locationFor } from "./route-loading.test-support.ts";
+import { createSessionRouteContext } from "./route-resolution.test-support.ts";
 import { pages } from "./route.ts";
 import type { SessionChatRouteData } from "./session-route-data.ts";
 
@@ -41,28 +41,7 @@ const resolvedRow = (key = sessionKey): SessionsResolveResult => ({
 });
 
 function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey = "main") {
-  const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
-    if (method === "sessions.resolve") {
-      return resolution;
-    }
-    throw new Error(`Unexpected gateway request: ${method}`);
-  });
-  const client = { request };
-  const context = {
-    basePath: "",
-    chatSubmissions: createChatSubmissions(),
-    placementStartup: { get: vi.fn(() => null) },
-    router: { getState: () => ({ matches: [], pendingMatches: [] }), subscribe: () => () => {} },
-    gateway: {
-      snapshot: { phase: "connected", client, hello: null },
-      subscribe: vi.fn(() => () => undefined),
-      subscribeEvents: vi.fn(() => () => undefined),
-    },
-    agents: { state: { agentsList: { mainKey } } },
-  } as unknown as ApplicationContext;
-  const sessions = createChatPageSessions(context.gateway);
-  const list = vi.spyOn(sessions, "list");
-  return { context: { ...context, sessions }, list, request };
+  return createSessionRouteContext(resolution, [], { agentId: "main", mainKey });
 }
 
 function coldContext() {
