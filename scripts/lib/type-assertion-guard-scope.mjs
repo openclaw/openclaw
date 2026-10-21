@@ -133,6 +133,7 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "src/gateway/test-http-response.ts", // Test support.
   "src/infra/diagnostic-trace-propagation.ts", // Global symbol registry crosses module copies.
   "src/infra/net/runtime-fetch.ts", // Undici and DOM fetch types live in separate namespaces.
+  "src/infra/provider-usage.load.ts", // Undici and DOM fetch types live in separate namespaces.
   "src/infra/state-migrations.meeting-transcripts-files.ts", // Legacy summary validation does not prove element types.
   "src/infra/unhandled-rejections.ts", // Global symbol registry crosses module copies.
   "src/meeting-bot/browser-controller.ts", // Generic health fallbacks cannot construct arbitrary platform subtypes.
