@@ -3,8 +3,9 @@ import type { ChatInputRegion } from "../../../app/chat-input-owner.ts";
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { isSessionRunStateActive } from "../../../lib/session-run-state.ts";
@@ -20,9 +21,11 @@ import {
   type SessionPanelProps,
 } from "./chat-session-panel.tsx";
 import { ChatSubagentsMobileList, type ChatSubagentMobileItem } from "./chat-subagents-mobile.tsx";
-import { ChatSubagentsPanelDesktop } from "./chat-subagents-panel-desktop.tsx";
 import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
+import { ChatSubagentsPanelDesktop } from "./chat-subagents-panel-desktop.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type Props = SessionPanelProps & {
   paneId: string;

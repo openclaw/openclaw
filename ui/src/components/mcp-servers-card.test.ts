@@ -224,8 +224,14 @@ describe("openclaw-mcp-servers-card", () => {
     actionButton(card, "Remove local").click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
     expect(disable.disabled).toBe(true);
+    expect(disable.textContent?.trim()).toBe("Working…");
+    expect(actionButton(card, "Add server").disabled).toBe(true);
     completion.resolve(true);
-    await waitForFast(() => expect(disable.disabled).toBe(false));
+    await waitForFast(() => {
+      expect(disable.disabled).toBe(false);
+      expect(card.querySelector('[role="status"]')?.textContent).toBe("Disabled MCP server local.");
+    });
+    expect(disable.textContent?.trim()).toBe("Disable");
     disable.click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
   });

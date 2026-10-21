@@ -39,7 +39,6 @@ extensions/codex/src/conversation-binding.test.ts
 extensions/codex/src/migration/provider.test.ts
 extensions/codex/src/migration/session-binding-sidecars.ts
 extensions/codex/src/supervision-tools.ts
-extensions/comfy/workflow-runtime.ts
 extensions/copilot/harness.test.ts
 extensions/copilot/harness.ts
 extensions/copilot/src/attempt.test.ts
@@ -69,7 +68,6 @@ extensions/google-meet/index.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
 extensions/google/transport-stream.test.ts
-extensions/google/transport-stream.ts
 extensions/imessage/src/actions.ts
 extensions/imessage/src/monitor.last-route.test.ts
 extensions/imessage/src/monitor/inbound-processing.ts
@@ -392,7 +390,6 @@ src/gateway/server-startup-post-attach.ts
 src/gateway/server.chat.gateway-server-chat-b.test.ts
 src/gateway/server.chat.gateway-server-chat.test.ts
 src/gateway/server.config-patch.test.ts
-src/gateway/server.cron.test.ts
 src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts
 src/gateway/session-create-service.ts
 src/gateway/session-message-events.test.ts
@@ -467,7 +464,6 @@ src/plugins/marketplace.ts
 src/plugins/plugin-registry-snapshot.test.ts
 src/plugins/provider-runtime.test.ts
 src/plugins/provider-runtime.ts
-src/plugins/schema-validator.test.ts
 src/plugins/sdk-alias.test.ts
 src/plugins/sdk-alias.ts
 src/plugins/tools.optional.test.ts

@@ -37,6 +37,7 @@ function createBaseParams(overrides: Partial<AutoThreadParams> = {}): AutoThread
     message: mockMessage,
     messageChannelId: "text1",
     channel: "discord",
+    agentId: "main",
     isGuildMessage: true,
     channelConfig: { allowed: true, autoThread: true },
     channelType: ChannelType.GuildText,

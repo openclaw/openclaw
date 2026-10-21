@@ -1,3 +1,4 @@
+import { findMarkdownLinkSourceSpans } from "../../packages/markdown-core/src/link-spans.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
@@ -6,11 +7,13 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { createAbortError, isAbortError } from "../infra/abort-signal.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
+import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "../media-understanding/defaults.js";
 import { resolveScopeDecision, resolveTimeoutMs } from "../media-understanding/resolve.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { DEFAULT_LINK_TIMEOUT_SECONDS } from "./defaults.js";
-import { extractLinksFromMessage } from "./detect.js";
+import { DEFAULT_LINK_TIMEOUT_SECONDS, DEFAULT_MAX_LINKS } from "./defaults.js";
+
+const BARE_LINK_RE = /https?:\/\/\S+/gi;
 
 function isLinkUrlTemplate(value: string): boolean {
   return value.includes("LinkUrl") || value.includes("LinkFinalUrl");
@@ -69,8 +72,44 @@ export async function applyLinkUnderstanding(params: {
     return;
   }
 
-  const message = params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body;
-  const links = extractLinksFromMessage(message ?? "", { maxLinks: config?.maxLinks });
+  const message = (params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body ?? "").trim();
+  if (!message) {
+    return;
+  }
+  const maxLinks =
+    typeof config.maxLinks === "number" && Number.isFinite(config.maxLinks) && config.maxLinks > 0
+      ? Math.floor(config.maxLinks)
+      : DEFAULT_MAX_LINKS;
+  // Display-only Markdown citations must not trigger link fetches.
+  const chunks: string[] = [];
+  let cursor = 0;
+  for (const [start, end] of findMarkdownLinkSourceSpans(message)) {
+    chunks.push(message.slice(cursor, start), " ");
+    cursor = end;
+  }
+  chunks.push(message.slice(cursor));
+  const seen = new Set<string>();
+  const links: string[] = [];
+  for (const match of chunks.join("").matchAll(BARE_LINK_RE)) {
+    const raw = match[0]?.trim();
+    if (!raw) {
+      continue;
+    }
+    const parsed = URL.parse(raw);
+    if (
+      !parsed ||
+      (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+      isBlockedHostnameOrIp(parsed.hostname) ||
+      seen.has(raw)
+    ) {
+      continue;
+    }
+    seen.add(raw);
+    links.push(raw);
+    if (links.length >= maxLinks) {
+      break;
+    }
+  }
   if (links.length === 0) {
     return;
   }

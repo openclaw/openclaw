@@ -1,5 +1,9 @@
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
+import {
+  mergeAcceptedSessionSpawnsForRun,
+  retireAcceptedSessionSpawnCompletionForRun,
+  type AcceptedSessionSpawn,
+} from "../accepted-session-spawn.js";
 import { prepareSystemAgentRunAdmission as prepareAdmission } from "../admitted-run-context.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
@@ -12,7 +16,7 @@ vi.mock("../subagents/registry/subagent-registry.js", () => ({
 
 const assertCurrent = vi.fn();
 const requester = { sessionKey: "agent:main:main", agentId: "main", runId: "parent" };
-const acceptedSessionSpawns = [
+const acceptedSessionSpawns: [AcceptedSessionSpawn] = [
   { runId: "child", childSessionKey: "agent:main:subagent:child", expectsCompletionMessage: true },
 ];
 
@@ -92,6 +96,62 @@ it("transfers producer-owned completion after a partial harness receipt", async 
   expect(registry.settle.mock.calls).toEqual([[{ ...settlement, requesterYielded: true }]]);
   expect(result.requesterContinuationSettled).toBe(true);
 });
+
+it("keeps confirmed cancellations retired when a stale harness receipt is settled", async () => {
+  const params = await admit();
+  const cancelled = acceptedSessionSpawns[0];
+  const replacement = {
+    runId: "replacement",
+    childSessionKey: "agent:main:subagent:replacement",
+    expectsCompletionMessage: true,
+  };
+  retireAcceptedSessionSpawnCompletionForRun(
+    params.preparedRunAdmission.operationalRunInstance,
+    cancelled,
+  );
+  const result: EmbeddedAgentRunResult = {
+    acceptedSessionSpawns: [cancelled, replacement],
+    meta: { durationMs: 1, yielded: true },
+  };
+
+  await settleRequesterRun(params, result, assertCurrent);
+
+  expect(registry.settle.mock.calls).toEqual([
+    [
+      {
+        ...settlement,
+        acceptedSessionSpawns: [{ ...cancelled, expectsCompletionMessage: false }, replacement],
+        requesterYielded: true,
+      },
+    ],
+  ]);
+  expect(result.requesterContinuationSettled).toBe(true);
+  expect(cancelled.expectsCompletionMessage).toBe(true);
+});
+
+it.each(["another run instance", "another child session", "unknown run"] as const)(
+  "preserves the required completion when cancellation names %s",
+  async (target) => {
+    const params = await admit();
+    const other = createAdmission();
+    retireAcceptedSessionSpawnCompletionForRun(
+      target === "another run instance"
+        ? other.operationalRunInstance
+        : params.preparedRunAdmission.operationalRunInstance,
+      {
+        ...acceptedSessionSpawns[0],
+        ...(target === "another child session"
+          ? { childSessionKey: "agent:main:subagent:other" }
+          : {}),
+        ...(target === "unknown run" ? { runId: "unknown" } : {}),
+      },
+    );
+
+    await settleRequesterRun(params, makeResult({ yielded: true }), assertCurrent);
+
+    expect(registry.settle.mock.calls).toEqual([[{ ...settlement, requesterYielded: true }]]);
+  },
+);
 
 it.each(["active", "closed", "replaced", "source-revoked", "cancelled"] as const)(
   "releases failed requester receipts only for the current operational owner (%s)",

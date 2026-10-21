@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
+import { For, Show, createMemo, createSignal, createStore, onSettled } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -37,7 +37,9 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       ProcessesPanelData,
       (identityChanged) => {
         if (identityChanged) {
-          setNavigation(emptyNavigation());
+          setNavigation((draft) => {
+            Object.assign(draft, emptyNavigation());
+          });
           if (list) {
             list.scrollTop = 0;
           }
@@ -60,18 +62,19 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       outputPositions: new Map<string, { left: number; top: number }>(),
     });
     const denied = createMemo(() => Boolean(data().error && !data().rows.length));
-    const [navigation, setNavigation] = createSignal<ReturnType<typeof emptyNavigation>>(
-      (previous) => (denied() ? emptyNavigation() : (previous ?? emptyNavigation())),
-    );
+    const [navigation, setNavigation] = createStore<ReturnType<typeof emptyNavigation>>((draft) => {
+      if (denied()) {
+        Object.assign(draft, emptyNavigation());
+      }
+    }, emptyNavigation());
     // Rendered selection observes denial transitions even while the detail is closed.
-    const selected = () => navigation().selected;
+    const selected = () => navigation.selected;
     const open = (row: SessionProcessSummary) => {
-      setNavigation((previous) => ({
-        ...previous,
-        listTop: list.scrollTop,
-        returnInstance: row.instanceId,
-        selected: row.instanceId,
-      }));
+      setNavigation((draft) => {
+        draft.listTop = list.scrollTop;
+        draft.returnInstance = row.instanceId;
+        draft.selected = row.instanceId;
+      });
     };
     const selectedRow = createMemo(() => data().rows.find((row) => row.instanceId === selected()));
     const running = createMemo(() => data().rows.filter((row) => row.status === "running"));
@@ -135,7 +138,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
     const rowView = (row: () => SessionProcessSummary) => {
       onSettled(() => {
         const id = row().instanceId;
-        const initialOpeners = navigation().openers;
+        const initialOpeners = navigation.openers;
         return () => initialOpeners.delete(id);
       });
       return (
@@ -159,7 +162,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                   title={row().name}
                   aria-label={row().name}
                   ref={(element) => {
-                    navigation().openers.set(row().instanceId, element);
+                    navigation.openers.set(row().instanceId, element);
                   }}
                   onClick={() => open(row())}
                 >
@@ -214,7 +217,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                 type="button"
                 aria-label={row().name}
                 ref={(element) => {
-                  navigation().openers.set(row().instanceId, element);
+                  navigation.openers.set(row().instanceId, element);
                 }}
                 onClick={() => open(row())}
               >
@@ -252,7 +255,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       const savePosition = () => {
         const id = selected();
         if (id && output) {
-          navigation().outputPositions.set(id, { left: output.scrollLeft, top: output.scrollTop });
+          navigation.outputPositions.set(id, { left: output.scrollLeft, top: output.scrollTop });
         }
       };
       onSettled(() => {
@@ -261,7 +264,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       const Output = (outputProps: { row: SessionProcessSummary }) => {
         const scrollState = useScrollState();
         onSettled(() => {
-          const position = navigation().outputPositions.get(outputProps.row.instanceId);
+          const position = navigation.outputPositions.get(outputProps.row.instanceId);
           if (position) {
             output.scrollLeft = position.left;
             output.scrollTop = position.top;
@@ -322,15 +325,18 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                 title={props.mobile ? undefined : t("chat.processesPanel.back")}
                 onClick={() => {
                   savePosition();
-                  setNavigation((previous) => ({ ...previous, selected: null }));
+                  setNavigation((draft) => {
+                    draft.selected = null;
+                  });
                   onSettled(() => {
-                    const current = navigation();
-                    list.scrollTop = current.listTop;
-                    const opener = current.returnInstance
-                      ? current.openers.get(current.returnInstance)
+                    list.scrollTop = navigation.listTop;
+                    const opener = navigation.returnInstance
+                      ? navigation.openers.get(navigation.returnInstance)
                       : undefined;
                     (opener?.isConnected ? opener : list).focus({ preventScroll: true });
-                    current.returnInstance = null;
+                    setNavigation((draft) => {
+                      draft.returnInstance = null;
+                    });
                   });
                 }}
               >

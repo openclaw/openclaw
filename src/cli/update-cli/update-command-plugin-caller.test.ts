@@ -32,6 +32,7 @@ import {
 } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { resultFixture } from "./update-command-fixtures.test-support.js";
+import { finishParams } from "./update-command-maintenance-fixtures.test-support.js";
 import * as postCore from "./update-command-post-core.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
@@ -215,7 +216,7 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
       assertOriginalCurrent = fence.assertCurrent;
       return withUpdateCommandExecutor("independent-live-owner", async (otherExecutor) => {
         const otherFence = await otherExecutor.enter(otherRoot);
-        const params: FinishUpdateParams = {
+        const params = finishParams({
           root: state.root,
           result: resultFixture(state.root, {
             status: "skipped",
@@ -224,18 +225,11 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
           coreAlreadyCurrent: true,
           mutationStarted: false,
           shouldRestart: false,
-          installKindChanged: false,
           configSnapshot,
-          requestedChannel: null,
-          storedChannel: "stable",
-          channel: "stable",
-          downgradeRisk: false,
           opts: { json: true, yes: true, run },
-          controlPlaneUpdateSentinelMeta: null,
           preUpdatePluginInstallRecords,
-          startedAt: Date.now(),
           updateStepTimeoutMs: 1_000,
-        };
+        });
         const unlink = fsSync.unlinkSync.bind(fsSync);
         const unlinkSpy =
           scenario === "host-link-recovery" && !recovering

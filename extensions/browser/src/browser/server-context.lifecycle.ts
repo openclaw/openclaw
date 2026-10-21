@@ -12,11 +12,7 @@ import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { RunningChrome } from "./chrome.js";
 import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
 import { withChromeProfileLifecycleLock } from "./chrome.profile-lifecycle-lock.js";
-import {
-  isLocalManagedProfile,
-  type ResolvedBrowserConfig,
-  type ResolvedBrowserProfile,
-} from "./config.js";
+import { isLocalManagedProfile, type ResolvedBrowserProfile } from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
@@ -33,7 +29,7 @@ type ProfileLifecycleActor = {
   starts: Map<string, Promise<void>>;
   leases: Set<Promise<void>>;
   handles: Set<RunningChrome>;
-  cleanupChromeMcp: Set<string>;
+  cleanupChromeMcp: string | undefined;
   cleanupPlaywright: Map<string, PlaywrightConnectionRetirement>;
   cleanupRelays: Set<ExtensionRelayResource>;
   terminal: ProfileLifecycleTerminal | null;
@@ -47,7 +43,6 @@ type ProfileTransitionOptions = {
   reason: string;
   terminal?: ProfileLifecycleTerminal;
   closeRelay?: boolean;
-  captureProfileResources?: boolean;
   /** Bridge runtimes must not retire process-global adapters shared by another runtime. */
   closeSharedAdapters?: boolean;
   managedChrome?: "stop" | "release-profile-data";
@@ -75,7 +70,7 @@ function createProfileLifecycleActor(): ProfileLifecycleActor {
     starts: new Map(),
     leases: new Set(),
     handles: new Set(),
-    cleanupChromeMcp: new Set(),
+    cleanupChromeMcp: undefined,
     cleanupPlaywright: new Map(),
     cleanupRelays: new Set(),
     terminal: null,
@@ -348,91 +343,6 @@ function capturePlaywrightRetirement(
   return retirement;
 }
 
-async function cleanupProfileResources(params: {
-  state: BrowserServerState;
-  runtime: ProfileRuntimeState;
-  eagerMcpClose: Promise<boolean> | null;
-  hadPendingWork: boolean;
-  managedChrome?: {
-    mode: NonNullable<ProfileTransitionOptions["managedChrome"]>;
-    profile: ResolvedBrowserProfile;
-    resolved: ResolvedBrowserConfig;
-  };
-}): Promise<ProfileTransitionResult> {
-  const { runtime } = params;
-  let stopped = params.hadPendingWork;
-  if (params.eagerMcpClose) {
-    stopped = (await params.eagerMcpClose) || stopped;
-  }
-  let firstError: Error | undefined;
-  const actor = getProfileLifecycle(runtime);
-  // `running` remains part of the public runtime shape. Include handles
-  // installed by older callers that predate lifecycle registration.
-  const managedHandles = new Set(actor.handles);
-  if (runtime.running) {
-    managedHandles.add(runtime.running);
-  }
-  for (const running of managedHandles) {
-    try {
-      await stopOpenClawChrome(running);
-      releaseProfileHandle(runtime, running);
-      stopped = true;
-    } catch (err) {
-      firstError ??= toLifecycleError(err, "Managed browser cleanup failed.");
-    }
-  }
-
-  if (actor.cleanupChromeMcp.size > 0) {
-    try {
-      const chromeMcp = await getChromeMcpModule.peek();
-      for (const profileName of actor.cleanupChromeMcp) {
-        stopped = (await chromeMcp?.closeChromeMcpSession(profileName)) || stopped;
-        actor.cleanupChromeMcp.delete(profileName);
-      }
-    } catch (err) {
-      firstError ??= toLifecycleError(err, "Chrome MCP cleanup failed.");
-    }
-  }
-
-  stopped = actor.cleanupPlaywright.size > 0 || stopped;
-  for (const [cdpUrl, retirement] of actor.cleanupPlaywright) {
-    try {
-      await retirement.close();
-      actor.cleanupPlaywright.delete(cdpUrl);
-    } catch (err) {
-      firstError ??= toLifecycleError(err, "Playwright cleanup failed.");
-    }
-  }
-  for (const relay of actor.cleanupRelays) {
-    try {
-      await relay.close();
-      actor.cleanupRelays.delete(relay);
-      if (params.state.extensionRelays?.get(runtime.profile.name) === relay) {
-        params.state.extensionRelays.delete(runtime.profile.name);
-        const tokens = { ...params.state.resolved.extensionRelayInternalTokens };
-        delete tokens[runtime.profile.name];
-        params.state.resolved = { ...params.state.resolved, extensionRelayInternalTokens: tokens };
-      }
-    } catch (err) {
-      firstError ??= toLifecycleError(err, "Browser relay cleanup failed.");
-    }
-  }
-  if (firstError) {
-    throw firstError;
-  }
-  if (params.managedChrome) {
-    const { mode, profile, resolved } = params.managedChrome;
-    const result = await stopOwnedOpenClawChrome(resolved, profile);
-    if (mode === "release-profile-data" && result.status === "unverified") {
-      throw new BrowserProfileUnavailableError(
-        `Cannot release browser profile "${profile.name}" data: ${result.reason}. Close that browser and retry.`,
-      );
-    }
-    stopped = result.status === "stopped" || stopped;
-  }
-  return { stopped };
-}
-
 /**
  * Synchronously cancel current work, eagerly begin owned adapter
  * teardown, then serialize exact-handle cleanup behind older starts and leases.
@@ -464,10 +374,9 @@ export function beginProfileTransition(
   const closeSharedAdapters = params.closeSharedAdapters !== false;
   const usesChromeMcp = getBrowserProfileCapabilities(ownerProfile).usesChromeMcp;
   if (closeSharedAdapters && usesChromeMcp) {
-    actor.cleanupChromeMcp.add(ownerProfile.name);
+    actor.cleanupChromeMcp = ownerProfile.name;
   }
-  const shouldClosePlaywright =
-    closeSharedAdapters && params.captureProfileResources !== false && !usesChromeMcp;
+  const shouldClosePlaywright = closeSharedAdapters && !usesChromeMcp;
   const eagerPlaywrightRetirement = shouldClosePlaywright
     ? capturePlaywrightRetirement(actor, ownerProfile.cdpUrl)
     : null;
@@ -497,17 +406,80 @@ export function beginProfileTransition(
       }
       captureRelay();
       const cleanup = async () => {
-        const result = await cleanupProfileResources({
-          state: params.state,
-          runtime: params.runtime,
-          eagerMcpClose,
-          hadPendingWork: hadPendingWork || Boolean(eagerPlaywrightRetirement?.retired),
-          managedChrome,
-        });
+        const { state, runtime } = params;
+        let stopped = hadPendingWork || Boolean(eagerPlaywrightRetirement?.retired);
+        if (eagerMcpClose) {
+          stopped = (await eagerMcpClose) || stopped;
+        }
+        let firstError: Error | undefined;
+        const cleanupActor = getProfileLifecycle(runtime);
+        // `running` remains part of the public runtime shape. Include handles
+        // installed by older callers that predate lifecycle registration.
+        const managedHandles = new Set(cleanupActor.handles);
+        if (runtime.running) {
+          managedHandles.add(runtime.running);
+        }
+        for (const running of managedHandles) {
+          try {
+            await stopOpenClawChrome(running);
+            releaseProfileHandle(runtime, running);
+            stopped = true;
+          } catch (err) {
+            firstError ??= toLifecycleError(err, "Managed browser cleanup failed.");
+          }
+        }
+
+        if (cleanupActor.cleanupChromeMcp) {
+          try {
+            const chromeMcp = await getChromeMcpModule.peek();
+            stopped =
+              (await chromeMcp?.closeChromeMcpSession(cleanupActor.cleanupChromeMcp)) || stopped;
+            cleanupActor.cleanupChromeMcp = undefined;
+          } catch (err) {
+            firstError ??= toLifecycleError(err, "Chrome MCP cleanup failed.");
+          }
+        }
+
+        stopped = cleanupActor.cleanupPlaywright.size > 0 || stopped;
+        for (const [cdpUrl, retirement] of cleanupActor.cleanupPlaywright) {
+          try {
+            await retirement.close();
+            cleanupActor.cleanupPlaywright.delete(cdpUrl);
+          } catch (err) {
+            firstError ??= toLifecycleError(err, "Playwright cleanup failed.");
+          }
+        }
+        for (const relay of cleanupActor.cleanupRelays) {
+          try {
+            await relay.close();
+            cleanupActor.cleanupRelays.delete(relay);
+            if (state.extensionRelays?.get(runtime.profile.name) === relay) {
+              state.extensionRelays.delete(runtime.profile.name);
+              const tokens = { ...state.resolved.extensionRelayInternalTokens };
+              delete tokens[runtime.profile.name];
+              state.resolved = { ...state.resolved, extensionRelayInternalTokens: tokens };
+            }
+          } catch (err) {
+            firstError ??= toLifecycleError(err, "Browser relay cleanup failed.");
+          }
+        }
+        if (firstError) {
+          throw firstError;
+        }
+        if (managedChrome) {
+          const { mode, profile, resolved } = managedChrome;
+          const result = await stopOwnedOpenClawChrome(resolved, profile);
+          if (mode === "release-profile-data" && result.status === "unverified") {
+            throw new BrowserProfileUnavailableError(
+              `Cannot release browser profile "${profile.name}" data: ${result.reason}. Close that browser and retry.`,
+            );
+          }
+          stopped = result.status === "stopped" || stopped;
+        }
         cleanupCompleted = true;
         await params.afterCleanup?.();
         actor.blockedReason = null;
-        return result;
+        return { stopped };
       };
       // Drain actor starts and leases before taking the cross-runtime lock:
       // pending work can itself need it. Once cleanup enters, hold the lock

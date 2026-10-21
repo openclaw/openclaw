@@ -138,7 +138,6 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
     args: params.args,
     env: params.env,
     exactEnv: true,
-    stderr: "pipe",
     decoder: new McpStdioFrameDecoder(params.maxFrameBytes),
   });
   // This strict proxy speaks legacy MCP; the low-level Protocol defaults to that era.
@@ -146,7 +145,7 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
   const onStderr = (chunk: Buffer) => {
     stderr = Buffer.concat([stderr, chunk]).subarray(-MAX_STDERR_BYTES);
   };
-  transport.stderr?.on("data", onStderr);
+  transport.stderr.on("data", onStderr);
   const startup = connectMcpClient({
     client: protocol,
     transport,
@@ -162,7 +161,7 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
       client: protocol,
       transport,
       transportType: "stdio",
-      detachStderr: () => transport.stderr?.off("data", onStderr),
+      detachStderr: () => transport.stderr.off("data", onStderr),
       onCleanupError: (error) => {
         cleanupError = error;
       },

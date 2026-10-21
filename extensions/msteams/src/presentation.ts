@@ -1,10 +1,11 @@
 import {
   adaptMessagePresentationForChannel,
+  renderPresentationForDelivery,
   resolveMessagePresentationButtonAction,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { ChannelOutboundAdapter } from "../runtime-api.js";
+import type { ChannelOutboundAdapter, ReplyPayload } from "../runtime-api.js";
 
 export const MSTEAMS_PRESENTATION_CAPABILITIES = {
   supported: true,
@@ -22,6 +23,24 @@ export const MSTEAMS_PRESENTATION_CAPABILITIES = {
     },
   },
 } satisfies ChannelOutboundAdapter["presentationCapabilities"];
+
+/** Resolve fallback prose before streaming claims text; retain native blocks for later rendering. */
+export async function resolveMSTeamsReplyPresentation(
+  payload: ReplyPayload,
+): Promise<ReplyPayload> {
+  let nativePayload: ReplyPayload | undefined;
+  const fallbackPayload = await renderPresentationForDelivery(
+    {
+      presentationCapabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
+      renderPresentation: (adapted) => {
+        nativePayload = adapted;
+        return adapted;
+      },
+    },
+    payload,
+  );
+  return nativePayload ?? fallbackPayload;
+}
 
 export function buildMSTeamsPresentationCard(params: {
   presentation: MessagePresentation;

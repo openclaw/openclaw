@@ -374,6 +374,7 @@ src/infra/database-engine/index-hint.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
 src/infra/database-engine/open.ts
+src/infra/database-engine/physical-facts-contract.ts
 src/infra/database-engine/physical-facts.ts
 src/infra/database-engine/physical-store.ts
 src/infra/database-engine/policy.ts
@@ -396,6 +397,7 @@ src/infra/database-engine/sqlite-vector-types.ts
 src/infra/database-engine/sqlite-vector.ts
 src/infra/database-engine/text-bytes.ts
 src/infra/database-engine/vector-contract.ts
+src/infra/postgres-sync/bridge-prestart.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/idle-bridges.ts
 src/infra/postgres-sync/protocol.ts
@@ -1772,6 +1774,7 @@ src/sessions/transcript-terminal-model.ts
 src/sessions/user-turn-transcript-admission.ts
 src/secrets/store/secret-store-validation-error.ts
 src/shared/assistant-error-format.ts
+src/shared/async-store.ts
 src/shared/async-work-scope.ts
 src/shared/avatar-limits.ts
 src/shared/avatar-policy.ts
@@ -2324,6 +2327,7 @@ packages/gateway-protocol/src/schema/agent-database-admission.ts
 packages/gateway-protocol/src/schema/agent-summary-enums.ts
 packages/gateway-protocol/src/schema/agents-avatar-generate.ts
 packages/gateway-protocol/src/schema/agents-list-session-placement.ts
+packages/gateway-protocol/src/schema/agents-create.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/gateway-protocol/src/schema/background-preferences.ts
 packages/gateway-protocol/src/schema/board.ts

@@ -6,7 +6,6 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
 import { applyMessageQueueDefaults } from "../config/defaults.js";
-import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import {
@@ -24,6 +23,7 @@ import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.
 import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
+import type { AutomaticHeartbeatRepairAdmission } from "./doctor-automatic-heartbeat-repair.js";
 import {
   noteDoctorHookConfigWarnings,
   noteImplicitFallbackClobberWarnings,
@@ -42,10 +42,13 @@ import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
   applyLegacyCompatibilityStep,
-  applyUnknownConfigKeyStep,
+  applyRetiredConfigStep,
   prepareDoctorConfigReferenceSource,
 } from "./doctor/shared/config-flow-steps.js";
-import { prepareDoctorConfigMigrationResult } from "./doctor/shared/config-migration-result.js";
+import {
+  prepareDoctorConfigMigrationResult,
+  retainHeartbeatMigrationInput,
+} from "./doctor/shared/config-migration-result.js";
 import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationResult,
@@ -63,6 +66,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   retiredStateAdmitted?: boolean;
   stateSchemaPreparation?: LegacyStateMigrationStepReceipt;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+  automaticHeartbeatRepair?: AutomaticHeartbeatRepairAdmission;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   runtime?: RuntimeEnv;
   prompter?: DoctorPrompter;
@@ -78,6 +82,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     repairPrefixedConfig: shouldRepair,
     doctorOnlyStateMigrations: shouldRepair,
     preparePluginMetadataSnapshot: true,
+    ...(params.automaticHeartbeatRepair
+      ? { automaticHeartbeatRepair: params.automaticHeartbeatRepair }
+      : {}),
     agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery,
     beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(params.prompter),
     measure: (name, run) =>
@@ -124,7 +131,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   };
   let state: DoctorConfigMutationState = {
     cfg: baseCfg,
-    candidate: structuredClone(baseCfg),
+    candidate: await retainHeartbeatMigrationInput(baseCfg, preflight.heartbeatMigrationSource),
     pendingChanges: false,
     fixHints: [],
   };
@@ -589,29 +596,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(sanitizeDoctorNote(mutableAllowlistWarnings.join("\n")), "Doctor warnings");
   }
 
-  const unknownStep = applyUnknownConfigKeyStep({
+  const modelBillingRouteConfig = state.candidate;
+  state = await applyRetiredConfigStep({
     state,
     shouldRepair,
     doctorFixCommand,
-    preservedPaths: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig)?.flatMap(
-      (pending) => (pending.configPaths ?? []).concat(pending.validationExcludedPaths ?? []),
-    ),
+    sourceConfig: snapshot.sourceConfig,
+    emitChanges: changesPanelSink.emit,
   });
-  state = unknownStep.state;
-  if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
-    const lines = [
-      ...unknownStep.removed.map((pathLocal) => `- ${pathLocal}`),
-      ...unknownStep.repairs.map((change) => `- ${change}`),
-    ];
-    if (shouldRepair) {
-      changesPanelSink.emit(lines);
-    } else {
-      note(lines.join("\n"), "Unknown config keys");
-    }
-  }
-  if (unknownStep.warnings.length > 0) {
-    note(unknownStep.warnings.join("\n"), "Doctor warnings");
-  }
 
   const finalized = await finalizeDoctorConfigFlow({
     ...state,
@@ -671,6 +663,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const migrationResult = await finalizeMigrationResult({
     cfg,
+    modelBillingRouteConfig,
     shouldWriteConfig,
     pluginInventoryChanged: pluginMetadataSnapshotState.inventoryChanged,
     metadataSnapshot: pluginMetadataSnapshotState.current,

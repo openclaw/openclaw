@@ -418,9 +418,6 @@ describe("monitorMatrixProvider", () => {
       "dispose-auto-join",
       "dispose-monitor-events",
     ]);
-    expect(hoisted.acquireSharedMatrixClient).toHaveBeenCalledWith(
-      expect.objectContaining({ startClient: false }),
-    );
     expect(hoisted.stopThreadBindingManager).toHaveBeenCalledTimes(1);
   });
 

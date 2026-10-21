@@ -35,6 +35,7 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
+import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import { SidebarAttachment } from "./chat-sidebar-attachment.tsx";
@@ -239,7 +240,12 @@ export function SidebarPanel(props: SidebarPanelProps) {
           </div>
         </Show>
         <Show when={props.filePresentation === "mobile" && props.content?.kind === "image"}>
-          <SidebarFileMobileRail name={title()} identity={title()} back={props.fileBack} />
+          <SidebarFileMobileRail
+            name={title()}
+            identity={title()}
+            back={props.fileBack}
+            attachment={props.fileView?.fileAttachment}
+          />
         </Show>
         <div class={["sidebar-content", { "sidebar-file-mobile__body": mobileMedia() }]}>
           <Show
@@ -427,6 +433,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                       runtime={props.attachmentRuntime}
                       embedSandboxMode={props.embedSandboxMode ?? "scripts"}
                       download={props.attachmentDownload}
+                      attachment={props.fileView?.fileAttachment}
                       mobile={props.filePresentation === "mobile"}
                       back={props.fileBack}
                       onOpenImage={props.onOpenImage}
@@ -459,6 +466,9 @@ export function SidebarPanel(props: SidebarPanelProps) {
                               download={(signal) => file().download(signal)}
                               class="btn btn--sm sidebar-file-view__action"
                             />
+                            <Show when={props.fileView?.fileAttachment}>
+                              <FileSessionMenu attachment={props.fileView?.fileAttachment} />
+                            </Show>
                             <Show when={props.fileView?.onReveal}>
                               <openclaw-tooltip prop:content={t("chat.detailPanel.showInFiles")}>
                                 <button

@@ -68,17 +68,19 @@ describe("Control UI build chunking", () => {
     const optional = modulePath("../components/assistant-panel-content.ts");
     const devices = modulePath("../pages/devices/devices-page.tsx");
     const sharedUi = modulePath("../components/select-picker-view.tsx");
+    const pluginActions = modulePath("../plugins/control-ui-actions.ts");
+    const pluginLoader = modulePath("../plugins/control-ui-loader.ts");
     const sharedStyle = modulePath("../styles/mcp-app-extensions.css");
     const sidebarStyle = modulePath("../styles/sidebar-reorder.css");
     const entry = "\0cold-load-fixture";
     const sources = new Map([
       [
         entry,
-        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)});`,
+        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)}); export const plugins = () => import(${JSON.stringify(pluginLoader)});`,
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class Chat { label = label; } export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; export class Chat { label = action(label); } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
       [
         newSession,
@@ -87,6 +89,8 @@ describe("Control UI build chunking", () => {
       [optional, 'export const panel = "optional-panel";'],
       [devices, 'export const page = "devices-page";'],
       [sharedUi, 'export const label = "shared-ui";'],
+      [pluginActions, "export const action = (label) => label;"],
+      [pluginLoader, `export { action } from ${JSON.stringify(pluginActions)};`],
       [sharedStyle, ".shared-fixture { color: red; }"],
       [sidebarStyle, ".sidebar-fixture { color: blue; }"],
     ]);
@@ -112,11 +116,14 @@ describe("Control UI build chunking", () => {
             codeSplitting: {
               ...controlUiCodeSplitting,
               // A stale capture must not pull a lazy page into the shared boot chunk.
-              groups: controlUiCodeSplitting.groups.map((group) =>
-                group.name === "control-ui-boot-shared"
-                  ? { ...group, test: (id: string) => id === devices || group.test(id) }
-                  : group,
-              ),
+              groups: controlUiCodeSplitting.groups.map((group) => ({
+                ...group,
+                // Exercise grouping below the production chunk-size floor.
+                minSize: 0,
+                ...(group.name === "control-ui-boot-shared"
+                  ? { test: (id: string) => id === devices || group.test(id) }
+                  : {}),
+              })),
             },
             strictExecutionOrder: true,
           },
@@ -146,6 +153,14 @@ describe("Control UI build chunking", () => {
     };
     expect(staticImports(chatChunk.fileName)).not.toContain(newSessionChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
+    const pluginChunk = chunks.find((chunk) => pluginLoader in chunk.modules)!;
+    const actionChunk = chunks.find((chunk) => pluginActions in chunk.modules)!;
+    const sharedChunk = chunks.find((chunk) => sharedUi in chunk.modules)!;
+    expect(actionChunk.fileName).toBe(sharedChunk.fileName);
+    expect(staticImports(pluginChunk.fileName)).toContain(actionChunk.fileName);
+    expect(staticImports(pluginChunk.fileName)).not.toContain(chatChunk.fileName);
+    const entryChunk = chunks.find((chunk) => chunk.isEntry)!;
+    expect(staticImports(entryChunk.fileName)).not.toContain(actionChunk.fileName);
     const devicesChunk = chunks.find((chunk) => devices in chunk.modules)!;
     expect(staticImports(chatChunk.fileName)).not.toContain(devicesChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(devicesChunk.fileName);
@@ -234,7 +249,7 @@ describe("Control UI build chunking", () => {
     expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar-session-narration.ts`)).toBe(
       true,
     );
-    expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.tsx`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/cron/cron-page.tsx`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/plugins/plugins-page.tsx`)).toBe(false);
     // Fetched shared chunks once co-located the chat view with modules New Session needs.

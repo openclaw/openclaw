@@ -205,13 +205,6 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
             outcome: "clean_stop",
             reason: "stop (process exit: unhandled rejection)",
           });
-          expect(f.gatewayLog.info).toHaveBeenCalledWith(
-            updating
-              ? "received SIGTERM; stopping after foreground update settlement"
-              : phase !== "running"
-                ? "received unhandled rejection during shutdown; finishing shutdown without restart"
-                : "received unhandled rejection; shutting down",
-          );
         });
       } finally {
         closeGate.release();

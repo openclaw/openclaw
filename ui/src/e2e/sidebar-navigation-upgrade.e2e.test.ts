@@ -36,7 +36,7 @@ suite.define(() => {
           gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
           ...appearance,
           sidebarEntries: legacyEntries,
-          sidebarPinnedRoutes: ["agents-home", "dashboards", "systems", "usage"],
+          sidebarPinnedRoutes: ["sessions", "dashboards", "systems", "usage"],
           navigationByProfile: { alex: { sidebarEntries: legacyEntries } },
         };
         await seedStorage(page, { [key]: JSON.stringify(stable) });

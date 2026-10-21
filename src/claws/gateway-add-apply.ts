@@ -82,7 +82,10 @@ export async function applyClawAddForGateway(
     reloadPlugins?: PluginInstallBatchReload;
     configWriteOptions?: StatelessClawAddOptions["configWriteOptions"];
     waitForAgentRuntime?: () => Promise<void>;
-    cronGateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable"> &
+    cronGateway?: Pick<
+      ClawCronGateway,
+      "add" | "list" | "waitUntilAgentAvailable" | "writeScratch" | "enable"
+    > &
       Partial<Pick<ClawCronGateway, "get" | "remove">>;
     rollbackNewAgent?: (
       agentId: string,

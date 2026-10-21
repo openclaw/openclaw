@@ -1,4 +1,3 @@
-// Covers plugin config state normalization and reset behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as bundledChannelCatalog from "../channels/bundled-channel-catalog-read.js";
 import {
@@ -6,7 +5,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePluginActivationStateShared } from "./config-activation-shared.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -17,56 +15,41 @@ import {
   resolveMemorySlotDecision,
 } from "./config-state.js";
 
-function normalizeVoiceCallEntry(entry: Record<string, unknown>) {
-  return normalizePluginsConfig({ entries: { "voice-call": entry } }).entries["voice-call"];
-}
-
-type ActivationProvenance = Pick<
-  ReturnType<typeof resolveEffectivePluginActivationState>,
-  "explicitlyEnabled" | "source" | "reason"
->;
-
-function expectResolvedEnableState(
-  params: Parameters<typeof resolveEnableState>,
+type ActivationParams = Parameters<typeof resolveEffectivePluginActivationState>[0];
+type Activation = ReturnType<typeof resolveEffectivePluginActivationState>;
+type Provenance = Pick<Activation, "explicitlyEnabled" | "source" | "reason">;
+const activation = (
+  enabled: boolean,
+  explicitlyEnabled: boolean,
+  source: Activation["source"],
+  reason?: string,
+) => ({ enabled, activated: enabled, explicitlyEnabled, source, reason });
+const entry = (id: string, enabled = true) => ({ entries: { [id]: { enabled } } });
+const normalizeEntry = (value: Record<string, unknown>) =>
+  normalizePluginsConfig({ entries: { "voice-call": value } }).entries["voice-call"];
+function checkEnable(
+  id: string,
+  origin: "bundled" | "workspace",
+  raw: Record<string, unknown>,
   expected: ReturnType<typeof resolveEnableState>,
-  provenance?: ActivationProvenance,
+  provenance?: Provenance,
+  enabledByDefault?: boolean,
 ) {
-  expect(resolveEnableState(...params)).toEqual(expected);
+  const config = normalizePluginsConfig(raw);
+  expect(resolveEnableState(id, origin, config, enabledByDefault)).toEqual(expected);
   if (provenance) {
-    const [id, origin, config, enabledByDefault] = params;
     expect(resolveEffectivePluginActivationState({ id, origin, config, enabledByDefault })).toEqual(
-      { enabled: expected.enabled, activated: expected.enabled, ...provenance },
+      {
+        enabled: expected.enabled,
+        activated: expected.enabled,
+        ...provenance,
+      },
     );
   }
 }
 
-function expectNormalizedEnableState(
-  [id, origin, config]: [string, "bundled" | "workspace", Record<string, unknown>],
-  expected: ReturnType<typeof resolveEnableState>,
-  provenance?: ActivationProvenance,
-) {
-  expectResolvedEnableState([id, origin, normalizePluginsConfig(config)], expected, provenance);
-}
-
-function activation(
-  enabled: boolean,
-  explicitlyEnabled: boolean,
-  source: ActivationProvenance["source"],
-  reason: string | undefined,
-) {
-  return { enabled, activated: enabled, explicitlyEnabled, source, reason };
-}
-
-const hookPolicy = {
-  allowPromptInjection: false,
-  allowConversationAccess: true,
-  timeoutMs: 250,
-  timeouts: { before_prompt_build: 90_000, agent_end: 60_000 },
-};
-
 describe("normalizePluginsConfig", () => {
-  afterEach(() => clearRuntimeConfigSnapshot());
-
+  afterEach(clearRuntimeConfigSnapshot);
   it("serves published policy without rereading entries and refreshes every publication", () => {
     const entries = { "google-gemini-cli": { enabled: true } };
     const readEntries = vi.fn(() => entries);
@@ -79,15 +62,12 @@ describe("normalizePluginsConfig", () => {
     };
     setRuntimeConfigSnapshot(config);
     readEntries.mockClear();
-
     expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(true);
     expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(true);
     expect(readEntries).not.toHaveBeenCalled();
-
     entries["google-gemini-cli"].enabled = false;
     setRuntimeConfigSnapshot(config);
     expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(false);
-
     const replacement = { plugins: { allow: ["replacement"] } };
     setRuntimeConfigSnapshot(replacement);
     expect(normalizePluginsConfig(replacement.plugins).allow).toEqual(["replacement"]);
@@ -98,7 +78,6 @@ describe("normalizePluginsConfig", () => {
       "unpublished-edit",
     ]);
   });
-
   it("keeps targeted authored plugin state identical across JSON persistence", () => {
     const normalized = normalizePluginTargetConfig(
       { plugins: { entries: { CODEX: { enabled: true, config: { appServer: {} } } } } },
@@ -119,80 +98,64 @@ describe("normalizePluginsConfig", () => {
   ] as const)("preserves contextEngine slot for %o (#64170)", (config, expected) => {
     expect(normalizePluginsConfig(config).slots.contextEngine).toBe(expected);
   });
-
   it.each([
-    {
-      name: "normalizes plugin hook policy flags",
-      entry: {
-        hooks: hookPolicy,
-      },
-      expectedHooks: {
+    [
+      "valid flags and timeouts",
+      {
         allowPromptInjection: false,
         allowConversationAccess: true,
         timeoutMs: 250,
         timeouts: { before_prompt_build: 90_000, agent_end: 60_000 },
       },
-    },
-    {
-      name: "drops invalid plugin hook policy values",
-      entry: {
-        hooks: {
-          allowPromptInjection: "nope",
-          allowConversationAccess: "nope",
-          timeoutMs: 0,
-          timeouts: {
-            before_prompt_build: 900_000,
-          },
-        } as unknown as { allowPromptInjection: boolean; allowConversationAccess: boolean },
+      {
+        allowPromptInjection: false,
+        allowConversationAccess: true,
+        timeoutMs: 250,
+        timeouts: { before_prompt_build: 90_000, agent_end: 60_000 },
       },
-      expectedHooks: undefined,
-    },
-  ] as const)("$name", ({ entry, expectedHooks }) => {
-    expect(normalizeVoiceCallEntry(entry)?.hooks).toEqual(expectedHooks);
+    ],
+    [
+      "invalid flags and timeouts",
+      {
+        allowPromptInjection: "nope",
+        allowConversationAccess: "nope",
+        timeoutMs: 0,
+        timeouts: { before_prompt_build: 900_000 },
+      },
+      undefined,
+    ],
+  ] as const)("normalizes hook policy: %s", (_name, hooks, expected) => {
+    expect(normalizeEntry({ hooks })?.hooks).toEqual(expected);
   });
-
   it.each([
-    {
-      name: "normalizes plugin subagent override policy settings",
-      subagent: {
+    [
+      "trimmed model allowlist",
+      {
         allowModelOverride: true,
         allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.5"],
       },
-      expected: {
+      {
         allowModelOverride: true,
         hasAllowedModelsConfig: true,
         allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
       },
-    },
-    {
-      name: "preserves explicit subagent allowlist intent even when all entries are invalid",
-      subagent: {
-        allowModelOverride: true,
-        allowedModels: [42, null, "anthropic"],
-      } as unknown as { allowModelOverride: boolean; allowedModels: string[] },
-      expected: {
-        allowModelOverride: true,
-        hasAllowedModelsConfig: true,
-        allowedModels: ["anthropic"],
-      },
-    },
-    {
-      name: "keeps explicit invalid subagent allowlist config visible to callers",
-      subagent: {
-        allowModelOverride: "nope",
-        allowedModels: [42, null],
-      } as unknown as { allowModelOverride: boolean; allowedModels: string[] },
-      expected: {
-        hasAllowedModelsConfig: true,
-      },
-    },
-  ] as const)("$name", ({ subagent, expected }) => {
-    expect(normalizeVoiceCallEntry({ subagent })?.subagent).toEqual(expected);
+    ],
+    [
+      "mixed allowlist entries",
+      { allowModelOverride: true, allowedModels: [42, null, "anthropic"] },
+      { allowModelOverride: true, hasAllowedModelsConfig: true, allowedModels: ["anthropic"] },
+    ],
+    [
+      "explicit invalid allowlist",
+      { allowModelOverride: "nope", allowedModels: [42, null] },
+      { hasAllowedModelsConfig: true },
+    ],
+  ] as const)("normalizes subagent policy: %s", (_name, subagent, expected) => {
+    expect(normalizeEntry({ subagent })?.subagent).toEqual(expected);
   });
-
   it("normalizes plugin llm override policy settings", () => {
     expect(
-      normalizeVoiceCallEntry({
+      normalizeEntry({
         llm: {
           allowModelOverride: true,
           allowedModels: [" openai/gpt-5.4 ", "", "anthropic/claude-sonnet-4-6"],
@@ -225,19 +188,17 @@ it("does not bypass allowlists for non-bundled plugins that reuse a channel id",
 });
 
 describe("resolveEffectivePluginActivationState", () => {
-  type ActivationParams = Parameters<typeof resolveEffectivePluginActivationState>[0];
-
   it.each([
-    { alpha: false, beta: true, pluginEnabled: true, expected: true },
-    { alpha: false, beta: undefined, pluginEnabled: true, expected: true },
-    // The same-named built-in channel is not owned by these manifest channel IDs.
-    { id: "telegram", alpha: false, beta: false, pluginEnabled: true, expected: false },
-    { id: "telegram", alpha: undefined, beta: undefined, pluginEnabled: true, expected: true },
-  ])(
-    "keeps multi-channel activation independent of order: %j",
-    ({ id = "multi-channel", alpha, beta, pluginEnabled, expected }) => {
+    ["multi-channel", false, true, true],
+    ["multi-channel", false, undefined, true],
+    // Manifest ownership overrides the same-named built-in channel.
+    ["telegram", false, false, false],
+    ["telegram", undefined, undefined, true],
+  ] as const)(
+    "keeps multi-channel activation independent of order: %s %s %s",
+    (id, alpha, beta, expected) => {
       const rootConfig = {
-        plugins: { entries: { [id]: { enabled: pluginEnabled } } },
+        plugins: entry(id),
         channels: {
           alpha: { enabled: alpha },
           beta: { enabled: beta },
@@ -255,121 +216,95 @@ describe("resolveEffectivePluginActivationState", () => {
           rootConfig,
           channelIds,
         };
-        for (const resolve of [
-          resolveEffectivePluginActivationState,
-          resolvePluginActivationStateShared,
-        ]) {
-          expect(resolve(params)).toMatchObject({ enabled: expected, activated: expected });
-        }
+        expect(resolveEffectivePluginActivationState(params)).toMatchObject({
+          enabled: expected,
+          activated: expected,
+        });
       }
     },
   );
 
-  it.each<{
-    name: string;
+  type Case = [
+    name: string,
     params: Pick<
       ActivationParams,
       "id" | "origin" | "enabledByDefault" | "autoEnabledReason" | "channelIds"
-    >;
-    rawConfig?: ActivationParams["rootConfig"];
-    effectiveConfig?: ActivationParams["rootConfig"];
-    expected: ReturnType<typeof resolveEffectivePluginActivationState>;
-  }>([
-    {
-      name: "distinguishes explicit enablement from auto activation",
-      params: { id: "telegram", origin: "bundled", autoEnabledReason: "telegram configured" },
-      rawConfig: { channels: { telegram: { botToken: "x" } } },
-      effectiveConfig: { channels: { telegram: { botToken: "x", enabled: true } } },
-      expected: activation(true, false, "auto", "telegram configured"),
-    },
-    {
-      name: "preserves explicit selection even when plugins are globally disabled",
-      params: { id: "browser", origin: "bundled" },
-      rawConfig: { plugins: { enabled: false, entries: { browser: { enabled: true } } } },
-      expected: activation(false, true, "disabled", "plugins disabled"),
-    },
-    {
-      name: "marks bundled default-enabled plugins as default activation",
-      params: { id: "openai", origin: "bundled", enabledByDefault: true },
-      rawConfig: {},
-      expected: activation(true, false, "default", "bundled default enablement"),
-    },
-    {
-      name: "keeps bundled default activation when auto-enable adds an effective entry",
-      params: { id: "acpx", origin: "bundled", enabledByDefault: true },
-      rawConfig: { acp: { enabled: true } },
-      effectiveConfig: {
-        acp: { enabled: true },
-        plugins: { entries: { acpx: { enabled: true } } },
-      },
-      expected: activation(true, false, "default", "bundled default enablement"),
-    },
-    {
-      name: "keeps bundled default activation when auto-enable supplies a reason",
-      params: {
+    >,
+    rawConfig: OpenClawConfig | undefined,
+    expected: Activation,
+    effectiveConfig?: OpenClawConfig,
+  ];
+  it.each<Case>([
+    [
+      "auto activation",
+      { id: "telegram", origin: "bundled", autoEnabledReason: "telegram configured" },
+      { channels: { telegram: { botToken: "x" } } },
+      activation(true, false, "auto", "telegram configured"),
+      { channels: { telegram: { botToken: "x", enabled: true } } },
+    ],
+    [
+      "global disable preserves explicit selection",
+      { id: "browser", origin: "bundled" },
+      { plugins: { enabled: false, ...entry("browser") } },
+      activation(false, true, "disabled", "plugins disabled"),
+    ],
+    [
+      "bundled default",
+      { id: "openai", origin: "bundled", enabledByDefault: true },
+      {},
+      activation(true, false, "default", "bundled default enablement"),
+    ],
+    [
+      "bundled default with effective entry",
+      { id: "acpx", origin: "bundled", enabledByDefault: true },
+      { acp: { enabled: true } },
+      activation(true, false, "default", "bundled default enablement"),
+      { acp: { enabled: true }, plugins: entry("acpx") },
+    ],
+    [
+      "bundled default with auto-enable reason",
+      {
         id: "acpx",
         origin: "bundled",
         enabledByDefault: true,
         autoEnabledReason: "ACP runtime configured",
       },
-      rawConfig: {},
-      expected: activation(true, false, "default", "bundled default enablement"),
-    },
-    {
-      name: "keeps allowlists authoritative over explicit bundled plugin enablement",
-      params: { id: "telegram", origin: "bundled" },
-      rawConfig: { plugins: { allow: ["browser"], entries: { telegram: { enabled: true } } } },
-      expected: activation(false, true, "disabled", "not in allowlist"),
-    },
-    {
-      name: "lets explicit bundled channel activation bypass the allowlist",
-      params: { id: "telegram", origin: "bundled" },
-      rawConfig: {
-        channels: { telegram: { enabled: true } },
-        plugins: { allow: ["browser"] },
-      },
-      expected: activation(true, true, "explicit", "channel enabled in config"),
-    },
-    {
-      name: "keeps denylist authoritative over explicit bundled channel activation",
-      params: { id: "telegram", origin: "bundled" },
-      rawConfig: {
-        channels: { telegram: { enabled: true } },
-        plugins: { deny: ["telegram"] },
-      },
-      expected: activation(false, true, "disabled", "blocked by denylist"),
-    },
-    {
-      name: "preserves activation when only the effective config enables a bundled plugin",
-      params: { id: "openai", origin: "bundled" },
-      rawConfig: { plugins: {} },
-      effectiveConfig: { plugins: { entries: { openai: { enabled: true } } } },
-      expected: activation(true, false, "auto", "enabled by effective config"),
-    },
-    {
-      name: "marks a channel enabled only in effective config as auto activation without an override reason",
-      params: { id: "telegram", origin: "bundled" },
-      rawConfig: {},
-      effectiveConfig: { channels: { telegram: { enabled: true } } },
-      expected: activation(true, false, "auto", "channel configured"),
-    },
-    {
-      name: "resolves an explicit channel disable through manifest-owned channel ids",
-      // QQ Bot style: plugin id `openclaw-demo` owns `channels.demo`, which the built-in
-      // catalog cannot map from the plugin id alone.
-      params: { id: "openclaw-demo", origin: "bundled", channelIds: ["demo"] },
-      rawConfig: {
-        channels: { demo: { enabled: false } },
-        plugins: { entries: { "openclaw-demo": { enabled: true } } },
-      },
-      expected: activation(false, true, "disabled", "channel disabled in config"),
-    },
-    {
-      name: "keeps a global plugin default-enabled without inventing explicit selection or a reason",
-      params: { id: "global-helper", origin: "global" },
-      expected: activation(true, false, "default", undefined),
-    },
-  ])("$name", ({ params, rawConfig, effectiveConfig = rawConfig, expected }) => {
+      {},
+      activation(true, false, "default", "bundled default enablement"),
+    ],
+    [
+      "allowlist overrides plugin enable",
+      { id: "telegram", origin: "bundled" },
+      { plugins: { allow: ["browser"], ...entry("telegram") } },
+      activation(false, true, "disabled", "not in allowlist"),
+    ],
+    [
+      "effective-only plugin enable",
+      { id: "openai", origin: "bundled" },
+      { plugins: {} },
+      activation(true, false, "auto", "enabled by effective config"),
+      { plugins: entry("openai") },
+    ],
+    [
+      "effective-only channel enable",
+      { id: "telegram", origin: "bundled" },
+      {},
+      activation(true, false, "auto", "channel configured"),
+      { channels: { telegram: { enabled: true } } },
+    ],
+    [
+      "manifest-owned channel disable",
+      { id: "openclaw-demo", origin: "bundled", channelIds: ["demo"] },
+      { channels: { demo: { enabled: false } }, plugins: entry("openclaw-demo") },
+      activation(false, true, "disabled", "channel disabled in config"),
+    ],
+    [
+      "external default has no invented provenance",
+      { id: "global-helper", origin: "global" },
+      undefined,
+      activation(true, false, "default"),
+    ],
+  ])("%s", (_name, params, rawConfig, expected, effectiveConfig = rawConfig) => {
     const catalog = vi.spyOn(bundledChannelCatalog, "listBundledChannelCatalogEntries");
     try {
       expect(
@@ -392,42 +327,70 @@ describe("resolveEffectivePluginActivationState", () => {
 });
 
 describe("resolveEnableState", () => {
-  it.each([
-    [
+  it("uses declared non-channel ownership without discovering the bundled channel catalog", () => {
+    const rootConfig: OpenClawConfig = {
+      channels: { telegram: { enabled: false } },
+      plugins: { entries: { helper: { enabled: true }, telegram: { enabled: true } } },
+    };
+    const catalog = vi.spyOn(bundledChannelCatalog, "listBundledChannelCatalogEntries");
+    try {
+      expect(
+        resolveEffectivePluginActivationState({
+          id: "helper",
+          origin: "bundled",
+          channelIds: [],
+          config: normalizePluginsConfig(rootConfig.plugins),
+          rootConfig,
+        }),
+      ).toEqual(activation(true, true, "explicit", "enabled in config"));
+      expect(catalog).not.toHaveBeenCalled();
+
+      expect(
+        resolveEffectivePluginActivationState({
+          id: "telegram",
+          origin: "bundled",
+          channelIds: [],
+          config: normalizePluginsConfig(rootConfig.plugins),
+          rootConfig,
+        }),
+      ).toEqual(activation(true, true, "explicit", "enabled in config"));
+
+      for (const channelIds of [undefined, ["telegram"]]) {
+        expect(
+          resolveEffectivePluginActivationState({
+            id: "telegram",
+            origin: "bundled",
+            channelIds,
+            config: normalizePluginsConfig(rootConfig.plugins),
+            rootConfig,
+          }),
+        ).toMatchObject({ enabled: false, reason: "channel disabled in config" });
+      }
+    } finally {
+      catalog.mockRestore();
+    }
+  });
+
+  it.each([undefined, true])("resolves bundled default=%s", (enabledByDefault) => {
+    const reason = "bundled (disabled by default)";
+    checkEnable(
       "openai",
       "bundled",
-      normalizePluginsConfig({}),
-      undefined,
-      { enabled: false, reason: "bundled (disabled by default)" },
-      {
-        explicitlyEnabled: false,
-        source: "disabled",
-        reason: "bundled (disabled by default)",
-      },
-    ],
-    ["openai", "bundled", normalizePluginsConfig({}), true, { enabled: true }],
-  ] as const)(
-    "resolves %s enable state for origin=%s manifestEnabledByDefault=%s",
-    (id, origin, config, manifestEnabledByDefault, expected, provenance?: ActivationProvenance) => {
-      expectResolvedEnableState(
-        [id, origin, config, manifestEnabledByDefault],
-        expected,
-        provenance,
-      );
-    },
-  );
-
+      {},
+      enabledByDefault ? { enabled: true } : { enabled: false, reason },
+      enabledByDefault ? undefined : { explicitlyEnabled: false, source: "disabled", reason },
+      enabledByDefault,
+    );
+  });
   it.each([true, false])("resolves selected memory slot with enabled=%s", (enabled) => {
-    expectNormalizedEnableState(
-      [
-        "memory-core",
-        "bundled",
-        {
-          allow: ["telegram"],
-          slots: { memory: "memory-core" },
-          ...(enabled ? {} : { entries: { "memory-core": { enabled: false } } }),
-        },
-      ],
+    checkEnable(
+      "memory-core",
+      "bundled",
+      {
+        allow: ["telegram"],
+        slots: { memory: "memory-core" },
+        ...(enabled ? {} : entry("memory-core", false)),
+      },
       enabled ? { enabled: true } : { enabled: false, reason: "disabled in config" },
       {
         explicitlyEnabled: true,
@@ -436,43 +399,33 @@ describe("resolveEnableState", () => {
       },
     );
   });
-
   it.each([
-    [
-      normalizePluginsConfig({
-        allow: ["workspace-helper"],
-      }),
+    [{ allow: ["workspace-helper"] }, "selected in allowlist"],
+    [entry("workspace-helper"), "enabled in config"],
+  ] as const)("resolves workspace-helper enable state for %o", (config, reason) => {
+    checkEnable(
+      "workspace-helper",
+      "workspace",
+      config,
       { enabled: true },
-      { explicitlyEnabled: true, source: "explicit", reason: "selected in allowlist" },
-    ],
-    [
-      normalizePluginsConfig({ entries: { "workspace-helper": { enabled: true } } }),
-      { enabled: true },
-      { explicitlyEnabled: true, source: "explicit", reason: "enabled in config" },
-    ],
-  ] as const)("resolves workspace-helper enable state for %o", (config, expected, provenance) => {
-    expectResolvedEnableState(["workspace-helper", "workspace", config], expected, provenance);
+      { explicitlyEnabled: true, source: "explicit", reason },
+    );
   });
-
   it("does not let the default memory slot auto-enable an untrusted workspace plugin", () => {
     const reason = "workspace plugin (disabled by default)";
-    expectNormalizedEnableState(
-      ["memory-core", "workspace", { slots: { memory: "memory-core" } }],
+    checkEnable(
+      "memory-core",
+      "workspace",
+      { slots: { memory: "memory-core" } },
       { enabled: false, reason },
       { explicitlyEnabled: true, source: "disabled", reason },
     );
   });
-
   it("keeps an explicitly selected workspace context engine enabled when omitted from plugins.allow", () => {
-    expectNormalizedEnableState(
-      [
-        "lossless-claw",
-        "workspace",
-        {
-          allow: ["telegram"],
-          slots: { contextEngine: "lossless-claw" },
-        },
-      ],
+    checkEnable(
+      "lossless-claw",
+      "workspace",
+      { allow: ["telegram"], slots: { contextEngine: "lossless-claw" } },
       { enabled: true },
     );
   });

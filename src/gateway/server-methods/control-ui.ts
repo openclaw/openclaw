@@ -472,6 +472,7 @@ export const controlUiHandlers: GatewayRequestHandlers = {
     try {
       const reader = client
         ? createControlUiSessionPrRead({
+            allowOwnImportedPullRequest: true,
             client,
             sessionKey: parsed.sessionKey,
             getRuntimeConfig: context.getRuntimeConfig,
@@ -490,10 +491,15 @@ export const controlUiHandlers: GatewayRequestHandlers = {
       if (!binding) {
         throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
       }
+      let assertReadAuthority: (() => void) | undefined;
+      let readCredential:
+        | import("../control-ui-session-pr-request.js").SessionPullRequestReadCredential
+        | undefined;
       const assertCurrent = () => {
         let identityCurrent = false;
         try {
           binding.assertCurrent?.();
+          assertReadAuthority?.();
           identityCurrent = true;
         } catch {
           // The read owner reports retired selections and grants as assertion failures.
@@ -517,10 +523,19 @@ export const controlUiHandlers: GatewayRequestHandlers = {
             { ...parsed, agentId: binding.params.agentId },
             {
               sessionScope: binding.identity,
+              credential: () => readCredential,
               assertCurrent: assertReadCurrent,
               loadPullRequests: (request) =>
                 loadControlUiSessionPullRequests(request, {
-                  read: { target: binding, sourceIdentity, assertCurrent: assertReadCurrent },
+                  read: {
+                    target: binding,
+                    sourceIdentity,
+                    assertCurrent: assertReadCurrent,
+                    retainReadAuthority: (guard, credential) => {
+                      assertReadAuthority = guard;
+                      readCredential = credential;
+                    },
+                  },
                 }),
             },
           );

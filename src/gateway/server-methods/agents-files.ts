@@ -370,6 +370,19 @@ export const agentFileHandlers: Pick<
       return;
     }
     const { agentId, workspaceDir, name } = resolved;
+    // Admit against the draft's target; the entire write below stays on this captured workspace.
+    if (params.expectedWorkspace !== undefined && params.expectedWorkspace !== workspaceDir) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Agent workspace changed since "${name}" was read. Your draft is preserved. Reload to use the current workspace file, or Overwrite to save this draft there.`,
+          { details: { type: "agent_file_conflict", name } },
+        ),
+      );
+      return;
+    }
     const access = getAgentWorkspaceAccess(workspaceDir);
     const filePath = path.join(workspaceDir, name);
     const content = params.content;

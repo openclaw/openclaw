@@ -7,6 +7,7 @@ import {
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { runPostActivationInspections } from "./update-command-post-activation-inspections.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -32,13 +33,11 @@ async function inspectFixture(
     root,
     gatewayReady: true,
     nodeRunner: process.execPath,
-    result: {
-      status: "ok",
-      mode: "npm",
+    result: updateResult({
       durationMs: 0,
       steps: [doctorStep(selectors, root)],
       ...result,
-    },
+    }),
   });
 }
 
@@ -138,12 +137,11 @@ it.each([null, "not-an-array", [" "], { length: 0 }].map((selectors) => ({ selec
 it.each(["doctor", "inline lint"])(
   "does not turn an empty deferred set from %s into an unfiltered lint pass",
   async (receiptOwner) => {
-    const result: UpdateRunResult = {
-      status: "ok",
+    const result = updateResult({
       mode: "git",
       durationMs: 0,
       steps: [doctorStep(receiptOwner === "doctor" ? [] : null)],
-    };
+    });
     if (receiptOwner === "inline lint") {
       result.postUpdate = {
         plugins: {

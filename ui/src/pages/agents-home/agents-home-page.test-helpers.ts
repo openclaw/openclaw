@@ -12,20 +12,20 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { i18n } from "../../i18n/index.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createContext } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
-  type GatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
-import { AgentsHomePage } from "./agents-home-page.tsx";
+import { ClawsPage } from "../claws/page.tsx";
 
-export const roster: AgentsListResult = {
+const roster: AgentsListResult = {
   defaultId: "harbor",
   mainKey: "team-room",
   scope: "per-sender",
@@ -40,64 +40,6 @@ export const roster: AgentsListResult = {
   ],
 };
 
-export function session(
-  agentId: string,
-  lastMessagePreview: string,
-  updatedAt: number,
-  overrides: Partial<GatewaySessionRow> = {},
-): GatewaySessionRow {
-  return {
-    key: `agent:${agentId}:team-room`,
-    agentId,
-    kind: "direct",
-    isMain: true,
-    updatedAt,
-    lastMessagePreview,
-    ...overrides,
-  };
-}
-
-export const initialSessions = () => [
-  session("harbor", "The schedule is ready.", 5_000),
-  session("ember", "The main chat summary.", 1_000),
-  session("ember", "A newer side-task message.", 2_000, {
-    key: "agent:ember:side-task",
-    isMain: undefined,
-    hasActiveRun: true,
-  }),
-];
-
-function parameter(params: unknown, key: string, fallback: unknown = ""): unknown {
-  return params && typeof params === "object" && key in params
-    ? Reflect.get(params, key)
-    : fallback;
-}
-
-export function rosterIdentity(params: unknown): AgentIdentityResult {
-  const agentId = String(parameter(params, "agentId"));
-  return {
-    agentId,
-    name: agentId === "ember" ? "Ember" : "Harbor",
-    avatar: "",
-    emoji: agentId === "harbor" ? "⚓" : "",
-  };
-}
-
-export function listSessions(sessions: GatewaySessionRow[], params: unknown): SessionsListResult {
-  const offset = Number(parameter(params, "offset", 0));
-  const limit = Number(parameter(params, "limit", 300));
-  const rows = sessions.slice(offset, offset + limit);
-  return {
-    ts: 6_000,
-    path: "",
-    count: rows.length,
-    sessions: rows,
-    defaults: { model: null, modelProvider: null, contextTokens: null },
-    hasMore: offset + rows.length < sessions.length,
-    nextOffset: offset + rows.length,
-  };
-}
-
 export const workflowOperator = {
   packageName: "@openclaw/workflow-operator",
   displayName: "Workflow Operator",
@@ -107,27 +49,81 @@ export const workflowOperator = {
   official: true,
   ownerHandle: "openclaw",
   downloads: 12,
+  installs: 12,
   updatedAtMs: 1_000,
 } as const;
 
 type PageOptions = {
+  clawsEnabled?: boolean;
+  pathname?: string;
   clawIconUrl?: string;
   workspaceFileNames?: string[];
+  applyResult?: {
+    agentId: string;
+    status: string;
+    readiness: { ready: boolean; requirements?: Array<{ kind: string; owner: string }> };
+  };
   riskConsentRequired?: boolean;
   reviewRequiredOnce?: "plugin" | "skill";
   clawHubTrustWarning?: string;
+  installedPlugins?: PluginListResult["plugins"];
+  rosterErrorOnceAfterAdd?: boolean;
   applyWait?: Promise<void>;
 };
 
 const disposers: Array<() => void> = [];
 
 export function createPage(options: PageOptions = {}) {
+  let clawsEnabled = options.clawsEnabled ?? false;
+  const ensureConfigLoaded = vi.fn(async () => undefined);
   let addCount = 0;
   let rejectedForReview = false;
-  const sessions = initialSessions();
+  let rosterFailuresAfterAdd = 0;
+  const runtimeConfigListeners = new Set<() => void>();
+  const runtimeConfig = {
+    state: {
+      configSnapshot: {
+        sourceConfig: { gateway: { controlUi: { experimental: { claws: clawsEnabled } } } },
+      },
+    },
+    ensureLoaded: ensureConfigLoaded,
+    subscribe: (listener: () => void) => {
+      runtimeConfigListeners.add(listener);
+      return () => runtimeConfigListeners.delete(listener);
+    },
+  };
+  const sessions: GatewaySessionRow[] = [
+    {
+      key: "agent:harbor:team-room",
+      agentId: "harbor",
+      kind: "direct",
+      isMain: true,
+      updatedAt: 5_000,
+      lastMessagePreview: "The schedule is ready.",
+    },
+    {
+      key: "agent:ember:team-room",
+      agentId: "ember",
+      kind: "direct",
+      isMain: true,
+      updatedAt: 1_000,
+      lastMessagePreview: "The main chat summary.",
+    },
+    {
+      key: "agent:ember:side-task",
+      agentId: "ember",
+      kind: "direct",
+      updatedAt: 2_000,
+      lastMessagePreview: "A newer side-task message.",
+      hasActiveRun: true,
+    },
+  ];
 
   const request = createGatewayRequestMock(async (method, params) => {
     if (method === "agents.list") {
+      if (addCount > 0 && options.rosterErrorOnceAfterAdd && rosterFailuresAfterAdd++ === 0) {
+        throw new Error("Roster unavailable");
+      }
       return {
         ...roster,
         agents: [
@@ -139,21 +135,52 @@ export function createPage(options: PageOptions = {}) {
       };
     }
     if (method === "agent.identity.get") {
-      return rosterIdentity(params);
+      const agentId =
+        params && typeof params === "object" && "agentId" in params ? String(params.agentId) : "";
+      return {
+        agentId,
+        name: agentId === "ember" ? "Ember" : "Harbor",
+        avatar: "",
+        emoji: agentId === "harbor" ? "⚓" : "",
+      } satisfies AgentIdentityResult;
     }
     if (method === "sessions.subscribe") {
       return { subscribed: true };
     }
     if (method === "sessions.list") {
-      return listSessions(sessions, params);
+      const offset =
+        params && typeof params === "object" && "offset" in params ? Number(params.offset) : 0;
+      const limit =
+        params && typeof params === "object" && "limit" in params ? Number(params.limit) : 300;
+      const rows = sessions.slice(offset, offset + limit);
+      return {
+        ts: 6_000,
+        path: "",
+        count: rows.length,
+        sessions: rows,
+        defaults: { model: null, modelProvider: null, contextTokens: null },
+        hasMore: offset + rows.length < sessions.length,
+        nextOffset: offset + rows.length,
+      } satisfies SessionsListResult;
     }
     if (method === "claws.catalog.search") {
-      const query = String(parameter(params, "query")).trim().toLowerCase();
+      const query =
+        params && typeof params === "object" && "query" in params
+          ? String(params.query).trim().toLowerCase()
+          : "";
+      const category =
+        params && typeof params === "object" && "category" in params ? String(params.category) : "";
+      const featured =
+        params && typeof params === "object" && "featured" in params
+          ? Boolean(params.featured)
+          : false;
       return {
         entries:
-          query &&
-          !workflowOperator.displayName.toLowerCase().includes(query) &&
-          !workflowOperator.packageName.toLowerCase().includes(query)
+          featured ||
+          (category && category !== "productivity") ||
+          (query &&
+            !workflowOperator.displayName.toLowerCase().includes(query) &&
+            !workflowOperator.packageName.toLowerCase().includes(query))
             ? []
             : [{ ...workflowOperator, iconUrl: options.clawIconUrl }],
       };
@@ -168,6 +195,11 @@ export function createPage(options: PageOptions = {}) {
           iconUrl: options.clawIconUrl,
           version: "1.2.0",
           agentName: "Workflow Operator",
+          workspaceFiles: instructions.length,
+          skills: 1,
+          plugins: 1,
+          mcpServers: 0,
+          scheduledJobs: 0,
           contents: {
             instructions,
             skills: [{ name: "@openclaw/research", version: "1.2.0" }],
@@ -177,48 +209,70 @@ export function createPage(options: PageOptions = {}) {
         },
       };
     }
+    if (method === "claws.catalog.preview") {
+      const name =
+        params && typeof params === "object" && "name" in params ? String(params.name) : "";
+      return { preview: { kind: "instruction", name, content: `# ${name}` } };
+    }
     if (method === "plugins.list") {
-      return { plugins: [], diagnostics: [], mutationAllowed: true };
+      return { plugins: options.installedPlugins ?? [], diagnostics: [], mutationAllowed: true };
     }
     if (method === "claws.add.plan") {
-      const capabilityGrants = {
-        hooks: {
-          allowPromptInjection: { effective: false },
-          allowConversationAccess: { effective: true },
-        },
-      };
-      const kind = options.reviewRequiredOnce;
-      const plugin = kind === "plugin";
-      const ref = plugin ? "@openclaw/workflow-tools" : "@openclaw/research";
-      const review = {
-        actionId: `${kind}:${ref}`,
-        ref,
-        version: "1.2.0",
-        reviewToken: plugin ? "review-workflow-tools" : "review-research",
-        riskWarning: plugin
-          ? "This plugin can access conversations."
-          : "This skill needs your trust.",
-      };
       return {
         operation: "add",
         planIntegrity: "sha256:reviewed-plan",
-        pluginReviews: plugin
-          ? [
-              {
-                ...review,
-                pluginId: "workflow-tools",
-                ownerAction: "install",
-                capabilityGrants,
-                capabilityGrantsByPluginId: { "workflow-tools": capabilityGrants },
-              },
-            ]
-          : [],
-        skillReviews: kind === "skill" ? [review] : [],
+        pluginReviews:
+          options.reviewRequiredOnce === "plugin"
+            ? [
+                {
+                  actionId: "plugin:@openclaw/workflow-tools",
+                  pluginId: "workflow-tools",
+                  ref: "@openclaw/workflow-tools",
+                  version: "1.2.0",
+                  ownerAction: "install",
+                  integrity: `sha256-${"A".repeat(43)}=`,
+                  declaredCapabilities: { tools: ["workflow.start"] },
+                  capabilityGrants: {
+                    hooks: {
+                      allowPromptInjection: { effective: false },
+                      allowConversationAccess: { effective: true },
+                    },
+                  },
+                  capabilityGrantsByPluginId: {
+                    "workflow-tools": {
+                      hooks: {
+                        allowPromptInjection: { effective: false },
+                        allowConversationAccess: { effective: true },
+                      },
+                    },
+                  },
+                  reviewToken: "review-workflow-tools",
+                  riskWarning: "This plugin can access conversations.",
+                },
+              ]
+            : [],
+        skillReviews:
+          options.reviewRequiredOnce === "skill"
+            ? [
+                {
+                  actionId: "skill:@openclaw/research",
+                  ref: "@openclaw/research",
+                  version: "1.2.0",
+                  integrity: "sha256:reviewed-skill",
+                  riskWarning: "This skill needs your trust.",
+                  reviewToken: "review-research",
+                },
+              ]
+            : [],
       };
     }
     if (method === "claws.add.apply") {
       await options.applyWait;
-      const acknowledged = parameter(params, "acknowledgeClawHubRisk") === true;
+      const acknowledged =
+        params &&
+        typeof params === "object" &&
+        "acknowledgeClawHubRisk" in params &&
+        params.acknowledgeClawHubRisk === true;
       if (options.riskConsentRequired && !acknowledged) {
         throw new GatewayRequestError({
           code: "INVALID_REQUEST",
@@ -244,38 +298,26 @@ export function createPage(options: PageOptions = {}) {
         });
       }
       addCount += 1;
-      return {
-        agentId: addCount === 1 ? "workflow-operator" : `workflow-operator-${addCount}`,
-        status: "complete",
-        readiness: { ready: true },
-      };
+      return (
+        options.applyResult ?? {
+          agentId: addCount === 1 ? "workflow-operator" : `workflow-operator-${addCount}`,
+          status: "complete",
+          readiness: { ready: true },
+        }
+      );
     }
     throw new Error(`Unexpected RPC: ${method}`);
   });
-  return mountAgentsHome(request, {
-    config: { gateway: { controlUi: { experimental: { claws: true } } } },
+  const client = createTestGatewayClient(request);
+  const source = createApplicationGateway({
+    client,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: gatewayHelloForMethods(
       ["openclaw.chat", "claws.catalog.search", "claws.catalog.detail", "claws.add.apply"],
       ["operator.read", "operator.admin"],
     ),
-  });
-}
-
-export function mountAgentsHome(
-  request: GatewayRequestMock,
-  options: {
-    config?: Record<string, unknown>;
-    hello?: ApplicationGatewaySnapshot["hello"];
-    staticSelection?: boolean;
-  } = {},
-) {
-  const ensureConfigLoaded = vi.fn(async () => undefined);
-  const source = createApplicationGateway({
-    client: createTestGatewayClient(request),
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: options.hello ?? null,
     assistantAgentId: "harbor",
     sessionKey: "agent:harbor:team-room",
     lastError: null,
@@ -290,58 +332,60 @@ export function mountAgentsHome(
     return () => eventListeners.delete(listener);
   };
   const agents = createAgentCapability(source.gateway);
-  const agentSelection = options.staticSelection
-    ? {
-        intentRevision: 0,
-        state: { selectedId: "harbor", scopeId: null },
-        set: () => undefined,
-        setScope: () => undefined,
-        subscribe: () => () => undefined,
-        dispose: () => undefined,
-      }
-    : createAgentSelectionCapability(source.gateway, agents);
+  const agentSelection = createAgentSelectionCapability(source.gateway, agents);
   const agentIdentity = createAgentIdentityCapability(source.gateway);
-  const sessions = createSessionCapability(source.gateway, agentSelection);
+  const sessionCapability = createSessionCapability(source.gateway, agentSelection);
   const navigate = vi.fn<ApplicationContext["navigate"]>();
   const context = {
-    ...createContext(source.gateway, sessions, roster, [], agentIdentity),
+    ...createContext(source.gateway, sessionCapability, roster, [], agentIdentity),
     basePath: "",
+    gateway: source.gateway,
     agents,
+    agentIdentity,
     agentSelection,
+    sessions: sessionCapability,
+    runtimeConfig: runtimeConfig as unknown as ApplicationContext["runtimeConfig"],
     navigate,
-    runtimeConfig: {
-      state: { configSnapshot: { sourceConfig: options.config ?? {} } },
-      ensureLoaded: ensureConfigLoaded,
-      subscribe: () => () => undefined,
-    } as unknown as ApplicationContext["runtimeConfig"],
   };
   const baselineEventListeners = eventListeners.size;
-  const provider = createSolidApplicationContextProvider(context);
-  const mountPage = () =>
-    mountSolid(() => createComponent(AgentsHomePage, {}), { wrapper: provider.wrapper });
-  const view = mountPage();
+  const solidProvider = createSolidApplicationContextProvider(context);
+  const view = mountSolid(
+    () =>
+      createComponent(ClawsPage, {
+        routeData: {
+          basePath: "",
+          location: { pathname: options.pathname ?? "/claws", search: "", hash: "" },
+        },
+      }),
+    { wrapper: solidProvider.wrapper },
+  );
+  const page = view.container;
   disposers.push(() => {
     view.unmount();
     agentSelection.dispose();
     agents.dispose();
-    sessions.dispose();
+    sessionCapability.dispose();
   });
   return {
-    page: view.container,
-    wrapper: provider.wrapper,
-    unmount: view.unmount,
-    mountPage,
+    page,
+    wrapper: solidProvider.wrapper,
+    context,
+    rosterListenerCount: () => eventListeners.size - baselineEventListeners,
     request,
     navigate,
     ensureConfigLoaded,
-    rosterListenerCount: () => eventListeners.size - baselineEventListeners,
-    emitChange: () => {
-      for (const listener of eventListeners) {
-        listener({ type: "event", event: "sessions.changed", payload: {} });
-      }
-    },
+    agentSelection,
+    gateway: source.gateway,
     setPhase: (phase: ApplicationGatewaySnapshot["phase"]) =>
       source.publish({ ...source.gateway.snapshot, phase }),
+    setClawsEnabled: (enabled: boolean) => {
+      clawsEnabled = enabled;
+      runtimeConfig.state.configSnapshot.sourceConfig.gateway.controlUi.experimental.claws =
+        clawsEnabled;
+      for (const listener of runtimeConfigListeners) {
+        listener();
+      }
+    },
   };
 }
 

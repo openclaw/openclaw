@@ -13,8 +13,9 @@ import {
   type MenuEntry,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ClearCompanion, ExternalPanelLink } from "../chat-pane-embedded-view.tsx";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import {
@@ -34,6 +35,8 @@ import {
 import type { HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
 import { useChatQuickActionEntries, type ChatQuickAction } from "./chat-quick-action.tsx";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type HeaderPanelAction = HeaderMenuQuickAction & { shortcut?: KeyboardShortcutCombo };
 
@@ -174,26 +177,12 @@ export function chatPaneLayoutModel(props: ChatPaneLayoutMenuProps) {
       });
     }
   }
-  const createClaw =
-    layout && isSidebarSlotVisible(layout, "companion")
-      ? definitions.find((definition) => definition.slot === "companion")?.view?.onCreateClaw
-      : undefined;
-  const createClawAction = createClaw
-    ? {
-        id: "create-claw",
-        label: t("clawsDraft.title"),
-        description: t("clawsDraft.railHint"),
-        icon: "box" as const,
-        onActivate: createClaw,
-      }
-    : undefined;
   const panelActions: ChatQuickAction[] = props.panelMenuActions ?? [];
   const allActions = [...actions, ...panelActions];
   return {
     actions,
     panelActions,
     allActions,
-    createClawAction,
     mainHeaderActionView: mainDefinition?.headerActionView,
     sideHeaderActionView: sideDefinition?.headerActionView,
     mainHeaderLink: mainDefinition?.headerLink,

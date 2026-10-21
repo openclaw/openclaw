@@ -1,5 +1,5 @@
 import { flush } from "solid-js";
-import { afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewayAgentRow } from "../api/types.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -43,15 +43,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
     root.style.width = "320px";
     document.body.append(root);
     let unmount: (() => void) | undefined;
-    for (const [count, pinCount] of [
-      [0, 0],
-      [1, 0],
-      [2, 0],
-      [3, 0],
-      [4, 4],
-      [5, 5],
-      [8, 8],
-    ] as const) {
+    for (const count of [0, 1, 2, 3, 4, 5, 8]) {
       unmount?.();
       unmount = mountSolid(
         () => {
@@ -68,13 +60,11 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
                 openMode: "hover",
                 agents: agents.slice(0, count),
                 identities: new Map(),
-                pinnedAgentIds: ["agent-0"],
-                onTogglePinnedAgent: async () => {},
                 resolveAvatarUrl: (url) => url,
                 avatarErrorHandler: () => () => {},
                 agentUnreadCount: () => 0,
+                onAgentSettings: () => {},
               },
-              undefined,
               controls,
             ),
           });
@@ -85,7 +75,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => resolve());
       });
-      expect(root.querySelectorAll(".sidebar-agent-menu__pin")).toHaveLength(pinCount);
+      expect(root.querySelectorAll(".sidebar-agent-menu__pin")).toHaveLength(0);
       const all = root.querySelector('[data-value="scope:all"]');
       if (count < 2) {
         expect(all).toBeNull();
@@ -146,11 +136,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
         { id: "scout", name: "Scout" },
       ],
     );
-    onTestFinished(
-      context.navigation.subscribe((snapshot) => {
-        sidebar.pinnedAgentIds = snapshot.pinnedAgentIds;
-      }),
-    );
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
     sidebar.connected = true;
     await sidebar.updateComplete;
     // Focus is ready before the dropdown's opening animation finishes.
@@ -169,26 +156,45 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
     await sidebar.updateComplete;
     await menuShown;
 
+    const menu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
+    expect(
+      [...menu!.querySelectorAll<HTMLElement>("[data-value]")]
+        .slice(0, 2)
+        .map((item) => item.getAttribute("data-value")),
+    ).toEqual(["command:new-agent", "scope:all"]);
+    expect(menu!.querySelector("[role=separator]")).toBeNull();
+    expect(menu!.querySelector("input")).toBeNull();
+    expect(menu!.querySelector(".sidebar-agent-menu__filter")).toBeNull();
+    expect(menu!.querySelector('[data-value="command:agents-directory"]')).toBeNull();
+    expect(menu!.querySelector('[data-value="command:capabilities"]')).toBeNull();
+    expect(menu!.querySelector('[data-value="command:agent-settings"]')).toBeNull();
+    expect(
+      sidebar.querySelector(".sidebar-agent-card__main")?.closest("openclaw-tooltip"),
+    ).toBeNull();
+
     const tiles = Array.from(
       sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch"),
     );
     expect(tiles).toHaveLength(5);
     await expect.poll(() => document.activeElement).toBe(tiles[1]);
-    const { userEvent } = await import("vitest/browser");
+    const { page, userEvent } = await import("vitest/browser");
+    const activeSettings = query(tiles[1]!, ".sidebar-agent-menu__settings");
+    await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
+    expect(getComputedStyle(activeSettings).opacity).toBe("0");
+    await userEvent.hover(tiles[1]!);
+    expect(getComputedStyle(activeSettings).opacity).toBe("1");
+    await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
+    expect(getComputedStyle(activeSettings).opacity).toBe("0");
     await userEvent.keyboard("{ArrowDown}");
     expect(document.activeElement).toBe(tiles[2]);
     await userEvent.tab();
-    const pin = query(tiles[2]!, ".sidebar-agent-menu__pin");
-    const currentPin = () =>
-      query(sidebar, '[data-value="agent:release"] .sidebar-agent-menu__pin');
-    expect(document.activeElement).toBe(pin);
-    await userEvent.keyboard(" ");
-    await expect.poll(() => currentPin().getAttribute("aria-pressed")).toBe("true");
-    expect(document.activeElement).toBe(currentPin());
+    const settings = query(tiles[2]!, ".sidebar-agent-menu__settings") as HTMLButtonElement;
+    expect(document.activeElement).toBe(settings);
+    expect(settings.hasAttribute("title")).toBe(false);
+    expect(getComputedStyle(settings).opacity).toBe("1");
     await userEvent.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(sidebar.querySelector('[data-value="agent:main"]'));
-    currentPin().click();
-    await expect.poll(() => currentPin().getAttribute("aria-pressed")).toBe("false");
+    expect(document.activeElement).toBe(tiles[3]);
+    expect(getComputedStyle(settings).opacity).toBe("0");
     await expect
       .poll(() =>
         tiles.map((tile) => tile.classList.contains("sidebar-agent-menu__agent-switch--active")),
@@ -202,9 +208,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
       const avatarBox = avatar.getBoundingClientRect();
       const labelBox = label.getBoundingClientRect();
       const rowBox = tile.getBoundingClientRect();
-      expect(rowBox.height).toBe(56);
-      expect(avatarBox.width).toBe(40);
-      expect(labelBox.left - avatarBox.right).toBe(12);
+      expect(rowBox.height).toBeGreaterThanOrEqual(44);
+      expect(avatarBox.width).toBe(28);
+      expect(labelBox.left - avatarBox.right).toBe(10);
       expect(Math.abs(center(avatarBox, "y") - center(rowBox, "y"))).toBeLessThanOrEqual(1);
     }
 
@@ -219,6 +225,17 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
     expect(all?.getAttribute("aria-current")).toBe("true");
     await userEvent.keyboard("{ArrowDown}");
     expect(document.activeElement).toBe(sidebar.querySelector('[data-value="agent:main"]'));
+    await userEvent.keyboard("{ArrowDown}");
+    await userEvent.tab();
+    const releaseSettings = sidebar.querySelector<HTMLButtonElement>(
+      '[data-value="agent:release"] .sidebar-agent-menu__settings',
+    );
+    expect(document.activeElement).toBe(releaseSettings);
+    await userEvent.keyboard("{Enter}");
+    expect(onNavigate).toHaveBeenCalledExactlyOnceWith("agents", {
+      pathname: "/settings/agents/release",
+    });
+    expect(context.agentSelection.state.selectedId).toBe("main");
   });
 
   it.each([

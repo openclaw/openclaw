@@ -14,7 +14,6 @@ import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-h
 import {
   findUiSessionRow,
   resolveSessionPreferredFace,
-  SESSION_DASHBOARD_EXPANDED_PARAM,
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
 } from "../../lib/sessions/route-navigation.ts";
@@ -25,7 +24,8 @@ import {
   resolveAgentIdFromSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
-import { draftRouteDataFromLocation, draftSearchFromLocation } from "./route-draft.ts";
+import { PendingSessionCreate } from "./pending-session-create-lazy.ts";
+import { draftSearchFromLocation, sessionRouteHints } from "./route-draft.ts";
 import { loadCatalogShareRouteFromLocation } from "./route-loader-catalog-share.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 import {
@@ -46,15 +46,6 @@ import {
 import type { ChatRouteData } from "./session-route-data.ts";
 
 export type { ChatRouteData, SessionChatRouteData } from "./session-route-data.ts";
-
-function sessionRouteHints(location: RouteLocation) {
-  return {
-    ...draftRouteDataFromLocation(location),
-    ...(new URLSearchParams(location.search).get(SESSION_DASHBOARD_EXPANDED_PARAM) === "expanded"
-      ? { dashboardExpanded: true as const }
-      : {}),
-  };
-}
 
 function locationWithoutSearchParam(location: RouteLocation, key: string): RouteLocation {
   const params = new URLSearchParams(location.search);
@@ -610,8 +601,7 @@ export async function loadSessionPage(
       result.creation = creation;
     }
     if (result.creation || context.placementStartup.get(result.sessionKey)?.initialTurn) {
-      // Startup owns a display-only view even if an interrupted temporary session is cleaned up.
-      await import("./pending-session-create.tsx");
+      await PendingSessionCreate.preload();
       signal.throwIfAborted();
     }
   }

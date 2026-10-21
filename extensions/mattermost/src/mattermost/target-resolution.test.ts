@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
 import { parseMattermostTarget, resolveMattermostOpaqueTarget } from "./target-resolution.js";
@@ -113,7 +114,9 @@ describe("mattermost target resolution", () => {
     expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
 
     vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-    await resolveMattermostOpaqueTarget(params);
+    fetchMattermostUser.mockRejectedValueOnce(new Error("Mattermost API 404 Not Found"));
+    fetchMattermostChannel.mockResolvedValue({ type: "P" });
+    await expect(resolveMattermostOpaqueTarget(params)).resolves.toMatchObject({ kind: "group" });
     expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
   });
 
@@ -130,6 +133,55 @@ describe("mattermost target resolution", () => {
     await expectRepeatedResolution("fail1234abcd1234abcd1234ab", "channel");
     expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
     expect(fetchMattermostChannel).toHaveBeenCalledTimes(2);
+    fetchMattermostChannel.mockResolvedValue({ type: "P" });
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input: "fail1234abcd1234abcd1234ab",
+        client: fixtureClient(),
+      }),
+    ).resolves.toMatchObject({ kind: "group" });
+    expect(fetchMattermostChannel).toHaveBeenCalledTimes(3);
+  });
+
+  it("coalesces cold lookups only within the same credential and server", async () => {
+    const release = createDeferred<void>();
+    const input = "j".repeat(26);
+    fetchMattermostUser.mockImplementation(async () => {
+      await release.promise;
+      return { id: input };
+    });
+    const client = fixtureClient("joined-token");
+    const pending = [
+      resolveMattermostOpaqueTarget({ input, client }),
+      resolveMattermostOpaqueTarget({ input, client }),
+      resolveMattermostOpaqueTarget({ input, client: fixtureClient("other-token") }),
+      resolveMattermostOpaqueTarget({
+        input,
+        client: fixtureClient("joined-token", "https://other.example.com"),
+      }),
+    ];
+    release.resolve();
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(3);
+    expect(await Promise.all(pending)).toEqual(
+      Array.from({ length: 4 }, () => ({ kind: "user", id: input, to: `user:${input}` })),
+    );
+  });
+
+  it("bounds retained targets without refreshing insertion order on a cache hit", async () => {
+    fetchMattermostUser.mockResolvedValue({ id: "bounded-user" });
+    const client = fixtureClient("bounded-token");
+    const resolve = (index: number) =>
+      resolveMattermostOpaqueTarget({ input: index.toString(36).padStart(26, "0"), client });
+    for (let index = 0; index < 1024; index++) {
+      await resolve(index);
+    }
+    await resolve(0);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1024);
+    await resolve(1024);
+    await resolve(1024);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1025);
+    await resolve(0);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1026);
   });
 
   it("uses the configured account for directory discovery", async () => {

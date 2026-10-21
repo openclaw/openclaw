@@ -175,6 +175,13 @@ conflicting source that cannot be verified stays in place. A conflicting identit
 or missing middle event is named in the finding. Compare those events with a
 verified backup, preserve the original, and restore a corrected JSONL at the named
 path before rerunning recovery. A healthy agent does not inherit another agent's failure.
+
+Transcript verification recognizes Doctor's legacy inbound-context heading
+normalization when comparing retained JSONL with SQLite. Heading-only rewrites
+do not report missing content or block migration completion. Different message
+bodies, event identities, and parent links still fail verification; the original
+JSONL bytes remain unchanged.
+
 When the legacy index and live transcript inputs are gone, verified historical
 archives keep their existing receipts. They do not require a new legacy-index
 receipt or block post-session plugin repair. The plugin's completion releases

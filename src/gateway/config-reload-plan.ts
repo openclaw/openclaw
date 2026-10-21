@@ -22,7 +22,6 @@ export type GatewayReloadPlan = {
   restartGmailWatcher: boolean;
   restartCron: boolean;
   restartHeartbeat: boolean;
-  reconcileSystemJobs?: boolean;
   reloadPlugins: boolean;
   /** Canonical config/install deltas that require a plugin replacement. */
   reloadPluginPaths?: string[];
@@ -51,7 +50,6 @@ const RELOAD_ACTIONS = [
   "restartGmailWatcher",
   "restartCron",
   "restartHeartbeat",
-  "reconcileSystemJobs",
   "reloadPlugins",
   "disposeMcpRuntimes",
 ] as const;
@@ -143,7 +141,6 @@ function expandReloadPolicies(policies: ReloadPolicy[]): ReloadRule[] {
 
 const AGENT_ROSTER_RELOAD_ACTIONS: readonly ReloadAction[] = [
   "restartHeartbeat",
-  "reconcileSystemJobs",
   "refreshHooksPolicy",
   "reloadInternalHooks",
 ];
@@ -219,7 +216,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "agent.heartbeat",
     ],
     kind: "hot",
-    actions: ["restartHeartbeat", "reconcileSystemJobs"],
+    actions: ["restartHeartbeat"],
   },
   {
     prefixes: ["agents.entries"],
@@ -528,7 +525,6 @@ export function buildGatewayReloadPlan(
     restartGmailWatcher: false,
     restartCron: false,
     restartHeartbeat: false,
-    reconcileSystemJobs: false,
     reloadPlugins: false,
     restartChannels: new Set(),
     restartServices: new Set(),

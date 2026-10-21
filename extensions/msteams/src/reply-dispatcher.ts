@@ -36,6 +36,7 @@ import {
   sendMSTeamsMessages,
 } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
+import { resolveMSTeamsReplyPresentation } from "./presentation.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
@@ -338,7 +339,10 @@ export function createMSTeamsReplyDispatcher(params: {
       if (pendingSettlement) {
         await pendingSettlement;
       }
-      const preparedPayload = streamController.preparePayload(payload);
+      const resolvedPayload = payload.presentation
+        ? await resolveMSTeamsReplyPresentation(payload)
+        : payload;
+      const preparedPayload = streamController.preparePayload(resolvedPayload);
       const native = streamController.claimNativeDelivery();
       if (preparedPayload && !native && findPendingNativeDelivery()) {
         // Close the earlier native segment before later blocks can overtake

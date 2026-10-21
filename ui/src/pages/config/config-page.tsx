@@ -3,7 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
-import type { SolidRouteProps } from "../../app-route-types.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";

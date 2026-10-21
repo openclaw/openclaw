@@ -26,6 +26,7 @@ import type {
 import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
+import { ollamaProviderDiscovery } from "./provider-discovery.js";
 import {
   normalizeResolvedModel,
   resolveThinkingProfile as resolveOllamaThinkingProfile,
@@ -46,6 +47,7 @@ import {
   OLLAMA_PROVIDER_ID,
   getUnlistedOllamaConfiguredModelIds,
   isLocalOllamaBaseUrl,
+  isOllamaApiKeyMarker,
   readOllamaStringValue,
   resolveOllamaDiscoveryResult,
   resolveOllamaRuntimeBaseUrl,
@@ -338,10 +340,6 @@ function readEnvBackedOllamaApiKey(value: unknown, env: NodeJS.ProcessEnv): stri
   return undefined;
 }
 
-function isAmbientOllamaApiKeyMarker(value: string | undefined): boolean {
-  return value === OLLAMA_DEFAULT_API_KEY || value === "OLLAMA_API_KEY";
-}
-
 function readUsableOllamaShowApiKey(params: {
   env: NodeJS.ProcessEnv;
   allowAmbientEnvFallback: boolean;
@@ -358,7 +356,7 @@ function readUsableOllamaShowApiKey(params: {
   }
   const resolvedApiKey = readOllamaStringValue(params.resolved?.apiKey);
   const canUseResolvedDiscovery =
-    params.allowAmbientEnvFallback || !isAmbientOllamaApiKeyMarker(resolvedApiKey);
+    params.allowAmbientEnvFallback || !isOllamaApiKeyMarker(resolvedApiKey);
   const discoveryApiKey = readConcreteOllamaApiKey(params.resolved?.discoveryApiKey);
   if (discoveryApiKey && canUseResolvedDiscovery) {
     return discoveryApiKey;
@@ -866,16 +864,7 @@ export default definePluginEntry({
           resolveProviderApiKey: ctx.resolveProviderApiKey,
           capContextTokens: true,
         }),
-      resolveSyntheticAuth: ({ provider, providerConfig }) => {
-        if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
-          return undefined;
-        }
-        return {
-          apiKey: OLLAMA_DEFAULT_API_KEY,
-          source: `models.providers.${provider ?? OLLAMA_PROVIDER_ID} (synthetic local key)`,
-          mode: "api-key",
-        };
-      },
+      resolveSyntheticAuth: ollamaProviderDiscovery.resolveSyntheticAuth,
       shouldDeferSyntheticProfileAuth: ({ resolvedApiKey }) =>
         resolvedApiKey?.trim() === OLLAMA_DEFAULT_API_KEY,
       prepareDynamicModel: async (ctx) => {

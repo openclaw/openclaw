@@ -3148,7 +3148,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     minimalTestGateway: false,
     cfgAtStart: { hooks: { internal: { enabled: false } } } as never,
     getConfig: () => ({ hooks: { internal: { enabled: false } } }) as never,
-    getReadiness: () => ({ ready: true, failing: [], uptimeMs: 0 }),
+    getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),
     port: 18789,
     log: { info: vi.fn(), warn: vi.fn() },
     isNixMode: false,

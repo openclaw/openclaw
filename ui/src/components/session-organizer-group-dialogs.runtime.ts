@@ -1,3 +1,7 @@
+import type {
+  FsListDirResult,
+  WorktreesBranchesResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { t } from "../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import type {
@@ -113,29 +117,50 @@ export async function editSessionGroupDefaultsDialog(
   if (!dialog || !deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
-  const defaults = deps.sessionGroupDefaults(group);
+  const readDefaults = () => {
+    if (scope.sessions.groupsStatus() !== "ready") {
+      return null;
+    }
+    const entry = scope.sessions.state.groupSettings.find((item) => item.name === group);
+    return entry ? { cwd: entry.cwd ?? "", worktree: entry.worktree === true } : null;
+  };
+  const requireCurrent = () => {
+    if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+  };
+  const defaults = readDefaults();
   if (defaults) {
     await dialog.showSessionGroupDefaultsDialog({
       group,
       defaults,
       signal: scope.signal,
-      listDirectory: (path) => {
-        if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-          return Promise.reject(new Error(t("sessionsView.groupDefaultsStale")));
-        }
-        return deps.listSessionGroupFolders(path);
+      listDirectory: async (path) => {
+        requireCurrent();
+        const result = await scope.client.request<FsListDirResult>(
+          "fs.listDir",
+          path ? { path } : {},
+        );
+        requireCurrent();
+        return result;
       },
-      inspectRepository: (path) => {
-        if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-          return Promise.reject(new Error(t("sessionsView.groupDefaultsStale")));
+      inspectRepository: async (path) => {
+        requireCurrent();
+        const repoRoot = path?.trim() || deps.sessionGroupWorkspace()?.trim();
+        if (!repoRoot) {
+          return "unavailable";
         }
-        return deps.inspectSessionGroupRepository(path);
+        const result = await scope.client.request<WorktreesBranchesResult>("worktrees.branches", {
+          repoRoot,
+          includeRepositoryStatus: true,
+        });
+        requireCurrent();
+        return result.repositoryStatus === "git" || result.repositoryStatus === "not_git"
+          ? result.repositoryStatus
+          : "unavailable";
       },
       submit: async (nextDefaults) => {
-        if (
-          !deps.sessionData.isSessionMutationScopeCurrent(scope) ||
-          !deps.sessionGroupDefaults(group)
-        ) {
+        if (!deps.sessionData.isSessionMutationScopeCurrent(scope) || !readDefaults()) {
           return t("sessionsView.groupDefaultsStale");
         }
         const operations = await loadOperations(deps, scope);

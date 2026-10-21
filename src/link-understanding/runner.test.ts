@@ -68,6 +68,50 @@ beforeEach(() => {
   mocks.runCommandWithTimeout.mockReset();
 });
 
+it.each([
+  [
+    "dedupes links and enforces maxLinks",
+    "https://a.example https://a.example https://b.test https://c.test",
+    2,
+    ["https://a.example", "https://b.test"],
+  ],
+  [
+    "ignores markdown links whose label contains brackets",
+    "Check [my notes [v2]](https://internal.example/doc) for details",
+    undefined,
+    [],
+  ],
+  [
+    "ignores markdown links with title line breaks",
+    '[doc](https://docs.example "line one\nline two") https://bare.example',
+    undefined,
+    ["https://bare.example"],
+  ],
+  [
+    "does not strip a link with an escaped closing delimiter",
+    '[doc](https://docs.example "t\\")',
+    undefined,
+    ["https://docs.example"],
+  ],
+  ["blocks 127.0.0.1", "http://127.0.0.1/test https://ok.test", undefined, ["https://ok.test"]],
+  [
+    "blocks private IPv4 embedded in an ISATAP URL",
+    "http://[2001:db8:1234::5efe:127.0.0.1]/secret",
+    undefined,
+    [],
+  ],
+] as const)("%s before fetching", async (_name, message, maxLinks, expected) => {
+  mocks.fetchWithSsrFGuard.mockImplementation(async () => ({
+    response: new Response("page body"),
+    finalUrl: "https://final.example",
+    release: async () => {},
+  }));
+  await fixture(message, cfg({ command: "curl", args: ["{{LinkUrl}}"] }, { maxLinks })).run();
+  expect(mocks.fetchWithSsrFGuard.mock.calls.map(([request]) => request.url)).toStrictEqual(
+    expected,
+  );
+});
+
 it("applies shared media scope rules to link message context", async () => {
   const match = { channel: "slack", chatType: "channel" as const, keyPrefix: "agent:main:" };
   const { context, before, run } = fixture(

@@ -25,6 +25,33 @@ const proposal = {
 };
 
 describe("agent-created Claw drafts", () => {
+  it("keeps the package slug while showing a title-cased agent name", async () => {
+    const workspaceDir = tempDirs.make("claw-draft-display-name-");
+    const draft = await createClawDraft(workspaceDir);
+    await writeFile(draft.path, JSON.stringify(proposal));
+    const target = { workspaceDir, draftId: draft.draftId };
+
+    await using initial = await prepareClawDraft({ ...target, publisher: "maker" });
+    expect(initial.displayName).toBe("Research Brief");
+
+    const choices = {
+      name: "research-brief",
+      displayName: "Engineering Partner",
+      description: "A collaborative engineering partner.",
+      excluded: [],
+    };
+    await using prepared = await prepareClawDraft({
+      ...target,
+      publisher: "maker",
+      choices,
+    });
+    expect(prepared.name).toBe("@maker/research-brief");
+    expect(prepared.displayName).toBe("Engineering Partner");
+    expect(prepared.files.find((file) => file.path === "CLAW.md")?.content).toContain(
+      "id: research-brief\n  name: Engineering Partner",
+    );
+  });
+
   it("builds only the reviewed proposal, excluding the source workspace and private draft metadata", async () => {
     const workspaceDir = tempDirs.make("claw-draft-privacy-");
     await writeFile(join(workspaceDir, "MEMORY.md"), "PRIVATE_MEMORY_SENTINEL");

@@ -71,6 +71,8 @@ function createConnection(
     runtime: testRuntime(),
     nextSeq: () => 1,
     onPosted: async () => {},
+    onReaction: async () => {},
+    getBotUpdateAt: async () => 0,
     ...options,
   });
 }

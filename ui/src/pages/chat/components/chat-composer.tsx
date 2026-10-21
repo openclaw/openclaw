@@ -4,7 +4,6 @@ import {
   createProjection,
   createSignal,
   merge,
-  onCleanup,
   onSettled,
   untrack,
 } from "solid-js";
@@ -67,7 +66,7 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
   }
   const voice = { dictation: state.dictation, picker: microphonePicker };
   // Dictation admission invalidates edits and dismisses errors before the next input event.
-  onCleanup(
+  onSettled(() =>
     voice.dictation.subscribe(() => {
       if (voice.dictation.locksComposer) {
         state.editRevision += 1;

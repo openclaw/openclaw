@@ -3,10 +3,13 @@ import { For, Show } from "solid-js";
 import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { SubagentDesktopAvatar } from "./chat-subagents-panel-desktop.tsx";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-subagents-mobile.css";
+import { SubagentDesktopAvatar } from "./chat-subagents-panel-desktop.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type ChatSubagentMobileStop = {
   label: string;

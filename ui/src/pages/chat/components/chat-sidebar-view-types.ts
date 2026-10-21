@@ -52,6 +52,7 @@ export type FileReaderWorkspace = {
 };
 
 export type ChatDetailPanelProps = {
+  attachmentChat?: import("./chat-composer-types.ts").ChatComposerProps;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   panelPresentation?: "desktop" | "mobile";
   panelActive?: boolean;

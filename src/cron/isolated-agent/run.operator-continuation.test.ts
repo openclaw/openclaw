@@ -66,6 +66,7 @@ import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js"
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewaySchedulerClock } from "../../test-utils/gateway-scheduler-clock.js";
 import { onTimer } from "../service/timer.test-support.js";
+import { readSessionMessagesAsyncMock } from "./run-automation.test-support.js";
 import { prepareAuthorityConfig, resetAuthorityRunHarness } from "./run.authority.test-support.js";
 import {
   createOperatorContinuationService,
@@ -76,7 +77,6 @@ import {
   loadRunCronIsolatedAgentTurn,
   loadSessionEntryMock,
   patchSessionEntryMock,
-  readSessionMessagesAsyncMock,
   resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
@@ -670,7 +670,7 @@ it.each([
       );
       expect(entered).toBe(1);
       if (scenario === "operator" || scenario === "paused force run") {
-        expect(JSON.stringify(offered)).toContain("inspect");
+        expect(JSON.stringify(offered)).toContain('"inspect"');
         expect(JSON.stringify(offered)).toContain("merge");
         expect(rejected).toBeUndefined();
         expect(results).toMatchObject([
@@ -696,7 +696,7 @@ it.each([
       } else if (scenario === "current tool deny") {
         expect(offered).toBeUndefined();
       } else {
-        expect(JSON.stringify(offered)).not.toContain("inspect");
+        expect(JSON.stringify(offered)).not.toContain('"inspect"');
         expect(JSON.stringify(offered)).not.toContain("merge");
         expect(results).toEqual([]);
       }

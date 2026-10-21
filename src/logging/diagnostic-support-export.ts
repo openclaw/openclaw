@@ -492,71 +492,6 @@ function describeStabilityForDiagnostics(
   };
 }
 
-function renderSummary(params: {
-  generatedAt: string;
-  stability: ReadDiagnosticStabilityBundleResult;
-  logTail: SanitizedLogTail;
-  config: ConfigShape;
-  status: SupportSnapshotStatus;
-  health: SupportSnapshotStatus;
-}): string {
-  const stabilityLine =
-    params.stability.status === "found"
-      ? `included latest stability bundle (${params.stability.bundle.snapshot.count} event(s))`
-      : `no stability bundle included (${params.stability.status})`;
-  const configLine = params.config.exists
-    ? `config shape included (${params.config.parseOk ? "parsed" : "parse failed"})`
-    : (params.config.error ?? "config file not found");
-  const logTailLine =
-    params.logTail.status === "failed"
-      ? `sanitized log tail unavailable (${params.logTail.error})`
-      : `sanitized log tail (${params.logTail.lineCount} line(s), inspected ${params.logTail.size} byte(s), raw messages omitted)`;
-  const supportSnapshotLine = (label: string, snapshot: SupportSnapshotStatus) => {
-    if (snapshot.status === "included") {
-      return `${label} snapshot included (${snapshot.path})`;
-    }
-    if (snapshot.status === "failed") {
-      return `${label} snapshot failed (${snapshot.error})`;
-    }
-    return `${label} snapshot skipped`;
-  };
-  return [
-    "# OpenClaw Diagnostics Export",
-    "",
-    "Attach this zip to the bug report. It is designed for maintainers to inspect without asking for raw logs first.",
-    "",
-    "## Generated",
-    "",
-    `Generated: ${params.generatedAt}`,
-    `OpenClaw: ${VERSION}`,
-    "",
-    "## Contents",
-    "",
-    `- ${stabilityLine}`,
-    `- ${logTailLine}`,
-    `- ${configLine}`,
-    `- ${supportSnapshotLine("gateway status", params.status)}`,
-    `- ${supportSnapshotLine("gateway health", params.health)}`,
-    "",
-    "## Maintainer Quick Read",
-    "",
-    "- `manifest.json`: file inventory and privacy notes",
-    "- `diagnostics.json`: top-level summary of config, logs, Bonjour/mDNS, stability, status, and health",
-    "- `config/sanitized.json`: config values with credentials, private identifiers, and prompt text redacted",
-    "- `status/gateway-status.json`: sanitized service/connectivity snapshot",
-    "- `health/gateway-health.json`: sanitized Gateway health snapshot",
-    "- `logs/openclaw-sanitized.jsonl`: sanitized log summaries and metadata",
-    "- `stability/latest.json`: newest payload-free stability bundle, when available",
-    "",
-    "## Privacy",
-    "",
-    "- raw chat text, webhook bodies, tool outputs, tokens, cookies, and secrets are not included intentionally",
-    "- log records keep operational summaries and safe metadata fields",
-    "- status and health snapshots redact secret fields, payload-like fields, and account/message identifiers",
-    "- config output keeps useful settings but redacts secrets, private identifiers, and prompt text",
-  ].join("\n");
-}
-
 function resolveOutputPath(options: { outputPath?: string; stateDir: string; now: Date }): string {
   const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
   const raw = options.outputPath?.trim();
@@ -651,19 +586,65 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
     files.push(jsonSupportBundleFile("stability/latest.json", stability.bundle));
   }
 
-  files.push(
-    textSupportBundleFile(
-      "summary.md",
-      renderSummary({
-        generatedAt,
-        stability,
-        logTail,
-        config: config.shape,
-        status: statusSnapshot.summary,
-        health: healthSnapshot.summary,
-      }),
-    ),
-  );
+  function renderSummary(): string {
+    const stabilityLine =
+      stability.status === "found"
+        ? `included latest stability bundle (${stability.bundle.snapshot.count} event(s))`
+        : `no stability bundle included (${stability.status})`;
+    const configLine = config.shape.exists
+      ? `config shape included (${config.shape.parseOk ? "parsed" : "parse failed"})`
+      : (config.shape.error ?? "config file not found");
+    const logTailLine =
+      logTail.status === "failed"
+        ? `sanitized log tail unavailable (${logTail.error})`
+        : `sanitized log tail (${logTail.lineCount} line(s), inspected ${logTail.size} byte(s), raw messages omitted)`;
+    const supportSnapshotLine = (label: string, snapshot: SupportSnapshotStatus) => {
+      if (snapshot.status === "included") {
+        return `${label} snapshot included (${snapshot.path})`;
+      }
+      if (snapshot.status === "failed") {
+        return `${label} snapshot failed (${snapshot.error})`;
+      }
+      return `${label} snapshot skipped`;
+    };
+    return [
+      "# OpenClaw Diagnostics Export",
+      "",
+      "Attach this zip to the bug report. It is designed for maintainers to inspect without asking for raw logs first.",
+      "",
+      "## Generated",
+      "",
+      `Generated: ${generatedAt}`,
+      `OpenClaw: ${VERSION}`,
+      "",
+      "## Contents",
+      "",
+      `- ${stabilityLine}`,
+      `- ${logTailLine}`,
+      `- ${configLine}`,
+      `- ${supportSnapshotLine("gateway status", statusSnapshot.summary)}`,
+      `- ${supportSnapshotLine("gateway health", healthSnapshot.summary)}`,
+      "",
+      "## Maintainer Quick Read",
+      "",
+      "- `manifest.json`: file inventory and privacy notes",
+      "- `diagnostics.json`: top-level summary of config, logs, Bonjour/mDNS, stability, status, and health",
+      "- `config/sanitized.json`: config values with credentials, private identifiers, and prompt text redacted",
+      "- `status/gateway-status.json`: sanitized service/connectivity snapshot",
+      "- `health/gateway-health.json`: sanitized Gateway health snapshot",
+      "- `logs/openclaw-sanitized.jsonl`: sanitized log summaries and metadata",
+      "- `stability/latest.json`: newest payload-free stability bundle, when available",
+      "",
+      "## Privacy",
+      "",
+      "- raw chat text, webhook bodies, tool outputs, tokens, cookies, and secrets are not included intentionally",
+      "- log records keep operational summaries and safe metadata fields",
+      "- status and health snapshots redact secret fields, payload-like fields, and account/message identifiers",
+      "- config output keeps useful settings but redacts secrets, private identifiers, and prompt text",
+    ].join("\n");
+  }
+
+  files.push(textSupportBundleFile("summary.md", renderSummary()));
 
   const manifest = {
     version: 1 as const,

@@ -205,21 +205,21 @@ vi.mock("../daemon-cli/restart-health.js", async (original) => ({
 }));
 vi.mock("../../infra/gateway-lock.js", async (original) => ({
   ...(await original<typeof import("../../infra/gateway-lock.js")>()),
-  acquireGatewayLock: (opts?: { port?: number }) => m.acquireGatewayLock(opts),
+  acquireGatewayLock: forward(() => m.acquireGatewayLock),
 }));
 vi.mock("../../infra/restart.js", async (original) => ({
   ...(await original<typeof import("../../infra/restart.js")>()),
-  consumeGatewayRestartIntent: () => m.consumeGatewayRestartIntent(),
-  consumeGatewayRestartAuthorization: () => m.consumeGatewayRestartAuthorization(),
-  isGatewayRestartExternallyAllowed: () => m.isGatewayRestartExternallyAllowed(),
-  markGatewayRestartHandled: () => m.markGatewayRestartHandled(),
-  peekGatewayRestartReason: () => m.peekGatewayRestartReason(),
-  resetGatewayRestartStateForInProcessRestart: () =>
-    m.resetGatewayRestartStateForInProcessRestart(),
-  rollbackGatewayRestartSignalAdmission: () => m.rollbackGatewayRestartSignalAdmission(),
+  consumeGatewayRestartIntent: forward(() => m.consumeGatewayRestartIntent),
+  consumeGatewayRestartAuthorization: forward(() => m.consumeGatewayRestartAuthorization),
+  isGatewayRestartExternallyAllowed: forward(() => m.isGatewayRestartExternallyAllowed),
+  markGatewayRestartHandled: forward(() => m.markGatewayRestartHandled),
+  peekGatewayRestartReason: forward(() => m.peekGatewayRestartReason),
+  resetGatewayRestartStateForInProcessRestart: forward(
+    () => m.resetGatewayRestartStateForInProcessRestart,
+  ),
+  rollbackGatewayRestartSignalAdmission: forward(() => m.rollbackGatewayRestartSignalAdmission),
   requestGatewayRestartWithSignalAdmission: m.requestGatewayRestartWithSignalAdmission,
-  scheduleGatewayRestart: (opts?: { delayMs?: number; reason?: string }) =>
-    m.scheduleGatewayRestart(opts),
+  scheduleGatewayRestart: forward(() => m.scheduleGatewayRestart),
 }));
 vi.mock("../../infra/restart-intent.js", async (original) => ({
   ...(await original<typeof import("../../infra/restart-intent.js")>()),
@@ -232,7 +232,7 @@ vi.mock("../../infra/gateway-boot-lifecycle.js", async (original) => ({
 }));
 // mock-isolation: Fixtures own handoff claims without reading or mutating live update state.
 vi.mock("../../infra/update-managed-service-handoff.js", () => ({
-  waitForSystemServiceUpdateHandoffs: () => m.waitForSystemServiceUpdateHandoffs(),
+  waitForSystemServiceUpdateHandoffs: forward(() => m.waitForSystemServiceUpdateHandoffs),
   captureForegroundUpdateHandoffStop: forward(() => m.captureForegroundUpdateHandoffStop),
   isForegroundUpdateHandoff: forward(() => m.isForegroundUpdateHandoff),
   completeForegroundUpdateHandoffAfterClose: forward(
@@ -241,24 +241,20 @@ vi.mock("../../infra/update-managed-service-handoff.js", () => ({
   cancelManagedServiceUpdateHandoff: forward(() => m.cancelManagedServiceUpdateHandoff),
   claimManagedServiceUpdateHandoff: forward(() => m.claimManagedServiceUpdateHandoff),
   requestManagedServiceUpdateHandoffPark: forward(() => m.requestManagedServiceUpdateHandoffPark),
-  commitManagedServiceUpdateHandoff: (
-    identity: ManagedUpdateOwner,
-    outcome?: "update" | "restore",
-  ) => m.commitManagedServiceUpdateHandoff(identity, outcome),
+  commitManagedServiceUpdateHandoff: forward(() => m.commitManagedServiceUpdateHandoff),
 }));
 // mock-isolation: Suspend ownership belongs to each fixture, not the process singleton.
 vi.mock("../../infra/gateway-suspend-coordinator.js", () => ({
   consumeGatewaySuspendHandoff: forward(() => m.consumeGatewaySuspendHandoff),
   disarmGatewaySuspendHandoff: forward(() => m.disarmGatewaySuspendHandoff),
-  resetGatewaySuspendCoordinatorForLifecycleRestart: () =>
-    m.resetGatewaySuspendCoordinatorForLifecycleRestart(),
+  resetGatewaySuspendCoordinatorForLifecycleRestart: forward(
+    () => m.resetGatewaySuspendCoordinatorForLifecycleRestart,
+  ),
 }));
 vi.mock("../../infra/process-respawn.js", async (original) => ({
   ...(await original<typeof import("../../infra/process-respawn.js")>()),
-  respawnGatewayProcessForUpdate: (opts?: { env?: NodeJS.ProcessEnv }) =>
-    m.respawnGatewayProcessForUpdate(opts),
-  restartGatewayProcessWithFreshPid: (opts?: { env?: NodeJS.ProcessEnv }) =>
-    m.restartGatewayProcessWithFreshPid(opts),
+  respawnGatewayProcessForUpdate: forward(() => m.respawnGatewayProcessForUpdate),
+  restartGatewayProcessWithFreshPid: forward(() => m.restartGatewayProcessWithFreshPid),
 }));
 // mock-isolation: Restart sentinel receipts must not read or write the runner's state.
 vi.mock("../../infra/restart-sentinel.js", () => ({
@@ -272,11 +268,8 @@ vi.mock("../../infra/restart-handoff.js", async (original) => ({
 }));
 // mock-isolation: Drain scenarios own their active-work snapshots and completion gates.
 vi.mock("../../infra/gateway-active-work.js", () => ({
-  createGatewayActiveWorkSnapshot: () => m.createGatewayActiveWorkSnapshot(),
-  waitForGatewayActiveWork: (
-    timeoutMs?: number,
-    options?: { onSnapshot?: (snapshot: GatewayActiveWorkSnapshot) => void },
-  ) => m.waitForGatewayActiveWork(timeoutMs, options),
+  createGatewayActiveWorkSnapshot: forward(() => m.createGatewayActiveWorkSnapshot),
+  waitForGatewayActiveWork: forward(() => m.waitForGatewayActiveWork),
 }));
 // mock-isolation: Run-loop retirement must not reset process-global cron job tracking.
 vi.mock("../../cron/active-jobs.js", () => ({
@@ -299,10 +292,7 @@ vi.mock("../../config/runtime-snapshot.js", () => ({
 }));
 // mock-isolation: Shutdown assertions must not abort unrelated process-global agent runs.
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
-  abortEmbeddedAgentRun: (
-    sessionId?: string,
-    opts?: { mode?: "all" | "compacting"; reason?: "restart" },
-  ) => m.abortEmbeddedAgentRun(sessionId, opts),
+  abortEmbeddedAgentRun: forward(() => m.abortEmbeddedAgentRun),
 }));
 // mock-isolation: Capture lifecycle diagnostics without initializing real log transports.
 vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => gatewayLog }));

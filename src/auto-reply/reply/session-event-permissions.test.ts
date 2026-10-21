@@ -506,7 +506,9 @@ it.for([
       let outcome: Awaited<ReturnType<typeof enqueueSessionEventForHost>["settled"]>;
       let accepted: Awaited<ReturnType<typeof enqueueSessionEventForHost>["accepted"]>;
       const route = toolOnly
-        ? vi.spyOn(routedReplies, "routeReply").mockResolvedValue({ ok: true, delivered: true })
+        ? vi
+            .spyOn(routedReplies, "routePreparedReply")
+            .mockResolvedValue({ ok: true, delivered: true })
         : undefined;
       try {
         const text = "Process the event; record the result.";

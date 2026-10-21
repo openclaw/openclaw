@@ -13,8 +13,11 @@ import {
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type Props = {
   props?: ChatDetailsProps;

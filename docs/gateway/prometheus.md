@@ -100,6 +100,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | --------------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------- |
 | `openclaw_gateway_build_info`                             | gauge     | `process_instance_id`, optional `build_id`                                                |
 | `openclaw_gateway_http_cancelled_total`                   | counter   | `source` (`client` or `shutdown`)                                                         |
+| `openclaw_control_ui_document_duration_seconds`           | histogram | `stage`                                                                                   |
 | `openclaw_gc_duration_seconds`                            | histogram | `kind`, `thread`                                                                          |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
 | `openclaw_gateway_rpc_client_requests_total`              | counter   | `method`, `client_kind`                                                                   |
@@ -509,6 +510,19 @@ or `threw`. `phase=total` is the complete elapsed time. Other fixed phases are
 `containerStart`. Only entered phases are recorded. Nested phases are inclusive
 and must not be summed. No paths, session identifiers, or template keys become
 metric labels.
+
+### Control UI documents
+
+`openclaw_control_ui_document_duration_seconds` measures the Control UI HTML handler.
+Its only label is `stage`: `auth_grants`, `identity_avatar`, `plugin_catalog`,
+`git_branch`, `preferences`, `render`, or `total`. Preparation stages include awaited
+work and run in parallel, so their durations must not be added together. `render`
+includes HTML rewriting, CSP preparation, compression, and response submission;
+`total` starts at handler entry and includes asset resolution. Neither includes
+time queued before the handler or delivery to the browser. Only entered stages
+are observed, including on failure; HEAD requests record `render` and `total`.
+The JSON bootstrap endpoint and static assets do not contribute samples.
+Queued diagnostic traces retain each stage's original start and end times.
 
 ### Session diff stages
 

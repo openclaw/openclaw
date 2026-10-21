@@ -1,5 +1,5 @@
 import { createMemo, Errored, lazy, Loading, onCleanup, onSettled, Show } from "solid-js";
-import type { SolidRouteProps } from "../../app-route-types.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
 import { reloadAfterRenderErrorOnce } from "../../app/stale-chunk-reload.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";

@@ -1,4 +1,3 @@
-// BTW inline message tests cover compact inline status message rendering.
 import {
   getCapabilities,
   getOsc8LinkAtColumn,
@@ -23,11 +22,7 @@ function expectUrlLink(lines: string[], url: string) {
 
 describe("btw inline message", () => {
   it("renders the BTW question, answer, and dismiss hint inline", () => {
-    const message = new BtwInlineMessage({
-      question: "what is 17 * 19?",
-      text: "323",
-    });
-
+    const message = new BtwInlineMessage({ question: "what is 17 * 19?", text: "323" });
     expect(message.render(80)).toEqual([
       "",
       " BTW: what is 17 * 19?                                                          ",
@@ -43,45 +38,34 @@ describe("btw inline message", () => {
       const capabilities = getCapabilities();
       setCapabilities({ ...capabilities, hyperlinks });
       try {
-        const firstQuestionAttack = "\x1b[3Jquestion";
-        const firstTextAttack = "\x1b]52;c;T08_BTW_CLIPBOARD\x07";
-        const nextQuestionAttack = "\u009b3Jquestion";
-        const nextTextAttack = "\u009d0;T08_BTW_TITLE\u009c";
         const url = "https://example.test/tui/btw?copy=caf%C3%A9";
         const message = new BtwInlineMessage({
-          question: `first ${firstQuestionAttack}\r\nمرحبا\tשלום`,
-          text: `${firstTextAttack}**first café**\nsecond body ${url}`,
+          question: "first \x1b[3Jquestion\r\nمرحبا\tשלום",
+          text: `\x1b]52;c;clipboard\x07**first café**\nsecond body ${url}`,
         });
 
-        let lines = message.render(140);
-        let raw = lines.join("\n");
-        let rendered = normalizeTestText(raw);
-        expect(rendered).toContain("BTW: \u2067first question مرحبا שלום\u2069");
-        expect(rendered).toContain("مرحبا שלום");
-        expect(rendered).toContain("first café");
-        expect(rendered).toContain("second body");
-        expect(lines[1]).not.toMatch(/[\r\n\t]/u);
-        expectUrlLink(lines, url);
-        expect(raw).not.toContain(firstQuestionAttack);
-        expect(raw).not.toContain(firstTextAttack);
+        function check(visible: string[]) {
+          const lines = message.render(140);
+          const raw = lines.join("\n");
+          for (const text of visible) {
+            expect(normalizeTestText(raw)).toContain(text);
+          }
+          for (const attack of ["\x1b[3J", "\x1b]52;", "\u009b3J", "\u009d0;"]) {
+            expect(raw).not.toContain(attack);
+          }
+          expect(lines[1]).not.toMatch(/[\r\n\t]/u);
+          expectUrlLink(lines, url);
+          return normalizeTestText(raw);
+        }
+        check(["BTW: \u2067first question مرحبا שלום\u2069", "first café", "second body"]);
 
         message.setResult({
-          question: `next ${nextQuestionAttack}\r\nשלום\tمرحبا`,
-          text: `${nextTextAttack}**next 東京** ${url}`,
+          question: "next \u009b3Jquestion\r\nשלום\tمرحبا",
+          text: `\u009d0;title\u009c**next 東京** ${url}`,
         });
 
-        lines = message.render(140);
-        raw = lines.join("\n");
-        rendered = normalizeTestText(raw);
-        expect(rendered).toContain("BTW: \u2067next question שלום مرحبا\u2069");
-        expect(rendered).toContain("שלום مرحبا");
-        expect(rendered).toContain("next 東京");
-        expect(rendered).not.toContain("first question");
-        expect(rendered).not.toContain("first café");
-        expectUrlLink(lines, url);
-        expect(raw).not.toContain(nextQuestionAttack);
-        expect(raw).not.toContain(nextTextAttack);
-        expect(lines[1]).not.toMatch(/[\r\n\t]/u);
+        const rendered = check(["BTW: \u2067next question שלום مرحبا\u2069", "next 東京"]);
+        expect(rendered).not.toMatch(/first question|first café/u);
       } finally {
         setCapabilities(capabilities);
       }
@@ -95,44 +79,25 @@ describe("btw inline message", () => {
     });
 
     const lines = message.render(100);
-    const normalized = lines
-      .map((line) => normalizeTestText(line).replace(/[\u2067\u2069]/gu, ""))
-      .join("\n");
+    const normalized = normalizeTestText(lines.join("\n")).replace(/[\u2067\u2069]/gu, "");
     expect(normalized).toContain("مرحبا");
     expect(normalized).not.toContain("# مرحبا");
     expect(normalized).toContain("│ שלום");
     expect(normalized).toContain("- عنصر");
     for (const line of lines.filter((entry) => /[\u0590-\u08ff]/u.test(entry))) {
-      expect(line.match(/\u2067/gu)).toHaveLength(1);
-      expect(line.match(/\u2069/gu)).toHaveLength(1);
+      expect(line.match(/[\u2067\u2069]/gu)).toEqual(["\u2067", "\u2069"]);
     }
   });
 
-  it("sanitizes BTW error questions and text before applying trusted themes", () => {
-    const questionAttack = "\x1b]0;T08_BTW_QUESTION_TITLE\x07";
-    const errorAttack = "\u009b3Jretry";
-    const message = new BtwInlineMessage({
-      question: `why ${questionAttack}failed?\r\nمرحبا\tשלום`,
-      text: `${errorAttack} **plain** safely café`,
-      isError: true,
-    });
-
-    const raw = message.render(100).join("\n");
+  it.each([false, true])("sanitizes errors with an empty fallback=%s", (empty) => {
+    const questionAttack = "\x1b]0;question-title\x07";
+    const text = empty ? " \x1b]0;hidden title\x07 " : "\u009b3Jretry **plain** safely café";
+    const question = `why ${questionAttack}failed?\r\nمرحبا\tשלום`;
+    const raw = new BtwInlineMessage({ question, text, isError: true }).render(100).join("\n");
     const rendered = normalizeTestText(raw);
     expect(rendered).toContain("BTW: \u2067why failed? مرحبا שלום\u2069");
-    expect(rendered).toContain("مرحبا שלום");
-    expect(rendered).toContain("retry **plain** safely café");
+    expect(rendered).toContain(empty ? "(no output)" : "retry **plain** safely café");
     expect(raw).not.toContain(questionAttack);
-    expect(raw).not.toContain(errorAttack);
-  });
-
-  it("renders a visible fallback when a BTW error sanitizes to empty", () => {
-    const message = new BtwInlineMessage({
-      question: "what failed?",
-      text: " \x1b]0;hidden title\x07 ",
-      isError: true,
-    });
-
-    expect(normalizeTestText(message.render(80).join("\n"))).toContain("(no output)");
+    expect(raw).not.toContain(empty ? "\x1b]0;hidden title\x07" : "\u009b3Jretry");
   });
 });

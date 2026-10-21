@@ -172,22 +172,31 @@ it("publishes uploaded resource selections and follows controlled selections", a
   const remove = await waitForSolid(() =>
     view.getByRole<HTMLButtonElement>("button", { name: "Remove" }),
   );
+  request.mockResolvedValueOnce({
+    resources: [{ uri: "parts://notes", name: "updated-notes.txt" }],
+  });
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForSolid(() => expect(view.getByText("updated-notes.txt")).toBeTruthy());
+  expect(view.getAllByRole("button", { name: "Remove" })).toHaveLength(1);
+  expect(view.getByRole("button", { name: "Remove" })).toBe(remove);
+  expect(view.queryByText("notes.txt")).toBeNull();
+  expect(selections).toHaveBeenLastCalledWith(["parts://notes"]);
   setDisabled(true);
   await waitForSolid(() => expect(remove.disabled).toBe(true));
-  expect(view.getByText("notes.txt")).toBeTruthy();
+  expect(view.getByText("updated-notes.txt")).toBeTruthy();
   expect(view.getByLabelText("Part")).toBe(input);
   setDisabled(false);
   await waitForSolid(() => expect(remove.disabled).toBe(false));
   remove.click();
-  await waitForSolid(() => expect(view.queryByText("notes.txt")).toBeNull());
+  await waitForSolid(() => expect(view.queryByText("updated-notes.txt")).toBeNull());
   expect(selections).toHaveBeenLastCalledWith([]);
   input.dispatchEvent(new Event("change", { bubbles: true }));
-  await waitForSolid(() => expect(selections).toHaveBeenCalledTimes(3));
+  await waitForSolid(() => expect(selections).toHaveBeenCalledTimes(4));
   expect(view.getByText("notes.txt")).toBeTruthy();
   setRequestId("replacement-request");
   await waitForSolid(() => expect(view.queryByText("notes.txt")).toBeNull());
   expect(view.getByLabelText("Part")).toBe(input);
-  expect(selections).toHaveBeenCalledTimes(3);
+  expect(selections).toHaveBeenCalledTimes(4);
 });
 
 it("retires pending previews on disabled and request changes while retaining controls", async () => {

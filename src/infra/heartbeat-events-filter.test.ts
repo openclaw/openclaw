@@ -148,6 +148,10 @@ it.each([
   { value: "no_reply: actual reminder", expected: true },
   { value: "HEARTBEAT_OK", expected: false },
   { value: "heartbeat_ok: already handled", expected: false },
+  { value: "heartbeat poll: noop", expected: false },
+  { value: "heartbeat wake: noop", expected: false },
+  { value: "Cron: investigate heartbeat wake failures", expected: true },
+  { value: "Reminder: review heartbeat poll results", expected: true },
   { value: "Exec completed (abc12345, code 0)", expected: false },
 ])("classifies cron system events for %j", ({ value, expected }) => {
   expect(isCronSystemEvent({ text: value })).toBe(expected);

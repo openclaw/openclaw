@@ -123,7 +123,6 @@ export async function requestFeishuApi<T>(
   request: () => Promise<T>,
   errorPrefix: string,
   options: {
-    includeConfigParams?: boolean;
     includeNestedErrorLogId?: boolean;
   } = {},
 ): Promise<T> {

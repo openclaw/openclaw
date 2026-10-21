@@ -6,7 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
-import { MCP_APP_RESOURCE_MENTION_EVENT } from "../../components/mcp-app-resources.tsx";
+import { MCP_APP_RESOURCE_MENTION_EVENT } from "../../components/mcp-app-resource-mention.ts";
 import {
   MCP_APP_CONTEXT_EVENT,
   MCP_APP_FILE_OPEN_EVENT,

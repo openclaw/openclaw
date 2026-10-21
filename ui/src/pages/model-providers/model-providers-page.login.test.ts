@@ -879,6 +879,93 @@ describe("Models provider login", () => {
     expect(request.mock.calls.some(([method]) => method.startsWith("openclaw.setup."))).toBe(false);
   });
 
+  it("reveals and focuses new inventory before a cancelled agent's read settles", async () => {
+    const { context, request } = loginHarness();
+    const originalRequest = request.getMockImplementation()!;
+    const previousInventory = deferred<ModelAuthStatusResult>();
+    let inventoryReads = 0;
+    request.mockImplementation(async (method, ...args) => {
+      if (method === "models.authStatus" && inventoryReads++ === 0) {
+        return previousInventory.promise;
+      }
+      return originalRequest(method, ...args);
+    });
+    let agentId = "writer";
+    let controller!: ModelProviderLogin;
+    const view = mountSolid(() => {
+      controller = createModelProviderLogin({
+        getScope: () => ({ context, agentId }),
+        canStart: () => true,
+        canContinue: () => true,
+        refresh: async () => undefined,
+      });
+      return createComponent(ModelProviderLoginView, { controller });
+    });
+    const openingPrevious = controller.open();
+    expect(controller.busy).toBe(true);
+    await waitForSolid(() =>
+      expect(
+        view.container.querySelector('.model-provider-login [role="status"]')?.textContent,
+      ).toBe("Loading…"),
+    );
+    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions .btn")!.click();
+    expect(controller.busy).toBe(false);
+    agentId = "reviewer";
+    await controller.open();
+    await waitForSolid(() => {
+      const input = view.container.querySelector("[data-models-login-search]");
+      expect(input).not.toBeNull();
+      expect(document.activeElement).toBe(input);
+      expect(providerChoices(view.container)).toEqual(["example"]);
+    });
+    const input = view.container.querySelector("[data-models-login-search]");
+    previousInventory.resolve({ ts: 1, providers: [], providerCapabilities: [] });
+    await openingPrevious;
+    await waitForSolid(() => {
+      expect(view.container.querySelector("[data-models-login-search]")).toBe(input);
+      expect(providerChoices(view.container)).toEqual(["example"]);
+    });
+    view.unmount();
+  });
+
+  it.each([false, true])("reopens after an inventory error (cached auth: %s)", async (cached) => {
+    const { context, request } = loginHarness();
+    const ready =
+      await context.gateway.snapshot.client!.request<ModelAuthStatusResult>("models.authStatus");
+    request.mockClear();
+    request.mockRejectedValueOnce(new Error("Inventory unavailable"));
+    let authStatus: ModelAuthStatusResult | undefined;
+    let controller!: ModelProviderLogin;
+    const view = mountSolid(() => {
+      controller = createModelProviderLogin({
+        getScope: () => ({ context, agentId: "writer", authStatus }),
+        canStart: () => true,
+        canContinue: () => true,
+        refresh: async () => undefined,
+      });
+      return createComponent(ModelProviderLoginView, { controller });
+    });
+    await controller.open();
+    await waitForSolid(() =>
+      expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
+        "Inventory unavailable",
+      ),
+    );
+    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions .btn")!.click();
+    if (cached) {
+      authStatus = ready;
+    }
+    await controller.open();
+    await waitForSolid(() => {
+      expect(view.container.querySelector('[role="alert"]')).toBeNull();
+      expect(providerChoices(view.container)).toEqual(["example"]);
+    });
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(
+      cached ? 1 : 2,
+    );
+    view.unmount();
+  });
+
   it.each([false, true])(
     "offers optional discovery without login choices (inventory unavailable: %s)",
     async (unavailable) => {

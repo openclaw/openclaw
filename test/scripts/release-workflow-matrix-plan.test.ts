@@ -495,7 +495,7 @@ ${expectDefined(step.run, "prompt-prefix command")}`,
       releaseProfile: "stable",
     };
     const plan = createReleaseWorkflowMatrixPlan(options);
-    expectStableMatrices(plan.dockerE2e.matrix.include, plan.liveModels.matrix.include);
+    // The CLI normalization case owns the exact stable chunk/provider inventory.
     for (const [chunk, timeout] of [
       ["package-update-openai", 60],
       ["package-update-restart-auth", 75],
@@ -504,13 +504,6 @@ ${expectDefined(step.run, "prompt-prefix command")}`,
         plan.dockerE2e.matrix.include.find((entry: MatrixEntry) => entry.chunk_id === chunk),
       ).toMatchObject({ timeout_minutes: timeout });
     }
-    expect(plan.liveModels.matrix.include).toContainEqual({
-      provider_label: "MiniMax",
-      providers: "minimax",
-      models: "minimax/MiniMax-M3,minimax-portal/MiniMax-M3",
-      max_models: "2",
-      profiles: "stable full",
-    });
     const admission = createReleaseSourceSelection(options);
     expect(admission.docker.map((entry) => ("chunk" in entry ? entry.chunk : undefined))).toEqual(
       FULL_DOCKER_CHUNKS,

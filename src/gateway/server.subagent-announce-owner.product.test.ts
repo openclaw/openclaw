@@ -141,7 +141,6 @@ function buildConfig(workspace: string, modelUrl: string): OpenClawConfig {
       defaults: {
         workspace,
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
         model: { primary: "synthetic/announce-owner" },
         subagents: { allowAgents: ["*"] },
       },

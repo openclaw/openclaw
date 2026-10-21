@@ -1,18 +1,21 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo, createSignal, createUniqueId, onSettled } from "solid-js";
+import { For, Show, createMemo, createStore, createUniqueId, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { isSessionRunStateActive } from "../../../lib/session-run-state.ts";
 import { endedWithoutFinishing, isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
-import type { SubagentsPanelRow } from "../subagents-panel-data.ts";
 import "../../../styles/session-panel-rail.css";
 import "./chat-subagents-working.css";
 import "./chat-subagents-panel-desktop.css";
+import type { SubagentsPanelRow } from "../subagents-panel-data.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type Group = "active" | "waiting" | "done" | "stopped" | "failed";
 const groups: readonly Group[] = ["active", "waiting", "done", "stopped", "failed"];
@@ -179,13 +182,22 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
   const id = createUniqueId();
   const scope = createMemo(() => JSON.stringify([props.sessionKey, props.agentId]));
   // Disclosure/reveal and return targets belong to this session's local interaction state.
-  const [navigation, setNavigation] = createSignal<{
+  const [navigation, setNavigation] = createStore<{
     scope: string;
     doneOpen: boolean;
     showAllDone: boolean;
     returnTarget?: { button: HTMLButtonElement; scrollTop: number };
-  }>((previous) =>
-    previous?.scope === scope() ? previous : { scope: scope(), doneOpen: true, showAllDone: false },
+  }>(
+    (draft) => {
+      const currentScope = scope();
+      if (draft.scope !== currentScope) {
+        draft.scope = currentScope;
+        draft.doneOpen = true;
+        draft.showAllDone = false;
+        delete draft.returnTarget;
+      }
+    },
+    { scope: "", doneOpen: true, showAllDone: false, returnTarget: undefined },
   );
   let content!: HTMLDivElement;
   const openButtons = new Map<string, HTMLButtonElement>();
@@ -197,26 +209,37 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
       }
     };
   };
-  createPendingFocus(() => ({ active: props.active, target: navigation().returnTarget }), {
-    requested: (next) => Boolean(next.target),
-    ready: (next) => next.active,
-    focus: ({ target }) => {
-      if (target) {
-        content.scrollTop = target.scrollTop;
-        // A child may disappear while open; retain a focus destination in the list.
-        (target.button.isConnected ? target.button : content).focus({ preventScroll: true });
-        setNavigation((previous) => ({ ...previous, returnTarget: undefined }));
-      }
+  createPendingFocus(
+    () => {
+      const target = navigation.returnTarget;
+      // The focus callback consumes plain facts, not nested store reads.
+      return {
+        active: props.active,
+        target: target && { button: target.button, scrollTop: target.scrollTop },
+      };
     },
-  });
-  const allDone = () => props.doneExpanded ?? navigation().showAllDone;
+    {
+      requested: (next) => Boolean(next.target),
+      ready: (next) => next.active,
+      focus: ({ target }) => {
+        if (target) {
+          content.scrollTop = target.scrollTop;
+          // A child may disappear while open; retain a focus destination in the list.
+          (target.button.isConnected ? target.button : content).focus({ preventScroll: true });
+          setNavigation((draft) => {
+            delete draft.returnTarget;
+          });
+        }
+      },
+    },
+  );
+  const allDone = () => props.doneExpanded ?? navigation.showAllDone;
   const visible = (group: Group) => props.rows.filter((row) => groupFor(row) === group);
   const shownGroups = createMemo(() => groups.filter((group) => visible(group).length > 0));
   const open = (row: SubagentsPanelRow, source: HTMLButtonElement) => {
-    setNavigation((previous) => ({
-      ...previous,
-      returnTarget: { button: source, scrollTop: content.scrollTop },
-    }));
+    setNavigation((draft) => {
+      draft.returnTarget = { button: source, scrollTop: content.scrollTop };
+    });
     props.onOpen(row);
   };
   return (
@@ -272,18 +295,20 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
                   <button
                     class="subagents-desktop__heading subagents-desktop__disclosure"
                     type="button"
-                    aria-expanded={navigation().doneOpen ? "true" : "false"}
+                    aria-expanded={navigation.doneOpen ? "true" : "false"}
                     aria-controls={`${id}-done`}
                     onClick={() =>
-                      setNavigation((previous) => ({ ...previous, doneOpen: !previous.doneOpen }))
+                      setNavigation((draft) => {
+                        draft.doneOpen = !draft.doneOpen;
+                      })
                     }
                   >
                     <span>{t("chat.subagentsPanel.desktopFilter.done")}</span>
                     <span class="subagents-desktop__count">{visible("done").length}</span>
-                    <Icon name={navigation().doneOpen ? "chevronDown" : "chevronRight"} />
+                    <Icon name={navigation.doneOpen ? "chevronDown" : "chevronRight"} />
                   </button>
                 </Show>
-                <Show when={group() !== "done" || navigation().doneOpen}>
+                <Show when={group() !== "done" || navigation.doneOpen}>
                   <div id={group() === "done" ? `${id}-done` : undefined} role="list">
                     <For
                       each={
@@ -311,7 +336,9 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
                       onClick={() => {
                         const key = visible("done")[10]?.session.key;
                         const currentScope = scope();
-                        setNavigation((previous) => ({ ...previous, showAllDone: true }));
+                        setNavigation((draft) => {
+                          draft.showAllDone = true;
+                        });
                         props.onDoneExpandedChange?.(true);
                         onSettled(() => {
                           const button = key ? openButtons.get(key) : undefined;

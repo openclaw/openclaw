@@ -6,8 +6,9 @@ import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import "../../../components/tooltip.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatByteSize } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
@@ -16,6 +17,8 @@ import { DesktopWorkspaceContents } from "./chat-session-workspace-desktop.tsx";
 import { MobileWorkspaceContents } from "./chat-session-workspace-mobile-adapter.tsx";
 import type { SessionWorkspaceFilter } from "./chat-sidebar-content-types.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 const SESSION_KIND_LABELS = {
   modified: "chat.workspaceFiles.changed",

@@ -105,7 +105,7 @@ describe("memory_search index versions", () => {
       expect(result.details).toMatchObject({
         results: [],
         unavailable: true,
-        warning: expect.stringContaining("newer OpenClaw"),
+        error: expect.stringContaining("newer OpenClaw"),
         action: providerCost,
       });
       expect(readMemoryDatabaseRevision(db)).toBe(before);

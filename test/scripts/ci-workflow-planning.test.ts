@@ -2843,17 +2843,16 @@ describe("ci workflow guards", () => {
             }
           : {
               smoke: [
-                "Swift lint",
                 ...(historical ? [] : ["Configure iOS build and report simulator selection"]),
                 ...(historical ? [] : ["Prepare iOS simulator"]),
                 "Build iOS app",
+                ...(historical ? ["Swift lint"] : []),
                 ...(historical ? [] : ["Run focused iOS voice cleanup simulator tests"]),
                 ...(historical ? [] : ["Run focused iOS lifecycle simulator tests"]),
               ],
               release: ["Build iOS app (Release)"],
               tests: [
                 "Test Watch RTC engine",
-                "Swift lint",
                 "Configure iOS build and report simulator selection",
                 "Prepare iOS simulator",
                 "Build iOS app",
@@ -2867,13 +2866,14 @@ describe("ci workflow guards", () => {
         const phaseContext = { ...context, matrix: { phase } };
         const expected =
           historical && phase === "tests"
-            ? ["Test Watch RTC engine", "Swift lint", "Build iOS app"]
+            ? ["Test Watch RTC engine", "Build iOS app", "Swift lint"]
             : workloads[phase];
         names.push(evaluateWorkflowExpression(job.name, phaseContext));
         const selected = job.steps
           .filter((step: WorkflowStep) =>
             Object.values(workloads)
               .flat()
+              .concat("Swift lint")
               .includes(step.name ?? ""),
           )
           .filter(

@@ -9,7 +9,7 @@ import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
-import type { SolidRouteProps } from "../app-route-types.ts";
+import type { SolidRouteProps } from "../app-route-types.tsx";
 import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
 import {
   SESSION_COMPOSER_FOCUS_PARAM,
@@ -26,7 +26,7 @@ import {
 } from "./router-outlet.test-support.tsx";
 
 // mock-isolation: Supply the renderer while retaining the registered route's ownership policy.
-vi.mock("../pages/chat/chat-page.ts", () => ({}));
+vi.mock("../pages/chat/chat-page.tsx", () => ({}));
 
 type RouteId = "chat" | "dashboard" | "home" | "settings" | "new-session";
 type TestContext = Record<string, never>;

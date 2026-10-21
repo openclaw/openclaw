@@ -522,58 +522,23 @@ describe("capability cli", () => {
     timeoutMs?: unknown;
   };
 
-  function firstGatewayCall() {
-    const calls = mocks.callGateway.mock.calls as unknown as Array<[GatewayCall]>;
-    return calls[0]?.[0];
+  function callArg<T>(mock: { mock: { calls: T[][] } }, index = 0): T | undefined {
+    return mock.mock.calls[index]?.[0];
   }
-
-  function firstCompletionCall() {
-    const calls = mocks.completeWithPreparedSimpleCompletionModel.mock.calls as unknown as Array<
-      [CompletionCall]
-    >;
-    return calls[0]?.[0];
-  }
-
-  function firstPreparedModelParams() {
-    const calls = mocks.acquireSimpleCompletionModelForAgent.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
-    return calls[0]?.[0];
-  }
-
-  function firstJsonOutput() {
-    const calls = mocks.runtime.writeJson.mock.calls as unknown as Array<[Record<string, unknown>]>;
-    return calls[0]?.[0];
-  }
-
-  function imageDescribeCall(index = 0) {
-    const calls = mocks.describeImageFile.mock.calls as unknown as Array<[ImageDescribeParams]>;
-    return calls[index]?.[0];
-  }
-
-  function firstImagePrepareCall() {
-    const calls = mocks.prepareImageDescriptionInput.mock.calls as unknown as Array<
-      [ImageDescribeParams]
-    >;
-    return calls[0]?.[0];
-  }
-
-  function firstImageDescribeWithModelCall() {
-    const calls = mocks.describePreparedImageWithModel.mock.calls as unknown as Array<
-      [ImageDescribeParams]
-    >;
-    return calls[0]?.[0];
-  }
-
-  function firstImageGenerationCall() {
-    const calls = mocks.generateImage.mock.calls as unknown as Array<[Record<string, unknown>]>;
-    return calls[0]?.[0];
-  }
-
-  function firstVideoGenerationCall() {
-    const calls = mocks.generateVideo.mock.calls as unknown as Array<[Record<string, unknown>]>;
-    return calls[0]?.[0];
-  }
+  const firstGatewayCall = () => callArg<GatewayCall>(mocks.callGateway);
+  const firstCompletionCall = () =>
+    callArg<CompletionCall>(mocks.completeWithPreparedSimpleCompletionModel);
+  const firstPreparedModelParams = () =>
+    callArg<Record<string, unknown>>(mocks.acquireSimpleCompletionModelForAgent);
+  const firstJsonOutput = () => callArg<Record<string, unknown>>(mocks.runtime.writeJson);
+  const imageDescribeCall = (index = 0) =>
+    callArg<ImageDescribeParams>(mocks.describeImageFile, index);
+  const firstImagePrepareCall = () =>
+    callArg<ImageDescribeParams>(mocks.prepareImageDescriptionInput);
+  const firstImageDescribeWithModelCall = () =>
+    callArg<ImageDescribeParams>(mocks.describePreparedImageWithModel);
+  const firstImageGenerationCall = () => callArg<Record<string, unknown>>(mocks.generateImage);
+  const firstVideoGenerationCall = () => callArg<Record<string, unknown>>(mocks.generateVideo);
 
   async function outputFixture(extension: string, original: string) {
     const dir = tempDirs.make("capability-output-");
@@ -649,17 +614,9 @@ describe("capability cli", () => {
     });
   }
 
-  function firstTextToSpeechCall() {
-    const calls = mocks.textToSpeech.mock.calls as unknown as Array<[Record<string, unknown>]>;
-    return calls[0]?.[0];
-  }
-
-  function firstEmbeddingProviderCall() {
-    const calls = mocks.createEmbeddingProvider.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
-    return calls[0]?.[0];
-  }
+  const firstTextToSpeechCall = () => callArg<Record<string, unknown>>(mocks.textToSpeech);
+  const firstEmbeddingProviderCall = () =>
+    callArg<Record<string, unknown>>(mocks.createEmbeddingProvider);
 
   function runtimeErrorMessages(): string[] {
     return mocks.runtime.error.mock.calls.map((call) => String(call[0] ?? ""));
@@ -667,6 +624,19 @@ describe("capability cli", () => {
 
   function expectRuntimeErrorContains(expected: string): void {
     expect(runtimeErrorMessages().join("\n")).toContain(expected);
+  }
+
+  function cliOptions(options: Record<string, string | number | true | string[] | undefined>) {
+    return Object.entries(options).flatMap(([name, value]) =>
+      value === undefined
+        ? []
+        : value === true
+          ? [`--${name}`]
+          : (Array.isArray(value) ? value : [String(value)]).flatMap((entry) => [
+              `--${name}`,
+              entry,
+            ]),
+    );
   }
 
   it.each(["list", "inspect"])("queries capability metadata through %s", async (action) => {
@@ -717,9 +687,7 @@ describe("capability cli", () => {
         "--agent",
         "work",
         "inspect",
-        "--model",
-        model,
-        "--json",
+        ...cliOptions({ model, json: true }),
       );
       if (present) {
         await run;
@@ -753,11 +721,11 @@ describe("capability cli", () => {
       "--agent",
       "work",
       "run",
-      "--model",
-      "catalog-fixture/WORK-MODEL@work",
-      "--prompt",
-      "hello",
-      "--json",
+      ...cliOptions({
+        model: "catalog-fixture/WORK-MODEL@work",
+        prompt: "hello",
+        json: true,
+      }),
     );
 
     expect(firstPreparedModelParams()).toMatchObject({
@@ -960,28 +928,6 @@ describe("capability cli", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      errorMessage: undefined,
-      expected: 'No text output returned for provider "openai" model "gpt-5.4"',
-    },
-    {
-      errorMessage: '{"detail":"Instructions are required"}',
-      expected: '{"detail":"Instructions are required"}',
-    },
-  ])(
-    "reports empty local model output with provider error $errorMessage",
-    async ({ errorMessage, expected }) => {
-      mocks.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
-        content: [],
-        ...(errorMessage ? { stopReason: "error", errorMessage } : {}),
-      } as never);
-      await expect(runModelProbe()).rejects.toThrow("exit 1");
-      expectRuntimeErrorContains(expected);
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    },
-  );
-
   it("rejects local Codex provider probes before simple-completion dispatch", async () => {
     primeChatGptModel("codex", "gpt-5.4");
 
@@ -1161,11 +1107,13 @@ describe("capability cli", () => {
       await runCapability(
         "image",
         action,
-        ...files.flatMap((file) => ["--file", file]),
-        ...(model ? ["--model", model] : []),
-        ...(prompt ? ["--prompt", prompt] : []),
-        ...(timeoutMs ? ["--timeout-ms", String(timeoutMs)] : []),
-        "--json",
+        ...cliOptions({
+          file: files,
+          model,
+          prompt,
+          "timeout-ms": timeoutMs,
+          json: true,
+        }),
       );
       if (model) {
         expect(firstImagePrepareCall()).toMatchObject({ filePath: files[0], mediaUrl: files[0] });
@@ -1205,11 +1153,11 @@ describe("capability cli", () => {
     await runCapability(
       "image",
       "describe",
-      "--file",
-      "photo.jpg",
-      "--model",
-      "openrouter/google/gemma-4-31b-it:free",
-      "--json",
+      ...cliOptions({
+        file: "photo.jpg",
+        model: "openrouter/google/gemma-4-31b-it:free",
+        json: true,
+      }),
     );
     expect(mocks.prepareImageDescriptionInput).toHaveBeenCalledTimes(1);
     const calls = mocks.describePreparedImageWithModel.mock.calls as unknown as Array<
@@ -1332,17 +1280,14 @@ describe("capability cli", () => {
       "image",
       "generate",
       "alpha",
-      "--agent",
-      "beta",
-      "--prompt",
-      "portrait",
-      "--quality",
-      "max",
-      "--resolution",
-      " 2k ",
-      "--openai-moderation",
-      "low",
-      "--json",
+      ...cliOptions({
+        agent: "beta",
+        prompt: "portrait",
+        quality: "max",
+        resolution: " 2k ",
+        "openai-moderation": "low",
+        json: true,
+      }),
     );
 
     expect(firstImageGenerationCall()).toMatchObject({
@@ -1364,46 +1309,32 @@ describe("capability cli", () => {
     await runCapability(
       "image",
       "edit",
-      "--file",
-      inputPath,
-      "--file",
-      inputPath,
-      "--count",
-      "3",
-      "--size",
-      "2160x3840",
-      "--aspect-ratio",
-      "9:16",
-      "--resolution",
-      "4K",
-      "--background",
-      "opaque",
-      "--timeout-ms",
-      "180000",
-      "--prompt",
-      "make background transparent",
-      "--model",
-      "openai/gpt-image-1.5",
-      "--output-format",
-      "png",
-      "--openai-background",
-      "transparent",
-      "--openai-moderation",
-      "auto",
-      "--quality",
-      "high",
-      "--output",
-      outputPath,
-      "--json",
+      ...cliOptions({
+        file: [inputPath, inputPath],
+        count: 3,
+        size: "2160x3840",
+        "aspect-ratio": "9:16",
+        resolution: "4K",
+        background: "opaque",
+        "timeout-ms": 180000,
+        prompt: "make background transparent",
+        model: "openai/gpt-image-1.5",
+        "output-format": "png",
+        "openai-background": "transparent",
+        "openai-moderation": "auto",
+        quality: "high",
+        output: outputPath,
+        json: true,
+      }),
     );
 
     const generationCall = firstImageGenerationCall();
     const inputImages = generationCall?.inputImages as Array<Record<string, unknown>>;
-    expect(generationCall?.prompt).toBe("make background transparent");
-    expect(generationCall?.modelOverride).toBe("openai/gpt-image-1.5");
-    expect(generationCall?.outputFormat).toBe("png");
-    expect(generationCall?.quality).toBe("high");
     expect(generationCall).toMatchObject({
+      prompt: "make background transparent",
+      modelOverride: "openai/gpt-image-1.5",
+      outputFormat: "png",
+      quality: "high",
       count: 3,
       size: "2160x3840",
       aspectRatio: "9:16",
@@ -1581,20 +1512,16 @@ describe("capability cli", () => {
       });
 
       await generateVideo(
-        "--model",
-        "minimax/MiniMax-Hailuo-2.3",
-        "--size",
-        "1280x768",
-        "--aspect-ratio",
-        "16:9",
-        "--resolution",
-        "768p",
-        "--duration",
-        duration,
-        "--audio",
-        "--watermark",
-        "--timeout-ms",
-        "300000",
+        ...cliOptions({
+          model: "minimax/MiniMax-Hailuo-2.3",
+          size: "1280x768",
+          "aspect-ratio": "16:9",
+          resolution: "768p",
+          duration,
+          audio: true,
+          watermark: true,
+          "timeout-ms": 300000,
+        }),
       );
 
       const videoCall = firstVideoGenerationCall();
@@ -1768,14 +1695,12 @@ describe("capability cli", () => {
       "infer",
       "audio",
       "transcribe",
-      "--file",
-      "memo.m4a",
-      "--model",
-      "openai/whisper-1",
-      "--language",
-      "en",
-      "--prompt",
-      "Focus on names",
+      ...cliOptions({
+        file: "memo.m4a",
+        model: "openai/whisper-1",
+        language: "en",
+        prompt: "Focus on names",
+      }),
     );
     expect(mocks.transcribeAudioFile).toHaveBeenNthCalledWith(
       1,

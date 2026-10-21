@@ -1,13 +1,16 @@
 import { createMemo, For } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerCronEnglish } from "../../../i18n/locales/en-cron.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { SessionAutomationInventory } from "./chat-summary-automations.tsx";
-import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
 import "../../../styles/chat/automation-mobile.css";
 import "../../../styles/chat/summary-automations.css";
+import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 registerEnglishCatalog(registerCronEnglish);
 
