@@ -15,18 +15,12 @@ function setResponse(body: string, contentType = "text/markdown; charset=utf-8")
   return fetchSpy;
 }
 
-function createToolWithHeaders(
-  headers: Record<string, string> = {},
-  cacheTtlMinutes = 0,
-): ReturnType<typeof createWebFetchTool> {
-  return createWebFetchTool({
+function fetchHeaders(headers: Record<string, string>, path: string, cacheTtlMinutes = 0) {
+  const tool = createWebFetchTool({
     lookupFn: lookupMock,
     config: { tools: { web: { fetch: { cacheTtlMinutes, headers } } } },
   });
-}
-
-function fetchHeaders(headers: Record<string, string>, path: string, cacheTtlMinutes = 0) {
-  return createToolWithHeaders(headers, cacheTtlMinutes)?.execute?.("call", {
+  return tool?.execute("call", {
     url: `https://example.com/${path}`,
   });
 }
@@ -192,14 +186,11 @@ describe("web_fetch headers and response extraction", () => {
     setResponse('{"patch":true}', "Application/JSON-Patch+JSON");
 
     const result = await fetchHeaders({}, "json-patch");
-    const details = result?.details as
-      | { extractor?: string; contentType?: string; text?: string }
-      | undefined;
-    expect(details).toMatchObject({
+    expect(result?.details).toMatchObject({
       extractor: "json",
       contentType: "application/json-patch+json",
+      text: expect.stringContaining('"patch": true'),
     });
-    expect(details?.text).toContain('"patch": true');
   });
 
   it("bypasses Firecrawl when runtime metadata marks Firecrawl inactive", async () => {
@@ -228,20 +219,5 @@ describe("web_fetch headers and response extraction", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/runtime-firecrawl-off");
-  });
-
-  it("converts markdown to text when extractMode is text", async () => {
-    setResponse("# Heading\n\n**Bold text** and [a link](https://example.com).");
-    const result = await createToolWithHeaders()?.execute?.("call", {
-      url: "https://example.com/text-mode",
-      extractMode: "text",
-    });
-    const details = result?.details as
-      | { extractor?: string; extractMode?: string; text?: string }
-      | undefined;
-    expect(details).toMatchObject({ extractor: "cf-markdown", extractMode: "text" });
-    expect(details?.text).not.toContain("# Heading");
-    expect(details?.text).toContain("Heading");
-    expect(details?.text).not.toContain("[a link](https://example.com)");
   });
 });

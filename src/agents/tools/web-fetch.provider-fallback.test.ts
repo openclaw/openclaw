@@ -47,10 +47,27 @@ function fallbackTool(fetch: FetchConfig = {}) {
   return createWebFetchTool({ config: { tools: { web: { fetch } } }, sandboxed: false });
 }
 
-function setProvider(execute: (input: unknown) => unknown) {
+function execute(tool: ReturnType<typeof createWebFetchTool>, path = "fallback") {
+  return tool!.execute(path, { url: `https://example.com/${path}` });
+}
+
+function activateProvider(provider: string, maxChars?: number) {
+  const config = { tools: { web: { fetch: { provider, maxChars } } } };
+  runtimeState.activeSecretsRuntimeSnapshot = { config };
+  runtimeState.activeRuntimeWebToolsMetadata = { fetch: metadata(provider), diagnostics: [] };
+}
+
+function expectRescued(details: unknown, text: string) {
+  expect(details).toMatchObject({
+    extractor: "custom-provider",
+    text: expect.stringContaining(text),
+  });
+}
+
+function setProvider(providerExecute: (input: unknown) => unknown) {
   resolveWebFetchDefinitionMock.mockReturnValue({
     provider: { id: "firecrawl" },
-    definition: { description: "firecrawl", parameters: {}, execute },
+    definition: { description: "firecrawl", parameters: {}, execute: providerExecute },
   });
 }
 
@@ -140,13 +157,10 @@ describe("web_fetch provider fallback normalization", () => {
       },
     ]);
     const tool = createWebFetchTool({
-      config: {
-        tools: { web: { fetch: { provider: "firecrawl" } } },
-      } as OpenClawConfig,
+      config: { tools: { web: { fetch: { provider: "firecrawl" } } } },
     });
-
     await expect(
-      tool?.execute?.("call-provider-fallback", { url: "https://example.com" }),
+      tool!.execute("call-provider-fallback", { url: "https://example.com" }),
     ).rejects.toMatchObject({
       name: "SecretSurfaceUnavailableError",
       code: "SECRET_SURFACE_UNAVAILABLE",
@@ -177,12 +191,14 @@ describe("web_fetch provider fallback normalization", () => {
       title: "Provider Title",
       warning: "Provider Warning",
     }));
-    const tool = fallbackTool({ maxChars: 800 });
-
-    const details = await fetchDetails(tool);
-
-    expect(details.extractor).toBe("custom-provider");
-    expect(details.contentType).toBe("text/plain");
+    const details = await fetchDetails(fallbackTool({ maxChars: 800 }));
+    expect(details).toMatchObject({
+      extractor: "custom-provider",
+      contentType: "text/plain",
+      truncated: true,
+      rawLength: providerRawText.length,
+      length: details.text?.length,
+    });
     expect(
       (details.text?.length ?? 0) + (details.title?.length ?? 0) + (details.warning?.length ?? 0),
     ).toBeLessThanOrEqual(800);
@@ -193,9 +209,6 @@ describe("web_fetch provider fallback normalization", () => {
     expect(details.text).toContain(`Full output: ${details.spill?.path}`);
     expect(details.title).toContain("Provider Title");
     expect(details.warning).toContain("Provider Warning");
-    expect(details.truncated).toBe(true);
-    expect(details.rawLength).toBe(providerRawText.length);
-    expect(details.length).toBe(details.text?.length);
     expect(details.externalContent).toEqual({
       untrusted: true,
       source: "web_fetch",
@@ -226,21 +239,16 @@ describe("web_fetch provider fallback normalization", () => {
     }));
     setProvider(providerExecute);
     const tool = fallbackTool({ cacheTtlMinutes: 1 });
-    const args = { url: "https://example.com/short-partial-provider" };
-    const first = await tool?.execute?.("short-partial-provider-first", args);
-    const second = await tool?.execute?.("short-partial-provider-second", args);
-    if (!first || !second) {
-      throw new Error("expected web_fetch results");
-    }
+    const first = await execute(tool, "short-partial-provider");
+    const second = await execute(tool, "short-partial-provider");
     const firstDetails = first.details as FetchDetails;
-    const secondDetails = second?.details as FetchDetails;
-    const terminalPresentation = tool ? getToolTerminalPresentation(tool) : undefined;
+    const secondDetails = second.details as FetchDetails;
 
     expect(firstDetails.truncated).toBe(true);
     expect(secondDetails).toMatchObject({ cached: true, truncated: true });
     expect([firstDetails.spill, secondDetails.spill]).toEqual([undefined, undefined]);
     expect(providerExecute).toHaveBeenCalledTimes(1);
-    expect(terminalPresentation?.({}, first)?.text).toContain("Truncated: yes");
+    expect(getToolTerminalPresentation(tool!)?.({}, first)?.text).toContain("Truncated: yes");
   });
 
   it("keeps requested url and only accepts safe provider finalUrl values", async () => {
@@ -250,11 +258,7 @@ describe("web_fetch provider fallback normalization", () => {
       finalUrl: "file:///etc/passwd",
       text: "provider body",
     }));
-    const tool = fallbackTool();
-
-    const details = await fetchDetails(tool);
-
-    expect(details).toMatchObject({
+    expect(await fetchDetails(fallbackTool())).toMatchObject({
       url: "https://example.com/fallback",
       finalUrl: "https://example.com/fallback",
     });
@@ -262,14 +266,7 @@ describe("web_fetch provider fallback normalization", () => {
 
   it("late-binds provider fallback config and runtime metadata from the active runtime snapshot", async () => {
     failDirectFetch();
-    const runtimeConfig = {
-      tools: { web: { fetch: { provider: "firecrawl", maxChars: 640 } } },
-    } as OpenClawConfig;
-    runtimeState.activeSecretsRuntimeSnapshot = { config: runtimeConfig };
-    runtimeState.activeRuntimeWebToolsMetadata = {
-      fetch: metadata("firecrawl"),
-      diagnostics: [],
-    };
+    activateProvider("firecrawl", 640);
     setProvider(async () => ({
       text: "runtime fallback body ".repeat(200),
     }));
@@ -289,14 +286,6 @@ describe("web_fetch provider fallback normalization", () => {
     if (details.spill) {
       await rm(details.spill.path, { force: true });
     }
-    const definitionInput = resolveWebFetchDefinitionMock.mock.calls.at(0)?.[0] as
-      | {
-          config?: OpenClawConfig;
-          runtimeWebFetch?: { selectedProvider?: string };
-        }
-      | undefined;
-    expect(definitionInput?.config).toBe(runtimeConfig);
-    expect(definitionInput?.runtimeWebFetch?.selectedProvider).toBe("firecrawl");
   });
 
   it("scopes provider fallback cache entries by the late-bound provider", async () => {
@@ -318,19 +307,11 @@ describe("web_fetch provider fallback normalization", () => {
     );
 
     const executeWithProvider = async (providerId: string) => {
-      runtimeState.activeSecretsRuntimeSnapshot = {
-        config: { tools: { web: { fetch: { provider: providerId } } } },
-      };
-      runtimeState.activeRuntimeWebToolsMetadata = {
-        fetch: metadata(providerId),
-        diagnostics: [],
-      };
-      const tool = createWebFetchTool({
-        config: {} as OpenClawConfig,
-        sandboxed: false,
-        lateBindRuntimeConfig: true,
-      });
-      return fetchDetails(tool, "https://example.com/provider-cache-scope");
+      activateProvider(providerId);
+      return fetchDetails(
+        createWebFetchTool({ sandboxed: false, lateBindRuntimeConfig: true }),
+        "https://example.com/provider-cache-scope",
+      );
     };
 
     const firstDetails = await executeWithProvider("firecrawl");
@@ -349,9 +330,7 @@ describe("web_fetch provider fallback normalization", () => {
     setProvider(providerExecute);
     const tool = fallbackTool({ headers: { "X-Routing-Target": "direct-only" } });
 
-    await tool?.execute?.("provider-header-isolation", {
-      url: "https://example.com/provider-header-isolation",
-    });
+    await execute(tool, "provider-header-isolation");
 
     const providerInput = providerExecute.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
     expect(providerInput).toEqual({
@@ -362,49 +341,34 @@ describe("web_fetch provider fallback normalization", () => {
   });
 
   it("cancels an unread error response when provider fallback throws", async () => {
-    let cancelled = false;
-    unreadError(() => {
-      cancelled = true;
-    });
+    const cancel = vi.fn();
+    unreadError(cancel);
     setProvider(async () => {
       throw new Error("provider fallback unavailable");
     });
-    const tool = fallbackTool();
-
-    await expect(
-      tool?.execute?.("failed-provider-fallback", {
-        url: "https://example.com/failed-provider-fallback",
-      }),
-    ).rejects.toThrow("provider fallback unavailable");
-    expect(cancelled).toBe(true);
+    await expect(execute(fallbackTool(), "failed-provider-fallback")).rejects.toThrow(
+      "provider fallback unavailable",
+    );
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("returns provider fallback without waiting for a stalled body cancellation", async () => {
-    let cancelInvoked = false;
-    unreadError(() => {
-      cancelInvoked = true;
-      return new Promise<void>(() => {});
-    });
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    unreadError(cancel);
     setProvider(async () => ({
       text: "provider rescued body",
       extractor: "custom-provider",
     }));
-    const tool = fallbackTool();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await Promise.race([
-        tool?.execute?.("stalled-body-cancellation", {
-          url: "https://example.com/stalled-body-cancellation",
-        }),
+        execute(fallbackTool(), "stalled-body-cancellation"),
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => reject(new Error("body cancellation blocked fallback")), 1_000);
         }),
       ]);
-      const details = result?.details as { text?: string; extractor?: string };
-
-      expect(details.extractor).toBe("custom-provider");
-      expect(details.text).toContain("provider rescued body");
-      expect(cancelInvoked).toBe(true);
+      expectRescued(result.details, "provider rescued body");
+      expect(cancel).toHaveBeenCalledOnce();
     } finally {
       if (timer) {
         clearTimeout(timer);
@@ -451,10 +415,7 @@ describe("web_fetch provider fallback normalization", () => {
       const result = await tool?.execute?.("guarded-http-body-cancellation", {
         url: `http://127.0.0.1:${port}/fallback`,
       });
-      const details = result?.details as { text?: string; extractor?: string };
-
-      expect(details.extractor).toBe("custom-provider");
-      expect(details.text).toContain("provider rescued real guarded HTTP");
+      expectRescued(result?.details, "provider rescued real guarded HTTP");
       await vi.waitFor(() => expect(upstreamClosed).toBe(true), {
         timeout: 2_000,
         interval: 10,

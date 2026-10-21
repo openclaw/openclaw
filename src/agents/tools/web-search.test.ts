@@ -156,6 +156,22 @@ describe("web_search normalized output contract", () => {
 
       expect(stripWrapMarkers(normalized)).toEqual(expected);
       expect(Value.Check(WebSearchOutputSchema, normalized)).toBe(true);
+      if (normalized.kind === "results") {
+        for (const row of normalized.results) {
+          for (const text of [row.title, row.snippet, row.siteName]) {
+            if (text) {
+              expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+            }
+          }
+        }
+      } else if (normalized.kind === "answer") {
+        expect(normalized.content).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+        for (const citation of normalized.citations ?? []) {
+          if (citation.title) {
+            expect(citation.title).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+          }
+        }
+      }
       if (provider === "brave" && normalized.kind === "results") {
         const snippet = normalized.results[0]?.snippet;
         expect(snippet?.match(/<<<EXTERNAL_UNTRUSTED_CONTENT/gu)?.length).toBe(1);
@@ -169,44 +185,6 @@ describe("web_search normalized output contract", () => {
       }
     },
   );
-
-  it.each([
-    {
-      provider: "qa-lab-search",
-      kind: "results",
-      result: {
-        results: [
-          { title: "Fixture title", url: "https://example.com", snippet: "Fixture snippet" },
-        ],
-      },
-      wrapped: {
-        results: [
-          {
-            title: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
-            snippet: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
-          },
-        ],
-      },
-    },
-    {
-      provider: "external-answer",
-      kind: "answer",
-      result: {
-        content: "answer body",
-        citations: [{ url: "https://example.com", title: "cite title" }],
-      },
-      wrapped: {
-        content: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
-        citations: [{ title: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT") }],
-      },
-    },
-  ])("wraps untrusted $kind fields from $provider", ({ provider, kind, result, wrapped }) => {
-    expect(normalize(result, provider)).toMatchObject({
-      kind,
-      externalContent: externalContent(provider),
-      ...wrapped,
-    });
-  });
 
   it("gates provider error text: code charset, wrapped message, http docs only", () => {
     const normalized = normalize({
@@ -357,27 +335,24 @@ describe("web_search time filter parsing", () => {
   });
 });
 
-describe("web_search unsupported filter response", () => {
-  it("returns undefined when no unsupported filter is set", () => {
-    expect(buildUnsupportedSearchFilterResponse({ query: "openclaw" }, "gemini")).toBeUndefined();
-  });
+it("accepts queries without unsupported filters", () => {
+  expect(buildUnsupportedSearchFilterResponse({ query: "openclaw" }, "gemini")).toBeUndefined();
+});
 
-  it("maps non-date filters to provider-specific unsupported errors", () => {
-    expect(buildUnsupportedSearchFilterResponse({ country: "us" }, "grok")).toEqual({
-      error: "unsupported_country",
-      message:
-        "country filtering is not supported by the grok provider. Only Brave and Perplexity support country filtering.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    });
-  });
-
-  it("collapses date filters to unsupported_date_filter", () => {
-    expect(buildUnsupportedSearchFilterResponse({ date_before: "2026-03-19" }, "kimi")).toEqual({
-      error: "unsupported_date_filter",
-      message:
-        "date_after/date_before filtering is not supported by the kimi provider. Only Brave and Perplexity support date filtering.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    });
+it.each([
+  [{ country: "us" }, "grok", "unsupported_country", "country filtering", "country filtering"],
+  [
+    { date_before: "2026-03-19" },
+    "kimi",
+    "unsupported_date_filter",
+    "date_after/date_before filtering",
+    "date filtering",
+  ],
+] as const)("reports unsupported filters %s", (params, provider, error, label, supported) => {
+  expect(buildUnsupportedSearchFilterResponse(params, provider)).toEqual({
+    error,
+    message: `${label} is not supported by the ${provider} provider. Only Brave and Perplexity support ${supported}.`,
+    docs: "https://docs.openclaw.ai/tools/web",
   });
 });
 

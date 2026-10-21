@@ -61,25 +61,16 @@ const RESPONSES = [
 let reservation: Awaited<ReturnType<typeof reserveTestPortListener<Server>>> | undefined;
 let baseUrl: string;
 const spillPaths = new Set<string>();
-
-beforeAll(async () => {
-  reservation = await reserveTestPortListener({
-    offsets: [0],
-    createListener: () =>
-      createServer((request, reply) => {
-        const fixture = RESPONSES.find(({ path }) => path === request.url);
-        if (!fixture) {
-          reply.writeHead(404);
-          reply.end();
-          return;
-        }
-        reply.writeHead(200, { "content-type": fixture.contentType });
-        reply.end(fixture.body);
-      }),
+const createListener = () =>
+  createServer((request, reply) => {
+    const fixture = RESPONSES.find(({ path }) => path === request.url);
+    reply.writeHead(fixture ? 200 : 404, { "content-type": fixture?.contentType ?? "text/plain" });
+    reply.end(fixture?.body);
   });
+beforeAll(async () => {
+  reservation = await reserveTestPortListener({ offsets: [0], createListener });
   baseUrl = `http://127.0.0.1:${reservation.claim.port}`;
 });
-
 afterAll(async () => {
   await Promise.all([...spillPaths].map((path) => rm(path, { force: true })));
   if (!reservation) {

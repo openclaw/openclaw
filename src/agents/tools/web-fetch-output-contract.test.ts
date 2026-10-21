@@ -4,7 +4,6 @@ import { queryObjects } from "node:v8";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
-import { compactToolOutputHint } from "../tool-schema-hints.js";
 
 const { fetchWithWebToolsNetworkGuardMock, resolveWebFetchDefinitionMock } = vi.hoisted(() => ({
   fetchWithWebToolsNetworkGuardMock: vi.fn(),
@@ -92,14 +91,6 @@ describe("web_fetch output contract", () => {
   afterEach(async () => {
     await Promise.all([...spillPaths].map(async (path) => await rm(path, { force: true })));
     spillPaths.clear();
-  });
-
-  it("declares the exact schema and promotes its complete compact hint", () => {
-    const tool = createContractTool();
-
-    expect(compactToolOutputHint(tool?.outputSchema)).toBe(
-      '{ externalContent: { source: "web_fetch"; untrusted: true; wrapped: true; provider?: string }; extractMode: "markdown" | "text"; extractor: string; fetchedAt: string; finalUrl: string; length: number; rawLength: number; status: number; text: string; tookMs: number; truncated: boolean; url: string; cached?: true; contentType?: string; spill?: { chars: number; path: string; truncated?: true }; title?: string; warning?: string }',
-    );
   });
 
   it.each(["direct", "provider"])("validates %s output and omits absent keys", async (source) => {

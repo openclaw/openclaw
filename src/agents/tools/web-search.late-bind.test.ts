@@ -48,6 +48,8 @@ beforeEach(() => {
 afterEach(() => setActiveDegradedSecretOwners([]));
 
 it("prefers active runtime metadata over options.runtimeWebSearch when present", async () => {
+  const config = { tools: { web: { search: { provider: "perplexity" } } } };
+  mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({ config });
   mocks.getActiveRuntimeWebToolsMetadataFromState.mockReturnValue({
     search: metadata("perplexity"),
   });
@@ -57,7 +59,26 @@ it("prefers active runtime metadata over options.runtimeWebSearch when present",
     runtimeWebSearch: metadata("brave"),
   });
   expect(mocks.runWebSearch.mock.calls[0]?.[0]).toMatchObject({
+    config,
+    preferRuntimeProviders: true,
     runtimeWebSearch: { selectedProvider: "perplexity" },
+  });
+  expect(mocks.runWebSearch.mock.calls[0]?.[0].config).toBe(config);
+});
+
+it.each([true, false])("keeps runtime discovery enabled with metadata=%s", async (withMetadata) => {
+  const runtimeWebSearch = withMetadata ? metadata("custom") : undefined;
+  const result = await execute({
+    config: { tools: { web: { search: { provider: "custom" } } } },
+    sandboxed: true,
+    runtimeWebSearch,
+  });
+  expect(result?.details).toEqual({ kind: "raw", provider: "brave", data: { ok: true } });
+  expect(mocks.runWebSearch).toHaveBeenCalledOnce();
+  expect(mocks.runWebSearch.mock.calls[0]?.[0]).toMatchObject({
+    sandboxed: true,
+    preferRuntimeProviders: true,
+    runtimeWebSearch,
   });
 });
 

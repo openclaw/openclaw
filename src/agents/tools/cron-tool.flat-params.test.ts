@@ -141,36 +141,21 @@ describe("cron shorthand recovery", () => {
       enabled: false,
       state: { streamStatus: "error", streamError: "PRIVATE_DIAGNOSTIC" },
     };
-    const uncertain = presentation?.({ action: "update" }, { content: [], details: observed });
+    const present = (action: string, details: unknown) =>
+      presentation?.({ action }, { content: [], details });
+    const uncertain = present("update", observed);
     expect(uncertain?.text).toContain("Paused. Source termination is not confirmed.");
     expect(uncertain?.text).not.toContain("PRIVATE_DIAGNOSTIC");
+    expect(present("get", { ...observed, state: { streamStatus: "stopped" } })?.text).toContain(
+      "Source termination confirmed.",
+    );
     expect(
-      presentation?.(
-        { action: "get" },
-        {
-          content: [],
-          details: {
-            ...observed,
-            state: { streamStatus: "stopped" },
-          },
-        },
-      )?.text,
-    ).toContain("Source termination confirmed.");
-    expect(
-      presentation?.(
-        { action: "add" },
-        {
-          content: [],
-          details: {
-            created: true,
-            job: { ...observed, enabled: true, state: { streamStatus: "running" } },
-          },
-        },
-      )?.text,
+      present("add", {
+        created: true,
+        job: { ...observed, enabled: true, state: { streamStatus: "running" } },
+      })?.text,
     ).toContain("Source running.");
-    expect(
-      presentation?.({ action: "remove" }, { content: [], details: { ok: true, removed: true } }),
-    ).toBeUndefined();
+    expect(present("remove", { ok: true, removed: true })).toBeUndefined();
   });
 
   it.each([
