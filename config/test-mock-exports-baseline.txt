@@ -2031,7 +2031,6 @@
 ["src/agents/mcp-auth-profile.test.ts","./mcp-oauth.js","011db17350f54aa76f9ece13a7be0fbe6c3f23cc05d41b80db58e97f03302aa6",1]
 ["src/agents/mcp-form-resource-upload.test.ts","../gateway/mcp-app-form-resources.js","f4382cde56f0383d87872692c6b7d4ba545ff43386190258a8ed02d3a5ae1ae9",1]
 ["src/agents/mcp-http-fetch.test.ts","./mcp-oauth.js","993c28b68dc387ddafb244dd2f998d3c11bcfdbf89c284dca98ddb6d7e4296a7",1]
-["src/agents/mcp-oauth-fetch.test.ts","./mcp-oauth.js","16153d09391f39145295acba2ac3992228dc92ee7979b1f8b78fe7917ecebc2c",1]
 ["src/agents/mcp-oauth-provider.preparation.test.ts","./mcp-oauth-store.js","aa5a057aadffdfd51f2bcc7b21382c8779300c3f4917d1c5c02d4f1666d009cf",1]
 ["src/agents/mcp-stderr.test.ts","../logger.js","e0ac6463cde20b6a6a4b3d43432610c56bda7d98c791925bf913dcdf9e266c5f",1]
 ["src/agents/mcp-stdio-client.test.ts","../process/owned-stdio.js","43024cb7bfc79bbd562fa77b9e5cd6a443d4d91ace798019f51629aae9f2f2ee",1]
