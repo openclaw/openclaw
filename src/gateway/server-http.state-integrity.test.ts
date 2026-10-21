@@ -111,7 +111,8 @@ it("returns 503 with the worker admission refusal after audit index corruption, 
     clearOpenClawStateDatabaseOpenFailure(pathname);
     const replyReady = createDeferred();
     let releaseReply: (() => void) | undefined;
-    const originalEmit = Worker.prototype.emit;
+    const originalEmit = vi.spyOn(Worker.prototype, "emit");
+    originalEmit.mockRestore();
     const replies = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
       this: Worker,
       event: string | symbol,
