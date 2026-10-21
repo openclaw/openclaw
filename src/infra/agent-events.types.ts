@@ -99,7 +99,7 @@ export type AgentEventRegistration = {
   readonly captureDelivery?: CaptureAgentEventDelivery;
   active: boolean;
 };
-export type AgentEventListeners = { registrations: readonly AgentEventRegistration[] };
+type AgentEventListeners = { registrations: readonly AgentEventRegistration[] };
 
 export type AgentEventState = {
   runs: Map<string, AgentRunEventState>;

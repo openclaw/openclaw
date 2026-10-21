@@ -33,7 +33,7 @@ export type DurableRecord = {
   cleanupKind?: "lifecycle" | "sweep";
 };
 
-export type DurableTab = DurableRecord & { kind: "durable"; storageKey: string };
+type DurableTab = DurableRecord & { kind: "durable"; storageKey: string };
 
 export type CloseTab = (tab: {
   targetId: string;

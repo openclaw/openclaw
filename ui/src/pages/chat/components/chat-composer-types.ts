@@ -110,8 +110,10 @@ export type ChatSessionProgressProps = {
 export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
   getTranscriptElement?: () => HTMLElement | null;
+  getScrollToLatestElement?: () => HTMLButtonElement | null;
   onComposerShellRef?: (element: HTMLElement) => void | (() => void);
   onComposerFloatRef?: (element: HTMLElement) => void | (() => void);
+  onActivityPillsLayout?: ChatActivityPillsProps["onLayout"];
   /** Native merged chrome, supplied by the pane owner; never inferred from pane width. */
   mobileComposer?: boolean;
   /** Observed keyboard visibility from the shell viewport owner, when available. */
