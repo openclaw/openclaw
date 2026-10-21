@@ -109,17 +109,13 @@ describe("execution auth binding fingerprints", () => {
     ).toBeUndefined();
   });
 
-  it("keeps identity-bearing OAuth stable across token refreshes", () => {
-    const fingerprint = (access: string, refresh: string) =>
-      oauth("openai", access, refresh, { accountId: "account-1", email: "User@Example.test" });
-
-    expect(fingerprint("access-a", "refresh-a")).toBe(fingerprint("access-b", "refresh-b"));
-  });
-
-  it("invalidates identity-less OAuth when its opaque grant changes", () => {
-    const fingerprint = (access: string, refresh: string) => oauth("anthropic", access, refresh);
-
-    expect(fingerprint("access-a", "refresh-a")).not.toBe(fingerprint("access-b", "refresh-b"));
+  it.each([
+    ["openai", { accountId: "account-1", email: "User@Example.test" }, true],
+    ["anthropic", {}, false],
+  ] as const)("refreshes %s OAuth (%j), stable=%s", (provider, identity, stable) => {
+    const fingerprint = (version: string) =>
+      oauth(provider, `access-${version}`, `refresh-${version}`, identity);
+    expect(fingerprint("a") === fingerprint("b")).toBe(stable);
   });
 
   it("uses stable id-token identity instead of rotating token material", () => {

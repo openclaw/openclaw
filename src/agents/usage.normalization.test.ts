@@ -1,15 +1,36 @@
 import { expect, it } from "vitest";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "./usage.js";
 
-it("separates nested cache_creation_input_tokens from uncached input", () => {
-  expect(
-    normalizeUsage({
+it.each([
+  [
+    "separates nested cache creation from uncached input",
+    {
       prompt_tokens: 100,
       completion_tokens: 10,
       total_tokens: 110,
       prompt_tokens_details: { cached_tokens: 40, cache_creation_input_tokens: 60 },
-    }),
-  ).toEqual({ input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: 110 });
+    },
+    { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: 110 },
+  ],
+  ["rejects empty usage", {}, undefined],
+  [
+    "keeps interrupted accounting without provisional counts or cost",
+    {
+      input: 20,
+      output: 3,
+      total: 23,
+      cost: { total: 0.5 },
+      usageReport: { state: "unavailable" },
+    },
+    { usageReport: { state: "unavailable" }, contextUsage: { state: "unavailable" } },
+  ],
+  [
+    "normalizes llama.cpp completion timings",
+    { timings: { prompt_n: 30_834, predicted_n: 34 } },
+    { input: 30_834, output: 34, cacheRead: undefined, cacheWrite: undefined, total: undefined },
+  ],
+] as const)("%s", (_name, input, expected) => {
+  expect(normalizeUsage(input)).toEqual(expected);
 });
 
 it("preserves recorded zero cost and 1h writes through normalization", () => {
@@ -22,16 +43,9 @@ it("preserves recorded zero cost and 1h writes through normalization", () => {
     totalTokens: 120,
     cost: { total: 0, totalOrigin: "provider-billed" as const },
   };
-  const normalized = normalizeUsage(raw);
-  expect(normalized).toEqual({
-    input: 20,
-    output: 10,
-    cacheRead: 30,
-    cacheWrite: 60,
-    cacheWrite1h: 40,
-    total: 120,
-    cost: { total: 0, totalOrigin: "provider-billed" },
-  });
+  const normalized = normalizeUsage(structuredClone(raw));
+  const { totalTokens, ...fields } = raw;
+  expect(normalized).toEqual({ ...fields, total: totalTokens });
   expect(normalizeUsage(normalized)).toEqual(normalized);
 });
 
@@ -39,38 +53,6 @@ it("retains a valid zero-cost-only fact", () => {
   const normalized = normalizeUsage({ cost: { total: 0 } });
   expect(normalized).toMatchObject({ cost: { total: 0 } });
   expect(normalizeUsage(normalized)).toEqual(normalized);
-});
-
-it("normalizes llama.cpp completion timings", () => {
-  const usage = normalizeUsage({
-    timings: { prompt_n: 30_834, predicted_n: 34 },
-  });
-  expect(usage).toEqual({
-    input: 30_834,
-    output: 34,
-    cacheRead: undefined,
-    cacheWrite: undefined,
-    total: undefined,
-  });
-});
-
-it("returns undefined for empty usage objects", () => {
-  expect(normalizeUsage({})).toBeUndefined();
-});
-
-it("keeps interrupted accounting observable without treating provisional counts or cost as complete", () => {
-  expect(
-    normalizeUsage({
-      input: 20,
-      output: 3,
-      total: 23,
-      cost: { total: 0.5 },
-      usageReport: { state: "unavailable" },
-    }),
-  ).toEqual({
-    usageReport: { state: "unavailable" },
-    contextUsage: { state: "unavailable" },
-  });
 });
 
 it("guards against empty/zero usage overwrites", () => {

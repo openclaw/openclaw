@@ -68,33 +68,20 @@ describe("resolveFastModeState", () => {
     },
   );
 
-  it("uses rosterless global fastModeDefault over model config", () => {
-    const cfg = modelConfig({ fastMode: false }, "openai/gpt-4o", { fastModeDefault: true });
-
-    const state = resolve({
-      cfg,
-      model: "gpt-4o",
-      agentId: "main",
-    });
-
-    expect(state).toMatchObject({ mode: true, enabled: true, source: "agent" });
-  });
-
-  it("prefers per-agent fastModeDefault over the global default", () => {
+  it.each([undefined, false] as const)("prefers agent defaults (per-agent=%s)", (perAgent) => {
     const cfg: OpenClawConfig = {
       agents: {
-        ...modelConfig({ fastMode: true }, "openai/gpt-4o", { fastModeDefault: true }).agents,
-        entries: { main: { fastModeDefault: false } },
+        ...modelConfig({ fastMode: perAgent === false }, "openai/gpt-4o", {
+          fastModeDefault: true,
+        }).agents,
+        ...(perAgent === undefined ? {} : { entries: { main: { fastModeDefault: perAgent } } }),
       },
     };
-
-    const state = resolve({
-      cfg,
-      model: "gpt-4o",
-      agentId: "main",
+    expect(resolve({ cfg, model: "gpt-4o", agentId: "main" })).toMatchObject({
+      mode: perAgent ?? true,
+      enabled: perAgent ?? true,
+      source: "agent",
     });
-
-    expect(state).toMatchObject({ mode: false, source: "agent" });
   });
 
   it("formats auto mode with the default threshold", () => {
@@ -118,25 +105,13 @@ describe("resolveFastModeState", () => {
     ).toBe("Current fast mode: auto (30 sec) (default: model).");
   });
 
-  it("uses model fastAutoOnSeconds for auto cutoff across session overrides", () => {
-    const cfg = modelConfig({ fastMode: "auto", fastAutoOnSeconds: 30 });
-
-    const state = resolve({
-      cfg,
-      sessionEntry: { fastMode: "auto" },
-    });
-
-    expect(state).toMatchObject({ mode: "auto", source: "session", fastAutoOnSeconds: 30 });
-  });
-
-  it("uses model fast_seconds alias for auto cutoff", () => {
-    const cfg = modelConfig({ fastMode: "auto", fast_seconds: 15 });
-
-    const state = resolve({
-      cfg,
-    });
-
-    expect(state).toMatchObject({ mode: "auto", source: "config", fastAutoOnSeconds: 15 });
+  it.each([
+    ["fastAutoOnSeconds", 30, { fastMode: "auto" as const }, "session"],
+    ["fast_seconds", 15, undefined, "config"],
+  ] as const)("uses model %s for auto cutoff", (key, seconds, sessionEntry, source) => {
+    expect(
+      resolve({ cfg: modelConfig({ fastMode: "auto", [key]: seconds }), sessionEntry }),
+    ).toMatchObject({ mode: "auto", source, fastAutoOnSeconds: seconds });
   });
 
   it.each([

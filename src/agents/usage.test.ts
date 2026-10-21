@@ -59,8 +59,9 @@ it("preserves only complete context snapshots", () => {
   );
 });
 
-it("handles OpenAI Responses input_tokens_details.cached_tokens field", () => {
-  expectNormalized(
+it.each([
+  [
+    "handles OpenAI Responses cache and reasoning details",
     {
       input_tokens: 120,
       output_tokens: 30,
@@ -68,32 +69,26 @@ it("handles OpenAI Responses input_tokens_details.cached_tokens field", () => {
       input_tokens_details: { cached_tokens: 100 },
       output_tokens_details: { reasoning_tokens: 17 },
     },
+    { input: 20, output: 30, cacheRead: 100, reasoningTokens: 17, total: 250 },
+  ],
+  [
+    "normalizes zero Anthropic output reasoning tokens",
     {
-      input: 20,
-      output: 30,
-      cacheRead: 100,
-      reasoningTokens: 17,
-      total: 250,
-    },
-  );
-});
-
-it("normalizes zero Anthropic output reasoning tokens", () => {
-  expect(
-    normalizeUsage({
       input_tokens: 30,
       output_tokens: 40,
       output_tokens_details: { thinking_tokens: 0 },
-    }),
-  ).toMatchObject({ input: 30, output: 40, reasoningTokens: 0 });
-});
-
-it("clamps negative input to zero (pre-subtracted cached_tokens > prompt_tokens)", () => {
-  expectNormalized(
+    },
+    { input: 30, output: 40, reasoningTokens: 0 },
+  ],
+  [
+    "clamps pre-subtracted negative input to zero",
     { input: -4900, output: 200, cacheRead: 5000 },
     { input: 0, output: 200, cacheRead: 5000 },
-  );
-});
+  ],
+] satisfies Array<[string, Parameters<typeof normalizeUsage>[0], NormalizedUsage]>)(
+  "%s",
+  (_name, input, expected) => expectNormalized(input, expected),
+);
 
 it("returns undefined when no valid fields are provided", () => {
   expect(normalizeUsage(null)).toBeUndefined();
