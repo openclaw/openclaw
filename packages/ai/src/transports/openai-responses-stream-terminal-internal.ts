@@ -8,8 +8,8 @@ import { calculateCost } from "../model-utils.js";
 import {
   extendResponsesMessageText,
   renderResponsesMessageText,
-  responsesMessageSources,
   responsesTextSignature,
+  withResponsesTextSources,
   type ResponsesMessageText,
 } from "../providers/openai-responses-message-text.js";
 import { resolveResponsesMessageSnapshotCollapse } from "../providers/openai-responses-stream-compat.js";
@@ -35,7 +35,6 @@ import type {
   Usage,
 } from "../types.js";
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
-import { withTextSignatureV1Sources } from "../utils/text-signature.js";
 import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE,
@@ -200,7 +199,7 @@ export function createResponsesTerminalController(params: {
       const previousText = started.text;
       started.text = text;
       started.textSignature = preserveSignature
-        ? withTextSignatureV1Sources(started.textSignature, responsesMessageSources(rendered))
+        ? withResponsesTextSources(started.textSignature, rendered)
         : responsesTextSignature(item.id, phase, rendered);
       params.setLastTextBlock({ block: started, index: contentIndex, phase, rendered });
       if (text.startsWith(previousText)) {

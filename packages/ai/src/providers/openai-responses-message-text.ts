@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { encodeTextSignatureV1 } from "../utils/text-signature.js";
 
 export type ResponsesMessageText = {
   text: string;
@@ -57,18 +56,43 @@ export function renderResponsesMessageText(
   return extendResponsesMessageText({ prose, citations }, previous);
 }
 
-/** The visible source links after provider prose; replay must strip them (text signature `sources`). */
-export function responsesMessageSources(text: ResponsesMessageText): string | undefined {
+/** The visible source links after provider prose; replay must strip them. */
+function responsesMessageSources(text: ResponsesMessageText): string | undefined {
   return text.text.length > text.prose.length ? text.text.slice(text.prose.length) : undefined;
 }
 
-/** Signature for a rendered Responses message, naming its source suffix for replay. */
+/**
+ * V1 text signature for a rendered Responses message. `sources` names the rendered link suffix
+ * so replay sends the provider's own text. It stays Responses-internal, not in the shared encoder.
+ */
 export function responsesTextSignature(
   id: string,
   phase: "commentary" | "final_answer" | undefined,
   text: ResponsesMessageText,
 ): string {
-  return encodeTextSignatureV1(id, phase, responsesMessageSources(text));
+  const sources = responsesMessageSources(text);
+  return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}), ...(sources ? { sources } : {}) });
+}
+
+/** Point a kept V1 signature at the current source suffix; other signatures carry none. */
+export function withResponsesTextSources(
+  signature: string | undefined,
+  text: ResponsesMessageText,
+): string | undefined {
+  if (!signature?.startsWith("{")) {
+    return signature;
+  }
+  try {
+    const parsed: unknown = JSON.parse(signature);
+    if (!parsed || typeof parsed !== "object" || !("v" in parsed) || parsed.v !== 1) {
+      return signature;
+    }
+    const sources = responsesMessageSources(text);
+    const rest = Object.fromEntries(Object.entries(parsed).filter(([key]) => key !== "sources"));
+    return JSON.stringify({ ...rest, ...(sources ? { sources } : {}) });
+  } catch {
+    return signature;
+  }
 }
 
 /** Merge source state only after matching cumulative provider prose, never formatted links. */
