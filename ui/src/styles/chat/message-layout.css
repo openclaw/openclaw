@@ -931,6 +931,10 @@
   font-weight: 600;
 }
 
+.chat-assistant-attachment-card__allow {
+  min-height: 44px;
+}
+
 .chat-assistant-attachment-card--recoverable .chat-assistant-attachment-card__status-badge {
   color: var(--warn);
 }

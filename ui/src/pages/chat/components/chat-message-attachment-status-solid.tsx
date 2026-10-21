@@ -111,7 +111,10 @@ export function AssistantAttachmentStatusCard(
           <button
             class={[
               "chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled",
-              { "chat-assistant-attachment-card__retry": !props.onAllow && Boolean(props.onRetry) },
+              {
+                "chat-assistant-attachment-card__allow": Boolean(props.onAllow),
+                "chat-assistant-attachment-card__retry": !props.onAllow && Boolean(props.onRetry),
+              },
             ]}
             type="button"
             onClick={() => action()?.()}
