@@ -118,6 +118,10 @@ it("requires a current relay capability and preserves policy denial over HTTP", 
   } finally {
     relay.unregister();
     server.closeAllConnections();
-    await releaseListener().finally(() => claim.release());
+    try {
+      await releaseListener();
+    } finally {
+      await claim.release();
+    }
   }
 });
