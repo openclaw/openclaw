@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { getByRole } from "@solidjs/testing-library";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { registerListener } from "../../../../../src/shared/listeners.ts";
@@ -153,6 +154,25 @@ function click(container: HTMLElement, selector: string) {
   button!.click();
   flush();
 }
+
+it.each([true, false])(
+  "exposes Dreaming switch state through cancellation (%s)",
+  async (enabled) => {
+    const page = await createPage({ [STATUS]: () => ({ dreaming: { enabled } }) });
+    page.context.setConfig({});
+    const toggle = getByRole<HTMLButtonElement>(page.container, "switch", { name: "Dreaming" });
+    await waitForSolid(() => expect(toggle.disabled).toBe(false));
+    expect(toggle.getAttribute("aria-checked")).toBe(String(enabled));
+    toggle.click();
+    flush();
+    expect(page.toggle.open).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe(String(enabled));
+    page.toggle.onCancel();
+    flush();
+    expect(page.toggle.open).toBe(false);
+    expect(toggle.getAttribute("aria-checked")).toBe(String(enabled));
+  },
+);
 
 it.each(["rejected", "declined"] as const)(
   "shows a %s toggle write through its receipt and permits retry",
