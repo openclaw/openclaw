@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -134,12 +136,8 @@ it.each([
           modelsJsonContents: '{"providers":{}}\n',
           pluginCatalogs: [{ pluginId: "fixture", contents: persisted }],
         });
-        if (window === "before-delete") {
-          expect(persisted).toContain(key);
-        } else {
-          expect(persisted).not.toContain(key);
-          expect(persisted).toContain("retained-inventory");
-        }
+        expect(persisted).not.toContain(key);
+        expect(persisted).toContain("retained-inventory");
       };
       const cleanup = spyCleanup().mockImplementation(async (params) => {
         await scrub(params);
@@ -160,11 +158,13 @@ it.each([
         const persisted = readCatalog(agentDir);
         expect(persisted).not.toContain(key);
         expect(persisted).toContain("retained-inventory");
-        expect(persisted).toContain(independentKey);
-        expect(persisted).toContain(independentHeader);
-        expect(JSON.parse(persisted ?? "null").providers.fixture.models).toContainEqual(
-          survivingModel,
-        );
+        expect(persisted).not.toContain(independentKey);
+        expect(persisted).not.toContain(independentHeader);
+        expect(persisted).not.toContain(survivor.key);
+        expect(JSON.parse(persisted ?? "null").providers.fixture).toEqual({
+          api: "openai-completions",
+          models: [{ id: "retained-inventory" }, { id: "surviving-inventory" }],
+        });
       } finally {
         release.resolve();
         await refresh;
@@ -183,10 +183,19 @@ it.each(["contention", "failure"] as const)(
       for (const agentDir of [main, child]) {
         saveProfiles(agentDir, { [profileId]: credential });
       }
-      await catalogs.replacePersistedPluginModelCatalogs({
-        agentDir: child,
-        pluginCatalogWrites: catalogWrites(credential.access, [{ id: "retained" }]),
+      // Released catalogs retained credentials; ordinary publication no longer does.
+      for (const [relativePath, contents] of Object.entries(
+        catalogWrites(credential.access, [{ id: "retained" }]),
+      )) {
+        const pathname = join(child, relativePath);
+        mkdirSync(dirname(pathname), { recursive: true });
+        writeFileSync(pathname, contents);
+      }
+      expect(catalogs.migrateLegacyPluginModelCatalogs({ agentDir: child })).toEqual({
+        migrated: 1,
+        warnings: [],
       });
+      expect(readCatalog(child)).toContain(credential.access);
       const update = storeUpdate.runAuthProfileStoreUpdate;
       vi.spyOn(storeUpdate, "runAuthProfileStoreUpdate").mockImplementation(async (params) => {
         if (params.agentDir !== child) {

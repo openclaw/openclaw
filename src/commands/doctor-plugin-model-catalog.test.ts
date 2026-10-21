@@ -9,6 +9,7 @@ import { resolveAuthProfileDatabaseOwnerId } from "../agents/auth-profiles/sqlit
 import {
   encodePluginModelCatalogRelativePath,
   loadPersistedPluginModelCatalogsReadOnly,
+  migrateLegacyPluginModelCatalogs,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "../agents/plugin-model-catalog.js";
@@ -296,12 +297,8 @@ describe("doctor generated plugin model catalog migration", () => {
   it("retires an orphaned recovery credential only on Doctor fix", async () => {
     const agentDir = createAgentDir();
     const contents = generatedCatalog("zai", "interrupted-released-provider-test-key");
-    await replacePersistedPluginModelCatalogs({
-      agentDir,
-      pluginCatalogWrites: {
-        [encodePluginModelCatalogRelativePath("zai")]: contents,
-      },
-    });
+    writeLegacyCatalog(agentDir, "zai", contents);
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({ migrated: 1, warnings: [] });
     const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
     try {
       database

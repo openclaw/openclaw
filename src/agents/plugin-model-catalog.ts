@@ -32,6 +32,7 @@ import {
 import {
   isGeneratedPluginModelCatalog,
   repairPluginModelCatalogTransportMetadata,
+  stripPluginModelCatalogCredentials,
 } from "./plugin-model-catalog-repair.js";
 import {
   PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
@@ -93,9 +94,21 @@ export function loadPersistedPluginModelCatalogsReadOnly(
 export function repairPersistedPluginModelCatalogs(params: {
   agentDir: string;
   catalogs: readonly PersistedPluginModelCatalog[];
+  credentials?: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>>;
+  assertCurrent?: () => void;
+  onDeferredCredentialCleanup?: (pluginId: string) => void;
 }): Array<{ pluginId: string; removedModelCount: number; completedCostModelCount: number }> {
   const repairs = params.catalogs.flatMap((catalog) => {
-    const repaired = repairPluginModelCatalogTransportMetadata(catalog.contents);
+    const credentials = params.credentials?.get(catalog.pluginId);
+    const contents = credentials
+      ? stripPluginModelCatalogCredentials(catalog.contents, credentials)
+      : catalog.contents;
+    if (contents === null) {
+      return [];
+    }
+    const repaired = params.credentials
+      ? { contents, removedModelCount: 0, completedCostModelCount: 0 }
+      : repairPluginModelCatalogTransportMetadata(contents);
     return repaired.contents !== catalog.contents
       ? [
           {
@@ -115,7 +128,25 @@ export function repairPersistedPluginModelCatalogs(params: {
   const applied = runOpenClawAgentWriteTransaction(
     (database) => {
       const kysely = getNodeSqliteKysely<PluginModelCatalogDatabase>(database.db);
+      const pendingMigrationIds = new Set(
+        params.credentials
+          ? executeSqliteQuerySync(
+              database.db,
+              kysely
+                .selectFrom("cache_entries")
+                .select("key")
+                .where("scope", "=", PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE),
+            ).rows.map((row) => row.key)
+          : [],
+      );
       return repairs.flatMap((repair) => {
+        if (pendingMigrationIds.has(repair.pluginId)) {
+          // Sidecar retirement compares exact cache and recovery bytes. Cleaning
+          // this row first would prevent the retained claim from ever retiring.
+          params.onDeferredCredentialCleanup?.(repair.pluginId);
+          return [];
+        }
+        params.assertCurrent?.();
         // Compare-and-set protects a concurrent provider refresh from being
         // overwritten by repair work planned from an older catalog snapshot.
         const result = executeSqliteQuerySync(

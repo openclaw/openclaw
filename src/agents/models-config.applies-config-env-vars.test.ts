@@ -91,6 +91,38 @@ async function generate(params: Partial<Parameters<typeof planModelsJsonForTest>
 }
 
 describe("models-config planning", () => {
+  it("does not duplicate a canonical profile key into an authored provider without apiKey", async () => {
+    const plan = await generate({
+      cfg: { models: { mode: "replace", providers: { custom: provider() } } },
+      authStore: {
+        version: 1,
+        profiles: {
+          "custom:default": { type: "api_key", provider: "custom", key: "synthetic-profile-key" },
+        },
+      },
+    });
+    expect(plan.providers.custom).toMatchObject({ models: [{ id: "gpt-5.5" }] });
+    expect(plan.providers.custom).not.toHaveProperty("apiKey");
+  });
+
+  it("omits derived credentials from planned plugin catalogs while retaining inventory", async () => {
+    discover({
+      openai: provider({
+        apiKey: "synthetic-discovery-key",
+        headers: { Authorization: "Bearer synthetic-discovery-key" },
+      }),
+    });
+    const plan = await generate({
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "openai", providers: ["openai"] }],
+      }),
+    });
+    const generated = JSON.parse(plan.pluginCatalogWrites!["plugins/openai/catalog.json"]!);
+    expect(generated.providers.openai).toMatchObject({ models: [{ id: "gpt-5.5" }] });
+    expect(generated.providers.openai).not.toHaveProperty("apiKey");
+    expect(generated.providers.openai).not.toHaveProperty("headers");
+  });
+
   it("does not expose the full registry to provider policy hooks for a scoped snapshot", async () => {
     providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReturnValue(
       "POLICY_ALIAS_API_KEY",

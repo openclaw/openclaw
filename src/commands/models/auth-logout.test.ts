@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -276,10 +278,7 @@ describe("models auth logout", () => {
       const retainedProvider = {
         api: "openai-completions",
         headers: { "X-Version": "1" },
-        models: [
-          { id: "selected-model", headers: {} },
-          { id: "surviving-model", apiKey: survivor.key },
-        ],
+        models: [{ id: "selected-model" }, { id: "surviving-model", apiKey: survivor.key }],
       };
       const catalog = {
         generatedBy: "openclaw-plugin-model-catalog-v1",
@@ -313,12 +312,17 @@ describe("models auth logout", () => {
       ];
       const scopes = ["plugin-model-catalog-v1", "plugin-model-catalog-migration-v1"];
       for (const agentDir of [main, child]) {
-        await catalogs.replacePersistedPluginModelCatalogs({
-          agentDir,
-          pluginCatalogWrites: {
-            [catalogs.encodePluginModelCatalogRelativePath("fixture")]: JSON.stringify(catalog),
-          },
+        // Seed released credential copies through Doctor, not the sanitized publisher.
+        const sourcePath = join(agentDir, catalogs.encodePluginModelCatalogRelativePath("fixture"));
+        mkdirSync(dirname(sourcePath), { recursive: true });
+        writeFileSync(sourcePath, JSON.stringify(catalog));
+        expect(catalogs.migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+          migrated: 1,
+          warnings: [],
         });
+        expect(catalogs.loadPersistedPluginModelCatalogsReadOnly(agentDir)[0]?.contents).toContain(
+          selected.key,
+        );
         const db = catalogDatabase(agentDir, main);
         const insert = db.prepare(
           "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, 1)",

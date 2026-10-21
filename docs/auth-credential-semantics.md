@@ -287,6 +287,18 @@ that credential only as availability evidence: it does not resolve the reference
 again or copy the value into model rows. Unresolved references and credentials
 retained in a generated catalog do not grant admission.
 
+New generated plugin catalogs contain inventory only: provider/model API keys and
+headers are removed before publication. Root `models.json` remains author-owned;
+authored literal keys and headers are still supported. A missing root API key is
+not filled with a plaintext copy of a stored auth-profile credential.
+
+Run `openclaw doctor --fix` to copy and verify retained generated credentials in
+canonical auth storage before removing their catalog copies. Doctor also cleans
+copies whose canonical credential already exists, without rewriting authored
+root/config bytes. Unverified legacy fields remain available for recovery and
+Doctor reports them. Ordinary refresh leaves those affected rows unchanged while
+continuing to publish unrelated catalogs.
+
 Environment-backed profiles keep usable values from the discovery environment,
 including cold command and worker paths. When that material is missing, only the
 selected profile's activated snapshot may supply it; otherwise discovery reports

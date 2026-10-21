@@ -27,6 +27,7 @@ import { resolveImplicitProviders } from "./models-config.providers.implicit.js"
 import { normalizeProviders } from "./models-config.providers.normalize.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
+import { stripPluginModelCatalogCredentials } from "./plugin-model-catalog-repair.js";
 import {
   encodePluginModelCatalogRelativePath,
   filterGeneratedPluginModelCatalogProviders,
@@ -106,10 +107,15 @@ function buildPluginCatalogWrites(
   pluginProviders: Record<string, Record<string, ProviderConfig>>,
 ): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(pluginProviders).map(([pluginId, providers]) => [
-      encodePluginModelCatalogRelativePath(pluginId),
-      `${JSON.stringify({ generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers }, null, 2)}\n`,
-    ]),
+    Object.entries(pluginProviders).map(([pluginId, providers]) => {
+      const contents = stripPluginModelCatalogCredentials(
+        JSON.stringify({ generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers }),
+      );
+      if (contents === null) {
+        throw new Error(`Invalid generated model catalog for plugin ${pluginId}`);
+      }
+      return [encodePluginModelCatalogRelativePath(pluginId), `${contents}\n`];
+    }),
   );
 }
 

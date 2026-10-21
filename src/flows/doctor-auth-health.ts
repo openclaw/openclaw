@@ -62,7 +62,10 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
   }
   const { maybeMigrateModelCatalogCredentials } =
     await import("../commands/doctor-model-catalog-credentials.js");
-  await maybeMigrateModelCatalogCredentials(migrationContext());
+  await maybeMigrateModelCatalogCredentials({
+    ...migrationContext(),
+    configSource: ctx.configResult.confirmedConfigSource,
+  });
   let authProfileHealthReady = true;
   if (
     ctx.configResult.retiredAuthProfileCleanupPlans?.length ||

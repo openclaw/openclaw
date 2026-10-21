@@ -135,7 +135,7 @@ it.for([
     // Explicit local catalogs select synthetic auth before profiles, but do not transmit it.
     const syntheticLocalAuth =
       owner === "profile" && explicitModels && baseUrl.startsWith("http://127.0.0.1");
-    expect(catalog.apiKey).toBe(syntheticLocalAuth ? "ollama-local" : NON_ENV_SECRETREF_MARKER);
+    expect(catalog).not.toHaveProperty("apiKey");
     expect(authorization).toEqual(
       syntheticLocalAuth ? [null, null] : [`Bearer ${runtimeKey}`, `Bearer ${runtimeKey}`],
     );

@@ -86,15 +86,17 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
     it("reads refreshed provider catalogs through the selected agent owner", async () => {
       const database = admit(() => openOpenClawAgentDatabase({ agentId: "main" }));
       const agentDir = path.dirname(database.path);
+      const catalog = (marker: string) =>
+        JSON.stringify({ generatedBy: "openclaw-plugin-model-catalog-v1", providers: {}, marker });
       for (const [contents, ids] of [
-        ['{"marker":"first catalog"}', ["fixture", "missing"]],
-        ['{"marker":"refreshed catalog"}', ["fixture"]],
+        [catalog("first catalog"), ["fixture", "missing"]],
+        [catalog("refreshed catalog"), ["fixture"]],
       ] satisfies [string, string[]][]) {
         await catalogs.replacePersistedPluginModelCatalogs({
           agentDir,
           pluginCatalogWrites: {
             [catalogs.encodePluginModelCatalogRelativePath("fixture")]: contents,
-            [catalogs.encodePluginModelCatalogRelativePath("other")]: '{"marker":"other"}',
+            [catalogs.encodePluginModelCatalogRelativePath("other")]: catalog("other"),
           },
         });
         expect(await loadPersistedPluginModelCatalogs(agentDir, ids)).toEqual([

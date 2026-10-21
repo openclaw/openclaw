@@ -76,7 +76,7 @@ export function repairPluginModelCatalogTransportMetadata(
 /** Returns null for unusable generated rows, which must not retain or export unknown secrets. */
 export function stripPluginModelCatalogCredentials(
   contents: string,
-  credentials?: ReadonlySet<string>,
+  credentials?: ReadonlySet<string> | ReadonlyMap<string, ReadonlySet<string>>,
 ): string | null {
   let parsed: unknown;
   try {
@@ -88,11 +88,12 @@ export function stripPluginModelCatalogCredentials(
     return null;
   }
   let changed = false;
+  let providerCredentials: ReadonlySet<string> | undefined;
   const matches = (value: unknown): boolean =>
     typeof value === "string" &&
     (credentials === undefined ||
-      credentials.has(value) ||
-      (value.startsWith("Bearer ") && credentials.has(value.slice(7))));
+      providerCredentials?.has(value) === true ||
+      (value.startsWith("Bearer ") && providerCredentials?.has(value.slice(7)) === true));
   const strip = (entry: Record<string, unknown>): boolean => {
     if (entry.apiKey !== undefined) {
       if (credentials !== undefined && typeof entry.apiKey !== "string") {
@@ -120,11 +121,17 @@ export function stripPluginModelCatalogCredentials(
             changed = true;
           }
         }
+        if (Object.keys(entry.headers).length === 0) {
+          delete entry.headers;
+          changed = true;
+        }
       }
     }
     return true;
   };
-  for (const provider of Object.values(parsed.providers)) {
+  for (const [providerId, provider] of Object.entries(parsed.providers)) {
+    providerCredentials =
+      credentials && "get" in credentials ? credentials.get(providerId) : credentials;
     if (!isRecord(provider) || !strip(provider)) {
       return null;
     }

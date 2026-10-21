@@ -119,7 +119,9 @@ export async function normalizeProviders(params: {
       providerKey: normalizedKey,
       provider: normalizedProvider,
       env,
-      profileApiKey,
+      // Catalogs may retain reference markers, but canonical profile secrets
+      // belong to runtime auth and must not be copied into a new root entry.
+      profileApiKey: profileApiKey?.source === "plaintext" ? undefined : profileApiKey,
       secretRefManagedProviders: params.secretRefManagedProviders,
       providerApiKeyResolver:
         runtimeProviderKey !== undefined

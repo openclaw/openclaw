@@ -19,6 +19,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import {
   resolveAuthProfileDatabaseOwnerId,
@@ -84,6 +85,20 @@ function writeLegacy(agentDir: string, contents: string, pluginId = "zai", suffi
   const pathname = join(agentDir, encodePluginModelCatalogRelativePath(pluginId)) + suffix;
   writeFileSync(pathname, contents, "utf8");
   return pathname;
+}
+
+/** Released writers stored raw credentials; the current publisher must not seed those fixtures. */
+function seedLegacyCatalogs(directory: string, catalogs: Record<string, string>) {
+  const database = openOpenClawAgentDatabase({
+    agentId: resolveAuthProfileDatabaseOwnerId(directory),
+    path: resolveAuthProfileDatabasePath(directory),
+  });
+  const insert = database.db.prepare(
+    "INSERT OR REPLACE INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
+  );
+  for (const [pluginId, contents] of Object.entries(catalogs)) {
+    insert.run("plugin-model-catalog-v1", pluginId, contents, Date.now());
+  }
 }
 
 let agentDir: string;
@@ -157,6 +172,97 @@ afterEach(async () => {
 });
 
 describe("SQLite-backed plugin model catalogs", () => {
+  it("publishes generated inventory without provider or model credential fields", async () => {
+    const contents = JSON.stringify({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: {
+        zai: {
+          api: "openai-completions",
+          baseUrl: "https://zai.example/v1",
+          apiKey: "synthetic-provider-key",
+          headers: { Authorization: "Bearer synthetic-provider-key" },
+          models: [
+            {
+              id: "inventory-model",
+              name: "Inventory model",
+              apiKey: "synthetic-model-key",
+              headers: { "X-Api-Key": "synthetic-model-key" },
+            },
+          ],
+        },
+      },
+    });
+
+    await replaceCatalogs(agentDir, { zai: contents });
+
+    const persisted = loadPersistedPluginModelCatalogsReadOnly(agentDir)[0];
+    expect(JSON.parse(persisted!.contents)).toEqual({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: {
+        zai: {
+          api: "openai-completions",
+          baseUrl: "https://zai.example/v1",
+          models: [{ id: "inventory-model", name: "Inventory model" }],
+        },
+      },
+    });
+  });
+
+  it.each(["replace", "delete-missing"])(
+    "retains legacy credentials during ordinary %s without blocking unrelated publication",
+    async (operation) => {
+      const retained = catalogContents("zai", "synthetic-only-retained-key");
+      writeLegacy(agentDir, retained);
+      expectMigration([1]);
+      const before = readCatalogCacheRow(agentDir, "zai");
+
+      const unrelated = catalogContents("other");
+      const publication = await replaceCatalogs(agentDir, {
+        other: unrelated,
+        ...(operation === "replace" ? { zai: catalogContents("zai") } : {}),
+      });
+
+      expect(readCatalogCacheRow(agentDir, "zai")).toEqual(before);
+      expect(publication.catalogs).toEqual([
+        { pluginId: "other", contents: unrelated },
+        { pluginId: "zai", contents: retained },
+      ]);
+    },
+  );
+
+  it.each(["replace", "delete-missing"])(
+    "removes revoked credentials from a mixed retained row during %s",
+    async (operation) => {
+      const removedKey = "synthetic-removed-mixed-key";
+      const legacy = JSON.parse(catalogContents("zai", removedKey));
+      legacy.providers.zai.headers = { "X-Recovery": "synthetic-retained-header" };
+      seedLegacyCatalogs(agentDir, { zai: JSON.stringify(legacy) });
+      const expected = structuredClone(legacy);
+      delete expected.providers.zai.apiKey;
+
+      const publication = await replacePersistedPluginModelCatalogs({
+        agentDir,
+        pluginCatalogWrites:
+          operation === "replace"
+            ? { [encodePluginModelCatalogRelativePath("zai")]: catalogContents("zai") }
+            : {},
+        // Discovery observed this key before its canonical profile was removed.
+        authSnapshot: [
+          {
+            databasePath: resolveAuthProfileDatabasePath(agentDir),
+            kind: "agent",
+            credentials: { "zai:default": [removedKey] },
+          },
+        ],
+      });
+
+      expect(publication.changed).toBe(true);
+      expect(publication.catalogs).toHaveLength(1);
+      expect(JSON.parse(publication.catalogs[0]!.contents)).toEqual(expected);
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual(publication.catalogs);
+    },
+  );
+
   it("reads only named catalog rows without running migration or repair", async () => {
     const zai = catalogContents("zai");
     const anthropic = catalogContents("anthropic");
@@ -209,14 +315,10 @@ describe("SQLite-backed plugin model catalogs", () => {
     }
   });
 
-  it("skips catalog mutation for unrelated credentials and observes a later matching publication", async () => {
-    const relativePath = encodePluginModelCatalogRelativePath("zai");
+  it("skips unrelated credentials and observes a later legacy-catalog update", async () => {
     const unrelated = catalogContents("zai", "unrelated-provider-test-key");
     const removedKey = "removed-provider-test-key";
-    await replacePersistedPluginModelCatalogs({
-      agentDir,
-      pluginCatalogWrites: { [relativePath]: unrelated },
-    });
+    seedLegacyCatalogs(agentDir, { zai: unrelated });
     const candidate = {
       agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
       databasePath: resolveAuthProfileDatabasePath(agentDir),
@@ -229,10 +331,7 @@ describe("SQLite-backed plugin model catalogs", () => {
       expect(worker.mock.calls.length).toBe(0);
       expect(readCatalogCacheRow(agentDir, "zai")).toEqual(before);
 
-      await replacePersistedPluginModelCatalogs({
-        agentDir,
-        pluginCatalogWrites: { [relativePath]: catalogContents("zai", removedKey) },
-      });
+      seedLegacyCatalogs(agentDir, { zai: catalogContents("zai", removedKey) });
       worker.mockClear();
       await removePersistedPluginModelCatalogCredentials(removal);
       expect(worker.mock.calls.length).toBe(1);
@@ -329,15 +428,15 @@ describe("SQLite-backed plugin model catalogs", () => {
       };
     };
     expect(catalog.providers?.nvidia).toMatchObject({
-      apiKey: "NVIDIA_API_KEY",
       models: [{ id: "model-owned-api", api: "openai-completions" }],
     });
+    expect(catalog.providers?.nvidia).not.toHaveProperty("apiKey");
     expect(catalog.providers?.nvidia).not.toHaveProperty("api");
   });
 
   it("leaves malformed persisted catalogs and valid sibling timestamps unchanged", async () => {
-    const validNvidia = catalogContents("nvidia", "NVIDIA_API_KEY");
-    const validZai = catalogContents("zai", "ZAI_API_KEY");
+    const validNvidia = catalogContents("nvidia");
+    const validZai = catalogContents("zai");
     await replacePersistedPluginModelCatalogs({
       agentDir,
       pluginCatalogWrites: {
@@ -379,7 +478,7 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("does not overwrite a provider refresh when repair uses an older catalog snapshot", async () => {
-    await replaceCatalogs(agentDir, { nvidia: catalogContents("nvidia", "old-provider-test-key") });
+    seedLegacyCatalogs(agentDir, { nvidia: catalogContents("nvidia", "old-provider-test-key") });
     withDatabase(agentDir, (database) => {
       updateCatalog(
         database,
@@ -390,7 +489,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     });
     const oldSnapshot = loadPersistedPluginModelCatalogsReadOnly(agentDir);
     const refreshed = catalogContents("nvidia", "refreshed-provider-test-key");
-    await replaceCatalogs(agentDir, { nvidia: refreshed });
+    seedLegacyCatalogs(agentDir, { nvidia: refreshed });
     const refreshedRow = readCatalogCacheRow(agentDir, "nvidia");
 
     expect(repairPersistedPluginModelCatalogs({ agentDir, catalogs: oldSnapshot })).toEqual([]);
@@ -454,7 +553,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     }
     const contents = catalogContents("zai", "protected-released-provider-test-key");
     const pluginDir = join(agentDir, "plugins", "zai");
-    await replaceCatalogs(agentDir, { zai: contents });
+    seedLegacyCatalogs(agentDir, { zai: contents });
     withDatabase(agentDir, (database) => {
       database
         .prepare(
@@ -546,7 +645,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     const regenerated = catalogContents("zai", "regenerated-provider-test-key");
     const released = catalogContents("zai", "released-provider-test-key");
     const unrelated = catalogContents("anthropic", "unrelated-provider-test-key");
-    await replaceCatalogs(agentDir, { zai: regenerated, anthropic: unrelated });
+    seedLegacyCatalogs(agentDir, { zai: regenerated, anthropic: unrelated });
     const sourcePath = writeLegacy(agentDir, released);
 
     expectMigration([1], { expectedContents: new Map([["zai", released]]) });
@@ -597,7 +696,7 @@ describe("SQLite-backed plugin model catalogs", () => {
 
   it("accepts a sidecar already migrated and removed by another process", async () => {
     const contents = catalogContents("zai", "concurrently-migrated-provider-test-key");
-    await replaceCatalogs(agentDir, { zai: contents });
+    seedLegacyCatalogs(agentDir, { zai: contents });
 
     expectMigration([0], { expectedContents: new Map([["zai", contents]]) });
     expectCatalogs(agentDir, { zai: contents });
@@ -632,12 +731,68 @@ describe("SQLite-backed plugin model catalogs", () => {
         },
       });
       expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
-        { pluginId: "zai", contents: refreshed },
+        { pluginId: "zai", contents },
       ]);
       expect(existsSync(sourcePath)).toBe(true);
     } finally {
       chmodSync(pluginDir, 0o700);
     }
+  });
+
+  it("defers credential cleanup until a retained sidecar can finish migration", async () => {
+    if (process.getuid?.() === 0) {
+      return;
+    }
+    const key = "synthetic-retained-sidecar-key";
+    const contents = catalogContents("zai", key);
+    const siblingKey = "synthetic-independent-catalog-key";
+    seedLegacyCatalogs(agentDir, { anthropic: catalogContents("anthropic", siblingKey) });
+    const pluginDir = join(agentDir, "plugins", "zai");
+    const sourcePath = writeLegacy(agentDir, contents);
+    const onDeferredCredentialCleanup = vi.fn();
+    const credentials = new Map([
+      ["zai", new Map([["zai", new Set([key])]])],
+      ["anthropic", new Map([["anthropic", new Set([siblingKey])]])],
+    ]);
+    const cleanup = () =>
+      repairPersistedPluginModelCatalogs({
+        agentDir,
+        catalogs: loadPersistedPluginModelCatalogsReadOnly(agentDir),
+        credentials,
+        onDeferredCredentialCleanup,
+      });
+    const recoveryRows = () =>
+      withDatabase(
+        agentDir,
+        (database) =>
+          database
+            .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+            .all("plugin-model-catalog-migration-v1", "zai"),
+        true,
+      );
+
+    await withPermissions(pluginDir, 0o500, 0o700, () => {
+      expectMigration([0, "Could not remove migrated legacy provider catalog"]);
+      expect(cleanup()).toEqual([
+        { pluginId: "anthropic", removedModelCount: 0, completedCostModelCount: 0 },
+      ]);
+      expect(onDeferredCredentialCleanup).toHaveBeenCalledExactlyOnceWith("zai");
+      expectCatalogs(agentDir, { anthropic: catalogContents("anthropic"), zai: contents });
+      expect(recoveryRows()).toEqual([{ value_json: contents }]);
+      expect(readFileSync(sourcePath, "utf8")).toBe(contents);
+    });
+
+    expectMigration([1]);
+    expect(existsSync(sourcePath)).toBe(false);
+    expect(recoveryRows()).toEqual([]);
+    expect(cleanup()).toEqual([
+      { pluginId: "zai", removedModelCount: 0, completedCostModelCount: 0 },
+    ]);
+    expect(onDeferredCredentialCleanup).toHaveBeenCalledTimes(1);
+    expectCatalogs(agentDir, {
+      anthropic: catalogContents("anthropic"),
+      zai: catalogContents("zai"),
+    });
   });
 
   it("never deletes retained migrated credentials after a newer catalog replaces them", async () => {
@@ -650,7 +805,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     const sourcePath = writeLegacy(agentDir, original);
     await withPermissions(pluginDir, 0o500, 0o700, async () => {
       expectMigration([0, "Could not remove migrated legacy provider catalog"]);
-      await replaceCatalogs(agentDir, { zai: refreshed });
+      seedLegacyCatalogs(agentDir, { zai: refreshed });
     });
 
     expectMigration([0, "Left superseded legacy provider catalog in place"]);
@@ -677,7 +832,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     const original = catalogContents("zai", "stale-released-provider-test-key");
     const refreshed = catalogContents("zai", "current-regenerated-provider-test-key");
     writeLegacy(agentDir, original);
-    await replaceCatalogs(agentDir, { zai: original });
+    seedLegacyCatalogs(agentDir, { zai: original });
     await closeOpenClawAgentDatabasesAsync(agentDir);
 
     expectMigration([0, "Legacy provider catalog was claimed before its migration was committed"], {
@@ -786,7 +941,7 @@ describe("SQLite-backed plugin model catalogs", () => {
       return;
     }
     const anthropic = catalogContents("anthropic", "available-anthropic-provider-test-key");
-    await replaceCatalogs(agentDir, { anthropic });
+    seedLegacyCatalogs(agentDir, { anthropic });
     const sourcePath = writeLegacy(
       agentDir,
       catalogContents("zai", "unreadable-provider-test-key"),

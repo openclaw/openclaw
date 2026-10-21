@@ -180,8 +180,8 @@ it("keeps manual, implicit, and generated ids literal across replanning", async 
     const generatedProviders = JSON.parse(generated.contents).providers;
     expect(generatedProviders.fixture).toMatchObject({
       baseUrl: "https://persisted.example/v1",
-      apiKey: "persisted-plugin-key",
     });
+    expect(generatedProviders.fixture).not.toHaveProperty("apiKey");
     expect(ids(generatedProviders.fixture)).toEqual(["native-model", ...modelIds]);
     expect(ids(generatedProviders["cached-fixture"])).toEqual(modelIds);
     expect(await fs.readFile(rootPath, "utf8")).toBe(rootContents);
