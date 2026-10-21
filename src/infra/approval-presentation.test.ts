@@ -198,32 +198,27 @@ describe("prepareExecApprovalPresentation", () => {
     });
   });
 
-  it("drops split emoji at the title and description boundaries without lone surrogates", () => {
-    const title = `${"a".repeat(79)}\u{1F600}`;
-    const description = `${"a".repeat(511)}\u{1F6E1}`;
-    const presentation = prepare(
-      "system-agent",
-      {
-        title,
-        description,
-        proposalHash: "a".repeat(64),
-      },
-      allowedDecisions,
-    );
-    expect(presentation).toMatchObject({
-      kind: "system-agent",
-      title: "a".repeat(79),
-      description: "a".repeat(511),
-    });
-  });
-
-  it("keeps an emoji that fits within the title limit intact", () => {
-    const title = `${"a".repeat(78)}\u{1F600}`;
-    const presentation = prepare(
-      "system-agent",
-      { title, description: "d", proposalHash: "a".repeat(64) },
-      allowedDecisions,
-    );
-    expect(presentation).toMatchObject({ kind: "system-agent", title });
-  });
+  it.each([
+    { prefix: 79, expectedSuffix: "" },
+    { prefix: 78, expectedSuffix: "\u{1F600}" },
+  ])(
+    "preserves only whole emoji at system-agent UTF-16 boundaries ($prefix)",
+    ({ prefix, expectedSuffix }) => {
+      expect(
+        prepare(
+          "system-agent",
+          {
+            title: `${"a".repeat(prefix)}\u{1F600}`,
+            description: `${"a".repeat(511)}\u{1F6E1}`,
+            proposalHash: "a".repeat(64),
+          },
+          allowedDecisions,
+        ),
+      ).toMatchObject({
+        kind: "system-agent",
+        title: "a".repeat(prefix) + expectedSuffix,
+        description: "a".repeat(511),
+      });
+    },
+  );
 });

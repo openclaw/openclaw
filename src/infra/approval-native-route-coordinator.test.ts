@@ -59,6 +59,45 @@ function createRequest(
   };
 }
 
+function originRequest(
+  id: string,
+  channel = "slack",
+  extra: Partial<ExecApprovalRequest["request"]> = {},
+) {
+  return createRequest(id, {
+    turnSourceChannel: channel,
+    turnSourceTo: "channel:C123",
+    ...extra,
+  });
+}
+
+function slackReporter(overrides: Partial<ReporterOptions> = {}) {
+  return createApprovalNativeRouteReporter({
+    channel: "slack",
+    channelLabel: "Slack",
+    ...overrides,
+  });
+}
+
+function expectNotice(
+  gateway: ReturnType<typeof createGatewayRequestMock>,
+  id: string,
+  message: string,
+  overrides: Record<string, unknown> = {},
+) {
+  expect(gateway).toHaveBeenCalledWith("send", {
+    channel: "slack",
+    to: "channel:C123",
+    accountId: "default",
+    threadId: undefined,
+    message,
+    idempotencyKey: `approval-route-notice:${id}`,
+    ...overrides,
+  });
+}
+
+const dmNotice = "Approval required. I sent the approval request to Slack DMs, not this chat.";
+
 afterEach(async () => {
   await Promise.all(approvalRouteReporters.splice(0).map((reporter) => reporter.stop()));
   coordinators.splice(0).forEach((owner) => owner.close());
@@ -132,19 +171,10 @@ describe("createApprovalNativeRouteReporter", () => {
         handledKinds: new Set([approvalKind]),
         accountId: "ops",
       });
-      const request = {
-        ...createRequest(`ambiguous-${approvalKind}`),
-        request: {
-          command: "echo hi",
-          title: "Approve operation",
-          description: "Synthetic approval",
-          proposalHash: "synthetic-proposal",
-          sessionId: "synthetic-session",
-          allowedDecisions: ["allow-once", "deny"] as const,
-          turnSourceChannel: "telegram",
-          turnSourceTo: "chat:123",
-        },
-      };
+      const request = createRequest(`ambiguous-${approvalKind}`, {
+        turnSourceChannel: "telegram",
+        turnSourceTo: "chat:123",
+      });
       for (const reporter of [first, second]) {
         expect(await reporter.selectRequest({ approvalKind, request })).toEqual({
           kind: "ambiguous-owner",
@@ -180,27 +210,21 @@ describe("createApprovalNativeRouteReporter", () => {
   ] as const)(
     "reports sorted unique cross-channel destinations with mixed surfaces=%s",
     async (mixed, destinations) => {
-      const request = createRequest("cross-channel-destinations", {
-        turnSourceChannel: "discord",
-        turnSourceTo: "channel:C123",
-      });
-      const reporters = [
+      const request = originRequest("cross-channel-destinations", "discord");
+      const reporters = (
+        [
+          ["telegram", "Telegram", "default"],
+          ["matrix", "Matrix", "default"],
+          ["telegram", "Telegram", "ops"],
+        ] as const
+      ).map(([channel, channelLabel, accountId]) =>
         coordinatedReporter(coordinator, {
-          channel: "telegram",
-          channelLabel: "Telegram",
-          classifyRoute: () => "bound-or-explicit",
+          channel,
+          channelLabel,
+          accountId,
+          classifyRoute: () => (channel === "telegram" ? "bound-or-explicit" : "unbound"),
         }),
-        coordinatedReporter(coordinator, {
-          channel: "matrix",
-          channelLabel: "Matrix",
-        }),
-        coordinatedReporter(coordinator, {
-          channel: "telegram",
-          channelLabel: "Telegram",
-          accountId: "ops",
-          classifyRoute: () => "bound-or-explicit",
-        }),
-      ];
+      );
       for (const reporter of reporters) {
         await expectSelection(reporter, request, "selected");
       }
@@ -355,64 +379,40 @@ describe("createApprovalNativeRouteReporter", () => {
 
   it("caps route-notice cleanup timers to five minutes", async () => {
     vi.useFakeTimers();
-    try {
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-      const reporter = createApprovalNativeRouteReporter({
-        channel: "slack",
-        channelLabel: "Slack",
-      });
-
-      await reporter.selectRequest(
-        selection(
-          createRequest(
-            "approval-long",
-            { turnSourceChannel: "slack", turnSourceTo: "channel:C123" },
-            Date.now() + 24 * 60 * 60_000,
-          ),
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const reporter = slackReporter();
+    await reporter.selectRequest(
+      selection(
+        createRequest(
+          "approval-long",
+          { turnSourceChannel: "slack", turnSourceTo: "channel:C123" },
+          Date.now() + 24 * 60 * 60_000,
         ),
-      );
-
-      const cleanupCall = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 5 * 60_000);
-      expect(cleanupCall).toBeDefined();
-      const [cleanupCallback] = cleanupCall ?? [];
-      expect(cleanupCallback).toBeTypeOf("function");
-    } finally {
-      vi.useRealTimers();
-    }
+      ),
+    );
+    const cleanupCall = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 5 * 60_000);
+    expect(cleanupCall).toBeDefined();
+    expect(cleanupCall?.[0]).toBeTypeOf("function");
   });
 
   it("does not wait on runtimes that start after a request was already observed", async () => {
     const lateRuntimeGateway = createGatewayRequestMock();
-    const request = createRequest("approval-1", {
-      turnSourceChannel: "slack",
-      turnSourceTo: "channel:C123",
+    const request = originRequest("approval-1", "slack", {
       turnSourceAccountId: "default",
       turnSourceThreadId: "1712345678.123456",
     });
 
-    const reporter = createApprovalNativeRouteReporter({
-      channel: "slack",
-      channelLabel: "Slack",
-    });
+    const reporter = slackReporter();
     await reporter.selectRequest(selection(request));
 
-    createApprovalNativeRouteReporter({
-      channel: "slack",
-      channelLabel: "Slack",
-      requestGateway: lateRuntimeGateway,
-    });
+    slackReporter({ requestGateway: lateRuntimeGateway });
 
     await reporter.reportDelivery(
       delivery(request, [approverDm("user:owner")], [], "1712345678.123456"),
     );
 
-    expect(requestGateway).toHaveBeenCalledWith("send", {
-      channel: "slack",
-      to: "channel:C123",
-      accountId: "default",
+    expectNotice(requestGateway, request.id, dmNotice, {
       threadId: "1712345678.123456",
-      message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
-      idempotencyKey: "approval-route-notice:approval-1",
     });
     expect(lateRuntimeGateway).not.toHaveBeenCalled();
   });
@@ -420,20 +420,13 @@ describe("createApprovalNativeRouteReporter", () => {
   it("does not suppress the notice when another account delivered to the same target id", async () => {
     const originGateway = createGatewayRequestMock();
     const otherGateway = createGatewayRequestMock();
-    const request = createRequest("approval-2", {
-      turnSourceChannel: "slack",
-      turnSourceTo: "channel:C123",
-    });
+    const request = originRequest("approval-2");
 
-    const originReporter = createApprovalNativeRouteReporter({
-      channel: "slack",
-      channelLabel: "Slack",
+    const originReporter = slackReporter({
       accountId: "work-a",
       requestGateway: originGateway,
     });
-    const otherReporter = createApprovalNativeRouteReporter({
-      channel: "slack",
-      channelLabel: "Slack",
+    const otherReporter = slackReporter({
       accountId: "work-b",
       requestGateway: otherGateway,
     });
@@ -448,22 +441,13 @@ describe("createApprovalNativeRouteReporter", () => {
       ]),
     );
 
-    expect(originGateway).toHaveBeenCalledWith("send", {
-      channel: "slack",
-      to: "channel:C123",
-      accountId: "work-a",
-      threadId: undefined,
-      message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
-      idempotencyKey: "approval-route-notice:approval-2",
-    });
+    expectNotice(originGateway, request.id, dmNotice, { accountId: "work-a" });
     expect(otherGateway).not.toHaveBeenCalled();
   });
 
   it("sends a manual fallback notice when native delivery reaches no targets", async () => {
-    const request = createRequest("deadbeef-1234-4567-89ab-cdef01234567", {
+    const request = originRequest("deadbeef-1234-4567-89ab-cdef01234567", "discord", {
       allowedDecisions: ["allow-once", "deny"],
-      turnSourceChannel: "discord",
-      turnSourceTo: "channel:C123",
       turnSourceAccountId: "default",
     });
 
@@ -475,16 +459,13 @@ describe("createApprovalNativeRouteReporter", () => {
 
     await reporter.reportDelivery(delivery(request, [], [approverDm("user:owner")]));
 
-    expect(requestGateway).toHaveBeenCalledWith("send", {
-      channel: "discord",
-      to: "channel:C123",
-      accountId: "default",
-      threadId: undefined,
-      message:
-        "Approval required. I could not deliver the native approval request.\n" +
+    expectNotice(
+      requestGateway,
+      request.id,
+      "Approval required. I could not deliver the native approval request.\n" +
         "Reply with: /approve deadbeef allow-once|deny\n" +
         "If the short code is ambiguous, use the full id in /approve.",
-      idempotencyKey: "approval-route-notice:deadbeef-1234-4567-89ab-cdef01234567",
-    });
+      { channel: "discord" },
+    );
   });
 });
