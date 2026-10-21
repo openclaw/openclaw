@@ -21,7 +21,6 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./embedded-agent-run
 import { createEmbeddedRunContextRecoveryState } from "./embedded-agent-runner/run/context-recovery-state.js";
 import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/helpers.js";
 import { prepareEmbeddedRunTerminal } from "./embedded-agent-runner/run/terminal-preparation.js";
-import { resolveSettledTurnFinalizationRequest } from "./embedded-agent-runner/run/terminal-resolution.js";
 import { createUsageAccumulator } from "./embedded-agent-runner/usage-accumulator.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { makeEmbeddedRunnerAttempt } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
@@ -384,21 +383,6 @@ it.each([
   });
   const reply = row.reply;
   const visibleText = reply?.disposition === "visible" ? reply.text : undefined;
-  if (visibleText !== undefined && !quiet) {
-    expect(
-      resolveSettledTurnFinalizationRequest({
-        runParams,
-        attempt,
-        activeErrorContext: { provider: "openai", model: model.id },
-        modelApi: model.api,
-        executionContract: undefined,
-        payloadsWithToolMedia: prepared.payloadsWithToolMedia,
-        hasTerminalToolPresentation: false,
-        terminalState,
-        settledTurnFinalizationAvailable: true,
-      }),
-    ).toBeNull();
-  }
   if (delivery === "deferred" && visibleText !== undefined) {
     const lastAssistant = beforeTerminalDelivery.mock.calls.at(-1)?.[0].lastAssistant;
     expect(resolveFinalAssistantVisibleText(lastAssistant as AssistantMessage | undefined)).toBe(

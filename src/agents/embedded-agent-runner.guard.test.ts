@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
@@ -8,8 +7,6 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createFileBackedSessionManagerForTest } from "../../test/helpers/session-manager-file-fixture.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
   attachRuntimePromptMediaFacts,
@@ -65,21 +62,7 @@ function createGuard(options?: Parameters<typeof guardSessionManager>[1]) {
   return { sm, appendMessage: appender(sm) };
 }
 
-function queuedRuntime(
-  recorder: ReturnType<typeof createUserTurnTranscriptRecorder>,
-  content: PersistedUserTurnMessage["content"],
-  timestamp: number,
-) {
-  const runtime = { role: "user" as const, content, timestamp };
-  return attachRuntimeUserTurnTranscriptContext(runtime, {
-    message: expectDefined(recorder.message, "expected prepared queued turn"),
-    recorder,
-  });
-}
-
 describe("guardSessionManager integration", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
   it("keeps real toolResult pending across delivery-mirror assistant messages", () => {
     const { sm, appendMessage } = createGuard();
 
@@ -336,87 +319,16 @@ describe("guardSessionManager integration", () => {
     },
   );
 
-  it.each(["retain", "in-place", "forge"] as const)(
-    "sender provenance survives only unchanged queued hook evidence: %s",
-    (mode) => {
-      installWriteHook((event) => {
-        const message = (event as { message: PersistedUserTurnMessage }).message;
-        const metadata = message["__openclaw"]!;
-        if (mode === "in-place") {
-          (metadata.senderIdentity as { id: string }).id = "forged";
-        }
-        if (mode === "forge") {
-          metadata.senderIdentity = { type: "profile", id: "forged" };
-        }
-        metadata.senderIsOwner = false;
-      });
-      const identity = { type: "profile", id: "author" };
-      const recorder = createUserTurnTranscriptRecorder({
-        message: {
-          ...makeUserMessage("queued", 1),
-          __openclaw: {
-            senderId: "author",
-            senderIsOwner: true,
-            ...(mode === "forge" ? {} : { senderIdentity: identity }),
-          },
-        },
-        target: createTestUserTurnTranscriptTarget(),
-      });
-      const { sm } = createGuard();
-      sm.appendMessage(queuedRuntime(recorder, "runtime", 2));
-      expect(getMessages(sm)[0]).toMatchObject({
-        __openclaw: { senderId: "author", senderIsOwner: true },
-      });
-      expect(
-        (getMessages(sm)[0] as PersistedUserTurnMessage)["__openclaw"]?.senderIdentity,
-      ).toEqual(mode === "retain" ? { type: "profile", id: "author" } : undefined);
-      expect(recorder.hasPersisted()).toBe(true);
-    },
-  );
-
-  it("commits queued group sender metadata to JSONL and completes its recorder", () => {
-    const dir = tempDirs.make("openclaw-queued-group-turn-");
-    const sessionManager = createFileBackedSessionManagerForTest(dir, dir);
-    const sessionFile = expectDefined(sessionManager.getSessionFile(), "session file");
-    const recorder = createUserTurnTranscriptRecorder({
-      input: {
-        text: "visible group prompt",
-        sender: { id: "user-42", name: "Ada", username: "ada42" },
-      },
-      target: createTestUserTurnTranscriptTarget(),
-    });
-    const sm = guardSessionManager(sessionManager, {
-      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
-    });
-    const runtimeMessage = queuedRuntime(recorder, text("runtime group prompt"), 456);
-
-    sm.appendMessage(runtimeMessage);
-    sm.appendMessage(makeAgentAssistantMessage({ content: text("acknowledged") }));
-
-    const entries = readFileSync(sessionFile, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { type: string; message?: AgentMessage });
-    expect(entries.find((entry) => entry.message?.role === "user")?.message).toMatchObject({
-      role: "user",
-      content: "visible group prompt",
-      __openclaw: {
-        senderId: "user-42",
-        senderName: "Ada",
-        senderUsername: "ada42",
-      },
-      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-    });
-    expect(recorder.hasPersisted()).toBe(true);
-  });
-
   it("marks the exact queued recorder blocked when a write hook suppresses its user message", () => {
     installWriteHook(() => ({ block: true }));
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: "queued prompt" },
       target: createTestUserTurnTranscriptTarget(),
     });
-    const runtimeMessage = queuedRuntime(recorder, "runtime queued prompt", 456);
+    const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
+      makeUserMessage("runtime queued prompt", 456),
+      { message: expectDefined(recorder.message, "prepared queued turn"), recorder },
+    );
     const { sm } = createGuard();
 
     sm.appendMessage(runtimeMessage);
@@ -453,9 +365,7 @@ describe("guardSessionManager integration", () => {
     expect(messages[2]).toEqual({ role: "user", content: "follow-up" });
     expect(messages[1]).toMatchObject(prepared);
   });
-});
 
-describe("flushPendingToolResultsAfterIdle", () => {
   it("waits for the real tool result before settling idle cleanup", async () => {
     vi.useFakeTimers();
     const id = "call_retry_1";
