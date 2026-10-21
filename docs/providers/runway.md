@@ -80,6 +80,11 @@ Local image and video references are supported via data URIs.
 
 ## Advanced configuration
 
+Task submission and polling honor `models.providers.runway.request`, including
+custom headers, proxy settings, and private-network policy. Polling enforces
+private-network restrictions even without a proxy override. Generated video
+downloads do not inherit task credentials or private-network trust.
+
 <AccordionGroup>
   <Accordion title="Environment variable aliases">
     OpenClaw recognizes both `RUNWAYML_API_SECRET` (preferred) and `RUNWAY_API_KEY`.

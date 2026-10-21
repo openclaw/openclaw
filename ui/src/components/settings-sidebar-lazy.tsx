@@ -1,4 +1,4 @@
-import { Errored, For, lazy, Loading, Show } from "solid-js";
+import { children, Errored, For, isPending, lazy, Loading, Show } from "solid-js";
 import { titleForRoute, visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -7,6 +7,9 @@ import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 
 type SettingsSidebarModule = typeof import("./settings-sidebar-shell.tsx");
+const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
+  export: "ShellSettingsSidebar",
+});
 export type SettingsSidebarFallbackProps = Pick<
   SettingsSidebarProps,
   | "presentation"
@@ -20,17 +23,24 @@ export type SettingsSidebarFallbackProps = Pick<
 export function LazySettingsSidebar(
   props: Parameters<SettingsSidebarModule["ShellSettingsSidebar"]>[0],
 ) {
-  const Sidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
-    export: "ShellSettingsSidebar",
-  });
+  // Observe the lazy content while Errored retains its fallback during a retry.
+  const content = children(() => (
+    <SettingsSidebar host={props.host} sidebarProps={props.sidebarProps} />
+  ));
   return (
     <Errored
       fallback={(_error, reset) => (
-        <SettingsSidebarFallback sidebarProps={props.sidebarProps} failed retry={reset} />
+        <SettingsSidebarFallback
+          sidebarProps={props.sidebarProps}
+          failed={!isPending(() => content())}
+          retry={reset}
+        />
       )}
     >
-      <Loading fallback={<SettingsSidebarFallback sidebarProps={props.sidebarProps} />}>
-        <Sidebar host={props.host} sidebarProps={props.sidebarProps} />
+      <Loading
+        fallback={<SettingsSidebarFallback sidebarProps={props.sidebarProps} failed={false} />}
+      >
+        {content()}
       </Loading>
     </Errored>
   );
@@ -38,7 +48,7 @@ export function LazySettingsSidebar(
 
 function SettingsSidebarFallback(props: {
   sidebarProps: SettingsSidebarFallbackProps;
-  failed?: boolean;
+  failed: boolean;
   retry?: () => void;
 }) {
   return (

@@ -18,7 +18,10 @@ import {
   KEYBOARD_SHORTCUTS_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { normalizeChatSendShortcut } from "./settings.ts";
-import { isStaleChunkImportError } from "./stale-chunk-reload.ts";
+
+const PendingDebugOverlay = lazy(() => import("../pages/debug/debug-overlay-frame.ts"), {
+  export: "renderPendingDebugOverlay",
+});
 
 /** Unported elements receive properties explicitly until their own lanes land. */
 export type ShellElementAttributes<T extends HTMLElement = HTMLElement> =
@@ -67,9 +70,6 @@ export function ShellLazyOverlays(props: {
   custodianPanelAvailable: boolean;
   nativeEmbed: boolean;
 }): SolidJSX.Element {
-  const DebugFrame = lazy(() => import("../pages/debug/debug-overlay-frame.ts"), {
-    export: "renderPendingDebugOverlay",
-  });
   const state = createMemo(() => {
     void props.revision;
     const lazyState = props.host.lazyCustomElements.visibleState;
@@ -88,38 +88,27 @@ export function ShellLazyOverlays(props: {
       sendShortcut: normalizeChatSendShortcut(props.host.context?.theme.settings.chatSendShortcut),
     };
   });
+  const PendingElementModal = () => (
+    <LazyElementModal
+      state={state().lazy}
+      onRetry={() => props.host.lazyCustomElements.retry()}
+      onClose={() => props.host.lazyCustomElements.close()}
+    />
+  );
   return (
     <>
       <Show
         when={state().paletteLoading}
         fallback={
-          <Show
-            when={state().pendingDebug}
-            fallback={
-              <LazyElementModal
-                state={state().lazy}
-                onRetry={() => props.host.lazyCustomElements.retry()}
-                onClose={() => props.host.lazyCustomElements.close()}
-              />
-            }
-          >
+          <Show when={state().pendingDebug} fallback={<PendingElementModal />}>
             {(pending) => (
-              <Errored
-                fallback={(error, reset) => (
-                  <LazyElementModal
-                    state={{
-                      status: "error",
-                      element: pending().element,
-                      error: error(),
-                      stale: isStaleChunkImportError(error()),
-                    }}
-                    onRetry={reset}
-                    onClose={() => props.host.lazyCustomElements.close()}
-                  />
-                )}
-              >
+              <Errored fallback={<PendingElementModal />}>
                 <Loading>
-                  <DebugFrame host={props.host} state={pending()} mode={state().debugMode} />
+                  <PendingDebugOverlay
+                    host={props.host}
+                    state={pending()}
+                    mode={state().debugMode}
+                  />
                 </Loading>
               </Errored>
             )}

@@ -112,6 +112,7 @@ describe("Details summary observation", () => {
       agentId: "main",
       scope: "all",
       summaryOnly: true,
+      poll: true,
     });
     expect(h.owner.snapshot.summary).toEqual({
       fileCount: 1,
@@ -174,6 +175,38 @@ describe("Details summary observation", () => {
     expect(h.owner.snapshot).toMatchObject({ stale: true, summary: { additions: 300 } });
     await vi.advanceTimersByTimeAsync(30_000);
     expect(h.owner.snapshot).toMatchObject({ stale: false, summary: { additions: 248 } });
+  });
+
+  it("polls computing summaries without publishing zero and pauses with visible demand", async () => {
+    const h = create();
+    const computing = { ...result, computing: true, files: [], additions: 0, deletions: 0 };
+    h.request.mockResolvedValueOnce(computing);
+    h.update();
+    await settle();
+    expect(h.owner.snapshot).toMatchObject({ summary: null, unavailable: false });
+    await vi.advanceTimersByTimeAsync(499);
+    expect(h.request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.owner.snapshot.summary?.additions).toBe(248);
+
+    h.request.mockResolvedValue(computing);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.owner.snapshot.summary?.additions).toBe(248);
+    h.visible("hidden");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.request).toHaveBeenCalledTimes(3);
+    h.visible("visible");
+    await settle();
+    expect(h.request).toHaveBeenCalledTimes(4);
+    h.update({ presented: false });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.request).toHaveBeenCalledTimes(4);
+    h.request.mockResolvedValue(result);
+    h.update({ sessionKey: "agent:main:replacement", presented: true });
+    await settle();
+    expect(h.owner.snapshot.summary?.additions).toBe(248);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.request).toHaveBeenCalledTimes(5);
   });
 
   it("keeps unknown and unavailable distinct from zero and returns a real zero summary", async () => {

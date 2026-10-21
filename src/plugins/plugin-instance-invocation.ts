@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   PluginExecutionFrame,
@@ -67,8 +68,7 @@ const pluginExecutionContext = resolveGlobalSingleton(
         return frames.getStore();
       },
       runFrame<T>(this: void, frame: PluginExecutionFrame, run: () => T): T {
-        // Every run copies the whole async context; re-entering the current frame is a no-op.
-        return frames.getStore() === frame ? run() : frames.run(frame, run);
+        return runWithAsyncStore(frames, frame, run);
       },
     };
   },

@@ -168,7 +168,6 @@ export function createSidebarMenus(deps: {
       "sessionMenuWork",
       session.worktreeId
         ? {
-            loading: Boolean(context && client),
             pullRequestUrl: null,
             worktreePath: null,
           }
@@ -211,7 +210,7 @@ export function createSidebarMenus(deps: {
         host.sessionDataContext?.gateway === context.gateway &&
         context.gateway.snapshot.client === client
       ) {
-        setField("sessionMenuWork", { loading: false, ...work });
+        setField("sessionMenuWork", work);
       }
     });
   }

@@ -142,7 +142,6 @@ function renderIdentityGateways(
 
 export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JSX.Element {
   const controls = createMenuControls();
-  const position = params.position;
   const profileName = () =>
     params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
   const avatarUser = createMemo(() => ({
@@ -155,7 +154,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
     params.profileViewer?.email && params.profileViewer.email !== profileName()
       ? params.profileViewer.email
       : null;
-  const items = (): MenuEntry[] => {
+  const items = createMemo<MenuEntry[]>(() => {
     const help = renderSidebarHelpMenu();
     return [
       {
@@ -294,12 +293,12 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
         ],
       },
     ];
-  };
+  });
   return (
     <SidebarDropdown
       controls={controls}
       class="sidebar-customize-menu sidebar-identity-menu"
-      position={position}
+      position={params.position}
       anchor={params.anchor}
       tabFocusTarget={params.tabFocusTarget}
       label={t("profilePage.identity.menuLabel")}

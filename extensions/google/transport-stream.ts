@@ -501,55 +501,6 @@ async function openGoogleSseAttempt(params: {
   };
 }
 
-async function openGoogleSseChunks(params: {
-  kind: CanonicalGoogleTransportApi;
-  model: GoogleTransportModel;
-  options: GoogleTransportOptions | undefined;
-  guardedFetch: ReturnType<typeof buildGuardedModelFetch>;
-  url: string;
-  headers: Record<string, string>;
-  request: GoogleGenerateContentRequest;
-  videoSlots: Record<string, unknown>[];
-}): Promise<Extract<GoogleSseAttempt, { type: "ready" }>> {
-  const errorPrefix =
-    params.kind === "google-vertex"
-      ? "Google Vertex AI API error"
-      : "Google Generative AI API error";
-  const retryMs =
-    params.kind === "google-generative-ai" &&
-    isOfficialGoogleAiStudioBaseUrl(params.model.baseUrl) &&
-    (isGoogleGemini3ProModel(params.model.id) || isGoogleGemini3FlashModel(params.model.id))
-      ? resolveGoogleGemini3FirstResponseRetryMs()
-      : 0;
-  const firstAttempt = await openGoogleSseAttempt({
-    ...params,
-    parentSignal: params.options?.signal,
-    firstResponseTimeoutMs: retryMs,
-    errorPrefix,
-  });
-  if (firstAttempt.type === "ready") {
-    return firstAttempt;
-  }
-
-  // The first serialization owns video shedding. Clone only after it times out
-  // so the retry inherits those exact omissions instead of restoring stale bytes.
-  const retryRequest = buildGoogleGemini3FirstResponseRetryParams({
-    model: params.model,
-    request: params.request,
-  })!;
-  const retryAttempt = await openGoogleSseAttempt({
-    ...params,
-    request: retryRequest,
-    parentSignal: params.options?.signal,
-    firstResponseTimeoutMs: 0,
-    errorPrefix,
-  });
-  if (retryAttempt.type === "timeout") {
-    throw new Error("Google Gemini first response retry timed out unexpectedly");
-  }
-  return retryAttempt;
-}
-
 async function* parseGoogleSseChunks(
   response: Response,
   signal?: AbortSignal,
@@ -731,16 +682,50 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
               accept: "text/event-stream",
             };
           }
-          return await openGoogleSseChunks({
-            kind,
+          const request = params;
+          const requestContext = {
             model,
             options,
             guardedFetch,
             url: requestUrl,
             headers: requestHeaders,
-            request: params,
+            request,
             videoSlots: trustedVideoSlots,
+          };
+          const errorPrefix =
+            kind === "google-vertex"
+              ? "Google Vertex AI API error"
+              : "Google Generative AI API error";
+          const retryMs =
+            kind === "google-generative-ai" &&
+            isOfficialGoogleAiStudioBaseUrl(model.baseUrl) &&
+            (isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id))
+              ? resolveGoogleGemini3FirstResponseRetryMs()
+              : 0;
+          const firstAttempt = await openGoogleSseAttempt({
+            ...requestContext,
+            parentSignal: options?.signal,
+            firstResponseTimeoutMs: retryMs,
+            errorPrefix,
           });
+          if (firstAttempt.type === "ready") {
+            return firstAttempt;
+          }
+
+          // The first serialization owns video shedding. Clone only after it times out
+          // so the retry inherits those exact omissions instead of restoring stale bytes.
+          const retryRequest = buildGoogleGemini3FirstResponseRetryParams({ model, request })!;
+          const retryAttempt = await openGoogleSseAttempt({
+            ...requestContext,
+            request: retryRequest,
+            parentSignal: options?.signal,
+            firstResponseTimeoutMs: 0,
+            errorPrefix,
+          });
+          if (retryAttempt.type === "timeout") {
+            throw new Error("Google Gemini first response retry timed out unexpectedly");
+          }
+          return retryAttempt;
         };
         const apiKeys =
           kind === "google-generative-ai" &&

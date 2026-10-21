@@ -1,48 +1,66 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { Errored, lazy, Loading, Show } from "solid-js";
+import { children, Errored, isPending, lazy, Loading, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 
 type DevicePairSetupModule = typeof import("../pages/devices/view-pairing.tsx");
 type DevicePairSetupProps = Parameters<DevicePairSetupModule["DevicePairSetup"]>[0];
+const PairingDialog = lazy(() => import("../pages/devices/view-pairing.tsx"), {
+  export: "DevicePairSetup",
+});
 
 // Keep the pairing runtime lazy so opening the shell never fetches this chunk.
 export function DevicePairSetup(props: { props: DevicePairSetupProps }): SolidJSX.Element {
-  const Pairing = lazy(() => import("../pages/devices/view-pairing.tsx"), {
-    export: "DevicePairSetup",
-  });
   return (
     <Show when={props.props.open}>
-      <Errored
-        fallback={(_error, reset) => (
-          <DevicePairSetupFallback onClose={props.props.onClose} retry={reset} />
-        )}
-      >
-        <Loading fallback={<DevicePairSetupFallback onClose={props.props.onClose} />}>
-          <Pairing {...props.props} />
-        </Loading>
-      </Errored>
+      {(_open) => {
+        // Observe the lazy content while Errored retains its fallback during a retry.
+        const content = children(() => <PairingDialog {...props.props} />);
+        return (
+          <Errored
+            fallback={(_error, reset) => (
+              <PairingDialogFallback
+                failed={!isPending(() => content())}
+                retry={reset}
+                onClose={() => props.props.onClose()}
+              />
+            )}
+          >
+            <Loading
+              fallback={
+                <PairingDialogFallback failed={false} onClose={() => props.props.onClose()} />
+              }
+            >
+              {content()}
+            </Loading>
+          </Errored>
+        );
+      }}
     </Show>
   );
 }
 
-function DevicePairSetupFallback(props: { onClose: () => void; retry?: () => void }) {
+function PairingDialogFallback(props: {
+  failed: boolean;
+  retry?: () => void;
+  onClose: () => void;
+}): SolidJSX.Element {
   return (
     <openclaw-modal-dialog
       label={t("devices.pairing.title")}
-      description={t(props.retry ? "devices.pairing.loadFailed" : "common.loading")}
+      description={t(props.failed ? "devices.pairing.loadFailed" : "common.loading")}
       onModal-cancel={() => props.onClose()}
     >
-      <section class="device-pair-setup" aria-busy={props.retry ? undefined : "true"}>
+      <section class="device-pair-setup" aria-busy={props.failed ? undefined : "true"}>
         <header class="device-pair-setup__header">
           <div>
             <h2>{t("devices.pairing.title")}</h2>
-            <p role={props.retry ? undefined : "status"}>
-              {t(props.retry ? "devices.pairing.loadFailed" : "common.loading")}
+            <p role={props.failed ? undefined : "status"}>
+              {t(props.failed ? "devices.pairing.loadFailed" : "common.loading")}
             </p>
           </div>
         </header>
         <openclaw-modal-actions class="device-pair-setup__footer">
-          <Show when={props.retry}>
+          <Show when={props.failed}>
             <button class="btn btn--primary" type="button" onClick={() => props.retry?.()}>
               {t("common.retry")}
             </button>

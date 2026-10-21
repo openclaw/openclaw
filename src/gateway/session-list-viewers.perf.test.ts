@@ -1,4 +1,5 @@
 import { expect, test, vi } from "vitest";
+import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
@@ -344,12 +345,12 @@ test("shares concurrent list selection across row modes and refilters only publi
     writeResidentEntries(store);
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const read = (rowMode: "compact" | "sidebar", client = alice) =>
+    const read = (rowMode: "compact" | "sidebar", client = alice, limit = 2) =>
       listProjectedSessions({
         projection,
         client,
         acceptsSerializedJson: true,
-        opts: { limit: 2, activeMinutes: 1, rowMode },
+        opts: { limit, activeMinutes: 1, rowMode },
       });
     try {
       expect(sessionIds(await read("compact"))).toEqual(["s127", "s126"]);
@@ -359,6 +360,41 @@ test("shares concurrent list selection across row modes and refilters only publi
       );
       expect(repeated.map((result) => result.totalCount)).toEqual(Array(8).fill(128));
       expect(owner).not.toHaveBeenCalled();
+      for (const client of [alice, bob]) {
+        for (const rowMode of ["compact", "sidebar"] as const) {
+          await read(rowMode, client, 2);
+          await read(rowMode, client, 128);
+        }
+      }
+      using stringify = vi.spyOn(JSON, "stringify");
+      using present = vi.spyOn(projection, "present");
+      for (const client of [alice, bob, alice, bob]) {
+        for (const rowMode of ["compact", "sidebar"] as const) {
+          stringify.mockClear();
+          await read(rowMode, client, 2);
+          const smallPageEncodings = stringify.mock.calls.length;
+          stringify.mockClear();
+          const result = await read(rowMode, client, 128);
+          const encodings = stringify.mock.calls.length;
+          expect(result.totalCount).toBe(128);
+          // Fixed request preparation may encode facts; additional warm rows must not.
+          expect(encodings, `warm ${rowMode} serialization scales with row count`).toBe(
+            smallPageEncodings,
+          );
+          const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
+          expect(rows.every((row) => row.rowMode === rowMode)).toBe(true);
+          expect(rows.find((row) => row.sessionId === "s127")?.sharingRole).toBe(
+            client === bob ? "owner" : "viewer",
+          );
+          expect(rows.find((row) => row.sessionId === "s0")?.sharingRole).toBe(
+            client === alice ? "owner" : "viewer",
+          );
+        }
+      }
+      expect(present).not.toHaveBeenCalled();
+      stringify.mockRestore();
+      present.mockRestore();
+      owner.mockClear();
       patchEntry(store, "agent:main:selection-0", { updatedAt: now + 200, visibility: "draft" });
       expectPage(await read("compact"), ["s0", "s127"], 128);
       expect(owner.mock.calls.length).toBeLessThan(32);

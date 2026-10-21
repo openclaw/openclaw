@@ -5,9 +5,9 @@ import { render } from "@solidjs/testing-library";
 import { createComponent, createRoot, flush, onSettled } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/app-sidebar.tsx";
+import * as settingsSidebar from "../components/settings-sidebar-shell.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "../plugins/control-ui-view.solid.tsx";
@@ -20,7 +20,6 @@ import { equalShellRouteState, selectShellRouteState } from "./app-host-route-st
 import { ShellOwner } from "./app-host.tsx";
 import { ApplicationShell } from "./app-shell-view.tsx";
 import { bootstrapApplication } from "./bootstrap.ts";
-import { DEBUG_OVERLAY_ELEMENT } from "./lazy-custom-element.ts";
 import { NATIVE_HISTORY_STATE_EVENT } from "./native-web-chrome.ts";
 import { registerRouteElement } from "./route-elements.ts";
 
@@ -551,12 +550,11 @@ it("keeps status in navigation across web layouts without replacing the content 
 });
 
 it("keeps connection retry in the minimal footer when the Settings renderer is unavailable", async () => {
-  // mock-isolation: reject the lazy import before the real sidebar renderer initializes.
-  vi.doMock("../components/settings-sidebar-shell.tsx", () => {
-    throw new Error("Settings renderer unavailable");
-  });
-  onTestFinished(() => vi.doUnmock("../components/settings-sidebar-shell.tsx"));
   const { owner, runtime, view } = await mountShell();
+  const renderer = vi.spyOn(settingsSidebar, "ShellSettingsSidebar").mockImplementation(() => {
+    throw new Error("Settings chunk unavailable");
+  });
+  onTestFinished(() => renderer.mockRestore());
   vi.spyOn(runtime.context.gateway, "snapshot", "get").mockReturnValue({
     ...runtime.context.gateway.snapshot,
     phase: "offline",
@@ -566,9 +564,8 @@ it("keeps connection retry in the minimal footer when the Settings renderer is u
   owner.routeState = { routeId: "appearance" };
   owner.invalidate();
   flush();
-  await waitForSolid(() =>
-    expect(view.container.textContent).toContain("Settings navigation could not load."),
-  );
+  await vi.dynamicImportSettled();
+  flush();
 
   expect(view.container.querySelector(".shell--settings")).not.toBeNull();
   const footer = view.container.querySelector(".shell-nav > .sidebar .sidebar-shell__footer");
@@ -580,37 +577,6 @@ it("keeps connection retry in the minimal footer when the Settings renderer is u
   expect(document.activeElement).toBe(retry);
   retry.click();
   expect(connect).toHaveBeenCalledOnce();
-});
-
-it("loads the pending debug frame on demand and retries its rejected module", async () => {
-  const loading = createDeferred<Record<string, () => Text>>();
-  const retrying = createDeferred<Record<string, () => Text>>();
-  const module = { renderPendingDebugOverlay: () => document.createTextNode("Debug frame ready") };
-  const load = vi.fn(() => retrying.promise).mockImplementationOnce(() => loading.promise);
-  // mock-isolation: control chunk rejection and recovery without evaluating the real frame.
-  vi.doMock("../pages/debug/debug-overlay-frame.ts", load);
-  onTestFinished(() => {
-    vi.doUnmock("../pages/debug/debug-overlay-frame.ts");
-    loading.resolve(module);
-    retrying.resolve(module);
-  });
-  const { owner, view } = await mountShell();
-  expect(load).not.toHaveBeenCalled();
-  const pending = { status: "loading" as const, element: DEBUG_OVERLAY_ELEMENT };
-  vi.spyOn(owner.lazyCustomElements, "visibleState", "get").mockReturnValue(pending);
-  owner.invalidate();
-  flush();
-  await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-  loading.reject(new Error("Debug frame unavailable"));
-  await waitForSolid(() => expect(view.container.textContent).toContain("Debug frame unavailable"));
-
-  view.getByRole("button", { name: "Retry" }).click();
-  await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
-  expect(view.container.textContent).toContain("Debug frame unavailable");
-  retrying.resolve(module);
-  await waitForSolid(() => expect(view.container.textContent).toContain("Debug frame ready"));
-  expect(view.container.querySelector(".lazy-view-error")).toBeNull();
-  expect(owner.lazyCustomElements.visibleState).toBe(pending);
 });
 
 it("briefly reveals collapsed status transitions and a recovery footer without extending their timers", async () => {

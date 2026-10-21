@@ -65,6 +65,8 @@ import {
   inspectAuthProfileJsonCell,
   inspectAgentAuthProfileJsonCellReadOnly,
   readAuthProfileJsonCellText,
+  readAuthProfileRows,
+  readAuthProfileRowsReadOnly,
 } from "./sqlite-json.js";
 import {
   acquireAuthProfileReadDatabase,
@@ -72,6 +74,7 @@ import {
   isMissingDatabasePath,
 } from "./sqlite-read-pool.js";
 import type {
+  AuthProfileRowRead,
   AuthProfileStoreOwner,
   PersistedAuthProfileStoreInspection,
   PreparedAuthProfileStoreOwner,
@@ -246,40 +249,66 @@ function readSelectedAgentAuthDatabase<T>(
   }
 }
 
-export function inspectAuthProfileJsonCellReadOnly(
+function readAuthProfileDatabaseReadOnly<T>(
   databaseTarget: Pick<AuthProfileDatabaseTarget, "kind" | "path"> & { env?: NodeJS.ProcessEnv },
-  target: "store" | "state",
-): PersistedAuthProfileStoreInspection {
+  reader: {
+    read: (db: EngineConnection, kind: AuthProfileDatabaseTarget["kind"]) => T;
+    readNativeAgent: (databasePath: string) => T;
+    unavailable: (inspection: PersistedAuthProfileStoreInspection) => T;
+  },
+): T {
   if (databaseTarget.kind === "shared-state") {
     try {
       return (
-        withExistingOpenClawStateDatabaseReadOnly(
-          ({ db }) => inspectAuthProfileJsonCell(db, target, "shared-state"),
-          { path: databaseTarget.path, ...(databaseTarget.env ? { env: databaseTarget.env } : {}) },
-        ) ?? { status: "missing", reason: "database" }
+        withExistingOpenClawStateDatabaseReadOnly(({ db }) => reader.read(db, "shared-state"), {
+          path: databaseTarget.path,
+          ...(databaseTarget.env ? { env: databaseTarget.env } : {}),
+        }) ?? reader.unavailable({ status: "missing", reason: "database" })
       );
     } catch {
-      return isMissingDatabasePath(databaseTarget.path)
-        ? { status: "missing", reason: "database" }
-        : { status: "unreadable" };
+      return reader.unavailable(
+        isMissingDatabasePath(databaseTarget.path)
+          ? { status: "missing", reason: "database" }
+          : { status: "unreadable" },
+      );
     }
   }
   if (getDatabaseEngineInput("agent")) {
     try {
       return (
-        readSelectedAgentAuthDatabase(databaseTarget, (db) =>
-          inspectAuthProfileJsonCell(db, target, "agent"),
-        )?.value ?? { status: "missing", reason: "database" }
+        readSelectedAgentAuthDatabase(databaseTarget, (db) => reader.read(db, "agent"))?.value ??
+        reader.unavailable({ status: "missing", reason: "database" })
       );
     } catch {
-      return { status: "unreadable" };
+      return reader.unavailable({ status: "unreadable" });
     }
   }
-  return inspectAgentAuthProfileJsonCellReadOnly(
-    databaseTarget.path,
-    target,
-    openSqliteReadOnlyDatabase,
-  );
+  return reader.readNativeAgent(databaseTarget.path);
+}
+
+export function inspectAuthProfileJsonCellReadOnly(
+  databaseTarget: Pick<AuthProfileDatabaseTarget, "kind" | "path"> & { env?: NodeJS.ProcessEnv },
+  target: "store" | "state",
+): PersistedAuthProfileStoreInspection {
+  return readAuthProfileDatabaseReadOnly(databaseTarget, {
+    read: (db, kind) => inspectAuthProfileJsonCell(db, target, kind),
+    readNativeAgent: (databasePath) =>
+      inspectAgentAuthProfileJsonCellReadOnly(databasePath, target, openSqliteReadOnlyDatabase),
+    unavailable: (inspection) => inspection,
+  });
+}
+
+export function readPersistedAuthProfileRows(
+  agentDir?: string,
+  env?: NodeJS.ProcessEnv,
+): AuthProfileRowRead {
+  const target = resolveAuthProfileDatabaseOptions(agentDir, env);
+  return readAuthProfileDatabaseReadOnly(target, {
+    read: (db, kind) => readAuthProfileRows(db, target.path, kind),
+    readNativeAgent: (databasePath) =>
+      readAuthProfileRowsReadOnly(databasePath, openSqliteReadOnlyDatabase),
+    unavailable: (inspection) => ({ store: inspection, state: inspection, cacheable: false }),
+  });
 }
 
 /** Doctor retains opaque rotation-state bytes while repairing independently readable credentials. */

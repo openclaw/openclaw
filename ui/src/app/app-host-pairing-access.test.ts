@@ -2,13 +2,14 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "@solidjs/web";
-import { createComponent, onSettled } from "solid-js";
+import { createComponent, createMemo, onSettled, Show } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
+import * as settingsSidebar from "../components/settings-sidebar-shell.tsx";
 import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
@@ -17,6 +18,7 @@ import {
   admitStoredChatComposerQueueItem,
   persistChatComposerState,
 } from "../pages/chat/composer-persistence.ts";
+import * as pairingView from "../pages/devices/view-pairing.tsx";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
   createContext,
@@ -60,42 +62,21 @@ function outboxes(sessionKey: string, total: number, draft: boolean) {
   };
 }
 
-function deferredRenderer(settings: boolean) {
-  const loading = createDeferred<Record<string, () => Text>>();
-  const retrying = createDeferred<Record<string, () => Text>>();
+function deferredRenderer() {
+  const loading = createDeferred();
+  const retrying = createDeferred();
   const load = vi.fn(() => retrying.promise).mockImplementationOnce(() => loading.promise);
-  const mock = () => {
-    if (settings) {
-      // mock-isolation: delay or reject the chunk before any real sidebar renderer initializes.
-      vi.doMock("../components/settings-sidebar-shell.tsx", load);
-    } else {
-      // mock-isolation: delay or reject the chunk before any real pairing renderer initializes.
-      vi.doMock("../pages/devices/view-pairing.tsx", load);
-    }
+  const view = () => {
+    const ready = createMemo(load);
+    return createComponent(Show, {
+      get when() {
+        ready();
+        return true;
+      },
+      children: (_ready) => document.createTextNode("Lazy view ready"),
+    });
   };
-  const unmock = () => {
-    if (settings) {
-      vi.doUnmock("../components/settings-sidebar-shell.tsx");
-    } else {
-      vi.doUnmock("../pages/devices/view-pairing.tsx");
-    }
-  };
-  const module = {
-    [settings ? "ShellSettingsSidebar" : "DevicePairSetup"]: () =>
-      document.createTextNode(settings ? "Settings ready" : "Pairing ready"),
-  };
-  mock();
-  onTestFinished(() => {
-    unmock();
-    loading.resolve(module);
-    retrying.resolve(module);
-  });
-  return {
-    loading,
-    retrying,
-    load,
-    module,
-  };
+  return { loading, retrying, load, view };
 }
 
 setupSidebarTest();
@@ -497,11 +478,15 @@ describe("application shell pairing access", () => {
     ["settings", true],
   ] as const)("keeps lazy %s visible (failed: %s)", async (surface, failed) => {
     const settings = surface === "settings";
-    const { shell, container, refresh, renderSidebar } = createPairingShell({
+    const { shell, container, overlaySnapshot, refresh, renderSidebar } = createPairingShell({
       auth: settings ? { role: "operator" } : admin,
       setupCode: settings ? undefined : "pair-mobile-secret",
     });
-    const { loading, retrying, load, module } = deferredRenderer(settings);
+    const { loading, retrying, load, view } = deferredRenderer();
+    const renderer = settings
+      ? vi.spyOn(settingsSidebar, "ShellSettingsSidebar").mockImplementation(view)
+      : vi.spyOn(pairingView, "DevicePairSetup").mockImplementation(view);
+    onTestFinished(() => renderer.mockRestore());
     if (settings) {
       shell.routeState = {
         routeId: "profile",
@@ -509,12 +494,17 @@ describe("application shell pairing access", () => {
       };
       await refresh();
     } else {
+      overlaySnapshot.devicePairSetupOpen = false;
       await renderSidebar();
+      await vi.dynamicImportSettled();
+      expect(load).not.toHaveBeenCalled();
+      overlaySnapshot.devicePairSetupOpen = true;
+      await refresh();
     }
+    await waitForSolid(() => expect(load).toHaveBeenCalledOnce());
     const message = settings
       ? "Settings navigation could not load."
       : "Could not load the pairing dialog";
-    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
     if (failed) {
       loading.reject(new Error(`${surface} chunk unavailable`));
       await waitForSolid(() => expect(container.textContent).toContain(message));
@@ -535,8 +525,7 @@ describe("application shell pairing access", () => {
         expect(actions.map((button) => button.textContent?.trim())).toEqual(["Retry", "Close"]);
       }
       actions.find((button) => button.textContent?.trim() === "Retry")?.click();
-      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
-      expect(target()?.textContent).toContain(message);
+      await waitForSolid(() => expect(target()?.getAttribute("aria-busy")).toBe("true"));
     } else {
       expect(target()?.getAttribute("aria-busy")).toBe("true");
       if (settings) {
@@ -559,11 +548,9 @@ describe("application shell pairing access", () => {
         expect(load).toHaveBeenCalledOnce();
       }
     }
-    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(failed ? 2 : 1));
-    (failed ? retrying : loading).resolve(module);
-    await waitForSolid(() =>
-      expect(container.textContent).toContain(settings ? "Settings ready" : "Pairing ready"),
-    );
+    expect(load).toHaveBeenCalledTimes(failed ? 2 : 1);
+    (failed ? retrying : loading).resolve();
+    await waitForSolid(() => expect(container.textContent).toContain("Lazy view ready"));
     expect(target()).toBeNull();
   });
 

@@ -20,7 +20,7 @@ import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 
 const participants = createTranscriptMemo<{
   showOwnSenderName: boolean;
-  sessionPeople: Set<string>;
+  replyPeople: readonly string[];
 }>();
 const forwardedGroups = createTranscriptMemo<boolean>();
 
@@ -75,7 +75,7 @@ export function resolveTranscriptParticipants(
           identity && identity.type !== "agent" ? [sessionParticipantIdentityKey(identity)] : [],
         ),
       );
-      return { showOwnSenderName, sessionPeople };
+      return { showOwnSenderName, replyPeople: [...sessionPeople].toSorted() };
     },
   );
 }

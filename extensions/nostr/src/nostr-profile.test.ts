@@ -93,11 +93,9 @@ describe("publishProfile real relay outcomes", () => {
     });
     try {
       await vi.waitFor(() => {
-        expect(first.events).toHaveLength(1);
-        expect(second.events).toHaveLength(1);
+        expect([first.events.length, second.events.length]).toEqual([1, 1]);
       });
-      expect(first.acknowledgements).toEqual([]);
-      expect(second.acknowledgements).toEqual([]);
+      expect([first.acknowledgements, second.acknowledgements]).toEqual([[], []]);
       first.acknowledgeAll();
       second.acknowledgeAll();
 

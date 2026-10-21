@@ -837,6 +837,10 @@ changes invalidate the whole store. Empty commits leave replica revisions
 unchanged, so unrelated reads can reuse their cached snapshots.
 A PostgreSQL function that writes rows and is called through SELECT must be classified unscoped.
 
+Worker commit receipts carry only explicitly staged domain facts on both engines.
+A write without staged facts still commits and invalidates caches, but publishes
+no domain receipt. Native operation settlement is independent of those facts.
+
 Full transcript hydration reads PostgreSQL payloads in byte-budgeted pages within
 one read snapshot. Paging preserves all selected events and their sequence order;
 it does not impose a history cutoff. Individual oversized events retain bounded

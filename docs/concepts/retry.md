@@ -47,7 +47,7 @@ An OpenAI SDK stream that fails with malformed server-sent event JSON also quali
 
 A Responses stream that ends before its terminal event also qualifies for transient recovery, including when a tool call is still unfinished. Partial tool arguments are never executed. A completed response with inconsistent tool-call identities does not qualify as a disconnected stream. A Gemini or Vertex AI stream that ends inside an event frame qualifies the same way; a whole frame of malformed JSON does not.
 
-Responses tool calls that accumulate 32 KiB of consecutive trailing whitespace are aborted early and qualify for the same bounded transient recovery. This limit applies to the whitespace run, not the total argument size. Transport diagnostics label this abort `degenerate_output`; session watchdog recovery is labeled `session_watchdog`.
+Responses tool calls that accumulate 4 KiB of consecutive trailing whitespace are aborted early and qualify for the same bounded transient recovery. This limit applies to the whitespace run, not the total argument size. Transport diagnostics label this abort `degenerate_output`; session watchdog recovery is labeled `session_watchdog`.
 
 Completed Responses replies are delivered immediately, even if the provider has not closed the HTTP response yet. OpenClaw discards up to 64 KiB of trailing bytes for at most 250 ms in the background so a finished connection can be reused. Trailing events never add output or tool calls. Cancellation and Gateway shutdown stop the drain.
 
