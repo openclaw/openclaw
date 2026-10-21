@@ -2914,7 +2914,6 @@
 ["src/auto-reply/reply/queue/settings-runtime.test.ts","../../../channels/plugins/index.js","bf6f5c60d377e0fde559fdef30aa03ab622919dae23582c3695a660d8f90d164",1]
 ["src/auto-reply/reply/reply-media-paths.test.ts","../../media/outbound-attachment.js","e25821dd13ddd1a23867d380929dabf9a57b7ba1be9e039ab3a90aa21e907b2c",1]
 ["src/auto-reply/reply/reply-media-paths.test.ts","../../media/read-capability.js","23a10313349561ff210b0b3b65334b65ea19a95316c27ee20e3c5c6c953c908e",1]
-["src/auto-reply/reply/reply-payloads.test.ts","../../channels/plugins/bundled.js","956a6b5115081e2c3d40a96dd7f9c5c43ba9d3e7c84572dcec74bbaff7a3d553",1]
 ["src/auto-reply/reply/reply-timing-tracker.test.ts","../../logging/subsystem.js","0f96c7878a63a14428079c912bb6346c918284824d7277f67e66205e35db9292",1]
 ["src/auto-reply/reply/route-reply.delivery-result.test.ts","../../infra/outbound/deliver-runtime.js","0d3602525550d11063a9f1dbbded511b84d54fe7a6bfc4c1c6b997c2fc7de116",1]
 ["src/auto-reply/reply/route-reply.delivery-result.test.ts","../../infra/outbound/deliver.js","b56b9e0267b8ea90749bd4fcbe564ee482076b1717816525530d2b64d7c62a02",1]

@@ -57,6 +57,7 @@ function targetsMatchTelegramReplySuppression(params: {
 }
 
 const suppression = { targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression };
+// mock-isolation: Keep bundled channel discovery isolated to the synthetic Telegram suppression fixture.
 vi.mock("../../channels/plugins/bundled.js", () => ({
   getBundledChannelPlugin: (channel: string) =>
     channel === "telegram"
