@@ -1159,7 +1159,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
   "src/agents/embedded-agent-runner/run/runtime-preparation.thinking.test.ts",
   "src/agents/embedded-agent-runner/run/settled-tool-evidence.test.ts",
-  "src/agents/embedded-agent-runner/run/settled-turn-finalization.silence.test.ts",
   "src/agents/embedded-agent-runner/run/settled-turn-finalization.stale-error.test.ts",
   "src/agents/embedded-agent-runner/run/settled-turn-finalization.test.ts",
   "src/agents/embedded-agent-runner/run/settled-turn-finalization.transport.test.ts",
