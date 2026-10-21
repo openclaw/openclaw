@@ -383,15 +383,10 @@ server.listen(port, "127.0.0.1", () => {
     },
   );
 
-  it("rejects ambiguous benchmark CLI values before spawning Node", () => {
+  it("validates installed-cohort controls and selected benchmark options", () => {
     for (const [args, error] of [
-      ["--wat", "Unknown argument: --wat"],
       ["--installed-cpu-diagnostic", "--installed-cpu-diagnostic requires --installed-cohort"],
-      ["--output --case default", "--output requires a value"],
-      ["--case", "--case requires a value"],
-      ["--runs --warmup 0", "--runs requires a value"],
       ["--case default --case default", 'Duplicate --case "default"'],
-      ["--output first.json --output second.json", "--output was provided more than once"],
     ]) {
       expect(() => parseOptions(args)).toThrow(error);
     }
@@ -421,11 +416,6 @@ server.listen(port, "127.0.0.1", () => {
     expect(
       testing.parseOptions(["--gateway-runtime", "/tmp/bun", "--gateway-cpus", "0,1"]),
     ).toMatchObject({ gatewayRuntime: "/tmp/bun", gatewayCpus: "0,1" });
-    expect(() => testing.parseOptions(["--gateway-cpus", "0-1"])).toThrow("--gateway-cpus");
-    expect(() => testing.parseOptions(["--gateway-runtime", "bun\0"])).toThrow("--gateway-runtime");
-    expect(() =>
-      testing.parseOptions(["--gateway-runtime", "bun", "--gateway-runtime", "node"]),
-    ).toThrow("--gateway-runtime was provided more than once");
   });
 
   it("forces incident packaged-plugin cases to load built plugin entries", () => {

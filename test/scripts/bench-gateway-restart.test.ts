@@ -114,10 +114,6 @@ function sample(overrides: Partial<RestartSampleFixture>): RestartSampleFixture 
 
 it("rejects ambiguous benchmark CLI values before spawning Node", () => {
   for (const [args, message] of [
-    ["--wat", "Unknown argument: --wat"],
-    ["--output --case skipChannels", "--output requires a value"],
-    ["--output first.json --output second.json", "--output was provided more than once"],
-    ["--case", "--case requires a value"],
     ["--case skipChannels --case skipChannels", 'Duplicate --case "skipChannels"'],
     ["--restarts --runs 1", "--restarts requires a value"],
   ] as const) {

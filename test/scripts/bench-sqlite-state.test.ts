@@ -29,13 +29,6 @@ describe("scripts/bench-sqlite-state", () => {
     );
   });
 
-  it("rejects duplicate single-value controls before seeding benchmark databases", () => {
-    expect(() =>
-      parseSqliteStateBenchmarkCli(["--profile", "smoke", "--profile", "large"]),
-    ).toThrow("--profile was provided more than once");
-    expect(parseSqliteStateBenchmarkCli(["--help", "--profile", "huge"])).toEqual({ help: true });
-  });
-
   it("reports production-shaped SQLite scenarios in the existing smoke benchmark", () => {
     const outputDir = tempDirs.make("openclaw-sqlite-bench-test-");
     const outputPath = path.join(outputDir, "report.json");

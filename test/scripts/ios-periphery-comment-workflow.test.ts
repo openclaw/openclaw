@@ -463,24 +463,26 @@ describe("iOS Periphery comment workflow", () => {
     expectUnavailableComment(result.updatedBodies);
   });
 
-  it.each(["iOS", "macOS"] as const)(
-    "reads the retained %s producer after an unrelated failed-job rerun",
-    async (platform) => {
-      const result = await runReport(
-        findingArchive,
-        {
-          platform,
-          run: { run_attempt: 3 },
-          scanAttempt: platform === "macOS" ? 3 : 2,
-          producerAttempt: 2,
-        },
-        { name: `${platform.toLowerCase()}-periphery-dead-code-12345-2` },
-      );
-      expect(result.downloadCount).toBe(1);
-      expect(result.createdBodies[0]).toContain("unusedSyntheticFunction");
-      expect(result.core.warnings).toEqual([]);
-    },
-  );
+  it.each([
+    ["iOS", 2],
+    ["macOS", 2],
+    ["macOS", 3],
+  ] as const)("reads %s producer attempt %s after a rerun", async (platform, producerAttempt) => {
+    const result = await runReport(
+      findingArchive,
+      {
+        platform,
+        run: { run_attempt: 3 },
+        scanAttempt: platform === "macOS" ? 3 : 2,
+        producerAttempt,
+        previousAttempts: producerAttempt === 3 ? [1, 2] : undefined,
+      },
+      { name: `${platform.toLowerCase()}-periphery-dead-code-12345-${producerAttempt}` },
+    );
+    expect(result.downloadCount).toBe(1);
+    expect(result.createdBodies[0]).toContain("unusedSyntheticFunction");
+    expect(result.core.warnings).toEqual([]);
+  });
 
   it.each(["failure", "cancelled"])(
     "does not fall back to an old report after a %s macOS producer rerun",
@@ -505,20 +507,18 @@ describe("iOS Periphery comment workflow", () => {
     },
   );
 
-  it("reads the newly produced macOS report after a producer rerun", async () => {
-    const result = await runReport(
-      findingArchive,
-      { platform: "macOS", producerAttempt: 3, previousAttempts: [1, 2], run: { run_attempt: 3 } },
-      { name: "macos-periphery-dead-code-12345-3" },
-    );
-    expect(result.downloadCount).toBe(1);
-    expect(result.createdBodies[0]).toContain("unusedSyntheticFunction");
-  });
-
-  it("reads deflated findings and escapes them before creating a PR comment", async () => {
+  it("renders bounded deflated findings and escapes them before creating a PR comment", async () => {
     const longName = `![click](https://example.invalid)\r\n@octocat|next${"a".repeat(260)}`;
+    const repeated = "{".repeat(500);
     const archive = reportZip(
-      [{ kind: "<script>*bold*</script>", location: "Sources/Test.swift:12", name: longName }],
+      [
+        { kind: "<script>*bold*</script>", location: "Sources/Test.swift:12", name: longName },
+        ...Array.from({ length: 49 }, (_, index) => ({
+          kind: repeated,
+          location: `${repeated}${index}:${index}`,
+          name: repeated,
+        })),
+      ],
       "1\n",
       "DEFLATE",
     );
@@ -532,22 +532,7 @@ describe("iOS Periphery comment workflow", () => {
     expect(parsed.text).toContain("<script>*bold*</script>");
     expect(parsed.text).toContain("![click](https://example.invalid) @octocat|next");
     expect(parsed.links).toEqual([]);
-  });
-
-  it("bounds the rendered comment after escaping", async () => {
-    const repeated = "{".repeat(500);
-    const archive = reportZip(
-      Array.from({ length: 50 }, (_, index) => ({
-        kind: repeated,
-        location: `${repeated}${index}:${index}`,
-        name: repeated,
-      })),
-      "1\n",
-    );
-    const result = await runReport(archive);
-
-    expect(result.createdBodies).toHaveLength(1);
-    expect(result.createdBodies[0]?.length).toBeLessThanOrEqual(60_000);
+    expect(body.length).toBeLessThanOrEqual(60_000);
   });
 
   it("warns without failing when workflow_run token cannot write comments", async () => {
