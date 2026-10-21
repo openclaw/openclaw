@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import * as ownership from "../agents/auth-profiles/path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../agents/auth-profiles/path-resolve.native.js";
 import * as persisted from "../agents/auth-profiles/persisted.js";
@@ -16,6 +17,7 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store-runtime.js";
 import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/upsert-with-lock.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -48,9 +50,9 @@ function inspectCopy(fixture: Awaited<ReturnType<typeof createEmptyFixture>>) {
   });
 }
 
-function detectLegacy(env: NodeJS.ProcessEnv, homedir?: () => string) {
+function detectLegacy(env: NodeJS.ProcessEnv, homedir?: () => string, config?: OpenClawConfig) {
   return doctor.detectLegacyStateMigrations({
-    cfg: { plugins: { enabled: false } },
+    cfg: { ...config, plugins: { enabled: false } },
     env,
     homedir,
     doctorOnlyStateMigrations: true,
@@ -162,7 +164,11 @@ async function createEmptyFixture(createSourceDatabase: boolean) {
   const stateDir = tempDirs.make("openclaw-shared-auth-empty-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_AGENT_DIR", "");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: undefined };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_AGENT_DIR: undefined,
+  };
   const mainAgentDir = paths.resolveSharedMainAuthAgentDir(env);
   const sourcePath = sqlite.resolveAuthProfileDatabasePath(mainAgentDir);
   if (createSourceDatabase) {
@@ -339,6 +345,100 @@ it("moves exact rows, preserves every effective agent store, and records receipt
     ),
   ).toEqual({ count: 2 });
 });
+
+it.each(["standard", "custom", "main override"] as const)(
+  "relocates the configured inheritance owner through Doctor (%s)",
+  async (layout) => {
+    const fixture = await createEmptyFixture(false);
+    const ownerDir = path.join(
+      fixture.stateDir,
+      layout === "custom" ? "custom-owner" : "agents/ops/agent",
+    );
+    const peerDir = path.join(fixture.stateDir, "agents/dev/agent");
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { authInheritance: { agentId: "ops" } },
+        entries: { ops: { agentDir: ownerDir }, dev: {} },
+      },
+    };
+    if (layout === "main override") {
+      fixture.env.OPENCLAW_AGENT_DIR = path.join(fixture.stateDir, "relocated-main");
+    }
+    const inherited = makeStore("openai:owner", "synthetic-owner-key");
+    const privateStore = makeStore("openai:private", "synthetic-private-key");
+    resolveAgentDir(config, "ops", fixture.env);
+    sqlite.writePersistedAuthProfileStoreRaw(inherited, ownerDir);
+    sqlite.writePersistedAuthProfileStoreRaw(privateStore, peerDir);
+    const detected = await detectLegacy(fixture.env, undefined, config);
+
+    expect(await fixture.migrate(detected.sharedAuthStore, fixture.env)).toMatchObject({
+      warnings: [],
+    });
+    expect(sharedAuth(fixture.env).store).toEqual(inherited);
+    expect(localAuth(ownerDir).store).toBeNull();
+    expect(localAuth(peerDir).store).toEqual(privateStore);
+    expect(loadAuthProfileStoreWithoutExternalProfiles(peerDir).profiles).toEqual({
+      ...inherited.profiles,
+      ...privateStore.profiles,
+    });
+    const db = stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
+    expect(
+      rows(
+        db,
+        "SELECT DISTINCT source_path FROM migration_sources WHERE migration_kind = 'shared-auth-store-state-db'",
+      ),
+    ).toEqual([{ source_path: path.join(ownerDir, "openclaw-agent.sqlite") }]);
+    expect((await detectLegacy(fixture.env, undefined, config)).sharedAuthStore.hasLegacy).toBe(
+      false,
+    );
+  },
+);
+
+it("keeps both credential stores when the configured owner and main are populated", async () => {
+  const fixture = await createFixture();
+  const detected = await detectLegacy(fixture.env, undefined, {
+    agents: { defaults: { authInheritance: { agentId: "ops" } }, entries: { ops: {} } },
+  });
+  const before = [localAuth(fixture.mainAgentDir), localAuth(fixture.opsAgentDir)];
+
+  expect(await fixture.migrate(detected.sharedAuthStore, fixture.env)).toMatchObject({
+    changes: [],
+    outcome: "skipped",
+    warningDisposition: "recoverable",
+    warnings: [expect.stringContaining("also stores credentials")],
+  });
+  expect([localAuth(fixture.mainAgentDir), localAuth(fixture.opsAgentDir)]).toEqual(before);
+  expect(ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
+    location: "legacy-main",
+  });
+});
+
+it.each(["empty owner", "directory alias"] as const)(
+  "preserves main-source relocation with a configured %s",
+  async (scenario) => {
+    const fixture = await createEmptyFixture(false);
+    const mainDir = path.dirname(fixture.sourcePath);
+    const ownerDir = path.join(fixture.stateDir, "ops-alias");
+    const store = makeStore("openai:shared", "synthetic-main-key");
+    sqlite.writePersistedAuthProfileStoreRaw(store, mainDir);
+    if (scenario === "directory alias") {
+      fs.symlinkSync(mainDir, ownerDir, process.platform === "win32" ? "junction" : "dir");
+    }
+    const detected = await detectLegacy(fixture.env, undefined, {
+      agents: {
+        defaults: { authInheritance: { agentId: "ops" } },
+        entries: { ops: { agentDir: ownerDir } },
+      },
+    });
+
+    expect(await fixture.migrate(detected.sharedAuthStore, fixture.env)).toMatchObject({
+      warnings: [],
+    });
+    expect(sharedAuth(fixture.env).store).toEqual(store);
+    expect(localAuth(mainDir).store).toBeNull();
+  },
+);
 
 it.each(["order state", "credential override"] as const)(
   "preserves post-relocation main-agent %s without treating it as legacy",

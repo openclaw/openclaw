@@ -3,15 +3,9 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createNativeNotificationsCapability } from "../../app/native-notifications.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import * as toast from "../../lib/toast.ts";
-import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { createDraftFixture, resetSubmissionMocks } from "./draft-submission-flow.test-support.ts";
 
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  sessionStorage.clear();
-  localStorage.clear();
-});
+afterEach(resetSubmissionMocks);
 
 function nativeBackgroundFixture(options: Parameters<typeof createDraftFixture>[0] = {}) {
   const postMessage = vi.fn();

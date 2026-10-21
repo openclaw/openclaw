@@ -490,7 +490,7 @@ describe("ChatComposerCapabilityHost", () => {
     state.connectionEpoch = 2;
     const reconnected = props();
     expect(reconnected.skills).toBeNull();
-    expect(reconnected.skillsLoading).toBe(false);
+    expect(reconnected.skillsRead).toBeNull();
     reconnected.onLoadSkills?.();
     expect(statusRequest).toHaveBeenCalledTimes(2);
     expect(request.mock.calls).toEqual([
@@ -504,7 +504,7 @@ describe("ChatComposerCapabilityHost", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(props().skills).toBeNull();
-    expect(props().skillsLoading).toBe(true);
+    expect(props().skillsRead).toBeTruthy();
 
     current.resolve({ skills: [skill("current")] });
     await vi.waitFor(() => expect(props().skills?.map(({ name }) => name)).toEqual(["current"]));

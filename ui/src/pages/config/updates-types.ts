@@ -6,6 +6,7 @@ export type UpdatesChannel = (typeof UPDATES_CHANNELS)[number];
 
 export type UpdatesViewProps = {
   update: ApplicationUpdateOverlaySnapshot;
+  statusRead: Promise<boolean> | null;
   commandScope?: object;
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   configObject: Record<string, unknown>;

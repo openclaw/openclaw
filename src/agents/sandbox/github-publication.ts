@@ -1,6 +1,17 @@
 import type { SandboxFsBridge } from "./fs-bridge.types.js";
 import type { SandboxContext } from "./types.js";
 
+export function canPrepareGitHubPullRequest(
+  sandbox: SandboxContext | null | undefined,
+): sandbox is SandboxContext {
+  return Boolean(
+    sandbox?.enabled &&
+    sandbox.backend &&
+    sandbox.workspaceSource === "managed-worktree" &&
+    sandbox.workspaceAccess !== "ro",
+  );
+}
+
 export function canRefreshGitHubPublicationBase(
   sandbox: SandboxContext | null | undefined,
 ): sandbox is SandboxContext {

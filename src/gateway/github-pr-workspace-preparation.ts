@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SessionGitHubActionParams } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
+import { canPrepareGitHubPullRequest } from "../agents/sandbox/github-publication.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
@@ -45,18 +46,12 @@ export async function performSessionGitHubPreparation(
   const { params, context } = options;
   const caller = getGatewayToolCallerIdentity();
   const sandbox = caller?.workspaceBaseRefreshSandbox;
-  if (
-    !caller ||
-    !sandbox?.enabled ||
-    !sandbox.backend ||
-    sandbox.workspaceSource !== "managed-worktree"
-  ) {
+  if (!caller || !canPrepareGitHubPullRequest(sandbox)) {
     throw new Error(
-      "Run prepare_pr from this conversation's sandboxed agent in a managed workspace.",
+      sandbox?.workspaceAccess === "ro"
+        ? "The workspace is read-only; prepare_pr requires a writable sandbox."
+        : "Run prepare_pr from this conversation's sandboxed agent in a managed workspace.",
     );
-  }
-  if (sandbox.workspaceAccess === "ro") {
-    throw new Error("The workspace is read-only; prepare_pr requires a writable sandbox.");
   }
   if (
     params.sessionKey !== caller.sessionKey ||

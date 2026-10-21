@@ -1,26 +1,16 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo } from "solid-js";
 import type { ChannelAccountSnapshot, ChannelsStatusSnapshot } from "../../api/types.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
-import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import {
   SettingsEmpty,
   SettingsRow,
   SettingsSection,
   SettingsStatus,
-  SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { AgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../../lib/channels/index.ts";
-import type { CronState } from "../../lib/cron/types.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import {
-  formatCronPayload,
-  formatCronSchedule,
-  formatCronState,
-  formatNextRun,
-} from "../../lib/presenter.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AgentPanelAction } from "./panel-ui.tsx";
@@ -179,133 +169,6 @@ export function AgentChannels(
               />
             );
           })
-        )}
-      </SettingsSection>
-    </>
-  );
-}
-
-export function AgentCron(
-  params: AgentsPageView["cron"] & {
-    basePath: string;
-    context: AgentContext;
-    readState: () => CronState;
-    canRunNow: boolean;
-    onSelectPanel: (panel: AgentsPanel) => void;
-  },
-) {
-  return (
-    <>
-      {renderAgentContextSection(
-        params.context,
-        t("agents.context.schedulingSubtitle"),
-        params.onSelectPanel,
-      )}
-      {params.readState().cronError ? (
-        <div class="callout danger">{params.readState().cronError}</div>
-      ) : undefined}
-      <SettingsSection
-        title={t("agents.cronPanel.schedulerTitle")}
-        description={t("agents.cronPanel.schedulerSubtitle")}
-        actions={
-          <AgentPanelAction
-            label={params.readState().cronLoading ? t("common.refreshing") : t("common.refresh")}
-            disabled={params.readState().cronLoading}
-            onClick={params.onRefresh}
-          />
-        }
-      >
-        <For
-          each={
-            [
-              [
-                t("common.enabled"),
-                params.readState().cronStatus
-                  ? params.readState().cronStatus?.enabled
-                    ? t("common.yes")
-                    : t("common.no")
-                  : t("common.na"),
-              ],
-              [t("agents.cronPanel.jobs"), params.readState().cronScopedTotal ?? t("common.na")],
-              [
-                t("agents.cronPanel.nextWake"),
-                formatNextRun(
-                  params.readState().cronStatus?.enabled === false
-                    ? null
-                    : params.readState().cronScopedNextWakeAtMs,
-                ),
-              ],
-            ] as const
-          }
-        >
-          {([title, value]) => (
-            <SettingsRow title={title} control={<SettingsValue value={value} />} />
-          )}
-        </For>
-      </SettingsSection>
-      <SettingsSection
-        title={t("agents.cronPanel.agentJobsTitle")}
-        description={t("agents.cronPanel.agentJobsSubtitle")}
-      >
-        <Show when={params.readState().cronJobsError}>
-          <div class="callout danger" role="alert">
-            {params.readState().cronJobsError}
-          </div>
-        </Show>
-        {params.readState().cronJobs.length === 0 ? (
-          <SettingsEmpty message={t("agents.cronPanel.noJobs")} />
-        ) : (
-          <>
-            <For each={params.readState().cronJobs} keyed={(job) => job.id}>
-              {(job) => {
-                const description = createMemo(() =>
-                  [
-                    job().description,
-                    formatCronSchedule(job()),
-                    job().sessionTarget,
-                    formatCronState(job()),
-                    formatCronPayload(job()),
-                  ]
-                    .filter(Boolean)
-                    .join(" · "),
-                );
-                return (
-                  <SettingsRow
-                    title={job().name}
-                    description={description()}
-                    control={
-                      <>
-                        <SettingsStatus
-                          kind={job().enabled ? "ok" : "warn"}
-                          label={job().enabled ? t("common.enabled") : t("common.disabled")}
-                        />
-                        <a
-                          class="btn btn--sm"
-                          href={`${pathForRoute("cron", params.basePath)}?job=${encodeURIComponent(job().id)}`}
-                          aria-label={t("agents.cronPanel.editJob", { name: job().name })}
-                        >
-                          {t("agents.cronPanel.edit")}
-                        </a>
-                        <AgentPanelAction
-                          label={t("agents.cronPanel.runNow")}
-                          disabled={!params.canRunNow}
-                          onClick={() => params.onRunNow(job().id)}
-                        />
-                      </>
-                    }
-                  />
-                );
-              }}
-            </For>
-            <CronJobsPagination
-              jobsShown={params.readState().cronJobs.length}
-              jobsTotal={params.readState().cronJobsTotal}
-              hasMore={params.readState().cronJobsHasMore}
-              loading={params.readState().cronLoading}
-              loadingMore={params.readState().cronJobsLoadingMore}
-              onLoadMore={params.onLoadMore}
-            />
-          </>
         )}
       </SettingsSection>
     </>

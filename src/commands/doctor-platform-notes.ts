@@ -178,15 +178,18 @@ export async function collectGatewayPlatformWarnings(
       .filter(
         (issue) =>
           issue.code === SERVICE_AUDIT_CODES.systemdKillModeControlGroup ||
-          issue.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+          issue.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone ||
+          issue.repair === "host",
       )
       .map((issue) =>
-        [
-          issue.detail ? `${issue.message} (${issue.detail})` : issue.message,
-          // Structured Doctor keeps this second line in fixHint, so triage
-          // message truncation cannot discard the supported repair command.
-          `Run ${formatCliCommand("openclaw gateway install --force")} only after verification; inspect drop-ins separately.`,
-        ].join("\n"),
+        issue.repair === "host"
+          ? `${issue.message} (${issue.detail})`
+          : [
+              issue.detail ? `${issue.message} (${issue.detail})` : issue.message,
+              // Structured Doctor keeps this second line in fixHint, so triage
+              // message truncation cannot discard the supported repair command.
+              `Run ${formatCliCommand("openclaw gateway install --force")} only after verification; inspect drop-ins separately.`,
+            ].join("\n"),
       );
   }
   return [

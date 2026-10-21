@@ -1,6 +1,5 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
-  "extensions/memory-core/src/memory/manager-duplicate-chunks.postgres.test.ts",
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",
   "src/gateway/server-methods/chat-send-admission.reads.test.ts",
   "src/sessions/background-session-result.test.ts",
@@ -205,7 +204,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/channels/turn/run-channel-turn.settlement.test.ts",
   "src/config/sessions/session-accessor.sqlite-bounded-context.test.ts",
   "src/gateway/server-methods/chat-transcript-persistence.mirrors.test.ts",
-  "src/gateway/server-methods/chat-transcript-persistence.generated-media.test.ts",
   "src/gateway/chat-display-projection.media.test.ts",
   "src/config/sessions/session-message-rewrite.test.ts",
   "src/config/sessions/session-actor-transcript-reuse.test.ts",
@@ -683,7 +681,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/agent-runner-required-maintenance.pending-input.test.ts",
   "src/auto-reply/reply/agent-runner-compaction-fallback.test.ts",
   "src/auto-reply/reply/abort.acp-boundary.test.ts",
-  "src/auto-reply/reply/commands-acp.controller.test.ts",
   "src/gateway/session-reset-acp.controller.test.ts",
   "src/auto-reply/reply/abort.test.ts",
   "src/auto-reply/reply/dispatch-from-config.pending-restart.test.ts",

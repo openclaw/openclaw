@@ -7,10 +7,7 @@ import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.ts";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.ts";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -23,6 +20,7 @@ import {
   chatControls,
   pairFixture,
 } from "./chat-lifecycle.test-support.ts";
+import { createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 // Task-only visual proof: ordinary UI runs must not pay for another Gateway boot.
@@ -109,32 +107,16 @@ describe.skipIf(!variant)("Task proof: actual deferred steering custody", () => 
           () => provider.close(),
         );
       try {
-        instance = await createOpenClawTestInstance({
+        instance = await createChatGatewayInstance({
           name: "steer-custody-real-gateway",
-          env: { VITEST: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
+          provider: "scroll-fixture",
+          identity: "Queue proof",
+          model: "echo",
+          apiKey: "synthetic-scroll-fixture-key",
+          baseUrl: "http://127.0.0.1:" + provider.port + "/v1",
+          models: [{ id: "echo", name: "Local synthetic inference" }],
           config: {
-            gateway: { controlUi: { enabled: true } },
-            cron: { enabled: false },
-            agents: {
-              defaults: {
-                model: "scroll-fixture/echo",
-                modelPolicy: { allow: ["scroll-fixture/*"] },
-              },
-              entries: { main: { identity: { name: "Queue proof" } } },
-            },
-            models: {
-              catalogRefresh: { enabled: false },
-              providers: {
-                "scroll-fixture": {
-                  api: "openai-responses",
-                  apiKey: "synthetic-scroll-fixture-key",
-                  baseUrl: "http://127.0.0.1:" + provider.port + "/v1",
-                  models: [{ id: "echo", name: "Local synthetic inference" }],
-                },
-              },
-            },
             messages: { queue: { mode: "followup", byChannel: { webchat: "followup" } } },
-            plugins: { allow: [] },
           },
         });
         await instance.startGateway();
