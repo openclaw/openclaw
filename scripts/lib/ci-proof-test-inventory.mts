@@ -897,7 +897,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/workboard/doctor-contract-api.test.ts",
   "extensions/workboard/src/cli.test.ts",
   "extensions/workboard/src/command.test.ts",
-  "extensions/workboard/src/dispatcher-ownership.test.ts",
   "extensions/workboard/src/dispatcher.test.ts",
   "extensions/workboard/src/lifecycle-sync.cleanup-recovery.test.ts",
   "extensions/workboard/src/lifecycle-sync.test.ts",

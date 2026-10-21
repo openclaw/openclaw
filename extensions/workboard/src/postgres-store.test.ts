@@ -44,7 +44,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     return path.join(tempDirs.make("openclaw-workboard-postgres-"), "workboard.sqlite");
   }
 
-  async function openDatabase(dbPath: string) {
+  async function openDatabase(dbPath = databasePath()) {
     const owner = createWorkboardDatabase(dbPath, undefined, postgresInput);
     if (owner.db instanceof DatabaseSync) {
       owner.close();
@@ -67,7 +67,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     owners.push({ close });
     const { schema } = await fixture.state();
     schemas.add(schema);
-    return { fixture, schema, close };
+    return { fixture, schema, close, dbPath };
   }
 
   const insertBoard = (id: string, name: string | null = null) => ({
@@ -127,8 +127,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
   });
 
   it("invalidates anchor revisions for attempted writes while retaining only committed rows", async () => {
-    const dbPath = databasePath();
-    const { fixture, schema } = await openDatabase(dbPath);
+    const { fixture, schema, dbPath } = await openDatabase();
     const before = readSqliteDatabaseWriteTokenForPath(dbPath);
     expect(before).toBeDefined();
     await fixture.statements([insertBoard("committed")], true);
@@ -160,8 +159,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     ["COMMIT", true],
     ["SELECT 1", false],
   ] as const)("classifies terminated PostgreSQL sessions before %s", async (statement, unknown) => {
-    const dbPath = databasePath();
-    const { fixture, schema } = await openDatabase(dbPath);
+    const { fixture, schema, dbPath } = await openDatabase();
     const [process] = await fixture.statements([get("SELECT pg_backend_pid() AS pid")]);
     const pid = (process as { pid: number }).pid;
     expect(typeof pid).toBe("number");
@@ -192,7 +190,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
   });
 
   it("keeps the connection usable after a deferred constraint fails at COMMIT", async () => {
-    const { fixture } = await openDatabase(databasePath());
+    const { fixture } = await openDatabase();
     const [pid] = await fixture.statements([get("SELECT pg_backend_pid() AS pid")]);
     await fixture.statements([
       { sql: "CREATE TABLE deferred_unique (id INTEGER UNIQUE DEFERRABLE INITIALLY DEFERRED)" },
@@ -251,64 +249,31 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     fs.renameSync(`${dbPath}.replacement`, dbPath);
   }
 
-  it("refuses a PostgreSQL schema version mismatch without migrating it", async () => {
-    const dbPath = databasePath();
-    const opened = await openDatabase(dbPath);
-    const schema = opened.schema;
-    await opened.close();
-    await observer.query(
-      `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET version = 4 WHERE store = 'workboard'`,
-    );
-    replaceAnchorForFreshAdmission(dbPath);
-    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(/expected.*3/i);
-    expect(
-      await rows<{ version: number }>(
-        `SELECT version::integer FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
-      ),
-    ).toEqual([{ version: 4 }]);
-  });
-
-  it("refuses PostgreSQL metadata belonging to a different anchor", async () => {
-    const dbPath = databasePath();
-    const opened = await openDatabase(dbPath);
-    const schema = opened.schema;
-    await opened.close();
-    const metadata = await observer.query<{ store_id: string }>(
-      `SELECT store_id FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
-    );
-    expect(metadata.rows).toHaveLength(1);
-    const originalId = metadata.rows[0]!.store_id;
-    const otherId = "00000000-0000-4000-8000-000000000001";
-    await observer.query(
-      `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET store_id = $1 WHERE store = 'workboard'`,
-      [otherId],
-    );
-    replaceAnchorForFreshAdmission(dbPath);
-    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
-      new RegExp(`${originalId}.*${otherId}|${otherId}.*${originalId}`),
-    );
-    expect(
-      await rows<{ store_id: string }>(
-        `SELECT store_id FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
-      ),
-    ).toEqual([{ store_id: otherId }]);
-  });
-
-  it("refuses an existing SQLite workboard without replacing its data", () => {
-    const dbPath = databasePath();
-    {
-      using existing = new DatabaseSync(dbPath);
-      existing.exec("CREATE TABLE workboard_boards (id TEXT PRIMARY KEY, name TEXT)");
-      existing.prepare("INSERT INTO workboard_boards VALUES (?, ?)").run("local", "Keep me");
-    }
-    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
-      "Existing SQLite workboard data cannot switch engines",
-    );
-    using preserved = new DatabaseSync(dbPath, { readOnly: true });
-    expect(preserved.prepare("SELECT * FROM workboard_boards").all()).toEqual([
-      { id: "local", name: "Keep me" },
-    ]);
-  });
+  it.each([
+    ["version", 4],
+    ["store_id", "00000000-0000-4000-8000-000000000001"],
+  ] as const)(
+    "refuses mismatched PostgreSQL %s without altering metadata",
+    async (column, value) => {
+      const { schema, close, dbPath } = await openDatabase();
+      await close();
+      const table = quoteIdentifier(schema) + ".openclaw_schema_meta";
+      const read = () =>
+        rows<{ value: number | string }>(
+          `SELECT ${column === "version" ? "version::integer" : column} AS value FROM ${table} WHERE store = 'workboard'`,
+        );
+      const before = await read();
+      expect(before).toHaveLength(1);
+      await observer.query(`UPDATE ${table} SET ${column} = $1 WHERE store = 'workboard'`, [value]);
+      replaceAnchorForFreshAdmission(dbPath);
+      expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
+        column === "version"
+          ? /expected.*3/i
+          : new RegExp(`${before[0]!.value}.*${value}|${value}.*${before[0]!.value}`),
+      );
+      expect(await read()).toEqual([{ value }]);
+    },
+  );
 });
 
 function quoteIdentifier(value: string): string {

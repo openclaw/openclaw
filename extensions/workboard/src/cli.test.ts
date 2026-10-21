@@ -42,17 +42,13 @@ function createProgram(store: WorkboardStore): Command {
 }
 
 async function captureStdout(run: () => Promise<void>): Promise<string> {
-  const chunks: string[] = [];
-  const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk): boolean => {
-    chunks.push(String(chunk));
+  let output = "";
+  using _ = vi.spyOn(process.stdout, "write").mockImplementation((chunk): boolean => {
+    output += String(chunk);
     return true;
   });
-  try {
-    await run();
-    return chunks.join("");
-  } finally {
-    write.mockRestore();
-  }
+  await run();
+  return output;
 }
 
 describe("registerWorkboardCli", () => {
@@ -74,12 +70,8 @@ describe("registerWorkboardCli", () => {
 
   it("records full-host authority on locally created cards", async () => {
     await parse("create", "Host card");
-    await expect(store.list()).resolves.toEqual([
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          automation: expect.objectContaining({ workspaceAccess: { unrestricted: true } }),
-        }),
-      }),
+    await expect(store.list()).resolves.toMatchObject([
+      { metadata: { automation: { workspaceAccess: { unrestricted: true } } } },
     ]);
   });
 
@@ -105,9 +97,7 @@ describe("registerWorkboardCli", () => {
     expect(includeOutput).toContain("Active card");
     expect(includeOutput).toContain("Archived card");
     expect(includeOutput).toContain("(archived)");
-    const jsonOutput = await captureStdout(async () => {
-      await createProgram(store).parseAsync(["workboard", "list", "--json"], { from: "user" });
-    });
+    const jsonOutput = await captureCli("list", "--json");
     expect(jsonOutput).toContain(archived.id);
     expect(jsonOutput).toContain("archivedAt");
   });

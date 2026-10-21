@@ -5,9 +5,9 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   execution,
+  lifecycleFixture,
   lifecycleSession,
   lifecycleSnapshot,
-  serviceContext,
 } from "./lifecycle-sync-fixtures.test-support.js";
 import { createWorkboardLifecycleService, syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
 import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
@@ -20,12 +20,11 @@ const SESSION_KEY = "agent:main:subagent:workboard-cleanup-recovery";
 const RUN_ID = "run-cleanup-recovery";
 const MANAGED_PATH = "/state/worktrees/recovery/wb-card";
 const SOURCE_PATH = "/repo";
-const context = serviceContext();
 type LifecycleParams = Parameters<typeof createWorkboardLifecycleService>[0];
 let dir: string;
 let stores: ReturnType<typeof createWorkboardSqliteStores>;
 let store: WorkboardStore;
-let service: ReturnType<typeof createWorkboardLifecycleService> | undefined;
+let active: ReturnType<typeof lifecycleFixture> | undefined;
 let removeIfLossless: Mock<NonNullable<LifecycleParams["worktrees"]>["removeIfLossless"]>;
 
 function openStore() {
@@ -36,9 +35,8 @@ function openStore() {
   store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
 }
 async function stop() {
-  service?.onGatewayStop();
-  await service?.stop?.(context);
-  service = undefined;
+  await active?.[Symbol.asyncDispose]();
+  active = undefined;
 }
 async function restart() {
   await stop();
@@ -46,14 +44,14 @@ async function restart() {
   openStore();
 }
 async function start(readSessions: LifecycleParams["readSessions"]) {
-  service = createWorkboardLifecycleService({
+  active = lifecycleFixture({
     store,
     readSessions,
     worktrees: { removeIfLossless },
   });
   await store.ready();
-  await service.start(context);
-  service.onGatewayStart();
+  await active.start();
+  await active.sweep();
 }
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-cleanup-"));
@@ -100,13 +98,11 @@ const doneSessionSnapshot = (updatedAt: number) =>
   vi.fn().mockResolvedValue(lifecycleSnapshot(lifecycleSession(SESSION_KEY, "done", updatedAt)));
 
 async function expectCleaned(id: string, calls = 1) {
-  await vi.waitFor(async () => {
-    expect(removeIfLossless).toHaveBeenCalledTimes(calls);
-    expect((await store.get(id))?.metadata?.automation?.workspace).toEqual({
-      kind: "worktree",
-      path: SOURCE_PATH,
-      branch: "main",
-    });
+  expect(removeIfLossless).toHaveBeenCalledTimes(calls);
+  expect((await store.get(id))?.metadata?.automation?.workspace).toEqual({
+    kind: "worktree",
+    path: SOURCE_PATH,
+    branch: "main",
   });
 }
 
@@ -135,7 +131,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
       return true;
     });
     await start(doneSessionSnapshot(card.updatedAt));
-    await vi.waitFor(() => expect(removeIfLossless).toHaveBeenCalledOnce());
+    expect(removeIfLossless).toHaveBeenCalledOnce();
     await stop();
     expect((await store.get(card.id))?.metadata?.automation?.workspace).toMatchObject({
       path: managedPath,

@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import {
   lifecycleSession,
-  serviceContext,
+  lifecycleFixture,
   type LifecycleSnapshot,
 } from "./lifecycle-sync-fixtures.test-support.js";
-import { createWorkboardLifecycleService, syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
+import { syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
 import { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteTestHarness, sqliteTestAuxStores } from "./test/sqlite-store.js";
 
@@ -60,12 +60,14 @@ beforeEach(async () => {
 afterEach(async () => {
   try {
     if (lifecycle) {
-      await stopLifecycleSweep(lifecycle);
+      lifecycle.stop();
     }
   } finally {
     try {
       await rejectInterruptedDispatch(interrupted);
     } finally {
+      await lifecycle?.[Symbol.asyncDispose]();
+      lifecycle = undefined;
       await interrupted.replacementStore.close();
     }
   }
@@ -75,20 +77,14 @@ async function sweep({
   complete = true,
 }: Omit<LifecycleSnapshot, "complete"> & { complete?: boolean }) {
   const readSessions = vi.fn().mockResolvedValue({ sessions, complete });
-  const service = createWorkboardLifecycleService({
+  const active = lifecycleFixture({
     store: interrupted.replacementStore,
     readSessions,
   });
-  const context = serviceContext();
-  await service.start(context);
-  const active = { context, readSessions, service };
-  lifecycle = active;
-  return active;
-}
-async function stopLifecycleSweep(active: NonNullable<typeof lifecycle>) {
-  active.service.onGatewayStop();
-  await active.service.stop?.(active.context);
-  lifecycle = undefined;
+  await active.start();
+  const result = { ...active, readSessions };
+  lifecycle = result;
+  return result;
 }
 
 describe("Workboard prepared launch restart recovery", () => {
@@ -96,9 +92,8 @@ describe("Workboard prepared launch restart recovery", () => {
     "fails a prepared %s session without acceptance evidence",
     async (status) => {
       const active = await sweep({ sessions: [lifecycleSession(canonicalSessionKey, status)] });
-      active.service.onGatewayStart();
-      await vi.waitFor(async () => expect((await read())?.status).toBe("blocked"));
-      await stopLifecycleSweep(active);
+      await active.sweep();
+      active.stop();
       await expect(read()).resolves.toMatchObject({
         status: "blocked",
         metadata: { automation: { launch: { phase: "failed" } } },
@@ -116,10 +111,7 @@ describe("Workboard prepared launch restart recovery", () => {
     });
 
     expect(active.readSessions).not.toHaveBeenCalled();
-    active.service.onGatewayStart();
-    await vi.waitFor(async () => {
-      expect((await read())?.metadata?.automation?.launch?.phase).toBe("accepted");
-    });
+    await active.sweep();
 
     const accepted = await read();
     const attempt = {
@@ -158,7 +150,7 @@ describe("Workboard prepared launch restart recovery", () => {
     expect(terminal?.metadata?.attempts).toHaveLength(1);
     expect(terminal?.metadata?.attempts?.[0]?.id).toBe(accepted?.metadata?.attempts?.[0]?.id);
 
-    await stopLifecycleSweep(active);
+    active.stop();
     await rejectInterruptedDispatch(interrupted);
     expect((await read())?.status).toBe("review");
   });
@@ -172,11 +164,8 @@ describe("Workboard prepared launch restart recovery", () => {
       sessions: [lifecycleSession(canonicalSessionKey, "done", launch.preparedAt + 1)],
     });
 
-    active.service.onGatewayStart();
-    await vi.waitFor(async () => {
-      expect((await read())?.status).toBe("review");
-    });
-    await stopLifecycleSweep(active);
+    await active.sweep();
+    active.stop();
 
     await expect(read()).resolves.toMatchObject({
       status: "review",
@@ -203,12 +192,8 @@ describe("Workboard prepared launch restart recovery", () => {
         complete: snapshot === "ambiguous",
       });
 
-      active.service.onGatewayStart();
-      const readSessions = active.readSessions;
-      await vi.waitFor(() => expect(readSessions).toHaveBeenCalledOnce());
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      await active.sweep();
+      expect(active.readSessions).toHaveBeenCalledOnce();
       await expect(read()).resolves.toMatchObject({
         status: "running",
         sessionKey: interrupted.prepared.sessionKey,
@@ -219,7 +204,7 @@ describe("Workboard prepared launch restart recovery", () => {
         },
       });
 
-      await stopLifecycleSweep(active);
+      active.stop();
       await rejectInterruptedDispatch(interrupted);
     },
   );

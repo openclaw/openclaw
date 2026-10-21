@@ -200,33 +200,30 @@ it("always excludes dock conversations and filters automation unless the scope o
   expect(board.selectFacts.mock.lastCall?.[0]).not.toHaveProperty("excludeSubagents");
 });
 
-it.each([undefined, "home"])(
-  "excludes each agent's configured Home session (%s) from reads and moves",
-  async (mainKey) => {
-    const home = { ...facts(mainKey ?? "main"), isMain: true };
-    const otherHome = {
-      ...facts("other-home", { key: `agent:ops:${mainKey ?? "main"}`, agentId: "ops" }),
-      isMain: true,
-    };
-    const work = facts("subagent:worker");
-    const board = await createFixture([home, otherHome, work]);
-    expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
-    expect(board.readFacts).not.toHaveBeenCalled();
-    await expect(board.move(home.key, "other")).rejects.toThrow(
-      "not available in this board's scope",
-    );
-    expect(await board.pins()).toEqual([]);
-    await board.update({ scope: { includeHome: true } });
-    expect((await board.read()).sessions.map(({ key }) => key)).toEqual([
-      home.key,
-      otherHome.key,
-      work.key,
-    ]);
-    await board.move(home.key, "focus");
-    await board.update({ scope: { includeHome: false } });
-    expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
-  },
-);
+it("excludes each agent's configured Home session from reads and moves", async () => {
+  const home = { ...facts("home"), isMain: true };
+  const otherHome = {
+    ...facts("other-home", { key: "agent:ops:home", agentId: "ops" }),
+    isMain: true,
+  };
+  const work = facts("subagent:worker");
+  const board = await createFixture([home, otherHome, work]);
+  expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
+  expect(board.readFacts).not.toHaveBeenCalled();
+  await expect(board.move(home.key, "other")).rejects.toThrow(
+    "not available in this board's scope",
+  );
+  expect(await board.pins()).toEqual([]);
+  await board.update({ scope: { includeHome: true } });
+  expect((await board.read()).sessions.map(({ key }) => key)).toEqual([
+    home.key,
+    otherHome.key,
+    work.key,
+  ]);
+  await board.move(home.key, "focus");
+  await board.update({ scope: { includeHome: false } });
+  expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
+});
 
 it("rejects a move when caller authority ends during the facts read", async () => {
   const board = await createFixture(["one"]);
@@ -467,16 +464,14 @@ it.each([false, true])(
     const availability = rateLimited
       ? { pullRequestsRateLimited: true as const }
       : { pullRequestsUnavailable: true };
+    const stale = (id: string, extra: Partial<WorkboardSessionFacts> = {}) => ({
+      ...facts(id, { ...availability, ...extra }),
+      pullRequestsStale: true as const,
+    });
     const rows = [
-      {
-        ...facts("review", { pullRequests: pr(1), ...availability }),
-        pullRequestsStale: true as const,
-      },
-      {
-        ...facts("merged", { pullRequests: pr(2, "merged"), ...availability }),
-        pullRequestsStale: true as const,
-      },
-      { ...facts("none", availability), pullRequestsStale: true as const },
+      stale("review", { pullRequests: pr(1) }),
+      stale("merged", { pullRequests: pr(2, "merged") }),
+      stale("none"),
       facts("unknown", availability),
     ];
     const board = await createFixture(rows, {

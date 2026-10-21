@@ -510,43 +510,86 @@ describe("workboard gateway methods", () => {
     expect(inheritedRespond.data?.card.metadata?.automation?.workspace).toBeUndefined();
   });
 
-  it("stores metadata updates through dedicated card methods", async () => {
-    const { invoke } = createGateway();
-    const createRespond = await invoke("cards.create", { title: "Carry metadata" });
-    const cardId = createRespond.data?.card.id;
-
-    const commentRespond = await invoke("cards.comment", {
-      id: cardId,
-      body: "Waiting on CI",
-    });
-    expect(commentRespond.ok).toBe(true);
-    expect(commentRespond.data.card).toMatchObject({
-      metadata: {
-        comments: [expect.objectContaining({ body: "Waiting on CI" })],
+  it.each([
+    [
+      "comment",
+      { body: "Waiting on CI" },
+      {
+        card: {
+          metadata: { comments: [expect.objectContaining({ body: "Waiting on CI" })] },
+          events: expect.arrayContaining([expect.objectContaining({ kind: "comment_added" })]),
+        },
       },
-      events: expect.arrayContaining([expect.objectContaining({ kind: "comment_added" })]),
-    });
-
-    const oversizedRespond = await invoke("cards.comment", {
-      id: cardId,
-      body: "x".repeat(2001),
-    });
-    expect(oversizedRespond.ok).toBe(false);
-    expect(oversizedRespond.error).toMatchObject({
-      message: "comment body must be 2000 characters or fewer (got 2001).",
-    });
+    ],
+    [
+      "claim",
+      { ownerId: "main" },
+      {
+        card: { status: "running", metadata: { claim: { ownerId: "main" } } },
+        token: expect.any(String),
+      },
+    ],
+    [
+      "heartbeat",
+      { ownerId: "main", note: "alive" },
+      {
+        card: { metadata: { comments: [expect.objectContaining({ body: "alive" })] } },
+      },
+    ],
+    [
+      "bulk",
+      { patch: { priority: "urgent" } },
+      {
+        cards: [expect.objectContaining({ priority: "urgent" })],
+      },
+    ],
+    [
+      "complete",
+      { summary: "Operator closed it." },
+      {
+        card: {
+          status: "done",
+          metadata: {
+            comments: expect.arrayContaining([
+              expect.objectContaining({ body: "Operator closed it." }),
+            ]),
+          },
+        },
+      },
+    ],
+    ["block", { reason: "Operator blocked it." }, { card: { status: "blocked" } }],
+  ] as const)("applies %s through the card RPC boundary", async (action, input, expected) => {
+    const { invoke } = createGateway();
+    const {
+      data: { card },
+    } = await invoke("cards.create", { title: "RPC target" });
+    if (["heartbeat", "complete", "block"].includes(action)) {
+      await invoke("cards.claim", { id: card.id, ownerId: "main" });
+    }
+    const target = action === "bulk" ? { ids: [card.id] } : { id: card.id };
+    const result = await invoke(`cards.${action}`, { ...target, ...input });
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject(expected);
   });
 
-  it("validates labels from comma-separated gateway input", async () => {
-    const { invoke } = createGateway();
-    const respond = await invoke("cards.create", {
-      title: "Check labels",
-      labels: `valid, ${"x".repeat(41)}`,
-    });
-    expect(respond.ok).toBe(false);
-    expect(respond.error).toMatchObject({
-      message: "labels must be 40 characters or fewer.",
-    });
+  it.each([
+    [
+      "comment",
+      { body: "x".repeat(2001) },
+      "comment body must be 2000 characters or fewer (got 2001).",
+    ],
+    [
+      "create",
+      { title: "Check labels", labels: `valid, ${"x".repeat(41)}` },
+      "labels must be 40 characters or fewer.",
+    ],
+  ] as const)("rejects invalid %s input through RPC", async (action, input, message) => {
+    const { invoke, store } = createGateway();
+    const card = await store.create({ title: "Invalid input target" });
+    const target = action === "comment" ? { id: card.id } : {};
+    const result = await invoke(`cards.${action}`, { ...target, ...input });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({ message });
   });
 
   it("returns an actionable exact-card admission failure", async () => {
@@ -730,56 +773,5 @@ describe("workboard gateway methods", () => {
       code: "workboard_error",
       message: "card is blocked; use workboard_unblock before claiming.",
     });
-  });
-
-  it("claims, heartbeats, and bulk-updates cards through gateway methods", async () => {
-    const { invoke } = createGateway();
-    const createRespond = await invoke("cards.create", { title: "Claim me" });
-    const cardId = createRespond.data?.card.id;
-
-    const claimRespond = await invoke("cards.claim", { id: cardId, ownerId: "main" });
-    expect(claimRespond.data).toMatchObject({
-      card: { status: "running", metadata: { claim: { ownerId: "main" } } },
-      token: expect.any(String),
-    });
-
-    const heartbeatRespond = await invoke("cards.heartbeat", {
-      id: cardId,
-      ownerId: "main",
-      note: "alive",
-    });
-    expect(heartbeatRespond.data).toMatchObject({
-      card: { metadata: { comments: [expect.objectContaining({ body: "alive" })] } },
-    });
-
-    const bulkRespond = await invoke("cards.bulk", {
-      ids: [cardId],
-      patch: { priority: "urgent" },
-    });
-    expect(bulkRespond.data).toMatchObject({
-      cards: [expect.objectContaining({ priority: "urgent" })],
-    });
-
-    const completeRespond = await invoke("cards.complete", {
-      id: cardId,
-      summary: "Operator closed it.",
-    });
-    expect(completeRespond.data.card).toMatchObject({
-      status: "done",
-      metadata: {
-        comments: expect.arrayContaining([
-          expect.objectContaining({ body: "Operator closed it." }),
-        ]),
-      },
-    });
-
-    const blockedCreateRespond = await invoke("cards.create", { title: "Block me" });
-    const blockedCardId = blockedCreateRespond.data?.card.id;
-    await invoke("cards.claim", { id: blockedCardId, ownerId: "main" });
-    const blockRespond = await invoke("cards.block", {
-      id: blockedCardId,
-      reason: "Operator blocked it.",
-    });
-    expect(blockRespond.data.card.status).toBe("blocked");
   });
 });
