@@ -47,7 +47,8 @@ describe("LINE carousel fallback delivery", () => {
   it.each(["", "After"])(
     "quotes the direct carousel fallback once when the following text is %j",
     async (text) => {
-      const { runtime, pushMessageLine, pushTemplateMessage } = createOutboundRuntime();
+      const { runtime, pushMessageLine, pushMessagesLine, pushTemplateMessage } =
+        createOutboundRuntime();
       setLineRuntime(runtime);
       recordLineQuoteToken({
         accountId: "default",
@@ -66,19 +67,24 @@ describe("LINE carousel fallback delivery", () => {
       });
 
       expect(pushTemplateMessage).not.toHaveBeenCalled();
-      expect(pushMessageLine).toHaveBeenNthCalledWith(
-        1,
-        "line:user:Ucarousel",
-        fallbackText,
-        expect.objectContaining({ quoteToken: "q-carousel" }),
-      );
-      expect(pushMessageLine).toHaveBeenCalledTimes(text ? 2 : 1);
       if (text) {
-        expect(pushMessageLine).toHaveBeenNthCalledWith(
-          2,
+        expect(pushMessageLine).not.toHaveBeenCalled();
+        expect(pushMessagesLine).toHaveBeenCalledTimes(1);
+        expect(pushMessagesLine).toHaveBeenCalledWith(
           "line:user:Ucarousel",
-          text,
-          expect.not.objectContaining({ quoteToken: expect.anything() }),
+          [
+            { type: "text", text: fallbackText, quoteToken: "q-carousel" },
+            { type: "text", text },
+          ],
+          expect.any(Object),
+        );
+      } else {
+        expect(pushMessagesLine).not.toHaveBeenCalled();
+        expect(pushMessageLine).toHaveBeenCalledTimes(1);
+        expect(pushMessageLine).toHaveBeenCalledWith(
+          "line:user:Ucarousel",
+          fallbackText,
+          expect.objectContaining({ quoteToken: "q-carousel" }),
         );
       }
     },
@@ -121,7 +127,8 @@ describe("LINE carousel fallback delivery", () => {
   });
 
   it("sends direct fallback before the ordinary text without calling template delivery", async () => {
-    const { runtime, pushMessageLine, pushTemplateMessage } = createOutboundRuntime();
+    const { runtime, pushMessageLine, pushMessagesLine, pushTemplateMessage } =
+      createOutboundRuntime();
     setLineRuntime(runtime);
 
     await lineOutboundAdapter.sendPayload!({
@@ -133,7 +140,16 @@ describe("LINE carousel fallback delivery", () => {
     });
 
     expect(pushTemplateMessage).not.toHaveBeenCalled();
-    expect(pushMessageLine.mock.calls.map((call) => call[1])).toEqual([fallbackText, "After"]);
+    expect(pushMessageLine).not.toHaveBeenCalled();
+    expect(pushMessagesLine).toHaveBeenCalledTimes(1);
+    expect(pushMessagesLine).toHaveBeenCalledWith(
+      "line:user:1",
+      [
+        { type: "text", text: fallbackText },
+        { type: "text", text: "After" },
+      ],
+      expect.any(Object),
+    );
   });
 
   it("keeps the auto-reply fallback and ordinary text in the same reply", async () => {

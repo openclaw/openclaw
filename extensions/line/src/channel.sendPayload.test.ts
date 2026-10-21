@@ -1,5 +1,4 @@
 import { HTTPFetchError } from "@line/bot-sdk";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
@@ -58,11 +57,11 @@ function send({ line, ...payload }: Payload, context: SendOverrides = {}) {
 }
 
 function expectBatch(messages: readonly unknown[], target = to) {
-  expect(mocks.pushMessagesLine).toHaveBeenCalledWith(target, messages, sendOptions);
-}
-
-function order(mock: { mock: { invocationCallOrder: number[] } }) {
-  return expectDefined(mock.mock.invocationCallOrder[0], "delivery invocation");
+  expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
+    target,
+    messages,
+    expect.objectContaining({ ...sendOptions, verbose: false }),
+  );
 }
 
 function delivery(messageIds: readonly string[], threadId = "c1") {
@@ -86,15 +85,6 @@ function expectPartial(cause: Error, messageIds: string[]) {
   return { code: "CHANNEL_PARTIAL_DELIVERY", cause, deliveryResult: partialDelivery(messageIds) };
 }
 const bubble = { type: "bubble" } as const;
-const flexMessage = { altText: "Now playing", contents: bubble };
-const templateMessage = {
-  type: "confirm",
-  text: "Continue?",
-  confirmLabel: "Yes",
-  confirmData: "yes",
-  cancelLabel: "No",
-  cancelData: "no",
-} as const;
 function quotaResponses(limit?: number, used?: number) {
   return stubLineApiFetch(
     Response.json(limit === undefined ? { type: "none" } : { type: "limited", value: limit }),
@@ -134,24 +124,29 @@ afterAll(() => {
   vi.resetModules();
 });
 
-it("orders oversized tables and puts quick replies on the final card", async () => {
+it("keeps oversized tables bounded while batching mixed parts", async () => {
   mocks.resolveTextChunkLimit.mockReturnValue(5000);
   mocks.chunkMarkdownText.mockImplementation(chunkMarkdownTextForLine);
   const markdown = `First\n\n| Small | Value |\n|---|---|\n| Kept | card |\n\nBetween\n\n| Name | Value |\n|---|---|\n| Large | ${"x".repeat(30_000)} |\n\nAfter\n\n\`\`\`js\nconsole.log("still a card")\n\`\`\``;
   await send({ text: markdown, line: { quickReplies: ["Continue"] } });
-  expect(mocks.pushFlexMessage).toHaveBeenCalledOnce();
-  const oversized = mocks.pushMessageLine.mock.calls.flatMap((args, index) =>
-    args[1].includes("Large") ? [mocks.pushMessageLine.mock.invocationCallOrder[index]] : [],
+  expect(mocks.pushFlexMessage).not.toHaveBeenCalled();
+  expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+  const batches = mocks.pushMessagesLine.mock.calls.map(([, messages]) => messages);
+  const messages = batches.flat();
+  expect(batches.length).toBeGreaterThan(0);
+  expect(batches.every((batch) => batch.length <= 5)).toBe(true);
+  const oversizedChunks = messages.filter(
+    (message) => message.type === "text" && message.text.includes("Large"),
   );
-  expect(oversized).toHaveLength(1);
-  expect(oversized[0]).toBeGreaterThan(order(mocks.pushFlexMessage));
-  expect(oversized[0]).toBeLessThan(order(mocks.pushMessagesLine));
-  expect(mocks.pushMessageLine.mock.calls.every((args) => args[1].length <= 5000)).toBe(true);
-  expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
-    to,
-    [expect.objectContaining({ altText: "Code", quickReply: createQuickReply("Continue") })],
-    expect.any(Object),
-  );
+  expect(oversizedChunks).toHaveLength(1);
+  expect(
+    oversizedChunks.every((message) => message.type === "text" && message.text.length <= 5000),
+  ).toBe(true);
+  expect(messages.at(-1)).toMatchObject({
+    type: "flex",
+    altText: "Code",
+    quickReply: createQuickReply("Continue"),
+  });
   expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
 });
 
@@ -224,18 +219,23 @@ it("publishes Flex receipts before a later legacy send fails", async () => {
   expect(fetch).not.toHaveBeenCalled();
 });
 
-it.each([
-  { kind: "flex", line: { flexMessage }, target: "line:group:1", text: "Now playing:" },
-  { kind: "template", line: { templateMessage }, target: to, text: "Choose one:" },
-])("sends $kind without dropping text", async ({ kind, line, target, text }) => {
-  await send({ text, line }, { to: target });
-  expect(
-    kind === "flex" ? mocks.pushFlexMessage : mocks.pushTemplateMessage,
-  ).toHaveBeenCalledOnce();
-  if (kind === "template") {
-    expect(mocks.buildTemplateMessageFromPayload).toHaveBeenCalledOnce();
-  }
-  expect(mocks.pushMessageLine).toHaveBeenCalledWith(target, text, sendOptions);
+it("sends flex message without dropping text", async () => {
+  await send(
+    {
+      text: "Now playing:",
+      line: {
+        flexMessage: { altText: "Now playing", contents: { type: "bubble" } },
+      },
+    },
+    { to: "line:group:1" },
+  );
+  expect(mocks.pushFlexMessage).not.toHaveBeenCalled();
+  expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+  expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
+  expect(mocks.pushMessagesLine.mock.calls[0]?.[1]).toEqual([
+    { type: "flex", altText: "Now playing", contents: { type: "bubble" } },
+    { type: "text", text: "Now playing:" },
+  ]);
 });
 
 it("preserves batch receipts and bounds Flex alternative text", async () => {
@@ -276,13 +276,36 @@ it("preserves batch receipts and bounds Flex alternative text", async () => {
   expect(onDeliveryResult).toHaveBeenCalledWith(delivery(providerMessageIds, "C123"));
 });
 
+it("sends template message without dropping text", async () => {
+  await send({
+    text: "Choose one:",
+    line: {
+      templateMessage: {
+        type: "confirm",
+        text: "Continue?",
+        confirmLabel: "Yes",
+        confirmData: "yes",
+        cancelLabel: "No",
+        cancelData: "no",
+      },
+    },
+  });
+  expect(mocks.buildTemplateMessageFromPayload).toHaveBeenCalledOnce();
+  expect(mocks.pushTemplateMessage).not.toHaveBeenCalled();
+  expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+  expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
+  expect(mocks.pushMessagesLine.mock.calls[0]?.[1].map(({ type }) => type)).toEqual([
+    "template",
+    "text",
+  ]);
+});
 it("sends quick-reply-only payloads with fallback text", async () => {
   const result = await send({ line: { quickReplies: ["One", "Two"] } });
   expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
     to,
     "Options:\n- One\n- Two",
     ["One", "Two"],
-    sendOptions,
+    expect.objectContaining({ ...sendOptions, verbose: false }),
   );
   expect(result).toEqual(delivery(["m-quick"]));
 });
@@ -318,14 +341,18 @@ it("reports caption and media receipts through the media adapter", async () => {
     mediaUrl: imageUrl,
     onDeliveryResult,
   });
-  const options = { ...sendOptions, accountId: "primary", mediaUrl: imageUrl };
-  expect(mocks.pushMessageLine).toHaveBeenCalledWith(to, "", options);
-  expect(result.receipt.platformMessageIds).toEqual(["m-media"]);
-  expect(onDeliveryResult).toHaveBeenCalledTimes(2);
-  expect(onDeliveryResult.mock.calls.map(([receipt]) => receipt.messageId)).toEqual([
-    "m-text",
-    "m-media",
-  ]);
+  expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+  expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+    to,
+    [
+      { type: "text", text: "image" },
+      { type: "image", originalContentUrl: imageUrl, previewImageUrl: imageUrl },
+    ],
+    expect.any(Object),
+  );
+  expect(result.receipt.platformMessageIds).toEqual(["m-batch"]);
+  expect(onDeliveryResult).toHaveBeenCalledOnce();
+  expect(onDeliveryResult.mock.calls.map(([receipt]) => receipt.messageId)).toEqual(["m-batch"]);
 });
 
 it.each([
@@ -392,25 +419,35 @@ it("does not stall retryable refusals on an allowance lookup", async () => {
   }
 });
 
-it.each([false, true])("keeps media receipts (observer=%s)", async (observed) => {
-  const rejection = refusal(429);
-  const onDeliveryResult = observed ? vi.fn() : undefined;
-  mocks.pushTextMessageWithQuickReplies.mockRejectedValueOnce(rejection);
-  const fetchMock = quotaResponses(200, 200);
-  await expect(
-    send(
-      { text: "Caption", mediaUrl: imageUrl, line: { quickReplies: ["Continue"] } },
-      { ...LINE_QUOTA_ACCOUNT, onDeliveryResult },
-    ),
-  ).rejects.toMatchObject(expectPartial(rejection, ["m-media"]));
-  expect(mocks.pushMessageLine).toHaveBeenCalledOnce();
-  expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledOnce();
-  if (onDeliveryResult) {
-    expect(order(onDeliveryResult)).toBeLessThan(order(mocks.pushTextMessageWithQuickReplies));
-    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(delivery(["m-media"]));
-  }
-  expect(fetchMock).not.toHaveBeenCalled();
-});
+it.each([false, true])(
+  "does not report a media receipt when the mixed batch is refused (observer=%s)",
+  async (observed) => {
+    const rejection = refusal(429);
+    const onDeliveryResult = observed ? vi.fn() : undefined;
+    mocks.pushMessagesLine.mockRejectedValueOnce(rejection);
+    const fetchMock = stubLineApiFetch(
+      Response.json({ type: "limited", value: 200 }),
+      Response.json({ totalUsage: 200 }),
+    );
+    await expect(
+      send(
+        {
+          text: "Caption",
+          mediaUrl: imageUrl,
+          line: { quickReplies: ["Continue"] },
+        },
+        { ...LINE_QUOTA_ACCOUNT, onDeliveryResult },
+      ),
+    ).rejects.toMatchObject({ cause: rejection });
+    expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
+    expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+    expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
+    if (onDeliveryResult) {
+      expect(onDeliveryResult).not.toHaveBeenCalled();
+    }
+    expect(fetchMock).toHaveBeenCalled();
+  },
+);
 
 it.each([false, true])("keeps nested partial evidence (accepted=%s)", async (accepted) => {
   const rejection = refusal(400);
