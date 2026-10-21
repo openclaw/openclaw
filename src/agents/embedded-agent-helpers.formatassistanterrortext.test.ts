@@ -65,47 +65,6 @@ describe("formatAssistantErrorText", () => {
       "Hostname/IP does not match certificate's altnames: Host: api.example.com",
       "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
     ],
-  ])("formats assistant error: %s", (raw, expected) => {
-    expectCopy(raw, expected);
-  });
-
-  it("explains client-restricted free tiers without exposing the provider response", () => {
-    const msg = makeAssistantError(
-      '403 {"type":"error","error":{"type":"FreeTierError","message":"OpenCode\\u0027s free tier can only be used from within OpenCode"}}',
-    );
-    expect(formatUserFacingAssistantErrorText(msg, { provider: "opencode" })).toBe(
-      "This model's free tier is limited to the provider's own client. Choose another model or use a paid plan.",
-    );
-  });
-
-  it("surfaces provider-specific rate limit message with reset time (#54433)", () => {
-    const msg = makeAssistantError(
-      "You have hit your ChatGPT usage limit (go plan). Try again in ~4381 min.",
-    );
-    const result = formatAssistantErrorText(msg);
-    expect(result).toContain("4381 min");
-    expect(result).toContain("go plan");
-    expect(result).not.toBe(
-      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-    );
-  });
-
-  it("returns context overflow for Anthropic 'Request size exceeds model context window'", () => {
-    const msg = makeAssistantError(
-      '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
-    );
-    expect(formatAssistantErrorText(msg)).toContain("Context overflow");
-  });
-  it("returns a reasoning-required message for mandatory reasoning endpoint errors", () => {
-    const msg = makeAssistantError(
-      "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
-    );
-    const result = formatAssistantErrorText(msg);
-    expect(result).toContain("Reasoning is required");
-    expect(result).toContain("/think minimal");
-    expect(result).not.toContain("Context overflow");
-  });
-  it.each([
     [
       '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}',
       "⚠️ The AI service needs a short break. Please try again in a few minutes.",
@@ -136,14 +95,53 @@ describe("formatAssistantErrorText", () => {
     ],
     ["HTTP 402 Payment Required", BILLING_ERROR_USER_MESSAGE],
     ["Provider finish_reason: error", "Provider finish_reason: error"],
+    [
+      "ENOSPC: no space left on device, write",
+      "OpenClaw could not write local session data because the disk is full. Free some disk space and try again.",
+    ],
+    ['HTTP 401: "Invalid token"', authInvalidTokenCopy],
   ])("formats provider error: %s", (errorText, expected) => {
     expectCopy(errorText, expected);
   });
-  it("returns a recovery hint when tool call input is missing", () => {
-    const msg = makeAssistantError("tool_use.input: Field required");
-    const result = formatAssistantErrorText(msg);
-    expect(result).toContain("Session history looks corrupted");
-    expect(result).toContain("/new");
+
+  it.each([
+    ["tool_use.input: Field required", ["Session history looks corrupted", "/new"], []],
+    [
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
+      ["Context overflow"],
+      [],
+    ],
+    [
+      "You have hit your ChatGPT usage limit (go plan). Try again in ~4381 min.",
+      ["4381 min", "go plan"],
+      [],
+    ],
+    [
+      "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+      ["Reasoning is required", "/think minimal"],
+      ["Context overflow"],
+    ],
+    [
+      '{"error":{"message":"400 Incorrect role information"}}',
+      ["Message ordering conflict"],
+      ["400"],
+    ],
+  ] as const)("retains actionable details for %s", (raw, included, excluded) => {
+    const result = formatAssistantErrorText(makeAssistantError(raw));
+    for (const part of included) {
+      expect(result).toContain(part);
+    }
+    for (const part of excluded) {
+      expect(result).not.toContain(part);
+    }
+  });
+  it("explains client-restricted free tiers without exposing the provider response", () => {
+    const msg = makeAssistantError(
+      '403 {"type":"error","error":{"type":"FreeTierError","message":"OpenCode\\u0027s free tier can only be used from within OpenCode"}}',
+    );
+    expect(formatUserFacingAssistantErrorText(msg, { provider: "opencode" })).toBe(
+      "This model's free tier is limited to the provider's own client. Choose another model or use a paid plan.",
+    );
   });
   it("prioritizes thinking-signature replay recovery over invalid-request formatting", () => {
     const msg = makeAssistantError(
@@ -152,12 +150,6 @@ describe("formatAssistantErrorText", () => {
     const replayCopy =
       "Session history or replay state is invalid. Use /new to start a fresh session and try again.";
     expectBothCopies(msg, replayCopy);
-  });
-  it("handles JSON-wrapped role errors", () => {
-    const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
-    const result = formatAssistantErrorText(msg);
-    expect(result).toContain("Message ordering conflict");
-    expect(result).not.toContain("400");
   });
   it("points unclassified failures to diagnostics", () => {
     expect(
@@ -185,18 +177,25 @@ describe("formatAssistantErrorText", () => {
     expect(formatUserFacingAssistantErrorText(msg)).toBe(GENERIC_ASSISTANT_ERROR_TEXT);
   });
 
-  it("never includes a raw provider body in classified failure copy", () => {
-    const raw = "HTTP 500: Authorization: Bearer sk-secret https://secret.example/path opaque-body";
+  it.each([
+    [
+      "server_error",
+      "HTTP 500: Authorization: Bearer sk-secret https://secret.example/path opaque-body",
+      expect.not.stringMatching(/sk-secret|secret\.example|opaque-body|Authorization/iu),
+    ],
+    [
+      "auth",
+      "HTTP 401: opaque-auth-canary",
+      "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+    ],
+  ] as const)("keeps raw provider details out of %s copy", (reason, raw, expected) => {
     const userFacing = formatUserFacingAssistantErrorText(makeAssistantError(raw), {
       provider: "openai",
-      providerOwner: {
-        id: "openai",
-        classifyFailoverReason: () => "server_error",
-      },
       model: "gpt-5.6-luna",
+      providerOwner: { id: "openai", classifyFailoverReason: () => reason },
     });
-
-    expect(userFacing).not.toMatch(/sk-secret|secret\.example|opaque-body|Authorization/iu);
+    expect(userFacing).toBeTypeOf("string");
+    expect(userFacing).toEqual(expected);
   });
 
   it("classifies service_unavailable text as provider overload", () => {
@@ -208,22 +207,6 @@ describe("formatAssistantErrorText", () => {
     ).toContain("overloaded");
   });
 
-  it("points classified authentication failures at provider re-authentication", () => {
-    const raw = "HTTP 401: opaque-auth-canary";
-    const userFacing = formatUserFacingAssistantErrorText(makeAssistantError(raw), {
-      provider: "openai",
-      providerOwner: {
-        id: "openai",
-        classifyFailoverReason: () => "auth",
-      },
-      model: "gpt-5.6-luna",
-    });
-
-    expect(userFacing).toBe(
-      "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
-    );
-    expect(userFacing).not.toContain("opaque-auth-canary");
-  });
   it("classifies provider upstream_error payloads as server errors for fallback", () => {
     const msg = makeAssistantMessageFixture({
       errorMessage: "Upstream request failed",
@@ -255,7 +238,6 @@ describe("formatAssistantErrorText", () => {
   ])("surfaces token limits from %s", (_carrier, msg) => {
     const userFacing = formatUserFacingAssistantErrorText(msg);
     expect(userFacing).toBe(replyLimitCopy);
-    expect(userFacing).not.toContain("deepseek-v4-flash:0731");
   });
 
   it("surfaces token limits from provider-wrapped HTTP errors", () => {
@@ -281,9 +263,6 @@ describe("formatAssistantErrorText", () => {
     );
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("30 seconds");
-    expect(result).not.toBe(
-      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-    );
     expect(formatUserFacingAssistantErrorText(msg)).toContain("30 seconds");
   });
 
@@ -294,13 +273,6 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
-  it("returns a friendly disk-space message", () => {
-    expectCopy(
-      "ENOSPC: no space left on device, write",
-      "OpenClaw could not write local session data because the disk is full. Free some disk space and try again.",
-    );
-  });
-
   it("returns a missing-scope message for raw OpenAI ChatGPT scope payloads without an HTTP prefix", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"},"code":401}',
@@ -308,13 +280,6 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg, { provider: "openai" })).toBe(
       "This login doesn't have the access OpenClaw needs. Sign in again under Models in the Control UI.",
     );
-  });
-
-  it("sanitizes raw HTTP 401 / Invalid token errors into a re-auth hint (#56197)", () => {
-    const reportedPayload = makeAssistantError('HTTP 401: "Invalid token"');
-    const friendly = formatAssistantErrorText(reportedPayload);
-    expect(friendly).toBe(authInvalidTokenCopy);
-    expect(friendly).not.toContain("Invalid token");
   });
 
   it("uses structured error body detail for model-not-found copy", () => {
