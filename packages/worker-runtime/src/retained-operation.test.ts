@@ -9,9 +9,9 @@ import {
 } from "./retained-operation.js";
 
 const pending = <T>() => createRetainedOperation<T>(() => {});
+const context = new AsyncLocalStorage<string>();
 
 it.each([false, true])("maps once under reentrancy in captured context: %s", async (throws) => {
-  const context = new AsyncLocalStorage<string>();
   const source = pending<number>();
   const failure = new Error("mapping failed");
   const receive = vi.fn((value: number) => {
@@ -34,16 +34,11 @@ it.each([false, true])("maps once under reentrancy in captured context: %s", asy
     );
     expect(reacted).not.toHaveBeenCalled();
   });
-  if (throws) {
-    await expect(operation.result).rejects.toBe(failure);
-  } else {
-    await expect(operation.result).resolves.toBe(42);
-  }
+  await expect(operation.result)[throws ? "rejects" : "resolves"].toBe(throws ? failure : 42);
   expect(receive).toHaveBeenCalledExactlyOnceWith(21);
 });
 
 it("adopts once and services in captured context before Promise reactions", async () => {
-  const context = new AsyncLocalStorage<string>();
   const source = pending<number>();
   const serviceChild = vi.fn(() => expect(context.getStore()).toBe("original"));
   const child = createRetainedOperation<number>(serviceChild);
@@ -72,51 +67,38 @@ it("adopts once and services in captured context before Promise reactions", asyn
 });
 
 it.each([
-  { cleanupStatus: "fulfilled", original: new Error("original operation failed") },
-  { cleanupStatus: "rejected", original: undefined },
-])("joins $cleanupStatus cleanup, skipping success", async ({ cleanupStatus, original }) => {
-  const failed = pending<void>();
+  { original: new Error("original operation failed"), cleanupRejects: false, sourceThrows: false },
+  { original: undefined, cleanupRejects: true, sourceThrows: false },
+  { original: new Error("source servicing failed"), cleanupRejects: false, sourceThrows: true },
+])("joins cleanup before failure: %j", async ({ original, cleanupRejects, sourceThrows }) => {
+  const failed = createRetainedOperation<void>(() => {
+    if (sourceThrows) {
+      throw original;
+    }
+  });
   const cleanup = pending<void>();
   const adopt = vi.fn((outcome: Exclude<RetainedOutcome<void>, { status: "pending" }>) => {
     expect(outcome.status === "rejected" && outcome.error).toBe(original);
     return cleanup.operation;
   });
   const joined = finallyRetainedOperation(failed.operation, adopt);
-  const next = vi.fn(() => cleanup.operation);
-  const ordinary = flatMapRetainedOperation(joined, next);
-  failed.reject(original);
-  joined.service();
-  joined.service();
+  if (!sourceThrows) {
+    failed.reject(original);
+    joined.service();
+    joined.service();
+  }
   expect(joined.read()).toEqual({ status: "pending" });
   expect(adopt).toHaveBeenCalledExactlyOnceWith({ status: "rejected", error: original });
+  const next = vi.fn(() => cleanup.operation);
+  const ordinary = flatMapRetainedOperation(joined, next);
   const cleanupError = new Error("native cleanup remains pending");
-  if (cleanupStatus === "fulfilled") {
-    cleanup.resolve(undefined);
-  } else {
-    cleanup.reject(cleanupError);
-  }
-  const expected = cleanupStatus === "fulfilled" ? original : cleanupError;
+  void (cleanupRejects ? cleanup.reject(cleanupError) : cleanup.resolve(undefined));
+  const expected = cleanupRejects ? cleanupError : original;
   ordinary.service();
   expect(joined.read()).toEqual({ status: "rejected", error: expected });
   await expect(ordinary.result).rejects.toBe(expected);
   expect(adopt).toHaveBeenCalledTimes(1);
   expect(next).not.toHaveBeenCalled();
-});
-
-it("joins cleanup after synchronous source servicing throws", async () => {
-  const failure = new Error("source servicing failed");
-  const source = createRetainedOperation<void>(() => {
-    throw failure;
-  });
-  const cleanup = pending<void>();
-  const adopt = vi.fn(() => cleanup.operation);
-  const joined = finallyRetainedOperation(source.operation, adopt);
-  expect(joined.read()).toEqual({ status: "pending" });
-  expect(adopt).toHaveBeenCalledExactlyOnceWith({ status: "rejected", error: failure });
-  cleanup.resolve(undefined);
-  joined.service();
-  expect(joined.read()).toEqual({ status: "rejected", error: failure });
-  await expect(joined.result).rejects.toBe(failure);
 });
 
 it.each([false, true])("preserves cleanup error combination (throws: %s)", async (throws) => {
