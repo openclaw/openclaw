@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import {
   revalidatePublishedSecurityClearance,
@@ -12,7 +11,6 @@ import { execPrGhAsync } from "./github.mjs";
 const oid = /^[a-f0-9]{40}$/u;
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
 const workflowPath = ".github/workflows/security-review.yml";
-const root = new URL("../../", import.meta.url);
 function requireEvidence(condition, message) {
   if (!condition) {
     throw new Error(`Prior-CI security admission: ${message}`);
@@ -112,8 +110,8 @@ async function latestStatuses(path) {
   return [...latest.values()];
 }
 
-function sourceFiles() {
-  const workflow = parse(readFileSync(new URL(workflowPath, root), "utf8"));
+function sourceFiles(bytes) {
+  const workflow = parse(bytes.toString("utf8"));
   const primary = workflow?.jobs?.review?.steps?.find((step) => step.id === "checkout");
   const retry = workflow?.jobs?.review?.steps?.find((step) => step.id === "checkout_retry");
   for (const step of [primary, retry]) {
@@ -144,7 +142,7 @@ function sourceFiles() {
       ),
     "publisher sources must be explicit repository files",
   );
-  return [workflowPath, ...paths];
+  return paths;
 }
 
 function statusSnapshot(statuses) {
@@ -270,20 +268,38 @@ export async function verifyPriorCiSecurity({
     "successful protected Security Review publisher is required",
   );
   const attemptPath = `${runPath}/attempts/${run.run_attempt}`;
-  const paths = sourceFiles();
+  const workflowSource = await read(`${prefix}/contents/${workflowPath}?ref=${run.head_sha}`);
+  requireEvidence(
+    workflowSource.type === "file" &&
+      workflowSource.path === workflowPath &&
+      oid.test(workflowSource.sha ?? "") &&
+      workflowSource.encoding === "base64" &&
+      typeof workflowSource.content === "string",
+    "complete protected publisher workflow is required",
+  );
+  const workflowBytes = Buffer.from(workflowSource.content, "base64");
+  requireEvidence(
+    createHash("sha1")
+      .update(`blob ${workflowBytes.length}\0`)
+      .update(workflowBytes)
+      .digest("hex") === workflowSource.sha,
+    "publisher workflow bytes differ from its source identity",
+  );
+  const workflow = { path: workflowPath, sha: workflowSource.sha };
+  // The publisher follows protected main, independently of the frozen PR wrapper.
+  verifyPriorCiSecurityMainSources({ sources: [workflow] }, main);
+  const paths = sourceFiles(workflowBytes);
   const [attempt, comparison, sources, jobs] = await readTogether([
     read(attemptPath),
     read(`${prefix}/compare/${run.head_sha}...${main}?per_page=1&page=2`),
     readTogether(
       paths.map(async (path) => {
-        const bytes = readFileSync(new URL(path, root));
-        const sha = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
         const source = await read(`${prefix}/contents/${path}?ref=${run.head_sha}`);
         requireEvidence(
-          source.type === "file" && source.path === path && source.sha === sha,
-          `Security Review publisher source differs from the current owner: ${path}`,
+          source.type === "file" && source.path === path && oid.test(source.sha ?? ""),
+          `complete Security Review publisher source is required: ${path}`,
         );
-        return { path, sha };
+        return { path, sha: source.sha };
       }),
     ),
     pages(`${attemptPath}/jobs`, "jobs"),
@@ -298,6 +314,8 @@ export async function verifyPriorCiSecurity({
       ["ahead", "identical"].includes(comparison.status),
     "publisher source is not on protected main",
   );
+  sources.unshift(workflow);
+  verifyPriorCiSecurityMainSources({ sources }, main);
   requireEvidence(
     new Set(jobs.map((job) => job.id)).size === jobs.length &&
       jobs.every(
