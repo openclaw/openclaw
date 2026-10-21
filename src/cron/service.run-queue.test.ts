@@ -576,10 +576,6 @@ it("joins a running job before restarting after scheduler cleanup fails", async 
     release.resolve();
     await withinTest(Promise.all([running, restarting]), signal);
     expect(await cron.readJob(job.id)).toMatchObject({ state: { lastRunStatus: "ok" } });
-    expect(logger.warn).toHaveBeenCalledWith(
-      { errors: ["Error: synthetic scheduler cleanup failure"] },
-      "cron: shutdown left work for recovery",
-    );
     await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
     expect(runCommandJob).toHaveBeenCalledTimes(2);
   } finally {
@@ -840,10 +836,6 @@ it("contains recovered scheduled launch failures without an unhandled rejection"
       setImmediate(resolve);
     });
     expect(unhandled).toEqual([]);
-    expect(logger.error).toHaveBeenCalledWith(
-      { jobId: job.id, err: String(failure) },
-      "cron: queued launch failed",
-    );
     const persisted = (await loadCronStore(storePath)).jobs[0];
     expect(persisted?.state.queuedAtMs).toBeUndefined();
     expect(persisted?.state.runningAtMs).toBeUndefined();

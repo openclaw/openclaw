@@ -21,6 +21,7 @@ import {
 import { runCronCommandJob } from "./command-runner.js";
 import { normalizeCronJobPatch } from "./normalize.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import type { CronEvent, CronService } from "./service.js";
 import {
   createCronServiceWithStateForTest,
@@ -190,18 +191,8 @@ async function createCommandWebhook(
   };
 }
 
-function agentJob(name: string, overrides: Partial<CronAddInput> = {}): CronAddInput {
-  return {
-    name,
-    enabled: true,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "test" },
-    delivery: { mode: "announce", ...destination },
-    ...overrides,
-  };
-}
+const agentJob = (name: string, overrides: Partial<CronAddInput> = {}) =>
+  cronTestInput({ name, delivery: { mode: "announce", ...destination }, ...overrides });
 
 async function createScheduledService(deps: Partial<CronServiceDeps> = {}, start = true) {
   const { storePath, cleanup } = await makeStorePath();
@@ -209,13 +200,9 @@ async function createScheduledService(deps: Partial<CronServiceDeps> = {}, start
   const finished = createDeferred<CronEvent>();
   const events: CronEvent[] = [];
   const { cron, state } = createCronServiceWithStateForTest({
+    ...cronTestDeps({ storePath, nowMs: undefined }),
     scheduler: createTestGatewayScheduler(clock.clock),
-    storePath,
-    cronEnabled: true,
     log: noopLogger,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
     onEvent: (event) => {
       if (event.action === "finished") {
