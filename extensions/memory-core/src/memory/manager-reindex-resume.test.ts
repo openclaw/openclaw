@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
-// This suite drives watcher notifications instead of the fixture's silent observer.
+// mock-isolation: This suite drives watcher notifications instead of the fixture's silent observer.
 vi.mock("./test-runtime-mocks.js", () => ({}));
 vi.mock("./local-file-watcher.js", async (original) => {
   const { MemoryFileWatcher } = await import("./file-watcher.js");
