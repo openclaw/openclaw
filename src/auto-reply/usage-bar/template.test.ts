@@ -18,7 +18,6 @@ vi.mock("@openclaw/fs-safe/watch", async () => {
 });
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const subscriptions: observation.WatchSubscription[] = [];
-const watchedPaths = new Map<string, observation.WatchSubscription>();
 let created = createDeferredCore<observation.WatchSubscription>();
 beforeEach(() => {
   created = createDeferredCore<observation.WatchSubscription>();
@@ -28,7 +27,6 @@ beforeEach(() => {
     expect(options.persistent).toBe(false);
     const subscription = original(authority, { ...options, mode: "poll" });
     subscriptions.push(subscription);
-    watchedPaths.set(join(authority.rootReal, options.scopes[0]!.path), subscription);
     created.resolve(subscription);
     created = createDeferredCore<observation.WatchSubscription>();
     return subscription;
@@ -37,14 +35,23 @@ beforeEach(() => {
 afterEach(async () => {
   await clearUsageBarTemplateCacheForTest();
   await Promise.all(subscriptions.splice(0).map((subscription) => subscription.close()));
-  watchedPaths.clear();
   warnSpy.mockClear();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 const tplA = { segments: [{ text: "A" }] };
 const tplB = { output: { default: [{ text: "B" }] } };
+const warning = "configured usage template could not be used; using built-in footer";
 const tmpDir = () => temp.make("usage-template-");
+const writeTemplate = (file: string, template: object) =>
+  writeFileSync(file, JSON.stringify(template));
+function expectTemplate(file: string | undefined, template: object) {
+  expect(loadUsageBarTemplate(file)).toEqual(template);
+}
+function expectWarningCount(file: string, count: number) {
+  expect(loadUsageBarTemplate(file)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+  expect(warnSpy).toHaveBeenCalledTimes(count);
+}
 function tmpFile(name: string, contents: string): string {
   const file = join(tmpDir(), name);
   writeFileSync(file, contents);
@@ -68,7 +75,7 @@ describe("loadUsageBarTemplate", () => {
     expect(loadUsageBarTemplate({ nope: true })).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy.mock.calls[0]).toMatchObject([
-      "configured usage template could not be used; using built-in footer",
+      warning,
       { source: "inline", reason: "unsupported-shape" },
     ]);
   });
@@ -81,73 +88,65 @@ describe("loadUsageBarTemplate", () => {
 
   it("reloads a path after invalid JSON is fixed", () => {
     const path = tmpFile("bad.json", "{ not json");
-    expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    writeFileSync(path, JSON.stringify(tplB));
+    expectWarningCount(path, 1);
+    writeTemplate(path, tplB);
     expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
   });
 
   it("bounds invalid-template warnings by least-recently-used path", () => {
     const dir = tmpDir();
-    const paths = Array.from({ length: 257 }, (_, index) => {
-      const path = join(dir, `bad-${index}.json`);
+    const paths = Array.from({ length: 257 }, (_, i) => join(dir, `bad-${i}.json`));
+    for (const path of paths) {
       writeFileSync(path, "{ not json");
-      return path;
-    });
-
+    }
     for (const path of paths.slice(0, 256)) {
       expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
     }
     expect(warnSpy).toHaveBeenCalledTimes(256);
 
     // Refresh the oldest warning before overflow so the next key becomes the LRU victim.
-    expect(loadUsageBarTemplate(paths[0])).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-    expect(warnSpy).toHaveBeenCalledTimes(256);
-
-    expect(loadUsageBarTemplate(paths[256])).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-    expect(warnSpy).toHaveBeenCalledTimes(257);
-    expect(loadUsageBarTemplate(paths[0])).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-    expect(warnSpy).toHaveBeenCalledTimes(257);
-
-    expect(loadUsageBarTemplate(paths[1])).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-    expect(warnSpy).toHaveBeenCalledTimes(258);
-    expect(warnSpy).toHaveBeenLastCalledWith(
-      "configured usage template could not be used; using built-in footer",
-      { source: "file", reason: "invalid-json", path: paths[1] },
-    );
+    expectWarningCount(paths[0]!, 256);
+    expectWarningCount(paths[256]!, 257);
+    expectWarningCount(paths[0]!, 257);
+    expectWarningCount(paths[1]!, 258);
+    expect(warnSpy).toHaveBeenLastCalledWith(warning, {
+      source: "file",
+      reason: "invalid-json",
+      path: paths[1],
+    });
   });
 
   it("refreshes atomic replacements and restored files, then rereads after loss of coverage", async () => {
     const directory = tmpDir();
     const file = join(directory, "template.json");
-    writeFileSync(file, JSON.stringify(tplA));
+    writeTemplate(file, tplA);
     const { template: first, subscription } = await loadObservedTemplate(file);
     await subscription.reconcile();
     expect(loadUsageBarTemplate(file)).toBe(first);
 
     const staged = join(directory, "staged.json");
     for (const next of [tplB, tplA]) {
-      writeFileSync(staged, JSON.stringify(next));
+      writeTemplate(staged, next);
       renameSync(staged, file);
       await subscription.reconcile();
-      expect(loadUsageBarTemplate(file)).toEqual(next);
+      expectTemplate(file, next);
     }
     unlinkSync(file);
     await subscription.reconcile();
     expect(loadUsageBarTemplate(file)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-    writeFileSync(file, JSON.stringify(tplA));
+    writeTemplate(file, tplA);
     await subscription.reconcile();
-    expect(loadUsageBarTemplate(file)).toEqual(tplA);
-    writeFileSync(staged, JSON.stringify(tplB));
+    expectTemplate(file, tplA);
+    writeTemplate(staged, tplB);
     renameSync(staged, file);
     await subscription.reconcile();
-    expect(loadUsageBarTemplate(file)).toEqual(tplB);
+    expectTemplate(file, tplB);
     expect(warnSpy).not.toHaveBeenCalled();
 
     renameSync(directory, join(tmpDir(), "retired"));
     await expect(subscription.reconcile()).rejects.toThrow();
     mkdirSync(directory);
-    writeFileSync(file, JSON.stringify(tplB));
+    writeTemplate(file, tplB);
     const replacement = await loadObservedTemplate(file);
     expect(replacement.template).toEqual(tplB);
     await replacement.subscription.reconcile();
@@ -156,34 +155,30 @@ describe("loadUsageBarTemplate", () => {
 
   it("evicts the oldest path with its observation, but retains entries when retrying a miss", async () => {
     const directory = tmpDir();
-    const files = Array.from({ length: 65 }, (_, index) =>
-      join(directory, `template-${index}.json`),
-    );
+    const files = Array.from({ length: 65 }, (_, i) => join(directory, `template-${i}.json`));
     for (const file of files.slice(0, 63)) {
-      writeFileSync(file, JSON.stringify(tplA));
+      writeTemplate(file, tplA);
       expect((await loadObservedTemplate(file)).template).toEqual(tplA);
     }
     const miss = files[63]!;
     expect(loadUsageBarTemplate(miss)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-    writeFileSync(miss, JSON.stringify(tplB));
+    writeTemplate(miss, tplB);
     expect((await loadObservedTemplate(miss)).template).toEqual(tplB);
     expect(subscriptions).toHaveLength(64);
-    const oldest = watchedPaths.get(files[0]!)!;
-    writeFileSync(files[0]!, JSON.stringify(tplB));
-    expect(loadUsageBarTemplate(files[0])).toEqual(tplA);
+    const oldest = subscriptions[0]!;
+    writeTemplate(files[0]!, tplB);
+    expectTemplate(files[0], tplA);
 
-    writeFileSync(files[64]!, JSON.stringify(tplA));
+    writeTemplate(files[64]!, tplA);
     expect((await loadObservedTemplate(files[64]!)).template).toEqual(tplA);
     expect(oldest.health().state).toBe("closed");
-    expect(
-      subscriptions
-        .filter((subscription) => subscription !== oldest)
-        .every((subscription) => subscription.health().state === "ready"),
-    ).toBe(true);
+    for (const subscription of subscriptions.filter((entry) => entry !== oldest)) {
+      expect(subscription.health().state).toBe("ready");
+    }
     expect((await loadObservedTemplate(files[0]!)).template).toEqual(tplB);
     await clearUsageBarTemplateCacheForTest();
-    expect(subscriptions.every((subscription) => subscription.health().state === "closed")).toBe(
-      true,
-    );
+    for (const subscription of subscriptions) {
+      expect(subscription.health().state).toBe("closed");
+    }
   });
 });

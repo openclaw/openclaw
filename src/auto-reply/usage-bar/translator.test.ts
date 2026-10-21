@@ -20,85 +20,79 @@ function tpl(pieces: unknown[]): UsageBarTemplate {
 function render(pieces: unknown[], contract: Record<string, unknown>): string {
   return renderUsageBar(tpl(pieces), { surface: "discord", ...contract });
 }
+function expectVerb(verb: string, value: unknown, expected: string) {
+  expect(render([{ text: `{x|${verb}}` }], { x: value })).toBe(expected);
+}
 
-describe("usage-bar verbs", () => {
+describe("usage-bar translator", () => {
   it("num — compact counts", () => {
     expect(render([{ text: "{usage.input_tokens|num}" }], { usage: { input_tokens: 3000 } })).toBe(
       "3.0k",
     );
-    expect(render([{ text: "{x|num}" }], { x: 272000 })).toBe("272k");
-    expect(render([{ text: "{x|num}" }], { x: 128 })).toBe("128");
+    expectVerb("num", 272000, "272k");
+    expectVerb("num", 128, "128");
   });
 
   it("num formats millions while preserving signed thousands rounding", () => {
-    expect(render([{ text: "{x|num}" }], { x: 1_000_000 })).toBe("1.0m");
-    expect(render([{ text: "{x|num}" }], { x: 1_048_576 })).toBe("1.0m");
-    expect(render([{ text: "{x|num}" }], { x: 2_000_000 })).toBe("2.0m");
-    expect(render([{ text: "{x|num}" }], { x: -1_500_000 })).toBe("-1.5m");
-    expect(render([{ text: "{x|num}" }], { x: -10_500 })).toBe("-10k");
-    expect(render([{ text: "{x|num}" }], { x: 999_950 })).toBe("1000k");
+    expectVerb("num", 1_000_000, "1.0m");
+    expectVerb("num", 1_048_576, "1.0m");
+    expectVerb("num", 2_000_000, "2.0m");
+    expectVerb("num", -1_500_000, "-1.5m");
+    expectVerb("num", -10_500, "-10k");
+    expectVerb("num", 999_950, "1000k");
   });
 
-  it.each([{ value: true, expected: ["1", "1.00", "0m", "1%", "99"] }])(
-    "preserves numeric verb coercion and formatting for $value",
-    ({ value, expected }) => {
-      for (const [index, verb] of ["num", "fixed", "dur", "pct", "inv"].entries()) {
-        expect(render([{ text: `{x|${verb}}` }], { x: value })).toBe(expected[index]);
-      }
-    },
-  );
+  it("preserves numeric verb coercion and formatting for true", () => {
+    const expected = ["1", "1.00", "0m", "1%", "99"];
+    for (const [index, verb] of ["num", "fixed", "dur", "pct", "inv"].entries()) {
+      expectVerb(verb, true, expected[index]!);
+    }
+  });
 
-  it.each([""])("preserves an alias-produced %s through numeric verbs", (value) => {
+  it("preserves an alias-produced empty string through numeric verbs", () => {
     for (const verb of ["num", "fixed", "dur", "pct", "inv"]) {
       const template = tpl([{ text: `{x|alias:numbers|${verb}}` }]);
-      template.aliases = { numbers: { empty: value } };
+      template.aliases = { numbers: { empty: "" } };
       expect(renderUsageBar(template, { surface: "discord", x: "empty" })).toBe("");
     }
   });
 
   it("keeps missing-path fallback separate from invalid numeric and empty pipeline results", () => {
     expect(render([{ text: "{x|num|missing}" }], {})).toBe("missing");
-    expect(render([{ text: "{x|num|missing}" }], { x: "nope" })).toBe("");
-    expect(render([{ text: "{x|num|inv|pct}" }], { x: "nope" })).toBe("");
-    expect(render([{ text: "{x|fixed:-1|inv|pct}" }], { x: 25 })).toBe("");
+    expectVerb("num|missing", "nope", "");
+    expectVerb("num|inv|pct", "nope", "");
+    expectVerb("fixed:-1|inv|pct", 25, "");
   });
 
   it("meter:1 — single glyph, codepoint-correct for astral scales", () => {
-    expect(render([{ text: "{x|meter:1:moon}" }], { x: 0 })).toBe("🌑");
-    expect(render([{ text: "{x|meter:1:moon}" }], { x: 50 })).toBe("🌗");
-    expect(render([{ text: "{x|meter:1:moon}" }], { x: 100 })).toBe("🌕");
+    expectVerb("meter:1:moon", 0, "🌑");
+    expectVerb("meter:1:moon", 50, "🌗");
+    expectVerb("meter:1:moon", 100, "🌕");
   });
 
   it("meter — preserves default and supported explicit widths", () => {
-    expect(render([{ text: "{x|meter::braille}" }], { x: 75 })).toBe("⣿⣿⣿⣧⠐");
-    expect(render([{ text: "{x|meter:   :braille}" }], { x: 75 })).toBe("⣿⣿⣿⣧⠐");
-    expect(render([{ text: "{x|meter:+5:braille}" }], { x: 75 })).toBe("⣿⣿⣿⣧⠐");
-    expect(render([{ text: "{x|meter: 5 :braille}" }], { x: 75 })).toBe("⣿⣿⣿⣧⠐");
+    expectVerb("meter::braille", 75, "⣿⣿⣿⣧⠐");
+    expectVerb("meter:   :braille", 75, "⣿⣿⣿⣧⠐");
+    expectVerb("meter:+5:braille", 75, "⣿⣿⣿⣧⠐");
+    expectVerb("meter: 5 :braille", 75, "⣿⣿⣿⣧⠐");
     expect(render([{ text: "{x|meter:100:braille}" }], { x: 50 })).toHaveLength(100);
   });
 
-  it.each(["abc"])("meter — rejects invalid width %s", (width) => {
-    expect(render([{ text: `{x|meter:${width}:braille}` }], { x: 75 })).toBe("");
+  it("meter — rejects invalid width abc", () => {
+    expectVerb("meter:abc:braille", 75, "");
   });
 
   it("alias — listed shortens, unlisted echoes through", () => {
-    expect(render([{ text: "{m|alias:models}" }], { m: "claude-opus-4-6" })).toBe("opus46");
-    expect(render([{ text: "{m|alias:models}" }], { m: "some-new-model" })).toBe("some-new-model");
+    expectVerb("alias:models", "claude-opus-4-6", "opus46");
+    expectVerb("alias:models", "some-new-model", "some-new-model");
   });
 
   it("alias — prototype keys (toString, constructor) do not match inherited properties", () => {
-    // When a model is named "toString" or "constructor", the `in` operator
-    // would match Object.prototype inherited properties and return
-    // Object.prototype.toString (a function) instead of the raw key.
-    // After the fix (Object.hasOwn), these should echo through unchanged.
-    expect(render([{ text: "{m|alias:models}" }], { m: "toString" })).toBe("toString");
-    expect(render([{ text: "{m|alias:models}" }], { m: "constructor" })).toBe("constructor");
-    expect(render([{ text: "{m|alias:models}" }], { m: "valueOf" })).toBe("valueOf");
-    expect(render([{ text: "{m|alias:models}" }], { m: "__proto__" })).toBe("__proto__");
+    expectVerb("alias:models", "toString", "toString");
+    expectVerb("alias:models", "constructor", "constructor");
+    expectVerb("alias:models", "valueOf", "valueOf");
+    expectVerb("alias:models", "__proto__", "__proto__");
   });
-});
-
-describe("usage-bar segment forms", () => {
   it("when drops on null/false/empty, keeps on 0", () => {
     const seg = [{ when: "u.cache_hit_pct", text: "🗄 {u.cache_hit_pct|pct}" }];
     expect(render(seg, { u: {} })).toBe("");
@@ -106,10 +100,6 @@ describe("usage-bar segment forms", () => {
   });
 
   it("map — prototype keys (toString, constructor) do not match inherited properties", () => {
-    // When the map key is "toString" or "constructor", the `in` operator
-    // would incorrectly match Object.prototype inherited properties and
-    // return undefined (Object.prototype.toString is a function, not a
-    // string case value) instead of falling through to _default.
     const seg = [
       { map: "state.mode", cases: { toString: "should-not-match", _default: "fallback" } },
     ];
@@ -138,9 +128,6 @@ describe("usage-bar segment forms", () => {
   it("each drops the whole segment when the array is empty", () => {
     expect(render([{ text: "W", each: "windows", item: "{x}" }], {})).toBe("");
   });
-});
-
-describe("usage-bar end-to-end with buildUsageContract", () => {
   it("renders a full footer from a reply usage snapshot", () => {
     const contract = buildUsageContract(
       {
