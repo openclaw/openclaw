@@ -1,10 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -66,18 +66,19 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-sentinel-update-result-") };
-
 beforeAll(() => {
   createUpdateRun({ trigger: "cli" }, { env });
 });
-
-async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
-  const { db } = openOpenClawStateDatabase({ env });
+let restoreEnv: () => void;
+beforeEach(() => {
+  restoreEnv = captureEnv(["OPENCLAW_STATE_DIR"]).restore;
+  setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  const { db } = openOpenClawStateDatabase();
   const stateDb = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   executeSqliteQuerySync(db, stateDb.deleteFrom("gateway_restart_sentinel"));
   executeSqliteQuerySync(db, stateDb.deleteFrom("update_runs"));
-  await withEnvAsync(env, run);
-}
+});
+afterEach(() => restoreEnv());
 
 describe("control-plane update restart sentinel", () => {
   it.each([
@@ -129,26 +130,24 @@ describe("control-plane update restart sentinel", () => {
   ] as const)(
     "does not publish a targetless CLI %s notice for a restored runtime",
     async (phase, status, reason) => {
-      await withRestartSentinelStateDir(async () => {
-        const run = createUpdateRun({ trigger: "cli" });
-        if (phase === "rollback") {
-          finishUpdateRun(run.runId, { status: "rolled-back", reason });
-        }
-        const before = getUpdateRun(run.runId);
-        await writeControlPlaneUpdateRestartSentinel({
-          meta: { runId: run.runId, handoffId: "owned-handoff", root: "/owned/package" },
-          result: updateResult({
-            runId: run.runId,
-            status,
-            reason,
-            ...(phase === "unsafe"
-              ? { recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" } }
-              : {}),
-          }),
-        });
-        expect(await readRestartSentinel()).toBeNull();
-        expect(getUpdateRun(run.runId)).toEqual(before);
+      const run = createUpdateRun({ trigger: "cli" });
+      if (phase === "rollback") {
+        finishUpdateRun(run.runId, { status: "rolled-back", reason });
+      }
+      const before = getUpdateRun(run.runId);
+      await writeControlPlaneUpdateRestartSentinel({
+        meta: { runId: run.runId, handoffId: "owned-handoff", root: "/owned/package" },
+        result: updateResult({
+          runId: run.runId,
+          status,
+          reason,
+          ...(phase === "unsafe"
+            ? { recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" } }
+            : {}),
+        }),
       });
+      expect(await readRestartSentinel()).toBeNull();
+      expect(getUpdateRun(run.runId)).toEqual(before);
     },
   );
 
@@ -173,61 +172,57 @@ describe("control-plane update restart sentinel", () => {
     { label: "Gateway", meta: {}, trigger: "api" as const },
     { label: "unknown run", meta: {}, unknown: true },
   ])("retains the $label update notice", async ({ meta, origin, trigger, unknown }) => {
-    await withRestartSentinelStateDir(async () => {
-      const run = unknown ? undefined : createUpdateRun({ trigger: trigger ?? "cli", origin });
-      await writeControlPlaneUpdateRestartSentinel({
-        meta: { ...meta, runId: run?.runId },
-        result: updateResult(),
-      });
-      const payload = (await readRestartSentinel())?.payload;
-      expect(payload).toMatchObject({ kind: "update", status: "ok" });
-      expect(payload?.message).toBe(meta.note ?? undefined);
-      if (meta.sessionKey) {
-        expect(payload?.sessionKey).toBe(meta.sessionKey);
-      }
-      if (meta.deliveryContext) {
-        expect(payload?.deliveryContext).toEqual(meta.deliveryContext);
-      }
-      if (meta.threadId) {
-        expect(payload?.threadId).toBe(meta.threadId);
-      }
-      if (meta.continuationMessage) {
-        expect(payload?.continuation).toEqual({
-          kind: "agentTurn",
-          message: meta.continuationMessage,
-        });
-      }
+    const run = unknown ? undefined : createUpdateRun({ trigger: trigger ?? "cli", origin });
+    await writeControlPlaneUpdateRestartSentinel({
+      meta: { ...meta, runId: run?.runId },
+      result: updateResult(),
     });
+    const payload = (await readRestartSentinel())?.payload;
+    expect(payload).toMatchObject({ kind: "update", status: "ok" });
+    expect(payload?.message).toBe(meta.note ?? undefined);
+    if (meta.sessionKey) {
+      expect(payload?.sessionKey).toBe(meta.sessionKey);
+    }
+    if (meta.deliveryContext) {
+      expect(payload?.deliveryContext).toEqual(meta.deliveryContext);
+    }
+    if (meta.threadId) {
+      expect(payload?.threadId).toBe(meta.threadId);
+    }
+    if (meta.continuationMessage) {
+      expect(payload?.continuation).toEqual({
+        kind: "agentTurn",
+        message: meta.continuationMessage,
+      });
+    }
   });
 
   it.each(["cli", "api"] as const)(
     "keeps pending notice failure marking scoped to requested %s reporting",
     async (trigger) => {
-      await withRestartSentinelStateDir(async () => {
-        const run = createUpdateRun({ trigger });
-        const noticeOwner = trigger === "cli" ? createUpdateRun({ trigger: "api" }) : run;
-        await writeResult(
-          updateResult({
-            status: "skipped",
-            reason: "restart-health-pending",
-          }),
-          { runId: noticeOwner.runId, sessionKey: "agent:ops:main" },
-        );
-        const before = await readRestartSentinel();
-        const marked = await markControlPlaneUpdateRestartSentinelFailure("restart-unhealthy", {
-          runId: run.runId,
-        });
-        if (trigger === "cli") {
-          expect(marked).toBeNull();
-          expect(await readRestartSentinel()).toEqual(before);
-        } else {
-          expect(marked).toMatchObject({
-            status: "error",
-            stats: { runId: run.runId, reason: "restart-unhealthy" },
-          });
-          expect((await readRestartSentinel())?.payload).toEqual(marked);
-        }
+      const run = createUpdateRun({ trigger });
+      const noticeOwner = trigger === "cli" ? createUpdateRun({ trigger: "api" }) : run;
+      await writeResult(
+        updateResult({
+          status: "skipped",
+          reason: "restart-health-pending",
+        }),
+        { runId: noticeOwner.runId, sessionKey: "agent:ops:main" },
+      );
+      const before = await readRestartSentinel();
+      const marked = await markControlPlaneUpdateRestartSentinelFailure("restart-unhealthy", {
+        runId: run.runId,
       });
+      if (trigger === "cli") {
+        expect(marked).toBeNull();
+        expect(await readRestartSentinel()).toEqual(before);
+      } else {
+        expect(marked).toMatchObject({
+          status: "error",
+          stats: { runId: run.runId, reason: "restart-unhealthy" },
+        });
+        expect((await readRestartSentinel())?.payload).toEqual(marked);
+      }
     },
   );
 
@@ -258,84 +253,80 @@ describe("control-plane update restart sentinel", () => {
   ] satisfies [string, UpdateRestartSentinelMeta][])(
     "carries the complete %s notice route without mixing destinations",
     async (route, overrides) => {
-      await withRestartSentinelStateDir(async () => {
-        const origin = {
-          sessionKey: "agent:ops:telegram:group:room",
-          deliveryContext: {
-            channel: "telegram",
-            to: "room",
-            accountId: "recorded-account",
-            threadId: "recorded-thread",
-          },
-        };
-        const run = createUpdateRun({ trigger: "cli", origin });
-        const meta: UpdateRestartSentinelMeta = {
-          runId: run.runId,
-          handoffId: "owner",
-          note: "Requested note",
-          continuationMessage: "Requested continuation",
-          ...overrides,
-        };
-        await writeControlPlaneUpdateRestartSentinel({
-          meta,
-          result: updateResult(),
-        });
-        const payload = (await readRestartSentinel())?.payload;
-        expect(payload?.sessionKey).toBe(meta.sessionKey ?? origin.sessionKey);
-        expect(payload?.deliveryContext).toEqual(
-          route === "other-session"
-            ? undefined
-            : route === "explicit" || route === "other-delivery"
-              ? meta.deliveryContext
-              : {
-                  channel: "telegram",
-                  to: "room",
-                  accountId: "recorded-account",
-                },
-        );
-        expect(payload?.threadId).toBe(
-          route === "other-session" || route === "other-delivery"
-            ? undefined
-            : (meta.threadId ?? "recorded-thread"),
-        );
-        expect(payload?.message).toBe(meta.note);
-        expect(payload?.continuation).toEqual({
-          kind: "agentTurn",
-          message: meta.continuationMessage,
-        });
-        expect(payload?.stats).toMatchObject({ runId: run.runId, handoffId: "owner" });
+      const origin = {
+        sessionKey: "agent:ops:telegram:group:room",
+        deliveryContext: {
+          channel: "telegram",
+          to: "room",
+          accountId: "recorded-account",
+          threadId: "recorded-thread",
+        },
+      };
+      const run = createUpdateRun({ trigger: "cli", origin });
+      const meta: UpdateRestartSentinelMeta = {
+        runId: run.runId,
+        handoffId: "owner",
+        note: "Requested note",
+        continuationMessage: "Requested continuation",
+        ...overrides,
+      };
+      await writeControlPlaneUpdateRestartSentinel({
+        meta,
+        result: updateResult(),
       });
+      const payload = (await readRestartSentinel())?.payload;
+      expect(payload?.sessionKey).toBe(meta.sessionKey ?? origin.sessionKey);
+      expect(payload?.deliveryContext).toEqual(
+        route === "other-session"
+          ? undefined
+          : route === "explicit" || route === "other-delivery"
+            ? meta.deliveryContext
+            : {
+                channel: "telegram",
+                to: "room",
+                accountId: "recorded-account",
+              },
+      );
+      expect(payload?.threadId).toBe(
+        route === "other-session" || route === "other-delivery"
+          ? undefined
+          : (meta.threadId ?? "recorded-thread"),
+      );
+      expect(payload?.message).toBe(meta.note);
+      expect(payload?.continuation).toEqual({
+        kind: "agentTurn",
+        message: meta.continuationMessage,
+      });
+      expect(payload?.stats).toMatchObject({ runId: run.runId, handoffId: "owner" });
     },
   );
 
   it.each(["other-run", "other-handoff", "matching"] as const)(
     "binds a routed failure marker to the %s sentinel owner",
     async (owner) => {
-      await withRestartSentinelStateDir(async () => {
-        const run = createUpdateRun({ trigger: "api", origin: { sessionKey: "agent:ops:main" } });
-        const other = createUpdateRun({ trigger: "api" });
-        await writeResult(updateResult(), {
-          runId: owner === "other-run" ? other.runId : run.runId,
-          handoffId: owner === "other-handoff" ? "successor" : "original",
-          sessionKey: "agent:ops:main",
-          continuationMessage: "Do not lose the requested continuation",
-        });
-        const before = await readRestartSentinel();
-        const marked = await markControlPlaneUpdateRestartSentinelFailure("restart-unhealthy", {
-          runId: run.runId,
-          handoffId: "original",
-        });
-        if (owner === "matching") {
-          expect(marked).toMatchObject({
-            status: "error",
-            stats: { runId: run.runId, handoffId: "original", reason: "restart-unhealthy" },
-          });
-          expect(marked?.continuation).toBeUndefined();
-        } else {
-          expect(marked).toBeNull();
-          expect(await readRestartSentinel()).toEqual(before);
-        }
+      const run = createUpdateRun({ trigger: "api", origin: { sessionKey: "agent:ops:main" } });
+      const other = createUpdateRun({ trigger: "api" });
+      await writeResult(updateResult(), {
+        runId: owner === "other-run" ? other.runId : run.runId,
+        handoffId: owner === "other-handoff" ? "successor" : "original",
+        sessionKey: "agent:ops:main",
+        continuationMessage: "Do not lose the requested continuation",
       });
+      const before = await readRestartSentinel();
+      const marked = await markControlPlaneUpdateRestartSentinelFailure("restart-unhealthy", {
+        runId: run.runId,
+        handoffId: "original",
+      });
+      if (owner === "matching") {
+        expect(marked).toMatchObject({
+          status: "error",
+          stats: { runId: run.runId, handoffId: "original", reason: "restart-unhealthy" },
+        });
+        expect(marked?.continuation).toBeUndefined();
+      } else {
+        expect(marked).toBeNull();
+        expect(await readRestartSentinel()).toEqual(before);
+      }
     },
   );
 
@@ -354,32 +345,30 @@ describe("control-plane update restart sentinel", () => {
   );
 
   it("preserves advisory step classification through the typed sentinel round trip", async () => {
-    await withRestartSentinelStateDir(async () => {
-      await writeResult(
-        updateResult({
-          status: "error",
-          steps: [
-            {
-              name: "post-install doctor",
-              command: "openclaw doctor",
-              cwd: "/tmp/openclaw",
-              durationMs: 1,
-              exitCode: 86,
-              advisory: {
-                kind: "package-post-install-doctor",
-                message: "private advisory detail",
-              },
+    await writeResult(
+      updateResult({
+        status: "error",
+        steps: [
+          {
+            name: "post-install doctor",
+            command: "openclaw doctor",
+            cwd: "/tmp/openclaw",
+            durationMs: 1,
+            exitCode: 86,
+            advisory: {
+              kind: "package-post-install-doctor",
+              message: "private advisory detail",
             },
-          ],
-        }),
-      );
+          },
+        ],
+      }),
+    );
 
-      const steps = (await readRestartSentinel())?.payload.stats?.steps;
-      expect(steps).toEqual([
-        expect.objectContaining({ name: "post-install doctor", advisory: true }),
-      ]);
-      expect(JSON.stringify(steps)).not.toContain("private advisory detail");
-    });
+    const steps = (await readRestartSentinel())?.payload.stats?.steps;
+    expect(steps).toEqual([
+      expect.objectContaining({ name: "post-install doctor", advisory: true }),
+    ]);
+    expect(JSON.stringify(steps)).not.toContain("private advisory detail");
   });
 
   it.each([
@@ -413,38 +402,36 @@ describe("control-plane update restart sentinel", () => {
   ] as const)(
     "keeps $health rollback notifications readable by released 2026.9.4",
     async ({ service, reason, health }) => {
-      await withRestartSentinelStateDir(async () => {
-        const persisted = {
-          serviceRestartSafe: true as const,
-          version: "2026.9.4",
-          buildId: "restored-build",
-          ...(service ? { service } : {}),
-        };
-        const result = updateResult({
-          status: "error",
-          reason: "readyz-unhealthy",
-          recovery: { ...persisted, packageRollbackVerified: true as const, reason },
-        });
-        await writeControlPlaneUpdateRestartSentinel({
-          result,
-          meta: { sessionKey: "agent:main:main" },
-        });
-        const { db } = openOpenClawStateDatabase();
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
-            .selectFrom("gateway_restart_sentinel")
-            .select("stats_json")
-            .where("sentinel_key", "=", "current"),
-        );
-        const stats = z
-          .object({ recovery: releasedRecoverySchema })
-          .parse(JSON.parse(row?.stats_json ?? "null"));
-        expect(stats.recovery).toEqual(persisted);
-        expect(result.recovery).toEqual({ ...persisted, packageRollbackVerified: true, reason });
-        const report = await prepareUpdateFailureReport({ attemptId: "released-reader", result });
-        expect(report.body).toContain(`Gateway health ${health} (${reason})`);
+      const persisted = {
+        serviceRestartSafe: true as const,
+        version: "2026.9.4",
+        buildId: "restored-build",
+        ...(service ? { service } : {}),
+      };
+      const result = updateResult({
+        status: "error",
+        reason: "readyz-unhealthy",
+        recovery: { ...persisted, packageRollbackVerified: true as const, reason },
       });
+      await writeControlPlaneUpdateRestartSentinel({
+        result,
+        meta: { sessionKey: "agent:main:main" },
+      });
+      const { db } = openOpenClawStateDatabase();
+      const row = executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
+          .selectFrom("gateway_restart_sentinel")
+          .select("stats_json")
+          .where("sentinel_key", "=", "current"),
+      );
+      const stats = z
+        .object({ recovery: releasedRecoverySchema })
+        .parse(JSON.parse(row?.stats_json ?? "null"));
+      expect(stats.recovery).toEqual(persisted);
+      expect(result.recovery).toEqual({ ...persisted, packageRollbackVerified: true, reason });
+      const report = await prepareUpdateFailureReport({ attemptId: "released-reader", result });
+      expect(report.body).toContain(`Gateway health ${health} (${reason})`);
     },
   );
 
@@ -480,12 +467,10 @@ describe("control-plane update restart sentinel", () => {
       });
       expect(priorUnsafeRecoverySchema.safeParse(payload.stats?.recovery).success).toBe(true);
 
-      await withRestartSentinelStateDir(async () => {
-        await writeRestartSentinel(payload);
-        expect((await readRestartSentinel())?.payload.stats?.recovery).toEqual({
-          serviceRestartSafe: false,
-          reason: "runtime-verification-failed",
-        });
+      await writeRestartSentinel(payload);
+      expect((await readRestartSentinel())?.payload.stats?.recovery).toEqual({
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
       });
     },
   );
