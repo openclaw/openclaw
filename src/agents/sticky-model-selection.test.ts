@@ -29,6 +29,11 @@ const model = (primary: string, fallback = "openai/gpt-5.6-luna") => ({
   primary,
   fallbacks: [fallback],
 });
+const defaultModel = model("anthropic/claude-opus-4-6");
+const agentModel = model("anthropic/claude-sonnet-4-6", "google/gemini-3-pro");
+function config(defaults = defaultModel, work = agentModel): OpenClawConfig {
+  return { agents: { defaults: { model: defaults }, entries: { work: { model: work } } } };
+}
 function select(
   agentId = "main",
   selectedModel = "openai/gpt-5.6-sol",
@@ -54,31 +59,19 @@ describe("persistStickyModelSelection", () => {
   it.each(["defaults", "agent"] as const)(
     "persists a normalized selection at %s scope",
     async (target) => {
-      mocks.cfg = {
-        agents: {
-          defaults: { model: model("anthropic/claude-opus-4-6") },
-          entries: { work: { model: model("anthropic/claude-sonnet-4-6", "google/gemini-3-pro") } },
-        },
-      };
+      mocks.cfg = config();
       expect(select("work", " openai/gpt-5.6-sol ", target)).toBe("requested");
       await vi.waitFor(() =>
         expect(mocks.info).toHaveBeenCalledWith(
           `persisted sticky model selection agentId=work model=openai/gpt-5.6-sol target=${target}`,
         ),
       );
-      expect(mocks.cfg.agents).toEqual({
-        defaults: {
-          model: model(target === "defaults" ? "openai/gpt-5.6-sol" : "anthropic/claude-opus-4-6"),
-        },
-        entries: {
-          work: {
-            model: model(
-              target === "agent" ? "openai/gpt-5.6-sol" : "anthropic/claude-sonnet-4-6",
-              "google/gemini-3-pro",
-            ),
-          },
-        },
-      });
+      expect(mocks.cfg).toEqual(
+        config(
+          target === "defaults" ? { ...defaultModel, primary: "openai/gpt-5.6-sol" } : defaultModel,
+          target === "agent" ? { ...agentModel, primary: "openai/gpt-5.6-sol" } : agentModel,
+        ),
+      );
     },
   );
 

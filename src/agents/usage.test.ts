@@ -4,6 +4,7 @@ import {
   derivePromptTokens,
   deriveSessionTotalTokens,
   makeZeroUsageSnapshot,
+  hasNonzeroUsage,
   normalizeUsage,
   toOpenAiChatCompletionsUsage,
   type NormalizedUsage,
@@ -61,6 +62,21 @@ it("preserves only complete context snapshots", () => {
 
 it.each([
   [
+    "separates nested cache creation from uncached input",
+    {
+      prompt_tokens: 100,
+      completion_tokens: 10,
+      total_tokens: 110,
+      prompt_tokens_details: { cached_tokens: 40, cache_creation_input_tokens: 60 },
+    },
+    { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: 110 },
+  ],
+  [
+    "normalizes llama.cpp timings",
+    { timings: { prompt_n: 30_834, predicted_n: 34 } },
+    { input: 30_834, output: 34 },
+  ],
+  [
     "handles OpenAI Responses cache and reasoning details",
     {
       input_tokens: 120,
@@ -90,8 +106,53 @@ it.each([
   (_name, input, expected) => expectNormalized(input, expected),
 );
 
-it("returns undefined when no valid fields are provided", () => {
-  expect(normalizeUsage(null)).toBeUndefined();
+it.each([null, {}])("returns undefined for empty usage %j", (raw) => {
+  expect(normalizeUsage(raw)).toBeUndefined();
+});
+it("keeps interrupted accounting without provisional counts or cost", () => {
+  expect(
+    normalizeUsage({
+      input: 20,
+      output: 3,
+      total: 23,
+      cost: { total: 0.5 },
+      usageReport: { state: "unavailable" },
+    }),
+  ).toEqual({ usageReport: { state: "unavailable" }, contextUsage: { state: "unavailable" } });
+});
+it("preserves recorded zero cost and 1h writes through normalization", () => {
+  const raw = {
+    input: 20,
+    output: 10,
+    cacheRead: 30,
+    cacheWrite: 60,
+    cacheWrite1h: 40,
+    totalTokens: 120,
+    cost: { total: 0, totalOrigin: "provider-billed" as const },
+  };
+  const normalized = normalizeUsage(structuredClone(raw));
+  const { totalTokens, ...fields } = raw;
+  expect(normalized).toEqual({ ...fields, total: totalTokens });
+  expect(normalizeUsage(normalized)).toEqual(normalized);
+});
+it("retains a valid zero-cost-only fact", () => {
+  const normalized = normalizeUsage({ cost: { total: 0 } });
+  expect(normalized).toMatchObject({ cost: { total: 0 } });
+  expect(normalizeUsage(normalized)).toEqual(normalized);
+});
+it("guards against empty/zero usage overwrites", () => {
+  for (const [input, expected] of [
+    [undefined, false],
+    [null, false],
+    [{}, false],
+    [{ input: 0, output: 0 }, false],
+    [{ reasoningTokens: 1 }, true],
+    [{ input: 1 }, true],
+    [{ total: 1 }, true],
+    [{ input: 12, output: 3, usageReport: { state: "unavailable" } }, false],
+  ] satisfies [Parameters<typeof hasNonzeroUsage>[0], boolean][]) {
+    expect(hasNonzeroUsage(input)).toBe(expected);
+  }
 });
 it("preserves reasoning token details", () => {
   const usage = {
@@ -136,6 +197,14 @@ it("does not treat total-only usage as a prompt snapshot", () => {
   expect(deriveContextPromptTokens({ lastCallUsage: { output: 200, total: 1_200 } })).toBe(1_000);
 });
 it.each([
+  [
+    "unclamped context exceeding its window",
+    {
+      usage: { input: 27, cacheRead: 2_400_000, cacheWrite: 0, total: 2_402_300 },
+      contextTokens: 200_000,
+    },
+    2_400_027,
+  ],
   [
     "last-call usage",
     {

@@ -41,48 +41,33 @@ describe("resolveFastModeState", () => {
     },
   );
 
-  it("prefers session overrides over per-agent and global defaults", () => {
-    const state = resolve({
-      cfg: {
-        agents: {
-          defaults: { fastModeDefault: "auto" },
-          entries: { main: { fastModeDefault: false } },
-        },
-      } as OpenClawConfig,
-      model: "gpt-4o",
-      agentId: "main",
-      sessionEntry: { fastMode: true },
-    });
-
-    expect(state).toMatchObject({ enabled: true, mode: true, source: "session" });
-  });
-
-  it.each(["auto", "ultrafast"] as const)(
-    "keeps %s as the persisted mode and starts enabled",
-    (mode) => {
-      const state = resolve({
-        sessionEntry: { fastMode: mode },
-      });
-
-      expect(state).toMatchObject({ mode, enabled: true });
+  it.each([
+    [true, false, "auto", undefined, true, "session"],
+    ["auto", undefined, undefined, undefined, "auto", "session"],
+    ["ultrafast", undefined, undefined, undefined, "ultrafast", "session"],
+    [undefined, undefined, true, false, true, "agent"],
+    [undefined, false, true, true, false, "agent"],
+  ] as const)(
+    "resolves session=%s, agent=%s, global=%s, model=%s by priority",
+    (session, agent, global, modelMode, mode, source) => {
+      const configured = global !== undefined;
+      const cfg: OpenClawConfig = configured
+        ? modelConfig(modelMode === undefined ? {} : { fastMode: modelMode }, "openai/gpt-4o", {
+            fastModeDefault: global,
+          })
+        : {};
+      if (agent !== undefined) {
+        cfg.agents = { ...cfg.agents, entries: { main: { fastModeDefault: agent } } };
+      }
+      expect(
+        resolve({
+          cfg,
+          ...(configured ? { model: "gpt-4o", agentId: "main" } : {}),
+          sessionEntry: { fastMode: session },
+        }),
+      ).toMatchObject({ mode, enabled: mode !== false, source });
     },
   );
-
-  it.each([undefined, false] as const)("prefers agent defaults (per-agent=%s)", (perAgent) => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        ...modelConfig({ fastMode: perAgent === false }, "openai/gpt-4o", {
-          fastModeDefault: true,
-        }).agents,
-        ...(perAgent === undefined ? {} : { entries: { main: { fastModeDefault: perAgent } } }),
-      },
-    };
-    expect(resolve({ cfg, model: "gpt-4o", agentId: "main" })).toMatchObject({
-      mode: perAgent ?? true,
-      enabled: perAgent ?? true,
-      source: "agent",
-    });
-  });
 
   it("formats auto mode with the default threshold", () => {
     expect(formatFastModeAutoLabel()).toBe("auto (60 sec)");
