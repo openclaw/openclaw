@@ -83,6 +83,8 @@ it.each(["content", "connection", "disconnect"] as const)(
       panel.attachmentRuntime = { connectionEpoch: 2 };
     } else {
       panel.remove();
+      // The bridge keeps the same renderer through a same-turn reparent.
+      await Promise.resolve();
     }
     expect(signal.aborted).toBe(true);
     if (change !== "disconnect") {
