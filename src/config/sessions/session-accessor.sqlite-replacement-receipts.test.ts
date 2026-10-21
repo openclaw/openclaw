@@ -106,15 +106,15 @@ it("sheds aggregate optional snapshots while committing every required receipt r
       expect(metadata.source.writeToken).toBeUndefined();
       expect(result.replacement.current.get(key)).toMatchObject({ label: key });
       expect(result.replacement.current.get(key)?.skillsSnapshot).toBeUndefined();
-      const predicate = retainPreparedSessionEntryPredicate({
+      const predicate = retainPredicate({
         databaseIdentity: `file:${identity}`,
         sessionKey: key,
-        entry: readExactSessionEntryRow(database, key, "full")!.entry,
+        entry: readEntry(database, key, "full")!.entry,
         projection: ["skillsSnapshot"],
         matches: (before, after) =>
           isDeepStrictEqual(before?.skillsSnapshot, after?.skillsSnapshot),
       });
-      const publication = retainSessionEntryWorkerPublication({
+      const publication = retainPublication({
         agentId: "main",
         storePath: database.path,
         databaseIdentity: identity,
@@ -161,9 +161,9 @@ it("preserves retained snapshot authority through title writes and revokes libra
     if (typeof identity !== "string") {
       throw new Error("Expected durable snapshot fixture");
     }
-    const retained = { databaseIdentity: `file:${identity}`, sessionKey: scope.sessionKey };
-    const snapshot = retainPreparedSessionEntryPredicate({
-      ...retained,
+    const retainedScope = { databaseIdentity: `file:${identity}`, sessionKey: scope.sessionKey };
+    const snapshot = retainPredicate({
+      ...retainedScope,
       entry,
       projection: ["skillsSnapshot"],
       matches: (before, after) =>
@@ -173,9 +173,9 @@ it("preserves retained snapshot authority through title writes and revokes libra
           after?.skillsSnapshot?.librarySelections,
         ),
     });
-    const list = retainPreparedSessionEntryPredicate({
-      ...retained,
-      entry: readExactSessionEntryRow(database, scope.sessionKey, "list")!.entry,
+    const list = retainPredicate({
+      ...retainedScope,
+      entry: readEntry(database, scope.sessionKey, "list")!.entry,
       projection: "list",
       matches: (before, after) =>
         before?.sessionId === after?.sessionId && after?.skillsSnapshot === undefined,
@@ -206,7 +206,7 @@ it("preserves retained snapshot authority through title writes and revokes libra
       expect(pendingCurrent).toBe(true);
       expect(snapshot.isCurrent()).toBe(true);
       expect(snapshot.readRetainedEntry()?.skillsSnapshot).toEqual(entry.skillsSnapshot);
-      await recordSessionParticipantInWorker(scope, {
+      await recordParticipant(scope, {
         identity: { type: "agent", id: "other" },
         promptedAt: 1,
       });
