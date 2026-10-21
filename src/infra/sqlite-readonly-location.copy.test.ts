@@ -52,6 +52,14 @@ function createDatabaseFixture(sql: string) {
   return fixture;
 }
 
+function expectRows(location: string, queries: Record<string, unknown>) {
+  withDatabase(location, (database) => {
+    for (const [sql, expected] of Object.entries(queries)) {
+      expect(database.prepare(sql).all()).toEqual(expected);
+    }
+  });
+}
+
 function patternedBytes(size: number): Buffer {
   const bytes = Buffer.allocUnsafe(size);
   for (let index = 0; index < size; index += 1) {
@@ -547,14 +555,10 @@ it.each(["append", "restart"] as const)("captures a committed prefix across WAL 
       expect(fs.statSync(walPath).size).toBe(capturedWalBytes);
       expect(fs.statSync(`${prepared.location}-wal`).size).toBeLessThan(capturedWalBytes);
     }
-    withDatabase(prepared.location, (snapshot) => {
-      expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      expect(snapshot.prepare("SELECT value FROM entries").all()).toEqual([{ value }]);
-      expect(snapshot.prepare("SELECT length(data) AS bytes FROM payload").get()).toEqual({
-        bytes: payloadBytes,
-      });
+    expectRows(prepared.location, {
+      "PRAGMA integrity_check": [{ integrity_check: "ok" }],
+      "SELECT value FROM entries": [{ value }],
+      "SELECT length(data) AS bytes FROM payload": [{ bytes: payloadBytes }],
     });
     expect(snapshotSqliteFamily(fixture.sourcePath)).toEqual(sourceAfterWrites);
   } finally {
@@ -623,17 +627,10 @@ it("rejects a reset WAL paired with checkpoint-restored main bytes during native
     prepared = await prepareSqliteReadOnlyCopyInProcess(fixture.sourcePath, fixture.stagingRoot);
     expect(reset).toBe(true);
     expect(restored).toBe(true);
-    withDatabase(prepared.location, (snapshot) => {
-      expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      expect(
-        snapshot
-          .prepare(
-            "SELECT left_value.value AS left_value, right_value.value AS right_value FROM left_value CROSS JOIN right_value",
-          )
-          .get(),
-      ).toEqual({ left_value: "A", right_value: "A" });
+    expectRows(prepared.location, {
+      "PRAGMA integrity_check": [{ integrity_check: "ok" }],
+      "SELECT left_value.value AS left_value, right_value.value AS right_value FROM left_value CROSS JOIN right_value":
+        [{ left_value: "A", right_value: "A" }],
     });
     expect(snapshotSqliteFamily(fixture.sourcePath)).toEqual(sourceAfterWrites);
   } finally {
@@ -862,10 +859,8 @@ it("snapshots a fixed 16 MiB database when staging can write one complete copy",
   );
 
   expectSnapshot(fixture, bytes, (location) => {
-    withDatabase(location, (snapshot) => {
-      expect(snapshot.prepare("SELECT length(payload) AS bytes FROM probe").get()).toEqual({
-        bytes: 16 * MIB,
-      });
+    expectRows(location, {
+      "SELECT length(payload) AS bytes FROM probe": [{ bytes: 16 * MIB }],
     });
   });
   expect(written).toBeLessThanOrEqual(bytes.length);

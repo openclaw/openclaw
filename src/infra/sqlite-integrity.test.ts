@@ -280,73 +280,40 @@ describe("assertSqliteIntegrity", () => {
     );
   });
 
-  function expectForeignKeyViolation(
-    sql: string,
-    expected: RegExp,
-    beforeCheck?: (database: DatabaseSync) => void,
-  ) {
-    withDatabase(sql, (database) => {
-      beforeCheck?.(database);
-      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(expected);
-    });
-  }
-
-  it("reports violations deterministically without truncating 64-bit rowids", () => {
-    expectForeignKeyViolation(
-      `
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE parents (id INTEGER PRIMARY KEY);
-        CREATE TABLE children (
-          id INTEGER PRIMARY KEY,
-          parent_id INTEGER NOT NULL REFERENCES parents(id)
-        );
-        INSERT INTO children (id, parent_id)
-        VALUES (9007199254740993, 99), (1, 99);
-      `,
+  it.each([
+    [
+      "64-bit rowids in deterministic order",
+      "(9007199254740993, 99), (1, 99)",
       /children row 1 references parents \(foreign key 0\); children row 9007199254740993 references parents \(foreign key 0\)/u,
-    );
-  });
-
-  it("cannot be bypassed by a schema object shadowing the table-valued pragma", () => {
-    expectForeignKeyViolation(
-      `
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE parents (id INTEGER PRIMARY KEY);
-        CREATE TABLE children (
-          id INTEGER PRIMARY KEY,
-          parent_id INTEGER NOT NULL REFERENCES parents(id)
-        );
-        INSERT INTO children (id, parent_id) VALUES (1, 99);
-        CREATE TABLE pragma_foreign_key_check (
-          "table" TEXT NOT NULL,
-          rowid INTEGER,
-          parent TEXT NOT NULL,
-          fkid INTEGER NOT NULL
-        );
-      `,
+    ],
+    [
+      "a shadowing schema object",
+      "(1, 99)",
       /foreign_key_check failed for test database: children row 1 references parents \(foreign key 0\)/u,
-      (database) => {
-        expect(
-          database
-            .prepare('SELECT "table", rowid, parent, fkid FROM pragma_foreign_key_check')
-            .all(),
-        ).toEqual([]);
-      },
-    );
-  });
-
-  it("identifies violations in WITHOUT ROWID tables", () => {
-    expectForeignKeyViolation(
-      `
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE parents (id TEXT PRIMARY KEY);
-        CREATE TABLE children (
-          id TEXT PRIMARY KEY,
-          parent_id TEXT NOT NULL REFERENCES parents(id)
-        ) WITHOUT ROWID;
-        INSERT INTO children (id, parent_id) VALUES ('child-1', 'missing-parent');
-      `,
+    ],
+    [
+      "WITHOUT ROWID tables",
+      "('child-1', 'missing-parent')",
       /foreign_key_check failed for test database: children row without rowid references parents \(foreign key 0\)/u,
+    ],
+  ] as const)("reports foreign key violations with %s", (variant, rows, expected) => {
+    const withoutRowid = variant === "WITHOUT ROWID tables";
+    const type = withoutRowid ? "TEXT" : "INTEGER";
+    withDatabase(
+      `PRAGMA foreign_keys = OFF;
+       CREATE TABLE parents (id ${type} PRIMARY KEY);
+       CREATE TABLE children (id ${type} PRIMARY KEY, parent_id ${type} NOT NULL REFERENCES parents(id))
+         ${withoutRowid ? "WITHOUT ROWID" : ""};
+       INSERT INTO children (id, parent_id) VALUES ${rows};`,
+      (database) => {
+        if (variant === "a shadowing schema object") {
+          database.exec(
+            'CREATE TABLE pragma_foreign_key_check ("table" TEXT NOT NULL, rowid INTEGER, parent TEXT NOT NULL, fkid INTEGER NOT NULL)',
+          );
+          expect(database.prepare("SELECT * FROM pragma_foreign_key_check").all()).toEqual([]);
+        }
+        expect(() => assertSqliteIntegrity(database, "test database")).toThrow(expected);
+      },
     );
   });
 });

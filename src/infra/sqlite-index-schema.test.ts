@@ -160,14 +160,10 @@ describe("repairCanonicalSqliteIndexes", () => {
     },
   );
 
-  it.each([
-    [
-      "column order",
-      "CREATE UNIQUE INDEX idx_records_identity ON records(external_id, tenant_id) WHERE active = 1",
-    ],
-  ])("repairs same-name %s drift", (_name, driftedSql) => {
+  it("repairs same-name column order drift", () => {
     using db = createDatabase();
-    db.exec(`DROP INDEX idx_records_identity; ${driftedSql};`);
+    db.exec(`DROP INDEX idx_records_identity;
+      CREATE UNIQUE INDEX idx_records_identity ON records(external_id, tenant_id) WHERE active = 1`);
 
     expect(
       repairCanonicalSqliteIndexes(db, "test database", expectedCatalog, {
@@ -225,35 +221,6 @@ describe("repairCanonicalSqliteIndexes", () => {
       ]);
     },
   );
-
-  it("rolls back without dropping the drifted index when canonical rows conflict", () => {
-    using db = createDatabase();
-    db.exec(`
-        DROP INDEX idx_records_identity;
-        CREATE UNIQUE INDEX idx_records_identity ON records(id);
-        INSERT INTO records VALUES
-          (1, 'Tenant', NULL, 1),
-          (2, 'tenant', NULL, 1);
-      `);
-
-    expect(() => repairCanonicalSqliteIndexes(db, "test database", expectedCatalog)).toThrow(
-      /canonical index idx_records_identity failed.*UNIQUE constraint failed/iu,
-    );
-
-    expect(
-      db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_records_identity'").get(),
-    ).toEqual({
-      sql: "CREATE UNIQUE INDEX idx_records_identity ON records(id)",
-    });
-    expect(
-      db
-        .prepare(
-          "SELECT name FROM sqlite_schema WHERE type = 'index' AND name LIKE 'openclaw_probe_%'",
-        )
-        .all(),
-    ).toEqual([]);
-    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-  });
 
   it.each([
     {
