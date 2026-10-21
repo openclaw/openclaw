@@ -6,6 +6,8 @@ import { createApplicationRouter, startApplicationRouter } from "../../app-route
 import { loadChatRoute } from "./route-loader.ts";
 import {
   createSessionRouteContext,
+  createSessionRouteRow,
+  sessionRouteListResult,
   sessionRouteKey,
   sessionRouteUuid,
 } from "./route-resolution.test-support.ts";
@@ -40,6 +42,29 @@ async function setup(key = sessionRouteKey, storedPrefix = prefix) {
   Object.assign(fixture.context.gateway.snapshot.client!, { offlineRecoveryScope: "account-a" });
   return fixture;
 }
+
+it("keeps cached roster admission ahead of a prewarmed full-UUID snapshot", async () => {
+  const { context, request } = await setup();
+  await context.sessions.whenCachedRosterSettled();
+  context.gateway.snapshot.phase = "connecting";
+  context.sessions.state.result = sessionRouteListResult([createSessionRouteRow()]);
+  context.sessions.state.resultCached = true;
+  Object.defineProperty(context.sessions, "cachedRoutingDefaults", {
+    value: { mainKey: "main", scope: "per-sender" },
+  });
+  const result = await loadChatRoute(
+    context,
+    { pathname: `/chat/roboclaw/${sessionRouteUuid.replaceAll("-", "")}`, search: "", hash: "" },
+    "chat",
+    new AbortController().signal,
+  );
+  expect(result).toMatchObject({
+    kind: "session",
+    sessionKey: sessionRouteKey,
+    sessionResolutionFromCache: "roster",
+  });
+  expect(request).not.toHaveBeenCalled();
+});
 
 it.each([sessionRouteUuid, sessionRouteUuid.replaceAll("-", "")])(
   "admits an off-roster full UUID %s from the scoped snapshot and leaves it for the pane",

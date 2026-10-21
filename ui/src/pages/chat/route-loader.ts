@@ -470,21 +470,6 @@ export async function loadChatRoute(
         : {}),
     };
   }
-  if (!cached && !preferenceDerived && !revalidation) {
-    const snapshot = await findSnapshotSessionReference(context, target);
-    signal.throwIfAborted();
-    if (snapshot) {
-      // Only authority canonicalizes; shortening a dashed UUID here can restart discovery.
-      return {
-        kind: "session",
-        sessionKey: snapshot.key,
-        agentId: snapshot.agentId,
-        ...sessionRouteHints(routeLocation),
-        face,
-        sessionResolutionFromCache: "snapshot",
-      };
-    }
-  }
   let localRow = cached?.row;
   if (!cached && !preferenceDerived && !revalidation) {
     await context.sessions.whenCachedRosterSettled();
@@ -502,6 +487,21 @@ export async function loadChatRoute(
         target,
         configuredMainKey(context),
       );
+    }
+  }
+  if (!localRow && !preferenceDerived && !revalidation) {
+    const snapshot = await findSnapshotSessionReference(context, target);
+    signal.throwIfAborted();
+    if (snapshot) {
+      // Only authority canonicalizes; shortening a dashed UUID here can restart discovery.
+      return {
+        kind: "session",
+        sessionKey: snapshot.key,
+        agentId: snapshot.agentId,
+        ...sessionRouteHints(routeLocation),
+        face,
+        sessionResolutionFromCache: "snapshot",
+      };
     }
   }
   const resolution = revalidatedResolution
