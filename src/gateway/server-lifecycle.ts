@@ -26,6 +26,7 @@ import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { createControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
+import { publishHooksTokenEnvKey } from "./hooks.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
 import { startNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { waitForNodeWorkerSupervisor } from "./node-registry-private.js";
@@ -305,6 +306,7 @@ export async function prepareGatewayLifecycle(params: {
       hookClientIpConfig: typeof runtimeState.hookClientIpConfig;
     }) => {
       runtimeState.hooksConfig = next.hooksConfig;
+      publishHooksTokenEnvKey(next.hooksConfig);
       runtimeState.hookClientIpConfig = next.hookClientIpConfig;
     },
     setHeartbeatRunner: (next: typeof runtimeState.heartbeatRunner) => {

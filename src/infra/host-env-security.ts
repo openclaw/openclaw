@@ -31,6 +31,36 @@ const GIT_PROTOCOL_FROM_USER_ENV_KEY = "GIT_PROTOCOL_FROM_USER";
 const GIT_PROTOCOL_FROM_USER_DISABLED_VALUE = "0";
 const GIT_DEFAULT_ALWAYS_ALLOWED_PROTOCOLS = new Set(["git", "http", "https", "ssh"]);
 const scopedBlockedInheritedEnvKeys = new AsyncLocalStorage<ReadonlySet<string>>();
+const gatewayCredentialEnvKeysByOwner = new Map<string, ReadonlySet<string>>();
+
+/**
+ * Publish, per owner, the env names the running Gateway reads its own credentials from (for
+ * example the `NAME` in `hooks.token: "${NAME}"`). Host exec children never inherit them.
+ */
+export function setGatewayCredentialEnvKeys(owner: string, keys: Iterable<string>): void {
+  const normalized = new Set<string>();
+  for (const key of keys) {
+    const trimmed = key.trim();
+    if (trimmed) {
+      normalized.add(trimmed.toUpperCase());
+    }
+  }
+  if (normalized.size > 0) {
+    gatewayCredentialEnvKeysByOwner.set(owner, normalized);
+  } else {
+    gatewayCredentialEnvKeysByOwner.delete(owner);
+  }
+}
+
+function isGatewayCredentialEnvVarName(key: string): boolean {
+  const upper = key.toUpperCase();
+  for (const keys of gatewayCredentialEnvKeysByOwner.values()) {
+    if (keys.has(upper)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** Run a bounded operation without forwarding selected inherited env vars to host exec. */
 export function withHostExecInheritedEnvOmitted<T>(keys: Iterable<string>, run: () => T): T {
@@ -234,7 +264,7 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
     if (baseEnv.OPENCLAW_SERVICE_KIND === "node" && NODE_SERVICE_ENV_KEYS.has(key.toUpperCase())) {
       continue;
     }
-    if (isScopedBlockedHostExecEnvVarName(key)) {
+    if (isScopedBlockedHostExecEnvVarName(key) || isGatewayCredentialEnvVarName(key)) {
       continue;
     }
     const sanitized = sanitizeHostInheritedEnvValue(key, value);
