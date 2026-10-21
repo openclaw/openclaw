@@ -18,7 +18,7 @@ import {
   waitForChatAbortControllerRemoval,
   waitForChatAbortTerminalPersistence,
 } from "./chat-abort-lifecycle-internal.js";
-import { abortChatRunById, registerChatAbortController } from "./chat-abort.js";
+import { abortChatRunById, registerChatAbortController, type ChatAbortOps } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
 
 afterEach(() => resetSessionControllerStateForTest());
@@ -57,7 +57,18 @@ function registeredRun(
       targets: [{ runId, entry }],
       timeoutMs: 1_000,
     });
-  return { runId, entry, registration, drain };
+  const abort = (broadcast: ChatAbortOps["broadcast"] = () => {}) =>
+    abortChatRunById(
+      {
+        chatRunState: createChatRunState(),
+        removeChatRun: () => undefined,
+        agentRunSeq: new Map(),
+        broadcast,
+        nodeSendToSession: () => {},
+      },
+      { runId, sessionKey: getRpcSourceIdentity(entry).sessionKey },
+    );
+  return { runId, entry, registration, drain, abort };
 }
 
 it.each(
@@ -91,44 +102,22 @@ it("finishes an empty selection without draining unrelated registrations", async
 });
 
 it("releases the reserved terminal owner when no lifecycle subscriber adopts it", async () => {
-  const { runId, entry, drain } = registeredRun();
+  const { runId, drain, abort } = registeredRun();
   const result = drain();
-  expect(
-    abortChatRunById(
-      {
-        chatRunState: createChatRunState(),
-        removeChatRun: () => undefined,
-        agentRunSeq: new Map(),
-        broadcast: () => {},
-        nodeSendToSession: () => {},
-      },
-      { runId, sessionKey: getRpcSourceIdentity(entry).sessionKey },
-    ),
-  ).toEqual({ aborted: true });
+  expect(abort()).toEqual({ aborted: true });
   expect(await result).toBe(true);
   expect(rpcSourceTesting.has(runId)).toBe(false);
 });
 
 it("marks captured cancellation without publishing over a replacement", () => {
-  const { runId, entry } = registeredRun();
+  const { runId, entry, abort } = registeredRun();
   let replacement: ReturnType<typeof registeredRun> | undefined;
   entry.input.abortSignal.addEventListener("abort", () => {
     rpcSourceTesting.deleteExpected(runId, entry);
     replacement = registeredRun({ runId, sessionKey: "agent:main:replacement" });
   });
   const broadcast = vi.fn();
-  expect(
-    abortChatRunById(
-      {
-        chatRunState: createChatRunState(),
-        removeChatRun: () => undefined,
-        agentRunSeq: new Map(),
-        broadcast,
-        nodeSendToSession: () => {},
-      },
-      { runId, sessionKey: getRpcSourceIdentity(entry).sessionKey },
-    ),
-  ).toEqual({ aborted: true });
+  expect(abort(broadcast)).toEqual({ aborted: true });
   expect(broadcast).not.toHaveBeenCalled();
   expect(entry.input.abortSignal.aborted).toBe(true);
   expect(entry.adapter.terminalOutcomeObserved).toBe(true);
