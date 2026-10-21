@@ -1,4 +1,3 @@
-// Browser Talk consult tool calls are session mailbox inputs reserved on arrival.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
@@ -26,7 +25,7 @@ vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
 }));
 
 import { parseRealtimeVoiceAgentConsultArgs } from "../../talk/agent-consult-tool.js";
-import { createTalkClientAgentConsultRunner } from "./client-agent-consult.js";
+import { createConsultRunner } from "./client-gateway-control.agent-consult-fixture.test-support.js";
 import type { ConsultParams } from "./client-gateway-control.agent-consult.test-support.js";
 import { createTalkClientGatewayControlOwner } from "./client-gateway-control.js";
 import { controlBridge, controlContext } from "./client-gateway-control.test-support.js";
@@ -46,7 +45,6 @@ const channelTurn = {
   storePath: sessionTarget.storePath,
 };
 
-/** Backend prompts in the order their turns started. */
 const order: string[] = [];
 
 /** Parks the next backend run until the returned gate is released. */
@@ -57,14 +55,12 @@ function gate() {
     async (params: { prompt: string; abortSignal?: AbortSignal }) => {
       order.push(params.prompt);
       started.resolve();
-      await new Promise<void>((resolve, reject) => {
-        void released.promise.then(() => resolve());
-        params.abortSignal?.addEventListener(
-          "abort",
-          () => reject(new DOMException("aborted", "AbortError")),
-          { once: true },
-        );
-      });
+      params.abortSignal?.addEventListener(
+        "abort",
+        () => released.reject(new DOMException("aborted", "AbortError")),
+        { once: true },
+      );
+      await released.promise;
       return { payloads: [] };
     },
   );
@@ -72,14 +68,11 @@ function gate() {
 }
 
 function createOwner(flushTranscript: () => Promise<void> = async () => undefined) {
-  const runner = createTalkClientAgentConsultRunner({
-    config,
+  const runner = createConsultRunner({
     context: { logGateway: { warn: vi.fn() } } as never,
     sessionTarget,
     ownerConnId: "conn-talk",
     getVoiceSessionId: () => "voice-talk",
-    initialItems: [],
-    registerRun: vi.fn(async () => ({ release: vi.fn(), isCurrent: () => true })),
   });
   const owner = createTalkClientGatewayControlOwner({
     voiceSessionId: "voice-talk",
@@ -95,14 +88,19 @@ function createOwner(flushTranscript: () => Promise<void> = async () => undefine
   const bridge = controlBridge();
   owner.control.bindBridge(bridge);
   owner.activate();
-  const consult = (callId: string, question: string) =>
-    owner.control.onToolCall?.({
-      itemId: `item-${callId}`,
-      callId,
-      name: "openclaw_agent_consult",
-      args: { question },
-    });
-  return { owner, bridge, consult };
+  return {
+    owner,
+    bridge,
+    consult: (callId: string, question: string) =>
+      owner.control.onToolCall?.({
+        itemId: `item-${callId}`,
+        callId,
+        name: "openclaw_agent_consult",
+        args: { question },
+      }),
+    waitForResults: (count = 1) =>
+      vi.waitFor(() => expect(bridge.submitToolResult).toHaveBeenCalledTimes(count)),
+  };
 }
 
 let runSequence = 0;
@@ -142,15 +140,13 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
-  resetSessionControllerStateForTest();
-});
+afterEach(resetSessionControllerStateForTest);
 
 describe("browser Talk consults through the session mailbox", () => {
   it("runs two quick consults FIFO and answers them in order", async () => {
     const first = gate();
     const second = gate();
-    const { bridge, consult, owner } = createOwner();
+    const { bridge, consult, owner, waitForResults } = createOwner();
 
     consult("call-1", "first");
     consult("call-2", "second");
@@ -160,54 +156,51 @@ describe("browser Talk consults through the session mailbox", () => {
     first.release();
     await second.started.promise;
     second.release();
-    await vi.waitFor(() => expect(bridge.submitToolResult).toHaveBeenCalledTimes(2));
+    await waitForResults(2);
     expect(order).toEqual(["first", "second"]);
     expect(bridge.submitToolResult).toHaveBeenNthCalledWith(1, "call-1", expect.anything());
     expect(bridge.submitToolResult).toHaveBeenNthCalledWith(2, "call-2", expect.anything());
     await owner.close();
   });
 
-  it("waits behind a running channel turn", async () => {
-    const consultGate = gate();
-    const channelRelease = createDeferred();
-    const channelStarted = createDeferred();
-    const channel = withSessionTurn(channelTurn, async () => {
-      channelStarted.resolve();
-      await channelRelease.promise;
-    });
-    await channelStarted.promise;
-    const { bridge, consult, owner } = createOwner();
-
-    consult("call-1", "after channel");
-    await vi.waitFor(() => expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledOnce());
-    expect(order).toEqual([]);
-
-    channelRelease.resolve();
-    await channel;
-    await consultGate.started.promise;
-    consultGate.release();
-    await vi.waitFor(() => expect(bridge.submitToolResult).toHaveBeenCalledOnce());
-    await owner.close();
-  });
-
-  it("reserves its mailbox position when the tool call arrives", async () => {
-    const consultGate = gate();
-    const flush = createDeferred();
-    const { bridge, consult, owner } = createOwner(async () => await flush.promise);
-    const channelRan = vi.fn(() => order.push("channel"));
-
-    consult("call-1", "reserved first");
-    const channel = withSessionTurn(channelTurn, async () => channelRan());
-    flush.resolve();
-    await consultGate.started.promise;
-    expect(channelRan).not.toHaveBeenCalled();
-
-    consultGate.release();
-    await channel;
-    expect(order).toEqual(["reserved first", "channel"]);
-    await vi.waitFor(() => expect(bridge.submitToolResult).toHaveBeenCalledOnce());
-    await owner.close();
-  });
+  it.each(["channel", "consult"] as const)(
+    "keeps %s-first mailbox order across transcript flush",
+    async (first) => {
+      const consultGate = gate();
+      const flush = createDeferred();
+      const channelStarted = createDeferred();
+      const channelRelease = createDeferred();
+      const { consult, owner, waitForResults } = createOwner(() => flush.promise);
+      const startChannel = () =>
+        withSessionTurn(channelTurn, async () => {
+          order.push("channel");
+          channelStarted.resolve();
+          await channelRelease.promise;
+        });
+      let channel: Promise<void>;
+      if (first === "channel") {
+        channel = startChannel();
+        await channelStarted.promise;
+        consult("call-1", "consult");
+      } else {
+        consult("call-1", "consult");
+        channel = startChannel();
+      }
+      flush.resolve();
+      if (first === "channel") {
+        await vi.waitFor(() => expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledOnce());
+        expect(order).toEqual(["channel"]);
+      }
+      channelRelease.resolve();
+      await consultGate.started.promise;
+      expect(order).toEqual(first === "channel" ? ["channel", "consult"] : ["consult"]);
+      consultGate.release();
+      await channel;
+      expect(order).toEqual(first === "channel" ? ["channel", "consult"] : ["consult", "channel"]);
+      await waitForResults();
+      await owner.close();
+    },
+  );
 
   it("cancels a running consult through Stop and keeps the session's waiting turn", async () => {
     const hook = vi.fn();
@@ -271,7 +264,7 @@ describe("browser Talk consults through the session mailbox", () => {
     replacement.consult("call-2", "next");
     await next.started.promise;
     next.release();
-    await vi.waitFor(() => expect(replacement.bridge.submitToolResult).toHaveBeenCalledOnce());
+    await replacement.waitForResults();
     await replacement.owner.close();
   });
 });

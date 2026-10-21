@@ -9,153 +9,141 @@ import {
 import { captureClientVoiceSessionSettlement } from "../../talk/client-voice-session-lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  cleanupTalkConnection,
-  prepareTalkConnectionClose,
-  registerTalkConnectionCleanup,
+  cleanupTalkConnection as disconnect,
+  prepareTalkConnectionClose as prepareClose,
+  registerTalkConnectionCleanup as register,
 } from "./session-registry.js";
+
+function cleanupGate() {
+  const started = createDeferred();
+  const completion = createDeferred();
+  return {
+    ...completion,
+    started: started.promise,
+    run: () => {
+      started.resolve();
+      return completion.promise;
+    },
+  };
+}
+const withState = (run: () => Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal", label: "talk-cleanup" }, run);
 
 describe("Talk connection cleanup registry", () => {
   const log = { warn: vi.fn() };
   beforeEach(() => log.warn.mockClear());
 
-  it("keeps a live Gateway's cleanup admission after its store reopens", async () => {
-    await withOpenClawTestState(
-      { scenario: "minimal", label: "talk-cleanup-store-reopen" },
-      async () => {
+  it("keeps a live Gateway's cleanup admission after its store reopens", () =>
+    withState(async () => {
+      openOpenClawStateDatabase();
+      const cleanup = vi.fn();
+      const original = prepareClose([{ connId: "original" }], log);
+      register("original", "realtime-relay", cleanup);
+      let nested: ReturnType<typeof prepareClose> | undefined;
+      try {
+        await closeOpenClawStateDatabaseAsync();
         openOpenClawStateDatabase();
-        const cleanup = vi.fn();
-        const original = prepareTalkConnectionClose([{ connId: "original" }], log);
-        registerTalkConnectionCleanup("original", "realtime-relay", cleanup);
-        let nested: ReturnType<typeof prepareTalkConnectionClose> | undefined;
-        try {
-          await closeOpenClawStateDatabaseAsync();
-          openOpenClawStateDatabase();
-          nested = prepareTalkConnectionClose([], log);
-          await nested.drain();
-          await original.drain();
-          expect(cleanup).toHaveBeenCalledOnce();
-          expect(log.warn).not.toHaveBeenCalled();
-        } finally {
-          await Promise.allSettled([original.drain(), nested?.drain()]);
+        nested = prepareClose([], log);
+        await nested.drain();
+        await original.drain();
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(log.warn).not.toHaveBeenCalled();
+      } finally {
+        await Promise.allSettled([original.drain(), nested?.drain()]);
+      }
+    }));
+
+  it("joins all connection cleanups after settlement admission is lost", () =>
+    withState(async () => {
+      const connId = "conn-close-refusal";
+      const gate = cleanupGate();
+      const second = vi.fn();
+      register(connId, "realtime-relay", gate.run);
+      register(connId, "browser-control", second);
+      const close = prepareClose([{ connId }], log);
+      const accepted = captureClientVoiceSessionSettlement();
+      const beginClose = accepted.run(() => AsyncLocalStorage.bind(() => close.beginClose()));
+      accepted.release();
+      beginClose();
+      const draining = close.drain();
+      void draining.catch(() => {});
+      try {
+        await awaitGateBeforeSettlement(gate.started, draining, "Talk cleanup was skipped");
+        expect(second).toHaveBeenCalledOnce();
+        gate.resolve();
+        await expect(draining).rejects.toThrow("lost its accepted owner");
+      } finally {
+        gate.resolve();
+        await draining.catch(() => {});
+        disconnect(connId, log);
+      }
+    }));
+  it.each([false, true])(
+    "replaces cleanup by kind and continues after errors (throws=%s)",
+    (throws) => {
+      const replaced = vi.fn();
+      const transcription = vi.fn();
+      const realtime = vi.fn().mockImplementationOnce(() => {
+        if (throws) {
+          throw new Error("realtime cleanup failed");
         }
-      },
-    );
-  });
+      });
 
-  it("joins all connection cleanups after settlement admission is lost", async () => {
-    await withOpenClawTestState(
-      { scenario: "minimal", label: "talk-cleanup-refusal" },
-      async () => {
-        const connId = "conn-close-refusal";
-        const entered = createDeferred();
-        const finish = createDeferred();
-        const second = vi.fn();
-        registerTalkConnectionCleanup(connId, "realtime-relay", () => {
-          entered.resolve();
-          return finish.promise;
-        });
-        registerTalkConnectionCleanup(connId, "browser-control", second);
-        const close = prepareTalkConnectionClose([{ connId }], log);
-        const accepted = captureClientVoiceSessionSettlement();
-        const beginClose = accepted.run(() => AsyncLocalStorage.bind(() => close.beginClose()));
-        accepted.release();
-        beginClose();
-        const draining = close.drain();
-        void draining.catch(() => {});
-        try {
-          await awaitGateBeforeSettlement(entered.promise, draining, "Talk cleanup was skipped");
-          expect(second).toHaveBeenCalledOnce();
-          finish.resolve();
-          await expect(draining).rejects.toThrow("lost its accepted owner");
-        } finally {
-          finish.resolve();
-          await draining.catch(() => {});
-          cleanupTalkConnection(connId, log);
-        }
-      },
-    );
-  });
-  it("keeps one cleanup per relay kind", () => {
-    const replacedRealtimeCleanup = vi.fn();
-    const transcriptionCleanup = vi.fn();
-    const realtimeCleanup = vi.fn();
+      register("conn-dedupe", "realtime-relay", replaced);
+      register("conn-dedupe", "realtime-relay", realtime);
+      register("conn-dedupe", "transcription-relay", transcription);
 
-    registerTalkConnectionCleanup("conn-dedupe", "realtime-relay", replacedRealtimeCleanup);
-    registerTalkConnectionCleanup("conn-dedupe", "realtime-relay", realtimeCleanup);
-    registerTalkConnectionCleanup("conn-dedupe", "transcription-relay", transcriptionCleanup);
-
-    cleanupTalkConnection("conn-dedupe", log);
-    cleanupTalkConnection("conn-dedupe", log);
-    expect(replacedRealtimeCleanup).not.toHaveBeenCalled();
-    expect(realtimeCleanup).toHaveBeenCalledOnce();
-    expect(realtimeCleanup.mock.contexts).toEqual([undefined]);
-    expect(transcriptionCleanup).toHaveBeenCalledOnce();
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
-  it("continues cleanup after one relay owner throws", () => {
-    const transcriptionCleanup = vi.fn();
-
-    registerTalkConnectionCleanup(
-      "conn-error",
-      "realtime-relay",
-      vi.fn().mockImplementationOnce(() => {
-        throw new Error("realtime cleanup failed");
-      }),
-    );
-    registerTalkConnectionCleanup("conn-error", "transcription-relay", transcriptionCleanup);
-
-    cleanupTalkConnection("conn-error", log);
-    expect(log.warn).toHaveBeenCalledWith(
-      "failed to run realtime-relay Talk cleanup after connection disconnect: realtime cleanup failed",
-    );
-    expect(transcriptionCleanup).toHaveBeenCalledOnce();
-    cleanupTalkConnection("conn-error", log);
-  });
+      disconnect("conn-dedupe", log);
+      if (!throws) {
+        disconnect("conn-dedupe", log);
+      }
+      expect(replaced).not.toHaveBeenCalled();
+      expect(realtime).toHaveBeenCalledOnce();
+      expect(realtime.mock.contexts).toEqual([undefined]);
+      expect(transcription).toHaveBeenCalledOnce();
+      if (throws) {
+        expect(log.warn).toHaveBeenCalledWith(
+          "failed to run realtime-relay Talk cleanup after connection disconnect: realtime cleanup failed",
+        );
+        disconnect("conn-dedupe", log);
+      } else {
+        expect(log.warn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("retains failed async cleanup for shutdown retry without replacing its owner", async () => {
-    const first = createDeferred();
-    const finish = createDeferred();
-    const firstStarted = createDeferred();
-    const retryStarted = createDeferred();
-    const cleanup = vi
-      .fn()
-      .mockImplementationOnce(() => {
-        firstStarted.resolve();
-        return first.promise;
-      })
-      .mockImplementationOnce(() => {
-        retryStarted.resolve();
-        return finish.promise;
-      });
-    registerTalkConnectionCleanup("conn-async-retry", "browser-control", cleanup);
-    cleanupTalkConnection("conn-async-retry", log);
-    cleanupTalkConnection("conn-async-retry", log);
-    await firstStarted.promise;
+    const first = cleanupGate();
+    const retry = cleanupGate();
+    const cleanup = vi.fn().mockImplementationOnce(first.run).mockImplementationOnce(retry.run);
+    register("conn-async-retry", "browser-control", cleanup);
+    disconnect("conn-async-retry", log);
+    disconnect("conn-async-retry", log);
+    await first.started;
     expect(cleanup).toHaveBeenCalledOnce();
     const firstObserved = first.promise.catch(() => undefined);
     first.reject(new Error("physical cleanup failed"));
     await firstObserved;
     await Promise.resolve();
     const drained = vi.fn();
-    const concurrentDrained = vi.fn();
-    const draining = drainGlobalSingletonLifecycleState("restart").then(drained);
-    const concurrentDrain = drainGlobalSingletonLifecycleState("restart").then(concurrentDrained);
+    const drains = [
+      drainGlobalSingletonLifecycleState("restart").then(drained),
+      drainGlobalSingletonLifecycleState("restart").then(drained),
+    ];
     try {
-      await retryStarted.promise;
+      await retry.started;
       expect(cleanup).toHaveBeenCalledTimes(2);
       await Promise.resolve();
       expect(drained).not.toHaveBeenCalled();
-      finish.resolve();
-      await Promise.all([draining, concurrentDrain]);
-      expect(drained).toHaveBeenCalledOnce();
-      expect(concurrentDrained).toHaveBeenCalledOnce();
-      cleanupTalkConnection("conn-async-retry", log);
+      retry.resolve();
+      await Promise.all(drains);
+      expect(drained).toHaveBeenCalledTimes(2);
+      disconnect("conn-async-retry", log);
       expect(cleanup).toHaveBeenCalledTimes(2);
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("physical cleanup failed"));
     } finally {
-      finish.resolve();
-      await Promise.all([draining, concurrentDrain]);
+      retry.resolve();
+      await Promise.all(drains);
     }
   });
 });
