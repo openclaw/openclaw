@@ -21,6 +21,7 @@ import {
   prepareDraftContext,
   mountPalette,
   paletteInput,
+  pressKey,
   setInputValue,
 } from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
@@ -86,11 +87,14 @@ function finishRead(index: number, dataUrl = "data:image/png;base64,aW1hZ2U=") {
   reader.dispatchEvent(new ProgressEvent("load"));
 }
 
-function key(input: HTMLTextAreaElement, init: KeyboardEventInit) {
-  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-  input.dispatchEvent(event);
-  return event;
-}
+const key = (input: HTMLTextAreaElement, { key: name = "", ...init }: KeyboardEventInit) =>
+  pressKey(input, name, { cancelable: true, ...init });
+const expectError = (message: string) =>
+  expect(toast.showToast).toHaveBeenCalledExactlyOnceWith({
+    message,
+    placement: "top-center",
+    severity: "error",
+  });
 
 async function mount(options: Parameters<typeof createDraftFixture>[0] = {}) {
   const fixture = createDraftFixture(options);
@@ -218,11 +222,7 @@ describe("command palette paste-only images", () => {
     await palette.updateComplete;
     await waitForSolid(() => expect(queryAll(".chat-attachment-thumb")).toHaveLength(0));
     expect(query(".chat-attachment-failures")).toBeNull();
-    expect(toast.showToast).toHaveBeenCalledExactlyOnceWith({
-      message: "Could not attach file. Try again.",
-      placement: "top-center",
-      severity: "error",
-    });
+    expectError("Could not attach file. Try again.");
     expect(input.value).toBe("Keep my draft");
     expect(start().disabled).toBe(false);
     expect(create).not.toHaveBeenCalled();
@@ -353,11 +353,7 @@ describe("command palette paste-only images", () => {
       expect(queryAll(".chat-attachment-thumb")).toHaveLength(outcome === "partial" ? 1 : 0);
       expect(query(".chat-attachment-failures")).toBeNull();
       expect(replacement.value).toBe("Keep every image");
-      expect(toast.showToast).toHaveBeenCalledExactlyOnceWith({
-        message: "File too large. Try a smaller file.",
-        placement: "top-center",
-        severity: "error",
-      });
+      expectError("File too large. Try a smaller file.");
     }
     if (outcome === "ready" || delayedPolicy) {
       const submitted = { message: textOnly ? "Keep every image" : "" };

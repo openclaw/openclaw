@@ -12,6 +12,9 @@ describe("github item references", () => {
   ];
   const resolved = { githubRepo, githubRepositories };
   const toolRepository = { owner: "acme", repo: "tools", aliases: ["Tools"] };
+  const repositories = (
+    ...entries: NonNullable<MarkdownRenderOptions["githubRepositories"]>
+  ): MarkdownRenderOptions => ({ githubRepo, githubRepositories: entries });
   const tools = {
     githubRepo,
     githubRepositories: [
@@ -101,26 +104,21 @@ describe("github item references", () => {
     [
       "OpenClaw PR #42",
       "openclaw/openclaw/pull/42",
-      { githubRepo, githubRepositories: [{ owner: "other", repo: "project", aliases: ["Claw"] }] },
+      repositories({ owner: "other", repo: "project", aliases: ["Claw"] }),
     ],
     [
       "Original Tools PR #42",
       "other/original-tools/pull/42",
-      {
-        githubRepo,
-        githubRepositories: [
-          toolRepository,
-          { owner: "other", repo: "original-tools", aliases: ["Original Tools"] },
-        ],
-      },
+      repositories(toolRepository, {
+        owner: "other",
+        repo: "original-tools",
+        aliases: ["Original Tools"],
+      }),
     ],
     [
       '"Alice\'s Tools" PR #42',
       "acme/tools/pull/42",
-      {
-        githubRepo,
-        githubRepositories: [{ owner: "acme", repo: "tools", aliases: ["Alice's Tools"] }],
-      },
+      repositories({ owner: "acme", repo: "tools", aliases: ["Alice's Tools"] }),
     ],
   ])("resolves the complete known repository in %s", (source, target, options) => {
     for (const fragment of renderBoth(source, options)) {
@@ -154,33 +152,23 @@ describe("github item references", () => {
       "project unknown PR #1576",
       "repo: unknown PR #1576",
     ].map((source): [string, MarkdownRenderOptions] => [source, { githubRepo }]),
-    [
-      "Original Unknown Tools PR #42",
-      { githubRepo, githubRepositories: [toolRepository, { aliases: ["Unknown Tools"] }] },
-    ],
+    ["Original Unknown Tools PR #42", repositories(toolRepository, { aliases: ["Unknown Tools"] })],
     [
       "ClawSweeper PR #1576",
-      {
-        githubRepo,
-        githubRepositories: [
-          ...githubRepositories,
-          { owner: "fork", repo: "clawsweeper", aliases: ["ClawSweeper"] },
-        ],
-      },
+      repositories(...githubRepositories, {
+        owner: "fork",
+        repo: "clawsweeper",
+        aliases: ["ClawSweeper"],
+      }),
     ],
-    [
-      "ClawSweeper PR #1576",
-      { githubRepo, githubRepositories: [...githubRepositories, { aliases: ["ClawSweeper"] }] },
-    ],
+    ["ClawSweeper PR #1576", repositories(...githubRepositories, { aliases: ["ClawSweeper"] })],
     [
       "OpenClaw PR #1576",
-      {
-        githubRepo,
-        githubRepositories: [
-          ...githubRepositories,
-          { owner: "fork", repo: "openclaw", aliases: ["OpenClaw"] },
-        ],
-      },
+      repositories(...githubRepositories, {
+        owner: "fork",
+        repo: "openclaw",
+        aliases: ["OpenClaw"],
+      }),
     ],
     ...[
       "project Unknown Tools PR #42",

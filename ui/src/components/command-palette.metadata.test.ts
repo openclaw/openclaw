@@ -7,6 +7,7 @@ import {
   registerCommandPaletteTestHooks,
   searchPalette,
   settlePalette,
+  enterQuery,
 } from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
 
@@ -48,7 +49,7 @@ it("keeps returned model rows without refresh warnings or obsolete choices", asy
     .fn()
     .mockResolvedValueOnce({ models: [model("retained"), model("obsolete")] })
     .mockResolvedValueOnce({
-      models: [model("retained")],
+      models: [model("retained"), model("current")],
       refreshFailed: true,
       providerOutcomes: [{ provider: "ollama", status: "unavailable" }],
     })
@@ -75,12 +76,20 @@ it("keeps returned model rows without refresh warnings or obsolete choices", asy
   emit("chat.metadata.changed");
   await settlePalette(palette);
   expect(findPaletteOption(palette, "Needle obsolete")).toBeUndefined();
-  expect(palette.querySelectorAll('[role="option"]')).toHaveLength(1);
+  expect(palette.querySelectorAll('[role="option"]')).toHaveLength(2);
   expect(findPaletteOption(palette, "Needle retained")).toBeDefined();
+  expect(findPaletteOption(palette, "Needle current")).toBeDefined();
   expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
+  expect(palette.querySelector(".cmd-palette__no-results")).toBeNull();
+
+  await enterQuery(palette, "");
+  expect(findPaletteOption(palette, "Agents")).toBeDefined();
+  expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
+  await searchPalette(palette, "needle");
 
   emit("chat.metadata.changed");
   await settlePalette(palette);
   expect(findPaletteOption(palette, "Needle retained")).toBeUndefined();
+  expect(findPaletteOption(palette, "Needle current")).toBeUndefined();
   expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
 });

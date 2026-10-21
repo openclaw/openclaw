@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
-import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { loadModelCatalog } from "../lib/model-catalog-store.ts";
@@ -21,6 +20,7 @@ import {
   paletteInput,
   setInputValue,
   pressKey,
+  transcriptResult,
 } from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
 import {
@@ -165,36 +165,6 @@ describe("CommandPalette search", () => {
     await searchPalette(palette, "fixture/hidden");
     expect(findPaletteOption(palette, "Reviewer")).toBeUndefined();
   });
-  it("keeps partial catalog refresh diagnostics out of search and navigation", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(modelResult("obsolete", "Needle obsolete"))
-      .mockResolvedValueOnce({ ...modelResult("current", "Needle current"), refreshFailed: true })
-      .mockResolvedValueOnce({ models: [] });
-    const harness = modelGateway(request);
-    const { palette, query } = await mountPalette(createContext(harness.gateway, async () => null));
-    await searchPalette(palette, "needle");
-    expect(findPaletteOption(palette, "Needle obsolete")).toBeDefined();
-
-    harness.emit("chat.metadata.changed");
-    await settlePalette(palette);
-    expect(findPaletteOption(palette, "Needle obsolete")).toBeUndefined();
-    expect(findPaletteOption(palette, "Needle current")).toBeDefined();
-    expect(palette.querySelectorAll('[role="option"]')).toHaveLength(1);
-    expect(query(".cmd-palette__source-error")).toBeNull();
-    expect(query(".cmd-palette__no-results")).toBeNull();
-
-    await enterQuery(palette, "");
-    await palette.updateComplete;
-    expect(findPaletteOption(palette, "Agents")).toBeDefined();
-    expect(query(".cmd-palette__source-error")).toBeNull();
-    await searchPalette(palette, "needle");
-    harness.emit("chat.metadata.changed");
-    await settlePalette(palette);
-    expect(findPaletteOption(palette, "Needle current")).toBeUndefined();
-    expect(query(".cmd-palette__source-error")).toBeNull();
-  });
-
   it("clears choices after a failed model-selection change and retries on input", async () => {
     const request = vi
       .fn()
@@ -439,20 +409,7 @@ describe("CommandPalette search", () => {
 
   it("scrolls the current session result across search groups and stops after closing", async () => {
     const listed = createSessionResult("agent:main:scroll-target", "Needle topic");
-    const transcript: SessionsSearchResult = {
-      sessions: listed.sessions,
-      results: [
-        {
-          sessionKey: listed.sessions[0]!.key,
-          sessionId: "scroll-target",
-          messageId: "scroll-message",
-          role: "assistant",
-          timestamp: 42,
-          snippet: "The payload appears in this conversation.",
-          score: 10,
-        },
-      ],
-    };
+    const transcript = transcriptResult(listed, "The payload appears in this conversation.");
     const { palette, query, queryAll } = await mountSearch(
       {
         methods: ["sessions.search"],
@@ -632,7 +589,7 @@ describe("CommandPalette search", () => {
     categorized.sessions[0]!.category = "Tak";
     const list = vi.fn<ApplicationContext["sessions"]["list"]>(async () => categorized);
     const request = vi.fn(async (method: string) =>
-      method === "models.list" ? { models: [] } : ({ results: [] } satisfies SessionsSearchResult),
+      method === "models.list" ? { models: [] } : { results: [] },
     );
     const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
 

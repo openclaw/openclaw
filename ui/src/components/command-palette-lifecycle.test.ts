@@ -108,9 +108,7 @@ describe("CommandPalette lifecycle", () => {
     expect(findPaletteOption(palette, "Retained chat")).toBeDefined();
     expect(findPaletteOption(palette, "Retained model")).toBeDefined();
     expect(findPaletteOption(palette, "Retained plugin")).toBeDefined();
-    expect(palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")?.value).toBe(
-      "retained",
-    );
+    expect(paletteInput(palette).value).toBe("retained");
     harness.setConnected(true);
     await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
@@ -130,7 +128,7 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.isOpen).toBe(false);
     palette.openPalette();
     await palette.updateComplete;
-    expect(palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")?.value).toBe("");
+    expect(paletteInput(palette).value).toBe("");
     expect(findPaletteOption(palette, "Refreshed retained chat")).toBeUndefined();
   });
 

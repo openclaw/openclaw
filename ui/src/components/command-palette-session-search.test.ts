@@ -8,24 +8,11 @@ import {
   mountSearch,
   registerCommandPaletteTestHooks,
   searchPalette,
+  transcriptResult,
 } from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
 
 registerCommandPaletteTestHooks({ mockScroll: false });
-
-function transcript(sessionKey: string, snippet: string): SessionsSearchResult["results"] {
-  return [
-    {
-      sessionKey,
-      sessionId: "session",
-      messageId: "message",
-      role: "assistant",
-      timestamp: 1,
-      snippet,
-      score: 1,
-    },
-  ];
-}
 
 describe("CommandPalette session search", () => {
   it.each([
@@ -70,11 +57,7 @@ describe("CommandPalette session search", () => {
       options?.search && !scenario.serverMatch ? metadata : roster,
     );
     const searchResult: SessionsSearchResult = {
-      results: transcript(
-        contextOnly.sessions[0]!.key,
-        "The needle appears only in the conversation body.",
-      ),
-      sessions: contextOnly.sessions,
+      ...transcriptResult(contextOnly, "The needle appears only in the conversation body."),
       ...scenario.response,
     };
     const request = vi.fn(async (method: string) => {
@@ -156,7 +139,8 @@ describe("CommandPalette session search", () => {
       return {
         sessions: includesOlder ? older.sessions : [],
         results: includesOlder
-          ? transcript("agent:main:older", "The uncommonneedle is only in this older conversation.")
+          ? transcriptResult(older, "The uncommonneedle is only in this older conversation.")
+              .results
           : [],
       };
     });

@@ -17,26 +17,9 @@ import {
   setInputValue,
   pressKey,
   registerCommandPaletteTestHooks,
+  transcriptResult,
 } from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
-
-function transcriptResult(roster: SessionsListResult, snippet: string): SessionsSearchResult {
-  const sessionKey = roster.sessions[0]!.key;
-  return {
-    sessions: roster.sessions,
-    results: [
-      {
-        sessionKey,
-        sessionId: sessionKey.split(":").at(-1)!,
-        messageId: "message",
-        role: "assistant",
-        timestamp: 1,
-        score: 1,
-        snippet,
-      },
-    ],
-  };
-}
 
 describe("CommandPalette pending searches", () => {
   registerCommandPaletteTestHooks({ mockScroll: false });
