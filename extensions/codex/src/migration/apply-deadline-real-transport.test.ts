@@ -1,9 +1,7 @@
-// Keep the real request owner to catch deadlines stretched by a wall-clock rewind.
-import { EventEmitter } from "node:events";
-import { PassThrough, Writable } from "node:stream";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "../app-server/client.js";
+import { createClientHarness } from "../app-server/test-support.js";
 
 const callCount = vi.hoisted(() => ({ count: 0 }));
 
@@ -13,38 +11,22 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 // mock-isolation: retain real request owner; replace only the shared-client acquisition boundary
 vi.mock("../app-server/shared-client.js", () => ({
-  getLeasedSharedCodexAppServerClient: vi.fn(() => {
-    const stdout = new PassThrough();
-    const proc = new EventEmitter();
-    const stdin = new Writable({
-      write(chunk, _enc, cb) {
-        const msg = JSON.parse(chunk.toString());
-        if (msg.method === "plugin/list") {
-          callCount.count += 1;
-          const marketplace =
-            callCount.count === 1
-              ? { name: "custom", path: "/c", plugins: [] }
-              : { name: "openai-curated", path: "/curated", plugins: [] };
-          stdout.write(
-            JSON.stringify({ id: msg.id, result: { marketplaces: [marketplace] } }) + "\n",
-          );
-        }
-        cb();
-      },
-    });
-    const transport = Object.assign(proc, {
-      stdin,
-      stdout,
-      stderr: new PassThrough(),
-      exitCode: null as number | null,
-      kill: () => {},
-    });
-    stdin.on("close", () => {
-      transport.exitCode = 0;
-      proc.emit("exit", 0, null);
-    });
-    return Promise.resolve(CodexAppServerClient.fromTransportForTests(transport));
-  }),
+  getLeasedSharedCodexAppServerClient: vi.fn(
+    async () =>
+      createClientHarness({
+        onWrite(line, send) {
+          const msg = JSON.parse(line);
+          if (msg.method === "plugin/list") {
+            callCount.count += 1;
+            const marketplace =
+              callCount.count === 1
+                ? { name: "custom", path: "/c", plugins: [] }
+                : { name: "openai-curated", path: "/curated", plugins: [] };
+            send({ id: msg.id, result: { marketplaces: [marketplace] } });
+          }
+        },
+      }).client,
+  ),
   releaseLeasedSharedCodexAppServerClient: vi.fn(() => true),
   retireSharedCodexAppServerClientIfCurrent: vi.fn(() => true),
   isCodexAppServerStartSelectionChangedError: vi.fn(() => false),
@@ -79,11 +61,7 @@ vi.mock("../app-server/auth-profile.js", () => ({
   resolveCodexAppServerAuthProfileIdForAgent: vi.fn(() => undefined),
 }));
 
-import type {
-  MigrationItem,
-  MigrationPlan,
-  MigrationProviderContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { MigrationPlan, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { applyCodexMigrationPlan } from "./apply.js";
 
 let workspace: Awaited<ReturnType<typeof tempWorkspace>>;
@@ -128,19 +106,15 @@ it("keeps request allowances within the 30s discovery budget after a 120s rewind
           kind: "plugin",
           action: "install",
           status: "planned",
-          source: "/s/.codex",
-          destination: "/d/agent",
           details: { configKey: "t", marketplaceName: "openai-curated", pluginName: "t" },
-        } as unknown as MigrationItem,
+        },
       ],
-      metadata: { codexHome: "/s/.codex" },
     } as unknown as MigrationPlan,
     ctx: {
       config: {
         agents: { defaults: { workspace: "/d/w" } },
         plugins: { entries: { codex: { enabled: true, config: {} } } },
       },
-      source: "/s/.codex",
       stateDir: workspace.dir,
     } as unknown as MigrationProviderContext,
   });
