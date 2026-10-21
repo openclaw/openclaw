@@ -48,15 +48,19 @@ vi.mock("../app-server/plugin-activation.js", () => ({
     };
   },
 }));
+// mock-isolation: avoid database and credential-store dependencies in cache-key construction
 vi.mock("../app-server/plugin-app-cache-key.js", () => ({
   buildCodexPluginAppCacheKey: vi.fn(async () => "k"),
 }));
+// mock-isolation: avoid database and credential-store dependencies in auth account resolution
 vi.mock("../app-server/auth-bridge.js", () => ({
   resolveCodexAppServerAuthAccountCacheKey: vi.fn(async () => undefined),
 }));
+// mock-isolation: avoid credential-store dependencies in fallback API-key fingerprinting
 vi.mock("../app-server/auth-cache-key.js", () => ({
   resolveCodexAppServerFallbackApiKeyCacheKey: vi.fn(() => undefined),
 }));
+// mock-isolation: avoid credential-store dependencies in auth profile resolution
 vi.mock("../app-server/auth-profile.js", () => ({
   resolveCodexAppServerAuthProfileIdForAgent: vi.fn(() => undefined),
 }));
