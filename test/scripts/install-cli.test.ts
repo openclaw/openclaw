@@ -161,6 +161,24 @@ describe("install-cli.sh", () => {
     expect(result.stdout).not.toContain("unexpected-node-install");
   });
 
+  it("creates a private prefix under a group-writable umask before downloading Node", () => {
+    const root = tempDirs.make("openclaw-install-cli-umask-");
+    const prefix = join(root, "state");
+    const result = runInstallCliShell(
+      `
+      umask 0002
+      os_detect() { echo linux; }; arch_detect() { echo x64; }
+      is_musl_linux() { return 1; }; linked_node_is_usable() { return 1; }
+      detect_downloader() { :; }; download_file() { echo download-unavailable >&2; return 1; }
+      main --node-only --prefix "$FIXTURE_PREFIX"
+    `,
+      { FIXTURE_PREFIX: prefix },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("download-unavailable");
+    expect(lstatSync(prefix).mode & 0o777).toBe(0o700);
+  });
+
   it.each([
     { tempBase: "directory", downloadFails: false },
     { tempBase: "file", downloadFails: true },
@@ -1183,6 +1201,7 @@ fi
     const prefix = join(root, "prefix");
     mkdirSync(bad);
     mkdirSync(good);
+    writeFileSync(join(good, "package.json"), '{"type":"commonjs"}\n');
     symlinkSync(nodeExecutable, join(bad, "node"));
     writeShell(join(bad, "npm"), 'printf "%s\\n" "$*" >> "$BAD_NPM_LOG"\nexit 42');
     writeShell(
