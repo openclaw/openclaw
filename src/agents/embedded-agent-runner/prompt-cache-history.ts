@@ -1,5 +1,5 @@
+import { hash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import type { Message } from "../../llm/types.js";
 
@@ -9,11 +9,9 @@ const MESSAGE_ENVELOPE_OMITTED_FIELDS = new Set(["content", "__openclaw"]);
 
 export type PromptHistoryFingerprint = {
   role: string;
-  envelopeFields: Map<string, string>;
-  envelopeDigest: string;
-  contentKind: "string" | "blocks";
-  blocks: string[];
-  blockFields: Map<string, string>[];
+  identityLength: number;
+  layout: string;
+  packed: string;
   stringBlock?: WeakRef<PromptStringFingerprint>;
 };
 
@@ -36,18 +34,18 @@ function fingerprintValue(value: unknown): string {
     if (cached) {
       return cached;
     }
-    const digest = sha256Hex(stableStringify(value));
+    const digest = `j${hash("sha256", stableStringify(value), "latin1")}`;
     immutableValueFingerprints.set(value, digest);
     return digest;
   }
-  return sha256Hex(stableStringify(value));
+  return `j${hash("sha256", stableStringify(value), "latin1")}`;
 }
 
 function fingerprintText(value: string): string {
   // UTF-8 replaces lone surrogates; escape those without serializing ordinary prompt text.
   return value.isWellFormed()
-    ? `text:${sha256Hex(value)}`
-    : `escaped:${sha256Hex(stableStringify(value))}`;
+    ? `t${hash("sha256", value, "latin1")}`
+    : `e${hash("sha256", stableStringify(value), "latin1")}`;
 }
 
 function fingerprintRecord(record: object, omit?: ReadonlySet<string>): RecordFingerprint {
@@ -87,7 +85,7 @@ function fingerprintRecord(record: object, omit?: ReadonlySet<string>): RecordFi
     return previous;
   }
   const fingerprint = {
-    digest: sha256Hex(stableStringify(Object.fromEntries(fields!))),
+    digest: hash("sha256", stableStringify(Object.fromEntries(fields!)), "latin1"),
     fields: fields!,
     primitives,
   };
@@ -101,7 +99,16 @@ export function fingerprintMessage(
 ): PromptHistoryFingerprint {
   const cached = messageFingerprints.get(message);
   if (cached) {
-    return previous && sameHistoryFingerprint(previous, cached) ? previous : cached;
+    if (
+      previous &&
+      (previous === cached ||
+        (previous.identityLength === cached.identityLength &&
+          previous.packed.startsWith(cached.packed.slice(0, cached.identityLength))))
+    ) {
+      messageFingerprints.set(message, previous);
+      return previous;
+    }
+    return cached;
   }
   const { content } = message;
   let stringBlock: PromptHistoryFingerprint["stringBlock"];
@@ -123,37 +130,22 @@ export function fingerprintMessage(
     blocks = fingerprints.map(({ digest }) => digest);
   }
   const envelope = fingerprintRecord(message, MESSAGE_ENVELOPE_OMITTED_FIELDS);
-  if (
-    previous?.envelopeDigest === envelope.digest &&
-    previous.contentKind === (typeof content === "string" ? "string" : "blocks") &&
-    previous.blocks.length === blocks.length &&
-    previous.blocks.every((digest, index) => digest === blocks[index])
-  ) {
+  const identity = [typeof content === "string" ? "t" : "b", envelope.digest, ...blocks].join("");
+  if (previous?.identityLength === identity.length && previous.packed.startsWith(identity)) {
     return previous;
   }
+  const records = [envelope, ...fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS)];
   const fingerprint: PromptHistoryFingerprint = {
     role: message.role,
-    envelopeFields: envelope.fields,
-    envelopeDigest: envelope.digest,
-    contentKind: typeof content === "string" ? "string" : "blocks",
-    blocks,
-    blockFields: fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS).map(({ fields }) => fields),
+    identityLength: identity.length,
+    // Flat Latin-1 strings retain full SHA-256 bytes without per-hash objects.
+    // The identity prefix precedes fixed-width, domain-tagged field hashes.
+    layout: JSON.stringify(records.map(({ fields }) => Array.from(fields.keys()))),
+    packed: [identity, ...records.flatMap(({ fields }) => Array.from(fields.values()))].join(""),
     stringBlock,
   };
   if (isOwnedTranscriptPayload(message)) {
     messageFingerprints.set(message, fingerprint);
   }
   return fingerprint;
-}
-
-function sameHistoryFingerprint(
-  previous: PromptHistoryFingerprint,
-  next: PromptHistoryFingerprint,
-) {
-  return (
-    previous.envelopeDigest === next.envelopeDigest &&
-    previous.contentKind === next.contentKind &&
-    previous.blocks.length === next.blocks.length &&
-    previous.blocks.every((digest, index) => digest === next.blocks[index])
-  );
 }

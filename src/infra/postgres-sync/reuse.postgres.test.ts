@@ -266,4 +266,41 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     expect(pid(differentSettings)).not.toBe(originalPid);
     run(() => differentSettings.close());
   });
+
+  it("applies all session settings with a quoted, comma-containing schema name", async () => {
+    const namespace = `${schema}_"first,second`;
+    const quoted = `"${namespace.replaceAll('"', '""')}"`;
+    await admin.query(`CREATE SCHEMA ${quoted}`);
+    const db = run(
+      () =>
+        new PostgresSyncConnection(connection!, namespace, anchor, schema, {
+          lockTimeoutMs: 321,
+          statementTimeoutMs: 654,
+        }),
+    );
+    try {
+      expect(
+        run(
+          () =>
+            db.query(
+              "SELECT current_setting('synchronous_commit') AS synchronous_commit, " +
+                "current_setting('lock_timeout') AS lock_timeout, " +
+                "current_setting('statement_timeout') AS statement_timeout, " +
+                "current_setting('search_path') AS search_path, current_schema() AS schema",
+            ).rows,
+        ),
+      ).toEqual([
+        {
+          synchronous_commit: "off",
+          lock_timeout: "321ms",
+          statement_timeout: "654ms",
+          search_path: quoted,
+          schema: namespace,
+        },
+      ]);
+    } finally {
+      run(() => db.close());
+      await admin.query(`DROP SCHEMA ${quoted}`);
+    }
+  });
 });

@@ -42,7 +42,7 @@ type ChatMetadataShell = HTMLElement & {
 function connectedGateway() {
   const harness = createGatewayStoreTestStore();
   harness.gateway.start();
-  harness.current().opts.onHello?.(gatewayHelloForMethods([]));
+  harness.current().testOptions.onHello?.(gatewayHelloForMethods([]));
   const client = harness.gateway.snapshot.client;
   assert.ok(client);
   return { ...harness, client };
@@ -89,7 +89,7 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
     request.mockClear();
     for (let index = 0; index < 50; index++) {
       beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [] });
-      current().opts.onEvent?.({
+      current().testOptions.onEvent?.({
         type: "event",
         event: "chat.metadata.changed",
         payload: { modelCatalogChanged: false, authChanged: false, commandsChanged: false },
@@ -100,7 +100,7 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
     expect.soft(metadataCalls(request, "models.authStatus")).toHaveLength(0);
     expect.soft(metadataCalls(request, "models.list")).toHaveLength(0);
     expect.soft(changed).not.toHaveBeenCalled();
-    current().opts.onEvent?.({
+    current().testOptions.onEvent?.({
       type: "event",
       event: "chat.metadata.changed",
       payload: { modelCatalogChanged: true, authChanged: false },
@@ -113,7 +113,7 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
     for (const event of ["config.changed", "chat.metadata.changed"]) {
       request.mockClear();
       changed.mockClear();
-      current().opts.onEvent?.({ type: "event", event, payload: {} });
+      current().testOptions.onEvent?.({ type: "event", event, payload: {} });
       await read();
       await read();
       expect(metadataCalls(request, "models.authStatus")).toHaveLength(
@@ -150,7 +150,7 @@ it("reuses unrelated agent catalogs across a minute of scoped publications", asy
     await read();
     request.mockClear();
     for (revision = 1; revision <= 60; revision++) {
-      current().opts.onEvent?.({
+      current().testOptions.onEvent?.({
         type: "event",
         event: "chat.metadata.changed",
         payload: {
@@ -170,7 +170,7 @@ it("reuses unrelated agent catalogs across a minute of scoped publications", asy
       await vi.advanceTimersByTimeAsync(1_000);
     }
     expect(metadataCalls(request, "models.list")).toHaveLength(120);
-    current().opts.onEvent?.({
+    current().testOptions.onEvent?.({
       type: "event",
       event: "chat.metadata.changed",
       payload: { modelCatalogChanged: true, authChanged: false, commandsChanged: false },
@@ -198,7 +198,7 @@ it("keeps a pending agent catalog read when another agent publishes changes", as
   reader.bind(gateway, scope);
   const pending = reader.read();
   try {
-    current().opts.onEvent?.({
+    current().testOptions.onEvent?.({
       type: "event",
       event: "chat.metadata.changed",
       payload: { agentId: "bravo", modelCatalogChanged: true, commandsChanged: false },
@@ -212,7 +212,7 @@ it("keeps a pending agent catalog read when another agent publishes changes", as
       { agentId: "bravo", modelSelectionChanged: true },
     ]) {
       request.mockClear();
-      current().opts.onEvent?.({ type: "event", event: "chat.metadata.changed", payload });
+      current().testOptions.onEvent?.({ type: "event", event: "chat.metadata.changed", payload });
       expect(await loadModelCatalog(client, scope)).toEqual(catalog);
       expect(metadataCalls(request, "models.list")).toHaveLength(1);
     }
@@ -379,7 +379,7 @@ it("retires chat metadata through config.changed and the Gateway close callback"
   expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
 
   beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models: [] });
-  current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
+  current().testOptions.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
   expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
   gateway.stop();
 });
@@ -405,7 +405,7 @@ it.each([
       presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "original" } }],
     },
   };
-  current().opts.onHello?.(hello);
+  current().testOptions.onHello?.(hello);
   const request = current()
     .request.mockImplementationOnce(() => stale.promise)
     .mockImplementation(() => fresh.promise);
@@ -433,10 +433,10 @@ it.each([
       : loadModelCatalog(client, { agentId: "main" });
   const before = read().catch((error: unknown) => error);
   if (transition === "same-client reconnect") {
-    current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
-    current().opts.onHello?.({ ...hello });
+    current().testOptions.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
+    current().testOptions.onHello?.({ ...hello });
   } else if (transition === "same-client identity") {
-    current().opts.onEvent?.({
+    current().testOptions.onEvent?.({
       type: "event",
       event: "presence",
       payload: {

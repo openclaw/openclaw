@@ -63,33 +63,22 @@ beforeEach(() => {
   randomTokenMock.mockReturnValue("generated-token");
 });
 
-it.each(["SecretRef", "deferred"] as const)(
-  "does not generate or persist a token for %s auth",
-  async (kind) => {
-    resolveSecretRefValuesMock.mockResolvedValue(
-      new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-token"]]),
-    );
-    const result = await install({
-      ...(kind === "SecretRef"
-        ? {
-            config: { gateway: { auth: { mode: "token" as const, token: tokenRef } } },
-            env: { OPENCLAW_GATEWAY_TOKEN: "resolved-token" },
-          }
-        : { requireExisting: true }),
-      generateIfMissing: createGeneration(),
-    });
-    if (kind === "SecretRef") {
-      expect(result).toMatchObject({
-        unavailableReason: undefined,
-        warnings: [expect.stringContaining("SecretRef-managed")],
-      });
-    } else {
-      expect(result.unavailableReason).toContain("existing Gateway token");
-    }
-    expect(randomTokenMock).not.toHaveBeenCalled();
-    expect(replaceConfigFileMock).not.toHaveBeenCalled();
-  },
-);
+it("does not generate or persist a token for SecretRef auth", async () => {
+  resolveSecretRefValuesMock.mockResolvedValue(
+    new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-token"]]),
+  );
+  const result = await install({
+    config: { gateway: { auth: { mode: "token", token: tokenRef } } },
+    env: { OPENCLAW_GATEWAY_TOKEN: "resolved-token" },
+    generateIfMissing: createGeneration(),
+  });
+  expect(result).toMatchObject({
+    unavailableReason: undefined,
+    warnings: [expect.stringContaining("SecretRef-managed")],
+  });
+  expect(randomTokenMock).not.toHaveBeenCalled();
+  expect(replaceConfigFileMock).not.toHaveBeenCalled();
+});
 
 it("returns unavailable reason when token SecretRef is unresolved in token mode", async () => {
   resolveSecretRefValuesMock.mockRejectedValue(new Error("missing env var"));

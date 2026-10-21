@@ -105,6 +105,7 @@ function coldStartEnv(token?: string) {
 const runtimeDiagnostics = {
   degradedSecretOwners: [],
   degradedPlugins: [],
+  modelReasoningWarning: "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.",
   sqliteWal: createSqliteWalHealth(),
   startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
   installationReplacementWarning: "Installation replaced; draining before handoff.",

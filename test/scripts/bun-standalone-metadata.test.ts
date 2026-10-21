@@ -242,7 +242,7 @@ function fixture({
     materializeErrorStack: () => {},
     FsSafeError: class extends Error {},
     safeFileSignature: (name: string) => observedFs.statSync(name),
-    safeHashFile: ({ filePath }: { filePath: string }) =>
+    safeHashFile: (filePath: string) =>
       crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex"),
     normalizeLowercaseStringOrEmpty,
   });

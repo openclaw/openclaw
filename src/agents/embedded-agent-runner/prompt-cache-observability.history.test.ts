@@ -1,4 +1,4 @@
-import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
+import * as crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import {
@@ -21,6 +21,9 @@ import { beginOpenAIObservation } from "./prompt-cache-observability.test-suppor
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
 import type { PromptPreparationResult, PromptPreparationTask } from "./provider-prompt-state.js";
 
+// mock-isolation: Preserve native hashing while observing history work in this process.
+vi.mock("node:crypto", { spy: true });
+
 let testScope = 0;
 
 function scopedKey(value: string): string {
@@ -30,6 +33,7 @@ function scopedKey(value: string): string {
 describe("prompt cache history fingerprints", () => {
   beforeEach(() => {
     testScope += 1;
+    vi.mocked(crypto.hash).mockClear();
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -46,7 +50,7 @@ describe("prompt cache history fingerprints", () => {
           timestamp: 2,
         },
       ];
-      const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+      const hashes = vi.mocked(crypto.hash);
       const observed = vi.fn();
       const observer = createPromptCacheRequestObserver(
         { sessionId, streamStrategy: "test" },
@@ -91,7 +95,9 @@ describe("prompt cache history fingerprints", () => {
       expect(loop[1]?.content).toBe(first[1]?.content);
       for (const text of ["Read the fixture", "Fixture context", "fixture result"]) {
         expect(
-          hashes.mock.calls.filter(([value]) => typeof value === "string" && value.includes(text)),
+          hashes.mock.calls.filter(
+            ([, value]) => typeof value === "string" && value.includes(text),
+          ),
         ).toHaveLength(1);
       }
       expect(observed).toHaveBeenCalledTimes(3);
@@ -119,11 +125,13 @@ describe("prompt cache history fingerprints", () => {
     );
     const message = publish("sealed-history-fixture");
     expect(isOwnedTranscriptPayload(message)).toBe(true);
-    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const hashes = vi.mocked(crypto.hash);
     const messages: Message[] = [message];
     await observer.onModelRequest(model, { messages });
     expect(
-      hashes.mock.calls.some(([text]) => String(text).includes("sealed-history-fixture")),
+      hashes.mock.calls.some(
+        ([, text]) => typeof text === "string" && text.includes("sealed-history-fixture"),
+      ),
     ).toBe(false);
     messages.push({ role: "user", content: "continue", timestamp: 2 });
     expect(await observer.onModelRequest(model, { messages })).toMatchObject({
@@ -210,7 +218,7 @@ describe("prompt cache history fingerprints", () => {
     >(Symbol.for("openclaw.providerPromptHashPool"), () => {
       throw new Error("Expected the prompt observer to initialize its worker pool");
     });
-    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const hashes = vi.mocked(crypto.hash);
     const prepare = vi.spyOn(pool, "run").mockImplementation((_input, options) => {
       expect(options.inputBytes).toBeGreaterThanOrEqual(entry.message.content.length * 2);
       const error = new Error("fixture request canceled");
@@ -236,7 +244,7 @@ describe("prompt cache history fingerprints", () => {
       content: [{ type: "text", text: `Synthetic history ${timestamp}` }],
       timestamp,
     }));
-    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const hashes = vi.mocked(crypto.hash);
     beginOpenAIObservation({ sessionId, messages });
     hashes.mockClear();
     messages.push({ role: "user", content: "Next turn", timestamp: 100 });
@@ -361,7 +369,7 @@ describe("prompt cache history fingerprints", () => {
         content: kind === "string" ? text : [{ type: "text", text }],
         timestamp: 1,
       };
-      const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+      const hashes = vi.mocked(crypto.hash);
       for (let index = 0; index < 3; index++) {
         expect(
           beginOpenAIObservation({ sessionId, messages: [{ ...message }] }).changes,
@@ -369,7 +377,7 @@ describe("prompt cache history fingerprints", () => {
       }
       expect(
         hashes.mock.calls.filter(
-          ([value]) => typeof value === "string" && value.includes("large-content-fixture"),
+          ([, value]) => typeof value === "string" && value.includes("large-content-fixture"),
         ),
       ).toHaveLength(1);
     },

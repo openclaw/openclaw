@@ -8,8 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "google-auth-library": "11.2.0",
-    "zod": "4.6.6"
+    "google-auth-library": "11.3.0",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

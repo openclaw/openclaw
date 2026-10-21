@@ -69,6 +69,52 @@ you only need an issued ClawRouter key.
   </Step>
 </Steps>
 
+## Decision models
+
+Select Luna independently of the conversational model:
+
+```json5
+{
+  agents: {
+    defaults: { decisionModel: "clawrouter/openai/gpt-6-luna" },
+    entries: {
+      support: { decisionModel: "clawrouter/openai/gpt-6-luna" },
+      quiet: { decisionModel: "" },
+    },
+  },
+}
+```
+
+An agent override selects its own decision model; an empty string disables
+that agent's decisions instead of inheriting the default. This does not change
+primary, fallback, utility, thinking, or Fast settings.
+
+The bundled `clawrouter` owner implements native OpenAI Decisions for Boolean,
+choice, and score questions. Inputs are explicit text/JSON or inline PNG, JPEG,
+or WebP images (up to 4 MiB). Limits are 200 questions per batch and 255 choice
+alternatives. Reasoning accepts only `auto` (or omission). Provider probabilities,
+confidence, usage, and individual refusals remain typed; there is no chat/JSON
+fallback, invented probability, or ambient conversation history.
+
+Static decision catalog support is **not a key grant**. Each evaluation checks
+the effective ClawRouter endpoint's `/v1/catalog` with that call's prepared router
+credential. The key must grant `openai/gpt-6-luna` with `llm.decisions` and the
+native OpenAI Decisions route. Inference then posts to
+`/v1/native/openai/v1/decisions` using upstream model `gpt-6-luna` and the same
+prepared auth/transport. No upstream OpenAI key is looked up on the host.
+A deployment without that native service route or key grant cannot evaluate
+these decisions; its existing chat access is not substituted. SystemOne and
+SubQ protocols are not implemented by this adapter.
+
+The typed-only declaration stays out of conversational model selection unless
+live chat discovery independently grants that model. For custom deployments,
+implicit native inventory is endpoint-scoped: explicitly author the Luna model
+row under `models.providers.clawrouter.models` with `api: "openai-responses"`;
+this still does not bypass the per-call key grant check.
+
+See [Decision models](/concepts/decision-models) for the shared API and selector
+semantics.
+
 ## Managed non-interactive deployment
 
 Keep the ClawRouter key in the workload's secret injection and store only a
@@ -195,14 +241,22 @@ content-retention state.
 
 `GET /v1/catalog` returns `{ providers: [...] }`, where each provider entry
 lists its own `models[]` (with upstream id, capabilities, and pricing) and its
-supported request routes. OpenClaw does not ship a second, fixed list of
-ClawRouter models. A catalog model is advertised as an OpenClaw model when:
+supported request routes. Conversational inventory stays credential-scoped rather
+than using a shipped fixed model list. The static Luna decision declaration above
+describes protocol support only. A catalog model is advertised for chat when:
 
 - the ClawRouter key's policy grants its provider;
 - the catalog model advertises a supported LLM capability (`llm.responses`,
   `llm.chat`, `llm.messages`, or `llm.stream` with a matching streaming
   route); and
 - the provider exposes a matching route for one of the transports below.
+
+A model can declare optional `input` modalities (`["text"]` or `["text", "image"]`).
+A valid declaration takes precedence over built-in modality inference: explicit
+text-only models never gain image support from their names. Malformed declarations
+are treated as text-only. When `input` is absent, OpenClaw retains its existing
+family inference and recognizes exact known native OpenAI image-capable models;
+unknown model names do not inherit image support from a new GPT generation prefix.
 
 Adding a model to a supported ClawRouter provider needs no OpenClaw release.
 Successful catalog responses, including an empty granted-model list, are reused
@@ -216,8 +270,8 @@ grants and budgets when a model request is dispatched.
 A model's optional `displayName` is its picker label; without it, OpenClaw uses
 the provider display name and catalog `id`, omitting a repeated `<provider>/`
 prefix from the label (for example, `Anthropic · claude-sonnet-4-6`). The label never changes model
-identity. Responses and Chat Completions send the catalog `id` unchanged;
-only native Anthropic and Gemini routes use `upstream` at dispatch. A facade
+identity. For conversational requests, Responses and Chat Completions send the
+catalog `id` unchanged; native Anthropic and Gemini routes use `upstream` at dispatch. A facade
 that exposes an alias must return only safe catalog metadata, including that
 alias in the required `upstream` field, and keep its private target mapping
 inside the facade.
@@ -309,12 +363,12 @@ prevent model calls or the existing `/v1/usage` snapshot.
 
 ## Security behavior
 
-- Catalog discovery is scoped to the configured ClawRouter key. HTTP responses are cached by endpoint and resolved credential; changing either does not reuse the previous response. Prepared inventory and dynamic model lookup retain their own agent, workspace, and auth scopes.
+- Catalog discovery is scoped to the configured ClawRouter key. Conversational inventory responses are cached by endpoint and resolved credential; changing either does not reuse the previous response. Prepared inventory and dynamic model lookup retain their own agent, workspace, and auth scopes. Decisions check the selected key’s catalog on every call.
 - The ClawRouter key is attached only at request dispatch; it is not stored in model metadata.
 - Automatic attribution and request-correlation values are trimmed and control-character rejected before dispatch. Attribution values are bounded to 256 characters; request ids are bounded to 128.
 - Model transport diagnostics contain metadata only and never include the ClawRouter key or model content.
 - Native Anthropic and Gemini model ids are rewritten to their upstream ids only at dispatch.
-- Unsupported or ungranted catalog rows are not selectable.
+- Unsupported or ungranted catalog rows are not advertised for chat. Static decision support never grants a key permission to execute.
 
 ## Related
 

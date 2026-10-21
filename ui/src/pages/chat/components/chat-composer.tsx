@@ -19,13 +19,14 @@ import {
 import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerPrediction } from "./chat-composer-prediction.ts";
 import { createComposerQuestionPanel } from "./chat-composer-question.tsx";
+import type { ComposerQuestions } from "./chat-composer-questions.ts";
 import { composerDraftKey, getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.tsx";
 
 export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
 
-export function ChatComposer(props: ChatComposerProps) {
+export function ChatComposer(props: ChatComposerProps & { questions: ComposerQuestions }) {
   // A pane owns this component's lifetime; a different pane mounts a different composer.
   const initialPaneId = untrack(() => props.paneId);
   const state = getChatComposerState(initialPaneId);
@@ -108,7 +109,12 @@ export function ChatComposer(props: ChatComposerProps) {
     };
   };
   const prediction = createComposerPrediction(readPredictionSource);
-  const questionPanel = createComposerQuestionPanel(() => currentProps, state, composition);
+  const questionPanel = createComposerQuestionPanel(
+    () => props.questions,
+    composition,
+    () => props.getTranscriptElement,
+  );
+  const streaming = createMemo(() => currentProps.stream !== null);
   const context = createMemo(() => {
     draftState();
     dictation.read();
@@ -120,6 +126,7 @@ export function ChatComposer(props: ChatComposerProps) {
       voice,
       prediction,
       questionPanel(),
+      streaming(),
     );
   });
   createEffect(
@@ -141,8 +148,38 @@ export function ChatComposer(props: ChatComposerProps) {
       prediction.sync(predictions);
     },
   );
+  onSettled(() => {
+    const register = currentProps.registerHumanMentionAccess;
+    if (!register) {
+      return undefined;
+    }
+    let active = true;
+    const access = state.mentionMenu.externalAccess(() => {
+      if (!active) {
+        return undefined;
+      }
+      const current = context();
+      return {
+        directory: current.mentionDirectory,
+        host:
+          current.mentionDirectory &&
+          current.showComposer &&
+          !state.composerComposing &&
+          !state.dictation?.locksComposer &&
+          state.composerTextarea?.isConnected
+            ? current.mentionMenuHost
+            : undefined,
+      };
+    });
+    const release = register(access);
+    return () => {
+      active = false;
+      release();
+    };
+  });
   onSettled(() =>
     listen(document, "visibilitychange", () => prediction.sync(readPredictionSource())),
   );
+
   return renderChatComposerView(context, currentProps, state);
 }

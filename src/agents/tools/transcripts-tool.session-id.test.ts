@@ -31,7 +31,7 @@ function createHarness() {
     importTranscript: async () => [{ text: note }],
   };
   registerTranscriptTestProvider(provider);
-  const tool = createTranscriptsTool({ stateDir, caller: { kind: "operator", source: "local" } });
+  const tool = createTranscriptsTool({ caller: { kind: "operator", source: "local" } });
   return {
     databaseOptions,
     store,

@@ -2,34 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { RuntimeId } from "./runtime-id.js";
-import {
-  runRuntimeParityScenario,
-  type RuntimeParityCell,
-  type RuntimeParityResult,
-  type RuntimeParityScenarioExecution,
-} from "./runtime-parity.js";
+import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import { extractQaContentText } from "./runtime-transcript.js";
-
-export type JsonlReplayInput = {
-  directory: string;
-  runtimePair: ["openclaw", "codex"];
-  providerMode: "mock-openai" | "live-frontier";
-};
-
-type JsonlReplayTurn = {
-  turn: number;
-  lineNumber: number;
-  userText: string;
-  transcriptPrefix: string;
-};
-
-type JsonlReplayCellRunner = (params: {
-  runtime: RuntimeId;
-  transcriptPath: string;
-  turn: JsonlReplayTurn;
-  turns: readonly JsonlReplayTurn[];
-  providerMode: JsonlReplayInput["providerMode"];
-}) => Promise<RuntimeParityScenarioExecution>;
 
 type JsonlReplayResult = {
   transcripts: Array<{
@@ -41,14 +15,10 @@ type JsonlReplayResult = {
   }>;
 };
 
-type JsonlReplayOptions = {
-  runCell?: JsonlReplayCellRunner;
-};
-
 type JsonlReplayMarkdownReport = {
   generatedAt: string;
-  providerMode: JsonlReplayInput["providerMode"];
-  runtimePair: JsonlReplayInput["runtimePair"];
+  providerMode: "mock-openai" | "live-frontier";
+  runtimePair: ["openclaw", "codex"];
   transcripts: JsonlReplayResult["transcripts"];
 };
 
@@ -61,10 +31,10 @@ function extractTextContent(content: unknown): string {
   });
 }
 
-function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[] {
-  const turns: JsonlReplayTurn[] = [];
+function extractJsonlReplayUserTurns(transcriptBytes: string): string[] {
+  const turns: string[] = [];
   const acceptedLines: string[] = [];
-  for (const [lineIndex, rawLine] of transcriptBytes.split(/\r?\n/u).entries()) {
+  for (const rawLine of transcriptBytes.split(/\r?\n/u)) {
     const trimmed = rawLine.trim();
     if (!trimmed) {
       continue;
@@ -87,12 +57,7 @@ function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[]
     if (!userText) {
       continue;
     }
-    turns.push({
-      turn: turns.length + 1,
-      lineNumber: lineIndex + 1,
-      userText,
-      transcriptPrefix: `${acceptedLines.join("\n")}\n`,
-    });
+    turns.push(`${acceptedLines.join("\n")}\n`);
   }
   return turns;
 }
@@ -113,45 +78,26 @@ async function listJsonlFiles(directory: string): Promise<string[]> {
   return files;
 }
 
-function defaultRunCell(): Promise<RuntimeParityScenarioExecution> {
-  throw new Error(
-    "jsonl replay requires a runtime cell runner; CLI/suite wiring should provide the Phase 1 runtime parity runner",
-  );
-}
-
-function assertSupportedRuntimePair(runtimePair: JsonlReplayInput["runtimePair"]) {
-  if (runtimePair[0] !== "openclaw" || runtimePair[1] !== "codex") {
-    throw new Error(`unsupported jsonl replay runtime pair: ${runtimePair.join(",")}`);
-  }
-}
-
-export function createMockJsonlReplayCellRunner(): JsonlReplayCellRunner {
-  return async ({ runtime, turn }) => ({
+function createMockJsonlReplayCell(
+  runtime: RuntimeId,
+  transcriptBytes: string,
+  turn: number,
+): RuntimeParityResult["cells"]["openclaw"] {
+  const inputTokens = Math.max(1, Math.ceil(transcriptBytes.length / 4));
+  return {
+    runtime,
+    transcriptBytes,
+    toolCalls: [],
+    finalText: `Replayed curated turn ${turn}.`,
+    usage: { inputTokens, outputTokens: 8, totalTokens: inputTokens + 8 },
+    wallClockMs: 1,
+    bootStateLines: [],
     status: "pass",
-    cell: {
-      runtime,
-      transcriptBytes: turn.transcriptPrefix,
-      toolCalls: [],
-      finalText: `Replayed curated turn ${turn.turn}.`,
-      usage: {
-        inputTokens: Math.max(1, Math.ceil(turn.transcriptPrefix.length / 4)),
-        outputTokens: 8,
-        totalTokens: Math.max(1, Math.ceil(turn.transcriptPrefix.length / 4)) + 8,
-      },
-      wallClockMs: 1,
-      bootStateLines: [],
-    },
-  });
+  };
 }
 
-export async function runJsonlReplay(
-  input: JsonlReplayInput,
-  options: JsonlReplayOptions = {},
-): Promise<JsonlReplayResult> {
-  assertSupportedRuntimePair(input.runtimePair);
-  const directory = path.resolve(input.directory);
-  const transcriptPaths = await listJsonlFiles(directory);
-  const runCell = options.runCell ?? defaultRunCell;
+export async function runJsonlReplay(directory: string): Promise<JsonlReplayResult> {
+  const transcriptPaths = await listJsonlFiles(path.resolve(directory));
   const transcripts: JsonlReplayResult["transcripts"] = [];
 
   for (const transcriptPath of transcriptPaths) {
@@ -162,26 +108,10 @@ export async function runJsonlReplay(
       codex: [],
     };
     const drift: Array<RuntimeParityResult["drift"]> = [];
-    let firstDriftAtTurn: number | undefined;
-
-    for (const turn of turns) {
-      const parity = await runRuntimeParityScenario({
-        scenarioId: `${path.basename(transcriptPath)}#turn-${turn.turn}`,
-        runCell: async (runtime) =>
-          runCell({
-            runtime,
-            transcriptPath,
-            turn,
-            turns,
-            providerMode: input.providerMode,
-          }),
-      });
-      cells.openclaw.push(parity.cells.openclaw);
-      cells.codex.push(parity.cells.codex);
-      drift.push(parity.drift);
-      if (firstDriftAtTurn === undefined && parity.drift !== "none") {
-        firstDriftAtTurn = turn.turn;
-      }
+    for (const [index, transcriptPrefix] of turns.entries()) {
+      cells.openclaw.push(createMockJsonlReplayCell("openclaw", transcriptPrefix, index + 1));
+      cells.codex.push(createMockJsonlReplayCell("codex", transcriptPrefix, index + 1));
+      drift.push("none");
     }
 
     transcripts.push({
@@ -189,7 +119,6 @@ export async function runJsonlReplay(
       userTurnCount: turns.length,
       cells,
       drift,
-      ...(firstDriftAtTurn !== undefined ? { firstDriftAtTurn } : {}),
     });
   }
 

@@ -152,7 +152,7 @@ export function buildOpenAIResponsesParams(
     input: messages,
     stream: true,
     prompt_cache_key: promptCacheKey,
-    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
+    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat, options?.promptCacheTtl),
     ...(instructions ? { instructions } : {}),
     ...(metadata ? { metadata } : {}),
   };

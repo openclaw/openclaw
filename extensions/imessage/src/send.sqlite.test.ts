@@ -45,8 +45,6 @@ describe("iMessage send SQLite receipt recovery", () => {
   });
 
   afterEach(async () => {
-    const { clearIMessageApprovalReactionTargetsForTest } = await import("./approval-reactions.js");
-    clearIMessageApprovalReactionTargetsForTest();
     vi.restoreAllMocks();
     vi.useRealTimers();
     await state.cleanup();

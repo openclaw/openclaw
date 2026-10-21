@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createComponent, createSignal } from "solid-js";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ControlUiHost,
   ControlUiReplacement,
@@ -12,13 +12,14 @@ import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 import {
   installTranscriptDomMocks,
@@ -27,13 +28,30 @@ import {
 import "../../plugins/control-ui-view.solid.tsx";
 import "../../plugins/control-ui-contributions.solid.tsx";
 
+const fontsDescriptor = Object.getOwnPropertyDescriptor(document, "fonts");
+beforeEach(() => {
+  Object.defineProperty(document, "fonts", {
+    configurable: true,
+    value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
+  });
+});
+
 afterEach(async () => {
+  cleanupSolid();
   resetChatViewState();
   resetTranscriptTestDom();
   await resetComposerFixture();
+  if (fontsDescriptor) {
+    Object.defineProperty(document, "fonts", fontsDescriptor);
+  } else {
+    Reflect.deleteProperty(document, "fonts");
+  }
 });
 
-function createPluginChat(replacement: ControlUiReplacement<"composer">, initiallySelected = true) {
+function createPluginChat(
+  replacement?: ControlUiReplacement<"composer">,
+  initiallySelected = true,
+) {
   installTranscriptDomMocks();
   const lifetime = new AbortController();
   const pluginHost = {
@@ -45,7 +63,7 @@ function createPluginChat(replacement: ControlUiReplacement<"composer">, initial
     components: {},
   } as unknown as ControlUiHost;
   const reportError = vi.fn();
-  const registration = {
+  const registration = replacement && {
     key: `questions/${replacement.id}`,
     pluginId: "questions",
     signal: lifetime.signal,
@@ -69,18 +87,38 @@ function createPluginChat(replacement: ControlUiReplacement<"composer">, initial
     },
   } as unknown as ApplicationContext;
   const provider = document.body.appendChild(createApplicationContextProvider(context));
+  let current: ChatProps;
+  let update: ((next: ChatProps) => void) | undefined;
   function render(overrides: Partial<ChatProps>) {
     const props = createChatProps({ sessionKey: "agent:main:main", ...overrides });
-    const view = mountSolid(() => createComponent(ChatView, { props }), {
-      container: provider,
-      wrapper: createSolidApplicationContextProvider(context).wrapper,
-    });
-    onTestFinished(() => {
-      view.unmount();
-      props.transcript.dispose();
-      lifetime.abort();
-      provider.remove();
-    });
+    current = props;
+    if (update) {
+      update(props);
+    } else {
+      const view = mountSolid(
+        () => {
+          const [value, setValue] = createSignal(props);
+          const questions = createComposerQuestions(props.paneId, value);
+          update = (next) => setValue(() => next);
+          return createComponent(ChatView, {
+            get props() {
+              return value();
+            },
+            questions,
+          });
+        },
+        {
+          container: provider,
+          wrapper: createSolidApplicationContextProvider(context).wrapper,
+        },
+      );
+      onTestFinished(() => {
+        view.unmount();
+        current.transcript.dispose();
+        lifetime.abort();
+        provider.remove();
+      });
+    }
     flush();
     props.transcript.start();
     props.transcript.update();
@@ -217,3 +255,51 @@ it("keeps one actionable local queue row with a nondelegating plugin composer", 
   row?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
   expect(onQueueRemove).toHaveBeenCalledExactlyOnceWith("local-row");
 });
+
+it.each(["native", "delegated"] as const)(
+  "keeps mobile conversation presentation live through the %s composer",
+  async (mode) => {
+    const { provider, render } = createPluginChat(
+      mode === "delegated"
+        ? {
+            id: "mobile-presentation",
+            label: "Mobile presentation",
+            surface: "composer",
+            mount: (container, view) => ({ dispose: view.mountDefault(container) }),
+          }
+        : undefined,
+    );
+    const onRefresh = vi.fn();
+    const initial = createChatProps({
+      paneId: `mobile-presentation-${mode}`,
+      mobileComposer: true,
+      loading: true,
+      draft: "Retain this draft",
+      runError: { summary: "Request interrupted.\nPlease check the conversation." },
+      onRefresh,
+    });
+    render(initial);
+    await waitForSolid(() => {
+      expect(provider.querySelector(".chat-conversation-loading")).not.toBeNull();
+      expect(provider.querySelector(".chat-error--mobile")?.textContent).toContain(
+        "Couldn’t finish this reply",
+      );
+    });
+    const textarea = provider.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.setSelectionRange(2, 5);
+    provider.querySelector<HTMLButtonElement>(".chat-error__refresh")!.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    render({ ...initial, mobileComposer: false });
+    await waitForSolid(() => {
+      expect(provider.querySelector(".chat-conversation-loading")).toBeNull();
+      expect(provider.querySelector(".chat-error--mobile")).toBeNull();
+      expect(provider.querySelector(".chat-error")?.textContent).toContain(
+        "Couldn't finish this reply. Check the conversation before trying again.",
+      );
+    });
+    expect(provider.querySelector("textarea")).toBe(textarea);
+    expect(textarea.value).toBe("Retain this draft");
+    expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([2, 5]);
+  },
+);

@@ -177,7 +177,7 @@ it("coalesces live completions and cancels in-flight work for the terminal diges
     const terminalPublished = createDeferred();
     harness.broadcastToConnIds.mockImplementationOnce(() => terminalPublished.resolve());
     await emitEvent(harness, "lifecycle", { phase: "end", endedAt: 30_000 });
-    expect(harness.completeModel.mock.calls[1]?.[0]?.abortSignal.aborted).toBe(true);
+    expect(harness.completeModel.mock.calls[1]?.[0]?.abortSignal?.aborted).toBe(true);
     await flushObserver();
     expect(completeModel).toHaveBeenCalledTimes(2);
     second.resolve(modelMessage({ headline: "Canceled live result", health: "on-track" }));

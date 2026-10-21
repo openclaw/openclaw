@@ -1,6 +1,7 @@
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { generateSecureHex } from "../infra/secure-random.js";
 import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
@@ -10,8 +11,12 @@ import {
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { getBeforeToolCallDiagnosticOptions } from "./before-tool-call-metadata.js";
+import {
+  getBeforeToolCallDiagnosticOptions,
+  getBeforeToolCallHookContext,
+} from "./before-tool-call-metadata.js";
 import { disposeCodeModeResults } from "./code-mode-results.js";
+import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
@@ -230,14 +235,24 @@ export function registerHeadlessToolSearchCatalog(params: {
   tools: readonly AnyAgentTool[];
   hookContext?: HookContext;
 }): void {
-  const { catalogRef, tools, hookContext } = params;
-  const entries = tools.filter(shouldCatalogTool).map((tool) => {
-    const scopedTool =
-      hookContext && isToolWrappedWithBeforeToolCallHook(tool)
-        ? rewrapToolWithBeforeToolCallHook(tool, hookContext)
+  const { catalogRef, tools } = params;
+  const config = params.hookContext?.config ?? getRuntimeConfigSnapshot() ?? undefined;
+  const hookContext = params.hookContext
+    ? { ...params.hookContext, config }
+    : config?.tools?.gatewayPolicy
+      ? { config }
+      : undefined;
+  const entries = applyGatewayToolPolicy([...tools], config)
+    .filter(shouldCatalogTool)
+    .map((tool) => {
+      const scopedTool = hookContext
+        ? rewrapToolWithBeforeToolCallHook(tool, {
+            ...getBeforeToolCallHookContext(tool),
+            ...hookContext,
+          })
         : tool;
-    return toCatalogEntry(scopedTool, undefined, hookContext);
-  });
+      return toCatalogEntry(scopedTool);
+    });
   registerToolSearchCatalog({ catalogRef, entries });
 }
 
@@ -478,14 +493,30 @@ export function createToolSearchCatalogRef(): ToolSearchCatalogRef {
 export function applyToolCatalogCompaction(
   params: ToolSearchCatalogCompactionParams,
 ): ToolSearchCatalogApplyResult {
-  const hasControlTool =
-    params.enabled && params.tools.some((tool) => params.isVisibleControlTool(tool));
+  const config =
+    params.toolHookContext?.config ?? params.config ?? getRuntimeConfigSnapshot() ?? undefined;
+  const hasGatewayPolicy = Boolean(config?.tools?.gatewayPolicy);
+  const toolHookContext = params.toolHookContext
+    ? { ...params.toolHookContext, config }
+    : hasGatewayPolicy
+      ? { config }
+      : undefined;
+  const tools = applyGatewayToolPolicy(params.tools, config).map((tool) => {
+    if (!hasGatewayPolicy || !toolHookContext) {
+      return tool;
+    }
+    return rewrapToolWithBeforeToolCallHook(tool, {
+      ...getBeforeToolCallHookContext(tool),
+      ...toolHookContext,
+    });
+  });
+  const hasControlTool = params.enabled && tools.some((tool) => params.isVisibleControlTool(tool));
   const catalogRef = params.catalogRef;
   if (!hasControlTool || !catalogRef) {
     return {
       tools: params.enabled
-        ? params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name))
-        : params.tools,
+        ? tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name))
+        : tools,
       compacted: false,
       catalogToolCount: 0,
       catalogRegistered: false,
@@ -495,11 +526,11 @@ export function applyToolCatalogCompaction(
 
   const visible: AnyAgentTool[] = [];
   const catalog: ToolSearchCatalogEntry[] = [];
-  for (const tool of params.tools) {
+  for (const tool of tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(
-        params.toolHookContext && !isToolWrappedWithBeforeToolCallHook(tool)
-          ? wrapToolWithBeforeToolCallHook(tool, params.toolHookContext)
+        toolHookContext && !isToolWrappedWithBeforeToolCallHook(tool)
+          ? wrapToolWithBeforeToolCallHook(tool, toolHookContext)
           : tool,
       );
       continue;
@@ -509,7 +540,7 @@ export function applyToolCatalogCompaction(
     }
     if (shouldCatalogTool(tool) && (params.shouldCatalogTool?.(tool) ?? true)) {
       const directVisible = params.isVisibleCatalogTool?.(tool) === true;
-      catalog.push({ ...toCatalogEntry(tool, undefined, params.toolHookContext), directVisible });
+      catalog.push({ ...toCatalogEntry(tool, undefined, toolHookContext), directVisible });
       if (!directVisible) {
         continue;
       }

@@ -8,8 +8,9 @@ import {
   listRegisteredEmbeddingProviders,
   restoreRegisteredEmbeddingProviders,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createEmbeddingProvider } from "./embeddings.js";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmbeddingProvider, resolveEmbeddingProviderIndexIdentity } from "./embeddings.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
@@ -41,6 +42,7 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 
 async function startEmbeddingServer(options?: {
   reject?: (inputCount: number) => { status: number; body: string } | undefined;
+  authorization?: string;
 }): Promise<TestServer> {
   const requests: CapturedRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -53,6 +55,11 @@ async function startEmbeddingServer(options?: {
           headers: req.headers,
           body,
         });
+        if (options?.authorization && req.headers.authorization !== options.authorization) {
+          res.writeHead(401, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Invalid fixture credential" } }));
+          return;
+        }
         const input = body.input;
         const texts = Array.isArray(input) ? input : [input];
         const rejection = options?.reject?.(texts.length);
@@ -139,6 +146,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   const pendingServers = servers.splice(0);
   await Promise.all(pendingServers.map((server) => server.close()));
   restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
@@ -268,11 +276,15 @@ function createMemoryEmbeddingOwner(generation: MemorySemanticProviderGeneration
 async function createMemoryEmbeddingOwnerForServer(
   baseUrl: string,
   database: DatabaseSync,
-  outputDimensionality?: number,
+  overrides?: {
+    provider?: string;
+    model?: string;
+    config?: OpenClawConfig;
+    outputDimensionality?: number;
+  },
 ) {
-  const created = await createEmbeddingProvider(
-    createMemoryEmbeddingOptions({ baseUrl, outputDimensionality }),
-  );
+  const options = { ...createMemoryEmbeddingOptions({ baseUrl, ...overrides }), ...overrides };
+  const created = await createEmbeddingProvider(options);
   const provider = created.provider;
   if (!provider) {
     throw new Error("expected the OpenAI-compatible embedding provider to be created");
@@ -290,6 +302,7 @@ async function createMemoryEmbeddingOwnerForServer(
   return {
     owner: createMemoryEmbeddingOwner(generation),
     generation,
+    options,
   };
 }
 
@@ -320,6 +333,146 @@ function distinctCandidates(
 }
 
 describe("memory-core embedding batch recovery over real transport", () => {
+  it.each([
+    { model: "bge-large-zh", limit: 16, requests: [16, 16, 1] },
+    {
+      model: "qianfan/bge-large-en",
+      resolvedModel: "bge-large-en",
+      limit: 16,
+      requests: [16, 16, 1],
+    },
+    { model: "Embedding-V1", limit: 16, requests: [16, 16, 1] },
+    { model: "custom-embedding-model", limit: 33, requests: [33] },
+  ])(
+    "indexes 33 inputs using Qianfan's documented cap for $model",
+    async ({ model, resolvedModel, limit, requests }) => {
+      const server = await startEmbeddingServer({
+        reject: (count) =>
+          count > limit
+            ? {
+                status: 400,
+                body: JSON.stringify({
+                  error: {
+                    code: "InvalidParameter",
+                    message:
+                      "The parameter inputspecified in the request are not valid: ... Request id: ...",
+                    param: "input",
+                    type: "BadRequest",
+                  },
+                }),
+              }
+            : undefined,
+      });
+      const database = new DatabaseSync(":memory:");
+      try {
+        const { owner, generation, options } = await createMemoryEmbeddingOwnerForServer(
+          server.baseUrl,
+          database,
+          {
+            provider: "qianfan",
+            model,
+            config: {
+              plugins: { allow: ["qianfan"], entries: { qianfan: { enabled: true } } },
+              models: {
+                providers: {
+                  qianfan: { api: "openai-completions", baseUrl: server.baseUrl, models: [] },
+                },
+              },
+            },
+          },
+        );
+        const embeddings = await owner.embedChunksInBatches(
+          distinctCandidates(33),
+          generation,
+          8000,
+        );
+        expect(generation.provider.id).toBe("qianfan");
+        expect(generation.runtime?.id).toBe("qianfan");
+        expect(resolveEmbeddingProviderIndexIdentity(options)?.provider).toEqual({
+          id: "qianfan",
+          model: resolvedModel ?? model,
+        });
+
+        expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual(
+          requests,
+        );
+        expect(embeddings).toEqual(
+          Array.from({ length: 33 }, (_, index) => [index + 1, (index % limit) + 0.5, 3]),
+        );
+      } finally {
+        database.close();
+      }
+    },
+  );
+
+  it.each([
+    { name: "environment", envKey: "fixture-env-key", expected: "fixture-env-key" },
+    { name: "saved profile", expected: "fixture-profile-key" },
+    { name: "remote API key", apiKey: "fixture-remote-key", expected: "fixture-remote-key" },
+    { name: "remote header", header: "Bearer fixture-header-key", expected: "fixture-header-key" },
+  ])("uses Qianfan $name credentials over HTTP", async ({ envKey, apiKey, header, expected }) => {
+    await withOpenClawTestState({ label: "qianfan-embedding-auth" }, async (state) => {
+      vi.stubEnv("QIANFAN_API_KEY", envKey);
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: envKey
+          ? {}
+          : {
+              "qianfan:default": {
+                type: "api_key",
+                provider: "qianfan",
+                key: "fixture-profile-key",
+              },
+            },
+      });
+      const server = await startEmbeddingServer({ authorization: `Bearer ${expected}` });
+      const result = await createEmbeddingProvider({
+        config: {
+          plugins: { allow: ["qianfan"], entries: { qianfan: { enabled: true } } },
+          models: {
+            providers: {
+              qianfan: { api: "openai-completions", baseUrl: server.baseUrl, models: [] },
+            },
+          },
+        },
+        agentDir: state.agentDir(),
+        provider: "qianfan",
+        fallback: "none",
+        model: "bge-large-zh",
+        remote: { apiKey, headers: header ? { Authorization: header } : undefined },
+      });
+      await expect(result.provider?.embed("hello")).resolves.toEqual([5, 0.5, 3]);
+      expect(server.requests).toHaveLength(1);
+      expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${expected}`);
+    });
+  });
+
+  it("does not send Qianfan credentials to a different remote destination", async () => {
+    await withOpenClawTestState({ label: "qianfan-embedding-destination" }, async (state) => {
+      vi.stubEnv("QIANFAN_API_KEY", "fixture-env-key");
+      const providerServer = await startEmbeddingServer();
+      const remoteServer = await startEmbeddingServer();
+      await expect(
+        createEmbeddingProvider({
+          config: {
+            plugins: { allow: ["qianfan"], entries: { qianfan: { enabled: true } } },
+            models: {
+              providers: {
+                qianfan: { api: "openai-completions", baseUrl: providerServer.baseUrl, models: [] },
+              },
+            },
+          },
+          agentDir: state.agentDir(),
+          provider: "qianfan",
+          fallback: "none",
+          model: "bge-large-zh",
+          remote: { baseUrl: remoteServer.baseUrl },
+        }),
+      ).rejects.toThrow("embedding credentials are not configured");
+      expect(remoteServer.requests).toEqual([]);
+    });
+  });
+
   it.each([
     {
       message: "input array max 10",
@@ -435,7 +588,7 @@ describe("memory-core embedding batch recovery over real transport", () => {
       const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
         server.baseUrl,
         database,
-        2,
+        { outputDimensionality: 2 },
       );
       await expect(
         owner.embedChunksInBatches(distinctCandidates(4), generation, 8000),

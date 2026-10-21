@@ -11,7 +11,7 @@ import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CLAUDE_AUTO_MEMORY_MAX_FILES,
   CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES,
-  readMemoryDir,
+  listMarkdownFiles,
   type ClaudeSource,
 } from "./source.js";
 
@@ -42,45 +42,6 @@ async function addInstructionItem(params: {
       details: { sourceLabel: params.sourceLabel },
     }),
   );
-}
-
-type MarkdownFileScan = {
-  files: string[];
-  truncatedBy?: "files" | "entries";
-};
-
-async function listMarkdownFiles(root: string, maxFiles: number): Promise<MarkdownFileScan> {
-  const files: string[] = [];
-  const pending = [""];
-  let visited = 0;
-  let truncatedBy: MarkdownFileScan["truncatedBy"];
-  scan: while (pending.length > 0) {
-    const relativeDir = pending.pop();
-    if (relativeDir === undefined) {
-      break;
-    }
-    for (const entry of await readMemoryDir(path.join(root, relativeDir))) {
-      visited += 1;
-      if (visited > CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES) {
-        truncatedBy = "entries";
-        break scan;
-      }
-      const relativePath = path.join(relativeDir, entry.name);
-      if (entry.isDirectory()) {
-        pending.push(relativePath);
-      } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
-        files.push(relativePath);
-        if (files.length > maxFiles) {
-          truncatedBy = "files";
-          break scan;
-        }
-      }
-    }
-  }
-  return {
-    files: files.toSorted((left, right) => left.localeCompare(right)),
-    ...(truncatedBy ? { truncatedBy } : {}),
-  };
 }
 
 function collectionSlug(label: string, id: string): string {

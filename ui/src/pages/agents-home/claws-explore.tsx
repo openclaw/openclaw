@@ -6,6 +6,7 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { ClawArtwork } from "./claw-artwork.tsx";
 import { searchClaws, type ClawCatalogEntry } from "./claws-catalog-client.ts";
 import "../../styles/agents-home.css";
 
@@ -44,7 +45,7 @@ function ClawCard(props: {
       />
       <div class="agents-home__claw-head">
         <span class="agents-home__claw-art" aria-hidden="true">
-          <Icon name="box" />
+          <ClawArtwork src={props.entry.iconUrl} />
         </span>
         <div class="agents-home__claw-identity">
           <h3>{props.entry.displayName}</h3>

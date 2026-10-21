@@ -75,10 +75,14 @@ close and seal reuse do not advance that timestamp. On Linux, where Node can
 substitute change time for unavailable birthtime, the existing physical-file
 identity policy uses a stable unknown birthtime value.
 
-Schema identity covers the loaded SQLite version, source ID and compile options,
+Seal identity records the loaded SQLite version, source ID and compile options,
 the Node/Bun runtime versions, the database family's schema version and canonical
-SQL definitions, and the admission policy revision. Unknown SQLite identity disables
-seal reuse. Admitted facts identify agent
+SQL definitions, and the admission policy revision. Reuse compares the schema,
+policy, and compile features. Only `COMPILER=...` is excluded from compile options:
+it identifies the compiler, not a SQLite feature. Runtime versions and SQLite
+version/source IDs do not invalidate otherwise compatible proof. The existing
+native library safety and capability admission still runs. Unknown SQLite identity
+disables seal reuse. Admitted facts identify agent
 and shared-state databases, including databases at custom paths. A shared-state
 schema change does not invalidate an unchanged agent database's seal, or vice versa.
 Unclassified or mixed admission facts conservatively depend on both schemas.
@@ -106,8 +110,10 @@ same-version installer is represented in admission facts. A complete prior-build
 catalog retains seal reuse without validation SQL; adding requirements alone does
 not invalidate seals whose catalogs already satisfy them.
 
-Updating from an older application-version-bound seal requires one full validation;
-subsequent compatible builds reuse the new seal. Managed drain followed by an
+Legacy seals containing only a combined identity hash remain reusable when that
+hash matches the current runtime/library tuple. A mismatch requires one full
+validation. The next clean close writes decomposed identity components, so later
+runtime/library-only updates reuse the original full-verification timestamp. Managed drain followed by an
 interrupt uses ordinary close and can publish a seal once its writers settle.
 Forced termination before successful close cannot certify the database.
 
@@ -117,10 +123,9 @@ handles still hold leases even when no agent work is running. The final handle m
 release its lease after checkpoint and native close before certifying the seal.
 At the next full integrity gate, `no-proof` means no seal was found. Rejected seals
 report `malformed-proof`, `expired-proof`, `file-mismatch`, or `journal-present`;
-identity changes report `runtime-mismatch`, `sqlite-mismatch`, `schema-mismatch`,
-or `policy-mismatch`. Older seals lack component diagnostics and report
-`identity-mismatch` when their combined identity differs. Matching older seals
-remain reusable; the added diagnostic metadata does not change admission policy.
+incompatible identities report `feature-mismatch`, `schema-mismatch`, or
+`policy-mismatch`. A simultaneous runtime change cannot mask those mismatches.
+Legacy seals report `identity-mismatch` when their combined identity differs.
 
 Worker admission checks current authority after lease cleanup and before opening
 the native agent database. A refusal at that boundary releases its unopened lease
@@ -157,7 +162,8 @@ state and that seal is still correct.
 This optimization deliberately cannot detect silent corruption that preserves
 all compared metadata. SQLite may detect it during normal use; otherwise the
 next full verification catches it. The seven-day admission interval bounds
-reuse of old full-verification evidence. The checksum protects the small seal
+reuse of old full-verification evidence; a runtime or SQLite patch update does not
+add an early scan. The checksum protects the small seal
 against incomplete writes; it is not a hash of the database contents.
 
 Doctor migrations and repairs use the integrity policy below regardless of any

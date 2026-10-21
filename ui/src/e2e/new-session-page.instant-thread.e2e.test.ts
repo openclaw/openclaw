@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   ONE_PIXEL_PNG_B64,
@@ -83,16 +84,23 @@ suite.define(() => {
           expect(await page.locator(".chat-queue__text").allTextContents()).toEqual(followers);
           expect(await page.locator(".chat-pane__incognito").count()).toBe(incognito ? 1 : 0);
           if (!incognito) {
-            await page.locator(".chat-pane__nav-toggle").click();
+            await navigationDrawerToggle(page).click();
             // The sliding drawer can hover a tooltip under the stationary pointer.
             await page.mouse.move(0, 0);
             await expect
-              .poll(() => page.locator(".chat-pane__nav-toggle").getAttribute("aria-expanded"))
+              .poll(() => navigationDrawerToggle(page).getAttribute("aria-expanded"))
               .toBe("true");
             await page.keyboard.press("Escape");
             await expect
-              .poll(() => page.locator(".chat-pane__nav-toggle").getAttribute("aria-expanded"))
+              .poll(() => navigationDrawerToggle(page).getAttribute("aria-expanded"))
               .toBe("false");
+            // Resume writing through the native editor after using the drawer.
+            await followUpComposer.click();
+            await page
+              .locator(
+                '.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="true"]',
+              )
+              .waitFor();
           }
           expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -118,11 +126,14 @@ suite.define(() => {
           expect(savedSettings.join("\n")).not.toContain(String(params.key));
 
           await captureUiProof(suite, page, `instant-${incognito}-pending.png`);
-          await waitForControlUiProofSurface(page.locator(".chat-pane__header"), [
-            followUpComposer,
+          const header = page
+            .locator(".chat-pane__header, .agent-chat__header--mobile")
+            .filter({ visible: true });
+          await waitForControlUiProofSurface(followUpComposer, [
+            header,
             page.locator(".chat-group.user .chat-bubble"),
           ]);
-          const pendingHeader = await page.locator(".chat-pane__header").boundingBox();
+          const pendingHeader = await header.boundingBox();
           const pendingComposer = await page.locator(".agent-chat__composer-shell").boundingBox();
           const pendingBubble = await page.locator(".chat-group.user .chat-bubble").boundingBox();
           const confirmedKey = canonicalReplacement
@@ -163,20 +174,31 @@ suite.define(() => {
             .poll(() => page.locator(".chat-queue__text").allTextContents())
             .toEqual(followers);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          expect(
+            await followUpComposer.evaluate((element) => element === document.activeElement),
+          ).toBe(true);
           await captureUiProof(suite, page, `instant-${incognito}-committed.png`);
-          await waitForControlUiProofSurface(page.locator(".chat-pane__header"), [
-            followUpComposer,
+          await waitForControlUiProofSurface(followUpComposer, [
+            header,
             page.locator(".chat-group.user .chat-bubble"),
           ]);
           for (const selector of [".chat-pane__incognito", ".chat-pane__incognito-notice"]) {
             expect(await page.locator(selector).isVisible()).toBe(incognito);
           }
-          for (const [selector, pending] of [
-            [".chat-pane__header", pendingHeader],
-            [".agent-chat__composer-shell", pendingComposer],
-            [".chat-group.user .chat-bubble", pendingBubble],
+          for (const [selector, target, pending] of [
+            ["header", header, pendingHeader],
+            [
+              ".agent-chat__composer-shell",
+              page.locator(".agent-chat__composer-shell"),
+              pendingComposer,
+            ],
+            [
+              ".chat-group.user .chat-bubble",
+              page.locator(".chat-group.user .chat-bubble"),
+              pendingBubble,
+            ],
           ] as const) {
-            const committed = await page.locator(selector).boundingBox();
+            const committed = await target.boundingBox();
             expect(pending).not.toBeNull();
             expect(committed).not.toBeNull();
             expect(committed!.y, selector).toBeCloseTo(pending!.y, 0);

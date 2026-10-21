@@ -1437,7 +1437,7 @@
     rgb(0 0 0 / 12%) calc(100% - 12px), transparent calc(100% - 4px);
 
   display: flex;
-  gap: calc(var(--chat-composer-editor-inset-block) * 3);
+  gap: calc(var(--chat-attachment-inset-block) * 3);
   flex-wrap: nowrap;
   flex-shrink: 0;
   /* Keep horizontal clipping inside the composer. Reserve remove-target and
@@ -1445,8 +1445,8 @@
   width: 100%;
   max-width: 100%;
   margin-block-start: calc(-1 * var(--chat-attachment-hit-slop));
-  padding-block: calc(var(--chat-composer-editor-inset-block) * 2 + var(--chat-attachment-hit-slop))
-    var(--chat-composer-editor-inset-block);
+  padding-block: calc(var(--chat-attachment-inset-block) * 2 + var(--chat-attachment-hit-slop))
+    var(--chat-attachment-inset-block);
   padding-inline: var(--chat-composer-editor-inset-inline)
     calc(var(--chat-composer-editor-inset-inline) + var(--chat-attachment-hit-slop));
   overflow-x: auto;

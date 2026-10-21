@@ -15,6 +15,7 @@ import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelKey, type ModelRef } from "./model-ref-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
 
 // Cache process-stable modules, not the catalog/auth facts read from each request's owner.
@@ -237,6 +238,7 @@ export async function prepareModelChoice(params: {
               agentId: params.agentId,
               workspaceDir: owner.workspaceDir,
               preparedModelRuntime: owner,
+              assertCurrent: decisions.assertCurrent,
               modelIdSource: "selected",
               authProfileId: auth.selectedProfileId,
               authProfileMode: resolveProviderModelMaterializationAuthMode(auth.selectedAuthMode),
@@ -244,8 +246,13 @@ export async function prepareModelChoice(params: {
               allowBundledStaticCatalogFallback: true,
               deferProviderDynamicModelPreparation: params.source === "automatic",
             },
-          );
-          if (!decisions.isCurrent()) {
+          ).catch((error: unknown) => {
+            if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+              return undefined;
+            }
+            throw error;
+          });
+          if (!resolution || !decisions.isCurrent()) {
             return {
               kind: "unavailable",
               error: "Model configuration changed during selection. Retry the request.",
@@ -484,6 +491,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
         preparedModelRuntime: owner,
         agentRuntimeId: materializationRuntime,
         allowBundledStaticCatalogFallback: true,
+        assertCurrent: decisions.assertCurrent,
         // Discovery must retain the prepared account instead of rereading live auth stores.
         authProfileMode,
         ...(selectedAuth.selectedProfileId

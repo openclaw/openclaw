@@ -35,7 +35,6 @@ function resolvedBundledPaths(config: OpenClawConfig, id: string) {
     config,
     workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
     env: isolatedEnv,
-    fallbackToBundledMetadata: true,
     fallbackToBundledMetadataForResolvedBundled: true,
     pluginIds: [id],
     fallbackBundledPluginIds: [id],

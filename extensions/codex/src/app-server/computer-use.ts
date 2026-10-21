@@ -497,7 +497,6 @@ async function inspectCodexComputerUseWithoutFence(
       ready: liveTest.ok,
       reason: liveTest.ok ? "ready" : "live_test_failed",
       liveTest,
-      ...(repair ? { repair } : {}),
       warnings: [
         ...status.warnings,
         ...(repair?.warnings ?? []),
@@ -826,24 +825,13 @@ function statusFromPlugin(params: {
     pluginName: config.pluginName,
     mcpServerName: config.mcpServerName,
     marketplaceName: plugin.marketplaceName,
-    ...(plugin.marketplacePath ? { marketplacePath: plugin.marketplacePath } : {}),
     tools,
-    installation: {
-      status: !plugin.summary.installed
-        ? "not_installed"
-        : installed
-          ? "installed"
-          : "installed_disabled",
-      ok: installed,
-      message: installed ? "Computer Use plugin is installed and enabled." : message,
-    },
-    exposure: {
-      status: available ? "available" : "missing",
-      ok: available,
-      message: available
-        ? `Computer Use MCP server ${config.mcpServerName} exposes ${tools.length} tools.`
-        : `Computer Use MCP server ${config.mcpServerName} is not exposed.`,
-    },
+    installation: !plugin.summary.installed
+      ? "not_installed"
+      : installed
+        ? "installed"
+        : "installed_disabled",
+    exposure: available ? "available" : "missing",
     liveTest: skippedLiveTestStatus(config, "Computer Use live test was not run."),
     warnings:
       plugin.summary.source?.type === "remote"

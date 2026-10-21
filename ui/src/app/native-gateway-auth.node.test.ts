@@ -233,7 +233,7 @@ describe("native authenticated Control UI", () => {
       search: "",
       hash: window.location.hash,
     });
-    gateway = createApplicationGateway(startup.settings, "", "", undefined, {
+    gateway = createApplicationGateway(startup.settings, "", "", {
       persistDefaultConnectionSettings: false,
       clientOptions: startup.nativeClient ?? undefined,
     });

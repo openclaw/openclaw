@@ -173,6 +173,19 @@ cycles with `--bundle-dir <baseline> --compare-bundle-dir <candidate> --runs 20
 restores each build's warm state before each run. Streaming comparisons do not
 require the separate `--warm-reload` diagnostics or external probe scripts.
 
+Use `--streaming-burst-size 5` to enqueue five snapshots every 166.7 ms
+while retaining the average 30 deltas/s. The mock transport still applies
+`--frame-gap-ms`; set it to zero to remove intentional spacing, and inspect
+delivery timestamps before treating a group as one-frame delivery.
+Streaming reports count synchronous
+stream assignments, frame publications, pane render calls/time, forced rail
+observations, and row ResizeObserver deliveries. These are separate boundaries:
+publication is not a rendered commit, and pane render time excludes subsequent
+Solid and Markdown work. The source-mapped CPU profile covers that later work;
+the task/microtask and next-rAF timings do not measure presentation to the screen.
+After timing, each run also checks that the real transcript grew and remains
+within two pixels of its native scroll bottom, without manually requesting a render.
+
 ## Initial baseline
 
 Production UI at `488c0a3850fc`, Blacksmith Testbox, three Sessions reloads with

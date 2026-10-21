@@ -8,9 +8,11 @@ import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbo
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
+  controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -97,7 +99,21 @@ async function layoutAndWait(
   await hidden?.waitFor({ state: "hidden" });
 }
 
+async function waitForPanelGeometry(page: Page): Promise<void> {
+  await page.locator(".sidebar-region").evaluate(async (element) => {
+    const animations = element
+      .getAnimations({ subtree: true })
+      .filter(
+        (animation) =>
+          animation.playState === "running" &&
+          Number.isFinite(animation.effect?.getComputedTiming().endTime),
+      );
+    await Promise.all(animations.map((animation) => animation.finished.catch(() => undefined)));
+  });
+}
+
 async function expectPaneHeaderGeometry(page: Page, dock: "left" | "right" | "bottom") {
+  await waitForPanelGeometry(page);
   const boxes = await page.evaluate(() => {
     const bounds = (selector: string) => {
       const element = document.querySelector(selector);
@@ -108,14 +124,36 @@ async function expectPaneHeaderGeometry(page: Page, dock: "left" | "right" | "bo
       return { x, y, width, height, bottom, right };
     };
     return {
+      toolbarFrame: bounds(".sidebar-region__header"),
       toolbar: bounds(".chat-pane__header"),
       tabs: bounds('[data-region-header="side"]'),
+      toggle: bounds(".chat-pane__panels-toggle"),
+      tabControlCenters: Array.from(
+        document.querySelectorAll<HTMLElement>(
+          '[data-region-header="side"] button:not(.oc-overlay button)',
+        ),
+      )
+        .map((button) => button.getBoundingClientRect())
+        .filter((box) => box.width > 0 && box.height > 0)
+        .map((box) => box.y + box.height / 2),
       main: bounds('.sidebar-region [data-region="main"]:not([hidden])'),
       side: bounds('.sidebar-region [data-region="side"]:not([hidden])'),
     };
   });
+  // The session topbar and side tabs share the compact desktop header height.
+  expect(boxes.toolbar.height).toBe(44);
+  expect(boxes.toolbarFrame.height).toBe(44);
+  expect(boxes.tabs.height).toBe(44);
+  expect(boxes.toggle.y + boxes.toggle.height / 2).toBe(boxes.toolbar.y + boxes.toolbar.height / 2);
+  for (const center of boxes.tabControlCenters) {
+    expect(center).toBe(boxes.tabs.y + boxes.tabs.height / 2);
+  }
+  // Left/bottom docking reserves the 28px Panels toggle plus its 4px gap in the frame.
+  expect(boxes.toolbar.x).toBe(boxes.toolbarFrame.x);
+  expect(boxes.toolbar.y).toBe(boxes.toolbarFrame.y);
+  expect(boxes.toolbarFrame.right - boxes.toolbar.right).toBe(dock === "right" ? 0 : 32);
   for (const [header, content] of [
-    [boxes.toolbar, boxes.main],
+    [boxes.toolbarFrame, boxes.main],
     [boxes.tabs, boxes.side],
   ] as const) {
     expect(header.height).toBeGreaterThan(0);
@@ -128,7 +166,7 @@ async function expectPaneHeaderGeometry(page: Page, dock: "left" | "right" | "bo
     expect(boxes.tabs.y).toBeGreaterThanOrEqual(boxes.main.bottom);
   } else {
     expect(boxes.toolbar.y).toBeCloseTo(boxes.tabs.y, 0);
-    expect(boxes.main.y).toBeCloseTo(boxes.side.y, 0);
+    expect(boxes.side.y).toBe(boxes.main.y);
     expect(boxes.side.x < boxes.main.x).toBe(dock === "left");
   }
 }
@@ -168,14 +206,12 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await chat.waitFor();
         expect(await chat.getAttribute("aria-pressed")).toBe("false");
-        expect(await composer.isVisible()).toBe(false);
+        await expect.poll(() => composer.isVisible()).toBe(false);
         // Details is session context, not a shortcut that reveals the transcript.
-        await header.locator(".chat-header-session-menu__trigger").click();
-        await page.getByRole("menuitem", { name: "Session details", exact: true }).click();
-        const details = page.getByRole("dialog", { name: "Details", exact: true });
-        await details.waitFor();
-        expect(await composer.isVisible()).toBe(false);
-        await details.getByRole("button", { name: "Close details", exact: true }).click();
+        const details = await openChatDetails(page);
+        expect(await details.getAttribute("role")).toBe("dialog");
+        await expect.poll(() => composer.isVisible()).toBe(false);
+        await closeChatDetails(page);
         await chat.click();
         await composer.fill("Let's review the eight remaining changes.");
         await page.getByText("The release overview is ready.", { exact: false }).waitFor();
@@ -193,14 +229,19 @@ suite.define(() => {
         await composer.waitFor({ state: "hidden" });
         await chat.click();
         expect(await composer.inputValue()).toBe("Let's review the eight remaining changes.");
-        // Mobile presents one surface at a time without changing the saved desktop layout.
+        // The mobile dock keeps the conversation available and retains the saved desktop layout.
         await page.setViewportSize({ width: 390, height: 844 });
-        await composer.waitFor();
-        await expect.poll(() => input.isVisible()).toBe(false);
-        await chat.click();
+        const mobileHeader = page.locator(".agent-chat__header--mobile");
+        await mobileHeader.getByRole("button", { name: "Session dashboard", exact: true }).click();
+        const host = page.locator(".chat-mobile-host");
         await input.waitFor();
-        await composer.waitFor({ state: "hidden" });
-        await chat.click();
+        expect(await composer.isVisible()).toBe(true);
+        await host
+          .locator(".chat-mobile-host__header")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
+        await host.waitFor({ state: "hidden" });
+        expect(await composer.inputValue()).toBe("Let's review the eight remaining changes.");
         await page.setViewportSize({ width: 1440, height: 960 });
         await input.waitFor();
         expect(await composer.inputValue()).toBe("Let's review the eight remaining changes.");
@@ -258,7 +299,9 @@ suite.define(() => {
       const targets = () =>
         panes.evaluateAll((elements) =>
           elements.map((pane) => {
-            const tab = pane.querySelector(".side-panel__header .tabstrip-tab[active]")!;
+            const tab = pane.querySelector(
+              '.side-panel__header .tabstrip-tab[aria-selected="true"]',
+            )!;
             const target = document.getElementById(tab.getAttribute("aria-controls")!);
             return {
               tabId: tab.id,
@@ -339,6 +382,7 @@ suite.define(() => {
         const dashboard = page.locator('[data-panel-slot="dashboard"]');
         const paneHeader = page.locator(".chat-pane__header");
         const sideHeader = page.locator('[data-region-header="side"]');
+        await waitForPanelGeometry(page);
         const width = await regionSize(dashboard);
         const expectContinuity = async () => {
           expect(await documentIdentity(input)).toBe(identity);
@@ -350,24 +394,26 @@ suite.define(() => {
         const dashboardTab = sideHeader.locator('.tabstrip-tab[data-tab-value="dashboard"]');
         for (const dock of ["right", "left", "bottom"] as const) {
           await dockChatSidePanel(page, dock);
+          await waitForPanelGeometry(page);
           const priorSize = await dashboard.boundingBox();
           await dashboardTab.click();
-          await chat.waitFor({ state: "hidden" });
+          expect(await chat.isVisible()).toBe(true);
+          await layoutAndWait(paneHeader, "Expand Dashboard", dashboard, chat);
           expect(await sideHeader.isVisible()).toBe(true);
           expect(await dashboard.getAttribute("data-region")).toBe("side");
-          expect(await regionSize(dashboard)).toBeCloseTo(
-            await regionSize(page.locator(".sidebar-region")),
-            0,
-          );
+          await expect
+            .poll(() => regionSize(dashboard))
+            .toBeCloseTo(await regionSize(page.locator(".sidebar-region")), 0);
           await expectContinuity();
           await layoutAndWait(paneHeader, "Restore split", chat);
-          expect(await dashboard.boundingBox()).toEqual(priorSize);
+          await expect.poll(() => dashboard.boundingBox()).toEqual(priorSize);
           await expectPaneHeaderGeometry(page, dock);
           await expectContinuity();
           await layoutAndWait(paneHeader, "Expand Dashboard", dashboard, chat);
           await dashboardTab.focus();
           await page.keyboard.press("Space");
-          await chat.waitFor();
+          expect(await chat.isVisible()).toBe(false);
+          await layoutAndWait(paneHeader, "Restore split", chat);
           await expectContinuity();
         }
         await dockChatSidePanel(page, "right");
@@ -419,12 +465,13 @@ suite.define(() => {
         await divider.focus();
         await page.keyboard.press("ArrowRight");
         await expect.poll(() => regionSize(chat)).toBeGreaterThan(width);
+        await waitForPanelGeometry(page);
         const resizedWidth = await regionSize(chat);
         await layoutAndWait(paneHeader, "Minimize side panel", dashboard, chat);
         await expectContinuity();
         await layoutAndWait(paneHeader, /^(Side panel|Minimize side panel)$/, chat);
         await expectContinuity();
-        expect(await regionSize(chat)).toBeCloseTo(resizedWidth, 0);
+        await expect.poll(() => regionSize(chat)).toBeCloseTo(resizedWidth, 0);
 
         await page.reload();
         await page
@@ -435,46 +482,118 @@ suite.define(() => {
         await expectPaneHeaderGeometry(page, "left");
         await openChatSidePanelType(page, "Terminal");
         const terminal = page.locator('[data-panel-slot="terminal"] openclaw-terminal-panel');
+        await terminal.locator(".tp-session.is-current").click();
         await terminal.locator(".tp-host canvas").waitFor();
         await expect.poll(() => gateway.getRequests("terminal.open")).toHaveLength(1);
         await layoutAndWait(page, "Expand Terminal", terminal, dashboard);
         await layoutAndWait(page, "Restore split", dashboard);
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
-        await selectChatLayoutAction(paneHeader, /^Swap /);
-        await page.locator('[data-panel-slot="terminal"][data-region="main"]').waitFor();
-        const chatTab = sideHeader.locator('.tabstrip-tab[data-tab-value="conversation"]');
-        await chatTab.click();
-        await chat.waitFor();
-        await chatTab.focus();
-        await page.keyboard.press("ArrowLeft");
-        await dashboard.waitFor();
-        expect(await terminal.isVisible()).toBe(true);
-        await page.keyboard.press("Enter");
-        await terminal.waitFor({ state: "hidden" });
-        await layoutAndWait(paneHeader, "Restore split", terminal);
-        await chatTab.click();
-        await dashboardTab.click();
-        await terminal.waitFor({ state: "hidden" });
-        await dashboard.waitFor();
-        await layoutAndWait(paneHeader, "Restore split", terminal);
-        expect(await terminal.locator(".tp-host canvas").count()).toBe(1);
+        const terminalCanvas = await terminal.locator(".tp-host canvas").elementHandle();
+        await dockChatSidePanel(page, "left");
+        await layoutAndWait(page, "Expand Terminal", terminal, dashboard);
+        await layoutAndWait(page, "Restore split", dashboard);
+        await dockChatSidePanel(page, "bottom");
+        await layoutAndWait(page, "Expand Terminal", terminal, dashboard);
+        await layoutAndWait(page, "Restore split", dashboard);
         await dockChatSidePanel(page, "right");
-        await selectChatLayoutAction(paneHeader, "Focus");
-        await selectChatLayoutAction(paneHeader, "Restore split");
+        expect(await terminalCanvas?.evaluate((canvas) => canvas.isConnected)).toBe(true);
+        await terminalCanvas?.dispose();
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
         expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
+      },
+    );
+  }, 120_000);
 
-        await page.setViewportSize({ width: 400, height: 900 });
-        await page.locator(".sidebar-region--narrow").waitFor();
-        await dashboard.waitFor();
-        await terminal.waitFor({ state: "hidden" });
-        expect(await regionSize(dashboard)).toBeCloseTo(
-          await regionSize(page.locator(".sidebar-region")),
-          0,
+  it("retains an existing main Terminal through docking, keyboard selection and mobile round trips", async () => {
+    await suite.withPage(
+      {
+        viewport: { width: 1440, height: 1000 },
+        permissions: ["local-network-access"],
+      },
+      async ({ page }) => {
+        await page.addInitScript(
+          ({ key, sessionKey: savedSessionKey }) => {
+            localStorage.setItem(
+              key,
+              JSON.stringify({
+                sidebarSessionLayouts: {
+                  [savedSessionKey]: {
+                    columns: [
+                      {
+                        id: "side-panel-column",
+                        side: "right",
+                        panels: [
+                          { id: "terminal", slot: "terminal" },
+                          { id: "dashboard", slot: "dashboard" },
+                          { id: "conversation", slot: "conversation" },
+                        ],
+                        activePanelId: "dashboard",
+                        width: 480,
+                        height: 360,
+                      },
+                    ],
+                    mainPanelId: "terminal",
+                    open: true,
+                  },
+                },
+              }),
+            );
+          },
+          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), sessionKey },
         );
-        // Mobile presents one tool at a time. Minimize the selected Dashboard
-        // before measuring the retained Terminal that is still the saved main.
-        await layoutAndWait(paneHeader, "Minimize side panel", terminal);
+        const gateway = await installBoardGateway(
+          page,
+          {
+            terminalEnabled: true,
+            communityInvite: false,
+            featureMethods: [...chatMethods, "terminal.open"],
+          },
+          4,
+        );
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const terminalPanel = page.locator('[data-panel-slot="terminal"]');
+        const terminal = terminalPanel.locator("openclaw-terminal-panel");
+        const canvas = terminal.locator(".tp-host canvas");
+        await terminal.locator(".tp-session.is-current").click();
+        await canvas.waitFor();
+        expect(await terminalPanel.getAttribute("data-region")).toBe("main");
+        const mountedCanvas = await canvas.elementHandle();
+        const input = widgetInput(page);
+        await input.fill("Retained alongside main Terminal");
+        const identity = await documentIdentity(input);
+        const side = page.locator('[data-region-header="side"]');
+        const chatTab = side.locator('.tabstrip-tab[data-tab-value="conversation"]');
+        const dashboardTab = side.locator('.tabstrip-tab[data-tab-value="dashboard"]');
+        await chatTab.click();
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.fill("Retained chat beside main Terminal");
+        await chatTab.focus();
+        await page.keyboard.press("ArrowLeft");
+        await input.waitFor();
+        expect(await terminal.isVisible()).toBe(true);
+        await page.keyboard.press("Enter");
+        expect(await terminal.isVisible()).toBe(true);
+        for (const dock of ["left", "bottom", "right"] as const) {
+          await dockChatSidePanel(page, dock);
+          await layoutAndWait(
+            page,
+            "Expand Dashboard",
+            page.locator('[data-panel-slot="dashboard"]'),
+            terminal,
+          );
+          await layoutAndWait(page, "Restore split", terminal);
+          expect(await documentIdentity(input)).toBe(identity);
+          expect(await input.inputValue()).toBe("Retained alongside main Terminal");
+          expect(await composer.inputValue()).toBe("Retained chat beside main Terminal");
+          expect(await mountedCanvas?.evaluate((element) => element.isConnected)).toBe(true);
+        }
+        await page.setViewportSize({ width: 400, height: 900 });
+        const mobile = page.locator(".agent-chat__header--mobile");
+        await mobile.getByRole("button", { name: "Panels", exact: true }).click();
+        const host = page.locator(".chat-mobile-host");
+        await host.getByRole("button", { name: "Panels", exact: true }).click();
+        await side.locator('.tabstrip-tab[data-tab-value^="hosted:terminal:"]').click();
+        await terminal.waitFor();
         await expect
           .poll(
             async () =>
@@ -482,24 +601,20 @@ suite.define(() => {
           )
           .toBeGreaterThan(30);
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(400);
-        await layoutAndWait(paneHeader, "Side panel", dashboard, terminal);
-        await selectChatLayoutAction(paneHeader, /^Swap /);
-        await expect.poll(() => dashboard.getAttribute("data-region")).toBe("main");
-        await terminal.waitFor();
-        await dashboard.waitFor({ state: "hidden" });
-        await layoutAndWait(paneHeader, "Focus", dashboard, terminal);
-        await layoutAndWait(paneHeader, "Restore split", terminal.locator(".tp-host canvas"));
-        await layoutAndWait(paneHeader, /^Swap /, dashboardTab);
-        const narrowSize = await dashboard.boundingBox();
         await dashboardTab.click();
+        await input.waitFor();
         await terminal.waitFor({ state: "hidden" });
-        await layoutAndWait(paneHeader, "Restore split", dashboard, terminal);
-        expect(await dashboard.boundingBox()).toEqual(narrowSize);
-        expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
-        await page.setViewportSize({ width: 1440, height: 1000 });
+        await side.locator('.tabstrip-tab[data-tab-value^="hosted:terminal:"]').click();
         await terminal.waitFor();
-        await expectPaneHeaderGeometry(page, "right");
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await terminalPanel.locator(".tp-host canvas").waitFor();
+        await expect.poll(() => terminalPanel.getAttribute("data-region")).toBe("main");
+        expect(await mountedCanvas?.evaluate((element) => element.isConnected)).toBe(true);
+        expect(await canvas.count()).toBe(1);
+        expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
+        expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
+        await mountedCanvas?.dispose();
       },
     );
-  }, 120_000);
+  });
 });
