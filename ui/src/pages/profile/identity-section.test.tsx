@@ -34,10 +34,9 @@ function mountIdentity(overrides: Partial<IdentitySectionProps> = {}) {
 
 let unmount: (() => void) | undefined;
 let container: HTMLElement;
-const query = <T extends Element = HTMLElement>(selector: string) =>
-  container.querySelector<T>(selector);
-const fileInput = () => query<HTMLInputElement>('input[type="file"]');
-const avatarButton = () => query<HTMLButtonElement>(".identity-avatar-control .btn");
+const fileInput = () => container.querySelector<HTMLInputElement>('input[type="file"]');
+const avatarButton = () =>
+  container.querySelector<HTMLButtonElement>(".identity-avatar-control .btn");
 it("hides upload controls while preserving avatar display and name editing", () => {
   const base = createApplicationConfigCapability({ resourceBasePath: "" });
   const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
@@ -49,9 +48,13 @@ it("hides upload controls while preserving avatar display and name editing", () 
   expect(props.onAvatarSelect).not.toHaveBeenCalled();
   mountIdentity(props);
   expect([fileInput(), avatarButton()]).toEqual([null, null]);
-  expect(query("openclaw-viewer-avatar")).not.toBeNull();
-  expect(query<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(false);
-  query(".identity-name-control")?.dispatchEvent(new SubmitEvent("submit", { cancelable: true }));
+  expect(container.querySelector("openclaw-viewer-avatar")).not.toBeNull();
+  expect(container.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(
+    false,
+  );
+  container
+    .querySelector(".identity-name-control")
+    ?.dispatchEvent(new SubmitEvent("submit", { cancelable: true }));
   expect(props.onSaveDisplayName).toHaveBeenCalledOnce();
 });
 afterEach(() => {
@@ -64,7 +67,7 @@ it("falls back to initials when no same-origin avatar route is available", async
     avatarUrl: null,
     profile: { ...PROFILE, emails: ["profile-preview@example.test"], hasAvatar: false },
   });
-  const avatar = query<HTMLElement & { updateComplete?: Promise<unknown> }>(
+  const avatar = container.querySelector<HTMLElement & { updateComplete?: Promise<unknown> }>(
     "openclaw-viewer-avatar",
   );
   await avatar?.updateComplete;
@@ -109,5 +112,8 @@ it("explains personal GitHub sign-in for the shared owner without email or retry
   );
   expect(container.textContent).not.toContain("Linked emails");
   expect(container.textContent).not.toContain("Refresh to retry");
-  expect(query("input.settings-toggle__input")).toMatchObject({ checked: false, disabled: true });
+  expect(container.querySelector("input.settings-toggle__input")).toMatchObject({
+    checked: false,
+    disabled: true,
+  });
 });
