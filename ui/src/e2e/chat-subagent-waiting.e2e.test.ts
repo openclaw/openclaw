@@ -379,7 +379,7 @@ suite.define(() => {
         );
         await expect.poll(countHasFocus).toBe(true);
         // A subagent opened there keeps its own header, with the way back to the list.
-        await panelRow.getByRole("button", { name: "Backend implementation", exact: true }).click();
+        await panelRow.locator(".chat-subagents-mobile__open").click();
         const backToList = panel.getByRole("button", { name: "Back to Subagents", exact: true });
         await backToList.click();
         await panelRow.waitFor();
@@ -546,7 +546,7 @@ suite.define(() => {
         const selectedTitle = page.locator(
           ".chat-pane-cache__pane--active .chat-pane__session-title-text",
         );
-        const detailTitle = panel.locator(".chat-subagent-detail__title");
+        const detailTitle = panel.locator(".subagents-desktop__child-name");
         await activityRow.getByRole("button").click();
         await expect.poll(() => detailTitle.textContent()).toBe("Backend implementation");
         expect(await selectedTitle.textContent()).toBe("Build the implementation");

@@ -107,7 +107,10 @@ const CONTEXT_BINDING_PRODUCERS = [
 ] as const;
 const SCOPED_BUILDER_HANDOFFS = [
   ["buzz/src/gateway", "const buildContext = channelRuntime?.inbound.buildContext"],
-  ["clickclack/src/gateway", "buildContext: params.buildContext"],
+  [
+    "clickclack/src/gateway",
+    'const buildContext = (ctx.channelRuntime as PluginRuntime["channel"]',
+  ],
   ["discord/src/monitor/provider", "buildContext: pluginChannelRuntime?.inbound.buildContext"],
   [
     "imessage/src/monitor/monitor-provider",

@@ -100,7 +100,6 @@ function mockReadyDashboard() {
   mocks.ensureDashboardGatewayReady.mockResolvedValue({
     ready: true,
     recovered: false,
-    status: {},
   });
 }
 
@@ -216,8 +215,6 @@ describe("dashboardCommand --json", () => {
     mocks.ensureDashboardGatewayReady.mockResolvedValue({
       ready: false,
       reason: "Gateway is not running.",
-      recoverable: false,
-      status: {},
     });
 
     await dashboardCommand(runtime, { json: true });

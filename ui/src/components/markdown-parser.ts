@@ -19,6 +19,7 @@ import {
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
 import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
+import { installMarkdownHexColors } from "./markdown-hex-colors.ts";
 import { installMarkdownHumanMentions } from "./markdown-human-mentions.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
@@ -587,5 +588,6 @@ export function createMarkdownParser(): MarkdownItParser {
       : code;
   };
   installMarkdownHumanMentions(markdownParser);
+  installMarkdownHexColors(markdownParser);
   return markdownParser;
 }

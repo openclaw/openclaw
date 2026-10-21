@@ -145,9 +145,9 @@ suite.define(() => {
             await protocol.send("Emulation.setSafeAreaInsetsOverride", {
               insets: { bottom: safeArea },
             });
-            expect(await bottomGap()).toBe(6 + safeArea);
+            expect(await bottomGap()).toBe(10 + safeArea);
             await textarea.focus();
-            expect(await bottomGap()).toBe(6 + safeArea);
+            expect(await bottomGap()).toBe(10 + safeArea);
             await textarea.blur();
           }
           await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 0 } });

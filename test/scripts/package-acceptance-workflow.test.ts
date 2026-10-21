@@ -4294,6 +4294,7 @@ type ProtectedPreflightConsumerParams = {
   additionalPreflightArtifactNames?: string[];
   archiveFailureStatus?: number;
   repeatDownload?: boolean;
+  sdkArtifactFiles?: string[];
 };
 
 function writePreflightConsumerTooling(toolingDir: string) {
@@ -4548,7 +4549,10 @@ async function runReleasePublishPreflightConsumerGuard(params: ProtectedPrefligh
       : [[preflightName, ["preflight-manifest.json", "dependency-evidence/proof.json"]]]),
     [
       `plugin-sdk-api-release-diff-${producerRun.id}-${producerRun.run_attempt}`,
-      ["plugin-sdk-api-release-diff.json", "plugin-sdk-api-release-evidence.json"],
+      params.sdkArtifactFiles ?? [
+        "plugin-sdk-api-release-diff.json",
+        "plugin-sdk-api-release-evidence.json",
+      ],
     ],
     ...(params.additionalPreflightArtifactNames ?? []).map((artifactName) => [
       artifactName,
@@ -6026,6 +6030,56 @@ esac
       );
     }
   });
+
+  it.each([
+    { name: "FRV", fullReleasePreflight: true },
+    { name: "historical NPM", fullReleasePreflight: false },
+  ])(
+    "accepts the readable SDK diff summary but still requires both JSON proofs ($name)",
+    async ({ fullReleasePreflight }) => {
+      const qualifiedName = `openclaw-npm-preflight-${"a".repeat(40)}`;
+      const run = (sdkArtifactFiles: string[]) =>
+        runReleasePublishPreflightConsumerGuard({
+          currentRef: "refs/heads/main",
+          currentWorkflowSha: "b".repeat(40),
+          fullReleasePreflight,
+          preflightHeadBranch: "main",
+          preflightHeadSha: "a".repeat(40),
+          preflightArtifactName: fullReleasePreflight ? qualifiedName : undefined,
+          sdkArtifactFiles,
+        });
+      const withSummary = await run([
+        "plugin-sdk-api-release-diff.json",
+        "plugin-sdk-api-release-evidence.json",
+        "plugin-sdk-api-release-diff.md",
+      ]);
+      expect(withSummary.status, withSummary.stderr).toBe(0);
+      expect(
+        readFileSync(
+          join(
+            withSummary.runnerTemp,
+            "openclaw-plugin-sdk-api-evidence",
+            "plugin-sdk-api-release-evidence.json",
+          ),
+          "utf8",
+        ),
+      ).toBe(JSON.stringify({ fixture: "plugin-sdk-api-release-evidence.json" }));
+
+      const missingEvidence = await run([
+        "plugin-sdk-api-release-diff.json",
+        "plugin-sdk-api-release-diff.md",
+      ]);
+      expect(missingEvidence.status).toBe(1);
+      expect(missingEvidence.stderr).toContain("missing plugin-sdk-api-release-evidence.json");
+
+      const unexpected = await run([
+        "plugin-sdk-api-release-diff.json",
+        "plugin-sdk-api-release-evidence.json",
+        "unexpected.json",
+      ]);
+      expect(unexpected.status).toBe(1);
+    },
+  );
 
   it("never retries permanent core download failures or switches to a historical alias", async () => {
     const result = await runReleasePublishPreflightConsumerGuard({

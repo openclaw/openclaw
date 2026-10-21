@@ -17,7 +17,7 @@ import { listDatabaseEngineStores } from "../infra/database-engine/registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
-import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
+import { pluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
 import { resolvePluginControlPlaneWorkspace } from "./control-plane-workspace.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
@@ -295,7 +295,7 @@ async function loadPluginCliCommandRegistryWithContext(params: {
     ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
     cache: false,
     channelPluginLoadIntent: "full",
-    runtimeOptions: { nodes: createPluginCliGatewayNodesRuntime() },
+    runtimeOptions: { nodes: pluginCliGatewayNodesRuntime },
   });
   const resources = params.prepared.resources;
   return params.prepared.withCache(() =>

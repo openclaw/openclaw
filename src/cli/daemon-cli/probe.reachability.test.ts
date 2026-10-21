@@ -148,7 +148,7 @@ describe("Gateway reachability over real sockets", () => {
         expect(rpc.error).toContain("gateway closed (1006)");
       }
       const { result, output } = await checkDashboardReadiness(url, rpc);
-      expect(result).toMatchObject({ ready: false, recoverable: false });
+      expect(result).toMatchObject({ ready: false });
       expect(output).toContain("Gateway check failed:");
       expect(output).not.toContain("Gateway is not running");
       expect(output).not.toContain("gateway start");

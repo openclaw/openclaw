@@ -581,6 +581,28 @@ test("captures runtime delivery before listeners and independently for nested em
   expect(seen).toEqual(["original:inner", "late:inner"]);
 });
 
+test("skips a removed registration while its replacement starts with the next event", () => {
+  const seen: number[] = [];
+  const listener = (event: AgentEventPayload) => seen.push(event.seq);
+  // Keep the bucket alive when the original registration is removed.
+  onAgentEventForRun("run", () => {});
+  const remove = onAgentEventForRun("run", listener);
+  onAgentRuntimeEvent(
+    () => {},
+    (event) => {
+      if (event.seq === 1) {
+        remove();
+        onAgentEventForRun("run", listener);
+      }
+      return () => true;
+    },
+  );
+  emit("run");
+  expect(seen).toEqual([]);
+  emit("run");
+  expect(seen).toEqual([2]);
+});
+
 test.each(["capture", "delivery"])("isolates runtime %s failures from other listeners", (phase) => {
   const blocked = vi.fn();
   const seen = captureEvents();

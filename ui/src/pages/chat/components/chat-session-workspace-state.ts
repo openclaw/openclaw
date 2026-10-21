@@ -535,7 +535,7 @@ export function selectSessionWorkspacePreview(state: SessionWorkspaceHost, id: s
   }
 }
 
-export function closeSessionWorkspacePreview(state: SessionWorkspaceHost, id: string) {
+function closeSessionWorkspacePreview(state: SessionWorkspaceHost, id: string) {
   const workspace = getSessionWorkspace(state);
   const index = workspace.previews.findIndex((entry) => entry.id === id);
   if (index < 0) {

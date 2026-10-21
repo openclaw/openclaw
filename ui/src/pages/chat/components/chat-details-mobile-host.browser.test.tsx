@@ -61,7 +61,9 @@ it("keeps Details in the mobile host through opening, parking, and returning", a
     expect(panel.hidden).toBe(false);
     expect(panel.matches(":popover-open")).toBe(false);
     expect(panel.querySelector(".chat-details__toolbar")).toBeNull();
-    await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
+    // The outer host commit does not include this production lazy import.
+    await customElements.whenDefined("openclaw-chat-details-mobile-host-content");
+    await expect.poll(() => panel.querySelector(".chat-details-mobile-root")).not.toBeNull();
     const content = panel.firstElementChild;
     document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     expect(close).not.toHaveBeenCalled();

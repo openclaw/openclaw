@@ -50,7 +50,7 @@ function collectCodexRouteWarnings(cfg: OpenClawConfigWithLegacyRoster): string[
 }
 
 function maybeRepairCodexRoutes(cfg: OpenClawConfigWithLegacyRoster) {
-  return maybeRepairCodexRoutesUnderTest({ cfg, shouldRepair: true });
+  return maybeRepairCodexRoutesUnderTest({ cfg });
 }
 
 type Agents = NonNullable<OpenClawConfigWithLegacyRoster["agents"]>;

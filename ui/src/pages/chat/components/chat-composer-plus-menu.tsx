@@ -7,7 +7,8 @@ import {
   type MenuEntry,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { countSessionToolOverrides } from "../../../lib/sessions/tool-overrides.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
@@ -15,6 +16,8 @@ import type {
   ChatComposerPlusMenuContentProps,
   ChatComposerPlusMenuProps,
 } from "./chat-composer-plus-menu.types.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 type MenuContent = typeof import("./chat-composer-plus-menu-content.tsx");
 type ContentState =

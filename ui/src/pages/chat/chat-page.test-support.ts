@@ -10,8 +10,6 @@ import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
 import "./chat-page.ts";
 
-export { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
-
 export function createChatPageNavigationContext() {
   const router = createRouter({ routes: [] });
   onTestFinished(() => router.stop());

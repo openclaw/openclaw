@@ -15,16 +15,19 @@ import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectPresentation } from "../../lib/reactive/presentation.ts";
+import { orderSessionPullRequests } from "../../lib/session-pull-request-presentation.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
+import { listSubagents } from "./chat-subagent-wait.ts";
 import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
 import {
   renderChatComposerNotices as ChatComposerNoticesView,
   renderChatTopbarNotices as ChatTopbarNotices,
 } from "./chat-view-notices.tsx";
+import type { ChatActivityPillsProps } from "./components/chat-activity-pills.tsx";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
 import {
   ComposerQuestionDock,
@@ -32,9 +35,14 @@ import {
 } from "./components/chat-composer-question.tsx";
 import type { ComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ComposerQueue } from "./components/chat-composer-regions.tsx";
-import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
+import {
+  getChatComposerState,
+  hasTerminalRunStatus,
+  isChatRunWorking,
+} from "./components/chat-composer-state.ts";
 import { ChatComposer } from "./components/chat-composer.tsx";
 import { ChatConversationHistoryError } from "./components/chat-conversation-history-error.tsx";
+import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
 import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
@@ -70,7 +78,12 @@ function ChatTranscript(input: ChatViewInput) {
   );
 }
 
-function ChatFooterContent(input: ChatViewInput) {
+function ChatFooterContent(
+  input: ChatViewInput & {
+    mobileComposition?: boolean;
+    activities?: ChatActivityPillsProps;
+  },
+) {
   const pendingInputs = () => input.frame.pendingInputs;
   const pendingButton = (page: "earlier" | "latest") => (
     <button
@@ -109,7 +122,11 @@ function ChatFooterContent(input: ChatViewInput) {
           <Show when={pendingInputs()?.before !== undefined}>{pendingButton("latest")}</Show>
         </div>
       </Show>
-      <Show when={input.props.inlineApproval && input.props.onApprovalDecision}>
+      <Show
+        when={
+          !input.mobileComposition && input.props.inlineApproval && input.props.onApprovalDecision
+        }
+      >
         <div class="chat-inline-approval">
           <ExecApprovalCard
             props={{
@@ -127,7 +144,7 @@ function ChatFooterContent(input: ChatViewInput) {
       </Show>
       <Show when={!input.props.detailsEnabled}>
         <ChatPullRequests
-          pullRequests={input.props.pullRequests ?? []}
+          pullRequests={input.activities?.pullRequests ? [] : (input.props.pullRequests ?? [])}
           gateway={input.props.pullRequestsGateway}
           sessionId={input.props.pullRequestsSessionId}
           sessionKey={scopedSessionArtifactKey(
@@ -135,13 +152,13 @@ function ChatFooterContent(input: ChatViewInput) {
             input.props.currentAgentId ?? undefined,
           )}
           presented={input.props.presented ?? true}
-          branch={input.props.pullRequestsBranch}
+          branch={input.activities?.publication ? undefined : input.props.pullRequestsBranch}
           branchDismissed={input.props.pullRequestsBranchDismissed}
           status={input.props.pullRequestsStatus ?? "ready"}
           onDismiss={(pullRequest) => input.props.onDismissPullRequest?.(pullRequest)}
           onDismissBranch={input.props.onDismissPullRequestsBranch}
           onOpenSessionDiff={input.props.onOpenSessionDiff}
-          publication={input.props.githubPublication}
+          publication={input.activities?.publication ? undefined : input.props.githubPublication}
         />
       </Show>
       <ChatSessionSuggestions
@@ -168,17 +185,97 @@ function ChatFooterContent(input: ChatViewInput) {
 }
 
 function ChatComposerView(input: ChatViewInput) {
+  const activities = createMemo((): ChatActivityPillsProps | undefined => {
+    if (!input.props.mobileComposer) {
+      return undefined;
+    }
+    const destinations = input.props.mobileActivities;
+    const goal = input.props.selectedSession?.goal;
+    const card = input.props.progressCard;
+    return {
+      presented: input.presented,
+      approvalPending: Boolean(input.props.inlineApproval),
+      subagents: destinations?.onOpenSubagents
+        ? { activities: listSubagents(input.props), onOpen: destinations.onOpenSubagents }
+        : undefined,
+      goal:
+        goal && destinations?.goal
+          ? { ...destinations.goal, value: goal, recovery: input.props.goalRecovery }
+          : undefined,
+      // The pane's chat projection already applies the single Show in chat preference.
+      progress:
+        card && destinations?.onOpenProgress
+          ? {
+              card,
+              showInChat: true,
+              sessionStatus: input.props.selectedSession?.status,
+              startedAt: input.props.selectedSession?.startedAt,
+              endedAt: input.props.selectedSession?.endedAt,
+              hasActiveRun: isChatRunWorking(input.props),
+              refresh: input.props.progressCardRefresh?.state,
+              onOpen: destinations.onOpenProgress,
+            }
+          : undefined,
+      pullRequests: destinations?.onOpenPullRequest
+        ? {
+            items: orderSessionPullRequests(input.props.pullRequests ?? []),
+            status: input.props.pullRequestsStatus ?? "ready",
+            onOpen: destinations.onOpenPullRequest,
+          }
+        : undefined,
+      publication:
+        input.props.githubPublication && destinations?.publication?.eligible
+          ? { view: input.props.githubPublication, onOpen: destinations.publication.onOpen }
+          : undefined,
+    };
+  });
   return (
     <ChatComposer
       {...input.props}
       questions={input.questions}
       getTranscriptElement={input.getTranscriptElement}
-      progressCard={input.props.detailsEnabled ? null : input.props.progressCard}
+      progressCard={
+        input.props.detailsEnabled || activities()?.progress ? null : input.props.progressCard
+      }
       progressCardInitialLoading={
-        input.props.detailsEnabled ? false : input.props.progressCardInitialLoading
+        input.props.detailsEnabled || activities()?.progress
+          ? false
+          : input.props.progressCardInitialLoading
       }
       displayQueue={input.frame.displayQueue}
-      footerContent={<ChatFooterContent {...input} />}
+      footerContent={
+        <ChatFooterContent
+          {...input}
+          mobileComposition={input.props.mobileComposer}
+          activities={activities()}
+        />
+      }
+      mobileActivityPills={activities()}
+      mobileApprovalContent={
+        <Show
+          when={
+            input.props.mobileComposer &&
+            input.props.inlineApproval &&
+            input.props.onApprovalDecision
+          }
+        >
+          <div class="agent-chat__mobile-approval">
+            <ExecApprovalCard
+              props={{
+                approval: input.props.inlineApproval!,
+                sourceSession: input.frame.approvalSourceSession,
+                busy: input.props.approvalBusy ?? false,
+                connected: input.props.connected,
+                canGrant: input.props.approvalCanGrant,
+                error: input.props.approvalErrors?.get(input.props.inlineApproval!.id) ?? null,
+                variant: "inline",
+                presentation: "mobile",
+                onDecision: input.props.onApprovalDecision!,
+              }}
+            />
+          </div>
+        </Show>
+      }
       notices={<ChatComposerNoticesView {...input.props} presented={input.presented} />}
       onToggleRealtimeTalk={
         input.props.suggestionComposer ? undefined : input.props.onToggleRealtimeTalk
@@ -221,17 +318,19 @@ function ChatComposerCompanion(input: ChatViewInput) {
   );
 }
 
-/** Plugin mountDefault creates a separate root and must carry its application scope. */
+/** Plugin mountDefault creates a separate root; restore application and conversation context here. */
 function ChatSurfaceContent(input: { view: Component<ChatViewInput>; viewProps: ChatViewInput }) {
   const View = dynamic(() => input.view);
   return (
-    <Show when={input.viewProps.application} keyed fallback={<View {...input.viewProps} />}>
-      {(application) => (
-        <ApplicationProvider value={application}>
-          <View {...input.viewProps} />
-        </ApplicationProvider>
-      )}
-    </Show>
+    <ChatConversationMobile value={() => input.viewProps.props.mobileComposer === true}>
+      <Show when={input.viewProps.application} keyed fallback={<View {...input.viewProps} />}>
+        {(application) => (
+          <ApplicationProvider value={application}>
+            <View {...input.viewProps} />
+          </ApplicationProvider>
+        )}
+      </Show>
+    </ChatConversationMobile>
   );
 }
 

@@ -51,11 +51,11 @@ function skippedFilesToast(messageKey: string, skipped: readonly File[]): void {
   if (skipped.length === 0) {
     return;
   }
+  const tooLarge = messageKey === "chat.attachments.tooLarge";
   showToast({
-    message: skippedFilesMessage(
-      messageKey,
-      skipped.map((file) => file.name),
-    ),
+    message: tooLarge ? t("chat.attachments.tooLargeToast") : t(messageKey),
+    placement: "top-center",
+    severity: "error",
   });
 }
 
@@ -66,7 +66,7 @@ export function admitAttachmentFiles(
   options: {
     resizeImages?: boolean;
     compressVideos?: boolean;
-    onRejected?: (file: File, message: string) => void;
+    notify?: boolean;
   } = {},
 ): File[] {
   const admitted: File[] = [];
@@ -97,14 +97,11 @@ export function admitAttachmentFiles(
       total += reservation;
     }
   }
-  for (const [messageKey, files] of [
-    ["chat.attachments.readFailed", empty],
-    ["chat.attachments.tooLarge", oversized],
-  ] as const) {
-    skippedFilesToast(messageKey, files);
-    for (const file of files) {
-      options.onRejected?.(file, messageKey);
-    }
+  if (options.notify !== false) {
+    skippedFilesToast(
+      oversized.length ? "chat.attachments.tooLarge" : "chat.attachments.readFailed",
+      oversized.length ? oversized : empty,
+    );
   }
   return admitted;
 }

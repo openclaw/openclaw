@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -32,7 +33,7 @@ it("batches export metadata while observing committed appends, rewrites and cold
       ).toBe(true);
     }
     const requests = scopes.map((scope) => ({ absPath: scope.sessionKey, options: scope }));
-    const readBatch = async () => {
+    const readBatch = async (expectedPayloadReads = 1) => {
       const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
       try {
         const entries = await collectSessionMemoryEntries(requests);
@@ -46,16 +47,23 @@ it("batches export metadata while observing committed appends, rewrites and cold
             /\bfrom\s+"session_transcript_cold_archives"/i.test(sql),
           ),
         ).toHaveLength(0);
-        expect(observer.queries.filter((sql) => sql.includes(' as "event_json"'))).toHaveLength(1);
+        expect(observer.queries.filter((sql) => sql.includes(' as "event_json"'))).toHaveLength(
+          expectedPayloadReads,
+        );
         return entries;
       } finally {
         observer.restore();
       }
     };
 
-    expect(await readBatch()).toMatchObject(
+    const initial = await readBatch();
+    expect(initial).toMatchObject(
       scopes.map((_, index) => ({ entry: { content: `User: Preference ${index}.` } })),
     );
+    expect(await readBatch(0)).toEqual(initial);
+    channel("openclaw.memory.critical").publish(undefined);
+    expect(await readBatch()).toEqual(initial);
+    expect(await readBatch(0)).toEqual(initial);
 
     expect(
       appendTranscriptMessageSync(scopes[0]!, {

@@ -3,7 +3,6 @@
 // exported from production code.
 import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { BrowserSessionTabAuthority } from "../browser-runtime-state.js";
-import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { BrowserTabOwnership } from "./client.types.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import type { BrowserSessionTabRoute } from "./session-tab-route.js";
@@ -46,19 +45,8 @@ export type CloseTab = (tab: {
 type CleanupParams = SessionEntryCurrentPreparation & {
   isCurrent?: () => boolean;
   closeTab?: CloseTab;
-  closeDurableTab?: (
-    tab: DurableTab,
-    options: CloseOptions,
-  ) => Promise<CloseTrackedCdpTargetResult>;
   getResolvedBrowserConfig?: () => ResolvedBrowserConfig | null;
   onWarn?: (message: string) => void;
-  onDebug?: (message: string) => void;
-};
-
-export type CloseOptions = {
-  closeIfCurrent: (
-    dispatch: () => Promise<CloseTrackedCdpTargetResult>,
-  ) => Promise<CloseTrackedCdpTargetResult>;
 };
 
 export type RegistryModule = {

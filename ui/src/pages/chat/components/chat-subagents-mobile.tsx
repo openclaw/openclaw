@@ -59,7 +59,7 @@ export type ChatSubagentsMobileListProps = {
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
 };
 
-export type ChatSubagentMobileHeaderProps = {
+type ChatSubagentMobileHeaderProps = {
   title: string;
   sessionKey: string;
   backLabel: string;

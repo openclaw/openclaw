@@ -270,7 +270,14 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     listen(window, TERMINAL_PANEL_DOCK_BOTTOM_EVENT, () => {
       const owner = options.current();
       if (owner) {
-        owner.state.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, "terminal"));
+        const layout = owner.state.sidebarLayout;
+        const next = closeSlot(layout, "terminal");
+        // Moving the terminal leaves the desktop panel open, even when its
+        // last tab becomes the launcher. Mobile keeps its existing dismissal.
+        if (owner.sidebarRegion?.presentation !== "mobile") {
+          next.open = layout.open;
+        }
+        owner.state.updateSidebarLayout(next);
       }
     }),
   );

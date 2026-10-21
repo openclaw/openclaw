@@ -361,6 +361,22 @@ describe("sidebar projection memo", () => {
     );
   });
 
+  it("keeps invisible row replacements quiet and publishes the next visible change", async () => {
+    const initial = session("first");
+    const { sidebar, publish, row } = await mount([initial]);
+    const owner = getAppSidebarOwner(sidebar.hostElement)!;
+    const invalidate = vi.spyOn(owner, "invalidate");
+    publish([{ ...initial, totalTokens: 123 }]);
+    await settleLitElement(sidebar);
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(row(initial.key)?.textContent).toContain("first");
+
+    publish([{ ...initial, totalTokens: 456, label: "Renamed" }]);
+    await settleLitElement(sidebar);
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(row(initial.key)?.textContent).toContain("Renamed");
+  });
+
   it("shares the projection across unrelated updates and refreshes route, list, and filter inputs", async () => {
     const projectHome = vi.spyOn(sidebarAgentSessionRows, "projectSidebarHomeSession");
     const rows = [

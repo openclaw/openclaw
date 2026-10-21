@@ -61,7 +61,7 @@ export function CatalogBar(props: {
             class="btn btn--sm"
             type="button"
             disabled={props.retrying}
-            onClick={props.onRetry}
+            onClick={() => props.onRetry()}
           >
             {props.retrying ? t("common.loading") : t("lazyView.retry")}
           </button>

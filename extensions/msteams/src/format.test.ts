@@ -9,32 +9,16 @@ describe("formatMSTeamsMarkdown", () => {
       "- [x] shipped\n- [ ] pending",
       "[x] shipped\n[ ] pending",
     ],
-    [
-      "preserves escaped brackets in transport-owned mentions",
-      String.raw`@[Alice \[Ops\]](29:abc)`,
-      String.raw`@[Alice \[Ops\]](29:abc)`,
-    ],
-    [
-      "preserves transport-owned markdown images",
-      "![chart](https://example.com/chart_(final).png)",
-      "![chart](https://example.com/chart_(final).png)",
-    ],
-    [
-      "preserves images containing nested opener text",
-      "![plot](https://example.com/a![b].png)",
-      "![plot](https://example.com/a![b].png)",
-    ],
-    [
-      "includes escaped backticks when choosing inline code delimiters",
-      "``a \\` b``",
-      "``a \\` b``",
-    ],
+    ["preserves escaped mention brackets", String.raw`@[Alice \[Ops\]](29:abc)`],
+    ["preserves transport-owned images", "![chart](https://example.com/chart_(final).png)"],
+    ["preserves nested image opener text", "![plot](https://example.com/a![b].png)"],
+    ["counts escaped backticks for code delimiters", "``a \\` b``"],
     [
       "serializes link destinations with angle brackets",
       "[x](https://host/a)",
       "[x](<https://host/a>)",
     ],
-  ])("%s", (_name, before, after) => {
+  ])("%s", (_name, before, after = before) => {
     expect(formatMSTeamsMarkdown(before, "off")).toBe(after);
   });
 
@@ -49,18 +33,12 @@ describe("formatMSTeamsMarkdown", () => {
   );
 
   it("protects table-looking fenced blocks inside blockquotes", () => {
-    const fence = [
-      "> ```",
-      "> | A | B |",
-      "> |---|---|",
-      "> ![x](https://e.test/a?x=1&amp;y=2)",
-      "> ```",
-    ].join("\n");
+    const fence = "> ```\n> | A | B |\n> |---|---|\n> ![x](https://e.test/a?x=1&amp;y=2)\n> ```";
     expect(formatMSTeamsMarkdown(`${fence}\n\n# Next`, "off")).toBe(`${fence}\n**Next**`);
   });
 
   it("preserves quoted text around fenced code", () => {
-    const before = ["> Before", ">", "> ```", "> code", "> ```", ">", "> After"].join("\n");
+    const before = "> Before\n>\n> ```\n> code\n> ```\n>\n> After";
     const output = formatMSTeamsMarkdown(before, "off");
     expect(output).toContain("> Before");
     expect(output).toContain("> ```\n> code\n> ```");
@@ -81,22 +59,12 @@ describe("formatMSTeamsMarkdown", () => {
   });
 
   it("tracks fences opened on list continuation lines", () => {
-    const before = [
-      "- item",
-      "  ```",
-      "  code",
-      "",
-      "| A | B |",
-      "|---|---|",
-      "[x](https://host/a)",
-    ].join("\n");
+    const before = "- item\n  ```\n  code\n\n| A | B |\n|---|---|\n[x](https://host/a)";
     expect(formatMSTeamsMarkdown(before, "off")).toContain("[x](https://host/a)");
   });
 
   it("treats over-indented quoted fence markers as indented code", () => {
-    const before = ["    > ```", "", "> | A | B |", "> |---|---|", "> [x](https://host/a)"].join(
-      "\n",
-    );
+    const before = "    > ```\n\n> | A | B |\n> |---|---|\n> [x](https://host/a)";
     expect(formatMSTeamsMarkdown(before, "off")).toContain("> [x](https://host/a)");
   });
 });

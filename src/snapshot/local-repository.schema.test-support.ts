@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { deriveDeliveryQueueRetentionColumns } from "../infra/delivery-queue-retention-columns.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
@@ -9,44 +10,32 @@ export const TRANSIENT_PLUGIN_BLOB_MARKER = `transient-plugin-blob-${"sensitive"
 export const DURABLE_PLUGIN_BLOB_MARKER = "durable-plugin-blob-control";
 export const STATE_LEASE_MARKER = "snapshot-must-not-retain-active-lease";
 
+function initializeDatabase(
+  database: DatabaseSync,
+  role: "global" | "agent",
+  agentId: string | null = null,
+) {
+  const version = role === "global" ? OPENCLAW_STATE_SCHEMA_VERSION : OPENCLAW_AGENT_SCHEMA_VERSION;
+  database.exec(`${role === "global" ? OPENCLAW_STATE_SCHEMA_SQL : OPENCLAW_AGENT_SCHEMA_SQL}
+    PRAGMA user_version = ${version};`);
+  database
+    .prepare(`INSERT INTO schema_meta
+    (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+    VALUES ('primary', ?, ?, ?, NULL, 1, 1)`)
+    .run(role, version, agentId);
+}
+
 export function createGlobalDatabase(databasePath: string): void {
   withDatabase(databasePath, (database) => {
-    database.exec(`
-      ${OPENCLAW_STATE_SCHEMA_SQL}
-      PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
-    `);
-    database
-      .prepare(
-        `
-          INSERT INTO schema_meta (
-            meta_key,
-            role,
-            schema_version,
-            agent_id,
-            app_version,
-            created_at,
-            updated_at
-          ) VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)
-        `,
-      )
-      .run(OPENCLAW_STATE_SCHEMA_VERSION);
+    initializeDatabase(database, "global");
     const entryJson = '{"payload":"do-not-restore"}';
     database
       .prepare(
-        `
-          INSERT INTO delivery_queue_entries (
-            queue_name,
-            id,
-            status,
-            entry_json,
-            retention_id_prefix,
-            retention_max_age_ms,
-            retention_max_entries,
-            enqueued_at,
-            updated_at
-          ) VALUES ('delivery', 'queued', 'pending', ?,
-            @retention_id_prefix, @retention_max_age_ms, @retention_max_entries, 1, 1)
-        `,
+        `INSERT INTO delivery_queue_entries
+          (queue_name, id, status, entry_json, retention_id_prefix,
+           retention_max_age_ms, retention_max_entries, enqueued_at, updated_at)
+          VALUES ('delivery', 'queued', 'pending', ?,
+            @retention_id_prefix, @retention_max_age_ms, @retention_max_entries, 1, 1)`,
       )
       .run(deriveDeliveryQueueRetentionColumns("queued", entryJson), entryJson);
   });
@@ -55,11 +44,9 @@ export function createGlobalDatabase(databasePath: string): void {
 export function seedGlobalPluginBlobSnapshotFixtures(databasePath: string): void {
   withDatabase(databasePath, (database) => {
     const insertPluginBlob = database.prepare(
-      `
-        INSERT INTO plugin_blob_entries (
-          plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `,
+      `INSERT INTO plugin_blob_entries
+        (plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     insertPluginBlob.run(
       "diffs",
@@ -83,60 +70,28 @@ export function seedGlobalPluginBlobSnapshotFixtures(databasePath: string): void
 }
 
 export function createAgentDatabase(databasePath: string, agentId: string): void {
-  withDatabase(databasePath, (database) => {
-    database.exec(`
-      ${OPENCLAW_AGENT_SCHEMA_SQL}
-      PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
-    `);
-    database
-      .prepare(
-        `
-          INSERT INTO schema_meta (
-            meta_key,
-            role,
-            schema_version,
-            agent_id,
-            app_version,
-            created_at,
-            updated_at
-          ) VALUES ('primary', 'agent', ?, ?, NULL, 1, 1)
-        `,
-      )
-      .run(OPENCLAW_AGENT_SCHEMA_VERSION, agentId);
-  });
+  withDatabase(databasePath, (database) => initializeDatabase(database, "agent", agentId));
 }
 
 export function seedStateLease(databasePath: string): void {
   withDatabase(databasePath, (database) => {
     database
       .prepare(
-        `
-          INSERT INTO state_leases (
-            scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at
-          ) VALUES (?, 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
-        `,
+        `INSERT INTO state_leases
+          (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
+          VALUES (?, 'write', 'worker', 9999999999999, 1, NULL, 1, 1)`,
       )
       .run(STATE_LEASE_MARKER);
   });
 }
 
-function disableDefensiveModeForSchemaCorruption(database: object): void {
-  (
-    database as {
-      enableDefensive?: (active: boolean) => void;
-    }
-  ).enableDefensive?.(false);
-}
-
 export function createUnsafeIndexDrift(databasePath: string): void {
   withDatabase(databasePath, (database) => {
-    disableDefensiveModeForSchemaCorruption(database);
+    // Deliberate schema corruption for the integrity-check negative control.
+    (database as { enableDefensive?: (active: boolean) => void }).enableDefensive?.(false);
     database.exec(`
-      CREATE TABLE records (
-        id INTEGER PRIMARY KEY,
-        indexed_value TEXT NOT NULL,
-        alternate_value TEXT NOT NULL
-      );
+      CREATE TABLE records
+        (id INTEGER PRIMARY KEY, indexed_value TEXT NOT NULL, alternate_value TEXT NOT NULL);
       CREATE INDEX records_value ON records(indexed_value);
       INSERT INTO records (indexed_value, alternate_value)
       VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');

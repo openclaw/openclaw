@@ -72,7 +72,6 @@ function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
     logHealth: { info: vi.fn(), error: vi.fn() },
-    runWorktreeGc: vi.fn<() => Promise<ManagedWorktreeGcResult | void>>(async () => undefined),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
   };
@@ -482,32 +481,32 @@ describe("startGatewayMaintenanceTimers", () => {
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
-    const sweep = createDeferred();
-    deps.runWorktreeGc.mockReturnValueOnce(sweep.promise);
+    const sweep = createDeferred<ManagedWorktreeGcResult>();
+    deps.worktreeGc.mockReturnValueOnce(sweep.promise);
     const timers = startGatewayMaintenanceTimers(deps);
 
     await Promise.resolve();
-    expect(deps.runWorktreeGc).not.toHaveBeenCalled();
+    expect(deps.worktreeGc).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(60 * 60_000 - 1);
-    expect(deps.runWorktreeGc).not.toHaveBeenCalled();
+    expect(deps.worktreeGc).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2);
-    expect(deps.runWorktreeGc).toHaveBeenCalledTimes(1);
+    expect(deps.worktreeGc).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(60 * 60_000);
-    expect(deps.runWorktreeGc).toHaveBeenCalledTimes(1);
-    sweep.resolve();
+    expect(deps.worktreeGc).toHaveBeenCalledTimes(1);
+    sweep.resolve(deps.worktreeGcResult);
     await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
-    expect(deps.runWorktreeGc).toHaveBeenCalledTimes(2);
+    expect(deps.worktreeGc).toHaveBeenCalledTimes(2);
 
     await stopMaintenanceTimers(timers);
     await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
-    expect(deps.runWorktreeGc).toHaveBeenCalledTimes(2);
+    expect(deps.worktreeGc).toHaveBeenCalledTimes(2);
   });
 
   it("records partial managed worktree cleanup in health logs", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
-    deps.runWorktreeGc.mockResolvedValue({
+    deps.worktreeGc.mockResolvedValue({
       removed: [],
       orphansDeleted: 0,
       snapshotsPruned: 0,

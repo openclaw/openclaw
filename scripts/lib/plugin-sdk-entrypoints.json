@@ -178,6 +178,7 @@
   "migration-runtime",
   "plugin-state-runtime",
   "plugin-state-test-runtime",
+  "mcp-enterprise-test-runtime",
   "markdown-table-runtime",
   "account-helpers",
   "account-core",

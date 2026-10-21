@@ -45,7 +45,6 @@ export type ChatPaneLayoutMenuProps = {
   panelMenuActions?: HeaderPanelAction[];
   layoutMenuActions?: HeaderMenuQuickAction[];
   sidebarLayout?: SidebarLayout;
-  sidePanelOpen?: boolean;
   panelDefinitions?: SidebarPanelDefinition[];
   onLayoutChange?: ChatPageHost["updateSidebarLayout"];
   onToggleSidePanel?: () => void;
@@ -64,7 +63,6 @@ export function chatPaneLayoutModel(props: ChatPaneLayoutMenuProps) {
   const mainDefinition = definitions.find((definition) => definition.slot === mainSlot);
   const sideDefinition = definitions.find((definition) => definition.slot === side?.slot);
   const split = layout?.open === true && !layout.expanded;
-  const sidePanelOpen = props.sidePanelOpen ?? split;
   const actions: ChatQuickAction[] = [];
   if (layout && props.onLayoutChange && (split || layout.expanded)) {
     actions.push({
@@ -135,9 +133,9 @@ export function chatPaneLayoutModel(props: ChatPaneLayoutMenuProps) {
     actions.push({
       id: "side-panel",
       className: "chat-side-panel-toggle",
-      label: t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label"),
-      icon: sidePanelOpen ? "panelRightClose" : "panelRightOpen",
-      active: sidePanelOpen,
+      label: t(split ? "chat.sidePanel.minimize" : "chat.sidePanel.label"),
+      icon: split ? "panelRightClose" : "panelRightOpen",
+      active: split,
       onActivate: props.onToggleSidePanel,
     });
   }
@@ -180,21 +178,22 @@ export function chatPaneLayoutModel(props: ChatPaneLayoutMenuProps) {
     layout && isSidebarSlotVisible(layout, "companion")
       ? definitions.find((definition) => definition.slot === "companion")?.view?.onCreateClaw
       : undefined;
-  if (createClaw) {
-    actions.push({
-      id: "create-claw",
-      label: t("clawsDraft.title"),
-      description: t("clawsDraft.railHint"),
-      icon: "box",
-      onActivate: createClaw,
-    });
-  }
+  const createClawAction = createClaw
+    ? {
+        id: "create-claw",
+        label: t("clawsDraft.title"),
+        description: t("clawsDraft.railHint"),
+        icon: "box" as const,
+        onActivate: createClaw,
+      }
+    : undefined;
   const panelActions: ChatQuickAction[] = props.panelMenuActions ?? [];
   const allActions = [...actions, ...panelActions];
   return {
     actions,
     panelActions,
     allActions,
+    createClawAction,
     mainHeaderActionView: mainDefinition?.headerActionView,
     sideHeaderActionView: sideDefinition?.headerActionView,
     mainHeaderLink: mainDefinition?.headerLink,
@@ -230,7 +229,8 @@ export function ChatDashboardMenu(
   const actions = createMemo((): ChatQuickAction[] => {
     const layout = props.sidebarLayout;
     const result: ChatQuickAction[] = [];
-    if (layout && props.onLayoutChange) {
+    // The shared mobile host owns expansion without changing the retained desktop layout.
+    if (!props.mobile && layout && props.onLayoutChange) {
       const main = sidebarMainPanel(layout);
       const dashboard = layout.columns
         .flatMap((column) => column.panels)
@@ -311,9 +311,11 @@ export function ChatDashboardMenu(
             },
             entry.kind === "content"
               ? {
-                  ...entry,
-                  content: (
-                    <div class="chat-dashboard-menu__default-status">
+                  id: `${entry.id}-status`,
+                  label: actions().find((action) => action.id === entry.id)!.label,
+                  disabled: true,
+                  render: (attributes) => (
+                    <div {...attributes} class="chat-dashboard-menu__default-status">
                       {entry.content}
                       <Icon name="check" />
                     </div>

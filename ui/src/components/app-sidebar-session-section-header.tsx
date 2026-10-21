@@ -79,7 +79,7 @@ export function renderSidebarSessionSectionHeader(params: {
         event.currentTarget.removeAttribute("data-section-drag-blocked");
         params.onFinishDrag();
       }}
-      onContextMenu={params.onContextMenu}
+      onContextMenu={(event) => params.onContextMenu?.(event)}
     >
       <span class="sidebar-session-group-drag-handle" aria-hidden="true" />
       {params.content}
@@ -101,7 +101,7 @@ export function renderSidebarSessionSectionHeader(params: {
           aria-label={params.status.label}
           aria-expanded={params.status.expanded ? "true" : "false"}
           title={params.status.title}
-          onClick={params.status.onToggle}
+          onClick={() => params.status?.onToggle()}
         >
           {params.status.content}
         </button>

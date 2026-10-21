@@ -11,7 +11,7 @@ type ChatOutputsDashboard = {
   onOpen: () => void;
 };
 
-export type ChatOutputsData = {
+type ChatOutputsData = {
   /** The complete artifacts.list({ sessionKey, messageRole: "assistant" }) result. */
   artifacts: readonly ArtifactSummary[] | null;
   artifactsLoading: boolean;
@@ -21,7 +21,7 @@ export type ChatOutputsData = {
   dashboardError: string | null;
 };
 
-export type ChatOutputsProps = ChatOutputsData & {
+type ChatOutputsProps = ChatOutputsData & {
   onOpenArtifact: (artifactId: ArtifactSummary["id"]) => void;
   onRetryArtifacts?: () => void;
   onRetryDashboard?: () => void;

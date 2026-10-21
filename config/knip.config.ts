@@ -82,6 +82,18 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-ingress-writer.ts!",
   // scripts/perf/README.md invokes this cold usage-cache measurement CLI by path.
   "scripts/perf/chat-metadata-burst-measure.ts!",
+  // docs/ci/checkout.md invokes this checkout materialization benchmark by path.
+  "scripts/perf/ci-preflight-checkout-measure.mjs!",
+  // The narration payload benchmark in #179092 is invoked by path.
+  "scripts/perf/tool-frame-replay.ts!",
+  // scripts/perf/README.md invokes these drivers and their worker-memory preload.
+  "scripts/perf/workboard-read-measure.ts!",
+  "scripts/perf/transcript-hydration-headroom.ts!",
+  "scripts/perf/transcript-worker-memory-preload.ts!",
+  // scripts/perf/README.md invokes this synthetic authority allocation probe by path.
+  "scripts/perf/operator-authority-measure.ts!",
+  // #179149 invokes this synthetic event-dispatch allocation probe by path.
+  "scripts/perf/agent-event-dispatch-measure.ts!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.

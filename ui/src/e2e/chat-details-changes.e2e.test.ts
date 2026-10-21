@@ -4,12 +4,12 @@ import { closeChatDetails, openChatDetails } from "./chat-details.test-support.t
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
-  name: "Details change summary",
+  name: "Details Environment changes",
   trackBrowserContexts: true,
 });
 
 suite.define(() => {
-  it("observes only metadata while Details is presented and retains last-known changes on refresh failure", async () => {
+  it("shares read-only Uncommitted demand between Environment and Review and recovers retained counts", async () => {
     const context = await suite.newBrowserContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -20,6 +20,7 @@ suite.define(() => {
     await page.clock.install();
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+      operatorScopes: ["operator.read"],
       workspace: "/workspace/openclaw",
       workspaceGit: true,
       models: [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }],
@@ -65,73 +66,93 @@ suite.define(() => {
         },
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await page.getByText("Improve workspace navigation", { exact: true }).first().waitFor();
+    await page.goto(suite.server.baseUrl + "chat");
+    await page
+      .getByText("Improve workspace navigation", { exact: true })
+      .filter({ visible: true })
+      .first()
+      .waitFor();
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
     const details = await openChatDetails(page);
-    const action = details.getByRole("button", { name: "All changes", exact: true });
-    // The lazy Session view must mount before its summary timer can advance.
+    const environment = details.locator('[data-details-group="environment"]');
+    const disclosure = environment.locator(":scope > summary");
+    const action = environment.getByRole("button", { name: /^Changes/ });
     await action.waitFor();
     await pauseVirtualClock(page);
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(1);
     await page.clock.runFor(1);
-    await expect.poll(() => action.textContent()).toContain("12 files");
-    expect(await action.textContent()).toContain("+248");
+    await expect.poll(() => action.textContent()).toContain("+248");
     expect(await action.textContent()).toContain("−61");
-    expect(await details.locator(".chat-details__participants").count()).toBe(0);
     expect((await gateway.getRequests("sessions.diff"))[0]?.params).toMatchObject({
-      scope: "all",
-      summaryOnly: true,
+      scope: "uncommitted",
     });
-    await gateway.deferNext("sessions.diff", { summaryOnly: true });
-    await page.clock.runFor(30_001);
+    expect(await gateway.getRequests("sessions.diff", { summaryOnly: true })).toHaveLength(0);
+    expect(await page.locator(".session-diff").count()).toBe(0);
+    await disclosure.press("Enter");
+    await expect.poll(() => disclosure.getAttribute("aria-expanded")).toBe("false");
+    await page.clock.fastForward(60_000);
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(1);
+    await gateway.deferNext("sessions.diff", { scope: "uncommitted" });
+    await disclosure.press("Enter");
     await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(2);
     expect(await action.textContent()).toContain("+248");
-    await page.clock.runFor(1_000);
-    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(2);
+    await page.clock.fastForward(60_000);
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(2);
     await gateway.rejectDeferred("sessions.diff", {
       code: "UNAVAILABLE",
       message: "Temporary checkout read failure",
     });
-    await expect.poll(() => action.textContent()).toContain("stale");
-    expect(await action.textContent()).toContain("12 files");
-    expect(await action.getAttribute("aria-description")).toContain("Last-known changes");
+    expect(await action.textContent()).toContain("+248");
+    expect(await action.textContent()).toContain("−61");
+
+    await page.clock.resume();
+    await closeChatDetails(page);
+    await pauseVirtualClock(page);
+    await page.clock.fastForward(60_000);
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(2);
     await gateway.setMethodResponse("sessions.diff", {
       sessionKey: "main",
+      branch: "feature/workspace-navigation",
+      baseRef: "HEAD",
       files: [{ path: "src/app.ts", status: "modified", additions: 12480, deletions: 1030 }],
       additions: 12480,
       deletions: 1030,
       truncated: true,
     });
-    await page.clock.runFor(30_001);
-    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(3);
-    await expect.poll(() => action.textContent()).toContain("+12.5K");
-    expect(await action.textContent()).toContain("partial");
-    expect(await action.textContent()).not.toContain("stale");
-    expect(await action.getAttribute("aria-description")).toContain("+12480 lines, −1030 lines");
-    await page.clock.resume();
-    await closeChatDetails(page);
-    await pauseVirtualClock(page);
-    const beforeHidden = (await gateway.getRequests("sessions.diff")).length;
-    await page.clock.fastForward(60_000);
-    expect(await gateway.getRequests("sessions.diff")).toHaveLength(beforeHidden);
+    await gateway.deferNext("sessions.diff", { scope: "uncommitted" });
     await page.clock.resume();
     await openChatDetails(page);
     await pauseVirtualClock(page);
-    await page.clock.runFor(1);
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.diff")).length)
-      .toBe(beforeHidden + 1);
-    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(3);
+    expect(await action.textContent()).toContain("+248");
+
+    // Review joins Environment's pending read through the checkout owner.
     await action.click();
-    await expect
-      .poll(
-        async () =>
-          (await gateway.getRequests("sessions.diff")).length -
-          (await gateway.getRequests("sessions.diff", { summaryOnly: true })).length,
-      )
-      .toBe(1);
-    expect((await gateway.getRequests("sessions.diff")).at(-1)?.params).toMatchObject({
-      scope: "all",
-    });
+    const review = page.locator(".session-diff");
+    await expect.poll(() => review.getAttribute("aria-busy")).toBe("true");
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(3);
+    await gateway.resolveDeferred("sessions.diff");
+    await expect.poll(() => review.getAttribute("aria-busy")).toBe("false");
+    await expect.poll(() => action.textContent()).toContain("+12480");
+    expect(await action.textContent()).toContain("−1030");
+    expect(
+      await action.getByLabel("Some changes could not be displayed.", { exact: true }).count(),
+    ).toBe(1);
+    expect(
+      await review.getByRole("button", { name: "Choose change scope", exact: true }).textContent(),
+    ).toBe("Uncommitted");
+    expect(await review.locator(".session-diff__filename").allTextContents()).toEqual(["app.ts"]);
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(3);
+    expect(await gateway.getRequests("sessions.diff", { scope: "all" })).toHaveLength(0);
+    expect(await gateway.getRequests("sessions.diff", { summaryOnly: true })).toHaveLength(0);
+    for (const method of [
+      "sessions.files.list",
+      "sessions.files.get",
+      "sessions.files.set",
+      "sessions.patch",
+      "chat.send",
+    ]) {
+      expect(await gateway.getRequests(method)).toHaveLength(0);
+    }
   });
 });

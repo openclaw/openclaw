@@ -80,7 +80,8 @@ async function fixture() {
     widgets: [],
     replacements: [],
   };
-  Object.assign(context.plugins, {
+  const plugins = Object.assign(context.plugins, {
+    revision: 0,
     registryStatus: "complete",
     registrations: <K extends keyof ControlUiContributions>(kind: K) =>
       registrations[kind].map((entry) => ({ ...entry })),
@@ -89,7 +90,10 @@ async function fixture() {
       return () => listeners.delete(listener);
     },
   });
-  const notifyPlugins = () => listeners.forEach((listener) => listener());
+  const notifyPlugins = () => {
+    plugins.revision += 1;
+    listeners.forEach((listener) => listener());
+  };
   const { sidebar, provider } = await mountSidebarContext(context);
   sidebar.activeRouteId = "plugin";
   sidebar.activePluginTabId = "briefing/daily";

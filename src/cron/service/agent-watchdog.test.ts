@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CronAgentExecutionPhase } from "../types.js";
+import type { CronAgentExecutionPhase, CronAgentExecutionStarted } from "../types.js";
 import { CRON_AGENT_SETUP_WATCHDOG_MS, createCronAgentWatchdog } from "./agent-watchdog.js";
 import { preExecutionTimeoutErrorMessage } from "./execution-errors.js";
 
-const initialSetupPhases = ["workspace"] as const satisfies readonly CronAgentExecutionPhase[];
-
-const fallbackSetupPhases = [
-  "runtime_plugins",
-] as const satisfies readonly CronAgentExecutionPhase[];
+let dispose: (() => void) | undefined;
+afterEach(() => {
+  dispose?.();
+  vi.useRealTimers();
+});
 
 function makeWatchdog(timeoutMultiplier = 3) {
   vi.useFakeTimers();
@@ -17,23 +17,34 @@ function makeWatchdog(timeoutMultiplier = 3) {
     jobTimeoutMs: CRON_AGENT_SETUP_WATCHDOG_MS * timeoutMultiplier,
     triggerTimeout,
   });
-  return { triggerTimeout, watchdog };
+  const jobId = "watchdog-job";
+  const runner = (isFallback = false) =>
+    watchdog.noteRunnerStarted({ jobId, phase: "runner_entered", isFallback });
+  const phase = (nextPhase: CronAgentExecutionPhase) =>
+    watchdog.notePhase({ jobId, phase: nextPhase });
+  const advance = async (ms: number, execution?: Omit<CronAgentExecutionStarted, "jobId">) => {
+    await vi.advanceTimersByTimeAsync(ms);
+    expect(triggerTimeout.mock.calls).toEqual(
+      execution ? [[preExecutionTimeoutErrorMessage({ jobId, ...execution })]] : [],
+    );
+  };
+  watchdog.start();
+  dispose = watchdog.dispose;
+  const fallback = () => {
+    phase("model_call_started");
+    runner(true);
+    phase("runtime_plugins");
+  };
+  return { triggerTimeout, watchdog, runner, phase, fallback, advance };
 }
 
 describe("cron agent setup watchdog", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("starts setup timeout only after lane admission", async () => {
-    const { triggerTimeout, watchdog } = makeWatchdog(2);
+    const { triggerTimeout, watchdog, advance } = makeWatchdog(2);
 
-    watchdog.start();
     watchdog.noteLaneWait();
 
-    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS + 1);
-
-    expect(triggerTimeout).not.toHaveBeenCalled();
+    await advance(CRON_AGENT_SETUP_WATCHDOG_MS + 1);
     expect(watchdog.observedLaneWait()).toBe(true);
 
     watchdog.noteLaneAdmitted();
@@ -47,95 +58,43 @@ describe("cron agent setup watchdog", () => {
     expect(watchdog.observedLaneWait()).toBe(false);
   });
 
-  it("keeps the pre-execution watchdog armed for runner entry alone", async () => {
-    const { triggerTimeout, watchdog } = makeWatchdog();
-    const execution = { jobId: "runner-entry-only-job", phase: "runner_entered" } as const;
-
-    watchdog.start();
-    watchdog.noteRunnerStarted(execution);
-    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS);
-
-    expect(triggerTimeout).toHaveBeenCalledExactlyOnceWith(
-      preExecutionTimeoutErrorMessage(execution),
-    );
-    watchdog.dispose();
+  it("lets initial workspace progress use the configured job timeout", async () => {
+    const { runner, phase, advance } = makeWatchdog();
+    runner();
+    phase("workspace");
+    await advance(CRON_AGENT_SETUP_WATCHDOG_MS);
   });
 
-  it.each(initialSetupPhases)(
-    "lets initial %s progress use the configured job timeout",
+  it.each(["runner_entered", "runtime_plugins"] as const)(
+    "keeps the pre-execution watchdog armed at %s",
     async (phase) => {
-      const { triggerTimeout, watchdog } = makeWatchdog();
-      const jobId = "initial-setup-progress-job";
+      const { runner, fallback, advance } = makeWatchdog();
+      runner();
+      if (phase === "runtime_plugins") {
+        fallback();
+      }
 
-      watchdog.start();
-      watchdog.noteRunnerStarted({ jobId, phase: "runner_entered" });
-      watchdog.notePhase({ jobId, phase });
-      await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS);
-
-      expect(triggerTimeout).not.toHaveBeenCalled();
-      watchdog.dispose();
-    },
-  );
-
-  it.each(fallbackSetupPhases)(
-    "rearms the pre-execution watchdog when execution falls back to %s",
-    async (fallbackPhase) => {
-      const { triggerTimeout, watchdog } = makeWatchdog();
-      const jobId = "fallback-watchdog-job";
-
-      watchdog.start();
-      watchdog.noteRunnerStarted({ jobId, phase: "runner_entered" });
-      watchdog.notePhase({ jobId, phase: "model_call_started" });
-      watchdog.noteRunnerStarted({ jobId, phase: "runner_entered", isFallback: true });
-      watchdog.notePhase({ jobId, phase: fallbackPhase });
-
-      await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
-      expect(triggerTimeout).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(triggerTimeout).toHaveBeenCalledExactlyOnceWith(
-        preExecutionTimeoutErrorMessage({ jobId, phase: fallbackPhase }),
-      );
-      watchdog.dispose();
+      await advance(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
+      await advance(1, { phase });
     },
   );
 
   it("keeps the fallback watchdog armed across later setup progress", async () => {
-    const { triggerTimeout, watchdog } = makeWatchdog();
-    const jobId = "fallback-progress-job";
-
-    watchdog.start();
-    watchdog.noteRunnerStarted({ jobId, phase: "runner_entered" });
-    watchdog.notePhase({ jobId, phase: "model_call_started" });
-    watchdog.noteRunnerStarted({ jobId, phase: "runner_entered", isFallback: true });
-    watchdog.notePhase({ jobId, phase: "runtime_plugins" });
+    const { runner, phase, fallback, advance } = makeWatchdog();
+    runner();
+    fallback();
     await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS / 2);
-    watchdog.notePhase({ jobId, phase: "model_resolution" });
-    watchdog.notePhase({ jobId, phase: "auth" });
-    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS / 2);
-
-    expect(triggerTimeout).toHaveBeenCalledExactlyOnceWith(
-      preExecutionTimeoutErrorMessage({ jobId, phase: "auth" }),
-    );
-    watchdog.dispose();
+    phase("model_resolution");
+    phase("auth");
+    await advance(CRON_AGENT_SETUP_WATCHDOG_MS / 2, { phase: "auth" });
   });
 
   it("gives a fallback a fresh guard when the initial runner made no progress", async () => {
-    const { triggerTimeout, watchdog } = makeWatchdog();
-    const jobId = "fallback-after-stalled-runner-job";
-
-    watchdog.start();
-    watchdog.noteRunnerStarted({ jobId, phase: "runner_entered" });
+    const { runner, advance } = makeWatchdog();
+    runner();
     await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
-    watchdog.noteRunnerStarted({ jobId, phase: "runner_entered", isFallback: true });
-    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
-
-    expect(triggerTimeout).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(triggerTimeout).toHaveBeenCalledExactlyOnceWith(
-      preExecutionTimeoutErrorMessage({ jobId, phase: "runner_entered", isFallback: true }),
-    );
-    watchdog.dispose();
+    runner(true);
+    await advance(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
+    await advance(1, { phase: "runner_entered", isFallback: true });
   });
 });
