@@ -67,7 +67,12 @@ function fixture(filename?: string) {
   };
 }
 
-function expectRenewed(actual: string[], retained: string[], retired: string[], added = 1) {
+function expectRenewed(
+  actual: readonly string[],
+  retained: readonly string[],
+  retired: readonly string[],
+  added = 1,
+) {
   expect(actual).toHaveLength(retained.length + added);
   expect(actual).toEqual(expect.arrayContaining(retained));
   expect(new Set(actual).size).toBe(actual.length);

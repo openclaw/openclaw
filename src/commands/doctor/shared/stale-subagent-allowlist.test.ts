@@ -21,7 +21,8 @@ describe("stale subagent allowlist doctor repair", () => {
       "writer-agent": { runtime: { type: "acp", acp: { agent: " Writer " } } },
     });
     cfg.acp = { defaultAgent: " CLAUDE ", allowedAgents: [" CODEX ", "*", "codex"] };
-    expect(scanStaleSubagentAllowlistReferences(cfg)).toStrictEqual([
+    const hits = scanStaleSubagentAllowlistReferences(cfg);
+    expect(hits).toStrictEqual([
       {
         pathLabel: "agents.defaults.subagents.allowAgents",
         agentId: "stale",

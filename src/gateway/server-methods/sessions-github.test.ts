@@ -9,6 +9,7 @@ import {
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { getUserProfileDisplay } from "../../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -229,6 +230,7 @@ describe("sessions.github.publish", () => {
         client.authenticatedUserProfile = {
           profileId: profile.id,
           displayName: profile.displayName,
+          avatarRevision: getUserProfileDisplay(profile.id).avatarRevision,
           hasAvatar: false,
           updatedAt: profile.updatedAt,
         };
