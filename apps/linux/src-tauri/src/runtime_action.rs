@@ -605,7 +605,7 @@ pub(crate) fn install_launcher(
         return Err("The CLI entry point must belong to its managed installation.".into());
     }
     let path = crate::cli::managed_launcher(prefix);
-    fs::create_dir_all(path.parent().ok_or(CHANGED)?).map_err(|error| error.to_string())?;
+    ensure_private_directory(path.parent().ok_or(CHANGED)?)?;
     let original = match fs::symlink_metadata(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => LauncherFile {
             path,
@@ -617,6 +617,17 @@ pub(crate) fn install_launcher(
             .ok_or("The existing CLI launcher is not a recognized managed installation.")?,
     };
     publish_launcher(&LauncherFile { entry, ..original }, runtime, purpose)
+}
+
+fn ensure_private_directory(path: &Path) -> Result<(), String> {
+    fs::create_dir_all(path).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn publish_launcher(

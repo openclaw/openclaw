@@ -120,7 +120,8 @@ resolve_installer_path() {
 }
 
 OPENCLAW_EFFECTIVE_HOME="$(resolve_home_path "${OPENCLAW_HOME:-$HOME}")"
-PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
+DEFAULT_PREFIX="${HOME}/.openclaw"
+PREFIX="${OPENCLAW_PREFIX:-${DEFAULT_PREFIX}}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
 DEFAULT_NODE_VERSION="24.21.0"
@@ -492,6 +493,24 @@ select_node_version_for_platform() {
 
 node_dir() {
   echo "${PREFIX}/tools/node-v${NODE_VERSION}"
+}
+
+ensure_private_install_prefix() {
+  local prefix="$1"
+  local existed=0
+  if [[ -e "$prefix" ]]; then
+    existed=1
+    if [[ ! -d "$prefix" ]]; then
+      fail "Install prefix is not a directory: ${prefix}"
+    fi
+  else
+    (umask 077 && mkdir -p "$prefix") || fail "Could not create install prefix: ${prefix}"
+  fi
+  # The default prefix is the state directory. Service-definition admission
+  # rejects group-writable roots, so repair retries from older umask-derived installs.
+  if [[ "$existed" -eq 0 || "$prefix" == "$DEFAULT_PREFIX" ]]; then
+    chmod 700 "$prefix" || fail "Could not secure install prefix: ${prefix}"
+  fi
 }
 
 node_bin() {
@@ -1305,6 +1324,7 @@ main() {
     fail_freebsd_source_install
   fi
   PREFIX="$(resolve_installer_path "$PREFIX")"
+  ensure_private_install_prefix "$PREFIX"
   local original_tmpdir="${TMPDIR-}" original_tmpdir_set="${TMPDIR+x}"
   local TMPDIR="$original_tmpdir"
   prepare_tmpdir

@@ -332,6 +332,31 @@ fn rejects_modified_source_and_installed_payload_without_overwriting() {
     assert_eq!(fs::read(&runtime.bun).unwrap(), b"operator replacement");
 }
 
+#[cfg(unix)]
+#[test]
+fn repairs_a_group_writable_state_prefix_before_runtime_publication() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    fs::create_dir_all(&fixture.prefix).unwrap();
+    fs::set_permissions(&fixture.prefix, fs::Permissions::from_mode(0o775)).unwrap();
+
+    fixture.seed().unwrap();
+
+    assert_eq!(
+        fs::metadata(&fixture.prefix).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(fixture.prefix.join("tools"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn rejects_corrupted_missing_or_truncated_resource_envelope() {

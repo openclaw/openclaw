@@ -124,6 +124,33 @@ describe("install-cli.sh", () => {
 
   defineInstallerShellIsolationContract(installerContract);
 
+  it.each(["missing", "group-writable"] as const)(
+    "creates or repairs the default install prefix as private when it is %s",
+    (state) => {
+      const root = tempDirs.make("openclaw-install-cli-prefix-mode-");
+      const prefix = join(root, ".openclaw");
+      const cli = join(root, "cli");
+      if (state === "group-writable") {
+        mkdirSync(prefix, { recursive: true });
+        chmodSync(prefix, 0o775);
+      }
+      writeShell(cli, "printf 'OpenClaw 2026.10.5\\n'");
+
+      const result = runInstallCliShell(
+        `
+        umask 0002
+        install_node() { :; }
+        install_openclaw() { mkdir -p "$PREFIX/bin"; cp "$FIXTURE_CLI" "$PREFIX/bin/openclaw"; }
+        main --json --npm --onboard --runtime-only
+        `,
+        { HOME: root, FIXTURE_CLI: cli },
+      );
+
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(lstatSync(prefix).mode & 0o777).toBe(0o700);
+    },
+  );
+
   it("keeps runtime-only installation free of service and onboarding effects", () => {
     const root = tempDirs.make("openclaw-browser-runtime-install-");
     const prefix = join(root, "prefix"),

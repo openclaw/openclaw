@@ -145,6 +145,21 @@ fn fresh_install_with_unknown_mutation_capability_carries_null_definition_and_bu
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn launcher_parent_repairs_group_writable_permissions() {
+    let fixture = Fixture::new();
+    let bin = fixture.0.join("bin");
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o775)).unwrap();
+
+    ensure_private_directory(&bin).unwrap();
+
+    assert_eq!(
+        fs::metadata(&bin).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+}
+
 #[test]
 fn fresh_install_marks_a_preexisting_canonical_launcher_after_health() {
     const CHILD: &str = "OPENCLAW_RUNTIME_ACTION_EXECUTION_CHILD";

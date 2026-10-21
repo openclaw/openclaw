@@ -127,7 +127,9 @@ fn seed_at(
     validate_manifest(&manifest)?;
     verify_payload(source, manifest_bytes, &manifest, true)?;
     let store = prefix.join("tools/desktop-runtime");
-    ensure_directory(&store)?;
+    ensure_private_directory(prefix)?;
+    ensure_private_directory(&prefix.join("tools"))?;
+    ensure_private_directory(&store)?;
     let destination = runtime_directory(prefix, manifest_bytes, &manifest);
     if fs::symlink_metadata(&destination).is_ok() {
         verify_payload(&destination, manifest_bytes, &manifest, false)?;
@@ -258,7 +260,7 @@ fn ensure_directory(path: &Path) -> RuntimeResult<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(path).map_err(Into::into)
+            create_runtime_directory(path).map_err(Into::into)
         }
         _ => Err(format!(
             "Runtime directory is unavailable or redirected: {}",
@@ -266,6 +268,30 @@ fn ensure_directory(path: &Path) -> RuntimeResult<()> {
         )
         .into()),
     }
+}
+
+fn create_runtime_directory(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(path)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(path)
+    }
+}
+
+fn ensure_private_directory(path: &Path) -> RuntimeResult<()> {
+    ensure_directory(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 fn payload_directories(manifest: &Manifest) -> BTreeSet<PathBuf> {
