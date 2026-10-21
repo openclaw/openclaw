@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import { configureAcpErrorRedactor } from "../error-format.js";
 import {
   AcpRuntimeError,
@@ -8,12 +8,16 @@ import {
   withAcpRuntimeErrorBoundary,
 } from "./errors.js";
 
-async function expectRejectedAcpRuntimeError(promise: Promise<unknown>): Promise<AcpRuntimeError> {
+const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+
+async function expectWrappedError(source: Error, code: string) {
   try {
-    await promise;
+    await rejectThroughBoundary(source);
   } catch (error) {
-    expect(error).toBeInstanceOf(AcpRuntimeError);
-    return error as AcpRuntimeError;
+    assert(error instanceof AcpRuntimeError);
+    expect(error).toMatchObject({ name: "AcpRuntimeError", code, message: source.message });
+    expect(error.cause).toBe(source);
+    return;
   }
   throw new Error("expected ACP runtime error rejection");
 }
@@ -28,19 +32,12 @@ function rejectThroughBoundary(error: unknown) {
   });
 }
 
-afterEach(() => {
-  configureAcpErrorRedactor(undefined);
-});
+afterEach(() => configureAcpErrorRedactor(undefined));
 
 describe("withAcpRuntimeErrorBoundary", () => {
   it("wraps generic errors with fallback code and source message", async () => {
     const sourceError = Object.assign(new Error("boom"), { data: { details: "extra diagnostic" } });
-    const error = await expectRejectedAcpRuntimeError(rejectThroughBoundary(sourceError));
-
-    expect(error.name).toBe("AcpRuntimeError");
-    expect(error.code).toBe("ACP_TURN_FAILED");
-    expect(error.message).toBe("boom");
-    expect(error.cause).toBe(sourceError);
+    await expectWrappedError(sourceError, "ACP_TURN_FAILED");
   });
 
   it("passes through existing ACP runtime errors", async () => {
@@ -49,38 +46,25 @@ describe("withAcpRuntimeErrorBoundary", () => {
   });
 
   it("preserves ACP runtime codes from foreign package errors", async () => {
-    class ForeignAcpRuntimeError extends Error {
-      readonly code = "ACP_BACKEND_MISSING" as const;
-      readonly data = { details: "extra backend diagnostic" };
-    }
-
-    const foreignError = new ForeignAcpRuntimeError("backend missing");
-
-    const error = await expectRejectedAcpRuntimeError(rejectThroughBoundary(foreignError));
-
-    expect(error.name).toBe("AcpRuntimeError");
-    expect(error.code).toBe("ACP_BACKEND_MISSING");
-    expect(error.message).toBe("backend missing");
-    expect(error.cause).toBe(foreignError);
+    const foreignError = Object.assign(new Error("backend missing"), {
+      code: "ACP_BACKEND_MISSING",
+      data: { details: "extra backend diagnostic" },
+    });
+    await expectWrappedError(foreignError, "ACP_BACKEND_MISSING");
     expect(isAcpRuntimeError(foreignError)).toBe(true);
   });
 
   it("preserves redacted RequestError details from numeric ACP errors", () => {
-    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
     const requestError = Object.assign(new Error("Internal error"), {
       name: "RequestError",
       code: -32603,
-      data: {
-        details: `unknown config option: timeout; token=${token}`,
-      },
+      data: { details: `unknown config option: timeout; token=${token}` },
     });
-
     const error = toAcpRuntimeError({
       error: requestError,
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "fallback",
     });
-
     expect(error.code).toBe("ACP_TURN_FAILED");
     expect(error.message).toContain("Internal error: unknown config option: timeout");
     expect(error.message).not.toContain(token);
@@ -90,21 +74,16 @@ describe("withAcpRuntimeErrorBoundary", () => {
 
 describe("formatAcpErrorChain redaction", () => {
   it("redacts secret-shaped tokens that arrive as top-level non-Error values", () => {
-    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
-
     const out = formatAcpErrorChain(`upstream rejected token=${token}`);
-
     expect(out).toMatch(/upstream rejected/);
     expect(out).not.toContain(token);
   });
 
   it("redacts secret-shaped tokens that arrive in nested cause messages", () => {
-    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
     const inner = new Error(`upstream rejected token=${token}`);
-    const acp = new AcpRuntimeError("ACP_TURN_FAILED", "ACP turn failed", { cause: inner });
-
-    const out = formatAcpErrorChain(acp);
-
+    const out = formatAcpErrorChain(
+      new AcpRuntimeError("ACP_TURN_FAILED", "ACP turn failed", { cause: inner }),
+    );
     expect(out).toMatch(/ACP_TURN_FAILED/);
     expect(out).toMatch(/upstream rejected/);
     expect(out).not.toContain(token);
@@ -118,7 +97,6 @@ describe("formatAcpErrorChain redaction", () => {
     const out = formatAcpErrorChain(
       new AcpRuntimeError("ACP_TURN_FAILED", `backend failed: ${secrets.join(" ")}`),
     );
-
     for (const secret of secrets) {
       expect(out).not.toContain(secret);
     }
@@ -127,9 +105,7 @@ describe("formatAcpErrorChain redaction", () => {
 
   it("uses a configured host redactor before rendering ACP error text", () => {
     configureAcpErrorRedactor((value) => value.replaceAll("custom-secret", "[CUSTOM]"));
-
     const out = formatAcpErrorChain(new AcpRuntimeError("ACP_TURN_FAILED", "custom-secret"));
-
     expect(out).toContain("[CUSTOM]");
     expect(out).not.toContain("custom-secret");
   });
