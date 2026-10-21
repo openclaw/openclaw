@@ -230,7 +230,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await pane.getByRole("button", { name: "Session sharing", exact: true }).click();
         const sharing = pane.locator(".chat-pane__sharing-menu");
-        await sharing.getByText("Session members", { exact: true }).waitFor();
+        await sharing.getByText("Session access", { exact: true }).waitFor();
         const searchToggle = sharing.getByRole("button", { name: "Search people…", exact: true });
         await searchToggle.click();
         const search = sharing.getByRole("searchbox", { name: "Search people…", exact: true });
