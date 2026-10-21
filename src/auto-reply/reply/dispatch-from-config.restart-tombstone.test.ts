@@ -138,7 +138,7 @@ describe("restart tombstone channel feedback", () => {
       elapsedMs += 1_500;
       return sessionStoreMocks.currentEntry;
     });
-    // Slow lifecycle diagnostics must not count as duplicate rejection warnings.
+    // Uncontended lifecycle effects stay quiet even when their own work is slow.
     const rejectionWarnings = () =>
       warn.mock.calls.filter(([line]) => line.includes("[auto-reply/reply-turn-admission]"));
     await rejectInbound({ visibleReplies: "message_tool" });
@@ -156,7 +156,7 @@ describe("restart tombstone channel feedback", () => {
       expect(line).toContain("automatic recovery exhausted");
       expect(line).toContain("/reset");
     }
-    expect(warn.mock.calls.map(([line]) => stripVTControlCharacters(line))).toContainEqual(
+    expect(warn.mock.calls.map(([line]) => stripVTControlCharacters(line))).not.toContainEqual(
       expect.stringContaining("[sessions/lifecycle] slow session lifecycle operation"),
     );
     expect(sessionStoreMocks.currentEntry).toMatchObject({

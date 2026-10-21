@@ -22,62 +22,45 @@ const VECTOR = {
   clientProof: "Rl8TStMYlPLxJPDYwSe__mtEjgMf1C4TM-ZN6sUipZ4",
   acceptProof: "1R5MpHs6qnAdc0_X6vKBwj91tlRoWfNuGXaNfSD7VnI",
 };
-
-function challenge(overrides: Record<string, unknown> = {}) {
-  return {
-    type: "auth.challenge",
-    v: 2,
-    ...VECTOR.fields,
-    serverProof: VECTOR.serverProof,
-    ...overrides,
-  };
+const { keyId, sessionId, clientNonce } = VECTOR.fields;
+const clientProof = VECTOR.clientProof;
+const challenge = (overrides: Record<string, unknown> = {}) => ({
+  type: "auth.challenge",
+  v: 2,
+  ...VECTOR.fields,
+  serverProof: VECTOR.serverProof,
+  ...overrides,
+});
+function ok(acceptProof = VECTOR.acceptProof) {
+  return { type: "auth.ok", v: 2, sessionId: VECTOR.fields.sessionId, acceptProof };
 }
-
-async function client() {
-  return await createExtensionRelayAuthClient({
+async function client(start = true) {
+  const auth = await createExtensionRelayAuthClient({
     token: VECTOR.token,
     relayUrl: "ws://127.0.0.1:18797/extension?profile=chrome",
     clientNonce: VECTOR.fields.clientNonce,
     now: () => VECTOR.fields.issuedAtMs + 1,
   });
+  if (start) {
+    auth.start();
+  }
+  return auth;
 }
-
-describe("Browser Relay Authentication v2 WebCrypto vectors", () => {
+describe("Browser Relay Authentication v2", () => {
   it("verifies server proof before producing client proof and verifies accept proof", async () => {
-    const auth = await client();
-    expect(auth.start()).toEqual({
-      type: "auth.hello",
-      v: 2,
-      keyId: VECTOR.fields.keyId,
-      clientNonce: VECTOR.fields.clientNonce,
-    });
-    await expect(auth.acceptChallenge(challenge())).resolves.toEqual({
-      type: "auth.response",
-      v: 2,
-      sessionId: VECTOR.fields.sessionId,
-      clientProof: VECTOR.clientProof,
-    });
-    await expect(
-      auth.acceptOk({
-        type: "auth.ok",
-        v: 2,
-        sessionId: VECTOR.fields.sessionId,
-        acceptProof: VECTOR.acceptProof,
-      }),
-    ).resolves.toBeUndefined();
+    const auth = await client(false);
+    expect(auth.start()).toEqual({ type: "auth.hello", v: 2, keyId, clientNonce });
+    const response = { type: "auth.response", v: 2, sessionId, clientProof };
+    await expect(auth.acceptChallenge(challenge())).resolves.toEqual(response);
+    await expect(auth.acceptOk(ok())).resolves.toBeUndefined();
   });
-});
-
-describe("Browser Relay Authentication v2 client validation", () => {
   it("rejects a bad server proof without producing a client proof", async () => {
     const auth = await client();
-    auth.start();
     await expect(auth.acceptChallenge(challenge({ serverProof: "A".repeat(43) }))).rejects.toThrow(
       "server proof is invalid",
     );
     await expect(auth.acceptChallenge(challenge())).rejects.toThrow("out of sequence");
   });
-
   it("rejects every substituted challenge binding", async () => {
     const substitutions: Array<[string, unknown]> = [
       ["v", 1],
@@ -96,11 +79,9 @@ describe("Browser Relay Authentication v2 client validation", () => {
     ];
     for (const [field, value] of substitutions) {
       const auth = await client();
-      auth.start();
       await expect(auth.acceptChallenge(challenge({ [field]: value }))).rejects.toThrow();
     }
   });
-
   it("rejects expired, overlong, and extra-field challenges", async () => {
     for (const mutation of [
       {
@@ -111,55 +92,30 @@ describe("Browser Relay Authentication v2 client validation", () => {
       { unexpected: true },
     ]) {
       const auth = await client();
-      auth.start();
       await expect(auth.acceptChallenge(challenge(mutation))).rejects.toThrow();
     }
   });
-
   it("rejects bad accept proof and exact-sequence violations", async () => {
-    const early = await client();
-    await expect(
-      early.acceptOk({
-        type: "auth.ok",
-        v: 2,
-        sessionId: VECTOR.fields.sessionId,
-        acceptProof: VECTOR.acceptProof,
-      }),
-    ).rejects.toThrow("out of sequence");
-
+    const early = await client(false);
+    await expect(early.acceptOk(ok())).rejects.toThrow("out of sequence");
     const auth = await client();
-    auth.start();
     await auth.acceptChallenge(challenge());
-    await expect(
-      auth.acceptOk({
-        type: "auth.ok",
-        v: 2,
-        sessionId: VECTOR.fields.sessionId,
-        acceptProof: "A".repeat(43),
-      }),
-    ).rejects.toThrow("accept proof is invalid");
+    await expect(auth.acceptOk(ok("A".repeat(43)))).rejects.toThrow("accept proof is invalid");
   });
-
   it("canonicalizes only the allowed profile query", () => {
     expect(
       extensionRelayAuthResource("wss://gateway.example/base/browser/extension?profile=work"),
     ).toBe("/base/browser/extension?profile=work");
-    expect(() =>
-      extensionRelayAuthResource("ws://127.0.0.1/extension?profile=a&profile=b"),
-    ).toThrow("unsupported query");
-    expect(() => extensionRelayAuthResource("ws://127.0.0.1/extension?token=nope")).toThrow(
+    const url = "ws://127.0.0.1/extension";
+    expect(() => extensionRelayAuthResource(`${url}?profile=a&profile=b`)).toThrow(
       "unsupported query",
     );
+    expect(() => extensionRelayAuthResource(`${url}?token=nope`)).toThrow("unsupported query");
   });
-
   it("rejects duplicate security fields before JSON parsing", () => {
     expect(parseRelayAuthJson('{"type":"auth.ok","v":2,"v":1}')).toBeNull();
-    expect(parseRelayAuthJson('{"type":"auth.ok","v":2}')).toEqual({
-      type: "auth.ok",
-      v: 2,
-    });
+    expect(parseRelayAuthJson('{"type":"auth.ok","v":2}')).toEqual({ type: "auth.ok", v: 2 });
   });
-
   it("rejects oversized authentication frames before JSON parsing", () => {
     expect(parseRelayAuthJson(`{"padding":"${"a".repeat(16 * 1024)}"}`)).toBeNull();
     expect(parseRelayAuthJson(`{"padding":"${"é".repeat(9 * 1024)}"}`)).toBeNull();

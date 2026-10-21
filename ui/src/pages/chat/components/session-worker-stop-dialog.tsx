@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { action, createOptimistic, Show } from "solid-js";
 import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerSessionMachineEnglish } from "../../../i18n/locales/en-session-machine.ts";
@@ -12,7 +12,7 @@ type SessionWorkerStopDialogProps = {
   machineName?: string;
   pending: boolean;
   onConfirm: () => void;
-  onCancel: () => void;
+  onCancel: () => boolean;
 };
 
 /** The placement owner retains the captured identity and performs the effect. */
@@ -24,10 +24,8 @@ function SessionWorkerStopDialog(props: SessionWorkerStopDialogProps) {
       class="session-worker-stop-dialog"
       label={t("sessionsView.workerStopTitle")}
       onModal-cancel={(event) => {
-        if (props.pending) {
+        if (!props.onCancel()) {
           event.preventDefault();
-        } else {
-          props.onCancel();
         }
       }}
     >
@@ -111,25 +109,34 @@ export async function showSessionWorkerStopDialog(options: {
   try {
     await withPromiseModalHost<void>(undefined, ({ render, finish }) => {
       render(() => {
-        const [pending, setPending] = createSignal(false);
+        const [pending, setPending] = createOptimistic(false);
+        let confirming = false;
         const cancel = () => {
-          if (!pending()) {
-            finish();
+          if (confirming) {
+            return false;
           }
+          finish();
+          return true;
         };
-        const confirm = async () => {
-          if (pending()) {
+        const confirm = action(function* (): Generator<
+          Promise<"close" | "retry">,
+          void,
+          "close" | "retry"
+        > {
+          if (confirming) {
             return;
           }
+          confirming = true;
           setPending(true);
           try {
-            if ((await options.confirm()) === "close") {
+            // Owner publications must not join the dialog's held transition and block navigation.
+            if ((yield Promise.resolve().then(options.confirm)) === "close") {
               finish();
             }
           } finally {
-            setPending(false);
+            confirming = false;
           }
-        };
+        });
         return (
           <SessionWorkerStopDialog
             description={options.description}

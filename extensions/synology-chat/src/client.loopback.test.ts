@@ -160,7 +160,7 @@ describe("Synology Chat client loopback", () => {
     }
     releaseRetry();
 
-    await expect(send).resolves.toBe(true);
+    await expect(send).resolves.toEqual({ messageIds: [] });
     expect(receivedRequests).toBe(1);
     expect(timeoutSpy.mock.calls.filter(([, delay]) => delay === 300)).toHaveLength(1);
   });
@@ -312,6 +312,59 @@ describe("Synology Chat client loopback", () => {
       expect(result?.receipt.primaryPlatformMessageId).toBeUndefined();
     }
   });
+
+  it.each([
+    {
+      name: "all text chunks",
+      text: "x".repeat(4001),
+      media: false,
+      missingChunk: -1,
+      ids: ["25769804017", "25769804018", "25769804019"],
+    },
+    {
+      name: "partially identified text",
+      text: "x".repeat(2001),
+      media: false,
+      missingChunk: 1,
+      ids: [],
+    },
+    { name: "hosted media", text: "", media: true, missingChunk: -1, ids: ["25769804017"] },
+  ])(
+    "preserves genuine webhook identities for $name",
+    async ({ text, media, missingChunk, ids }) => {
+      let requestCount = 0;
+      const port = await listenLoopback((req, res) => {
+        readForm(req, () => {
+          const index = requestCount++;
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              success: true,
+              data: {
+                succ: {
+                  user_id_post_map: {
+                    "123456": index === missingChunk ? undefined : 25769804017 + index,
+                  },
+                },
+              },
+            }),
+          );
+        });
+      });
+      const cfg = config(`http://127.0.0.1:${port}/incoming`);
+      const context = { cfg, text, to: "123456" };
+      const result = media
+        ? await synologyChatPlugin.message.send?.media?.({
+            ...context,
+            mediaUrl: "https://example.com/proof.png",
+          })
+        : await synologyChatPlugin.message.send?.text?.(context);
+      expect(requestCount).toBe(media ? 1 : Math.ceil(text.length / 2000));
+      expect(result?.messageId).toBe(ids[0] ?? "");
+      expect(result?.receipt.platformMessageIds).toEqual(ids);
+      expect(result?.receipt.parts.map((part) => part.platformMessageId)).toEqual(ids);
+    },
+  );
 
   it("chunks long text before the Synology payload limit for every text adapter", async () => {
     const receivedPayloads: Array<{ text: string; user_ids?: number[] }> = [];
