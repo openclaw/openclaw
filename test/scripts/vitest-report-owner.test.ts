@@ -85,24 +85,16 @@ it.for([
   [["--reporter=github-actions", "--coverage.enabled=false"], false, false],
   [["--reporter=json", "--reporter=verbose", "--coverage"], true, true],
   [["--reporter=json", "--reporter=github-actions"], true, false],
-] as const)(
-  "requires explicit native output ownership: %j owner=%s",
-  ([args, owner, admitted], { expect }) => {
-    const { options } = parseCLI(["vitest", "run", ...args]);
-    expect(canParallelizeVitestOutput(options, owner)).toBe(admitted);
-  },
-);
-
-it.for([
   [{ reporter: "dot", coverage: { enabled: false } }, false, true],
   [{ reporters: "verbose", coverage: { enabled: false } }, false, true],
   [{ reporter: ["dot", "verbose"], coverage: { enabled: false } }, false, true],
   [{ reporter: "github-actions" }, true, false],
   [{ reporters: "./custom-reporter.mjs" }, true, false],
   [{ reporters: [["json", { outputFile: "shared.json" }]] }, true, false],
-] satisfies [CliOptions, boolean, boolean][])(
-  "keeps native reporter shape ownership: %j",
-  ([options, owner, admitted], { expect }) => {
+] satisfies [string[] | CliOptions, boolean, boolean][])(
+  "requires explicit native output ownership: %j owner=%s",
+  ([input, owner, admitted], { expect }) => {
+    const options = Array.isArray(input) ? parseCLI(["vitest", "run", ...input]).options : input;
     expect(canParallelizeVitestOutput(options, owner)).toBe(admitted);
   },
 );
