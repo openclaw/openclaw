@@ -241,7 +241,7 @@ describe("candidate-owned publish consumer chain", () => {
         }),
         compareCommitLineage: (base: string, head: string) => {
           if (base !== root.p || head !== newerP) {
-            return root.client.compareCommitLineage(base, head);
+            throw new Error("Unexpected lineage comparison");
           }
           return scenario === "newer main P"
             ? { status: "ahead", merge_base_commit: { sha: root.p } }
