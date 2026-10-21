@@ -34,6 +34,7 @@ import {
   installSessionPlacementAdmissionProvider,
   prepareSessionPlacementSandbox,
 } from "../../session-placement-admission.js";
+import { makeEmbeddedRunnerAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import * as workspaceSandbox from "../../workspace-sandbox.js";
 import { requireGit } from "../../worktrees/git.js";
 import { insertRegistryWorktree } from "../../worktrees/registry.js";
@@ -428,23 +429,13 @@ it.each(dispatchCases)(
             retainedRetryPreparer?.({ cwd: path.join(cwd, "different") });
           }
         }
-        return {
-          terminal: { kind: "ok" },
+        return makeEmbeddedRunnerAttempt({
           sessionIdUsed: params.sessionId,
-          messagesSnapshot: [],
           assistantTexts: [`${params.agentId} answered`],
-          toolMetas: [],
-          lastAssistant: undefined,
-          didSendViaMessagingTool: false,
-          messagingToolSentTexts: [],
-          messagingToolSentMediaUrls: [],
-          messagingToolSentTargets: [],
-          cloudCodeAssistFormatError: false,
           replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-          itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
           providerRetryMaxRetries: legacyRetryCount,
           providerRetryMaxDelayMs: legacyRetryDelayMs,
-        };
+        });
       });
       if (cancelTrajectory) {
         runAttempt.mockImplementation(async (attempt) => {

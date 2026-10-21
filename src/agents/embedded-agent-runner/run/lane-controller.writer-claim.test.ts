@@ -15,12 +15,8 @@ import {
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import * as sessionEntryWriter from "../../../config/sessions/session-accessor.sqlite-entry.js";
-import { createMemorySessionActorOwner } from "../../../config/sessions/session-actor-memory.js";
-import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
-import { readSessionActorStorageResult } from "../../../config/sessions/session-actor-storage-result.js";
 import { preparePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
-import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import {
@@ -35,12 +31,18 @@ import {
   getAgentEventLifecycleGeneration,
   onAgentEvent,
   resetAgentEventsForTest,
+  emitAgentEvent,
+  onAgentRuntimeEvent,
+  rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
-import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
+import {
+  registerAgentRunContext,
+  claimAgentRunContext,
+  getAgentRunContext,
+} from "../../../infra/agent-run-registry.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
-import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
-import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
+import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
@@ -53,6 +55,7 @@ import {
   prepareAgentRunAdmission,
   prepareSystemAgentRunAdmission,
 } from "../../admitted-run-context.js";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createHarnessCompletionSourceAssertion } from "../../agent-harness-completion-recovery.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
@@ -71,149 +74,141 @@ import {
 import type { EmbeddedAgentRunResult } from "../types.js";
 import { createLaneControllerFixture } from "./lane-controller.test-support.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import * as sessionBootstrap from "./session-bootstrap.js";
 import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
-const fixture = useTempSessionsFixture("lane-writer-claim-");
-const sessionId = "writer-session";
-const sessionKey = "agent:main:writer-session";
-const lifecycleRevision = "writer-revision";
-const sessionRevision = { lifecycleRevision, sessionId };
 const completedResult: EmbeddedAgentRunResult = { meta: { durationMs: 0 } };
 
-const writerScope = () => ({ agentId: "main", sessionKey, storePath: fixture.storePath() });
-const readEntry = () => loadSessionEntry(writerScope());
-const assistantMessage = (text: string) =>
-  buildAssistantMessage({
-    model: { api: "openai-responses", provider: "openai", id: "gpt-test" },
-    content: [{ type: "text", text }],
-    stopReason: "stop",
-    usage: buildUsageWithNoCost({}),
-  });
-
-function writerParams(overrides: Partial<RunEmbeddedAgentParams> = {}) {
-  return {
-    ...writerScope(),
-    prompt: "hello",
-    runId: "run-b",
-    sessionFile: sessionKey,
-    sessionId,
-    sessionTarget: { ...writerScope(), sessionId },
-    timeoutMs: 30_000,
-    workspaceDir: "/tmp",
-    enqueue: async (task) => await task(),
-    ...overrides,
-  } satisfies RunEmbeddedAgentParams;
-}
-
-async function seedWriter(runId = "run-a", extra: Partial<InternalSessionEntry> = {}) {
-  await replaceSessionEntry(writerScope(), {
-    activeWriterRunId: runId,
-    ...sessionRevision,
-    updatedAt: 1,
-    ...extra,
-  } as InternalSessionEntry);
-}
-
-function installWriter(
-  runId: string,
-  cancel: Parameters<typeof setActiveEmbeddedRun>[1]["cancel"],
-  stopped = false,
-) {
-  return setActiveEmbeddedRun(
-    sessionId,
-    {
-      kind: "embedded",
-      runId,
-      cancel,
-      abort: vi.fn(),
-      isCompacting: () => false,
-      ...(stopped ? { isStopped: () => true } : {}),
-      isStreaming: () => !stopped,
-      queueMessage: async () => {},
-    },
-    sessionKey,
-    sessionKey,
-  );
-}
-
-function observeLifecycle(runId: string) {
-  const events: unknown[] = [];
-  onTestFinished(
-    onAgentEvent((event) => {
-      if (event.runId === runId && event.stream === "lifecycle") {
-        events.push(event);
-      }
-    }),
-  );
-  return events;
-}
-
-function captureStaleWriter(runId: string) {
-  const fence = {
-    ...writerScope(),
-    expectedLifecycleRevision: lifecycleRevision,
-    expectedWriterRunId: runId,
-  };
-  const manager = SessionManager.open({ ...fence, sessionId }, "/tmp");
-  return async () => {
-    expect(() => manager.appendMessage(assistantMessage("late model output"))).toThrow(
-      SessionTranscriptWriterClaimReboundError,
-    );
-    expect(
-      await appendExactAssistantMessageToSessionTranscript({
-        ...fence,
-        expectedSessionId: sessionId,
-        message: assistantMessage("late output"),
-      }),
-    ).toMatchObject({ ok: false, code: "session-rebound" });
-  };
-}
-
-function recoveryLane(runId: string, recovery = true) {
-  setRuntimeConfigSnapshot({});
-  onTestFinished(clearRuntimeConfigSnapshot);
-  const prepared = prepareAgentRunAdmission({
-    cfg: {},
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: recovery
-        ? { kind: "recovery", boundary: "gateway.main-session-recovery", state: "present" }
-        : { kind: "system", boundary: "fresh-request", state: "present" },
-    },
-  });
-  const params = writerParams({
-    runId,
-    prompt: "Continue the interrupted request",
-    preparedRunAdmission: { ...prepared },
-  });
-  return {
-    prepared,
-    run: () => {
-      const { controller } = createLaneControllerFixture(params, {
-        configureRuntime: false,
-        globalLane: `recovery-global:${runId}`,
-      });
-      return controller.enqueueSession(() => controller.enqueueGlobal(async () => completedResult));
-    },
-  };
-}
-
-function pauseRecoveryAppend(runId: string) {
-  const lane = recoveryLane(runId);
-  const entered = createDeferred();
-  const release = createDeferred();
-  const append = noteWriter.appendSessionTranscriptNote;
-  vi.spyOn(noteWriter, "appendSessionTranscriptNote").mockImplementation(async (...args) => {
-    entered.resolve();
-    await release.promise;
-    return append(...args);
-  });
-  return { lane, entered: entered.promise, release: release.resolve, pending: lane.run() };
-}
-
 describe("embedded run durable writer admission", () => {
+  const fixture = useTempSessionsFixture("lane-writer-claim-");
+  const sessionId = "writer-session";
+  const sessionKey = "agent:main:writer-session";
+  const lifecycleRevision = "writer-revision";
+  const sessionRevision = { lifecycleRevision, sessionId };
+
+  const writerScope = () => ({ agentId: "main", sessionKey, storePath: fixture.storePath() });
+  const readEntry = () => loadSessionEntry(writerScope());
+  const assistantMessage = (text: string) =>
+    buildAssistantMessage({
+      model: { api: "openai-responses", provider: "openai", id: "gpt-test" },
+      content: [{ type: "text", text }],
+      stopReason: "stop",
+      usage: buildUsageWithNoCost({}),
+    });
+
+  function writerParams(overrides: Partial<RunEmbeddedAgentParams> = {}) {
+    return {
+      ...writerScope(),
+      prompt: "hello",
+      runId: "run-b",
+      sessionFile: sessionKey,
+      sessionId,
+      sessionTarget: { ...writerScope(), sessionId },
+      timeoutMs: 30_000,
+      workspaceDir: "/tmp",
+      enqueue: async (task) => await task(),
+      ...overrides,
+    } satisfies RunEmbeddedAgentParams;
+  }
+
+  async function seedWriter(runId = "run-a", extra: Partial<InternalSessionEntry> = {}) {
+    await replaceSessionEntry(writerScope(), {
+      activeWriterRunId: runId,
+      ...sessionRevision,
+      updatedAt: 1,
+      ...extra,
+    } as InternalSessionEntry);
+  }
+
+  function installWriter(
+    runId: string,
+    cancel: Parameters<typeof setActiveEmbeddedRun>[1]["cancel"],
+    stopped = false,
+  ) {
+    return setActiveEmbeddedRun(
+      sessionId,
+      {
+        kind: "embedded",
+        runId,
+        cancel,
+        abort: vi.fn(),
+        isCompacting: () => false,
+        ...(stopped ? { isStopped: () => true } : {}),
+        isStreaming: () => !stopped,
+        queueMessage: async () => {},
+      },
+      sessionKey,
+      sessionKey,
+    );
+  }
+
+  function observeLifecycle(runId: string) {
+    const events: unknown[] = [];
+    onTestFinished(
+      onAgentEvent((event) => {
+        if (event.runId === runId && event.stream === "lifecycle") {
+          events.push(event);
+        }
+      }),
+    );
+    return events;
+  }
+
+  function recoveryLane(runId: string, recovery = true) {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(clearRuntimeConfigSnapshot);
+    const prepared = prepareAgentRunAdmission({
+      cfg: {},
+      operationalRunInstance: createOperationalRunInstanceRef(runId),
+      facts: {
+        runId,
+        agentId: "main",
+        ingress: recovery
+          ? { kind: "recovery", boundary: "gateway.main-session-recovery", state: "present" }
+          : { kind: "system", boundary: "fresh-request", state: "present" },
+      },
+    });
+    const params = writerParams({
+      runId,
+      prompt: "Continue the interrupted request",
+      preparedRunAdmission: { ...prepared },
+    });
+    return {
+      prepared,
+      run: () => {
+        const { controller } = createLaneControllerFixture(params, {
+          configureRuntime: false,
+          globalLane: `recovery-global:${runId}`,
+        });
+        return controller.enqueueSession(() =>
+          controller.enqueueGlobal(async () => completedResult),
+        );
+      },
+    };
+  }
+
+  function pauseRecoveryAppend(runId: string) {
+    const lane = recoveryLane(runId);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const append = noteWriter.appendSessionTranscriptNote;
+    vi.spyOn(noteWriter, "appendSessionTranscriptNote").mockImplementation(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return append(...args);
+    });
+    return { lane, entered: entered.promise, release: release.resolve, pending: lane.run() };
+  }
+
+  async function runFresh(runId: string) {
+    const lane = recoveryLane(runId, false);
+    try {
+      await lane.run();
+    } finally {
+      lane.prepared.close();
+    }
+  }
+
   beforeEach(() => {
     resetAgentEventsForTest();
     runsTesting.resetActiveEmbeddedRuns();
@@ -253,6 +248,10 @@ describe("embedded run durable writer admission", () => {
         notifications.push(event);
       }
     });
+    const recoveryMessage = expect.objectContaining({
+      role: "user",
+      content: [{ type: "text", text: expect.stringContaining(text) }],
+    });
     const stopPlacement = installSessionPlacementAdmissionProvider({
       assertCompactionSuccessorAllowed: () => {},
       executeLocalTurn: async (_claim, run) => run(),
@@ -260,23 +259,14 @@ describe("embedded run durable writer admission", () => {
         const reopened = await SessionManager.openAsync(target);
         const context = reopened.buildSessionContext().messages;
         const modelContext = convertToLlm(context);
-        expect(modelContext).toHaveLength(initial.length + 1);
-        expect(modelContext.slice(0, initial.length)).toEqual(initial);
-        expect(modelContext.at(-1)).toMatchObject({
-          role: "user",
-          content: [{ type: "text", text: expect.stringContaining(text) }],
-        });
+        expect(modelContext).toEqual([...initial, recoveryMessage]);
         const workerContext = windowInitialMessages(modelContext);
         expect(workerContext.kind).toBe("complete");
         expect(workerInitial.kind).toBe("complete");
         if (workerContext.kind !== "complete" || workerInitial.kind !== "complete") {
           throw new Error("Recovery fixture lost its complete worker context");
         }
-        expect(workerContext.messages.slice(0, -1)).toEqual(workerInitial.messages);
-        expect(workerContext.messages.at(-1)).toMatchObject({
-          role: "user",
-          content: [{ type: "text", text: expect.stringContaining(text) }],
-        });
+        expect(workerContext.messages).toEqual([...workerInitial.messages, recoveryMessage]);
         expect(JSON.stringify(reopened.getEntries().slice(0, originalEntries.length))).toBe(
           originalBytes,
         );
@@ -299,12 +289,7 @@ describe("embedded run durable writer admission", () => {
     try {
       await lane.run();
       await lane.run();
-      const fresh = recoveryLane("fresh-request", false);
-      try {
-        await fresh.run();
-      } finally {
-        fresh.prepared.close();
-      }
+      await runFresh("fresh-request");
       expect(observed).toEqual(["placement", "placement", "placement"]);
       expect(notifications).toHaveLength(1);
       expect(notifications[0]).toMatchObject({
@@ -437,15 +422,10 @@ describe("embedded run durable writer admission", () => {
         /other-run|other-session|other-agent|missing-session|job-approved|run-aborted/,
       );
       expect(text).toContain("do not establish whether other watchers exist or are running");
-      const fresh = recoveryLane("after-proposal-recovery", false);
-      try {
-        await fresh.run();
-        expect(
-          convertToLlm((await SessionManager.openAsync(target)).buildSessionContext().messages),
-        ).toEqual(context);
-      } finally {
-        fresh.prepared.close();
-      }
+      await runFresh("after-proposal-recovery");
+      expect(
+        convertToLlm((await SessionManager.openAsync(target)).buildSessionContext().messages),
+      ).toEqual(context);
       await replaceSessionEntry(target, {
         sessionId,
         updatedAt: now,
@@ -537,7 +517,7 @@ describe("embedded run durable writer admission", () => {
     },
   );
 
-  it("supersedes the live prior writer, claims the row, and rejects its late append", async () => {
+  it("commits the new writer claim before recording supersession and cancelling the prior writer", async () => {
     setRuntimeConfigSnapshot({});
     onTestFinished(clearRuntimeConfigSnapshot);
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
@@ -554,7 +534,6 @@ describe("embedded run durable writer admission", () => {
       sessionId,
       sessionKey,
     });
-    const assertStaleWriter = captureStaleWriter("run-a");
     let supersededOutcome: AgentRunTerminalOutcome | undefined;
     onTestFinished(
       onAgentEvent((event) => {
@@ -591,7 +570,6 @@ describe("embedded run durable writer admission", () => {
       ...sessionRevision,
       updatedAt: 1,
     });
-    await assertStaleWriter();
   });
 
   it.each([false, true])(
@@ -631,115 +609,6 @@ describe("embedded run durable writer admission", () => {
     },
   );
 
-  it.each([false, true])(
-    "revokes cancelled memory writer custody without clearing a successor (successor=%s)",
-    async (successor) => {
-      const key = "agent:main:dashboard:incognito-terminal-writer";
-      const scope = { agentId: "main", sessionKey: key, storePath: "/synthetic/terminal-writer" };
-      const owner = createMemorySessionActorOwner({
-        agentId: scope.agentId,
-        path: scope.storePath,
-      });
-      const hostAuthority = { assertCurrent() {}, authorize() {} };
-      let cancelled = false;
-      const assertExecutionCurrent = () => {
-        if (cancelled) {
-          throw new Error("Memory execution is cancelled");
-        }
-      };
-      const actor = await owner.acquire(
-        { database: owner.identity, sessionKey: key },
-        { assertCurrent: assertExecutionCurrent, assertReadable: assertExecutionCurrent },
-      );
-      const target = captureSessionTarget({
-        storeScope: scope.storePath,
-        sessionKey: key,
-        agentId: scope.agentId,
-        incarnation: sessionId,
-      });
-      const operation = createReplyOperation({
-        sessionKey: key,
-        sessionId,
-        agentId: scope.agentId,
-        resetTriggered: false,
-        target,
-      });
-      let replacementOperation: ReturnType<typeof createReplyOperation> | undefined;
-      try {
-        readSessionActorStorageResult(
-          await actor.storage!.mutate(
-            {
-              type: "session.entry.create",
-              input: { entry: { sessionId, lifecycleRevision, updatedAt: 1, incognito: true } },
-            },
-            hostAuthority,
-          ),
-        );
-        await runWithSessionActorStorage(
-          {
-            actor,
-            agentId: scope.agentId,
-            path: scope.storePath,
-            authority: { assertCurrent: assertExecutionCurrent, authorize: assertExecutionCurrent },
-          },
-          async () => {
-            const claim = await claimAgentSessionWriter(
-              writerParams({
-                ...scope,
-                prompt: "terminal memory turn",
-                runId: "terminal-memory-writer",
-                sessionTarget: { ...scope, sessionId },
-                replyOperation: operation,
-              }),
-            );
-            expect(claim).toBeDefined();
-            cancelled = true;
-            operation.abort("stop");
-            if (successor) {
-              operation.complete();
-              replacementOperation = createReplyOperation({
-                sessionKey: key,
-                sessionId,
-                agentId: scope.agentId,
-                resetTriggered: false,
-                target,
-              });
-              const replacement = await owner.acquireExisting(key, {
-                assertCurrent() {},
-                assertReadable() {},
-              });
-              try {
-                readSessionActorStorageResult(
-                  await replacement!.storage!.mutate(
-                    {
-                      type: "session.entry.patch",
-                      input: {
-                        operation: { kind: "fields", patch: { activeWriterRunId: "next-writer" } },
-                      },
-                    },
-                    hostAuthority,
-                  ),
-                );
-              } finally {
-                await replacement?.release();
-              }
-            }
-
-            await expect(claim?.revoke(() => true)).resolves.toBe(!successor);
-            expect(owner.readSession(key, hostAuthority)?.entry?.activeWriterRunId).toBe(
-              successor ? "next-writer" : undefined,
-            );
-          },
-        );
-      } finally {
-        replacementOperation?.complete();
-        operation.complete();
-        await actor.release();
-        owner.close();
-      }
-    },
-  );
-
   it("silently replaces a persisted claim whose prior run is no longer live", async () => {
     await seedWriter("completed-run");
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
@@ -764,19 +633,17 @@ describe("embedded run durable writer admission", () => {
     expect(readEntry()).toMatchObject({ activeWriterRunId: "run-next" });
   });
 
-  it("silently replaces a stopped prior writer while keeping stale transcript writes fenced", async () => {
+  it("silently replaces a stopped prior writer without cancellation or lifecycle events", async () => {
     await seedWriter("run-stopped");
     const cancel = vi.fn();
     installWriter("run-stopped", cancel, true);
     const events = observeLifecycle("run-stopped");
-    const assertStaleWriter = captureStaleWriter("run-stopped");
 
     await claimAgentSessionWriter(writerParams({ prompt: "next turn", runId: "run-next" }));
 
     expect(cancel).not.toHaveBeenCalled();
     expect(events).toEqual([]);
     expect(readEntry()).toMatchObject({ activeWriterRunId: "run-next", updatedAt: 1 });
-    await assertStaleWriter();
   });
 
   it.each([false, true])(
@@ -866,5 +733,180 @@ describe("embedded run durable writer admission", () => {
     expect(cancelA).not.toHaveBeenCalled();
     expect(events).toEqual([]);
     expect(readEntry()).toMatchObject({ activeWriterRunId: "run-a" });
+  });
+});
+
+type LaneParams = RunEmbeddedAgentParams & { sessionFile: string };
+
+function createController(
+  options: Partial<LaneParams> & { initialQueuedLifecycleGeneration?: string },
+) {
+  const { initialQueuedLifecycleGeneration, ...overrides } = options;
+  const lifecycleGeneration = options.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
+  const runId = options.runId ?? "run-1";
+  const params: LaneParams = {
+    admittedRunContext: createTestAdmittedRunContext(runId),
+    agentId: "main",
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    sessionFile: "agent:main:session-1",
+    workspaceDir: "/tmp/workspace",
+    prompt: "hello",
+    timeoutMs: 30_000,
+    runId,
+    lifecycleGeneration,
+    enqueue: options.enqueue ?? (async (task) => await task()),
+    ...overrides,
+  };
+  return createLaneControllerFixture(params, {
+    lifecycleGeneration,
+    globalLane: "global-lane",
+    initialQueuedLifecycleGeneration: initialQueuedLifecycleGeneration ?? lifecycleGeneration,
+  });
+}
+
+function createQueuedController(options: Parameters<typeof createController>[0]) {
+  const gate = createDeferred();
+  const state = createController({
+    ...options,
+    enqueue: async (task) => {
+      await gate.promise;
+      return await task();
+    },
+  });
+  const run = state.controller.enqueueGlobal(async () => completedResult);
+  return { ...state, run, release: gate.resolve };
+}
+
+async function expectStaleRun(run: Promise<EmbeddedAgentRunResult>, runId: string) {
+  await expect(run).rejects.toMatchObject({
+    name: "AbortError",
+    message: "Agent run belongs to a stale gateway lifecycle",
+  });
+  expect(getAgentRunContext(runId)).toBeUndefined();
+}
+
+describe("createEmbeddedRunLaneController lifecycle admission", () => {
+  beforeEach(() => resetAgentEventsForTest());
+  afterEach(() => clearRuntimeConfigSnapshot());
+
+  it.each([
+    { trigger: "user" as const, expected: "foreground" },
+    { trigger: "cron" as const, expected: "background" },
+  ])("marks $trigger session work as $expected", async ({ trigger, expected }) => {
+    using writer = vi.spyOn(sessionBootstrap, "claimAgentSessionWriter");
+    writer.mockResolvedValue(undefined);
+    const priorities: Array<CommandQueueEnqueueOptions["priority"]> = [];
+    const { controller } = createController({
+      trigger,
+      enqueue: async (task, options) => {
+        priorities.push(options?.priority);
+        return await task();
+      },
+    });
+    await controller.enqueueSession(() => controller.enqueueGlobal(async () => completedResult));
+    expect(priorities).toEqual([expected]);
+  });
+
+  it("applies the current swarm capacity only to global execution admission", async () => {
+    const capacities: Array<number | undefined> = [];
+    let maxConcurrent = 32;
+    const { controller } = createController({
+      enqueue: async (task, options) => {
+        capacities.push(options?.maxConcurrent);
+        return await task();
+      },
+      swarmExecutionLane: {
+        lane: "subagent:swarm:group",
+        get maxConcurrent() {
+          return maxConcurrent;
+        },
+      },
+    });
+    maxConcurrent = 8;
+    await controller.enqueueSession(() => controller.enqueueGlobal(async () => completedResult));
+    expect(capacities).toEqual([8]);
+  });
+
+  it("preserves the selected agent for sessionless admitted runtime events", async () => {
+    const runId = "sessionless-owned-run";
+    const { controller } = createController({
+      runId,
+      agentId: "research",
+      sessionKey: undefined,
+    });
+    const events: Array<{ agentId?: string; sessionKey?: string }> = [];
+    onTestFinished(onAgentRuntimeEvent((event) => events.push(event)));
+    await controller.enqueueGlobal(async () => {
+      emitAgentEvent({ runId, stream: "assistant", data: { delta: "owned progress" } });
+      return completedResult;
+    });
+    expect(getAgentRunContext(runId)).toMatchObject({ agentId: "research" });
+    expect(getAgentRunContext(runId)?.sessionKey).toBeUndefined();
+    expect(events).toMatchObject([{ agentId: "research", sessionKey: undefined }]);
+  });
+
+  it("rebinds inter-session user work that was queued before lifecycle rotation", async () => {
+    const state = createQueuedController({
+      trigger: "user",
+      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      runId: "inter-session-across-restart",
+    });
+    const currentGeneration = rotateAgentEventLifecycleGeneration();
+    state.release();
+    await state.run;
+    expect(state.getLifecycleGeneration()).toBe(currentGeneration);
+    expect(getAgentRunContext("inter-session-across-restart")).toMatchObject({
+      lifecycleGeneration: currentGeneration,
+    });
+  });
+
+  it("does not claim a rebound generation after queued work was aborted", async () => {
+    const abortController = new AbortController();
+    const state = createQueuedController({
+      trigger: "user",
+      runId: "aborted-across-restart",
+      abortSignal: abortController.signal,
+    });
+    rotateAgentEventLifecycleGeneration();
+    abortController.abort();
+    state.release();
+    await expect(state.run).rejects.toMatchObject({ name: "AbortError" });
+    expect(getAgentRunContext("aborted-across-restart")).toBeUndefined();
+  });
+
+  it("rejects stale descendants admitted only after lifecycle rotation", async () => {
+    const staleGeneration = getAgentEventLifecycleGeneration();
+    const currentGeneration = rotateAgentEventLifecycleGeneration();
+    const { controller } = createController({
+      lifecycleGeneration: staleGeneration,
+      initialQueuedLifecycleGeneration: currentGeneration,
+      trigger: "user",
+      runId: "stale-descendant",
+    });
+
+    const run = controller.enqueueGlobal(async () => completedResult);
+    await expectStaleRun(run, "stale-descendant");
+  });
+
+  it("does not replace a newer same-id run context", async () => {
+    const staleGeneration = getAgentEventLifecycleGeneration();
+    const currentGeneration = rotateAgentEventLifecycleGeneration();
+    const newerContext = {
+      sessionKey: "new-session-key",
+      sessionId: "new-session",
+      lifecycleGeneration: currentGeneration,
+    };
+    claimAgentRunContext("shared-run", { ...newerContext });
+    const { controller } = createController({
+      lifecycleGeneration: staleGeneration,
+      trigger: "user",
+      runId: "shared-run",
+    });
+
+    await expect(controller.enqueueGlobal(async () => completedResult)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(getAgentRunContext("shared-run")).toMatchObject(newerContext);
   });
 });

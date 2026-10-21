@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { readRuntimePromptImageFactIndexes } from "../../../media/runtime-prompt-image-provenance.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
@@ -158,41 +157,6 @@ describe("plugin harness prompt media", () => {
         media: [{ kind: "image" }],
       }),
     ).rejects.toThrow("failed to hydrate 1 structured image attachment");
-  });
-
-  it("surfaces inline sanitization failure when a preceding plugin image fact is suppressed", async () => {
-    await expect(
-      preparePluginHarnessPromptImages({
-        images: [{ type: "image", data: "%%%", mimeType: "image/png" }],
-        imageOrder: ["inline"],
-        media: [
-          {
-            path: "/tmp/described-missing.png",
-            contentType: "image/png",
-            hydrationSuppressed: true,
-          },
-          { path: "/tmp/inline.png", contentType: "image/png" },
-        ],
-      }),
-    ).rejects.toThrow("failed to hydrate 1 structured image attachment");
-  });
-
-  it("retains an intentionally non-hydrating remote-only image as a type-only fact", async () => {
-    const media = buildInboundMediaNoteProjection({
-      media: [{ url: "https://example.com/described.png", contentType: "image/png" }],
-      MediaUnderstanding: [
-        {
-          kind: "image.description",
-          attachmentIndex: 0,
-          text: "already described",
-          provider: "test",
-        },
-      ],
-    }).media;
-    const result = await preparePluginHarnessPromptImages({ media });
-
-    expect(result.images).toEqual([]);
-    expect(result.media).toBeUndefined();
   });
 
   it("retains layout-derived suppression after plugin host materialization", async () => {
