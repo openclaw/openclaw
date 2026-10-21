@@ -40,7 +40,9 @@ it("loads OpenRouter usage through the default loader and dispatcher-aware trans
         models: { providers: { openrouter: { baseUrl: `${baseUrl}/api/v1`, models: [] } } },
       } satisfies OpenClawConfig;
       const provider = await registerSingleProviderPlugin(openrouterPlugin);
-      resolveUsage.mockImplementation(({ context }) => provider.fetchUsageSnapshot?.(context));
+      resolveUsage.mockImplementation(async ({ context }) =>
+        provider.fetchUsageSnapshot?.(context),
+      );
       // A plain wrapper reproduces native fetch's dispatcher incompatibility on every Node version.
       vi.stubGlobal("fetch", () => {
         throw new TypeError("native fetch cannot use the bundled dispatcher");
