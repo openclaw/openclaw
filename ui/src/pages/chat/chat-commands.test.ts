@@ -154,12 +154,10 @@ describe("refreshSlashCommands", () => {
     const request = vi.fn().mockResolvedValue({
       commands: [pairCommand],
     });
-
     await refreshSlashCommands({
       client: { request } as never,
       agentId: undefined,
     });
-
     expect(request).toHaveBeenCalledWith("commands.list", {
       includeArgs: true,
       scope: "text",
@@ -175,13 +173,11 @@ describe("refreshSlashCommands", () => {
   it("keeps local fallback commands after repeated gateway failures", async () => {
     const request = vi.fn().mockRejectedValue(new Error("offline"));
     const client = { request } as never;
-
     await refreshSlashCommands({ client, agentId: "main" });
     expect(requireCommandByName("help")).toMatchObject({
       key: "help",
       executeLocal: true,
     });
-
     await refreshSlashCommands({ client, agentId: "main" });
     expect(request).toHaveBeenCalledTimes(2);
     expect(requireCommandByName("help")).toMatchObject({
@@ -194,13 +190,11 @@ describe("refreshSlashCommands", () => {
     const { promise: first, resolve: resolveFirst } = createDeferred<unknown>();
     const request = vi.fn().mockImplementationOnce(async () => await first);
     const client = { request } as never;
-
     const pending = refreshSlashCommands({ client, agentId: "main" });
     const duplicate = refreshSlashCommands({ client, agentId: "main" });
     resolveFirst({ commands: [pairCommand] });
     await pending;
     await duplicate;
-
     expect(request).toHaveBeenCalledTimes(1);
     expect(requireCommandByName("pair")).toMatchObject({
       name: "pair",
@@ -248,7 +242,6 @@ describe("refreshSlashCommands", () => {
 
     invalidateChatMetadataStore(client);
     await refreshSlashCommands({ client, agentId: "main" });
-
     expect(request).toHaveBeenCalledOnce();
     expect(requireCommandByName("requested-command")).toMatchObject({
       description: "Loaded after metadata invalidation.",
@@ -263,9 +256,7 @@ describe("local command loading", () => {
       // This command-only harness never commits a transcript DOM.
       renderLifecycle: { afterCommit: () => () => {} },
     });
-
     await expect(dispatchChatSlashCommand(host, "help", "")).resolves.toBe("completed");
-
     expect(host.chatMessages.at(-1)).toMatchObject({
       role: "system",
       content: expect.stringContaining("**Available Commands**"),
@@ -277,9 +268,7 @@ describe("local command loading", () => {
     const host = makeChatHost({ requestHandlers: {} });
     const pending = dispatchChatSlashCommand(host, "model", "example/model");
     host.connectionEpoch += 1;
-
     await expect(pending).resolves.toBe("failed");
-
     expect(host.request).not.toHaveBeenCalled();
     expect(host.chatMessages).toEqual([]);
   });
@@ -334,9 +323,7 @@ describe("conversation reset confirmation", () => {
       lastError: null,
       chatError: null,
     };
-
     const result = await dispatchChatSlashCommand(host as never, command, "");
-
     expect(result).toBe("failed");
     expect(request).not.toHaveBeenCalled();
     expect(reset).not.toHaveBeenCalled();
@@ -349,58 +336,53 @@ describe("conversation reset confirmation", () => {
       "new",
       "",
     );
-
     expect(result).toBe("cancelled");
-  });
-
-  it("defers /clear when a run starts during confirmation", async () => {
-    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
-    const host = resetHost(async () => await confirmation);
-
-    const pending = dispatchChatSlashCommand(host as never, "clear", "");
-    host.chatRunId = "run-started-during-confirmation";
-    settleConfirmation?.(true);
-
-    await expect(pending).resolves.toBe("deferred");
-    expect(host.sessions.reset).not.toHaveBeenCalled();
   });
 
   it("cancels /clear before resetting a board-bearing session", async () => {
     const host = resetHost(async () => false);
-    const result = await dispatchChatSlashCommand(host as never, "clear", "");
-
-    expect(result).toBe("cancelled");
+    expect(await dispatchChatSlashCommand(host as never, "clear", "")).toBe("cancelled");
     expect(host.sessions.reset).not.toHaveBeenCalled();
   });
 
-  it("does not clear through a replacement Gateway after confirmation", async () => {
-    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
-    const replacementClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const host = resetHost(async () => await confirmation);
+  it.each([
+    {
+      name: "a run starts",
+      result: "deferred",
+      error: undefined,
+      change: (host: ReturnType<typeof resetHost>) => {
+        host.chatRunId = "new-run";
+      },
+    },
+    {
+      name: "the Gateway changes",
+      result: "failed",
+      error: "connection changed",
+      change: (host: ReturnType<typeof resetHost>) => {
+        host.client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+        host.connectionEpoch += 1;
+        host.hello = gatewayHelloForMethods(["sessions.reset"], ["operator.write"]);
+      },
+    },
+    {
+      name: "scope is revoked",
+      result: "failed",
+      error: "operator.admin",
+      change: (host: ReturnType<typeof resetHost>) => {
+        host.hello = gatewayHelloForMethods(["sessions.reset"], ["operator.write"]);
+      },
+    },
+  ])("does not clear after confirmation when $name", async ({ change, result, error }) => {
+    const { promise, resolve } = createDeferred<boolean>();
+    const host = resetHost(() => promise);
     host.hello = gatewayHelloForMethods(["sessions.reset"]);
-
     const pending = dispatchChatSlashCommand(host as never, "clear", "");
-    host.client = replacementClient;
-    host.connectionEpoch += 1;
-    host.hello = gatewayHelloForMethods(["sessions.reset"], ["operator.write"]);
-    settleConfirmation?.(true);
-
-    await expect(pending).resolves.toBe("failed");
+    change(host);
+    resolve(true);
+    await expect(pending).resolves.toBe(result);
     expect(host.sessions.reset).not.toHaveBeenCalled();
-    expect(host.lastError).toContain("connection changed");
-  });
-
-  it("rechecks /clear scope after confirmation", async () => {
-    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
-    const host = resetHost(async () => await confirmation);
-    host.hello = gatewayHelloForMethods(["sessions.reset"]);
-
-    const pending = dispatchChatSlashCommand(host as never, "clear", "");
-    host.hello = gatewayHelloForMethods(["sessions.reset"], ["operator.write"]);
-    settleConfirmation?.(true);
-
-    await expect(pending).resolves.toBe("failed");
-    expect(host.sessions.reset).not.toHaveBeenCalled();
-    expect(host.lastError).toContain("operator.admin");
+    if (error) {
+      expect(host.lastError).toContain(error);
+    }
   });
 });

@@ -37,6 +37,21 @@ function mockBlobUrls(...urls: string[]) {
   }
 }
 
+function agentIdentity(agentId: string, revision = 1, name = agentId) {
+  return { agentId, name, avatar: `/avatar/${agentId}?v=${revision}` };
+}
+
+function avatarHost(sessionKey = "agent:main:first", withStatus = true) {
+  setAvatarGatewayOrigin("https://gateway.example.test", ["test-token"]);
+  return makeChatHost({
+    sessionKey,
+    requestHandlers: {
+      "agent.identity.get": ({ agentId }: { agentId: string }) =>
+        withStatus ? { ...agentIdentity(agentId), avatarStatus: "local" } : agentIdentity(agentId),
+    },
+  });
+}
+
 function waitForImage(container: Element, src: string, selector = "img") {
   return vi.waitFor(() => {
     const image = container.querySelector<HTMLImageElement>(selector);
@@ -106,15 +121,8 @@ function renderAvatar(
   ],
 ) {
   const [role, assistant, user, sender, channelAvatar] = params;
-  const view = mountSolid(() => (
-    <ChatAvatar
-      role={role}
-      assistant={assistant}
-      user={user}
-      sender={sender}
-      channelAvatar={channelAvatar}
-    />
-  ));
+  const props = { role, assistant, user, sender, channelAvatar };
+  const view = mountSolid(() => <ChatAvatar {...props} />);
   return view.container.querySelector<HTMLElement>(".chat-avatar");
 }
 
@@ -179,25 +187,22 @@ it.each(["assistant", "local", "profile"] as const)(
   },
 );
 
-it.each([["/console", "sample-bot", "1000000001", true]] as const)(
-  "binds footer portraits at %s to account %s and sender %s",
-  (basePath, accountId, id, matches) => {
-    setAvatarGatewayOrigin(window.location.origin, [], basePath);
-    const sender = nativeSender(accountId);
-    sender.identity.id = id;
-    const identity = { ...sender.identity };
-    const { container } = mountSolid(() => (
-      <ChatAuthorAvatar
-        sender={sender}
-        class="chat-author-avatar"
-        channelAvatar={channelPortrait(basePath)}
-      />
-    ));
-    expect(Boolean(container.querySelector("openclaw-channel-avatar"))).toBe(matches);
-    expect(container.querySelector("[role=img]")?.getAttribute("aria-label")).toBe("Riley Adams");
-    expect(sender.identity).toEqual(identity);
-  },
-);
+it("binds footer portraits to the account and sender under a base path", () => {
+  const basePath = "/console";
+  setAvatarGatewayOrigin(window.location.origin, [], basePath);
+  const sender = nativeSender();
+  const identity = { ...sender.identity };
+  const { container } = mountSolid(() => (
+    <ChatAuthorAvatar
+      sender={sender}
+      class="chat-author-avatar"
+      channelAvatar={channelPortrait(basePath)}
+    />
+  ));
+  expect(Boolean(container.querySelector("openclaw-channel-avatar"))).toBe(true);
+  expect(container.querySelector("[role=img]")?.getAttribute("aria-label")).toBe("Riley Adams");
+  expect(sender.identity).toEqual(identity);
+});
 
 it("renders a source-bound native portrait without borrowing the viewer's profile", () => {
   const sender = nativeSender();
@@ -451,21 +456,6 @@ describe("ChatAvatar", () => {
 });
 
 describe("refreshChatAvatar", () => {
-  function avatarHost() {
-    setAvatarGatewayOrigin("https://gateway.example.test", ["test-token"]);
-    return makeChatHost({
-      sessionKey: "agent:main:first",
-      requestHandlers: {
-        "agent.identity.get": ({ agentId }: { agentId: string }) => ({
-          agentId,
-          name: agentId,
-          avatar: `/avatar/${agentId}?v=1`,
-          avatarStatus: "local",
-        }),
-      },
-    });
-  }
-
   it("replaces a revised avatar without revoking a retained sibling's image", async () => {
     const host = avatarHost();
     const identities = identityCapability(host);
@@ -476,7 +466,7 @@ describe("refreshChatAvatar", () => {
     await Promise.all([refreshChatAvatar(host), refreshChatAvatar(sibling)]);
     expect(fetchAvatar).toHaveBeenCalledOnce();
     identities.invalidate(["main"]);
-    host.request.mockResolvedValue({ agentId: "main", name: "Main", avatar: "/avatar/main?v=2" });
+    host.request.mockResolvedValue(agentIdentity("main", 2, "Main"));
     const refresh = refreshChatAvatar(host);
     expect(host.chatAvatarUrl).toBe("blob:old");
     await refresh;
@@ -497,11 +487,7 @@ describe("refreshChatAvatar", () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:working-avatar");
     const revoke = vi.spyOn(URL, "revokeObjectURL");
     await Promise.all([refreshChatAvatar(host), refreshChatAvatar(sibling)]);
-    const replacement = {
-      agentId: "main",
-      name: "Main",
-      avatar: "/avatar/main?v=2",
-    };
+    const replacement = agentIdentity("main", 2, "Main");
     identities.invalidate(["main"]);
     host.request.mockResolvedValue(replacement);
     host.connected = false;
@@ -534,7 +520,7 @@ describe("refreshChatAvatar", () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:working-avatar");
     await refreshChatAvatar(host);
     identities.invalidate(["main"]);
-    host.request.mockResolvedValue({ agentId: "main", name: "Main", avatar: "/avatar/main?v=2" });
+    host.request.mockResolvedValue(agentIdentity("main", 2, "Main"));
     fetchAvatar.mockResolvedValue(new Response(null, { status: 503 }));
     await refreshChatAvatar(host);
     expect(host.chatAvatarUrl).toBe("blob:working-avatar");
@@ -651,18 +637,8 @@ describe("refreshSenderAgentAvatars", () => {
     }));
   }
   function senderHost() {
-    setAvatarGatewayOrigin("https://gateway.example.test", ["test-token"]);
     return {
-      ...makeChatHost({
-        sessionKey: "agent:main:main",
-        requestHandlers: {
-          "agent.identity.get": ({ agentId }: { agentId: string }) => ({
-            agentId,
-            name: agentId,
-            avatar: `/avatar/${agentId}?v=1`,
-          }),
-        },
-      }),
+      ...avatarHost("agent:main:main", false),
       agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "research" }] },
       senderAgentAvatars: undefined as ReadonlyMap<string, string | null> | undefined,
     };
@@ -733,11 +709,7 @@ describe("refreshSenderAgentAvatars", () => {
     host.chatMessages = forwardedMessages("research");
     await refreshSenderAgentAvatars(host);
     identities.invalidate(["research"]);
-    host.request.mockResolvedValue({
-      agentId: "research",
-      name: "Research",
-      avatar: "/avatar/research?v=2",
-    });
+    host.request.mockResolvedValue(agentIdentity("research", 2, "Research"));
     fetchAvatar.mockResolvedValue(new Response(null, { status: 503 }));
     host.chatMessages = forwardedMessages("research");
     await refreshSenderAgentAvatars(host);
