@@ -623,7 +623,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.syncSessionReactions();
     this.syncRetainedBoardSession(this.resolveBoardView());
     if (changes.routeResolutionPending && !this.routeResolutionPending && this.state) {
-      this.synchronizeSessionObservation();
       void resumeStoredChatOutboxes(this.state);
     }
   }

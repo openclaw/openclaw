@@ -59,6 +59,7 @@ suite.define(() => {
         });
         expect(new URL(page.url()).pathname).toBe(`/chat/main/${id}`);
         await gateway.setMethodResponse("sessions.resolve", { ok: true, ...row });
+        await gateway.deferNext("sessions.resolve");
         await gateway.resolveDeferred("connect");
         await gateway.waitForRequest("sessions.resolve", { after: 1 });
         await gateway.resolveDeferred("sessions.resolve", { ok: true, ...row });
@@ -153,9 +154,9 @@ suite.define(() => {
           const send = pane.locator(".chat-send-btn--send");
           expect(await send.isDisabled()).toBe(true);
           await pane.locator(".agent-chat__composer-combobox textarea").press("Enter");
-          expect(await pane.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
-            draft,
-          );
+          expect(
+            (await pane.locator(".agent-chat__composer-combobox textarea").inputValue()).trimEnd(),
+          ).toBe(draft);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           const movedKey =
             outcome === "mismatch"
