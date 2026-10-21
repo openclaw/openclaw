@@ -30,32 +30,27 @@ it("builds the bundled Kimi coding defaults", () => {
     baseUrl: "https://api.kimi.com/coding/",
   });
   expect(provider.headers).toEqual({ "User-Agent": "claude-code/0.1.0" });
-  const k3Contract = {
-    reasoning: true,
-    thinkingLevelMap: {
-      minimal: "low",
-      low: "low",
-      medium: "high",
-      high: "high",
-      xhigh: "max",
-      max: "max",
-    },
-    cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-    maxTokens: 131_072,
-    compat: { codeMode: "preferred" },
-  };
-  expect(provider.models).toMatchObject([
-    { ...k3Contract, id: "k3", name: "Kimi K3", contextWindow: 1_048_576 },
-    { ...k3Contract, id: "k3-256k", name: "Kimi K3 (256k)", contextWindow: 262_144 },
-    { id: "kimi-for-coding" },
-    {
-      id: "kimi-for-coding-highspeed",
-      name: "Kimi K2.7 Code HighSpeed",
-      reasoning: true,
-      contextWindow: 262_144,
-      maxTokens: 32_768,
-    },
+  for (const model of provider.models.slice(0, 2)) {
+    expect(model).toMatchObject({
+      thinkingLevelMap: {
+        minimal: "low",
+        low: "low",
+        medium: "high",
+        high: "high",
+        xhigh: "max",
+        max: "max",
+      },
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+      compat: { codeMode: "preferred" },
+    });
+  }
+  expect(provider.models.map((m) => [m.id, m.name, m.contextWindow, m.maxTokens])).toEqual([
+    ["k3", "Kimi K3", 1_048_576, 131_072],
+    ["k3-256k", "Kimi K3 (256k)", 262_144, 131_072],
+    ["kimi-for-coding", "Kimi Code", 262_144, 32_768],
+    ["kimi-for-coding-highspeed", "Kimi K2.7 Code HighSpeed", 262_144, 32_768],
   ]);
+  expect(provider.models.map((m) => m.reasoning)).toEqual([true, true, true, true]);
   expect(provider.models.slice(2).map((model) => model.compat?.codeMode)).toEqual([
     undefined,
     undefined,
@@ -63,12 +58,11 @@ it("builds the bundled Kimi coding defaults", () => {
 });
 
 it("covers every K3 catalog row with the K3 thinking policy", () => {
-  const thinkingRows = buildKimiCodingProvider()
+  const ids = buildKimiCodingProvider()
     .models.filter((model) => model.thinkingLevelMap)
     .map((model) => model.id);
 
-  expect(KIMI_K3_MODEL_IDS).toEqual(expect.arrayContaining(thinkingRows));
-  expect(KIMI_K3_MODEL_IDS).toContain("kimi-k3");
+  expect(KIMI_K3_MODEL_IDS).toEqual(expect.arrayContaining([...ids, "kimi-k3"]));
 });
 
 it.each([
@@ -76,11 +70,8 @@ it.each([
   ["k2p5", "kimi-for-coding"],
   ["kimi-for-coding", "kimi-for-coding"],
   ["k3[1m]", "k3"],
-])("normalizes %s to %s through the helper and static manifest", (input, expected) => {
+])("normalizes %s to %s through the helper and static manifest", (input, model) => {
   const options = { manifestPlugins: [manifest], allowPluginNormalization: false };
-  expect(normalizeKimiCodingModelId(input)).toBe(expected);
-  expect(parseModelRef(`kimi/${input}`, "kimi", options)).toEqual({
-    provider: "kimi",
-    model: expected,
-  });
+  expect(normalizeKimiCodingModelId(input)).toBe(model);
+  expect(parseModelRef(`kimi/${input}`, "kimi", options)).toEqual({ provider: "kimi", model });
 });
