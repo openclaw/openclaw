@@ -1,4 +1,5 @@
 import type { Worker } from "node:worker_threads";
+import type { DocumentExtractionRequest } from "openclaw/plugin-sdk/document-extractor";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createPdfFixture } from "./document-extractor.test-support.js";
 
@@ -33,6 +34,18 @@ const request = {
   maxPixels: 100_000,
   minTextChars: 1,
 };
+const extractor = createPdfDocumentExtractor();
+const extract = (overrides: Partial<DocumentExtractionRequest> = {}) =>
+  extractor.extract({ ...request, ...overrides });
+const selectedText = (text: string, processed: number[], total: number) => ({
+  text,
+  images: [],
+  metadata: {
+    pages: { processed, total, selection: "explicit", truncated: false },
+    textTruncated: false,
+    imagesTruncated: false,
+  },
+});
 
 describe("PDF document extractor worker", () => {
   const completenessFixture = createPdfFixture(
@@ -50,55 +63,33 @@ describe("PDF document extractor worker", () => {
       Buffer.from("suffix"),
     ]);
     const buffer = source.subarray(6, -6);
-    const result = await createPdfDocumentExtractor().extract({
-      ...request,
-      buffer,
-      pageNumbers: [21],
-      maxPages: 1,
-    });
-    expect(result).toMatchObject({
-      text: "PAGE 21 CORRECTION: REJECTED",
-      images: [],
-      metadata: {
-        pages: { processed: [21], total: 21, selection: "explicit", truncated: false },
-        textTruncated: false,
-      },
-    });
+    expect(await extract({ buffer, pageNumbers: [21], maxPages: 1 })).toEqual(
+      selectedText("PAGE 21 CORRECTION: REJECTED", [21], 21),
+    );
     expect(buffer).toEqual(completenessFixture);
   });
 
   it("preserves an explicitly empty page selection through the real worker", async () => {
-    const result = await createPdfDocumentExtractor().extract({ ...request, pageNumbers: [] });
-    expect(result).toEqual({
-      text: "",
-      images: [],
-      metadata: {
-        pages: { processed: [], total: 2, selection: "explicit", truncated: false },
-        textTruncated: false,
-        imagesTruncated: false,
-      },
-    });
+    expect(await extract({ pageNumbers: [] })).toEqual(selectedText("", [], 2));
   });
 
   it("preserves image-only pages beside selectable text", async () => {
     const textPage = `BT /F1 12 Tf 40 700 Td (${"Selectable report text. ".repeat(12)}) Tj ET`;
     const imagePage = "1 0 0 rg 50 50 300 500 re f";
-    const pages = [textPage, imagePage];
-    const extractor = createPdfDocumentExtractor();
-    const input = { ...request, buffer: createPdfFixture(pages), minTextChars: 200 };
-    const result = await extractor.extract(input);
-    const imageOnly = await extractor.extract({ ...input, pageNumbers: [2] });
+    const input = { buffer: createPdfFixture([textPage, imagePage]), minTextChars: 200 };
+    const result = await extract(input);
+    const imageOnly = await extract({ ...input, pageNumbers: [2] });
 
     expect(result?.text).toContain("Selectable report text.");
     expect(result?.images).toHaveLength(1);
     expect(result?.images).toEqual(imageOnly?.images);
-    const textOnly = await extractor.extract({ ...input, pageNumbers: [1] });
+    const textOnly = await extract({ ...input, pageNumbers: [1] });
     expect(textOnly?.images).toEqual([]);
     expect(textOnly?.text).toBe(result?.text);
   });
 
   it("renders real pages within the aggregate pixel budget", async () => {
-    const result = await createPdfDocumentExtractor().extract({ ...request, minTextChars: 10_000 });
+    const result = await extract({ minTextChars: 10_000 });
     expect(result?.images).toHaveLength(2);
     const pixels = result!.images.reduce((total, image) => {
       const png = Buffer.from(image.data, "base64");
@@ -110,8 +101,7 @@ describe("PDF document extractor worker", () => {
   });
 
   it("joins canceled extraction before allowing the next document to succeed", async () => {
-    const extractor = createPdfDocumentExtractor();
-    await extractor.extract(request);
+    await extract();
     const worker = workers.at(-1)!;
     expect(worker.threadId).toBeGreaterThan(0);
     const abort = new AbortController();
@@ -124,29 +114,21 @@ describe("PDF document extractor worker", () => {
     });
     try {
       await expect(
-        extractor.extract({
-          ...request,
-          minTextChars: 10_000,
-          maxPixels: 4_000_000,
-          signal: abort.signal,
-        }),
+        extract({ minTextChars: 10_000, maxPixels: 4_000_000, signal: abort.signal }),
       ).rejects.toBe(reason);
       expect(worker.threadId).toBe(-1);
     } finally {
       dispatch.mockRestore();
     }
-    await expect(extractor.extract({ ...request, signal: abort.signal })).rejects.toBe(reason);
-    await expect(extractor.extract(request)).resolves.toMatchObject({
+    await expect(extract({ signal: abort.signal })).rejects.toBe(reason);
+    await expect(extract()).resolves.toMatchObject({
       text: expect.stringContaining("First PDF page"),
     });
   });
 
   it("preserves invalid-document errors without poisoning later extraction", async () => {
-    const extractor = createPdfDocumentExtractor();
-    await expect(
-      extractor.extract({ ...request, buffer: Buffer.from("invalid PDF") }),
-    ).rejects.toThrow(/PDF|document/i);
-    await expect(extractor.extract(request)).resolves.toMatchObject({
+    await expect(extract({ buffer: Buffer.from("invalid PDF") })).rejects.toThrow(/PDF|document/i);
+    await expect(extract()).resolves.toMatchObject({
       text: expect.stringContaining("Second PDF page"),
     });
   });
