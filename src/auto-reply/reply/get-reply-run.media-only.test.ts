@@ -22,10 +22,6 @@ import {
 } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
-import {
-  attachActiveEmbeddedRun,
-  detachActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
@@ -77,6 +73,7 @@ import {
   loadEmbeddedAgentRuntime,
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
+import { registerHeartbeatPreemptionCases } from "./get-reply-run.heartbeat-preemption.test-support.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
@@ -1681,92 +1678,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(sessionNativeRuntime.waitForSessionRunEnd).not.toHaveBeenCalled();
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
-  it.for(["keyed", "reserved source"] as const)(
-    "drains a native heartbeat before running a visible Telegram turn (%s)",
-    async (admission, { signal }) => {
-      await useQueueMode("steer");
-      vi.useFakeTimers();
-      const sessionId = "session-embedded-heartbeat";
-      const target = preparedTarget(sessionId);
-      const heartbeat = createOperation(sessionId, { target, turnKind: "heartbeat" });
-      const preempted = createDeferred();
-      const cleanup = createDeferred();
-      const native = {
-        queueMessage: vi.fn(async () => {}),
-        isStreaming: () => true,
-        isCompacting: () => false,
-        preemptByVisibleTurn: vi.fn(() => {
-          preempted.resolve();
-          return true;
-        }),
-        abort: vi.fn(),
-      };
-      const attachment = attachActiveEmbeddedRun(
-        sessionId,
-        native,
-        target.sessionKey,
-        undefined,
-        target.agentId,
-        heartbeat,
-      );
-      if (!attachment) {
-        throw new Error("Expected an admitted heartbeat attachment");
-      }
-      attachment.runCleanupSettlement = cleanup.promise;
-      // A visible ingress reserves an input; it cannot own a second operation beside the heartbeat.
-      const source =
-        admission === "reserved source"
-          ? reserveSessionControllerSource(target.sessionKey, { target, policy: { mode: "steer" } })
-          : undefined;
-      const running = runPrepared({
-        isNewSession: false,
-        sessionId,
-        opts: source ? bindReplySourceInput({}, source) : undefined,
-        ...turn("answer this now", {
-          ...createProviderSurface("telegram"),
-          ChatType: "direct",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "user:1",
-        }),
-      });
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            preempted.promise,
-            running,
-            "Visible turn bypassed the heartbeat",
-          ),
-          signal,
-        );
-        expect(runReplyAgent).not.toHaveBeenCalled();
-        detachActiveEmbeddedRun(sessionId, native, target.sessionKey);
-        heartbeat.complete();
-        await withinTest(heartbeat.ownerSettlement, signal);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(runReplyAgent).not.toHaveBeenCalled();
-
-        cleanup.resolve();
-        await expect(withinTest(running, signal)).resolves.toEqual({ text: "ok" });
-        expect(native.preemptByVisibleTurn).toHaveBeenCalledOnce();
-        expect(native.abort).not.toHaveBeenCalled();
-        expect(runReplyAgent).toHaveBeenCalledOnce();
-        expect(requireRunReplyAgentCall()).toMatchObject({
-          shouldSteer: false,
-          shouldFollowup: false,
-          isActive: false,
-        });
-      } finally {
-        cleanup.resolve();
-        detachActiveEmbeddedRun(sessionId, native, target.sessionKey);
-        heartbeat.complete();
-        if (source) {
-          retireSessionControllerInput(source);
-        }
-        await running.catch(() => {});
-        vi.useRealTimers();
-      }
-    },
-  );
+  registerHeartbeatPreemptionCases({ runPrepared, requireRunReplyAgentCall });
   it("refreshes goal context after interrupt admission waits", async () => {
     const inboundMeta = await import("./inbound-meta.js");
     const activeEntry: SessionEntry = {
