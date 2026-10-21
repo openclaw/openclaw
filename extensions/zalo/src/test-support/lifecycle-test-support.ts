@@ -12,7 +12,7 @@ type Channel = PluginRuntime["channel"];
 
 type LifecycleMonitorSetupParams = {
   accountId: string;
-  dmPolicy: "open" | "pairing";
+  dmPolicy: "open" | "pairing" | "disabled";
   allowFrom?: string[];
   webhookUrl?: string;
   webhookSecret?: string;
@@ -64,6 +64,28 @@ export function createTextUpdate(params: {
       message_id: params.messageId,
       date: Math.floor(Date.now() / 1000),
       text: params.text ?? "hello from zalo",
+    },
+  };
+}
+
+export function createUnsupportedUpdate(params: {
+  messageId: string;
+  userId: string;
+  userName: string;
+  chatId: string;
+  text?: string;
+  messageType?: string;
+  chatType?: "PRIVATE" | "GROUP";
+}) {
+  return {
+    event_name: "message.unsupported.received",
+    message: {
+      from: { id: params.userId, name: params.userName },
+      chat: { id: params.chatId, chat_type: params.chatType ?? ("PRIVATE" as const) },
+      message_id: params.messageId,
+      date: Math.floor(Date.now() / 1000),
+      ...(params.text !== undefined ? { text: params.text } : {}),
+      ...(params.messageType !== undefined ? { message_type: params.messageType } : {}),
     },
   };
 }
