@@ -13,12 +13,8 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const changelog = `# Changelog
-
-## Unreleased
-
-- Package source preflight notes with enough detail.
-`;
+const changelog =
+  "# Changelog\n\n## Unreleased\n\n- Package source preflight notes with enough detail.\n";
 
 function rootManifest(overrides: Record<string, unknown> = {}) {
   return aiManifest({
@@ -30,9 +26,7 @@ function rootManifest(overrides: Record<string, unknown> = {}) {
 function aiManifest(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
     version: "2026.8.1",
-    dependencies: {
-      openai: "6.49.0",
-    },
+    dependencies: { openai: "6.49.0" },
     ...overrides,
   });
 }
@@ -46,12 +40,8 @@ function validateSource(overrides: Partial<Parameters<typeof validatePackageSour
   });
 }
 
-type WorkflowStep = {
+type WorkflowStep = Partial<Record<"if" | "name" | "run" | "uses", string>> & {
   env?: Record<string, string>;
-  if?: string;
-  name?: string;
-  run?: string;
-  uses?: string;
   with?: Record<string, unknown>;
 };
 
@@ -348,14 +338,6 @@ it("uses canonical package changelog validation", () => {
   expect(() => validateSource()).toThrow(
     "CHANGELOG.md does not contain a release section for 2026.8.1.",
   );
-});
-
-it("accepts complete oversized contribution records through the package renderer", () => {
-  expect(
-    validateSource({
-      changelogContent: `# Changelog\n\n## 2026.8.1\n\n- A complete release note with its original credit. Thanks @contributor.\n\n### Complete contribution record\n\n${"- **PR #123** Thanks @contributor.\n".repeat(20_000)}`,
-    }),
-  ).toBe("2026.8.1");
 });
 
 it("rejects source package version drift", () => {

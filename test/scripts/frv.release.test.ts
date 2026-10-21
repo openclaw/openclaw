@@ -292,6 +292,20 @@ const PUBLISH_REF = `release-publish/${PUBLISH_SHA.slice(0, 12)}-88`;
 const DIAGNOSTIC_FILE = "release-postpublish-diagnostics.json";
 const PUBLISH_PATH = ".github/workflows/openclaw-release-publish.yml";
 const FRV_PATH = ".github/workflows/full-release-validation.yml";
+const endpoint = (path: string) => `repos/${REPOSITORY}/${path}`;
+
+function observeRun<
+  T extends { id: number; workflow_id: number; path: string; run_attempt: number },
+>(responses: Record<string, unknown>, run: T, includeAttempt = false) {
+  responses[endpoint(`actions/runs/${run.id}`)] = run;
+  responses[endpoint(`actions/workflows/${run.workflow_id}`)] = {
+    id: run.workflow_id,
+    path: run.path.split("@")[0],
+  };
+  if (includeAttempt) {
+    responses[endpoint(`actions/runs/${run.id}/attempts/${run.run_attempt}`)] = run;
+  }
+}
 
 function publicationStep(name: string, conclusion = "success", number = 1) {
   return { number, name, status: "completed", conclusion };
@@ -468,7 +482,6 @@ async function runPublicationCli(
     fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
   }
   const responses: Record<string, unknown> = {};
-  const endpoint = (path: string) => `repos/${REPOSITORY}/${path}`;
   const artifactLists = new Map<number, unknown[]>();
   async function artifact(
     id: number,
@@ -529,17 +542,7 @@ async function runPublicationCli(
     fixture.diagnostic,
   );
   for (const run of [fixture.root, fixture.publisher]) {
-    responses[endpoint(`actions/runs/${run.id}`)] = run;
-    responses[endpoint(`actions/runs/${run.id}/attempts/${run.run_attempt}`)] = run;
-    responses[endpoint(`actions/workflows/${run.workflow_id}`)] = {
-      id: run.workflow_id,
-      path: run.id === 77 ? FRV_PATH : PUBLISH_PATH,
-    };
-    const artifacts = artifactLists.get(run.id) ?? [];
-    responses[endpoint(`actions/runs/${run.id}/artifacts?per_page=100&page=1`)] = {
-      total_count: artifacts.length,
-      artifacts,
-    };
+    observeRun(responses, run, true);
   }
   responses[endpoint("actions/runs/88/attempts/1/jobs?per_page=100&page=1")] = {
     total_count: fixture.publisherJobs.length,
@@ -547,11 +550,7 @@ async function runPublicationCli(
   };
   for (const entry of requiredChildren()) {
     const run = { ...runFor(entry, 1, "success"), workflow_id: Number(entry.runId) + 1000 };
-    responses[endpoint(`actions/runs/${entry.runId}`)] = run;
-    responses[endpoint(`actions/workflows/${run.workflow_id}`)] = {
-      id: run.workflow_id,
-      path: run.path,
-    };
+    observeRun(responses, run);
     responses[endpoint(`actions/runs/${entry.runId}/attempts/1/jobs?per_page=100&page=1`)] = {
       total_count: 1,
       jobs: [{ ...job("test"), id: Number(entry.runId) * 10, run_id: run.id, run_attempt: 1 }],
@@ -987,7 +986,7 @@ describe("publication status real CLI", () => {
       const fixture = publicationFixture();
       Reflect.set(fixture.diagnostic.children.openclawNpm!, "suppliedRunId", "909");
       const result = await runPublicationCli(fixture, undefined, (responses) => {
-        responses[`repos/${REPOSITORY}/actions/runs/909`] = {
+        observeRun(responses, {
           ...fixture.publisher,
           id: 909,
           workflow_id: 9090,
@@ -1000,11 +999,7 @@ describe("publication status real CLI", () => {
                 head_branch: "older-tooling",
                 conclusion: "success",
               }),
-        };
-        responses[`repos/${REPOSITORY}/actions/workflows/9090`] = {
-          id: 9090,
-          path: `.github/workflows/${workflow}.yml`,
-        };
+        });
       });
       const publication = JSON.parse(result.stdout).publication;
       expect(result.status).toBe(workflow === "wrong" ? 1 : 0);
@@ -1170,17 +1165,13 @@ describe("publication status real CLI", () => {
           normalClawHubRunAttempt: childRef === null ? null : "1",
         });
         if (childRef !== null) {
-          responses[`repos/${REPOSITORY}/actions/runs/909`] = {
+          observeRun(responses, {
             ...fixture.publisher,
             id: 909,
             workflow_id: 9090,
             head_branch: childRef,
             path: ".github/workflows/plugin-clawhub-release.yml",
-          };
-          responses[`repos/${REPOSITORY}/actions/workflows/9090`] = {
-            id: 9090,
-            path: ".github/workflows/plugin-clawhub-release.yml",
-          };
+          });
         }
       });
       expect(result.status).toBe(childRef === "foreign" ? 1 : 0);
@@ -1234,8 +1225,7 @@ describe("publication status real CLI", () => {
           "windows-dispatch.json",
           dispatch,
         );
-        responses[`repos/${REPOSITORY}/actions/runs/909`] = native;
-        responses[`repos/${REPOSITORY}/actions/workflows/9090`] = { id: 9090, path: native.path };
+        observeRun(responses, native);
         responses[`repos/${REPOSITORY}/actions/runs/909/artifacts?per_page=100&page=1`] = {
           total_count: 0,
           artifacts: [],
@@ -1336,9 +1326,7 @@ describe("publication status real CLI", () => {
       if (kind === "unconfirmed") {
         return;
       }
-      responses[`repos/${REPOSITORY}/actions/runs/909`] = request;
-      responses[`repos/${REPOSITORY}/actions/runs/909/attempts/1`] = request;
-      responses[`repos/${REPOSITORY}/actions/workflows/9090`] = { id: 9090, path: request.path };
+      observeRun(responses, request, true);
       responses[
         `repos/${REPOSITORY}/actions/workflows/linux-app-release.yml/runs?event=workflow_run&branch=main&created=%3E%3D2026-08-02T00%3A00%3A00Z&per_page=100&page=1`
       ] = {
@@ -1351,8 +1339,7 @@ describe("publication status real CLI", () => {
       if (kind === "awaiting") {
         return;
       }
-      responses[`repos/${REPOSITORY}/actions/runs/910`] = builder;
-      responses[`repos/${REPOSITORY}/actions/workflows/9100`] = { id: 9100, path: builder.path };
+      observeRun(responses, builder);
       await artifact(
         5,
         builder,
