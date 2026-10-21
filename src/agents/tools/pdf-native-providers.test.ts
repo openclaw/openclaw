@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
+import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.types.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 
 // mock-isolation: native PDF tests bypass plugin loading; only Google URL normalization is used.
@@ -149,12 +150,12 @@ describe("native PDF provider API calls", () => {
     },
   );
 
-  it.each([
-    { auth: { mode: "header" as const, headerName: "x-api-key", value: "fixture-override" } },
+  it.each<ModelProviderRequestTransportOverrides>([
+    { auth: { mode: "header", headerName: "x-api-key", value: "fixture-override" } },
     { headers: { "X-Api-Key": "fixture-override" } },
     {
       headers: { Authorization: "Bearer stale-fixture" },
-      auth: { mode: "authorization-bearer" as const, token: "fixture-override" },
+      auth: { mode: "authorization-bearer", token: "fixture-override" },
     },
   ])("preserves explicit native PDF authentication: %j", async (request) => {
     const fetchMock = mockFetchResponse(anthropicResponse());

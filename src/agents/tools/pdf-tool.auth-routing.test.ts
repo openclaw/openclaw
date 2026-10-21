@@ -209,7 +209,11 @@ it.each(["setup token", "provider-default setup token", "API key"] as const)(
         expect(headers.get("user-agent")).toMatch(/^claude-cli\/\d+\.\d+\.\d+$/);
         expect(headers.get("x-app")).toBe("cli");
       }
-      const body = JSON.parse(String(init?.body));
+      const requestBody = init?.body;
+      if (typeof requestBody !== "string") {
+        expect.fail("Expected a serialized PDF request body");
+      }
+      const body = JSON.parse(requestBody);
       expect(body.system).toEqual(
         oauth
           ? [
