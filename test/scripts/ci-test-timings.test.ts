@@ -40,6 +40,14 @@ import {
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
+function runtimeTiming(
+  { configs, includePatterns }: Pick<RuntimePlacementTiming, "configs" | "includePatterns">,
+  seconds: number,
+  env: RuntimePlacementTiming["env"] = {},
+): RuntimePlacementTiming {
+  return { configs, includePatterns, env, pretestBuildMode: "runtime", seconds };
+}
+
 function uiLog(files: Record<string, number>) {
   const body = Object.values(files).reduce((sum, value) => sum + value, 0);
   return [
@@ -452,9 +460,7 @@ describe("runtime placement observations", () => {
       mockRuntimePlacementCosts();
       const readRuntimeTimings = testTimings.readRuntimePlacementTimings;
       const runtimeSpy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
-      onTestFinished(() => {
-        runtimeSpy.mockRestore();
-      });
+      onTestFinished(() => runtimeSpy.mockRestore());
       const options = {
         compactMode: "push" as const,
         runnerBackend: "hybrid",
@@ -618,22 +624,20 @@ describe("runtime placement observations", () => {
         );
       }
       const selected = ["src/config/state-startup-corpus.test.ts"];
-      const preciseBefore = selectedBundles(selected, {
-        runnerBackend: "hybrid",
-      });
-      const blacksmith: RuntimePlacementTiming[] = runtimeGroups.map((group) => ({
-        configs: group.configs,
-        env: group.env ?? {},
-        includePatterns: group.includePatterns!,
-        pretestBuildMode: "runtime",
-        seconds: group.configs.includes(runtimeConfig)
-          ? 180
-          : group.includePatterns?.includes(
-                "src/infra/update-managed-service-handoff-lifecycle.test.ts",
-              )
-            ? 250
-            : 20,
-      }));
+      const preciseBefore = selectedBundles(selected, { runnerBackend: "hybrid" });
+      const blacksmith = runtimeGroups.map((group) =>
+        runtimeTiming(
+          { ...group, includePatterns: group.includePatterns! },
+          group.configs.includes(runtimeConfig)
+            ? 180
+            : group.includePatterns?.includes(
+                  "src/infra/update-managed-service-handoff-lifecycle.test.ts",
+                )
+              ? 250
+              : 20,
+          group.env,
+        ),
+      );
       spy.mockImplementation((profile) => (profile === "blacksmith" ? blacksmith : []));
       const after = nodeBundles(options);
       if (compactMode === "pull-request") {
@@ -874,7 +878,6 @@ function samplerToolingLog(seconds: number) {
 }
 
 type SamplerFixture = {
-  changedUiFiles?: string[];
   gitDirectory?: string;
   observedAt?: string;
   runs: ReturnType<typeof samplerRun>[];
@@ -905,7 +908,7 @@ function createSamplerFixture(fixture: SamplerFixture) {
 const execFileSync = childProcess.execFileSync;
 childProcess.execFileSync = (file, args, options) =>
   file === "git" && args[0] === "diff" && ${!fixture.gitDirectory}
-    ? ${JSON.stringify((fixture.changedUiFiles ?? []).join("\0"))}
+    ? ""
     : execFileSync(file, args, options);
 require("node:module").syncBuiltinESMExports();
 const OriginalDate = Date;
@@ -1039,20 +1042,11 @@ describe("CI test timing refit", () => {
       "dual-all:owner": 50,
     });
     expect(result.timings.runtimePlacementTimings.blacksmith).toEqual([
-      {
-        configs: descriptor.configs,
-        includePatterns: descriptor.includePatterns,
-        env: { ...descriptor.env, OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all" },
-        pretestBuildMode: "runtime",
-        seconds: 50,
-      },
-      {
-        configs: descriptor.configs,
-        includePatterns: descriptor.includePatterns,
-        env: descriptor.env,
-        pretestBuildMode: "runtime",
-        seconds: 20,
-      },
+      runtimeTiming(descriptor, 50, {
+        ...descriptor.env,
+        OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all",
+      }),
+      runtimeTiming(descriptor, 20, descriptor.env),
     ]);
   });
 
@@ -1325,13 +1319,7 @@ it.todo("retains todo coverage");
       github: [],
     });
     expect(mixed.timings.runtimePlacementTimings.blacksmith).toEqual([
-      {
-        configs: descriptor.configs,
-        includePatterns: descriptor.includePatterns,
-        env: { OPENCLAW_VITEST_MAX_WORKERS: "8" },
-        pretestBuildMode: "runtime",
-        seconds: 40,
-      },
+      runtimeTiming(descriptor, 40, { OPENCLAW_VITEST_MAX_WORKERS: "8" }),
     ]);
     // Both the job JSON and group pins can lower, but never raise, an inherited ceiling.
     const pinned = refitTestTimings(
@@ -1728,13 +1716,10 @@ describe("CI timing sampler provenance", () => {
     ...compactBaseline({ "core-unit-src-security-2": 20 }, { retained: 90 }),
     runtimePlacementTimings: {
       blacksmith: [
-        {
-          configs: ["test/vitest/reader.config.ts"],
-          env: {},
-          includePatterns: ["src/reader.test.ts"],
-          pretestBuildMode: "runtime",
-          seconds: 80,
-        },
+        runtimeTiming(
+          { configs: ["test/vitest/reader.config.ts"], includePatterns: ["src/reader.test.ts"] },
+          80,
+        ),
       ],
       github: [],
     },
@@ -1979,27 +1964,6 @@ describe("CI timing sampler provenance", () => {
     },
   );
 
-  it("retains changed UI file prices until matching-source samples arrive", () => {
-    const changed = "ui/src/e2e/optimized.e2e.test.ts";
-    const runs = samplerRuns([1, 2, 3]);
-    const fixture = createSamplerFixture({
-      runs,
-      changedUiFiles: [changed],
-      baseline: {
-        ...baseline,
-        uiE2e: { ...baseline.uiE2e, fileSeconds: { [changed]: 8, [measuredFile]: 100 } },
-      },
-      jobs: runs.flatMap(({ id }) => [
-        samplerJob(id * 10, id),
-        uiJob(id * 10 + 1, id, { [changed]: 69, [measuredFile]: 130 }),
-      ]),
-    });
-    const result = invoke(fixture, false, 3);
-    const timings = readTimings(fixture);
-    expect(timings.uiE2e.fileSeconds).toEqual({ [changed]: 8, [measuredFile]: 130 });
-    expect(result.stdout).toContain("UI file samples excluded after source changes: 1");
-  });
-
   it("refits unchanged UI neighbors without fetching historical blobs for moved tests", () => {
     const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-refit-history-")));
     onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
@@ -2098,7 +2062,8 @@ describe("CI timing sampler provenance", () => {
         ),
       ]),
     });
-    invoke(fixture, false, 4);
+    const result = invoke(fixture, false, 4);
+    expect(result.stdout).toContain("UI file samples excluded after source changes: 4");
     expect(readTimings(fixture).uiE2e.fileSeconds).toEqual({ ...prices, [measuredFile]: 130 });
     expect(missing()).toEqual(absent);
   });

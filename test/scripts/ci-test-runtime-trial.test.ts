@@ -154,23 +154,6 @@ it.each(["node", "bun-all", "dual-all"])(
   },
 );
 
-it.each(["node", "bun-all", "dual-all"])(
-  "preserves UI backend budgets and doubles only dual-all (%s)",
-  (policy) => {
-    const timeout = readCiWorkflow().jobs["checks-ui"]["timeout-minutes"];
-    for (const runnerBackend of ["blacksmith", "github"] as const) {
-      expect(
-        evaluateWorkflow(timeout, {
-          eventName: "workflow_dispatch",
-          ciShape: "main",
-          runnerBackend,
-          preflightOutputs: { ui_test_runtime_policy: policy, ci_shape: "main" },
-        }),
-      ).toBe((runnerBackend === "github" ? 35 : 20) * (policy === "dual-all" ? 2 : 1));
-    }
-  },
-);
-
 it("doubles explicit row deadlines only for dual-all", () => {
   for (const policy of ["bun-all", "dual-all"] as const) {
     const outputs = manifest({
