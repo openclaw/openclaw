@@ -409,6 +409,40 @@ leave it off for paired timing. Use only synthetic requests:
 parameters, stacks, and model rows are retained; authentication and other response
 payloads are omitted.
 
+Add `--reload-census` to count every RPC during that load window. This mode keeps
+parameter keys and opaque query IDs instead of parameter values; matching query
+IDs identify exact duplicates within one document. It also records native Long
+Animation Frame blocking and timestamps of changed sidebar row inventories.
+With `--request-stacks`, `--asset-dir /path/to/control-ui/assets` maps callers
+through the matching build's source maps.
+The first nonempty inventory and the last inventory change are DOM milestones,
+not paint times. Keep caller-stack diagnostics separate from untraced paired
+timing, and use matching fixture state, seeds, and observation windows.
+`--storage-state` accepts a synthetic Playwright storage-state file; use
+`--min-sidebar-rows` to reject captures with an empty or collapsed fixture roster.
+
+`control-ui-reload-fixture.ts` prepares a real Gateway fixture with 5,000 sessions,
+6,000 retained runs, 120 sessions assigned to the synthetic viewer, eight personal
+pins, seven browser plugins, and a synthetic model catalog. It seeds a dashboard
+widget through RPC and writes a Playwright preference file with Coding expanded.
+Run preparation sequentially on the benchmark host, with built runtime and UI assets:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/control-ui-reload-fixture.ts \
+  --state-dir /path/to/fixture --ui-root /path/to/control-ui --prepare
+node --import ./scripts/tsx.mjs scripts/perf/control-ui-reload-fixture.ts \
+  --state-dir /path/to/fixture --ui-root /path/to/control-ui
+```
+
+The default ports are 41514 (Gateway), 41515 (widget sandbox), and 41516 (proxy).
+Use distinct ports and state directories for concurrent sides. Once each fixture
+has been seeded, `--skip-seed` preserves its state on subsequent launches;
+`--runtime-entry` selects a separately built baseline or candidate runtime.
+Use the printed route with `--storage-state /path/to/fixture/browser-storage.json`,
+`--reload-census --min-sidebar-rows 10 --duration 15`. No provider credentials or
+model inference are needed. The fixture uses 8 MiB of transcript content rather
+than a multi-gigabyte database; this workload measures reload acquisition and rows.
+
 To isolate session activity from model selection, use
 `--activity-patch-sessions <key-a>,<key-b>` with `--load-runs 1` against existing
 synthetic sessions. This alternates navigation between those conversations and

@@ -615,6 +615,7 @@ async function dispatchDiscordCommandInteraction(
   }
 
   const { dispatched, hiddenFinalReply } = await dispatchDiscordNativeAgentReply({
+    assertAuthority: authority.assertActive,
     cfg,
     discordConfig,
     accountId,

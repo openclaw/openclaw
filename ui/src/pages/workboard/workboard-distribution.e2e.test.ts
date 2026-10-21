@@ -163,9 +163,7 @@ suite.define(() => {
       expect(await page.evaluate(() => window.isSecureContext)).toBe(false);
       expect((await gateway.getSocketUrls()).at(-1)).toBe(gatewayUrl);
       expect((await gateway.waitForRequest("plugins.controlUi.report")).params).toMatchObject({
-        pluginId: "workboard",
-        revision,
-        status: "activated",
+        reports: [{ pluginId: "workboard", revision, status: "activated" }],
       });
       // Deep links retain the shipped relative base; the Gateway resolves any /assets/ segment.
       const prefix = `/assets/plugins/workboard/${revision}/`;
