@@ -160,28 +160,19 @@ describe("bundled plugin build entries", () => {
     expect(listBundledPluginPackArtifacts({ cwd })).toEqual([]);
   });
 
-  const bundledChannelEntrySources = ["index.ts", "channel-entry.ts", "setup-entry.ts"];
-  const forEachBundledChannelEntry = (
-    visit: (params: { entryPath: string; entry: string; pluginId: string }) => void,
-  ) => {
+  function* bundledChannelEntries() {
     for (const dirent of fs.readdirSync("extensions", { withFileTypes: true })) {
       if (!dirent.isDirectory()) {
         continue;
       }
-
-      for (const sourceEntry of bundledChannelEntrySources) {
+      for (const sourceEntry of ["index.ts", "channel-entry.ts", "setup-entry.ts"]) {
         const entryPath = path.join("extensions", dirent.name, sourceEntry);
-        if (!fs.existsSync(entryPath)) {
-          continue;
+        if (fs.existsSync(entryPath)) {
+          yield { entryPath, entry: fs.readFileSync(entryPath, "utf8"), pluginId: dirent.name };
         }
-        visit({
-          entryPath,
-          entry: fs.readFileSync(entryPath, "utf8"),
-          pluginId: dirent.name,
-        });
       }
     }
-  };
+  }
 
   it("includes the manifest-less runtime core support package in dist build entries", () => {
     expect(collectBuildSources()).toContain("extensions/image-generation-core/runtime-api.ts");
@@ -251,10 +242,13 @@ describe("bundled plugin build entries", () => {
 
   it("keeps top-level bundled plugin test helpers out of public-surface entries", () => {
     const entryKeys = collectBuildSources().map((source) => source.replace(/\.[^.]+$/u, ""));
-
-    expect(entryKeys).not.toContain("extensions/browser/test-support");
-    expect(entryKeys).not.toContain("extensions/comfy/test-helpers");
-    expect(entryKeys).not.toContain("extensions/minimax/provider-http.test-helpers");
+    for (const entry of [
+      "browser/test-support",
+      "comfy/test-helpers",
+      "minimax/provider-http.test-helpers",
+    ]) {
+      expect(entryKeys).not.toContain(`extensions/${entry}`);
+    }
   });
 
   it("discovers repo plugin build entries without directory scans", () => {
@@ -384,21 +378,15 @@ describe("bundled plugin build entries", () => {
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
     const excludedPackageDirs = collectRootPackageExcludedExtensionDirs();
-    const offenders: string[] = [];
     const secretBackedPluginIds = new Set<string>();
-
-    forEachBundledChannelEntry(({ entryPath, entry, pluginId }) => {
+    for (const { entryPath, entry, pluginId } of bundledChannelEntries()) {
       if (!entry.includes('exportName: "channelSecrets"')) {
-        return;
+        continue;
       }
       secretBackedPluginIds.add(pluginId);
-      if (entry.includes("./src/secret-contract.js")) {
-        offenders.push(entryPath);
-      }
+      expect(entry, entryPath).not.toContain("./src/secret-contract.js");
       expect(entry).toContain('specifier: "./secret-contract-api.js"');
-    });
-
-    expect(offenders).toStrictEqual([]);
+    }
 
     for (const pluginId of [...secretBackedPluginIds].toSorted()) {
       if (excludedPackageDirs.has(pluginId)) {
