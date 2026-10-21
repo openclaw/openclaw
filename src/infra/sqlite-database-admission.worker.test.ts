@@ -338,13 +338,9 @@ it("keeps one shared generation when the host opens a newly created worker datab
 });
 
 function createDatabase(location: string, value: number): void {
-  const database = new DatabaseSync(location);
-  try {
-    database.exec("CREATE TABLE proof (value INTEGER NOT NULL)");
-    database.prepare("INSERT INTO proof VALUES (?)").run(value);
-  } finally {
-    database.close();
-  }
+  using database = new DatabaseSync(location);
+  database.exec("CREATE TABLE proof (value INTEGER NOT NULL)");
+  database.prepare("INSERT INTO proof VALUES (?)").run(value);
 }
 
 it("keeps per-operation admission replies scoped to the requested database", async () => {

@@ -185,12 +185,22 @@ function createAuthDatabase(key = "synthetic", metadata?: Record<string, string>
 }
 
 function clearAuthState(source: string) {
-  const writer = new (requireNodeSqlite().DatabaseSync)(source);
-  try {
-    writer.prepare("UPDATE auth_profile_state SET state_json = ?").run('{"lastGood":{}}');
-  } finally {
-    writer.close();
-  }
+  using writer = new (requireNodeSqlite().DatabaseSync)(source);
+  writer.prepare("UPDATE auth_profile_state SET state_json = ?").run('{"lastGood":{}}');
+}
+
+function holdBrokerReadiness(broker: ReturnType<typeof createSpawnBrokerHost>) {
+  const ready = createDeferredCore();
+  const admitted = createDeferredCore<BrokerChild>();
+  const spawnChild = broker.spawn.bind(broker);
+  const spawning = vi.spyOn(broker, "spawn").mockImplementation((...args) => {
+    const child = spawnChild(...args);
+    const actualReady = child.ready();
+    vi.spyOn(child, "ready").mockImplementation(() => actualReady.then(() => ready.promise));
+    void actualReady.then(() => admitted.resolve(child), admitted.reject);
+    return child;
+  });
+  return { ready, admitted, spawning };
 }
 
 function read(
@@ -582,30 +592,22 @@ describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
   it("cancels an admitted read before IPC readiness and joins its child", async () => {
     const { source } = createAuthDatabase();
     const broker = createSpawnBrokerHost();
-    const ready = createDeferredCore();
-    const admitted = createDeferredCore<BrokerChild>();
+    let held: ReturnType<typeof holdBrokerReadiness> | undefined;
     const abort = new AbortController();
     let reading: Promise<unknown> | undefined;
     try {
       await broker.ready();
-      const brokerSpawn = broker.spawn.bind(broker);
-      vi.spyOn(broker, "spawn").mockImplementation((...args) => {
-        const child = brokerSpawn(...args);
-        const actualReady = child.ready();
-        vi.spyOn(child, "ready").mockImplementation(() => actualReady.then(() => ready.promise));
-        void actualReady.then(() => admitted.resolve(child), admitted.reject);
-        return child;
-      });
+      held = holdBrokerReadiness(broker);
       reading = runWithSpawnBroker(broker, () => read(source, "canonical", abort.signal));
       const failure = new Error("auth read cancelled before readiness");
       const rejected = expect(reading).rejects.toBe(failure);
-      const child = await admitted.promise;
+      const child = await held.admitted.promise;
       abort.abort(failure);
       await rejected;
       expect(child.signalCode).toBe("SIGKILL");
       expect(child.connected).toBe(false);
     } finally {
-      ready.resolve();
+      held?.ready.resolve();
       abort.abort();
       await Promise.allSettled([reading]);
       await broker.close();
@@ -669,8 +671,7 @@ describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
     async (cleanupFails) => {
       const { source, rows } = createAuthDatabase();
       const broker = createSpawnBrokerHost();
-      const admitted = createDeferredCore<BrokerChild>();
-      const ready = createDeferredCore();
+      let held: ReturnType<typeof holdBrokerReadiness> | undefined;
       const cleanupEntered = createDeferredCore();
       const releaseCleanup = createDeferredCore();
       const cleanupFailure = new Error("recorded broker cleanup failure");
@@ -678,14 +679,8 @@ describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
       let settled = false;
       try {
         await broker.ready();
-        const brokerSpawn = broker.spawn.bind(broker);
-        const spawning = vi.spyOn(broker, "spawn").mockImplementation((...args) => {
-          const child = brokerSpawn(...args);
-          const actualReady = child.ready();
-          vi.spyOn(child, "ready").mockImplementation(() => actualReady.then(() => ready.promise));
-          void actualReady.then(() => admitted.resolve(child), admitted.reject);
-          return child;
-        });
+        held = holdBrokerReadiness(broker);
+        const { admitted, ready, spawning } = held;
         const cleanup = broker.waitForCleanup.bind(broker);
         const cleanupSpy = vi.spyOn(broker, "waitForCleanup").mockImplementation(async () => {
           cleanupEntered.resolve();
@@ -736,7 +731,7 @@ describe.skipIf(skipBroker)("auth SQLite broker lifecycle", () => {
         }
         cleanupSpy.mockRestore();
       } finally {
-        ready.resolve();
+        held?.ready.resolve();
         releaseCleanup.resolve();
         await Promise.allSettled([reading]);
         vi.restoreAllMocks();

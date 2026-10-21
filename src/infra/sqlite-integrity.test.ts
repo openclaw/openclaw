@@ -33,104 +33,92 @@ async function withMaintenanceCheck(check: "quick" | "full", run: () => void) {
   }
 }
 
+function tableFixture(sql = "CREATE TABLE items(value INTEGER)", withSibling = false) {
+  const filename = path.join(tempDirs.make("sqlite-table-integrity-"), "database.sqlite");
+  const database = openNodeSqliteDatabase(filename);
+  database.exec(sql);
+  const sibling = withSibling ? openNodeSqliteDatabase(filename) : undefined;
+  const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+  return {
+    database,
+    sibling,
+    count: (statement: string) => observer.queries.filter((query) => query === statement).length,
+    [Symbol.dispose]() {
+      observer.restore();
+      sibling?.close();
+      database.close();
+    },
+  };
+}
+
 describe("maintenance table integrity", () => {
   it("shares passing table checks across handles until a write, and retains QUICK and FK", async () => {
-    const filename = path.join(tempDirs.make("sqlite-table-receipt-"), "database.sqlite");
-    using database = openNodeSqliteDatabase(filename);
-    database.exec("CREATE TABLE items(value INTEGER CHECK(value > 0))");
-    using sibling = openNodeSqliteDatabase(filename);
-    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    const scoped = () =>
-      observer.queries.filter((sql) => sql === "PRAGMA integrity_check('items');");
-    try {
-      await withMaintenanceCheck("quick", () => {
-        for (const handle of [database, sibling]) {
-          assertSqliteIntegrity(handle, "items", { check: "quick", tables: ["items"] });
-        }
-        expect(scoped()).toHaveLength(1);
-        expect(observer.queries.filter((sql) => sql === "PRAGMA quick_check;")).toHaveLength(2);
-        expect(observer.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
-          2,
-        );
-        database.exec("PRAGMA ignore_check_constraints = ON; INSERT INTO items VALUES (-1)");
-        expect(() => assertSqliteTableIntegrity(sibling, "items", "items")).toThrow(
-          /CHECK constraint/u,
-        );
-        expect(scoped()).toHaveLength(2);
-        database.exec("DELETE FROM items");
-        assertSqliteTableIntegrity(sibling, "items", "items");
-        expect(scoped()).toHaveLength(3);
-      });
-      await withMaintenanceCheck("quick", () =>
-        assertSqliteTableIntegrity(database, "items", "items"),
+    using fixture = tableFixture("CREATE TABLE items(value INTEGER CHECK(value > 0))", true);
+    const { database, count } = fixture;
+    const sibling = fixture.sibling!;
+    await withMaintenanceCheck("quick", () => {
+      for (const handle of [database, sibling]) {
+        assertSqliteIntegrity(handle, "items", { check: "quick", tables: ["items"] });
+      }
+      expect(count("PRAGMA integrity_check('items');")).toBe(1);
+      expect(count("PRAGMA quick_check;")).toBe(2);
+      expect(count("PRAGMA foreign_key_check;")).toBe(2);
+      database.exec("PRAGMA ignore_check_constraints = ON; INSERT INTO items VALUES (-1)");
+      expect(() => assertSqliteTableIntegrity(sibling, "items", "items")).toThrow(
+        /CHECK constraint/u,
       );
-      expect(scoped()).toHaveLength(4);
-    } finally {
-      observer.restore();
-    }
+      expect(count("PRAGMA integrity_check('items');")).toBe(2);
+      database.exec("DELETE FROM items");
+      assertSqliteTableIntegrity(sibling, "items", "items");
+      expect(count("PRAGMA integrity_check('items');")).toBe(3);
+    });
+    await withMaintenanceCheck("quick", () =>
+      assertSqliteTableIntegrity(database, "items", "items"),
+    );
+    expect(count("PRAGMA integrity_check('items');")).toBe(4);
   });
 
   it("rechecks transaction-local writes, DDL, and rollback", async () => {
-    const filename = path.join(tempDirs.make("sqlite-table-transaction-"), "database.sqlite");
-    using database = openNodeSqliteDatabase(filename);
-    database.exec("CREATE TABLE items(value INTEGER)");
-    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    const scoped = () =>
-      observer.queries.filter((sql) => sql === "PRAGMA integrity_check('items');");
+    using fixture = tableFixture();
+    const { database, count } = fixture;
     const check = () => assertSqliteTableIntegrity(database, "items", "items");
-    try {
-      await withMaintenanceCheck("quick", () => {
-        database.exec("BEGIN");
-        check();
-        check();
-        expect(scoped()).toHaveLength(1);
-        database.exec("INSERT INTO items VALUES (1)");
-        check();
-        expect(scoped()).toHaveLength(2);
-        database.exec("CREATE INDEX idx_items ON items(value)");
-        check();
-        expect(scoped()).toHaveLength(3);
-        database.exec("ROLLBACK");
-        check();
-        expect(scoped()).toHaveLength(4);
-        expect(database.prepare("SELECT * FROM items").all()).toEqual([]);
-      });
-    } finally {
-      observer.restore();
-    }
+    await withMaintenanceCheck("quick", () => {
+      database.exec("BEGIN");
+      check();
+      check();
+      expect(count("PRAGMA integrity_check('items');")).toBe(1);
+      database.exec("INSERT INTO items VALUES (1)");
+      check();
+      expect(count("PRAGMA integrity_check('items');")).toBe(2);
+      database.exec("CREATE INDEX idx_items ON items(value)");
+      check();
+      expect(count("PRAGMA integrity_check('items');")).toBe(3);
+      database.exec("ROLLBACK");
+      check();
+      expect(count("PRAGMA integrity_check('items');")).toBe(4);
+      expect(database.prepare("SELECT * FROM items").all()).toEqual([]);
+    });
   });
 
   it("retains every explicit FULL check", async () => {
-    const filename = path.join(tempDirs.make("sqlite-table-full-"), "database.sqlite");
-    using database = openNodeSqliteDatabase(filename);
-    database.exec("CREATE TABLE items(value INTEGER)");
-    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    try {
-      await withMaintenanceCheck("full", () => {
-        for (let i = 0; i < 2; i += 1) {
-          assertSqliteIntegrity(database, "items", { check: "full", tables: ["items"] });
-          assertSqliteTableIntegrity(database, "items", "items");
-        }
-      });
-      expect(observer.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(2);
-      expect(
-        observer.queries.filter((sql) => sql === "PRAGMA integrity_check('items');"),
-      ).toHaveLength(2);
-      expect(observer.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(2);
-    } finally {
-      observer.restore();
-    }
+    using fixture = tableFixture();
+    const { database, count } = fixture;
+    await withMaintenanceCheck("full", () => {
+      for (let i = 0; i < 2; i += 1) {
+        assertSqliteIntegrity(database, "items", { check: "full", tables: ["items"] });
+        assertSqliteTableIntegrity(database, "items", "items");
+      }
+    });
+    expect(count("PRAGMA integrity_check;")).toBe(2);
+    expect(count("PRAGMA integrity_check('items');")).toBe(2);
+    expect(count("PRAGMA foreign_key_check;")).toBe(2);
   });
 });
 
 function withDatabase(sql: string, run: (database: DatabaseSync) => void) {
-  const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
-  try {
-    database.exec(sql);
-    run(database);
-  } finally {
-    database.close();
-  }
+  using database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+  database.exec(sql);
+  run(database);
 }
 
 function caught(run: () => unknown): unknown {
@@ -551,24 +539,18 @@ describe("integrity gate attribution", () => {
 
 describe("isTerminalSqliteIntegrityError", () => {
   it("distinguishes persistent damage from transient pragma failures", () => {
-    const corrupt = new Error("integrity check found damage");
-    corrupt.name = "SqliteIntegrityError";
-    const busy = new Error("integrity check could not run", {
-      cause: Object.assign(new Error("database is locked"), { errcode: 5 }),
-    });
-    busy.name = "SqliteIntegrityError";
-    const malformed = new Error("integrity check could not read the database", {
-      cause: Object.assign(new Error("database disk image is malformed"), { errcode: 11 }),
-    });
-    malformed.name = "SqliteIntegrityError";
-    const corruptIndex = new Error("integrity check found a corrupt index", {
-      cause: Object.assign(new Error("database index is malformed"), { errcode: 779 }),
-    });
-    corruptIndex.name = "SqliteIntegrityError";
-
-    expect(isTerminalSqliteIntegrityError(corrupt)).toBe(true);
-    expect(isTerminalSqliteIntegrityError(busy)).toBe(false);
-    expect(isTerminalSqliteIntegrityError(malformed)).toBe(true);
-    expect(isTerminalSqliteIntegrityError(corruptIndex)).toBe(true);
+    for (const [message, errcode, terminal] of [
+      ["integrity check found damage", undefined, true],
+      ["database is locked", 5, false],
+      ["database disk image is malformed", 11, true],
+      ["database index is malformed", 779, true],
+    ] as const) {
+      const cause =
+        errcode === undefined ? undefined : Object.assign(new Error(message), { errcode });
+      const failure = Object.assign(new Error(message, { cause }), {
+        name: "SqliteIntegrityError",
+      });
+      expect(isTerminalSqliteIntegrityError(failure)).toBe(terminal);
+    }
   });
 });
