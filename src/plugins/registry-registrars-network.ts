@@ -107,6 +107,7 @@ function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): st
 function adaptPluginGatewayMethodHandler(
   handler: GatewayRequestHandler,
   mayDispatch: boolean,
+  captureCurrent: () => (() => boolean) | undefined,
 ): GatewayRequestHandler {
   return async (opts) => {
     // Preserve the real context identity; these accessors expose no mutable state.
@@ -116,8 +117,15 @@ function adaptPluginGatewayMethodHandler(
       responded = true;
       opts.respond(ok, payload, error, meta);
     };
+    const ownerCurrent = captureCurrent();
+    const assertHandlerCurrent = () => {
+      opts.assertHandlerCurrent?.();
+      if (!ownerCurrent?.()) {
+        throw new Error("Plugin gateway method owner is no longer current");
+      }
+    };
     const scope = getPluginRuntimeGatewayRequestScope();
-    const invoke = () => handler({ ...opts, respond });
+    const invoke = () => handler({ ...opts, respond, assertHandlerCurrent });
     // A declared authenticated-request contract composes RPCs with the exact
     // admitted client, never a synthetic identity or inherited unrelated grant.
     try {
@@ -183,6 +191,11 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     const wrappedHandler = adaptPluginGatewayMethodHandler(
       handler,
       canDispatchGatewayMethods(record),
+      () =>
+        capturePluginLifecycleAuthority(getPluginRecordRegistry(registry, record), record, {
+          scopedRuntime: true,
+          admittedRuntime: true,
+        }),
     );
     registry.gatewayHandlers[trimmed] = wrappedHandler;
     const normalizedScope = normalizePluginGatewayMethodScope(trimmed, opts?.scope);

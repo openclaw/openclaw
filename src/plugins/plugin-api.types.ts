@@ -72,6 +72,7 @@ import type {
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
   OpenClawPluginServiceV2,
+  OpenClawPluginServiceV3,
   PluginInteractiveHandlerRegistration,
   PluginRegistrationMode,
   WidgetPresenter,
@@ -308,7 +309,8 @@ export type OpenClawPluginApi = {
   registerService: {
     (service: OpenClawPluginService): void;
     (service: OpenClawPluginServiceV2): void;
-    (service: OpenClawPluginService | OpenClawPluginServiceV2): void;
+    (service: OpenClawPluginServiceV3): void;
+    (service: OpenClawPluginService | OpenClawPluginServiceV2 | OpenClawPluginServiceV3): void;
   };
   /** Register a local gateway discovery advertiser such as mDNS/Bonjour. */
   registerGatewayDiscoveryService: (service: OpenClawGatewayDiscoveryService) => void;

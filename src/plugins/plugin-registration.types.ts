@@ -503,3 +503,22 @@ export type PluginRegistrationMode =
   | "setup-only"
   | "setup-runtime"
   | "cli-metadata";
+
+export type {
+  PluginServiceSessionWorkV1,
+  PluginServiceSessionWorkContextV1,
+} from "./service-session-work.types.js";
+
+export type OpenClawPluginServiceContextV3 = OpenClawPluginServiceContextV2 & {
+  sessionWork: import("./service-session-work.types.js").PluginServiceSessionWorkV1;
+};
+
+/** A service with host-owned durable session-work admission and current reauthorization. */
+export type OpenClawPluginServiceV3 = Omit<
+  OpenClawPluginService,
+  "apiVersion" | "start" | "stop"
+> & {
+  apiVersion: 3;
+  start: (ctx: OpenClawPluginServiceContextV3) => void | Promise<void>;
+  stop?: (ctx: OpenClawPluginServiceContextV3) => void | Promise<void>;
+};

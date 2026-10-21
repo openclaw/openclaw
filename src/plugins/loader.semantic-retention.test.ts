@@ -34,7 +34,10 @@ it.each(["manifest", "config"] as const)(
       id: "semantic-retention",
       configSchema: { type: "object" },
       body: `module.exports = { id: 'semantic-retention', register(api) {
-        api.registerGatewayMethod('semantic-retention.probe', ({respond}) => respond(true, 'available'));
+        api.registerGatewayMethod('semantic-retention.probe', ({respond, assertHandlerCurrent}) => {
+          assertHandlerCurrent();
+          respond(true, 'available');
+        });
       } };`,
     });
     const policy = { enabled: true, hooks: { allowPromptInjection: false } };

@@ -41,6 +41,7 @@ import type {
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import * as sessionAccess from "./session-access-authority.js";
 import { prepareGatewaySessionAccessAuthority } from "./session-access-authority.js";
+import { isSessionAccessRefreshingError } from "./session-mutation-authorization-error.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
@@ -625,7 +626,15 @@ describe("session resource admission", () => {
     await setImmediate();
     expect(prepare).toHaveBeenCalledOnce();
     expect(resource.signal.aborted).toBe(false);
-    expect(() => resource.assertCurrent()).toThrow("refreshing");
+    let failure: unknown;
+    try {
+      resource.assertCurrent();
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(sessionAccess.SessionAccessPreparationPendingError);
+    expect(isSessionAccessRefreshingError(failure)).toBe(true);
+    expect(isSessionAccessRefreshingError(new Error("Session revoked"))).toBe(false);
     state.mockReturnValue(readyState);
     expect(() => resource.assertCurrent()).not.toThrow();
     resource.release();

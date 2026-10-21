@@ -36,7 +36,7 @@ import { withPluginServiceScheduler } from "./service-scheduler-binding.js";
 import { createPluginServiceSchedulerRunner } from "./service-scheduler-context.js";
 import { createPluginServiceScheduler } from "./service-scheduler.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
-import type { OpenClawPluginServiceContextV2 } from "./types.js";
+import type { OpenClawPluginServiceContextV3 } from "./types.js";
 
 export type { PluginServicesHandle } from "./service-lifecycle.types.js";
 
@@ -509,8 +509,11 @@ async function startPreparedPluginServices({
     );
     const resolveGatewayContext = runtime ? getGatewayContextResolver(runtime) : undefined;
     const runServiceStart = createScheduledGatewayRunner(resolveGatewayContext);
-    const { getCron, mcpEvents } = createPluginServiceAutomationCapabilities({
+    const { getCron, mcpEvents, sessionWork } = createPluginServiceAutomationCapabilities({
       pluginId: entry.pluginId,
+      serviceId: entry.id,
+      registry,
+      signal: scheduling.scheduler.signal,
       lease,
       getCronService,
       resolveGatewayContext,
@@ -536,7 +539,8 @@ async function startPreparedPluginServices({
 
     const scopeTraceName = (name: string) =>
       `${traceName}.${name.split(".").map(encodeStartupTraceSegment).join(".")}`;
-    const serviceContext: OpenClawPluginServiceContextV2 = {
+    const serviceContext: OpenClawPluginServiceContextV3 = {
+      sessionWork,
       scheduler: scheduling.scheduler,
       config,
       workspaceDir,

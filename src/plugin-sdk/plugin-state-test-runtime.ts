@@ -95,6 +95,7 @@ export function createPluginStateKeyedStoreV2ForTests<T>(
 }
 
 export {
+  createPluginStateRuntimeStores as createPluginStateRuntimeStoresForTests,
   createPluginStateSyncKeyedStore as createPluginStateSyncKeyedStoreForTests,
   getPluginStateCapacity as getPluginStateCapacityForTests,
   importPluginStateEntriesForDoctor as importPluginStateEntriesForDoctorForTests,

@@ -60,11 +60,44 @@ export function resolveTrustedCaller(authority?: RuntimeLlmAuthority): LlmComple
   return normalizeCaller(authority?.caller);
 }
 
+/** Recovery targets are ceilings; foreground retains existing host bindings and opt-ins. */
+export function resolveInvocationAuthority(
+  authority: RuntimeLlmAuthority | undefined,
+  binding: { kind: "foreground" | "recovery"; agentId: string; sessionKey: string } | undefined,
+): RuntimeLlmAuthority | undefined {
+  if (!binding) {
+    return authority;
+  }
+  const agentId = normalizeOptionalString(authority?.agentId);
+  const sessionKey = normalizeOptionalString(authority?.sessionKey);
+  if (
+    (authority?.requiresBoundAgent && !agentId) ||
+    (agentId && normalizeAgentId(agentId) !== normalizeAgentId(binding.agentId)) ||
+    (sessionKey && sessionKey !== binding.sessionKey)
+  ) {
+    throw completionError(
+      "LLM_COMPLETION_NOT_AUTHORIZED",
+      "Plugin LLM completion binding conflicts with the current invocation.",
+    );
+  }
+  if (binding.kind === "foreground") {
+    return { ...authority, sessionKey: binding.sessionKey };
+  }
+  return {
+    ...authority,
+    agentId: binding.agentId,
+    sessionKey: binding.sessionKey,
+    requiresBoundAgent: true,
+    allowAgentIdOverride: false,
+  };
+}
+
 /** Authorize explicit selection without choosing a caller-specific default agent. */
 export function resolveRequestedRuntimeAgentId(params: {
   agentId?: string;
   authority?: RuntimeLlmAuthority;
   allowAgentIdOverride: boolean;
+  defaultAgentId?: string;
 }): string | undefined {
   const authorityAgentIdRaw = normalizeOptionalString(params.authority?.agentId);
   const requestedAgentIdRaw = normalizeOptionalString(params.agentId);
@@ -85,8 +118,11 @@ export function resolveRequestedRuntimeAgentId(params: {
     }
     return authorityAgentId;
   }
+  const defaultAgentId = params.defaultAgentId
+    ? normalizeAgentId(params.defaultAgentId)
+    : undefined;
   if (requestedAgentId) {
-    if (!params.allowAgentIdOverride) {
+    if (requestedAgentId !== defaultAgentId && !params.allowAgentIdOverride) {
       throw completionError(
         "LLM_COMPLETION_NOT_AUTHORIZED",
         "Plugin LLM completion cannot override the target agent.",
@@ -94,7 +130,7 @@ export function resolveRequestedRuntimeAgentId(params: {
     }
     return requestedAgentId;
   }
-  return undefined;
+  return defaultAgentId;
 }
 
 function buildPolicyFromEntry(entry: {

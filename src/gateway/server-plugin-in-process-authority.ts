@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
@@ -38,6 +39,7 @@ import {
   runWithOperatorToolGatewayAuthority,
   runOutsideOperatorToolGatewayAuthority,
 } from "./operator-tool-gateway-authority.js";
+import { readPluginSessionWorkAuthority } from "./plugin-session-work-authority.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
   DispatchGatewayMethodInProcessOptions,
@@ -278,6 +280,35 @@ export function resolveInProcessGatewayDispatch(
       `In-process gateway dispatch requires a gateway request scope or instance binding (method: ${method}).`,
     );
   }
+  const service = readPluginSessionWorkAuthority();
+  if (service) {
+    service.assertCurrent();
+    if (
+      context !== service.context ||
+      scope?.pluginId?.trim() !== service.pluginId ||
+      (options?.pluginRuntimeOwnerId !== undefined &&
+        options.pluginRuntimeOwnerId !== service.pluginId)
+    ) {
+      throw new Error("Accepted service work cannot target another plugin or Gateway");
+    }
+    const request = isRecord(params) ? params : {};
+    const requiredTool =
+      method === "tools.invoke"
+        ? typeof request.name === "string"
+          ? request.name
+          : undefined
+        : context.getGatewayMethodRegistry?.()?.getSessionAccess?.(method)?.requiredTool;
+    if (!requiredTool) {
+      throw new Error("Accepted service work requires a registered session-tool boundary");
+    }
+    if (
+      request.sessionKey !== service.target.sessionKey ||
+      request.agentId !== service.target.agentId
+    ) {
+      throw new Error("Accepted service work cannot target another conversation");
+    }
+    service.assertToolAllowed(requiredTool);
+  }
   const operatorRunAuthority =
     selection?.operatorAuthority ??
     caller?.operatorAuthority ??
@@ -315,6 +346,9 @@ export function resolveInProcessGatewayDispatch(
     options.agentToolCaller?.agentId === caller.agentId &&
     options.agentToolCaller.sessionKey === caller.sessionKey;
   const assertInvocationCurrent = composeSessionSourceAssertion([
+    // Host-owned agent paths may omit the ambient invocation guard below, but
+    // none may outlive or broaden a recovered service operation's tool ceiling.
+    service?.assertCurrent,
     selection?.assertCurrent,
     runtimeAuthority?.assertCurrent,
     assertSettleWakeCurrent,
@@ -623,6 +657,7 @@ export function resolveInProcessGatewayDispatch(
     assertSourceCurrent,
     assertInvocationCurrent,
     assertContextCurrent: composeSessionSourceAssertion([
+      service?.assertCurrent,
       selection?.assertCurrent,
       runtimeAuthority?.assertCurrent,
       assertSourceCurrent,
