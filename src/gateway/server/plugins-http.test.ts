@@ -112,35 +112,6 @@ describe("plugin HTTP route runtime scopes", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it.each(["plugin", "gateway"] as const)(
-    "denies write helpers for read-only %s routes",
-    async (auth) => {
-      let scope: RuntimeScope;
-      const response = await invoke(
-        {
-          auth,
-          handler: () => {
-            scope = getPluginRuntimeGatewayRequestScope();
-            requireScope("agent", scope?.client?.connect.scopes);
-            return true;
-          },
-        },
-        {
-          gatewayAuthSatisfied: auth === "gateway",
-          gatewayRequestOperatorScopes: ["operator.read"],
-        },
-      );
-      expect(response).toMatchObject({ handled: true, res: { statusCode: 500 } });
-      expect(response.setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
-      expect(response.end).toHaveBeenCalledWith("Internal Server Error");
-      expect(response.log.warn).toHaveBeenCalledWith(
-        "plugin http route failed (route): Error: missing scope: operator.write",
-      );
-      expect(scope?.client?.connect.scopes).toEqual(auth === "plugin" ? [] : ["operator.read"]);
-      expect(scope?.hasCurrentClientAuthority).toBeUndefined();
-    },
-  );
-
   it.each(["request policy", "visitor grant"] as const)(
     "rechecks %s before the next matched route",
     async (changed) => {

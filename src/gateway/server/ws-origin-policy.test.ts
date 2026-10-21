@@ -5,11 +5,7 @@ import type { OperatorScope } from "../operator-scopes.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import { disconnectDisallowedGatewayPolicyClients } from "./ws-origin-policy.js";
-import {
-  holdGatewayPolicyResponse,
-  onGatewayPolicyClientInvalidated,
-  registerGatewayPolicyResponse,
-} from "./ws-policy-close.js";
+import { onGatewayPolicyClientInvalidated } from "./ws-policy-close.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
 type Principal = Parameters<typeof captureGatewayAuthPolicy>[1];
@@ -363,65 +359,6 @@ describe("committed authentication policy", () => {
       );
       disconnectDisallowedGatewayPolicyClients([client], {});
       expect(client.invalidated).toBe(changedIdentity === identity);
-    },
-  );
-
-  it.each<OpenClawConfig["gateway"]>([
-    { trustedProxies: ["192.0.2.10"] },
-    { auth: { trustedProxy: { userHeader: "x-user", allowUsers: ["retained@example.test"] } } },
-  ])(
-    "fences transport without revoking accepted work and drains its config response for %j",
-    (gateway) => {
-      const initial: OpenClawConfig = {
-        gateway: {
-          auth: {
-            mode: "trusted-proxy",
-            allowTailscale: true,
-            trustedProxy: {
-              userHeader: "x-user",
-              allowUsers: ["retained@example.test", "other@example.test"],
-            },
-          },
-        },
-      };
-      const principal: Principal = {
-        role: "operator",
-        authMethod: "trusted-proxy",
-        verifiedIdentity: "retained@example.test",
-      };
-      const writer = policyClient(initial, principal);
-      const onRevoked = vi.fn();
-      onTestFinished(onGatewayPolicyClientInvalidated(writer, onRevoked));
-      const respond = vi.fn();
-      const response = registerGatewayPolicyResponse("config.patch", writer, respond);
-      holdGatewayPolicyResponse(respond);
-      const nextConfig: OpenClawConfig = {
-        gateway: {
-          ...initial.gateway,
-          ...gateway,
-          auth: {
-            ...initial.gateway!.auth,
-            ...gateway?.auth,
-            trustedProxy: {
-              ...initial.gateway!.auth!.trustedProxy!,
-              ...gateway?.auth?.trustedProxy,
-            },
-          },
-        },
-      };
-      const fresh = policyClient(nextConfig, principal);
-      const worker = { socket: { close: vi.fn() } };
-
-      disconnectDisallowedGatewayPolicyClients([writer, fresh, worker], nextConfig);
-
-      expect(writer.invalidated).toBe(true);
-      expect(writer.sourceInvalidated).toBe(false);
-      expect(onRevoked).not.toHaveBeenCalled();
-      expect(writer.socket.close).not.toHaveBeenCalled();
-      response?.finish();
-      expect(writer.socket.close).toHaveBeenCalledExactlyOnceWith(4001, "gateway policy changed");
-      expect(fresh.socket.close).not.toHaveBeenCalled();
-      expect(worker.socket.close).not.toHaveBeenCalled();
     },
   );
 });

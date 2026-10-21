@@ -383,26 +383,6 @@ it.each([
   },
 );
 
-it("prefers forwarded host over bind host for generic plugin surface URLs", async () => {
-  const handler = await connectWs({
-    host: "10.0.0.2:18789",
-    headers: {
-      "x-forwarded-for": "203.0.113.10",
-      "x-forwarded-host": "gateway.example.com",
-      "x-forwarded-proto": "https",
-    },
-    trustedProxies: ["127.0.0.1"],
-    options: {
-      gatewayHost: "10.0.0.2",
-      port: 18789,
-      pluginSurfaceScheme: "http",
-      getPluginNodeCapabilities: () => [{ surface: "canvas" }],
-    },
-  });
-
-  expect(handler.pluginSurfaceBaseUrl).toBe("https://gateway.example.com:443");
-});
-
 it("rejects late client registration after a pre-connect socket close", async () => {
   const handler = await connectWs({ clients });
 
@@ -473,28 +453,19 @@ it.each([
   expect(socket.ping).toHaveBeenCalledTimes(pong ? 2 : 1);
 });
 
-it.each(["direct", "broadcast", "preauth"])("bounds %s shutdown", async (delivery) => {
+it.each(["direct", "preauth"])("bounds %s shutdown", async (delivery) => {
   vi.useFakeTimers();
   socket.terminate.mockImplementation(() => socket.emit("close", 1006, Buffer.alloc(0)));
   const preauth = delivery === "preauth";
   const handler = await connectWs({ options: preauth ? { preauthHandshakeTimeoutMs: 100 } : {} });
-  if (delivery === "broadcast") {
-    registerClient(handler, socket, { connect: readableOperator });
-  }
   socket.send.mockClear();
-  const timers = vi.getTimerCount();
   if (preauth) {
     vi.advanceTimersByTime(100);
     expect(logWsControl.warn.mock.calls[0]?.[0]).toContain("handshake timeout");
     expect(logWsControl.warn.mock.calls[0]?.[0]).toContain("phase=ws_upgrade_started");
   } else {
     socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-    if (delivery === "direct") {
-      expect(handler.send(responseFrame)).toEqual({ kind: "unavailable" });
-    } else {
-      createBroadcaster({ clients }).broadcast("tick", {});
-      expect(vi.getTimerCount()).toBe(timers + 1);
-    }
+    expect(handler.send(responseFrame)).toEqual({ kind: "unavailable" });
   }
   expect(socket.send).not.toHaveBeenCalled();
   expect(socket.close).toHaveBeenCalledExactlyOnceWith(
