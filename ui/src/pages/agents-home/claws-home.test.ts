@@ -38,6 +38,7 @@ function createDetail(options: Parameters<typeof createPage>[0] = {}) {
   const find = (selector: string) => detail.querySelector<HTMLElement>(selector);
   return {
     ...fixture,
+    detail,
     find,
     calls: (method: string) => fixture.request.mock.calls.filter(([name]) => name === method),
     add: async () => {
@@ -244,7 +245,7 @@ it.each(["card", "detail"])(
   "shows Claw artwork and falls back on an image error in the %s",
   async (surface) => {
     const clawIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`;
-    const options = { clawsEnabled: true, clawIconUrl };
+    const options = { clawIconUrl };
     const container = surface === "card" ? createPage(options).page : createDetail(options).detail;
     const selector = surface === "card" ? ".agents-home__claw-art" : ".plugin-catalog-detail__icon";
     await waitForSolid(() =>
