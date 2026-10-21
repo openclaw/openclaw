@@ -21,6 +21,7 @@ import {
   canIsolateAgentDatabase,
   listAgentDatabaseAdmissionRefusals,
 } from "../state/agent-database-admission.js";
+import { getOpenClawAgentDatabaseCleanupFailures } from "../state/openclaw-agent-execution.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
@@ -470,6 +471,8 @@ export async function prepareGatewayKernelState(params: {
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     getStateDatabaseFailure: () =>
       openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(resolveDatabasePath()),
+    getAgentDatabaseCleanupFailures: () =>
+      getOpenClawAgentDatabaseCleanupFailures(resolveDatabasePath()),
     getAgentDatabaseAdmissionRefusals: () => {
       const cfg = getRuntimeConfig();
       return listAgentDatabaseAdmissionRefusals().filter(

@@ -60,7 +60,9 @@ export type AgentDatabaseFileExecutionOwner = {
   readonly kind: "file";
   readonly agentId: string;
   readonly sharedDatabaseKey: string;
+  readonly stateDatabasePath: string;
   readonly creationIdentity?: DatabasePathIdentity;
+  getCleanupFailure(): { reason: string; retryable: boolean } | undefined;
   getPendingPreparation(): Promise<void> | undefined;
   borrow(
     pathname: string,

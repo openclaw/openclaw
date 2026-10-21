@@ -310,6 +310,34 @@ describe("gateway probe endpoints", () => {
     }
   });
 
+  it("discloses retained cleanup details only to local or authenticated readiness callers", async () => {
+    const agentCleanup = ["main", "optional"].map((agentId) => ({
+      agentId,
+      reason: "retained worker cleanup failure",
+      repairHint: "Retry this agent or restart without deleting its lease.",
+    }));
+    let ready = true;
+    const getReadiness = () => ({
+      ready,
+      failing: ready ? [] : ["discord"],
+      uptimeMs: 8_000,
+      agentCleanup,
+    });
+    await withProbeServer(
+      { getReadiness },
+      async (probe) => {
+        for (const nextReady of [true, false]) {
+          ready = nextReady;
+          const status = ready ? 200 : 503;
+          await probe.json("/readyz", status, getReadiness(), true);
+          await probe.json(remote("/readyz"), status, { ready }, true);
+          await probe.json(remote("/readyz", "Bearer test-token"), status, getReadiness(), true);
+        }
+      },
+      AUTH_TOKEN,
+    );
+  });
+
   it("rejects unattributable proxy ingress before hooks and watch-node handlers", async () => {
     const handleHooksRequest = vi.fn(async () => true);
     const handleWatchNodeRequest = vi.fn(async () => true);
