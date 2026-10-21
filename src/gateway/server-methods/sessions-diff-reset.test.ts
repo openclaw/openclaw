@@ -18,6 +18,7 @@ import {
   readLocalWorkspaceProjection,
 } from "../worker-environments/local-workspace-store.test-support.js";
 import { loadSessionDiff } from "./sessions-diff.js";
+import { initRepo } from "./sessions-diff.test-support.js";
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
@@ -33,10 +34,7 @@ it("reads the accepted base immediately after a real same-session reset", async 
     await captureRuntimeConfigAsyncReader()();
     const git = (...args: string[]) =>
       execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
-    git("init", "-q", "-b", "main");
-    git("config", "user.name", "Test");
-    git("config", "user.email", "test@openclaw.test");
-    git("config", "commit.gpgsign", "false");
+    initRepo(repo);
     await fs.writeFile(path.join(repo, "base.txt"), "base\n");
     git("add", ".");
     git("commit", "-qm", "base");

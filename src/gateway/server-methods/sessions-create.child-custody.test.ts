@@ -73,6 +73,8 @@ const temporaryDirs = useAutoCleanupTempDirTracker((cleanup) => {
     cleanup();
   });
 });
+const parentKey = "agent:main:parent";
+const childKey = "agent:main:dashboard:accepted-child";
 
 async function createHostedChildFixture({
   system = false,
@@ -93,8 +95,6 @@ async function createHostedChildFixture({
 } = {}) {
   const storePath = path.join(temporaryDirs.make("openclaw-child-custody-"), "sessions.json");
   testState.sessionStorePath = storePath;
-  const parentKey = "agent:main:parent";
-  const childKey = "agent:main:dashboard:accepted-child";
   const childKeys = [childKey];
   const existingOwnerId = "existing-child-owner";
   const releaseProfileCatalog = mergedParentCreator
@@ -487,10 +487,8 @@ describe("hosted creation transfers accepted child input", () => {
             );
             expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
             expect(report).toHaveBeenCalledExactlyOnceWith(
-              url
-                ? [{ sessionKey: "agent:main:dashboard:accepted-child", url, publicRead: true }]
-                : [],
-              { createdSessionKey: "agent:main:dashboard:accepted-child" },
+              url ? [{ sessionKey: childKey, url, publicRead: true }] : [],
+              { createdSessionKey: childKey },
             );
           } finally {
             releaseReport.resolve();
@@ -573,13 +571,20 @@ describe("hosted creation transfers accepted child input", () => {
     }
   });
 
-  it("assigns the verified requester as the visible child owner", async () => {
-    await using fixture = await createHostedChildFixture();
+  it.each([
+    { name: "verified requester", options: {}, human: true },
+    { name: "canonical historical alias", options: { mergedParentCreator: true }, human: true },
+    { name: "different human owner", options: { mismatchedParentOwner: true }, human: false },
+  ])("assigns child ownership for a $name", async ({ name, options, human }) => {
+    await using fixture = await createHostedChildFixture(options);
     await fixture.send();
-    expect(loadSessionEntry(fixture.scope())?.owner).toMatchObject({
-      actor: { type: "human", id: fixture.profileId },
-      assignedBy: { type: "agent", id: "main" },
-    });
+    const owner = loadSessionEntry(fixture.scope())?.owner;
+    const actor = { type: human ? "human" : "agent", id: human ? fixture.profileId : "main" };
+    if (name === "verified requester") {
+      expect(owner).toMatchObject({ actor, assignedBy: { type: "agent", id: "main" } });
+    } else {
+      expect(owner?.actor).toEqual(actor);
+    }
   });
 
   it("does not replace the owner of an existing target session", async () => {
@@ -588,24 +593,6 @@ describe("hosted creation transfers accepted child input", () => {
     expect(loadSessionEntry(fixture.scope())?.owner?.actor).toMatchObject({
       type: "human",
       id: fixture.existingOwnerId,
-    });
-  });
-
-  it("inherits a historical owner alias into the requester's canonical profile", async () => {
-    await using fixture = await createHostedChildFixture({ mergedParentCreator: true });
-    await fixture.send();
-    expect(loadSessionEntry(fixture.scope())?.owner?.actor).toEqual({
-      type: "human",
-      id: fixture.profileId,
-    });
-  });
-
-  it("does not inherit a different human owner's assignment", async () => {
-    await using fixture = await createHostedChildFixture({ mismatchedParentOwner: true });
-    await fixture.send();
-    expect(loadSessionEntry(fixture.scope())?.owner?.actor).toEqual({
-      type: "agent",
-      id: "main",
     });
   });
 

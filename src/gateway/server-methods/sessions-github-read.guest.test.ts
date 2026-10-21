@@ -4,7 +4,11 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
+  expectFailure,
+  expectNoPersonalReads,
+  expectReply,
   mockPublicationIdentity,
+  optionsResult,
   receipt,
   sessionKey,
   withHeldReceipt,
@@ -13,14 +17,6 @@ import {
 
 beforeEach(mockPublicationIdentity);
 afterEach(() => vi.restoreAllMocks());
-
-function expectNoPersonalReads(fixture: Parameters<Parameters<typeof withReadFixture>[0]>[0]) {
-  expect(fixture.personalConnectionStatus).not.toHaveBeenCalled();
-  expect(fixture.personalPending).not.toHaveBeenCalled();
-  expect(fixture.preparePersonalStatus).not.toHaveBeenCalled();
-  expect(fixture.personalStatus).not.toHaveBeenCalled();
-  expect(fixture.requestForSession).not.toHaveBeenCalled();
-}
 
 describe.each(["options", "status"] as const)("registered guest sessions.github.%s", (method) => {
   it.each([
@@ -43,23 +39,16 @@ describe.each(["options", "status"] as const)("registered guest sessions.github.
             expect(fixture.latestShared).not.toHaveBeenCalled();
             expect(fixture.sharedStatus).not.toHaveBeenCalled();
           } else if (missing) {
-            expect(respond).toHaveBeenCalledWith(
-              false,
-              undefined,
-              expect.objectContaining({ code: "FORBIDDEN" }),
-            );
+            expectFailure(respond);
             expect(fixture.sharedStatus).toHaveBeenCalledOnce();
           } else {
-            expect(respond).toHaveBeenCalledWith(
-              true,
+            expectReply(
+              respond,
               method === "options"
-                ? {
-                    personal: null,
+                ? optionsResult({
                     shared: null,
                     sharedUnavailableReason: "unsupported_workspace",
-                    pendingPersonal: null,
-                    latestShared: receipt,
-                  }
+                  })
                 : receipt,
             );
           }
@@ -108,11 +97,8 @@ describe.each(["options", "status"] as const)("registered guest sessions.github.
                 lifecycle: () => updateSession({ lifecycleRevision: "replaced-publication" }),
               }[change]();
               await release(receipt);
-              expect(respond).toHaveBeenCalledExactlyOnceWith(
-                false,
-                undefined,
-                expect.objectContaining({ code: "FORBIDDEN" }),
-              );
+              expectFailure(respond);
+              expect(respond).toHaveBeenCalledOnce();
               expectNoPersonalReads(fixture);
             },
           );
