@@ -82,7 +82,8 @@ export class GatewayBenchWorkerProfiler {
     process.on("worker", (worker) => {
       this.workers.add(worker);
       const terminate = worker.terminate.bind(worker);
-      worker.terminate = async () => {
+      // Foreign workers can expose a read-only method; their unexported retirements stay incomplete.
+      Reflect.set(worker, "terminate", async () => {
         const recordings = [...this.activeRecordings].filter(
           ([recording]) => recording.threadId === worker.threadId,
         );
@@ -94,7 +95,7 @@ export class GatewayBenchWorkerProfiler {
           ]);
         }
         return await terminate();
-      };
+      });
       worker.once("exit", () => this.workers.delete(worker));
     });
     inspector.on(

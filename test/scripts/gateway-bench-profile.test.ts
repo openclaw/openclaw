@@ -275,6 +275,52 @@ process.on('message', (message) => {
 })();
 `;
 
+it("preserves read-only worker termination and reports its missing retirement profile", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-readonly-"));
+  const profilePath = path.join(directory, "heap");
+  const { child } = spawnFixture(
+    [
+      "--import",
+      new URL("../../scripts/tsx.mjs", import.meta.url).href,
+      "-e",
+      `
+        const { Worker } = require('node:worker_threads');
+        const { once } = require('node:events');
+        const keepAlive = setInterval(() => {}, 1000);
+        process.once('disconnect', () => clearInterval(keepAlive));
+        class ReadOnlyWorker extends Worker {}
+        Object.defineProperty(ReadOnlyWorker.prototype, 'terminate', {
+          value: Worker.prototype.terminate, writable: false,
+        });
+        (async () => {
+          await import(process.argv[1]);
+          const worker = new ReadOnlyWorker('setInterval(() => {}, 1000)', {
+            eval: true, execArgv: [], name: 'readonly-termination',
+          });
+          await once(worker, 'online');
+          process.on('message', async message => {
+            if (message.retire) {
+              await worker.terminate();
+              process.send({ retired: true });
+            }
+          });
+          process.send({ ready: true });
+        })();
+      `,
+      preloadUrl,
+    ],
+    directory,
+  );
+  await waitMessage(child, "ready");
+  await controlGatewayProfile(child, "heap", "start", profilePath, { includeWorkers: true });
+  expect(await sendMessage(child, { retire: true })).toEqual({ retired: true });
+  await controlGatewayProfile(child, "heap", "stop", profilePath);
+  const manifest = await readJson<WorkerProfileManifest>(`${profilePath}.workers.json`);
+  const recording = manifest.workers.find(({ title }) => title.includes("readonly-termination"));
+  expect(recording?.completed).not.toBe(true);
+  expect(recording?.error).toMatch(/Worker retired/);
+}, 30_000);
+
 async function waitMessage(child: ChildProcess, field: string) {
   for await (const [message] of on(child, "message", { close: ["exit"] })) {
     if (message[field]) {
