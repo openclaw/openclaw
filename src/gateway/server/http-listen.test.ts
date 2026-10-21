@@ -1,14 +1,12 @@
 import { EventEmitter } from "node:events";
 import { createServer, type Server as HttpServer } from "node:http";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { listenGatewayHttpServer } from "./http-listen.js";
 
 const sleepMock = vi.hoisted(() => vi.fn(async (_ms: number) => {}));
 
-vi.mock("../../utils.js", () => ({
-  sleep: (ms: number) => sleepMock(ms),
-}));
+vi.mock("../../utils.js", () => ({ sleep: (ms: number) => sleepMock(ms) }));
 
 function createFakeHttpServer(errors: string[]) {
   class FakeHttpServer extends EventEmitter {
@@ -47,61 +45,51 @@ function listen(
   });
 }
 
-describe("listenGatewayHttpServer", () => {
-  beforeEach(() => sleepMock.mockClear());
-  it("releases its listeners when native listen throws synchronously", async () => {
-    const server = createServer();
-    const onError = vi.fn();
-    const onListening = vi.fn();
-    server.on("error", onError);
-    server.on("listening", onListening);
-    const errorListeners = server.listeners("error");
-    const listeningListeners = server.listeners("listening");
+beforeEach(() => sleepMock.mockClear());
+it("releases its listeners when native listen throws synchronously", async () => {
+  const server = createServer();
+  const onError = vi.fn();
+  const onListening = vi.fn();
+  server.on("error", onError);
+  server.on("listening", onListening);
+  const errorListeners = server.listeners("error");
+  const listeningListeners = server.listeners("listening");
 
-    await expect(
-      listenGatewayHttpServer({
-        httpServer: server,
-        bindHost: "127.0.0.1",
-        port: 65_536,
-      }),
-    ).rejects.toMatchObject({
-      name: "GatewayLockError",
-      cause: { code: "ERR_SOCKET_BAD_PORT" },
-    });
-
-    expect(server.listeners("error")).toEqual(errorListeners);
-    expect(server.listeners("listening")).toEqual(listeningListeners);
-    expect(onError).not.toHaveBeenCalled();
-    expect(onListening).not.toHaveBeenCalled();
+  await expect(
+    listenGatewayHttpServer({ httpServer: server, bindHost: "127.0.0.1", port: 65_536 }),
+  ).rejects.toMatchObject({
+    name: "GatewayLockError",
+    cause: { code: "ERR_SOCKET_BAD_PORT" },
   });
 
-  it("retries EADDRINUSE and closes server handle before retry", async () => {
-    const fake = createFakeHttpServer(["EADDRINUSE"]);
-    await expect(listen(fake)).resolves.toBeUndefined();
+  expect(server.listeners("error")).toEqual(errorListeners);
+  expect(server.listeners("listening")).toEqual(listeningListeners);
+  expect(onError).not.toHaveBeenCalled();
+  expect(onListening).not.toHaveBeenCalled();
+});
 
-    expect(fake.closeCalls).toBe(1);
-    expect(sleepMock).toHaveBeenCalledTimes(1);
-  });
+it("retries EADDRINUSE and closes server handle before retry", async () => {
+  const fake = createFakeHttpServer(["EADDRINUSE"]);
+  await expect(listen(fake)).resolves.toBeUndefined();
 
-  it("throws GatewayLockError after EADDRINUSE retries are exhausted", async () => {
-    const fake = createFakeHttpServer(Array<string>(22).fill("EADDRINUSE"));
-    await expect(listen(fake)).rejects.toBeInstanceOf(GatewayLockError);
+  expect(fake.closeCalls).toBe(1);
+  expect(sleepMock).toHaveBeenCalledTimes(1);
+});
 
-    expect(fake.closeCalls).toBe(20);
-  });
-
-  it("fails immediately when EADDRINUSE retries are disabled", async () => {
-    const fake = createFakeHttpServer(["EADDRINUSE"]);
-    await expect(listen(fake, false)).rejects.toBeInstanceOf(GatewayLockError);
-
-    expect(fake.closeCalls).toBe(0);
+it.each([
+  {
+    reason: "exhausted retries",
+    errors: Array<string>(22).fill("EADDRINUSE"),
+    retry: true,
+    closes: 20,
+  },
+  { reason: "disabled retries", errors: ["EADDRINUSE"], retry: false, closes: 0 },
+  { reason: "non-EADDRINUSE error", errors: ["EACCES"], retry: true, closes: 0 },
+])("wraps $reason as GatewayLockError", async ({ errors, retry, closes }) => {
+  const fake = createFakeHttpServer(errors);
+  await expect(listen(fake, retry)).rejects.toBeInstanceOf(GatewayLockError);
+  expect(fake.closeCalls).toBe(closes);
+  if (!retry) {
     expect(sleepMock).not.toHaveBeenCalled();
-  });
-
-  it("wraps non-EADDRINUSE errors as GatewayLockError", async () => {
-    const fake = createFakeHttpServer(["EACCES"]);
-    await expect(listen(fake)).rejects.toBeInstanceOf(GatewayLockError);
-
-    expect(fake.closeCalls).toBe(0);
-  });
+  }
 });

@@ -78,16 +78,11 @@ it.each([false, {}, { serverMaxWindowBits: 10 }] as const)(
         codec.observeFrameBytes,
       );
       const threshold = GATEWAY_PER_MESSAGE_DEFLATE.threshold;
-      const frames = [threshold - 1, threshold + 1, threshold + 2].map((bytes) => {
-        const envelope = JSON.stringify({ type: "event", event: "chat", payload: "" });
-        return Buffer.from(
-          JSON.stringify({
-            type: "event",
-            event: "chat",
-            payload: "x".repeat(bytes - envelope.length),
-          }),
-        );
-      });
+      const envelope = { type: "event", event: "chat", payload: "" };
+      const envelopeLength = JSON.stringify(envelope).length;
+      const frames = [threshold - 1, threshold + 1, threshold + 2].map((bytes) =>
+        Buffer.from(JSON.stringify({ ...envelope, payload: "x".repeat(bytes - envelopeLength) })),
+      );
       const before = request.socket.bytesWritten;
       // Back-to-back compressed sends exercise ws's pending-compression queue.
       const sent = Promise.all(
@@ -184,12 +179,8 @@ it.each(["small", "large"])(
       });
       expect(compressed.byteLength < Buffer.poolSize >>> 1).toBe(size === "small");
       for (let sequence = 0; sequence < 2; sequence++) {
-        const frame = serializeGatewayFrame({
-          type: "res",
-          id: `history-${windowBits}-${sequence}`,
-          ok: true,
-          payload: { messages },
-        });
+        const id = `history-${windowBits}-${sequence}`;
+        const frame = serializeGatewayFrame({ type: "res", id, ok: true, payload: { messages } });
         let segment: Uint8Array | undefined;
         const concat = Buffer.concat.bind(Buffer);
         // Observe the actual memoized piece when the codec assembles its wire output.

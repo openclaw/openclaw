@@ -1,6 +1,3 @@
-/**
- * Shared WebSocket connection fixtures for gateway server tests.
- */
 import { EventEmitter } from "node:events";
 import type { Socket } from "node:net";
 import { expect, vi } from "vitest";
@@ -17,20 +14,11 @@ type AttachGatewayWsConnectionParams = Parameters<typeof attachGatewayWsConnecti
 export type GatewayWsTestSocket = ReturnType<typeof createGatewayWsTestSocket>;
 
 export function createGatewayWsTestLogger() {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
+  return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
 
 export function createResolvedGatewayTokenAuth(token: string): ResolvedGatewayAuth {
-  return {
-    mode: "token",
-    allowTailscale: false,
-    token,
-  };
+  return { mode: "token", allowTailscale: false, token };
 }
 
 export function createGatewayWsTestRequestContext(
@@ -159,11 +147,5 @@ export function attachGatewayWsForTest(params: {
   expect(onConnection).toBeTypeOf("function");
   onConnection?.(socket, upgradeReq);
 
-  return {
-    clients,
-    listeners,
-    socket,
-    upgradeReq,
-    wss,
-  };
+  return { clients, listeners, socket, upgradeReq, wss };
 }
