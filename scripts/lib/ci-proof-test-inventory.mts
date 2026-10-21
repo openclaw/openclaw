@@ -4859,7 +4859,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/e2e/browser-tab-preview-urls.e2e.test.ts",
   "ui/src/e2e/browser-talk-webkit-error.e2e.test.ts",
   "ui/src/e2e/channels-whatsapp-logout.e2e.test.ts",
-  "ui/src/e2e/chat-active-cursor-replay.e2e.test.ts",
   "ui/src/e2e/chat-attachment-announcement.e2e.test.ts",
   "ui/src/e2e/chat-attachment-containment.e2e.test.ts",
   "ui/src/e2e/chat-attachment-remove.e2e.test.ts",
