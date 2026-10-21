@@ -3,10 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseSessionEntries, SessionManager } from "../../agent-sessions.js";
 
-type FileBackedSessionManagerForTest = SessionManager & {
-  getSessionDir(): string;
-  getSessionFile(): string;
-};
+type FileBackedSessionManagerForTest = ReturnType<typeof attachFilePersistence>;
 
 type OpenFileBackedSessionManagerForTestOptions = {
   sessionId?: string;
@@ -15,80 +12,57 @@ type OpenFileBackedSessionManagerForTestOptions = {
   SessionManagerClass?: typeof SessionManager;
 };
 
-// Legacy JSONL tests need observable write-through files, but the production
-// constructor must stay SQLite/in-memory only. Decorate each fixture instance.
+// Keep legacy JSONL write-through in fixtures, not the production constructor.
 function attachFilePersistence(params: {
   manager: SessionManager;
   sessionDir: string;
   target: () => string;
   initialize: boolean;
   rotateTarget?: (sessionId: string) => void;
-}): FileBackedSessionManagerForTest {
-  const manager = params.manager as FileBackedSessionManagerForTest & {
-    persistRecord(entry: unknown): void;
-  };
-  const writeFullFile = () => {
+}) {
+  const manager = Object.assign(params.manager, {
+    getSessionDir: () => params.sessionDir,
+    getSessionFile: () => params.target(),
+  });
+  const writeFullFile = <T>(result: T): T => {
     const target = params.target();
     fs.mkdirSync(path.dirname(target), { recursive: true });
     const entries = manager.getPersistedEntries();
     fs.writeFileSync(target, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    return result;
   };
-  const originalNewSession = manager.newSession.bind(manager);
-  const originalRemoveTrailingEntries = manager.removeTrailingEntries.bind(manager);
-  const originalRemoveTrailingEntriesAsync = manager.removeTrailingEntriesAsync.bind(manager);
-  const originalPrepareTranscriptRewriteAsync = manager.prepareTranscriptRewriteAsync.bind(manager);
+  const persistRemoval = (removed: number) => (removed > 0 ? writeFullFile(removed) : removed);
+  const newSession = manager.newSession.bind(manager);
+  const removeTrailingEntries = manager.removeTrailingEntries.bind(manager);
+  const removeTrailingEntriesAsync = manager.removeTrailingEntriesAsync.bind(manager);
+  const prepareRewrite = manager.prepareTranscriptRewriteAsync.bind(manager);
   Object.assign(manager, {
-    getSessionDir: () => params.sessionDir,
-    getSessionFile: () => params.target(),
     newSession(options?: Parameters<SessionManager["newSession"]>[0]) {
       const sessionId = options?.id ?? randomUUID();
       params.rotateTarget?.(sessionId);
-      const result = originalNewSession({ ...options, id: sessionId });
-      writeFullFile();
-      return result;
+      return writeFullFile(newSession({ ...options, id: sessionId }));
     },
-    removeTrailingEntries(...args: Parameters<SessionManager["removeTrailingEntries"]>) {
-      const removed = originalRemoveTrailingEntries(...args);
-      if (removed > 0) {
-        writeFullFile();
-      }
-      return removed;
-    },
-    async removeTrailingEntriesAsync(
-      ...args: Parameters<SessionManager["removeTrailingEntriesAsync"]>
-    ) {
-      const removed = await originalRemoveTrailingEntriesAsync(...args);
-      if (removed > 0) {
-        writeFullFile();
-      }
-      return removed;
-    },
+    removeTrailingEntries: (...args: Parameters<typeof removeTrailingEntries>) =>
+      persistRemoval(removeTrailingEntries(...args)),
+    removeTrailingEntriesAsync: async (...args: Parameters<typeof removeTrailingEntriesAsync>) =>
+      persistRemoval(await removeTrailingEntriesAsync(...args)),
     async prepareTranscriptRewriteAsync() {
-      const rewrite = await originalPrepareTranscriptRewriteAsync();
+      const rewrite = await prepareRewrite();
       return {
         sessionManager: rewrite.sessionManager,
-        commit: async (rewrittenEntryIds: ReadonlyMap<string, string>) => {
-          await rewrite.commit(rewrittenEntryIds);
-          writeFullFile();
-        },
+        commit: async (ids: ReadonlyMap<string, string>) =>
+          writeFullFile(await rewrite.commit(ids)),
       };
     },
     persistRecord(entry: unknown) {
       const target = params.target();
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      if (fs.existsSync(target)) {
-        const contents = fs.readFileSync(target);
-        if (contents.length > 0 && contents.at(-1) !== 0x0a) {
-          fs.appendFileSync(target, "\n");
-        }
-      }
-      fs.appendFileSync(target, `${JSON.stringify(entry)}\n`);
+      const contents = fs.existsSync(target) ? fs.readFileSync(target) : undefined;
+      const separator = contents?.length && contents.at(-1) !== 0x0a ? "\n" : "";
+      fs.appendFileSync(target, `${separator}${JSON.stringify(entry)}\n`);
     },
   });
-  if (params.initialize) {
-    writeFullFile();
-  }
-  return manager;
+  return params.initialize ? writeFullFile(manager) : manager;
 }
 
 export function createFileBackedSessionManagerForTest(
