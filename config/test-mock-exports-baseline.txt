@@ -415,7 +415,6 @@
 ["extensions/feishu/src/bot.bot-threads.test.ts","./send.js","759bf86df0f162cdf7eb4afcbf02da151e82460173045269fa8ac37087ddc70a",1]
 ["extensions/feishu/src/bot.card-action.test.ts","./bot.js","ba6e2f59189e0e1ccc79761af9e99bf4ed1f8e9b700d32fd59c63cb9508b202a",1]
 ["extensions/feishu/src/card-ux-launcher.test.ts","./send.js","7c01bfcbaa4c5711594f084919d75b429c8a9f1528aee48d9dd0b481ba762e48",1]
-["extensions/feishu/src/channel.outbound.test.ts","./channel.runtime.js","95011d45608c43961f32fdeff94f517007737660ee1773175eeba41e638629d9",1]
 ["extensions/feishu/src/channel.test.ts","./channel.runtime.js","171c324ddecd4c03523ef463ae8c4233af9137fbc116b5e6ad7e5ef2301c681d",1]
 ["extensions/feishu/src/channel.test.ts","./client.js","a766f99084fc866bc01bc95c92ea86833c7054111e419c674ca435a652c9f1e0",1]
 ["extensions/feishu/src/channel.test.ts","./probe.js","a3acb61673a1576ead3240201b51bda3e884559460121492dd152f6ac1beea54",1]

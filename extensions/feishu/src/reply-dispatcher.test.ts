@@ -184,7 +184,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         text: {
           resolveTextChunkLimit: vi.fn(() => 4000),
           resolveChunkMode: vi.fn(() => "line"),
-          resolveMarkdownTableMode: vi.fn(() => "preserve"),
+          resolveMarkdownTableMode: vi.fn(() => "block"),
           convertMarkdownTables: vi.fn((text) => text),
           chunkTextWithMode: vi.fn((text) => [text]),
           chunkMarkdownTextWithMode: vi.fn((text) => [text]),

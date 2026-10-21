@@ -369,6 +369,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/feishu/src/monitor.vc-meeting-invited-handler.test.ts",
   "extensions/feishu/src/monitor.webhook-e2e.test.ts",
   "extensions/feishu/src/outbound-delivery.test.ts",
+  "extensions/feishu/src/outbound.handoff.test.ts",
   "extensions/feishu/src/outbound.send-authority.test.ts",
   "extensions/github-copilot/index.test.ts",
   "extensions/google-meet/participation-runtime-registration.test.ts",

@@ -16,6 +16,7 @@ import { buildFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
+import { chunkedFencesBalance } from "./markdown.js";
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import {
   resolveDriveCommentEventTurn,
@@ -260,6 +261,13 @@ export async function handleFeishuCommentEvent(
     { fallbackLimit: 4000 },
   );
   const chunkMode = core.channel.text.resolveChunkMode(effectiveCfg, "feishu", account.accountId);
+  // Comments have no native table renderer, so block falls back to code here.
+  const requestedTableMode = core.channel.text.resolveMarkdownTableMode({
+    cfg: effectiveCfg,
+    channel: "feishu",
+    accountId: account.accountId,
+    supportsBlockTables: false,
+  });
   const typingReaction = createCommentTypingReactionLifecycle({
     cfg: effectiveCfg,
     accountId: account.accountId,
@@ -295,7 +303,21 @@ export async function handleFeishuCommentEvent(
       if (!text.trim()) {
         return noVisibleFeishuReplyDelivery;
       }
-      const chunks = core.channel.text.chunkTextWithMode(text, textChunkLimit, chunkMode);
+      const requestedTableText = core.channel.text.convertMarkdownTables(text, requestedTableMode);
+      // Comments this reply cannot be cut into without stranding a fence would arrive
+      // as an unterminated code block, so the table is left as it arrived instead.
+      const tableText =
+        requestedTableMode === "code" &&
+        !chunkedFencesBalance(requestedTableText, textChunkLimit, chunkMode)
+          ? core.channel.text.convertMarkdownTables(text, "off")
+          : requestedTableText;
+      // A converted table is a fenced block, so the chunker has to close and reopen the
+      // fence rather than cut it in half.
+      const chunks = core.channel.text.chunkMarkdownTextWithMode(
+        tableText,
+        textChunkLimit,
+        chunkMode,
+      );
       const results: FeishuReplyDeliverySource[] = [];
       const acceptedChunks: string[] = [];
       for (const chunk of chunks) {
@@ -327,7 +349,7 @@ export async function handleFeishuCommentEvent(
       return createFeishuReplyDeliveryResult({
         results,
         visibleReplySent: results.length > 0,
-        content: text,
+        content: tableText,
         kind: "text",
       });
     },
