@@ -288,7 +288,7 @@ function StatusBody(
               type="button"
               class="btn primary login-gate__failure-refresh"
               disabled={props.refreshState === "pending"}
-              onClick={props.onRefresh}
+              onClick={() => props.onRefresh()}
             >
               {props.refreshState === "pending"
                 ? t("common.refreshing")
