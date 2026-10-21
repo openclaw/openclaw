@@ -191,10 +191,13 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
   }
   const base = new URL(params.baseUrl);
   const authorization = buildBasicAuthorization(credentials.apiUser, credentials.apiPassword);
-  async function fetchJson(
+  async function fetchLookup<T>(
     url: string,
     auditContext: string,
-  ): Promise<{ ok: true; payload: unknown } | { ok: false; status?: number }> {
+    init: RequestInit,
+    readResponse: (response: Response) => Promise<T>,
+    expectedStatus?: number,
+  ): Promise<T | { ok: false; status?: number }> {
     const { origin, hostname } = params.reference;
     const { accountConfig, signal } = params;
     try {
@@ -202,14 +205,7 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
       const privateNetworkPolicy = ssrfPolicyFromPrivateNetworkOptIn(accountConfig);
       const { response, release } = await fetchWithSsrFGuard({
         url,
-        init: {
-          method: "GET",
-          headers: {
-            Authorization: authorization,
-            "OCS-APIRequest": "true",
-            Accept: "application/json",
-          },
-        },
+        init,
         maxRedirects: 0,
         requireHttps: new URL(origin).protocol === "https:",
         timeoutMs: NEXTCLOUD_TALK_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
@@ -221,9 +217,31 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
         auditContext,
       });
       try {
-        if (!response.ok) {
+        if (expectedStatus === undefined ? !response.ok : response.status !== expectedStatus) {
           return { ok: false, status: response.status };
         }
+        return await readResponse(response);
+      } finally {
+        await releaseNextcloudTalkGuardedResponse({ response, release });
+      }
+    } catch {
+      signal?.throwIfAborted();
+      return { ok: false };
+    }
+  }
+  async function fetchJson(url: string, auditContext: string) {
+    return fetchLookup(
+      url,
+      auditContext,
+      {
+        method: "GET",
+        headers: {
+          Authorization: authorization,
+          "OCS-APIRequest": "true",
+          Accept: "application/json",
+        },
+      },
+      async (response) => {
         const payload = await readProviderJsonResponse<unknown>(
           response,
           "Nextcloud Talk media lookup",
@@ -232,20 +250,10 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
             chunkTimeoutMs: NEXTCLOUD_TALK_MEDIA_READ_IDLE_TIMEOUT_MS,
           },
         );
-        signal?.throwIfAborted();
-        return {
-          ok: true,
-          payload,
-        };
-      } finally {
-        await releaseNextcloudTalkGuardedResponse({ response, release });
-      }
-    } catch {
-      if (signal?.aborted) {
-        signal.throwIfAborted();
-      }
-      return { ok: false };
-    }
+        params.signal?.throwIfAborted();
+        return { ok: true as const, payload };
+      },
+    );
   }
   const userUrl = buildSameOriginUrl(base, "/ocs/v1.php/cloud/user");
   userUrl.searchParams.set("format", "json");
@@ -369,58 +377,30 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
     base,
     `/remote.php/dav/files/${encodeURIComponent(canonicalUserId)}/${exactHistoryMedia.encodedFilePath}`,
   );
-  const webDavFile = await (async (): Promise<
-    { ok: true; fileId: string } | { ok: false; status?: number }
-  > => {
-    const url = webDavUrl.toString();
-    const { origin, hostname } = params.reference;
-    const { accountConfig, signal } = params;
-    try {
-      signal?.throwIfAborted();
-      const privateNetworkPolicy = ssrfPolicyFromPrivateNetworkOptIn(accountConfig);
-      const { response, release } = await fetchWithSsrFGuard({
-        url,
-        init: {
-          method: "PROPFIND",
-          headers: {
-            Authorization: authorization,
-            Depth: "0",
-            "Content-Type": "application/xml; charset=utf-8",
-            Accept: "application/xml",
-          },
-          body: NEXTCLOUD_TALK_WEBDAV_FILE_ID_REQUEST,
-        },
-        maxRedirects: 0,
-        requireHttps: new URL(origin).protocol === "https:",
-        timeoutMs: NEXTCLOUD_TALK_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
-        ...(signal ? { signal } : {}),
-        policy: {
-          ...privateNetworkPolicy,
-          hostnameAllowlist: [hostname],
-        },
-        auditContext: "nextcloud-talk.inbound-media-file-id",
+  const webDavFile = await fetchLookup(
+    webDavUrl.toString(),
+    "nextcloud-talk.inbound-media-file-id",
+    {
+      method: "PROPFIND",
+      headers: {
+        Authorization: authorization,
+        Depth: "0",
+        "Content-Type": "application/xml; charset=utf-8",
+        Accept: "application/xml",
+      },
+      body: NEXTCLOUD_TALK_WEBDAV_FILE_ID_REQUEST,
+    },
+    async (response): Promise<{ ok: true; fileId: string } | { ok: false; status?: number }> => {
+      const xml = await readProviderTextResponse(response, "Nextcloud Talk file identity", {
+        maxBytes: 64 * 1024,
+        chunkTimeoutMs: NEXTCLOUD_TALK_MEDIA_READ_IDLE_TIMEOUT_MS,
       });
-      try {
-        if (response.status !== 207) {
-          return { ok: false, status: response.status };
-        }
-        const xml = await readProviderTextResponse(response, "Nextcloud Talk file identity", {
-          maxBytes: 64 * 1024,
-          chunkTimeoutMs: NEXTCLOUD_TALK_MEDIA_READ_IDLE_TIMEOUT_MS,
-        });
-        signal?.throwIfAborted();
-        const fileId = parseWebDavFileId(xml);
-        return fileId ? { ok: true, fileId } : { ok: false };
-      } finally {
-        await releaseNextcloudTalkGuardedResponse({ response, release });
-      }
-    } catch {
-      if (signal?.aborted) {
-        signal.throwIfAborted();
-      }
-      return { ok: false };
-    }
-  })();
+      params.signal?.throwIfAborted();
+      const fileId = parseWebDavFileId(xml);
+      return fileId ? { ok: true, fileId } : { ok: false };
+    },
+    207,
+  );
   if (!webDavFile.ok) {
     return {
       ok: false,
