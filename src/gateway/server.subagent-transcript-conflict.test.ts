@@ -395,7 +395,11 @@ for (const scenario of [
                   currentBatch(batch);
                 },
                 onCommitted: () => {},
-                onPublished: () => onPublished(currentBatch(batch)),
+                onPublished: () => {
+                  // Revalidate custody even when the caller does not observe publication.
+                  const current = currentBatch(batch);
+                  onPublished?.(current);
+                },
               });
               expect(result.publication).toBe("published");
             },
@@ -420,7 +424,7 @@ for (const scenario of [
                 },
               });
               expect(result.publication).toBe("published");
-              onCommitted?.();
+              await onCommitted?.();
             },
           });
 
