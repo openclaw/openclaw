@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   >(() => undefined),
 }));
 
+// mock-isolation: fixture capability providers avoid loading or invoking installed plugins.
 vi.mock("./capability-provider-runtime.js", () => mocks);
 
 let runtimeModule: typeof import("./embedding-provider-runtime.js");

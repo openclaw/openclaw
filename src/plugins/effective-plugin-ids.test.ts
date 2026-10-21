@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("./manifest-owner-policy.js").passesManifestOwnerBasePolicy>(),
 }));
 
+// mock-isolation: explicit auto-enable results isolate effective-id selection from discovery.
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,
 }));
@@ -32,16 +33,19 @@ vi.mock("./channel-presence-policy.js", () => ({
   listExplicitConfiguredChannelIdsForConfig: () => [],
 }));
 
+// mock-isolation: fixture channel inventories avoid loading installed plugin metadata.
 vi.mock("./channel-plugin-ids.js", () => ({
   listExplicitConfiguredChannelIdsForConfig: mocks.listExplicitConfiguredChannelIdsForConfig,
   loadGatewayStartupPluginPlan: mocks.loadGatewayStartupPluginPlan,
   resolveConfiguredChannelPluginIds: mocks.resolveConfiguredChannelPluginIds,
 }));
 
+// mock-isolation: each case owns its manifest snapshot instead of reading installed plugins.
 vi.mock("./manifest-contract-eligibility.js", () => ({
   loadManifestMetadataSnapshot: mocks.loadManifestMetadataSnapshot,
 }));
 
+// mock-isolation: cases control owner admission, opting into the real policy where needed.
 vi.mock("./manifest-owner-policy.js", () => ({
   passesManifestOwnerBasePolicy: mocks.passesManifestOwnerBasePolicy,
 }));

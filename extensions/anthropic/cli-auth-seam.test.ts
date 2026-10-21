@@ -7,6 +7,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 
 const runCommand = vi.hoisted(() => vi.fn());
 
+// mock-isolation: auth status fixtures must not execute the host's Claude CLI.
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runUtf8CommandWithTimeout: runCommand }));
 
 const { probeClaudeCliAuthStatus } = await import("./cli-auth-api.js");

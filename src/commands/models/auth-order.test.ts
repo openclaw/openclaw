@@ -22,6 +22,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   resolveAuthStatePathForDisplay: (agentDir: string) => `${agentDir}/auth-profiles.json`,
 }));
 
+// mock-isolation: auth-order cases supply their own config without reading operator state.
 vi.mock("./load-config.js", () => ({ loadModelsConfig: mocks.loadModelsConfig }));
 
 vi.mock("./shared.js", async (importOriginal) => {

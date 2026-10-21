@@ -5,6 +5,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 
 const mocks = vi.hoisted(() => ({ loadModelsConfig: vi.fn() }));
+// mock-isolation: CLI fallback cases supply their own config without reading operator state.
 vi.mock("./load-config.js", () => ({ loadModelsConfig: mocks.loadModelsConfig }));
 
 describe.each([

@@ -40,10 +40,12 @@ afterEach(() => {
 it("loads catalog and node handlers only on first use", async () => {
   let catalogImports = 0;
   let nodeCommandImports = 0;
+  // mock-isolation: count lazy catalog evaluation without loading the real session store.
   vi.doMock("./session-catalog.js", () => {
     catalogImports += 1;
     return { createClaudeSessionCatalogRuntime: () => ({ list: async () => [] }) };
   });
+  // mock-isolation: count lazy command evaluation without loading native session handlers.
   vi.doMock("./session-catalog-node-commands.js", () => {
     nodeCommandImports += 1;
     return { listClaudeSessions: async () => "[]" };
@@ -71,8 +73,11 @@ it("loads catalog and node handlers only on first use", async () => {
 it("registers callable provider hooks before loading execution runtimes", async () => {
   // mock-isolation: loading any execution module during registration must fail.
   vi.doMock("openclaw/plugin-sdk/provider-auth", failImport("auth execution loaded"));
+  // mock-isolation: importing the real stream transport would bypass the eager-load tripwire.
   vi.doMock("openclaw/plugin-sdk/provider-stream-shared", failImport("stream transport loaded"));
+  // mock-isolation: importing real stream wrappers would bypass the eager-load tripwire.
   vi.doMock("./stream-wrappers.js", failImport("stream execution loaded"));
+  // mock-isolation: importing the real catalog would bypass the eager-load tripwire.
   vi.doMock("./live-model-projection.js", failImport("live catalog loaded"));
   const providers: ProviderPlugin[] = [];
   await register({

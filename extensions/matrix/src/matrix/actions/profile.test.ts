@@ -4,6 +4,7 @@ const loadWebMediaMock = vi.fn();
 const syncMatrixOwnProfileMock = vi.fn<typeof import("../profile.js").syncMatrixOwnProfile>();
 const withClientMock = vi.fn();
 
+// mock-isolation: avatar loader assertions use fixture media I/O, not a live Matrix runtime.
 vi.mock("../../runtime.js", () => ({
   getMatrixRuntime: () => ({
     media: { loadWebMedia: loadWebMediaMock },
@@ -14,6 +15,7 @@ vi.mock("../profile.js", () => ({
   syncMatrixOwnProfile: syncMatrixOwnProfileMock,
 }));
 
+// mock-isolation: profile actions use the fixture client without creating a Matrix connection.
 vi.mock("./client.js", () => ({
   withResolvedActionClient: (...args: unknown[]) => withClientMock(...args),
 }));

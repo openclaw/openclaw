@@ -113,14 +113,16 @@ it.each<[string, string[], string, string[], number]>([
   const csv = download.mock.calls.find(([filename]) => filename.endsWith(".csv"))![1];
   const [header, ...rows] = csv.split("\n").map((row) => row.split(","));
   const keys = sortedKeys(expected);
-  expect.soft(rows.map(([key]) => key).toSorted()).toEqual(keys);
+  expect.soft(rows.map(([key]) => key).toSorted((a, b) => a!.localeCompare(b!))).toEqual(keys);
   expect
     .soft(rows.reduce((sum, row) => sum + Number(row[header!.indexOf("totalTokens")]), 0))
     .toBe(tokens);
   const payload = JSON.parse(
     download.mock.calls.find(([filename]) => filename.endsWith(".json"))![1],
   ) as UsageJsonExport;
-  expect.soft(payload.sessions.map((session) => session.key).toSorted()).toEqual(keys);
+  expect
+    .soft(payload.sessions.map((session) => session.key).toSorted((a, b) => a.localeCompare(b)))
+    .toEqual(keys);
   expect(payload.totals?.totalTokens).toBe(tokens);
   expect(payload.daily.reduce((sum, day) => sum + day.totalTokens, 0)).toBe(tokens);
   expect
