@@ -116,38 +116,37 @@ describe("Codex app inventory cache", () => {
     expect(refreshed?.installedApps.map((entry) => entry.id)).toEqual(["unrelated"]);
   });
 
-  it("upgrades an in-flight targeted refresh before returning the complete account inventory", async () => {
-    const { read, refresh, request, apps, release } = pendingInventory();
-    const targeted = refresh({ targetAppIds: ["google-calendar-app"] });
-    const complete = refresh({ targetAppIds: [] });
-    expect(request).toHaveBeenCalledTimes(1);
-    release();
-    const [targetedSnapshot, completeSnapshot] = await Promise.all([targeted, complete]);
+  it.each([true, false])(
+    "coalesces overlapping inventory reads (targeted first: %s)",
+    async (targetedFirst) => {
+      const { read, refresh, request, apps, release } = pendingInventory();
+      const narrow = ["google-calendar-app"];
+      const first = refresh({ targetAppIds: targetedFirst ? narrow : [] });
+      const second = refresh({ targetAppIds: targetedFirst ? [] : narrow });
+      expect(request).toHaveBeenCalledTimes(1);
+      release();
+      const [firstSnapshot, secondSnapshot] = await Promise.all([first, second]);
 
-    expect(targetedSnapshot.apps).toEqual([app("google-calendar-app")]);
-    expect(completeSnapshot.apps).toEqual(apps);
-    expect(read().snapshot?.apps).toEqual(apps);
-    expect(request.mock.calls.filter(([method]) => method === "app/installed")).toEqual([
-      ["app/installed", { forceRefresh: true }],
-      ["app/installed", { forceRefresh: false }],
-    ]);
-    expect(request.mock.calls.filter(([method]) => method === "app/read")).toEqual([
-      ["app/read", { appIds: ["google-calendar-app"], includeTools: true }],
-      ["app/read", { appIds: ["google-calendar-app", "unrelated-slack-app"], includeTools: true }],
-    ]);
-  });
-
-  it("joins a complete in-flight refresh for a narrower plugin request", async () => {
-    const { refresh, request, apps, release } = pendingInventory();
-    const complete = refresh({ targetAppIds: [] });
-    const targeted = refresh({ targetAppIds: ["google-calendar-app"] });
-    release();
-
-    const [completeSnapshot, targetedSnapshot] = await Promise.all([complete, targeted]);
-    expect(completeSnapshot.apps).toEqual(apps);
-    expect(targetedSnapshot.apps).toEqual(apps);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
+      expect(firstSnapshot.apps).toEqual(targetedFirst ? [apps[0]] : apps);
+      expect(secondSnapshot.apps).toEqual(apps);
+      expect(read().snapshot?.apps).toEqual(apps);
+      const coldRead = ["app/installed", { forceRefresh: true }];
+      const completeRead = [
+        "app/read",
+        { appIds: ["google-calendar-app", "unrelated-slack-app"], includeTools: true },
+      ];
+      expect(request.mock.calls).toEqual(
+        targetedFirst
+          ? [
+              coldRead,
+              ["app/read", { appIds: narrow, includeTools: true }],
+              ["app/installed", { forceRefresh: false }],
+              completeRead,
+            ]
+          : [coldRead, completeRead],
+      );
+    },
+  );
 
   it("limits each metadata request to the app/read 100-app contract", async () => {
     const apps = Array.from({ length: 205 }, (_, index) => app(`app-${index}`));

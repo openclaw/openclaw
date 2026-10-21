@@ -1,10 +1,8 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { upsertSessionUpstreamLinkAsync } from "openclaw/plugin-sdk/session-catalog";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toGenericTranscriptItem } from "../session-catalog-transcript-item.js";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
@@ -28,14 +26,7 @@ vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   upsertSessionUpstreamLinkAsync: vi.fn(() => true),
 }));
 
-const roots: string[] = [];
-
-afterEach(async () => {
-  for (const root of roots.splice(0)) {
-    await closeOpenClawAgentDatabasesAsync(root);
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
+const sessionDirs = useSessionStoreTempDirs(afterEach, "codex-fork-import-");
 
 function turn(id: string, texts: string[]): CodexTurn {
   const user: CodexThreadItem = {
@@ -53,8 +44,7 @@ function turn(id: string, texts: string[]): CodexTurn {
 }
 
 async function importHistory(turns: CodexTurn[], name?: string) {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "codex-fork-import-")));
-  roots.push(root);
+  const root = sessionDirs.make();
   const target = {
     agentId: "main",
     sessionId: "imported-session",

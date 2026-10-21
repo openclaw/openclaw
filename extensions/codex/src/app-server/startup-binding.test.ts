@@ -136,31 +136,6 @@ describe("Codex app-server startup binding", () => {
     },
   );
 
-  it("never rotates a materialized supervised native thread", async () => {
-    await writeExistingBinding({
-      connectionScope: "supervision",
-      supervisionSourceThreadId: "thread-source",
-      preserveNativeModel: true,
-      conversationSourceTransferComplete: true,
-    });
-    await writeRollout(`${tokenRecord(120_000, 128_000)}\n`);
-
-    const binding = await rotateBinding({
-      projectedTurnTokens: 999_999,
-      config: byteLimitConfig("1b"),
-    });
-
-    expect(binding).toMatchObject({
-      threadId: "thread-existing",
-      connectionScope: "supervision",
-      supervisionSourceThreadId: "thread-source",
-    });
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-existing",
-      connectionScope: "supervision",
-    });
-  });
-
   it.each([200_000, 16 * 1024 * 1024 + 1])(
     "reads a %i-byte rollout from one bounded direct tail",
     async (offset) => {
@@ -271,20 +246,34 @@ describe("Codex app-server startup binding", () => {
       maxBytes: "1mb",
       expectedContextTokens: 1_050_000,
     },
+    {
+      name: "materialized supervised native thread",
+      records: [tokenRecord(120_000, 128_000)],
+      maxBytes: "1b",
+      projectedTurnTokens: 999_999,
+      binding: {
+        connectionScope: "supervision" as const,
+        supervisionSourceThreadId: "thread-source",
+        preserveNativeModel: true,
+        conversationSourceTransferComplete: true,
+      },
+    },
   ])("preserves the binding with $name", async (scenario) => {
-    await writeExistingBinding({ dynamicToolsFingerprint: "[]" });
+    await writeExistingBinding({ dynamicToolsFingerprint: "[]", ...scenario.binding });
     await writeRollout([...scenario.records, ""]);
     const resolution = await resolveBinding({
       config: scenario.maxBytes ? byteLimitConfig(scenario.maxBytes) : undefined,
+      projectedTurnTokens: scenario.projectedTurnTokens,
     });
     expect(resolution).toMatchObject({
-      binding: { threadId: "thread-existing" },
+      binding: { threadId: "thread-existing", ...scenario.binding },
       ...(scenario.expectedContextTokens
         ? { startupContextTokens: scenario.expectedContextTokens }
         : {}),
     });
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       threadId: "thread-existing",
+      ...scenario.binding,
     });
   });
 
