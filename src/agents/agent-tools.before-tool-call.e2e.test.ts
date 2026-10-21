@@ -2374,6 +2374,26 @@ describe("before_tool_call requireApproval handling", () => {
     expect(onResolution).toHaveBeenCalledWith("deny");
   });
 
+  it("passes the recorded resolver attribution to the plugin", async () => {
+    const onResolution = vi.fn();
+    setApproval({ onResolution });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id",
+      decision: "allow-once",
+      resolvedAtMs: 1_700_000_000_000,
+      resolver: { kind: "device", id: "device-1" },
+    });
+
+    const result = await requestApproval({ params: { command: "echo ok" } });
+
+    expect(result).toHaveProperty("blocked", false);
+    expect(onResolution).toHaveBeenCalledWith("allow-once", {
+      resolvedAtMs: 1_700_000_000_000,
+      resolver: { kind: "device", id: "device-1" },
+    });
+  });
+
   it.each([
     { label: "an unknown decision", decision: "approved" },
     { label: "an excluded allow decision", decision: "allow-always", restricted: true },
@@ -2481,6 +2501,27 @@ describe("before_tool_call requireApproval handling", () => {
     expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
     ]);
+  });
+
+  it("reports a recorded single-phase timeout with its system attribution", async () => {
+    const onResolution = vi.fn();
+    setApproval({ onResolution });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id-immediate",
+      decision: null,
+      terminalReason: "timeout",
+      resolvedAtMs: 1_700_000_000_000,
+      resolver: { kind: "system" },
+    });
+
+    const result = await requestApproval();
+
+    expect(result).toHaveProperty("disposition", "timed_out");
+    expect(result).toHaveProperty("reason", "Approval timed out");
+    expect(onResolution).toHaveBeenCalledWith("timeout", {
+      resolvedAtMs: 1_700_000_000_000,
+      resolver: { kind: "system" },
+    });
   });
 
   it.each([new Error("run cancelled"), "sessions_yield"])(

@@ -11,6 +11,19 @@ export const PluginApprovalResolutions = {
 export type PluginApprovalResolution =
   (typeof PluginApprovalResolutions)[keyof typeof PluginApprovalResolutions];
 
+/**
+ * Resolver attribution the Gateway approval ledger recorded for this request.
+ * Descriptive only: it names the resolving device, channel reviewer, runtime
+ * client, or system outcome, and never proves a distinct person approved.
+ */
+export type PluginApprovalResolutionDetails = {
+  resolvedAtMs: number;
+  resolver?: {
+    kind: "device" | "channel" | "runtime" | "system";
+    id?: string;
+  };
+};
+
 export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
   block?: boolean;
@@ -25,6 +38,13 @@ export type PluginHookBeforeToolCallResult = {
     timeoutReason?: string;
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;
-    onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
+    /**
+     * Informational: not awaited and cannot change the outcome. `details` is
+     * present only when the Gateway recorded the resolution.
+     */
+    onResolution?: (
+      decision: PluginApprovalResolution,
+      details?: PluginApprovalResolutionDetails,
+    ) => Promise<void> | void;
   };
 };

@@ -88,6 +88,7 @@ export type {
 export {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
+  type PluginApprovalResolutionDetails,
   type PluginHookBeforeToolCallResult,
 } from "./hook-before-tool-call-result.js";
 export type {

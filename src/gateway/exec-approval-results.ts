@@ -104,7 +104,7 @@ export function prepareExecApprovalSettlement(params: {
     decision,
     resolvedAtMs: record.resolvedAtMs,
     resolvedBy: params.localResolvedBy,
-    resolverKind: record.resolver?.kind ?? null,
+    resolver: record.resolver,
     status: record.status,
     terminalReason: record.terminalReason,
     consumedAtMs: record.consumedAtMs,
