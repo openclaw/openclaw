@@ -48,7 +48,11 @@ describe("stepfun provider registration", () => {
         supportsStrictMode: false,
         supportedReasoningEfforts: ["low", "medium", "high"],
         maxTokensField: "max_tokens",
-        reasoningEffortMap: expect.objectContaining({ off: "low", medium: "medium", max: "high" }),
+        reasoningEffortMap: expect.objectContaining({
+          off: "low",
+          medium: "medium",
+          max: "high",
+        }),
       },
     };
     expect(standardModel).toMatchObject({
@@ -78,12 +82,10 @@ describe("stepfun provider registration", () => {
     expect(lowPayload).not.toHaveProperty("max_completion_tokens");
     expect(lowPayload).not.toHaveProperty("store");
     expect(lowPayload).not.toHaveProperty("stream_options");
-    expect(lowPayload.messages).toEqual(
-      expect.arrayContaining([expect.objectContaining({ role: "system", content: "system" })]),
+    expect(lowPayload.messages).toContainEqual(
+      expect.objectContaining({ role: "system", content: "system" }),
     );
-    expect(lowPayload.messages).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ role: "developer" })]),
-    );
+    expect(lowPayload.messages).not.toContainEqual(expect.objectContaining({ role: "developer" }));
     expect(
       buildOpenAICompletionsParams(transportModel, context, { reasoning: "high" } as never)
         .reasoning_effort,
@@ -111,50 +113,42 @@ describe("stepfun provider registration", () => {
   });
 
   it.each([
-    { providerId: "stepfun", methodId: "standard-api-key-cn" },
-    { providerId: "stepfun-plan", methodId: "plan-api-key-intl" },
-  ])(
-    "preserves an existing primary when repeating $methodId onboarding",
-    async ({ providerId, methodId }) => {
-      const { providers } = await registerStepFun();
-      const provider = requireRegisteredProvider(providers, providerId);
-      const method = provider.auth.find((entry) => entry.id === methodId);
-      if (!method?.runNonInteractive || !method.wizard?.choiceId) {
-        throw new Error(`expected StepFun non-interactive auth method ${methodId}`);
-      }
+    ["stepfun", "standard-api-key-cn"],
+    ["stepfun-plan", "plan-api-key-intl"],
+  ])("preserves primary during %s/%s onboarding", async (providerId, methodId) => {
+    const { providers } = await registerStepFun();
+    const provider = requireRegisteredProvider(providers, providerId);
+    const method = provider.auth.find((entry) => entry.id === methodId);
+    if (!method?.runNonInteractive || !method.wizard?.choiceId) {
+      throw new Error(`expected StepFun non-interactive auth method ${methodId}`);
+    }
 
-      const config = {
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-sonnet-4-6",
-              fallbacks: ["openai/gpt-5.6-luna"],
-            },
-            models: { "anthropic/claude-sonnet-4-6": { alias: "Existing" } },
-          },
+    const primary = "anthropic/claude-sonnet-4-6";
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary, fallbacks: ["openai/gpt-5.6-luna"] },
+          models: { [primary]: { alias: "Existing" } },
         },
-      };
+      },
+    };
 
-      const result = await method.runNonInteractive({
-        authChoice: method.wizard.choiceId,
-        config,
-        baseConfig: config,
-        opts: {},
-        runtime: createRuntimeSpies(),
-        resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" as const })),
-        toApiKeyCredential: vi.fn(() => null),
-      });
+    const result = await method.runNonInteractive({
+      authChoice: method.wizard.choiceId,
+      config,
+      baseConfig: config,
+      opts: {},
+      runtime: createRuntimeSpies(),
+      resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" as const })),
+      toApiKeyCredential: vi.fn(() => null),
+    });
 
-      const defaults = result?.agents?.defaults;
-      expect(defaults?.model).toEqual({
-        primary: "anthropic/claude-sonnet-4-6",
-        fallbacks: ["openai/gpt-5.6-luna"],
-      });
-      expect(defaults?.models?.["anthropic/claude-sonnet-4-6"]).toEqual({ alias: "Existing" });
-      expect(defaults?.models?.[`${providerId}/step-3.5-flash`]).toEqual(
-        expect.objectContaining({ alias: expect.any(String) }),
-      );
-      expect(result?.models?.providers?.[providerId]).toBeDefined();
-    },
-  );
+    const defaults = result?.agents?.defaults;
+    expect(defaults?.model).toEqual({ primary, fallbacks: ["openai/gpt-5.6-luna"] });
+    expect(defaults?.models?.[primary]).toEqual({ alias: "Existing" });
+    expect(defaults?.models?.[`${providerId}/step-3.5-flash`]).toMatchObject({
+      alias: expect.any(String),
+    });
+    expect(result?.models?.providers?.[providerId]).toBeDefined();
+  });
 });
