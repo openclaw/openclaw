@@ -97,16 +97,6 @@ describe("workspace manifest HTTP encoding", () => {
     };
   }
 
-  it("downloads gzip manifests and verifies decoded content", async () => {
-    await using f = await encodingFixture((res) => {
-      res.writeHead(200, { "content-encoding": "gzip" });
-      res.end(gzipSync(rawManifest));
-    });
-    await expect(f.run()).resolves.toBe(manifestRef);
-    expect(f.acceptEncoding()).toBe("gzip");
-    expect(await fs.readdir(f.workspaceDir)).not.toContain("sentinel.txt");
-  });
-
   it.each<[string, string, () => Buffer, RegExp]>([
     ["unknown encoding", "br", () => Buffer.from(rawManifest), /encoding/],
     ["decoded digest mismatch", "gzip", () => gzipSync(`${rawManifest} `), /digest/],
@@ -121,6 +111,7 @@ describe("workspace manifest HTTP encoding", () => {
     await expect(f.run()).rejects.toMatchObject({
       cause: { message: expect.stringMatching(reason) },
     });
+    expect(f.acceptEncoding()).toBe("gzip");
     expect(await f.read("sentinel.txt")).toBe("existing workspace");
     expect(await fs.readdir(path.dirname(f.workspaceDir))).toEqual(["workspace"]);
   });

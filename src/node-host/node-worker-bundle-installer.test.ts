@@ -141,6 +141,12 @@ describe("node worker bundle installer", () => {
     return { gatewayUrl: await listen(server), requests };
   }
 
+  async function setup(options?: BundleFixtureOptions) {
+    const fixture = await bundleFixture(options);
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    return { fixture, served, ...installation(fixture, served.gatewayUrl) };
+  }
+
   it.each([1, 4])(
     "resumes an authenticated download after %i interruptions",
     async (interruptions) => {
@@ -465,9 +471,7 @@ describe("node worker bundle installer", () => {
   );
 
   it("does not publish an HTTP bundle when cancellation arrives during receipt staging", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const { ensure } = installation(fixture, served.gatewayUrl);
+    const { fixture, served, ensure } = await setup();
     const controller = new AbortController();
     const open = fs.open.bind(fs);
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
@@ -558,9 +562,7 @@ describe("node worker bundle installer", () => {
   });
 
   it("does not renew retention when cancelled while validating an installed bundle", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const { ensure, retain } = installation(fixture, served.gatewayUrl);
+    const { served, ensure, retain } = await setup();
     await ensure();
     const controller = new AbortController();
     const stat = fs.stat.bind(fs);
@@ -579,9 +581,7 @@ describe("node worker bundle installer", () => {
   });
 
   it("rejects cancellation during final cleanup without renewing retention or removing published bytes", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const { ensure, inspect, retain } = installation(fixture, served.gatewayUrl);
+    const { fixture, ensure, inspect, retain } = await setup();
     const controller = new AbortController();
     const rm = fs.rm.bind(fs);
     vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
@@ -634,9 +634,7 @@ describe("node worker bundle installer", () => {
   });
 
   it("shares an in-flight prewarmed bundle check without sharing cancellation or later trust", async () => {
-    const fixture = await bundleFixture({ bundlePrewarm: 1 });
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const { installer, retain } = installation(fixture, served.gatewayUrl);
+    const { fixture, served, installer, retain } = await setup({ bundlePrewarm: 1 });
     const install = { input: fixture.input, gatewayUrl: served.gatewayUrl };
     await installer.ensure(install);
     const bundleDir = bundleDirectory(fixture);
@@ -680,9 +678,7 @@ describe("node worker bundle installer", () => {
   it("validates again when retention separates overlapping install requests", async ({
     signal,
   }) => {
-    const fixture = await bundleFixture({ bundlePrewarm: 1 });
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const { installer, retain } = installation(fixture, served.gatewayUrl);
+    const { fixture, served, installer, retain } = await setup({ bundlePrewarm: 1 });
     const install = { input: fixture.input, gatewayUrl: served.gatewayUrl };
     await installer.ensure(install);
     const bundleDir = bundleDirectory(fixture);
@@ -740,9 +736,7 @@ describe("node worker bundle installer", () => {
   });
 
   it("reuses a v1 install when Windows cannot retain Unix artifact modes", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const { ensure } = installation(fixture, served.gatewayUrl);
+    const { fixture, served, ensure } = await setup();
     const readStats = fs.lstat.bind(fs);
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
@@ -763,9 +757,7 @@ describe("node worker bundle installer", () => {
   });
 
   it("rejects the Cloudflare Access pair before a plaintext bundle transfer", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const { ensure } = installation(fixture, served.gatewayUrl);
+    const { served, ensure } = await setup();
 
     await expect(
       ensure({
@@ -780,9 +772,7 @@ describe("node worker bundle installer", () => {
   });
 
   it("prunes superseded bundle artifacts in bounded passes while retaining the latest install", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const { ensure, retain } = installation(fixture, served.gatewayUrl);
+    const { fixture, ensure, retain } = await setup();
     await ensure();
     const bundlesRoot = path.join(root, fixture.input.gatewayNamespace, "bundles");
     const staleHashes = Array.from({ length: 18 }, (_, index) =>
@@ -810,9 +800,7 @@ describe("node worker bundle installer", () => {
   });
 
   it("reinstalls when executable dependency material appears outside the bundle hash", async () => {
-    const fixture = await bundleFixture({ packageShell: true });
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const { ensure, inspect } = installation(fixture, served.gatewayUrl);
+    const { fixture, served, ensure, inspect } = await setup({ packageShell: true });
     const bundleDir = bundleDirectory(fixture);
     const tamperedDependency = path.join(bundleDir, "node_modules", "tampered", "index.js");
 
