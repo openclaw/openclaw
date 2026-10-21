@@ -91,13 +91,6 @@ function connectSideband(
   );
 }
 
-function readPendingAudio(pending: OpenAIQuicksilverPendingAudio): Buffer {
-  const length = pending.length;
-  const audio = Buffer.alloc(length);
-  expect(pending.readInto(audio)).toBe(length);
-  return audio;
-}
-
 describe("GPT-Live gateway relay bridge", () => {
   function createPendingPeerBridge(params?: {
     onClose?: (reason: "completed" | "error") => void;
@@ -142,26 +135,6 @@ describe("GPT-Live gateway relay bridge", () => {
     harness.triggerPeerError(new Error("terminal connection failure"));
     expect(harness.onClose).toHaveBeenCalledExactlyOnceWith("error");
     expect(harness.peer.close).toHaveBeenCalledOnce();
-  });
-
-  it("preserves caller-owned microphone frames while the media peer is starting", async () => {
-    const { bridge, connection, peer, resolvePeer, testBridge } = createPendingPeerBridge();
-    expect(bridge.connect()).toBe(connection);
-    const source = Buffer.from([0x7f, 0x41]);
-    bridge.sendAudio(source);
-    source.fill(0);
-    bridge.sendAudio(Buffer.from([0x22, 0x23]));
-    const pendingAudio = testBridge.pendingAudio;
-
-    resolvePeer();
-    await connection;
-
-    expect(peer.adoptPendingAudio).toHaveBeenCalledExactlyOnceWith(pendingAudio);
-    expect(testBridge.pendingAudio).not.toBe(pendingAudio);
-    expect(testBridge.pendingAudio).toHaveLength(0);
-    expect(readPendingAudio(pendingAudio)).toEqual(Buffer.from([0x7f, 0x41, 0x22, 0x23]));
-    bridge.sendAudio(Buffer.from([0x30, 0x31]));
-    expect(peer.sendAudio).toHaveBeenCalledExactlyOnceWith(Buffer.from([0x30, 0x31]));
   });
 
   it("discards queued microphone audio when media peer creation fails", async () => {

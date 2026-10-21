@@ -166,6 +166,7 @@ describe("GPT-Live werift audio peer", () => {
       webSocketFactory: () => new FakeSocket(),
     });
     const connection = bridge.connect();
+    expect(bridge.connect()).toBe(connection);
     const source = Buffer.alloc(256 * OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
     for (let offset = 0; offset < source.length; offset += 2) {
       source.writeUInt16LE(Math.floor(offset / OPENAI_QUICKSILVER_RELAY_FRAME_BYTES) + 1, offset);
@@ -219,6 +220,10 @@ describe("GPT-Live werift audio peer", () => {
           timestamp: (timestamp + 249 * 960) >>> 0,
         },
       });
+      const sendAudio = vi.spyOn(peer, "sendAudio");
+      const capture = Buffer.from([0x30, 0x31]);
+      bridge.sendAudio(capture);
+      expect(sendAudio).toHaveBeenCalledExactlyOnceWith(capture);
       expect(onError).not.toHaveBeenCalled();
     } finally {
       copy.mockRestore();

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openAIRealtimeHost } from "./realtime-host.js";
+import { createOpenAIRealtimeClientSecret } from "./realtime-provider-shared.js";
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import {
   createTranscriptionSession,
@@ -44,11 +46,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
-type SentRealtimeEvent = {
-  type: string;
-  audio?: string;
-  session?: unknown;
-};
+type SentRealtimeEvent = { type: string };
 
 function parseSent(socket: FakeWebSocketInstance): SentRealtimeEvent[] {
   return socket.sent.map((payload) => JSON.parse(payload) as SentRealtimeEvent);
@@ -92,6 +90,24 @@ function expectOverflow(
   expect(session.isConnected()).toBe(false);
 }
 
+function createSecret(
+  response: Response,
+  overrides: Partial<Parameters<typeof createOpenAIRealtimeClientSecret>[0]> = {},
+  label?: string,
+) {
+  ssrfMocks.fetchWithSsrFGuard.mockResolvedValue({ response, release: vi.fn() });
+  return createOpenAIRealtimeClientSecret(
+    {
+      authToken: "sk-test",
+      auditContext: "test",
+      session: { model: "gpt-4o-realtime-preview" },
+      ...overrides,
+    },
+    openAIRealtimeHost,
+    label,
+  );
+}
+
 describe("buildOpenAIRealtimeTranscriptionProvider", () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
@@ -109,16 +125,10 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
 
   it("preserves explicit zero-valued VAD settings", () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
+    const openai = { silenceDurationMs: 0, vadThreshold: 0 };
     const resolved = provider.resolveConfig?.({
       cfg: {} as never,
-      rawConfig: {
-        providers: {
-          openai: {
-            silenceDurationMs: 0,
-            vadThreshold: 0,
-          },
-        },
-      },
+      rawConfig: { providers: { openai } },
     });
 
     expect(resolved).toMatchObject({ silenceDurationMs: 0, vadThreshold: 0 });
@@ -279,15 +289,12 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     expect(parseSent(socket).at(-1)?.type).toBe("input_audio_buffer.append");
   });
 
-  it.each([
-    [1600, 1, false],
-    [1600, 1, true],
-  ] as const)(
-    "commits eligible %i-byte audio once (%i commits, VAD stopped: true, acknowledged: %s)",
-    async (audioBytes, expectedCommits, acknowledged) => {
+  it.each([false, true])(
+    "commits 1600-byte audio once after VAD stops (acknowledged: %s)",
+    async (acknowledged) => {
       const { session, socket } = await connectSession();
       session.sendAudio(Buffer.alloc(800, 1));
-      session.sendAudio(Buffer.alloc(audioBytes - 800, 2));
+      session.sendAudio(Buffer.alloc(800, 2));
       emitJson(socket, {
         type: "input_audio_buffer.speech_stopped",
         item_id: "first-turn",
@@ -302,7 +309,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
 
       expect(
         parseSent(socket).filter(({ type }) => type === "input_audio_buffer.commit"),
-      ).toHaveLength(expectedCommits);
+      ).toHaveLength(1);
       socket.close();
     },
   );
@@ -565,5 +572,59 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     emitCompleted(socket, "overflow-item", "must not emit");
 
     expectOverflow(session, onError, onTranscript, "terminal item history");
+  });
+
+  describe("createOpenAIRealtimeClientSecret", () => {
+    it("returns client secret from a well-formed response", async () => {
+      const result = await createSecret(
+        Response.json({
+          client_secret: { value: "eph-secret-abc" },
+          expires_at: Math.floor(Date.now() / 1000) + 60,
+        }),
+      );
+      expect(result).toMatchObject({ value: "eph-secret-abc", expiresAt: expect.any(Number) });
+      expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenLastCalledWith(
+        expect.objectContaining({ timeoutMs: 30_000 }),
+      );
+    });
+
+    it("bounds oversized success response and cancels the stream", async () => {
+      let readCount = 0;
+      const cancel = vi.fn();
+      const chunk = new Uint8Array(1024 * 1024);
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (readCount >= 20) {
+              controller.close();
+            } else {
+              readCount += 1;
+              controller.enqueue(chunk);
+            }
+          },
+          cancel,
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+      await expect(createSecret(response)).rejects.toThrow(/openai\.realtime-session/);
+      expect(cancel).toHaveBeenCalled();
+      expect(readCount).toBeLessThan(20);
+    });
+
+    it("replaces rejected transcription API-key details with bounded guidance", async () => {
+      await expect(
+        createSecret(
+          Response.json(
+            { error: { message: "Incorrect API key provided: secret" } },
+            { status: 401 },
+          ),
+          {
+            session: { type: "transcription" },
+            authRejectedMessage: "Update the transcription API key",
+          },
+          "OpenAI Realtime transcription",
+        ),
+      ).rejects.toThrow("Update the transcription API key");
+    });
   });
 });

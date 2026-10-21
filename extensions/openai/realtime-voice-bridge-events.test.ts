@@ -6,16 +6,7 @@ const mocks = await vi.hoisted(async () => {
   const { createOpenAIRealtimeMockState } = await import("./realtime-voice-test-support.js");
   return createOpenAIRealtimeMockState();
 });
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, execFileSync: mocks.execFileSyncMock };
-});
-
 vi.mock("ws", () => ({ default: mocks.FakeWebSocket }));
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
-}));
 
 // mock-isolation: Playback event tests use synthetic credentials; host auth storage is outside this transport fixture.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({

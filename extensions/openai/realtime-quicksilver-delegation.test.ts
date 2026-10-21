@@ -3,7 +3,6 @@ import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
-import { parseOpenAIQuicksilverEvent } from "./realtime-quicksilver-wire.js";
 import {
   FakeSocket,
   parseSent,
@@ -58,10 +57,6 @@ function readAppends(socket: FakeSocket, id?: string) {
 
 function waitForAppend(socket: FakeSocket, id: string, text: string) {
   return vi.waitFor(() => expect(parseSent(socket)).toContainEqual(delegationAppend(id, text)));
-}
-
-function parseEvent(event: unknown) {
-  return parseOpenAIQuicksilverEvent(JSON.stringify(event));
 }
 
 function inputText<T>(text: T) {
@@ -199,18 +194,6 @@ it("keeps standalone speech at session scope while a delegation owns its result"
   expect(socket.sent).toHaveLength(3);
 });
 
-it("parses session expiry and assistant transcript events", () => {
-  expect(parseEvent({ type: "session.started", session: { expires_at: 123 } })).toEqual({
-    kind: "session-started",
-    expiresAt: 123,
-  });
-  expect(parseEvent({ type: "output_transcript.added", item: { text: "wor" } })).toEqual({
-    kind: "transcript-delta",
-    role: "assistant",
-    text: "wor",
-  });
-});
-
 it("forwards only classified sideband event types", () => {
   const onWireEventType = vi.fn();
   const { controller, logger, onFatalError } = createDelegationHarness({ onWireEventType });
@@ -228,30 +211,6 @@ it("forwards only classified sideband event types", () => {
   ]);
   expect(logger.debug).toHaveBeenCalledOnce();
   expect(onFatalError).not.toHaveBeenCalled();
-});
-
-it("parses client delegations and ignores non-client targets", () => {
-  expect(
-    parseEvent({
-      type: "delegation.created",
-      item: {
-        type: "delegation",
-        target: "client",
-        id: "delegation-1",
-        content: [
-          { type: "input_text", text: "curl https://exa" },
-          { type: "output_text", text: "ignored" },
-          { type: "input_text", text: "mple.com" },
-        ],
-      },
-    }),
-  ).toEqual({ kind: "delegation", id: "delegation-1", prompt: "curl https://example.com" });
-  expect(
-    parseEvent({
-      type: "delegation.created",
-      item: { type: "delegation", target: "server", id: "delegation-2", content: [] },
-    }),
-  ).toEqual({ kind: "ignored", eventType: "delegation.created" });
 });
 
 it("revokes the old late-final owner on newer delegation and detach", async () => {

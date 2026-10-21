@@ -38,6 +38,18 @@ function offerRequest(token: string) {
   return createRequest({ token, body: AUDIO_ONLY_SDP });
 }
 
+async function expectRetrySchedule(readAttempts: () => number, check = expect) {
+  for (const [delay, attempts] of [
+    [999, 1],
+    [1, 2],
+    [4_999, 2],
+    [1, 3],
+  ]) {
+    await vi.advanceTimersByTimeAsync(delay);
+    check(readAttempts()).toBe(attempts);
+  }
+}
+
 describe("GA Realtime call retirement", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -153,16 +165,11 @@ describe("GA Realtime call retirement", () => {
         failure === "shutdown during creation"
           ? realtime.cleanup().catch((error: unknown) => error)
           : failure === "cancel during creation"
-            ? Promise.resolve(realtime.broker.cancelBrowserSession(reservation)).then(
-                () => {
+            ? Promise.resolve(realtime.broker.cancelBrowserSession(reservation))
+                .catch((error: unknown) => error)
+                .finally(() => {
                   cancelSettled = true;
-                  return undefined;
-                },
-                (error: unknown) => {
-                  cancelSettled = true;
-                  return error;
-                },
-              )
+                })
             : undefined;
       creation.resolve();
       if (failure === "cancel during creation") {
@@ -170,11 +177,7 @@ describe("GA Realtime call retirement", () => {
         expect.soft(cancelSettled).toBe(false);
         firstHangup.resolve();
       }
-      const handlingError = await handling.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect.soft(handlingError).toBeUndefined();
+      await expect.soft(handling).resolves.toBe(true);
       if (failure === "throwing error callback") {
         expect.soft(onClose).toHaveBeenCalledOnce();
       }
@@ -188,14 +191,7 @@ describe("GA Realtime call retirement", () => {
           expect(stopError).toBeInstanceOf(Error);
         }
       }
-      await vi.advanceTimersByTimeAsync(999);
-      expect(hangups).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(hangups).toBe(2);
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(hangups).toBe(2);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(hangups).toBe(3);
+      await expectRetrySchedule(() => hangups);
       expect(creations).toBe(1);
       expect(bridge.close).toHaveBeenCalledTimes(
         ["shutdown during creation", "cancel during creation", "empty answer"].includes(failure)
@@ -249,14 +245,7 @@ describe("GA Realtime call retirement", () => {
       await expect(handling).resolves.toBe(true);
       expect(end).toHaveBeenCalledOnce();
       expect.soft(hangups).toBe(1);
-      await vi.advanceTimersByTimeAsync(999);
-      expect.soft(hangups).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect.soft(hangups).toBe(2);
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect.soft(hangups).toBe(2);
-      await vi.advanceTimersByTimeAsync(1);
-      expect.soft(hangups).toBe(3);
+      await expectRetrySchedule(() => hangups, expect.soft);
       await vi.advanceTimersByTimeAsync(30 * 60_000);
       expect.soft(hangups).toBe(3);
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("INCOMPLETE"));
