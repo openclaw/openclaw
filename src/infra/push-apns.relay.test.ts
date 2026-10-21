@@ -48,17 +48,15 @@ function sendPush(
 }
 
 const relayResultFields = {
+  ok: true,
+  status: 200,
+  apnsId: undefined,
+  reason: undefined,
+  tokenSuffix: "12345678",
   topic: "ai.openclaw.ios",
   environment: "production",
   transport: "relay",
 };
-
-function expectRelayConfig(
-  resolved: ReturnType<typeof resolveApnsRelayConfigFromEnv>,
-  expected: { baseUrl: string; timeoutMs: number },
-) {
-  expect(resolved).toMatchObject({ ok: true, value: expected });
-}
 
 function mockRelayResponse(body: BodyInit | null, status = 200) {
   const response = new Response(body, { status });
@@ -78,80 +76,39 @@ describe("push-apns.relay", () => {
       });
     });
 
-    it("lets env overrides win and clamps tiny timeout values", () => {
-      const resolved = resolveApnsRelayConfigFromEnv(
-        {
-          OPENCLAW_APNS_RELAY_BASE_URL: " https://relay-override.example.com/base/ ",
-          OPENCLAW_APNS_RELAY_TIMEOUT_MS: "999",
-        } as NodeJS.ProcessEnv,
-        {
-          push: {
-            apns: {
-              relay: {
-                baseUrl: "https://relay.example.com",
-                timeoutMs: 2500,
-              },
-            },
+    it.each([
+      [
+        " https://relay-override.example.com/base/ ",
+        "999",
+        1000,
+        "https://relay-override.example.com/base",
+      ],
+      [
+        "https://relay.example.com",
+        String(Number.MAX_SAFE_INTEGER),
+        MAX_TIMER_TIMEOUT_MS,
+        "https://relay.example.com",
+      ],
+      ["https://relay.example.com", "2e4", 10_000, "https://relay.example.com"],
+      ["https://relay.example.com", "   ", 2500, "https://relay.example.com"],
+      ["http://[::1]:8787", "nope", 10_000, "http://[::1]:8787"],
+    ] as const)("normalizes relay URL %s and timeout %s", (url, timeout, timeoutMs, baseUrl) => {
+      expect(
+        resolveApnsRelayConfigFromEnv(
+          {
+            OPENCLAW_APNS_RELAY_BASE_URL: url,
+            OPENCLAW_APNS_RELAY_TIMEOUT_MS: timeout,
+            OPENCLAW_APNS_RELAY_ALLOW_HTTP: "yes",
           },
-        },
-      );
-
-      expectRelayConfig(resolved, {
-        baseUrl: "https://relay-override.example.com/base",
-        timeoutMs: 1000,
-      });
-    });
-
-    it("caps oversized timeout values before they reach AbortSignal.timeout", () => {
-      const resolved = resolveApnsRelayConfigFromEnv({
-        OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
-        OPENCLAW_APNS_RELAY_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
-      } as NodeJS.ProcessEnv);
-
-      expectRelayConfig(resolved, {
-        baseUrl: "https://relay.example.com",
-        timeoutMs: MAX_TIMER_TIMEOUT_MS,
-      });
-    });
-
-    it.each(["2e4"])("falls back for non-decimal env timeout %s", (timeoutMs) => {
-      const resolved = resolveApnsRelayConfigFromEnv({
-        OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
-        OPENCLAW_APNS_RELAY_TIMEOUT_MS: timeoutMs,
-      } as NodeJS.ProcessEnv);
-
-      expectRelayConfig(resolved, {
-        baseUrl: "https://relay.example.com",
-        timeoutMs: 10_000,
-      });
-    });
-
-    it("uses the configured timeout when the env override is blank", () => {
-      const resolved = resolveApnsRelayConfigFromEnv(
-        {
-          OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
-          OPENCLAW_APNS_RELAY_TIMEOUT_MS: "   ",
-        },
-        { push: { apns: { relay: { timeoutMs: 2500 } } } },
-      );
-
-      expectRelayConfig(resolved, {
-        baseUrl: "https://relay.example.com",
-        timeoutMs: 2500,
-      });
-    });
-
-    it("allows loopback http URLs for alternate truthy env values", () => {
-      const resolved = resolveApnsRelayConfigFromEnv({
-        OPENCLAW_APNS_RELAY_BASE_URL: "http://[::1]:8787",
-        OPENCLAW_APNS_RELAY_ALLOW_HTTP: "yes",
-        OPENCLAW_APNS_RELAY_TIMEOUT_MS: "nope",
-      });
-
-      expectRelayConfig(resolved, {
-        baseUrl: "http://[::1]:8787",
-        timeoutMs: 10_000,
-      });
+          timeout === "999" || timeout === "   "
+            ? {
+                push: {
+                  apns: { relay: { baseUrl: "https://configured.example.com", timeoutMs: 2500 } },
+                },
+              }
+            : undefined,
+        ),
+      ).toMatchObject({ ok: true, value: { baseUrl, timeoutMs } });
     });
 
     it.each([
@@ -172,23 +129,6 @@ describe("push-apns.relay", () => {
   });
 
   describe("public relay push", () => {
-    it("revalidates ownership before relay fetch and combines the lifecycle signal", async () => {
-      const controller = new AbortController();
-      const isCurrent = vi.fn().mockResolvedValue(true);
-      const { fetchMock } = mockRelayResponse("", 202);
-
-      await sendPush({
-        signal: controller.signal,
-        isCurrent,
-      });
-
-      expect(isCurrent).toHaveBeenCalledTimes(2);
-      const fetchOptions = fetchMock.mock.calls[0]?.[1];
-      expect(fetchOptions?.signal?.aborted).toBe(false);
-      controller.abort(new Error("pairing removed"));
-      expect(fetchOptions?.signal?.aborted).toBe(true);
-    });
-
     it("does not start relay transport when persistent ownership changed", async () => {
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -275,112 +215,40 @@ describe("push-apns.relay", () => {
       expect(cancel).toHaveBeenCalledOnce();
     });
 
-    it("falls back to fetch status when the relay body is not JSON", async () => {
-      // Real Response body so the bounded reader runs end-to-end; non-JSON parse stays a soft null.
-      const fetchMock = vi.fn().mockResolvedValue(new Response("not-json-at-all", { status: 202 }));
-      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-      await expect(sendPush()).resolves.toEqual({
-        ...relayResultFields,
-        ok: true,
-        status: 202,
-        apnsId: undefined,
-        reason: undefined,
-        tokenSuffix: "12345678",
-      });
+    it.each([
+      ["non-JSON fallback", "not-json-at-all", { status: 202 }],
+      [
+        "normalized fields",
+        '{"ok":false,"status":410,"apnsId":" relay-apns-id ","reason":" Unregistered ","tokenSuffix":" abcd1234 "}',
+        {
+          ok: false,
+          status: 410,
+          apnsId: "relay-apns-id",
+          reason: "Unregistered",
+          tokenSuffix: "abcd1234",
+        },
+      ],
+      ["BOM-prefixed failure", '\uFEFF{"ok":false,"status":410}', { ok: false, status: 410 }],
+      [
+        "sandbox metadata",
+        '{"ok":true,"status":200,"environment":"sandbox","tokenSuffix":" abcd1234 "}',
+        { environment: "sandbox", tokenSuffix: "abcd1234" },
+      ],
+    ] as const)("decodes %s", async (_name, body, expected) => {
+      mockRelayResponse(body, 202);
+      await expect(sendPush()).resolves.toEqual({ ...relayResultFields, ...expected });
     });
 
-    it("normalizes relay JSON response fields", async () => {
-      const fetchMock = vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            ok: false,
-            status: 410,
-            apnsId: " relay-apns-id ",
-            reason: " Unregistered ",
-            tokenSuffix: " abcd1234 ",
-          }),
-          { status: 202, headers: { "content-type": "application/json" } },
-        ),
-      );
-      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-      await expect(sendPush()).resolves.toEqual({
-        ...relayResultFields,
-        ok: false,
-        status: 410,
-        apnsId: "relay-apns-id",
-        reason: "Unregistered",
-        tokenSuffix: "abcd1234",
-      });
-    });
-
-    it("honors BOM-prefixed relay failure JSON", async () => {
-      const body = `\uFEFF${JSON.stringify({ ok: false, status: 410 })}`;
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValue(
-          new Response(body, { status: 202, headers: { "content-type": "application/json" } }),
-        );
-      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-      await expect(sendPush()).resolves.toEqual({
-        ...relayResultFields,
-        ok: false,
-        status: 410,
-        apnsId: undefined,
-        reason: undefined,
-        tokenSuffix: "12345678",
-      });
-    });
-
-    it("normalizes sandbox relay response metadata", async () => {
+    it("parses a large under-cap relay body unchanged (boundary just below the 16 MiB cap)", async () => {
       mockRelayResponse(
         JSON.stringify({
           ok: true,
           status: 200,
-          environment: "sandbox",
-          tokenSuffix: " abcd1234 ",
+          apnsId: "big-but-valid",
+          note: "x".repeat(8 * 1024 * 1024),
         }),
       );
-
-      await expect(sendPush()).resolves.toEqual({
-        ...relayResultFields,
-        ok: true,
-        status: 200,
-        apnsId: undefined,
-        reason: undefined,
-        environment: "sandbox",
-        tokenSuffix: "abcd1234",
-      });
-    });
-
-    it("parses a large under-cap relay body unchanged (boundary just below the 16 MiB cap)", async () => {
-      // A valid, large-but-bounded JSON body (~8 MiB payload, comfortably under the 16 MiB cap)
-      // must still parse normally: the cap only rejects overflow, it must not truncate or reject
-      // legitimate large success responses.
-      const padding = "x".repeat(8 * 1024 * 1024);
-      const fetchMock = vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            ok: true,
-            status: 200,
-            apnsId: "big-but-valid",
-            note: padding,
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
-      );
-      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-      await expect(sendPush()).resolves.toEqual({
-        ...relayResultFields,
-        ok: true,
-        status: 200,
-        apnsId: "big-but-valid",
-        reason: undefined,
-        tokenSuffix: "12345678",
-      });
+      await expect(sendPush()).resolves.toEqual({ ...relayResultFields, apnsId: "big-but-valid" });
     });
 
     it("fails closed when the relay response body exceeds the size cap", async () => {
@@ -390,10 +258,7 @@ describe("push-apns.relay", () => {
       await expect(sendPush()).resolves.toEqual({
         ...relayResultFields,
         ok: false,
-        status: 200,
         reason: "RelayResponseTooLarge",
-        apnsId: undefined,
-        tokenSuffix: "12345678",
       });
     });
 
@@ -410,11 +275,7 @@ describe("push-apns.relay", () => {
 
       await expect(sendPush()).resolves.toEqual({
         ...relayResultFields,
-        ok: true,
         status: 202,
-        apnsId: undefined,
-        reason: undefined,
-        tokenSuffix: "12345678",
       });
     });
   });

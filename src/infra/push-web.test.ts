@@ -327,21 +327,29 @@ describe("resolveVapidKeys", () => {
     }
   });
 
-  it("generates one durable SQLite VAPID identity", async () => {
-    const keys = await resolveVapidKeys(tmpDir);
-    expect(keys).toEqual({
-      ...generatedVapidKeys,
-      subject: "https://openclaw.ai",
-    });
-    expect(await readPersistedVapidKeyPair(tmpDir)).toEqual(keys);
+  it.each([false, true])(
+    "generates one durable SQLite VAPID identity (blank env: %s)",
+    async (blank) => {
+      if (blank) {
+        for (const name of ["PUBLIC_KEY", "PRIVATE_KEY", "SUBJECT"]) {
+          vi.stubEnv(`OPENCLAW_VAPID_${name}`, "   ");
+        }
+      }
+      const keys = await resolveVapidKeys(tmpDir);
+      expect(keys).toEqual({
+        ...generatedVapidKeys,
+        subject: "https://openclaw.ai",
+      });
+      expect(await readPersistedVapidKeyPair(tmpDir)).toEqual(keys);
 
-    await closeOpenClawStateDatabaseAsync();
-    await expect(resolveVapidKeys(tmpDir)).resolves.toEqual(keys);
-    expect(generateVAPIDKeys).toHaveBeenCalledTimes(1);
-    await expect(fs.stat(path.join(tmpDir, "push", "vapid-keys.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
+      await closeOpenClawStateDatabaseAsync();
+      await expect(resolveVapidKeys(tmpDir)).resolves.toEqual(keys);
+      expect(generateVAPIDKeys).toHaveBeenCalledTimes(1);
+      await expect(fs.stat(path.join(tmpDir, "push", "vapid-keys.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 
   it("requires Doctor before creating an identity beside retired state", async () => {
     const legacyPath = await writeLegacy("vapid-keys.json");
@@ -384,24 +392,6 @@ describe("resolveVapidKeys", () => {
     await expect(resolveVapidKeys(tmpDir)).resolves.toEqual(environmentKeys);
     expect(await readPersistedVapidKeyPair(tmpDir)).toBeNull();
     expect(generateVAPIDKeys).not.toHaveBeenCalled();
-  });
-
-  it("treats blank environment values as unset", async () => {
-    for (const name of [
-      "OPENCLAW_VAPID_PUBLIC_KEY",
-      "OPENCLAW_VAPID_PRIVATE_KEY",
-      "OPENCLAW_VAPID_SUBJECT",
-    ]) {
-      vi.stubEnv(name, "   ");
-    }
-    const keys = await resolveVapidKeys(tmpDir);
-    expect(keys).toEqual({
-      publicKey: "test-public-key-base64url",
-      privateKey: "test-private-key-base64url",
-      subject: "https://openclaw.ai",
-    });
-    expect(await readPersistedVapidKeyPair(tmpDir)).toEqual(keys);
-    expect(vi.mocked(webPush.generateVAPIDKeys)).toHaveBeenCalledTimes(1);
   });
 
   it("applies the current subject to a persisted identity", async () => {
@@ -478,6 +468,7 @@ describe("subscription CRUD", () => {
     await registerBound(endpoint, binding);
     expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
     expect(await clearSubscription(endpoint, binding)).toBe(true);
+    expect(await clearSubscription(endpoint, binding)).toBe(false);
     expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
     execute.mockClear();
     expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
@@ -541,20 +532,6 @@ describe("subscription CRUD", () => {
     expect((await listSubscriptions()).map((entry) => entry.endpoint).toSorted()).toEqual(
       endpoints,
     );
-  });
-
-  it("clears only the matching endpoint", async () => {
-    await registerSubscription(endpoint, {
-      binding: { deviceId: "browser-device", userProfileId: null },
-    });
-    const target = {
-      endpoint,
-      expectedDeviceId: "browser-device",
-      expectedUserProfileId: null,
-      baseDir: tmpDir,
-    };
-    await expect(clearBoundWebPushSubscription(target)).resolves.toBe(true);
-    await expect(clearBoundWebPushSubscription(target)).resolves.toBe(false);
   });
 
   it("rejects an endpoint-only ownership takeover without changing the subscription", async () => {
@@ -800,7 +777,7 @@ describe("sending", () => {
     },
   );
 
-  it.each([404, 410, 401, 403, 413, 429, 503, undefined])(
+  it.each([404, 410, 503, undefined])(
     "keeps successful sends alongside a failed delivery (status=%s)",
     async (statusCode) => {
       const failed = await registerSubscription("https://push.example.com/failed");

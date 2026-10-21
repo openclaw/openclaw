@@ -388,7 +388,6 @@ describe("push APNs send semantics", () => {
     const { registration, auth } = createDirectApnsSendFixture(
       "ios-node-session-error",
       "production",
-      { status: 200, apnsId: "unused", body: "" },
     );
 
     try {
@@ -423,8 +422,6 @@ describe("push APNs send semantics", () => {
   it.each([
     {
       name: "exec approval alert with generic modal-only metadata",
-      nodeId: "ios-node-approval-alert",
-      approvalId: "approval-123",
       invoke: sendApnsExecApprovalAlert,
       kind: "exec.approval.requested",
       pushType: "alert",
@@ -438,8 +435,6 @@ describe("push APNs send semantics", () => {
     },
     {
       name: "silent exec approval cleanup with a capped timeout",
-      nodeId: "ios-node-approval-cleanup",
-      approvalId: "approval-123",
       invoke: sendApnsExecApprovalResolvedWake,
       kind: "exec.approval.resolved",
       pushType: "background",
@@ -449,8 +444,6 @@ describe("push APNs send semantics", () => {
     },
     {
       name: "plugin approval alert with bounded request copy",
-      nodeId: "ios-node-plugin-approval-alert",
-      approvalId: "plugin:approval-123",
       invoke: (params: Parameters<typeof sendApnsExecApprovalAlert>[0]) =>
         sendApnsPluginApprovalAlert({
           ...params,
@@ -469,58 +462,39 @@ describe("push APNs send semantics", () => {
     },
     {
       name: "silent plugin approval cleanup",
-      nodeId: "ios-node-plugin-approval-cleanup",
-      approvalId: "plugin:approval-123",
       invoke: sendApnsPluginApprovalResolvedWake,
       kind: "plugin.approval.resolved",
       pushType: "background",
       aps: { "content-available": 1 },
-      sendResult: { status: 200, apnsId: "apns-plugin-approval-cleanup-id", body: "" },
     },
-  ])(
-    "sends $name",
-    async ({
-      nodeId,
+  ])("sends $name", async ({ invoke, kind, pushType, aps, forbidden, timeoutMs, sendResult }) => {
+    const approvalId = "approval-123";
+    const fixture = createDirectApnsSendFixture("ios-node-approval", "sandbox", sendResult);
+    const result = await invoke({
+      ...fixture,
       approvalId,
-      invoke,
-      kind,
-      pushType,
-      aps,
-      forbidden,
+      gatewayDeviceId: "gateway-device-123",
       timeoutMs,
-      sendResult,
-    }) => {
-      const fixture = createDirectApnsSendFixture(nodeId, "sandbox", sendResult);
-      const result = await invoke({
-        ...fixture,
-        approvalId,
-        gatewayDeviceId: "gateway-device-123",
-        timeoutMs,
-      });
-      expect(fixture.send).toHaveBeenCalledTimes(1);
-      const sent = requireSendRequest(fixture.send);
-      expect(sent.pushType).toBe(pushType);
-      if (timeoutMs !== undefined) {
-        expect(sent.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-      }
-      const payload = requirePayload(sent);
-      expect(payload.aps).toEqual(aps);
-      const metadata = expectOpenClaw(payload, {
-        kind,
-        approvalId,
-        gatewayDeviceId: "gateway-device-123",
-      });
-      expectNoProperties(metadata, forbidden ?? []);
-      expect(result).toMatchObject({ ok: true, transport: "direct" });
-    },
-  );
+    });
+    expect(fixture.send).toHaveBeenCalledTimes(1);
+    const sent = requireSendRequest(fixture.send);
+    expect(sent).toMatchObject({ pushType });
+    if (timeoutMs !== undefined) {
+      expect(sent.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    }
+    const payload = requirePayload(sent);
+    expect(payload.aps).toEqual(aps);
+    const metadata = expectOpenClaw(payload, {
+      kind,
+      approvalId,
+      gatewayDeviceId: "gateway-device-123",
+    });
+    expectNoProperties(metadata, forbidden ?? []);
+    expect(result).toMatchObject({ ok: true, transport: "direct" });
+  });
 
   it("falls back to the generic plugin approval title", async () => {
-    const fixture = createDirectApnsSendFixture("ios-node-plugin-approval-fallback", "sandbox", {
-      status: 200,
-      apnsId: "apns-plugin-approval-fallback-id",
-      body: "",
-    });
+    const fixture = createDirectApnsSendFixture("ios-node-plugin-approval-fallback");
     const { send } = fixture;
 
     await sendApnsPluginApprovalAlert({
