@@ -131,9 +131,9 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
   abort.abort();
   staleItem.click();
   expect(run).toHaveBeenCalledTimes(3);
-  expect(warnings.mock.calls.filter(([message]) => String(message).includes("NO_OWNER_EFFECT"))).toEqual(
-    [],
-  );
+  expect(
+    warnings.mock.calls.filter(([message]) => String(message).includes("NO_OWNER_EFFECT")),
+  ).toEqual([]);
 });
 
 it("shows the active plugin section's ordered children and leaves pinned children standalone", async () => {
