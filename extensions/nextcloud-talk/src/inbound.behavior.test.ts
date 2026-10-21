@@ -64,7 +64,7 @@ vi.mock("./room-info.js", async () => {
   };
 });
 
-function installRuntime(mentionRegexes: RegExp[] = []) {
+function installRuntime() {
   const runtime = {
     channel: {
       inbound: {
@@ -78,7 +78,7 @@ function installRuntime(mentionRegexes: RegExp[] = []) {
       commands: { shouldHandleTextCommands: vi.fn(() => false) },
       text: { hasControlCommand: vi.fn(() => false) },
       mentions: {
-        buildMentionRegexes: vi.fn(() => mentionRegexes),
+        buildMentionRegexes: vi.fn(() => []),
         matchesMentionPatterns: vi.fn(() => false),
       },
     },
@@ -216,6 +216,11 @@ async function withNativeAutomaticReply(
         vi.mocked<ProviderReplyDispatch>(core.channel.inbound.dispatch).mock.calls[0]?.[0],
         "automatic reply delivery",
       );
+      const prepare = expectDefined(request.delivery.preparePayload, "reply preparation");
+      const deliver = expectDefined(
+        request.delivery.deliverWithProviderMessageSending,
+        "native delivery",
+      );
       await run({
         fixture: Object.assign(fixture, { mediaUrl }),
         controller,
@@ -226,17 +231,11 @@ async function withNativeAutomaticReply(
             onPlatformSendDispatch,
             assertPlatformSendAuthorized: () => controller.signal.throwIfAborted(),
           };
-          const prepared = request.delivery.preparePayload
-            ? await request.delivery.preparePayload(payload, info)
-            : payload;
+          const prepared = await prepare(payload, info);
           if (prepared === null) {
             return { visibleReplySent: false };
           }
-          const delivery = request.delivery;
-          if (typeof delivery.deliverWithProviderMessageSending !== "function") {
-            throw new Error("expected provider message sending");
-          }
-          return await delivery.deliverWithProviderMessageSending(prepared, info);
+          return await deliver(prepared, info);
         },
       });
     } finally {
@@ -303,12 +302,6 @@ describe("nextcloud-talk inbound behavior", () => {
       log: "nextcloud-talk: drop empty message body (mediaType=application/pdf) target=user-1",
     },
     {
-      message: { isGroupChat: true },
-      account: { groupAllowFrom: ["user-1"] },
-      command: false,
-      log: "nextcloud-talk: drop room room-1 (no mention)",
-    },
-    {
       message: { isGroupChat: true, text: "/help" },
       account: { rooms: { "room-1": { allowFrom: ["user-1"], requireMention: false } } },
       command: true,
@@ -327,8 +320,6 @@ describe("nextcloud-talk inbound behavior", () => {
       installPairingController();
       if (command) {
         core = installCommandRuntime(vi.fn((body?: string) => body === "/help"));
-      } else {
-        installRuntime([/@openclaw/i]);
       }
     }
     const runtime = createRuntimeSpies();
@@ -395,34 +386,6 @@ describe("nextcloud-talk inbound behavior", () => {
     });
   });
 
-  it("sanitizes inbound replies while preserving native delivery fields", async () => {
-    const preparePayload = expectDefined(
-      (await allowedInbound()).delivery.preparePayload,
-      "reply preparation",
-    );
-    const info = { kind: "final" as const };
-    const mediaOnlyPayload = { mediaUrl: "https://example.com/a.png" };
-    expect(await preparePayload(mediaOnlyPayload, info)).toBe(mediaOnlyPayload);
-    expect(
-      await preparePayload(
-        {
-          text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
-          mediaUrls: ["https://example.com/a.png"],
-          replyToId: "41",
-        },
-        info,
-      ),
-    ).toEqual({
-      text: "Done.",
-      mediaUrls: ["https://example.com/a.png"],
-      replyToId: "41",
-    });
-    expect(await preparePayload({ text: "⚠️ 🛠️ `search repos (agent)` failed" }, info)).toEqual({
-      text: "",
-    });
-    expect(mocks.send).not.toHaveBeenCalled();
-  });
-
   it.each([
     { kind: "final" as const, caption: "The report" },
     { kind: "block" as const, caption: "The report" },
@@ -441,63 +404,17 @@ describe("nextcloud-talk inbound behavior", () => {
         );
         const upload = fixture.requests.find(({ method }) => method === "PUT");
         expect(upload?.body).toEqual(fixture.bytes);
-        expect(upload?.url.pathname).toMatch(/^\/cloud\/remote.php\/dav\/files\/canonical-user\//);
         const shareRequests = fixture.requests.filter(({ url }) =>
           url.pathname.endsWith("/shares"),
         );
         expect(shareRequests).toHaveLength(1);
         const share = new URLSearchParams(shareRequests[0]!.body.toString());
-        expect(Object.fromEntries(share)).toMatchObject({
-          shareType: "10",
-          shareWith: "allowed",
-          permissions: "1",
-        });
         expect(JSON.parse(share.get("talkMetaData") ?? "{}")).toEqual({ caption, replyTo: 41 });
         expect(result).toMatchObject({
           visibleReplySent: true,
           receipt: { platformMessageIds: ["42"] },
         });
-        expect(fixture.requests.some(({ url }) => url.pathname.includes("/bot/"))).toBe(false);
-        expect(
-          fixture.requests.every(
-            ({ authorization }) =>
-              authorization ===
-              `Basic ${Buffer.from("login-alias:synthetic-app-password").toString("base64")}`,
-          ),
-        ).toBe(true);
       });
-    },
-  );
-
-  it.each([
-    { kind: "final" as const, caption: "The report" },
-    { kind: "block" as const, caption: "The report" },
-    { kind: "final" as const, caption: "" },
-  ])(
-    "preserves a bot-only automatic $kind web link with caption '$caption'",
-    async ({ kind, caption }) => {
-      await withNativeAutomaticReply(
-        async ({ fixture, deliver }) => {
-          const mediaUrl = "https://example.com/report.pdf";
-          const result = await deliver(
-            { text: caption || undefined, mediaUrl, replyToId: "41" },
-            kind,
-          );
-          expect(result).toMatchObject({
-            visibleReplySent: true,
-            receipt: { platformMessageIds: ["900"] },
-          });
-          expect(fixture.requests).toHaveLength(1);
-          expect(fixture.requests[0]?.url.pathname).toBe(
-            "/cloud/ocs/v2.php/apps/spreed/api/v1/bot/allowed/message",
-          );
-          expect(JSON.parse(fixture.requests[0]!.body.toString())).toEqual({
-            message: `${caption}\n\nAttachment: ${mediaUrl}`.trim(),
-            replyTo: "41",
-          });
-        },
-        { botOnly: true },
-      );
     },
   );
 

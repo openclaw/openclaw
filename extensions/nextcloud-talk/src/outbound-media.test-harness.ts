@@ -53,6 +53,7 @@ type NextcloudTalkOutboundRequest = {
   body: Buffer;
   authorization?: string;
   ifNoneMatch?: string;
+  headers: IncomingMessage["headers"];
 };
 export type NextcloudTalkOutboundFixture = {
   directory: string;
@@ -95,6 +96,7 @@ export async function withNextcloudTalkOutboundFixture(
         url: new URL(request.url ?? "/", "http://fixture.invalid"),
         body: Buffer.concat(chunks),
         authorization: request.headers.authorization,
+        headers: request.headers,
         ifNoneMatch:
           typeof request.headers["if-none-match"] === "string"
             ? request.headers["if-none-match"]

@@ -51,8 +51,8 @@ vi.mock("./room-info.js", async (importOriginal) => ({
   resolveNextcloudTalkRoomKind: roomKindMock,
 }));
 
-function installInboundRuntime(coreRuntime = createPluginRuntimeMock()) {
-  setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+function installInboundRuntime(core = createPluginRuntimeMock()) {
+  setNextcloudTalkRuntime(core as unknown as PluginRuntime);
   const runtime = createRuntimeEnv();
   const receive = (
     message: Parameters<typeof createMessage>[0],
@@ -65,7 +65,7 @@ function installInboundRuntime(coreRuntime = createPluginRuntimeMock()) {
       config,
       runtime,
     });
-  return { coreRuntime, runtime, receive };
+  return { core, runtime, receive };
 }
 
 function expectNonOutcome(
@@ -79,10 +79,10 @@ function expectNonOutcome(
 }
 
 function mentionRoom(requireMention: boolean) {
-  const coreRuntime = createPluginRuntimeMock();
-  coreRuntime.channel.mentions.buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
-  coreRuntime.channel.mentions.matchesMentionPatterns = vi.fn(() => false);
-  const result = installInboundRuntime(coreRuntime);
+  const core = createPluginRuntimeMock();
+  core.channel.mentions.buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
+  core.channel.mentions.matchesMentionPatterns = vi.fn(() => false);
+  const result = installInboundRuntime(core);
   roomKindMock.mockResolvedValue("group");
   const channelConfig = { rooms: { "room-group": { requireMention } } };
   return {
@@ -102,16 +102,16 @@ function mentionRoom(requireMention: boolean) {
 }
 
 function expectTextContext(
-  coreRuntime: ReturnType<typeof createPluginRuntimeMock>,
+  core: ReturnType<typeof createPluginRuntimeMock>,
   message: Record<string, unknown>,
   noMedia = true,
 ) {
-  expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+  expect(core.channel.inbound.buildContext).toHaveBeenCalledWith(
     expect.objectContaining({ message: expect.objectContaining(message) }),
   );
   if (noMedia) {
     expect(
-      requireFirstMockArg(vi.mocked(coreRuntime.channel.inbound.buildContext), "buildContext"),
+      requireFirstMockArg(vi.mocked(core.channel.inbound.buildContext), "buildContext"),
     ).not.toHaveProperty("media");
   }
 }
@@ -183,8 +183,8 @@ function mockAuthenticatedSource(
   });
 }
 
-function requireBuildContextCall(coreRuntime: ReturnType<typeof createPluginRuntimeMock>) {
-  const call = (coreRuntime.channel.inbound.buildContext as ReturnType<typeof vi.fn>).mock.calls[0];
+function requireBuildContextCall(core: ReturnType<typeof createPluginRuntimeMock>) {
+  const call = (core.channel.inbound.buildContext as ReturnType<typeof vi.fn>).mock.calls[0];
   if (!call) {
     throw new Error("expected Nextcloud Talk inbound context");
   }
@@ -199,12 +199,13 @@ async function stage(fileName: string, fixture: Buffer, contentType: string) {
   const stagedPath = nodePath.join(directory, fileName);
   await fs.writeFile(stagedPath, fixture);
   const saved = { id: fileName, path: stagedPath, size: fixture.byteLength, contentType };
-  const coreRuntime = createPluginRuntimeMock();
-  coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => saved);
-  coreRuntime.channel.media.deleteMediaBuffer = vi.fn(async (id) => {
+  const core = createPluginRuntimeMock();
+  core.channel.media.saveRemoteMedia = vi.fn(async () => saved);
+  core.channel.media.deleteMediaBuffer = vi.fn(async (id) => {
     await fs.rm(nodePath.join(directory, id));
   });
-  setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+  setNextcloudTalkRuntime(core as unknown as PluginRuntime);
+  const runtime = createRuntimeEnv();
   const deliver = (
     mimeType = contentType,
     text = "",
@@ -214,10 +215,10 @@ async function stage(fileName: string, fixture: Buffer, contentType: string) {
       message: createVoiceMessage(fileName, mimeType, text),
       account: createAllowlistedAccount(),
       config: { channels: { "nextcloud-talk": {} } },
-      runtime: createRuntimeEnv(),
+      runtime,
       ...overrides,
     });
-  return { stagedPath, saved, coreRuntime, deliver };
+  return { stagedPath, saved, core, runtime, deliver };
 }
 
 describe("nextcloud-talk inbound media behavior", () => {
@@ -245,15 +246,15 @@ describe("nextcloud-talk inbound media behavior", () => {
   });
 
   it("admits and stages an attachment-only direct message", async () => {
-    const { coreRuntime, receive } = installInboundRuntime();
+    const { core, receive } = installInboundRuntime();
 
     await receive({
       text: "",
       attachment: createAttachment("9006"),
     });
 
-    expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledTimes(1);
-    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+    expect(core.channel.media.saveRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(core.channel.inbound.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
         message: expect.objectContaining({ bodyForAgent: "", rawBody: "" }),
         media: [{ path: "/tmp/test-media.jpg", contentType: "image/jpeg" }],
@@ -261,9 +262,8 @@ describe("nextcloud-talk inbound media behavior", () => {
     );
   });
 
-  it("does not invent a mention for an attachment-only mention-required room", async () => {
-    const { coreRuntime, runtime, account, config } = mentionRoom(true);
-
+  it.each([true, false])("requires mention for attachment-only room: %s", async (required) => {
+    const { core, runtime, account, config } = mentionRoom(required);
     await handleNextcloudTalkInbound({
       message: createMessage({
         roomToken: "room-group",
@@ -276,180 +276,131 @@ describe("nextcloud-talk inbound media behavior", () => {
       config,
       runtime,
     });
-
-    expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
-    expect(coreRuntime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
+    if (required) {
+      expect(core.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+      expect(core.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
+    } else {
+      expect(core.channel.media.saveRemoteMedia).toHaveBeenCalledOnce();
+      expect(core.channel.inbound.buildContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.objectContaining({ bodyForAgent: "", rawBody: "", commandBody: "" }),
+          media: [{ path: "/tmp/test-media.jpg", contentType: "image/jpeg" }],
+        }),
+      );
+      expect(core.channel.inbound.dispatchReply).toHaveBeenCalledOnce();
+    }
   });
 
-  it("stages an attachment-only message in a mention-not-required room", async () => {
-    const { coreRuntime, runtime, account, config } = mentionRoom(false);
-
-    await handleNextcloudTalkInbound({
-      message: createMessage({
-        roomToken: "room-group",
-        roomName: "Ops",
-        isGroupChat: true,
-        text: "",
-        attachment: createAttachment("9013"),
-      }),
-      account,
-      config,
-      runtime,
-    });
-
-    expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledTimes(1);
-    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.objectContaining({ bodyForAgent: "", rawBody: "", commandBody: "" }),
-        media: [{ path: "/tmp/test-media.jpg", contentType: "image/jpeg" }],
+  it.each([
+    ["omitted", undefined, "please inspect this receipt"],
+    ["empty", [], "please inspect this receipt"],
+    ["nonmatching", ["other-user"], "please inspect this receipt"],
+    ["omitted", undefined, ""],
+    ["empty", [], ""],
+    ["nonmatching", ["other-user"], ""],
+  ] as const)("denies %s media allowlist with caption %j", async (_label, mediaAllowFrom, text) => {
+    const { core, runtime, receive } = installInboundRuntime();
+    await receive(
+      { text, attachment: createAttachment("9001", { declaredSizeBytes: 24_576 }) },
+      createAllowlistedAccount({
+        mediaAllowFrom: mediaAllowFrom ? [...mediaAllowFrom] : undefined,
       }),
     );
-    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    ["image", "camera-shot.png", "image/png", 4_096, "inspect this image", "9010"],
-    ["PDF", "receipt.pdf", "application/pdf", 8_192, "inspect this PDF", "9011"],
-  ] as const)(
-    "passes a staged %s path and type into inbound context",
-    async (_kind, fileName, contentType, size, text, fileId) => {
-      const path = `/tmp/${fileName}`;
-      const coreRuntime = createPluginRuntimeMock();
-      vi.mocked(coreRuntime.channel.media.saveRemoteMedia).mockResolvedValueOnce({
-        id: fileName,
-        path,
-        size,
-        contentType,
-      });
-      const { receive } = installInboundRuntime(coreRuntime);
-
-      await receive({
-        text,
-        attachment: createAttachment(fileId, {
-          name: fileName,
-          mimeType: contentType,
-          declaredSizeBytes: size,
-        }),
-      });
-
-      expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledWith(
-        expect.objectContaining({
-          filePathHint: fileName,
-          fallbackContentType: contentType,
-          originalFilename: fileName,
-        }),
-      );
-      expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
-        expect.objectContaining({
-          media: [{ path, contentType }],
-        }),
-      );
-      expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each([
-    { label: "omitted", mediaAllowFrom: undefined },
-    { label: "empty", mediaAllowFrom: [] },
-    { label: "explicit nonmatch", mediaAllowFrom: ["other-user"] },
-  ])(
-    "logs $label media allowlist denial after normal admission without fetching",
-    async ({ mediaAllowFrom }) => {
-      const { coreRuntime, runtime, receive } = installInboundRuntime();
-
-      await receive(
-        {
-          text: "please inspect this receipt",
-          attachment: createAttachment("9001", { declaredSizeBytes: 24_576 }),
-        },
-        createAllowlistedAccount({ mediaAllowFrom }),
-      );
-
-      expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
-      expectNonOutcome(runtime, "media_sender_not_allowlisted");
-      expectTextContext(coreRuntime, {
-        bodyForAgent: "please inspect this receipt",
-        rawBody: "please inspect this receipt",
-      });
+    expect(core.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+    expectNonOutcome(runtime, "media_sender_not_allowlisted");
+    if (text) {
+      expectTextContext(core, { bodyForAgent: text, rawBody: text });
       expect(
         JSON.stringify(
-          requireFirstMockArg(
-            coreRuntime.channel.inbound.buildContext as ReturnType<typeof vi.fn>,
-            "Nextcloud Talk media-denied context",
-          ),
+          requireFirstMockArg(vi.mocked(core.channel.inbound.buildContext), "media-denied context"),
         ),
       ).not.toContain("Nextcloud Talk attachment unavailable");
-      expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
-    },
-  );
+      expect(core.channel.inbound.dispatchReply).toHaveBeenCalledOnce();
+    } else {
+      expect(core.channel.inbound.buildContext).not.toHaveBeenCalled();
+      expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
+      expect(core.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+    }
+  });
 
   it.each([
-    { label: "omitted", mediaAllowFrom: undefined },
-    { label: "empty", mediaAllowFrom: [] },
-    { label: "explicit nonmatch", mediaAllowFrom: ["other-user"] },
+    { reason: "media_hidden_download", attachment: { hideDownload: true } },
+    { reason: "media_missing_metadata", missingMetadata: true },
+    {
+      reason: "media_declared_oversize",
+      attachment: { declaredSizeBytes: 2 * 1024 * 1024 },
+      mediaMaxMb: 1,
+      extra: " sizeBytes=2097152 maxBytes=1048576",
+    },
+    { reason: "media_auth_unavailable", lookupFailure: true },
+    {
+      reason: "media_invalid_link",
+      attachment: { shareUrl: "https://cloud.example.com/f/9004/extra" },
+    },
+    {
+      reason: "media_origin_mismatch",
+      attachment: { shareUrl: "https://files.example.com/s/redacted-share-token" },
+    },
+    {
+      reason: "media_unavailable",
+      error: new MediaFetchError("http_error", "private-token secret-error-detail", {
+        status: 404,
+      }),
+      extra: " status=404",
+    },
+    {
+      reason: "media_fetch_failed",
+      error: new MediaFetchError("fetch_failed", "private-token secret-error-detail"),
+    },
+    { reason: "media_stage_failed", error: new Error("private-token secret-error-detail") },
   ])(
-    "drops attachment-only media when the media allowlist is $label",
-    async ({ mediaAllowFrom }) => {
-      const { coreRuntime, runtime, receive } = installInboundRuntime();
-
+    "preserves caption and bounded diagnostics for $reason",
+    async ({ reason, attachment, missingMetadata, mediaMaxMb, extra, lookupFailure, error }) => {
+      const { core, runtime, receive } = installInboundRuntime();
+      if (lookupFailure) {
+        mediaSourceMock.mockResolvedValueOnce({ ok: false, reason });
+      }
+      if (error) {
+        vi.mocked(core.channel.media.saveRemoteMedia).mockRejectedValueOnce(error);
+      }
+      const text = "inspect this sensitive receipt";
       await receive(
         {
-          text: "",
-          attachment: createAttachment("9001", { declaredSizeBytes: 24_576 }),
+          text,
+          ...(missingMetadata
+            ? { attachmentIssue: "media_missing_metadata" as const }
+            : { attachment: createAttachment("9001", attachment) }),
         },
-        createAllowlistedAccount({ mediaAllowFrom }),
+        createAllowlistedAccount({ mediaMaxMb }),
       );
-
-      expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
-      expectNonOutcome(runtime, "media_sender_not_allowlisted");
-      expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
-      expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
-      expect(coreRuntime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+      if (error) {
+        expect(core.channel.media.saveRemoteMedia).toHaveBeenCalledOnce();
+      } else {
+        expect(core.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+      }
+      expectNonOutcome(runtime, reason, extra);
+      const logs = JSON.stringify(vi.mocked(runtime.log!).mock.calls);
+      for (const secret of ["private-token", "secret-error-detail", text]) {
+        expect(logs).not.toContain(secret);
+      }
+      expectTextContext(core, {
+        ...unavailableText(text),
+        body: expect.stringContaining("[Nextcloud Talk attachment unavailable]"),
+      });
+      expect(core.channel.inbound.dispatchReply).toHaveBeenCalledOnce();
     },
   );
-
-  it("rejects hide-download media before fetching", async () => {
-    const { coreRuntime, runtime, receive } = installInboundRuntime();
-
-    await receive({
-      text: "private receipt",
-      attachment: createAttachment("9002", {
-        name: "private.pdf",
-        hideDownload: true,
-      }),
-    });
-
-    expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
-    expectNonOutcome(runtime, "media_hidden_download");
-    expectTextContext(coreRuntime, {
-      ...unavailableText("private receipt"),
-      body: expect.stringContaining("[Nextcloud Talk attachment unavailable]"),
-    });
-  });
-
-  it("bounds missing attachment metadata before fetching", async () => {
-    const { coreRuntime, runtime, receive } = installInboundRuntime();
-
-    await receive({
-      text: "caption survives",
-      attachmentIssue: "media_missing_metadata",
-    });
-
-    expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
-    expectNonOutcome(runtime, "media_missing_metadata");
-    expectTextContext(coreRuntime, unavailableText("caption survives"));
-  });
 
   it("keeps structured commands decoded when authorized media is unavailable", async () => {
     const hasControlCommand = vi.fn((body?: string) => body === "/status");
-    const coreRuntime = createPluginRuntimeMock({
+    const core = createPluginRuntimeMock({
       channel: {
         text: { hasControlCommand },
         commands: { shouldHandleTextCommands: vi.fn(() => true) },
       },
     });
-    const { receive } = installInboundRuntime(coreRuntime);
+    const { receive } = installInboundRuntime(core);
     const structuredCommand = '{"message":"/status","parameters":[]}';
 
     await receive({
@@ -459,108 +410,26 @@ describe("nextcloud-talk inbound media behavior", () => {
 
     expect(hasControlCommand).toHaveBeenCalledWith("/status", expect.anything());
     expectTextContext(
-      coreRuntime,
+      core,
       { ...unavailableText(structuredCommand), commandBody: "/status" },
       false,
     );
-    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+    expect(core.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects declared oversize media before fetching", async () => {
-    const { coreRuntime, runtime, receive } = installInboundRuntime();
-
-    await receive(
-      {
-        text: "large receipt",
-        attachment: createAttachment("9003", {
-          name: "large.pdf",
-          declaredSizeBytes: 2 * 1024 * 1024,
-        }),
-      },
-      createAllowlistedAccount({ mediaMaxMb: 1 }),
-    );
-
-    expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
-    expectNonOutcome(runtime, "media_declared_oversize", " sizeBytes=2097152 maxBytes=1048576");
-    expectTextContext(coreRuntime, unavailableText("large receipt"));
-  });
-
-  it("fails closed when the configured API account cannot resolve attachment access", async () => {
-    mediaSourceMock.mockResolvedValueOnce({
-      ok: false,
-      reason: "media_auth_unavailable",
-    });
-    const { coreRuntime, runtime, receive } = installInboundRuntime();
-
-    await receive({
-      text: "inspect this",
-      attachment: createAttachment("9004"),
-    });
-
-    expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
-    expectNonOutcome(runtime, "media_auth_unavailable");
-    expectTextContext(coreRuntime, unavailableText("inspect this"), false);
-  });
-
-  it.each([
-    {
-      label: "HTTP unavailable",
-      error: new MediaFetchError(
-        "http_error",
-        "https://cloud.example.com/s/private-token returned secret-error-detail",
-        { status: 404 },
-      ),
-      expectedLog:
-        "nextcloud-talk: inbound media non-outcome reason=media_unavailable account=default message=msg-1 sender=users/user-1 status=404",
-    },
-    {
-      label: "fetch timeout",
-      error: new MediaFetchError(
-        "fetch_failed",
-        "timeout reading https://cloud.example.com/s/private-token secret-error-detail",
-      ),
-      expectedLog:
-        "nextcloud-talk: inbound media non-outcome reason=media_fetch_failed account=default message=msg-1 sender=users/user-1",
-    },
-    {
-      label: "staging failure",
-      error: new Error("stage failed for private-token with secret-error-detail"),
-      expectedLog:
-        "nextcloud-talk: inbound media non-outcome reason=media_stage_failed account=default message=msg-1 sender=users/user-1",
-    },
-  ])("preserves caption and bounded diagnostics for $label", async ({ error, expectedLog }) => {
-    const coreRuntime = createPluginRuntimeMock();
-    vi.mocked(coreRuntime.channel.media.saveRemoteMedia).mockRejectedValueOnce(error);
-    const { runtime, receive } = installInboundRuntime(coreRuntime);
-
-    await receive({
-      text: "inspect this sensitive receipt",
-      attachment: createAttachment("9009"),
-    });
-
-    expect(runtime.log).toHaveBeenCalledWith(expectedLog);
-    const serializedLogs = JSON.stringify(
-      (runtime.log as unknown as ReturnType<typeof vi.fn>).mock.calls,
-    );
-    expect(serializedLogs).not.toContain("private-token");
-    expect(serializedLogs).not.toContain("secret-error-detail");
-    expect(serializedLogs).not.toContain("inspect this sensitive receipt");
-    expectTextContext(coreRuntime, unavailableText("inspect this sensitive receipt"));
-    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
-  });
   it("logs only bounded media diagnostics without sensitive attachment data", async () => {
     const accountId = `account-${"a".repeat(180)}`;
     const messageId = `message-${"m".repeat(180)}`;
     const senderId = "Users/Alice";
-    const coreRuntime = createPluginRuntimeMock();
-    vi.mocked(coreRuntime.channel.media.saveRemoteMedia).mockRejectedValueOnce(
+    const core = createPluginRuntimeMock();
+    vi.mocked(core.channel.media.saveRemoteMedia).mockRejectedValueOnce(
       new Error(
         "file-contents-secret credential-secret query-secret " +
           "https://cloud.example.com/s/private-token/download/private-file-secret.pdf " +
           "raw-payload-caption-secret",
       ),
     );
-    const { runtime, receive } = installInboundRuntime(coreRuntime);
+    const { runtime, receive } = installInboundRuntime(core);
 
     await receive(
       {
@@ -605,60 +474,36 @@ describe("nextcloud-talk inbound media behavior", () => {
   });
 
   it.each([
-    {
-      label: "malformed short file path",
-      shareUrl: "https://cloud.example.com/f/9004/extra",
-      reason: "media_invalid_link",
-    },
-    {
-      label: "configured-origin mismatch",
-      shareUrl: "https://files.example.com/s/redacted-share-token",
-      reason: "media_origin_mismatch",
-    },
-  ])("rejects $label before fetching", async ({ shareUrl, reason }) => {
-    const { coreRuntime, runtime, receive } = installInboundRuntime();
-
-    await receive({
-      text: "inspect this receipt",
-      attachment: createAttachment("9004", { shareUrl }),
-    });
-
-    expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
-    expectNonOutcome(runtime, reason);
-    expectTextContext(coreRuntime, unavailableText("inspect this receipt"));
-  });
-
-  it.each([
     { label: "explicit sender match", mediaAllowFrom: ["user-1"] },
     { label: "normalized sender match", mediaAllowFrom: ["NC-TALK:User-1"] },
     { label: "wildcard", mediaAllowFrom: ["*"] },
   ])(
     "stages admitted media for a $label and passes only returned local facts",
     async ({ mediaAllowFrom }) => {
-      const { coreRuntime, receive } = installInboundRuntime();
+      const { core, receive } = installInboundRuntime();
 
       await receive(
         {
           text: "inspect this receipt",
-          attachment: createAttachment("9005"),
+          attachment: createAttachment("9005", { name: "camera-shot.png", mimeType: "image/png" }),
         },
         createAllowlistedAccount({ mediaAllowFrom }),
       );
 
-      expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledWith(
+      expect(core.channel.media.saveRemoteMedia).toHaveBeenCalledWith(
         expect.objectContaining({
-          url: "https://cloud.example.com/remote.php/dav/files/test-user/Talk/receipt.pdf",
+          url: "https://cloud.example.com/remote.php/dav/files/test-user/Talk/camera-shot.png",
           maxRedirects: 0,
           maxBytes: 20 * 1024 * 1024,
           requestInit: {
             headers: { Authorization: "Basic redacted-test-credential" },
           },
-          filePathHint: "receipt.pdf",
-          fallbackContentType: "application/pdf",
-          originalFilename: "receipt.pdf",
+          filePathHint: "camera-shot.png",
+          fallbackContentType: "image/png",
+          originalFilename: "camera-shot.png",
         }),
       );
-      expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+      expect(core.channel.inbound.buildContext).toHaveBeenCalledWith(
         expect.objectContaining({
           message: expect.objectContaining({
             bodyForAgent: "inspect this receipt",
@@ -669,7 +514,7 @@ describe("nextcloud-talk inbound media behavior", () => {
         }),
       );
       const contextInput = requireFirstMockArg(
-        coreRuntime.channel.inbound.buildContext as ReturnType<typeof vi.fn>,
+        core.channel.inbound.buildContext as ReturnType<typeof vi.fn>,
         "Nextcloud Talk staged-media context",
       );
       const serializedContext = JSON.stringify(contextInput);
@@ -680,10 +525,10 @@ describe("nextcloud-talk inbound media behavior", () => {
   );
 
   it("preserves group routing, policy context, and reply options around staged media", async () => {
-    const coreRuntime = createPluginRuntimeMock();
-    coreRuntime.channel.mentions.buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
-    coreRuntime.channel.mentions.matchesMentionPatterns = vi.fn(() => true);
-    const { receive } = installInboundRuntime(coreRuntime);
+    const core = createPluginRuntimeMock();
+    core.channel.mentions.buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
+    core.channel.mentions.matchesMentionPatterns = vi.fn(() => true);
+    const { receive } = installInboundRuntime(core);
     roomKindMock.mockResolvedValue("group");
     const roomConfig = {
       enabled: true,
@@ -718,7 +563,7 @@ describe("nextcloud-talk inbound media behavior", () => {
       config,
     );
 
-    const contextInput = vi.mocked(coreRuntime.channel.inbound.buildContext).mock.calls[0]![0];
+    const contextInput = vi.mocked(core.channel.inbound.buildContext).mock.calls[0]![0];
     expect(contextInput).toEqual(
       expect.objectContaining({
         channel: "nextcloud-talk",
@@ -746,7 +591,7 @@ describe("nextcloud-talk inbound media behavior", () => {
       }),
     );
 
-    const request = vi.mocked(coreRuntime.channel.inbound.dispatch).mock.calls[0]![0];
+    const request = vi.mocked(core.channel.inbound.dispatch).mock.calls[0]![0];
     expect(request.accountId).toBe("default");
     expect(request.route).toEqual({
       agentId: contextInput.route?.agentId,
@@ -782,12 +627,12 @@ describe("nextcloud-talk inbound media behavior", () => {
       "canonicalizes authenticated $label audio-only MP4 voice media for downstream speech",
       async ({ detectedType }) => {
         const fixture = isoBmffFixture("soun");
-        const { coreRuntime, deliver } = await stage("native-voice.mp3", fixture, detectedType);
+        const { core, deliver } = await stage("native-voice.mp3", fixture, detectedType);
         mockAuthenticatedSource("native-voice.mp3", "voice");
 
         await deliver("audio/mpeg");
 
-        const context = requireBuildContextCall(coreRuntime);
+        const context = requireBuildContextCall(core);
         expect(context.message).toMatchObject({
           rawBody: "",
           commandBody: "",
@@ -802,16 +647,12 @@ describe("nextcloud-talk inbound media behavior", () => {
 
     it("preserves canonical desktop WAV native voice media and modality", async () => {
       const wav = Buffer.from("RIFF\u0000\u0000\u0000\u0000WAVEfmt ", "binary");
-      const { stagedPath, coreRuntime, deliver } = await stage(
-        "native-voice.wav",
-        wav,
-        "audio/wav",
-      );
+      const { stagedPath, core, deliver } = await stage("native-voice.wav", wav, "audio/wav");
       mockAuthenticatedSource("native-voice.wav", "voice");
 
       await deliver();
 
-      expect(requireBuildContextCall(coreRuntime)).toMatchObject({
+      expect(requireBuildContextCall(core)).toMatchObject({
         message: { sourceModality: "voice" },
         media: [{ path: stagedPath, contentType: "audio/wav" }],
       });
@@ -819,16 +660,12 @@ describe("nextcloud-talk inbound media behavior", () => {
 
     it("labels ordinary audio as attachment audio without granting native voice semantics", async () => {
       const fixture = isoBmffFixture("soun");
-      const { stagedPath, coreRuntime, deliver } = await stage(
-        "attached-audio.m4a",
-        fixture,
-        "audio/mp4",
-      );
+      const { stagedPath, core, deliver } = await stage("attached-audio.m4a", fixture, "audio/mp4");
       mockAuthenticatedSource("attached-audio.m4a");
 
       await deliver("audio/mp4", "inspect this recording");
 
-      expect(requireBuildContextCall(coreRuntime)).toMatchObject({
+      expect(requireBuildContextCall(core)).toMatchObject({
         message: {
           rawBody: "inspect this recording",
           bodyForAgent: "inspect this recording",
@@ -841,16 +678,12 @@ describe("nextcloud-talk inbound media behavior", () => {
 
     it("keeps genuine attached video on the video path", async () => {
       const fixture = isoBmffFixture("soun", "vide");
-      const { stagedPath, coreRuntime, deliver } = await stage(
-        "attached-video.mp4",
-        fixture,
-        "video/mp4",
-      );
+      const { stagedPath, core, deliver } = await stage("attached-video.mp4", fixture, "video/mp4");
       mockAuthenticatedSource("attached-video.mp4");
 
       await deliver();
 
-      const context = requireBuildContextCall(coreRuntime);
+      const context = requireBuildContextCall(core);
       expect(context.message).not.toHaveProperty("sourceModality");
       expect(context.media).toEqual([{ path: stagedPath, contentType: "video/mp4" }]);
     });
@@ -859,7 +692,7 @@ describe("nextcloud-talk inbound media behavior", () => {
       { label: "contains a video track", fixture: isoBmffFixture("soun", "vide") },
       { label: "has no verifiable audio track", fixture: isoBmffFixture() },
     ])("fails closed when an authenticated voice message $label", async ({ fixture }) => {
-      const { stagedPath, coreRuntime, deliver } = await stage(
+      const { stagedPath, core, deliver } = await stage(
         "contradictory-voice.mp4",
         fixture,
         "video/mp4",
@@ -868,11 +701,9 @@ describe("nextcloud-talk inbound media behavior", () => {
 
       await deliver();
 
-      expect(coreRuntime.channel.media.deleteMediaBuffer).toHaveBeenCalledWith(
-        "contradictory-voice.mp4",
-      );
+      expect(core.channel.media.deleteMediaBuffer).toHaveBeenCalledWith("contradictory-voice.mp4");
       await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
-      const context = requireBuildContextCall(coreRuntime);
+      const context = requireBuildContextCall(core);
       expect(context).not.toHaveProperty("media");
       expect(context.message).toMatchObject({
         bodyForAgent: "[Nextcloud Talk attachment unavailable]",
@@ -882,14 +713,14 @@ describe("nextcloud-talk inbound media behavior", () => {
 
     it("deletes the canonical media id when cancellation races native voice staging", async () => {
       const fixture = isoBmffFixture("soun");
-      const { stagedPath, saved, coreRuntime, deliver } = await stage(
+      const { stagedPath, saved, core, runtime, deliver } = await stage(
         "cancelled-voice.mp3",
         fixture,
         "video/mp4",
       );
       const abortController = new AbortController();
       const abortReason = new Error("ingress claim retired");
-      coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => {
+      core.channel.media.saveRemoteMedia = vi.fn(async () => {
         abortController.abort(abortReason);
         return saved;
       });
@@ -907,10 +738,20 @@ describe("nextcloud-talk inbound media behavior", () => {
         }),
       ).rejects.toBe(abortReason);
 
-      expect(coreRuntime.channel.media.deleteMediaBuffer).toHaveBeenCalledWith(
-        "cancelled-voice.m4a",
+      expect(mediaSourceMock).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: abortController.signal }),
       );
-      expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
+      expect(core.channel.media.saveRemoteMedia).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestInit: expect.objectContaining({ signal: abortController.signal }),
+        }),
+      );
+      expect(runtime.log).not.toHaveBeenCalledWith(
+        expect.stringContaining("inbound media non-outcome"),
+      );
+      expect(core.channel.media.deleteMediaBuffer).toHaveBeenCalledWith("cancelled-voice.m4a");
+      expect(core.channel.inbound.buildContext).not.toHaveBeenCalled();
+      expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
       await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.stat(stagedPath.replace(/\.mp3$/u, ".m4a"))).rejects.toMatchObject({
         code: "ENOENT",
@@ -919,11 +760,7 @@ describe("nextcloud-talk inbound media behavior", () => {
 
     it("retires the original staged file when voice canonicalization cannot rename it", async () => {
       const fixture = isoBmffFixture("soun");
-      const { stagedPath, coreRuntime, deliver } = await stage(
-        "rename-failure.mp3",
-        fixture,
-        "video/mp4",
-      );
+      const { stagedPath, core, deliver } = await stage("rename-failure.mp3", fixture, "video/mp4");
       const canonicalPath = stagedPath.replace(/\.mp3$/u, ".m4a");
       await fs.mkdir(canonicalPath);
       mockAuthenticatedSource("rename-failure.mp3", "voice");
@@ -932,32 +769,28 @@ describe("nextcloud-talk inbound media behavior", () => {
 
       await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect((await fs.stat(canonicalPath)).isDirectory()).toBe(true);
-      const context = requireBuildContextCall(coreRuntime);
+      const context = requireBuildContextCall(core);
       expect(context).not.toHaveProperty("media");
       expect(context.message.bodyForAgent).toContain("attachment unavailable");
-      expect(coreRuntime.channel.inbound.dispatch).toHaveBeenCalledOnce();
+      expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
     });
 
     it.each(["authority", "context"] as const)(
       "retires staged media when final %s preparation throws",
       async (failurePoint) => {
         const fixture = isoBmffFixture("soun");
-        const { stagedPath, coreRuntime, deliver } = await stage(
-          "pre-dispatch.m4a",
-          fixture,
-          "audio/mp4",
-        );
+        const { stagedPath, core, deliver } = await stage("pre-dispatch.m4a", fixture, "audio/mp4");
         const failure = new Error(`injected ${failurePoint} failure`);
         if (failurePoint === "authority") {
-          const resolveStable = coreRuntime.channel.inbound.ingress.resolveStable;
-          coreRuntime.channel.inbound.ingress.resolveStable = vi.fn(async (params) => {
-            if (vi.mocked(coreRuntime.channel.media.saveRemoteMedia).mock.calls.length > 0) {
+          const resolveStable = core.channel.inbound.ingress.resolveStable;
+          core.channel.inbound.ingress.resolveStable = vi.fn(async (params) => {
+            if (vi.mocked(core.channel.media.saveRemoteMedia).mock.calls.length > 0) {
               throw failure;
             }
             return await resolveStable(params);
           });
         } else {
-          vi.mocked(coreRuntime.channel.inbound.buildContext).mockImplementation(() => {
+          vi.mocked(core.channel.inbound.buildContext).mockImplementation(() => {
             throw failure;
           });
         }
@@ -966,24 +799,20 @@ describe("nextcloud-talk inbound media behavior", () => {
         await expect(deliver()).rejects.toBe(failure);
 
         await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+        expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
       },
     );
 
     it("retires staged media if the sender is revoked after storage", async () => {
       const fixture = isoBmffFixture("soun");
-      const { stagedPath, saved, coreRuntime, deliver } = await stage(
-        "revoked.m4a",
-        fixture,
-        "audio/mp4",
-      );
+      const { stagedPath, saved, core, deliver } = await stage("revoked.m4a", fixture, "audio/mp4");
       const account = createAllowlistedAccount({ dmPolicy: "pairing", allowFrom: [] });
       let pairedSenders = ["user-1"];
       pairingMock.mockReturnValue({
         readStoreForDmPolicy: vi.fn(async () => pairedSenders),
         issueChallenge: vi.fn(),
       });
-      coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => {
+      core.channel.media.saveRemoteMedia = vi.fn(async () => {
         pairedSenders = [];
         return saved;
       });
@@ -992,20 +821,21 @@ describe("nextcloud-talk inbound media behavior", () => {
       await deliver("audio/mp4", "", { account });
 
       await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+      expect(core.channel.inbound.buildContext).not.toHaveBeenCalled();
+      expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
     });
 
     it("does not retire media after handing it to the dispatcher even if dispatch rejects", async () => {
       const fixture = isoBmffFixture("soun");
-      const { stagedPath, coreRuntime, deliver } = await stage("adopted.m4a", fixture, "audio/mp4");
+      const { stagedPath, core, deliver } = await stage("adopted.m4a", fixture, "audio/mp4");
       const failure = new Error("dispatcher failed after accepting the context");
-      vi.mocked(coreRuntime.channel.inbound.dispatch).mockRejectedValueOnce(failure);
+      vi.mocked(core.channel.inbound.dispatch).mockRejectedValueOnce(failure);
       mockAuthenticatedSource("adopted.m4a");
 
       await expect(deliver()).rejects.toBe(failure);
 
       await expect(fs.readFile(stagedPath)).resolves.toEqual(fixture);
-      expect(coreRuntime.channel.media.deleteMediaBuffer).not.toHaveBeenCalled();
+      expect(core.channel.media.deleteMediaBuffer).not.toHaveBeenCalled();
     });
   });
 });

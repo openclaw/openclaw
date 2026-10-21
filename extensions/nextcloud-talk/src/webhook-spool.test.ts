@@ -5,6 +5,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createChannelIngressMonitor } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createFileSharedActivityBody,
@@ -16,6 +17,11 @@ import {
   parseNextcloudTalkFileSharedActivity,
 } from "./webhook-spool-state.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
+
+vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>();
+  return { ...actual, createChannelIngressMonitor: vi.fn(actual.createChannelIngressMonitor) };
+});
 
 type NextcloudTalkIngressQueue = NonNullable<
   Parameters<typeof createNextcloudTalkWebhookSpool>[0]["queue"]
@@ -102,6 +108,7 @@ let queue: NextcloudTalkIngressQueue;
 let stateDir: string;
 const spools: ReturnType<typeof createNextcloudTalkWebhookSpool>[] = [];
 beforeEach(async () => {
+  vi.mocked(createChannelIngressMonitor).mockClear();
   stateDir = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nextcloud-ingress-")),
   );
@@ -180,103 +187,6 @@ describe("Nextcloud Talk durable ingress", () => {
     const spool = startSpool(failingQueue, deliver);
     await expect(spool.receive(createRawEvent())).rejects.toBe(appendError);
     expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("drains other rooms while keeping unadopted same-room deliveries ordered", async () => {
-    const roomADelivery = Promise.withResolvers<void>();
-    const roomAStarted = Promise.withResolvers<void>();
-    const roomBAdopted = Promise.withResolvers<void>();
-    const secondRoomAAdopted = Promise.withResolvers<void>();
-    const delivered: string[] = [];
-    const spool = startSpool(queue, async (message, lifecycle) => {
-      delivered.push(message.messageId);
-      if (message.messageId === "room-a-1") {
-        roomAStarted.resolve();
-        await roomADelivery.promise;
-      }
-      await lifecycle.onAdopted();
-      if (message.messageId === "room-b-1") {
-        roomBAdopted.resolve();
-      } else if (message.messageId === "room-a-2") {
-        secondRoomAAdopted.resolve();
-      }
-    });
-
-    try {
-      await spool.receive(createRawEvent({ messageId: "room-a-1", roomToken: "room-a" }));
-      await roomAStarted.promise;
-      expect(delivered).toEqual(["room-a-1"]);
-
-      await spool.receive(createRawEvent({ messageId: "room-a-2", roomToken: "room-a" }));
-      await spool.receive(createRawEvent({ messageId: "room-b-1", roomToken: "room-b" }));
-
-      await roomBAdopted.promise;
-      expect(delivered).toEqual(["room-a-1", "room-b-1"]);
-      expect(await queue.listPending()).toEqual([
-        expect.objectContaining({ id: "room-a-2", laneKey: "room:room-a" }),
-      ]);
-
-      roomADelivery.resolve();
-      await secondRoomAAdopted.promise;
-      await spool.waitForIdle();
-      expect(delivered).toEqual(["room-a-1", "room-b-1", "room-a-2"]);
-    } finally {
-      roomADelivery.resolve();
-      await spool.stop();
-    }
-  });
-
-  it("caps active room deliveries after durable adoption across repeated pumps", async () => {
-    const deliveryGate = Promise.withResolvers<void>();
-    const capacityAdopted = Promise.withResolvers<void>();
-    const allAdopted = Promise.withResolvers<void>();
-    let adoptedDeliveries = 0;
-    let activeDeliveries = 0;
-    let maxActiveDeliveries = 0;
-    const deliver = vi.fn(async (_message, lifecycle) => {
-      activeDeliveries += 1;
-      maxActiveDeliveries = Math.max(maxActiveDeliveries, activeDeliveries);
-      await lifecycle.onAdopted();
-      adoptedDeliveries += 1;
-      if (adoptedDeliveries === 32) {
-        capacityAdopted.resolve();
-      } else if (adoptedDeliveries === 33) {
-        allAdopted.resolve();
-      }
-      try {
-        await deliveryGate.promise;
-      } finally {
-        activeDeliveries -= 1;
-      }
-    });
-    const spool = startSpool(queue, deliver);
-
-    try {
-      for (let index = 0; index < 33; index += 1) {
-        await spool.receive(
-          createRawEvent({
-            messageId: `room-delivery-${index}`,
-            roomToken: `room-${index}`,
-          }),
-        );
-      }
-
-      await capacityAdopted.promise;
-      expect(deliver).toHaveBeenCalledTimes(32);
-      expect(maxActiveDeliveries).toBe(32);
-      expect(await queue.listPending()).toEqual([
-        expect.objectContaining({ id: "room-delivery-32", laneKey: "room:room-32" }),
-      ]);
-
-      deliveryGate.resolve();
-      await allAdopted.promise;
-      await spool.waitForIdle();
-      expect(deliver).toHaveBeenCalledTimes(33);
-      expect(maxActiveDeliveries).toBe(32);
-    } finally {
-      deliveryGate.resolve();
-      await spool.stop();
-    }
   });
 
   it("keeps the claim until adoption finalization reaches its terminal callback", async () => {
@@ -360,6 +270,12 @@ describe("Nextcloud Talk durable ingress", () => {
     async ({ body, lane, message }) => {
       const deferred = deferredDelivery();
       const interrupted = startSpool(queue, deferred);
+      // Scheduling and capacity races belong to the shared ingress monitor suite.
+      expect(createChannelIngressMonitor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          drain: expect.objectContaining({ startLimit: 32, adoptionStallTimeoutMs: 5_000 }),
+        }),
+      );
       await receive(interrupted, body);
       await expectClaim(message.messageId, lane, body);
       expectDelivered(deferred, message);

@@ -4,6 +4,7 @@ import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import type { RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { createAccount } from "./inbound-media.test-fixtures.js";
@@ -174,6 +175,101 @@ describe("nextcloud talk room info", () => {
     const account = { ...lookupAccount(`invalid-${baseUrl}`), baseUrl };
     await expect(lookup(account)).resolves.toBeUndefined();
     await expect(lookup(account)).resolves.toBeUndefined();
+    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+});
+
+const { probeNextcloudTalkBotResponseFeature } = await import("./bot-preflight.js");
+
+const apiConfig = {
+  apiUser: "admin",
+  apiPassword: "app-password",
+  webhookPublicUrl: "https://bot.example.com/nextcloud-talk-webhook",
+};
+
+function probe(config: NonNullable<Parameters<typeof createAccount>[0]>["config"] = apiConfig) {
+  return probeNextcloudTalkBotResponseFeature({ account: createAccount({ config }) });
+}
+
+function mockBotResponse(response: Response): void {
+  fetchWithSsrFGuard.mockResolvedValueOnce({
+    response,
+    release: async () => {},
+    finalUrl: "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/admin",
+  });
+}
+
+function mockBotAdmin(features: number | string): void {
+  const bot = { id: 7, name: "OpenClaw", url: apiConfig.webhookPublicUrl, features };
+  mockBotResponse(Response.json({ ocs: { data: [bot] } }));
+}
+
+describe("probeNextcloudTalkBotResponseFeature", () => {
+  it.each([
+    [11, true, 11],
+    [9, false, 9],
+    ["2response", false, undefined],
+  ] as const)("checks response feature %s", async (input, ok, features) => {
+    mockBotAdmin(input);
+    await expect(probe()).resolves.toEqual({
+      ok,
+      code: ok ? "ok" : "missing_response_feature",
+      botId: "7",
+      botName: "OpenClaw",
+      features,
+      message: ok
+        ? 'Nextcloud Talk bot "OpenClaw" has the response feature.'
+        : `Nextcloud Talk bot "OpenClaw" (7) is missing the response feature${features === undefined ? "" : ` (features=${features})`}; outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction 7 1 or reinstall the bot with --feature response.`,
+    });
+  });
+
+  it("reports malformed bot admin JSON with a stable channel error", async () => {
+    mockBotResponse(
+      new Response("{ nope", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(probe()).resolves.toEqual({
+      ok: false,
+      code: "request_failed",
+      message:
+        "Nextcloud Talk bot response feature check failed: Nextcloud Talk bot response feature check failed: malformed JSON response",
+    });
+  });
+
+  it("bounds bot admin error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedTextResponse(
+      `${"nextcloud bot admin failure ".repeat(1024)}tail`,
+      {
+        status: 503,
+        headers: { "content-type": "text/plain" },
+      },
+    );
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    mockBotResponse(tracked.response);
+
+    await expect(probe()).resolves.toEqual({
+      ok: false,
+      code: "api_error",
+      status: 503,
+      message: "Nextcloud Talk bot response feature check failed (503)",
+    });
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(tracked.wasCanceled()).toBe(true);
+  });
+
+  it("skips when API credentials are absent", async () => {
+    await expect(
+      probe({ ...apiConfig, apiUser: undefined, apiPassword: undefined }),
+    ).resolves.toEqual({
+      ok: true,
+      skipped: true,
+      code: "missing_api_credentials",
+      message:
+        "Nextcloud Talk bot response feature check skipped: apiUser/apiPassword are not configured.",
+    });
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 });

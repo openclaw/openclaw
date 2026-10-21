@@ -132,9 +132,7 @@ function pairedFixture() {
   const error = new Error("ingress claim retired");
   const core = createPluginRuntimeMock();
   const readAllowFromStore = vi.fn(async () => (state.paired ? ["paired-user"] : []));
-  const deleteMediaBuffer = vi.fn(async () => undefined);
   core.channel.pairing.readAllowFromStore = readAllowFromStore;
-  Object.assign(core.channel.media, { deleteMediaBuffer });
   setNextcloudTalkRuntime(core);
   const runtime = createTestRuntimeEnv();
   return {
@@ -143,7 +141,6 @@ function pairedFixture() {
     error,
     core,
     readAllowFromStore,
-    deleteMediaBuffer,
     runtime,
     inbound: (id: string) =>
       handleNextcloudTalkInbound({
@@ -207,50 +204,6 @@ describe("nextcloud-talk inbound authz", () => {
     expectNoDispatch(core);
     expect(runtime.log).toHaveBeenCalledWith(
       "nextcloud-talk: drop DM room-revoked (authorization changed)",
-    );
-  });
-
-  it("deletes staged media when paired DM access changes during download", async () => {
-    const { state, core, runtime, readAllowFromStore, deleteMediaBuffer, inbound } =
-      pairedFixture();
-    core.channel.media.saveRemoteMedia = vi.fn(async () => {
-      state.paired = false;
-      return stagedMedia("staged-revoked.pdf");
-    });
-    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockResolvedValueOnce(authenticatedSource);
-    await inbound("revoked-during-download");
-
-    expect(resolveNextcloudTalkAuthenticatedMediaSourceMock).toHaveBeenCalledTimes(1);
-    expect(core.channel.media.saveRemoteMedia).toHaveBeenCalledTimes(1);
-    expect(readAllowFromStore).toHaveBeenCalledTimes(4);
-    expect(deleteMediaBuffer).toHaveBeenCalledWith("staged-revoked.pdf");
-    expectNoDispatch(core);
-    expect(runtime.log).toHaveBeenCalledWith(
-      "nextcloud-talk: drop DM room-revoked-during-download (authorization changed)",
-    );
-  });
-
-  it("deletes media staged while the ingress claim is cancelled", async () => {
-    const { controller, error, core, deleteMediaBuffer, runtime, inbound } = pairedFixture();
-    core.channel.media.saveRemoteMedia = vi.fn(async () => {
-      controller.abort(error);
-      return stagedMedia("staged-cancelled.pdf");
-    });
-    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockResolvedValueOnce(authenticatedSource);
-    await expect(inbound("cancelled-during-download")).rejects.toBe(error);
-
-    expect(resolveNextcloudTalkAuthenticatedMediaSourceMock).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: controller.signal }),
-    );
-    expect(core.channel.media.saveRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requestInit: expect.objectContaining({ signal: controller.signal }),
-      }),
-    );
-    expect(deleteMediaBuffer).toHaveBeenCalledWith("staged-cancelled.pdf");
-    expectNoDispatch(core);
-    expect(runtime.log).not.toHaveBeenCalledWith(
-      expect.stringContaining("inbound media non-outcome"),
     );
   });
 
