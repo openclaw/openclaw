@@ -181,6 +181,29 @@ function runtimeClient(sessionKey: string) {
   } as never;
 }
 
+function roleConfig(
+  name: string,
+  others: "view" | "write",
+  agents: "*" | string[] = "*",
+  sandbox?: "required",
+) {
+  const cfg = getRuntimeConfig();
+  const role = {
+    sessions: { others },
+    agents,
+    scopes: ["operator.read" as const, "operator.write" as const],
+    ...(sandbox ? { sandbox } : {}),
+  };
+  return {
+    ...cfg,
+    gateway: { ...cfg.gateway, roles: { default: name, definitions: { [name]: role } } },
+  };
+}
+
+function expectRecoveryError(result: unknown, error: Record<string, unknown>) {
+  expect(result).toMatchObject({ ok: false, error });
+}
+
 function expectUnrecovered(source: ReturnType<typeof loadSessionEntry>) {
   expect(source?.archivedAt).toBeUndefined();
   expect(source?.mainRestartRecovery?.tombstone?.recoveredSessionId).toBeUndefined();
@@ -465,13 +488,10 @@ test.each(["rejected", "unavailable", "stale-result"] as const)(
       context: placementContext(() => placement, failure === "unavailable" ? undefined : reclaim),
     });
 
-    expect(recovered).toMatchObject({
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        retryable: true,
-        message: expect.stringContaining("sessions.reclaim"),
-      },
+    expectRecoveryError(recovered, {
+      code: "UNAVAILABLE",
+      retryable: true,
+      message: expect.stringContaining("sessions.reclaim"),
     });
     expectUnrecovered(fixture.source());
     expect(reclaim).toHaveBeenCalledTimes(failure === "unavailable" ? 0 : 1);
@@ -489,9 +509,10 @@ test.each(["requested", "failed"] as const)(
       context: placementContext(() => placement, reclaim),
     });
 
-    expect(recovered).toMatchObject({
-      ok: false,
-      error: { code: "UNAVAILABLE", retryable: true, message: expect.stringContaining(state) },
+    expectRecoveryError(recovered, {
+      code: "UNAVAILABLE",
+      retryable: true,
+      message: expect.stringContaining(state),
     });
     expect(reclaim).not.toHaveBeenCalled();
     expect(fixture.source()?.archivedAt).toBeUndefined();
@@ -524,9 +545,9 @@ test.each(["session-id", "lifecycle-revision"] as const)(
       context: placementContext(() => placement, reclaim),
     });
 
-    expect(recovered).toMatchObject({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: expect.stringContaining("changed") },
+    expectRecoveryError(recovered, {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("changed"),
     });
     expectUnrecovered(fixture.source());
   },
@@ -669,23 +690,7 @@ test.each([
       storePath,
       overrides: { ...sourceStamp, visibility: "shared" },
     });
-    const cfg = {
-      ...getRuntimeConfig(),
-      gateway: {
-        ...getRuntimeConfig().gateway,
-        roles: {
-          default: "requester",
-          definitions: {
-            requester: {
-              sessions: { others: "write" as const },
-              agents: "*" as const,
-              scopes: ["operator.read" as const, "operator.write" as const],
-              ...(required ? { sandbox: "required" as const } : {}),
-            },
-          },
-        },
-      },
-    };
+    const cfg = roleConfig("requester", "write", "*", required ? "required" : undefined);
     const currentConfig =
       identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg;
     const request = {
@@ -765,22 +770,7 @@ test("sessions.recover cannot create a successor on an agent excluded by the cal
     createdActor: { type: "human", source: "profile", id: profile.id },
   });
   using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-  const cfg = {
-    ...getRuntimeConfig(),
-    gateway: {
-      ...getRuntimeConfig().gateway,
-      roles: {
-        default: "guest",
-        definitions: {
-          guest: {
-            sessions: { others: "view" as const },
-            agents: ["guest-only"],
-            scopes: ["operator.read" as const, "operator.write" as const],
-          },
-        },
-      },
-    },
-  };
+  const cfg = roleConfig("guest", "view", ["guest-only"]);
   const client = {
     connect: { role: "operator", scopes: ["operator.write"] },
     authenticatedUserProfile: {
@@ -793,9 +783,9 @@ test("sessions.recover cannot create a successor on an agent excluded by the cal
 
   const recovered = await fixture.recover({ client, context: { getRuntimeConfig: () => cfg } });
 
-  expect(recovered).toMatchObject({
-    ok: false,
-    error: { code: "FORBIDDEN", message: expect.stringContaining('agent "main"') },
+  expectRecoveryError(recovered, {
+    code: "FORBIDDEN",
+    message: expect.stringContaining('agent "main"'),
   });
   expect(fixture.source()).toMatchObject({
     mainRestartRecovery: {
@@ -897,9 +887,9 @@ test("sessions.recover revalidates runtime authority after its cloud placement r
     },
   });
 
-  expect(recovered).toMatchObject({
-    ok: false,
-    error: { code: "INVALID_REQUEST", message: "agent runtime authority is no longer active" },
+  expectRecoveryError(recovered, {
+    code: "INVALID_REQUEST",
+    message: "agent runtime authority is no longer active",
   });
   expect(reclaim).toHaveBeenCalledOnce();
   expectUnrecovered(fixture.source());

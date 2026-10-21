@@ -94,9 +94,19 @@ test.each([undefined, "session-a"])(
 );
 
 test.each([
-  { name: "session id", expected: { expectedSessionId: "sess-before-reset" } },
-  { name: "lifecycle revision", expected: { expectedLifecycleRevision: "revision-before-reset" } },
-])("sessions.patch rejects a replaced $name before archive side effects", async ({ expected }) => {
+  {
+    name: "session id before archive",
+    patch: { archived: true, expectedSessionId: "sess-before-reset" },
+  },
+  {
+    name: "lifecycle revision before archive",
+    patch: { archived: true, expectedLifecycleRevision: "revision-before-reset" },
+  },
+  {
+    name: "lifecycle revision for metadata",
+    patch: { label: "Stale agent request", expectedLifecycleRevision: "revision-before-reset" },
+  },
+])("sessions.patch rejects a replaced $name without side effects", async ({ patch }) => {
   const sessionKey = "agent:main:subagent:active-replacement";
   const replacementSessionId = "sess-active-after-reset";
   const { read } = await seedSession(
@@ -110,7 +120,7 @@ test.each([
 
   const result = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true, ...expected },
+    { key: sessionKey, ...patch },
     { context },
   );
 
@@ -186,26 +196,6 @@ test("sessions.patch rejects a session replaced before restore reaches the SQLit
     await Promise.allSettled([writer, restored]);
     preflight.mockRestore();
   }
-});
-
-test("sessions.patch rejects stale lifecycle revisions for metadata mutations", async () => {
-  const sessionKey = "agent:main:subagent:metadata-identity";
-  const { read, patch } = await seedSession(
-    sessionKey,
-    { lifecycleRevision: "revision-after-reset" },
-    "sess-after-reset",
-  );
-  const before = read();
-  expect(
-    await patch({
-      label: "Stale agent request",
-      expectedLifecycleRevision: "revision-before-reset",
-    }),
-  ).toMatchObject({
-    ok: false,
-    error: { message: `Session ${sessionKey} changed before patch. Retry.` },
-  });
-  expect(read()).toEqual(before);
 });
 
 test("sessions.patch preserves concurrent tool restrictions from a stale replacement", async () => {

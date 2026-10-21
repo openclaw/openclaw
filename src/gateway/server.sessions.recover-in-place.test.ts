@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { SessionsRecoverResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -165,9 +166,7 @@ async function recover(
     hasCurrentClientAuthority?: () => boolean;
   } = {},
 ) {
-  let response:
-    | { ok: boolean; payload?: SessionsRecoverResult; error?: { code?: string; message?: string } }
-    | undefined;
+  const respond = vi.fn<Parameters<typeof handleGatewayRequest>[0]["respond"]>();
   await handleGatewayRequest({
     req: {
       type: "req",
@@ -185,14 +184,10 @@ async function recover(
     client: options.client ?? current.operator,
     context: current.context,
     isWebchatConnect: () => false,
-    respond: (ok, payload, error) => {
-      response = { ok, payload: payload as SessionsRecoverResult | undefined, error };
-    },
+    respond,
   });
-  if (!response) {
-    throw new Error("sessions.recover did not respond");
-  }
-  return response;
+  const [ok, payload, error] = expectDefined(respond.mock.lastCall, "sessions.recover response");
+  return { ok, payload: payload as SessionsRecoverResult | undefined, error };
 }
 
 function expectContinuation(

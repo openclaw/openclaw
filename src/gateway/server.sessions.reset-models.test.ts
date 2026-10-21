@@ -262,7 +262,11 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   for (const entry of [reset.payload?.entry, stored]) {
     expect(entry).not.toHaveProperty("sessionFile");
     expect(entry).not.toHaveProperty("agentHarnessId");
-    expect(entry).toMatchObject({ ...ownedChildMetadata, ...provenance });
+    expect(entry).toMatchObject({
+      sessionId: "sess-owned-child",
+      ...ownedChildMetadata,
+      ...provenance,
+    });
     // Spawned children retain CLI bindings and reseed receipts (fa56682b3ced).
     expect(entry?.cliSessionIds).toEqual(ownedChildMetadata.cliSessionIds);
     expect(entry?.cliSessionBindings).toEqual(ownedChildMetadata.cliSessionBindings);

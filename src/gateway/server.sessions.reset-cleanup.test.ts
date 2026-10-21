@@ -504,18 +504,14 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
   const admissionLease = await admitMainWork(storePath, () => {
     interrupted = true;
   });
-  const { promise: mutationReleased, resolve: releaseMutation } = createDeferred();
-  const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
+  const mutation = createRequestGate();
   const blocker = runSessionMutation({
     scope: storePath,
     identities: ["agent:main:main", "sess-main"],
-    run: async () => {
-      markMutationStarted();
-      await mutationReleased;
-    },
+    run: () => mutation.pause(),
   });
   try {
-    await mutationStarted;
+    await mutation.entered;
     const { performGatewaySessionReset } = await import("./session-reset-service.js");
     const assertCurrent = vi.fn(() => {
       throw new Error("stale lifecycle");
@@ -537,7 +533,7 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
     expect(assertCurrent).not.toHaveBeenCalled();
     expect(interrupted).toBe(false);
   } finally {
-    releaseMutation();
+    mutation.release();
     admissionLease.release();
     await blocker;
   }
@@ -580,12 +576,8 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
       [sessionKey]: sessionStoreEntry("sess-archive-race", { lifecycleRevision: "before-reset" }),
     },
   });
-  const { promise: hookReleased, resolve: releaseHook } = createDeferred();
-  const { promise: hookStarted, resolve: markHookStarted } = createDeferred();
-  sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
-    markHookStarted();
-    await hookReleased;
-  });
+  const hook = createRequestGate();
+  sessionHookMocks.triggerInternalHook.mockImplementationOnce(() => hook.pause());
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
   const resetPromise = performGatewaySessionReset({
     key: sessionKey,
@@ -593,14 +585,14 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
     commandSource: "gateway:sessions.reset",
     workerPlacementContext: {},
   });
-  await hookStarted;
+  await hook.entered;
   const archivePromise = directSessionReq("sessions.patch", {
     key: sessionKey,
     archived: true,
     expectedSessionId: "sess-archive-race",
     expectedLifecycleRevision: "before-reset",
   });
-  releaseHook();
+  hook.release();
 
   const [reset, archived] = await Promise.all([resetPromise, archivePromise]);
   expect(reset.ok).toBe(true);
@@ -617,19 +609,13 @@ test("sessions.patch rejects an archive queued behind a rotated session", async 
   });
   // Resolve the lazy handler/config imports before queue ordering begins.
   await Promise.all([getSessionsHandlers(), getGatewayConfigModule()]);
-  let releaseBlocker = () => {};
-  const { promise: blockerStarted, resolve: markBlockerStarted } = createDeferred();
+  const gate = createRequestGate();
   const blocker = runExclusiveSessionLifecycle({
     scope: storePath,
     identities: [sessionKey, initialSessionId],
-    run: async () => {
-      markBlockerStarted();
-      await new Promise<void>((resolve) => {
-        releaseBlocker = resolve;
-      });
-    },
+    run: () => gate.pause(),
   });
-  await blockerStarted;
+  await gate.entered;
   const queuedReset = runSessionMutation({
     scope: storePath,
     identities: [sessionKey, initialSessionId],
@@ -652,7 +638,7 @@ test("sessions.patch rejects an archive queued behind a rotated session", async 
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
-  releaseBlocker();
+  gate.release();
 
   const archived = (await Promise.all([blocker, queuedReset, archivePromise]))[2];
   expectArchiveRejected(storePath, sessionKey, replacementSessionId, archived);

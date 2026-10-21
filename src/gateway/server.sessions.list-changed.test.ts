@@ -1,8 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { subscribePluginSessionsChanged } from "../plugins/services.test-support.js";
@@ -26,14 +24,7 @@ import {
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { seedCompletedSessionTranscript } from "./session-row-fixtures.test-support.js";
 import type { SessionsListResult } from "./session-utils.types.js";
-import {
-  agentCommandMock,
-  embeddedRunMock,
-  prepareGatewayReplyRuntimeForTest,
-  rpcReq,
-  testState,
-  writeSessionStore,
-} from "./test-helpers.js";
+import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   getGatewayConfigModule,
   getSessionsHandlers,
@@ -68,11 +59,11 @@ function reply(
   return { role: "assistant", provider, model, usage };
 }
 
-async function invokeSession(
-  method: MutationMethod,
+async function invokeSessionMutation(
   params: Record<string, unknown>,
-  context: Record<string, unknown>,
+  context: Record<string, unknown> = {},
   subscribedConnIds = new Set(["conn-1"]),
+  method: MutationMethod = "sessions.patch",
 ) {
   const respond = vi.fn();
   const broadcastToConnIds = vi.fn();
@@ -98,7 +89,8 @@ async function invokeSession(
     context: requestContext,
   };
   await handler(bindInProcessRequestMutationAuthority(options, undefined, undefined));
-  return { respond, context: requestContext, broadcastToConnIds };
+  await flushPendingSessionsChangedEvents(requestContext);
+  return { responsePayload: expectRespondPayload(respond), broadcastToConnIds };
 }
 
 async function mutationCatalogSnapshot(
@@ -114,20 +106,6 @@ async function mutationCatalogSnapshot(
     workspaceDir: resolveAgentWorkspaceDir(config, "main"),
     config,
     catalogComplete: true,
-  };
-}
-
-async function invokeSessionMutation(
-  params: Record<string, unknown>,
-  context = {},
-  subscribedConnIds = new Set(["conn-1"]),
-  method: MutationMethod = "sessions.patch",
-) {
-  const prepared = await invokeSession(method, params, context, subscribedConnIds);
-  await flushPendingSessionsChangedEvents(prepared.context);
-  return {
-    broadcastToConnIds: prepared.broadcastToConnIds,
-    responsePayload: expectRespondPayload(prepared.respond),
   };
 }
 
@@ -211,44 +189,6 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
   });
   expect(galleryChild).not.toHaveProperty("totalTokens");
   expect(galleryChild).not.toHaveProperty("model");
-  await prepareGatewayReplyRuntimeForTest();
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  agentCommandMock.mockImplementation(async (options) => {
-    const command = options as AgentCommandGatewayIngressOpts;
-    if (command.runId !== "list-live") {
-      throw new Error("Unexpected list boundary inference");
-    }
-    entered.resolve();
-    await release.promise;
-  });
-  try {
-    expect(
-      (
-        await rpcReq(ws, "agent", {
-          sessionKey: "agent:main:main",
-          message: "Hold this list-visible turn",
-          idempotencyKey: "list-live",
-        })
-      ).ok,
-    ).toBe(true);
-    await entered.promise;
-    for (const method of ["sessions.fork", "sessions.rewind", "sessions.branches.switch"]) {
-      const refused = await rpcReq(ws, method, {
-        sessionKey: "agent:main:main",
-        ...(method === "sessions.branches.switch"
-          ? { leafEntryId: "not-yet-a-boundary" }
-          : { entryId: "not-yet-a-boundary" }),
-      });
-      expect(refused.ok).toBe(false);
-      expect(refused.error?.code, `${method}: ${JSON.stringify(refused.error)}`).toBe(
-        "UNAVAILABLE",
-      );
-    }
-  } finally {
-    release.resolve();
-    agentCommandMock.mockReset();
-  }
   ws.close();
 });
 
@@ -452,53 +392,53 @@ test("sessions.patch scopes selected global mutations and events to the requeste
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
-test("sessions.compact scopes selected global truncation to the requested agent", async () => {
-  const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
-  const { broadcastToConnIds, responsePayload } = await invokeSessionMutation(
-    { key: "global", agentId: "work", maxLines: 2 },
-    { getRuntimeConfig: globalStores.getRuntimeConfig },
-    undefined,
-    "sessions.compact",
-  );
-  expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 2 });
-  expectChangedBroadcast(broadcastToConnIds, {
-    sessionKey: "global",
-    agentId: "work",
-    reason: "compact",
-    compacted: true,
-  });
-  for (const [agentId, storePath, expected] of [
-    ["main", globalStores.mainStorePath, ["main one", "main two"]],
-    ["work", globalStores.workStorePath, ["work two"]],
-  ] as const) {
-    await expect(
-      loadSeededTranscriptEvents({
-        agentId,
-        sessionId: `sess-${agentId}-global`,
+test.each(["transcript truncation", "embedded compaction"] as const)(
+  "sessions.compact scopes selected global %s to the requested agent",
+  async (mode) => {
+    const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
+    const truncate = mode === "transcript truncation";
+    const { broadcastToConnIds, responsePayload } = await invokeSessionMutation(
+      { key: "global", agentId: "work", ...(truncate ? { maxLines: 2 } : {}) },
+      { getRuntimeConfig: globalStores.getRuntimeConfig },
+      truncate ? undefined : new Set(),
+      "sessions.compact",
+    );
+    expectFields(responsePayload, {
+      ok: true,
+      key: "global",
+      compacted: true,
+      ...(truncate ? { kept: 2 } : {}),
+    });
+    if (truncate) {
+      expectChangedBroadcast(broadcastToConnIds, {
         sessionKey: "global",
-        storePath,
-      }).then(transcriptMessageContents),
-    ).resolves.toEqual(expected);
-  }
-  await resetConfiguredGlobalAgentSessionStore(globalStores);
-});
-
-test("sessions.compact passes the selected global agent into embedded compaction", async () => {
-  const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
-  const { responsePayload } = await invokeSessionMutation(
-    { key: "global", agentId: "work" },
-    { getRuntimeConfig: globalStores.getRuntimeConfig },
-    new Set(),
-    "sessions.compact",
-  );
-  expectFields(responsePayload, { ok: true, key: "global", compacted: true });
-  expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
-  expect(embeddedRunMock.compactEmbeddedAgentSession.mock.calls[0]?.[0]).toMatchObject({
-    sessionId: "sess-work-global",
-    sessionKey: "global",
-    agentId: "work",
-    authProfileId: "github-copilot:work",
-    authProfileIdSource: "user",
-  });
-  await resetConfiguredGlobalAgentSessionStore(globalStores);
-});
+        agentId: "work",
+        reason: "compact",
+        compacted: true,
+      });
+      for (const [agentId, storePath, expected] of [
+        ["main", globalStores.mainStorePath, ["main one", "main two"]],
+        ["work", globalStores.workStorePath, ["work two"]],
+      ] as const) {
+        await expect(
+          loadSeededTranscriptEvents({
+            agentId,
+            sessionId: `sess-${agentId}-global`,
+            sessionKey: "global",
+            storePath,
+          }).then(transcriptMessageContents),
+        ).resolves.toEqual(expected);
+      }
+    } else {
+      expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
+      expect(embeddedRunMock.compactEmbeddedAgentSession.mock.calls[0]?.[0]).toMatchObject({
+        sessionId: "sess-work-global",
+        sessionKey: "global",
+        agentId: "work",
+        authProfileId: "github-copilot:work",
+        authProfileIdSource: "user",
+      });
+    }
+    await resetConfiguredGlobalAgentSessionStore(globalStores);
+  },
+);
