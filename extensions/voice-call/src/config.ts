@@ -569,11 +569,6 @@ export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig
   const resolved = {
     ...config,
     tunnel: { ...config.tunnel },
-    realtime: {
-      ...config.realtime,
-      streamPath:
-        config.realtime.streamPath ?? defaultRealtimeStreamPathForServePath(config.serve.path),
-    },
   };
 
   if (resolved.provider === "telnyx") {

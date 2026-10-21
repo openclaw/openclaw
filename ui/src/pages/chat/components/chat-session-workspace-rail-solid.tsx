@@ -5,6 +5,7 @@ import { shortestFileLabels } from "../../../components/file-kind.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import "../../../components/tooltip.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatByteSize } from "../../../lib/format.ts";
@@ -74,7 +75,13 @@ function RailRow(props: {
         </span>
         <span class="chat-workspace-rail__file-main">
           <openclaw-tooltip prop:content={props.tooltip ?? props.name}>
-            <span class="chat-workspace-rail__file-name">{props.name}</span>
+            <span
+              ref={createTextOverflow(() => props.name)}
+              class="chat-workspace-rail__file-name"
+              title={props.name}
+            >
+              {props.name}
+            </span>
           </openclaw-tooltip>
           <Show when={props.meta}>
             <span class="chat-workspace-rail__file-meta">{props.meta}</span>
@@ -271,7 +278,14 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
     <aside class="chat-workspace-rail" aria-label={t("chat.workspaceFiles.label")}>
       <Show when={props.workspace.list?.root}>
         <openclaw-tooltip prop:content={props.workspace.list?.root}>
-          <div class="chat-workspace-rail__path">{props.workspace.list?.root}</div>
+          <div class="chat-workspace-rail__path">
+            <span
+              ref={createTextOverflow(() => props.workspace.list?.root)}
+              title={props.workspace.list?.root ?? undefined}
+            >
+              {props.workspace.list?.root}
+            </span>
+          </div>
         </openclaw-tooltip>
       </Show>
       <div class="chat-workspace-rail__toolbar">

@@ -1,4 +1,4 @@
-import { stableStringify } from "@openclaw/normalization-core";
+import { isDeepStrictEqual } from "node:util";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
@@ -54,9 +54,9 @@ export type ResponsesContinuationStatus =
 function jsonValuesEqual(left: object, right: object): boolean {
   // Normalize the left side first to preserve serialization errors and toJSON ordering.
   const leftJson = JSON.stringify(left) as string;
-  const normalizedLeft = stableStringify(JSON.parse(leftJson));
+  const normalizedLeft: unknown = JSON.parse(leftJson);
   const rightJson = JSON.stringify(right) as string;
-  return leftJson === rightJson || normalizedLeft === stableStringify(JSON.parse(rightJson));
+  return leftJson === rightJson || isDeepStrictEqual(normalizedLeft, JSON.parse(rightJson));
 }
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {

@@ -207,22 +207,13 @@ describe("gateway silent scope-upgrade reconnect", () => {
     const loaded = loadDeviceIdentity("silent-reconnect-race");
     const approveOriginal = devicePairingApprovalModule.approveDevicePairing;
     let simulatedRace = false;
-    const forwardApprove = async (requestId: string, optionsOrBaseDir?: unknown) => {
-      if (optionsOrBaseDir && typeof optionsOrBaseDir === "object") {
-        return await approveOriginal(
-          requestId,
-          optionsOrBaseDir as { callerScopes?: readonly string[] },
-        );
-      }
-      return await approveOriginal(requestId);
-    };
     vi.spyOn(devicePairingApprovalModule, "approveDevicePairing").mockImplementation(
-      async (requestId: string, optionsOrBaseDir?: unknown) => {
+      async (...args: Parameters<typeof approveOriginal>) => {
         if (simulatedRace) {
-          return await forwardApprove(requestId, optionsOrBaseDir);
+          return await approveOriginal(...args);
         }
         simulatedRace = true;
-        await forwardApprove(requestId, optionsOrBaseDir);
+        await approveOriginal(...args);
         return null;
       },
     );

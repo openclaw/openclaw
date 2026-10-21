@@ -49,7 +49,6 @@ export const page = definePage({
   }),
   component: () =>
     import("./plugin-page.tsx").then((module) => ({
-      header: true,
       renderSolid: (
         props: SolidRouteProps<PluginTabRef & { params: Readonly<Record<string, string>> }>,
       ) =>

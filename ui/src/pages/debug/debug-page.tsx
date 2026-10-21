@@ -464,7 +464,7 @@ export function DebugPage() {
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header">
           <div>
-            <div class="page-title">{t("tabs.debug")}</div>
+            <h1 class="page-title">{t("tabs.debug")}</h1>
           </div>
         </section>
       </ShellLayoutBoundary>

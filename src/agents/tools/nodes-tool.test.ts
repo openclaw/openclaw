@@ -40,6 +40,10 @@ const nodesCameraMocks = vi.hoisted(() => ({
     facing ? `/tmp/camera-${facing}.mp4` : "/tmp/camera.mp4",
   ),
   writeCameraPayloadToFile: vi.fn(async () => undefined),
+  // This suite isolates tool orchestration; rollback ownership has real-filesystem coverage.
+  withCameraArtifactBatch: vi.fn(
+    async (paths: string[], publish: (paths: string[]) => Promise<unknown>) => publish(paths),
+  ),
 }));
 
 const screenMocks = vi.hoisted(() => ({

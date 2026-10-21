@@ -1,4 +1,16 @@
-import { For, createEffect, createSignal, onCleanup } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  createStore,
+  isPending,
+  latest,
+  onSettled,
+} from "solid-js";
 import type {
   PluginCredentialDescriptor,
   PluginCredentialInspection,
@@ -50,11 +62,24 @@ export type PluginCredentialEditorProps = {
 };
 
 export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
+  // Keep revealed values clearable; async computations retain completion, never the payload.
   const [inspection, setInspection] = createSignal<PluginCredentialInspection | null>(null);
-  const [loading, setLoading] = createSignal(false);
+  const [inspectionRequest, setInspectionRequest] = createSignal<{ promise: Promise<void> }>();
+  const inspectionComplete = createMemo(
+    () => inspectionRequest()?.promise.then(() => null) ?? null,
+  );
+  const inspectionPending = createMemo<boolean>(
+    () =>
+      inspectionRequest()?.promise.then(
+        () => false,
+        () => false,
+      ) ?? false,
+    { loadingValue: true },
+  );
+  const loading = () => isPending(inspectionPending) || latest(inspectionPending);
   const [error, setError] = createSignal("");
   const [dialogOpen, setDialogOpen] = createSignal(false);
-  const [reference, setReference] = createSignal<SecretRef>({
+  const [reference, setReference] = createStore<SecretRef>({
     source: "env",
     provider: "default",
     id: "",
@@ -119,13 +144,13 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         setLiteral("");
         setDialogOpen(false);
         referenceSubmitted = false;
-        setReference({ source: "env", provider: "default", id: "" });
+        setReference(() => ({ source: "env", provider: "default", id: "" }));
       }
       if (sourceChanged || next.epoch !== previous?.epoch) {
         pending = undefined;
         setOperation(undefined);
       }
-      setLoading(false);
+      setInspectionRequest(undefined);
       setInspection((current) =>
         sourceChanged ? null : current?.kind === "literal" ? { kind: "literal" } : current,
       );
@@ -139,51 +164,50 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     },
   );
 
-  onCleanup(() => {
+  onSettled(() => () => {
     active = false;
     generation++;
     referenceSubmitted = false;
     referenceTrigger = null;
   });
 
-  async function inspect(reveal = false) {
+  function inspect(reveal = false) {
     const { gateway, pluginId, baseHash, canInspect } = props.context;
     const capturedConnection = gateway.capture();
     const requestGeneration = ++generation;
     connection = capturedConnection;
     setError("");
-    setLoading(false);
+    setInspectionRequest(undefined);
     if (!canInspect || !capturedConnection || !baseHash) {
-      return;
+      return Promise.resolve();
     }
-    setLoading(true);
-    try {
-      const result = await capturedConnection.client.request<PluginsCredentialsInspectResult>(
-        "plugins.credentials.inspect",
-        { pluginId, path: props.field.path, baseHash, ...(reveal ? { reveal: true } : {}) },
-      );
-      if (requestGeneration !== generation || !gateway.isCurrent(capturedConnection)) {
-        return;
+    const completed = (async () => {
+      try {
+        const result = await capturedConnection.client.request<PluginsCredentialsInspectResult>(
+          "plugins.credentials.inspect",
+          { pluginId, path: props.field.path, baseHash, ...(reveal ? { reveal: true } : {}) },
+        );
+        if (requestGeneration !== generation || !gateway.isCurrent(capturedConnection)) {
+          return;
+        }
+        if (result.baseHash !== props.context.baseHash) {
+          throw new Error(t("pluginsPage.credentials.stale"));
+        }
+        setInspection(
+          result.credential.kind === "literal" && !reveal ? { kind: "literal" } : result.credential,
+        );
+        setRevealed(
+          reveal && result.credential.kind === "literal" && result.credential.value !== undefined,
+        );
+      } catch (cause) {
+        if (requestGeneration === generation && gateway.isCurrent(capturedConnection)) {
+          throw cause;
+        }
       }
-      if (result.baseHash !== props.context.baseHash) {
-        setError(t("pluginsPage.credentials.stale"));
-        return;
-      }
-      setInspection(
-        result.credential.kind === "literal" && !reveal ? { kind: "literal" } : result.credential,
-      );
-      setRevealed(
-        reveal && result.credential.kind === "literal" && result.credential.value !== undefined,
-      );
-    } catch (cause) {
-      if (requestGeneration === generation && gateway.isCurrent(capturedConnection)) {
-        setError(formatUiError(cause));
-      }
-    } finally {
-      if (requestGeneration === generation && gateway.isCurrent(capturedConnection)) {
-        setLoading(false);
-      }
-    }
+    })();
+    setInspectionRequest({ promise: completed });
+    // The boundary presents admitted failures; callers only await inspection settlement.
+    return completed.catch(() => undefined);
   }
 
   function toggleReveal() {
@@ -203,7 +227,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     referenceTrigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     referenceSubmitted = false;
     const value = inspection();
-    setReference(
+    setReference(() =>
       value?.kind === "reference"
         ? { ...value.ref }
         : { source: "env", provider: "default", id: "" },
@@ -227,6 +251,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       return;
     }
     setError("");
+    setInspectionRequest(undefined);
     return commitOrDiscardReference(value);
   }
 
@@ -315,6 +340,45 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     cancelling() ||
     !inspection();
   const failure = () => error() || props.context.saveError;
+  const Failure = (feedback: { message: string; dialog?: boolean }) => (
+    <>
+      {feedback.dialog ? (
+        <p role="alert" class="callout danger">
+          {feedback.message}
+        </p>
+      ) : (
+        <div role="alert">
+          {feedback.message}
+          <button
+            class="btn btn--sm"
+            onClick={() => void (literal() ? patch(literal()) : inspect())}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      )}
+    </>
+  );
+  const Feedback = (feedback: { dialog?: boolean }) => (
+    <Show
+      when={failure()}
+      fallback={
+        <Show when={inspectionRequest()} keyed>
+          {(request) => (
+            <Errored
+              fallback={(cause) => (
+                <Failure message={formatUiError(cause())} dialog={feedback.dialog} />
+              )}
+            >
+              <Loading on={request}>{inspectionComplete()}</Loading>
+            </Errored>
+          )}
+        </Show>
+      }
+    >
+      {(message) => <Failure message={message()} dialog={feedback.dialog} />}
+    </Show>
+  );
   const configured = () =>
     props.field.value === REDACTED_SENTINEL || inspection()?.kind === "literal";
   const isReference = () => inspection()?.kind === "reference" || isSecretRef(props.field.value);
@@ -454,17 +518,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         {inspection()?.kind === "invalid" ? (
           <span role="alert">{t("pluginsPage.credentials.invalidStored")}</span>
         ) : null}
-        {!dialogOpen() && failure() ? (
-          <div role="alert">
-            {failure()}
-            <button
-              class="btn btn--sm"
-              onClick={() => void (literal() ? patch(literal()) : inspect())}
-            >
-              {t("common.retry")}
-            </button>
-          </div>
-        ) : null}
+        {!dialogOpen() ? <Feedback /> : null}
         {dialogOpen() ? (
           <openclaw-modal-dialog
             prop:initialFocus={() =>
@@ -493,20 +547,22 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                       autofocus
                       class="settings-input"
                       aria-label={t("pluginsPage.credentials.source")}
-                      value={reference().source}
+                      value={reference.source}
                       disabled={blocked()}
                       onChange={(event) => {
                         const source = credentialSources.find(
                           (entry) => entry === event.currentTarget.value,
                         );
                         if (source) {
-                          setReference({ ...reference(), source });
+                          setReference((draft) => {
+                            draft.source = source;
+                          });
                         }
                       }}
                     >
                       <For each={credentialSources}>
                         {(source) => (
-                          <option value={source} selected={source === reference().source}>
+                          <option value={source} selected={source === reference.source}>
                             {t(`pluginsPage.credentials.sources.${source}`)}
                           </option>
                         )}
@@ -519,26 +575,24 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                         {t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}
                         <input
                           class="settings-input"
-                          value={reference()[key]}
+                          value={reference[key]}
                           disabled={blocked()}
                           onInput={(event) =>
-                            setReference({ ...reference(), [key]: event.currentTarget.value })
+                            setReference((draft) => {
+                              draft[key] = event.currentTarget.value;
+                            })
                           }
                         />
                       </label>
                     )}
                   </For>
-                  <p class="muted">{t(`pluginsPage.credentials.help.${reference().source}`)}</p>
+                  <p class="muted">{t(`pluginsPage.credentials.help.${reference.source}`)}</p>
                   {unresolved() ? (
                     <p class="callout warn">{t("pluginsPage.credentials.unresolved")}</p>
                   ) : null}
                 </>
               )}
-              {failure() ? (
-                <p role="alert" class="callout danger">
-                  {failure()}
-                </p>
-              ) : null}
+              <Feedback dialog />
               <openclaw-modal-actions>
                 <button
                   class="btn"
@@ -555,8 +609,14 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                 {!environment() ? (
                   <button
                     class="btn primary"
-                    disabled={blocked() || !isValidSecretRef(reference())}
-                    onClick={() => void patch({ ...reference() })}
+                    disabled={blocked() || !isValidSecretRef(reference)}
+                    onClick={() =>
+                      void patch({
+                        source: reference.source,
+                        provider: reference.provider,
+                        id: reference.id,
+                      })
+                    }
                   >
                     {saving() ? t("common.saving") : t("common.save")}
                   </button>

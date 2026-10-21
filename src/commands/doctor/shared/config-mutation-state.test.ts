@@ -4,6 +4,14 @@ import {
   retainLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "../../../config/legacy.default-agent-owner.js";
+import {
+  createConfigResolutionFacts,
+  getResolvedConfigEnvSecretRef,
+  resolveConfigSecretRef,
+  setConfigResolutionFacts,
+} from "../../../config/resolution-facts.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { retainHeartbeatMigrationInput } from "./config-migration-result.js";
 import { applyDoctorConfigMutation } from "./config-mutation-state.js";
 import type { DoctorConfigMutationState } from "./config-mutation-state.js";
 
@@ -26,6 +34,58 @@ function enabledSignalMutation() {
 }
 
 describe("doctor config mutation state", () => {
+  it.each([false, true])(
+    "retains credential sources through repair preparation (repair=%s)",
+    async (shouldRepair) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            accounts: {
+              env: { botToken: "synthetic-token" },
+              literal: { botToken: "synthetic-token" },
+              escaped: { botToken: "${DOCTOR_TOKEN}" },
+              replaced: { botToken: "old-token" },
+              removed: { botToken: "old-token" },
+            },
+          },
+        },
+      };
+      const path = (account: string) => `channels.telegram.accounts.${account}.botToken`;
+      setConfigResolutionFacts(
+        cfg,
+        createConfigResolutionFacts(
+          [],
+          new Map(),
+          "default",
+          new Map(["env", "replaced", "removed"].map((account) => [path(account), "DOCTOR_TOKEN"])),
+        ),
+      );
+      const candidate = await retainHeartbeatMigrationInput(cfg, undefined);
+      expect(getResolvedConfigEnvSecretRef(candidate, path("env"))?.id).toBe("DOCTOR_TOKEN");
+      const rewritten = structuredClone(candidate);
+      rewritten.channels!.telegram!.accounts!.replaced = { botToken: "new-token" };
+      rewritten.channels!.telegram!.accounts!.moved = { botToken: "old-token" };
+      delete rewritten.channels!.telegram!.accounts!.removed;
+      const next = applyDoctorConfigMutation({
+        state: { cfg, candidate, pendingChanges: false, fixHints: [] },
+        mutation: { config: rewritten, changes: ["repair credentials"] },
+        shouldRepair,
+      });
+      const refs = ["env", "literal", "escaped", "replaced", "removed", "moved"].map(
+        (account) =>
+          resolveConfigSecretRef({
+            config: next.candidate,
+            path: path(account),
+            value: next.candidate.channels?.telegram?.accounts?.[account]?.botToken,
+            includeResolved: true,
+          })?.id ?? null,
+      );
+      expect(refs).toEqual(["DOCTOR_TOKEN", null, null, null, null, null]);
+      expect(next.cfg).toBe(shouldRepair ? rewritten : cfg);
+      expect(getResolvedConfigEnvSecretRef(cfg, path("replaced"))?.id).toBe("DOCTOR_TOKEN");
+    },
+  );
+
   it("updates candidate and fix hints in preview mode", () => {
     const next = applyDoctorConfigMutation({
       state: emptyMutationState(),
