@@ -29,46 +29,34 @@ export function createSqliteWorkerBackend(
       case "groupedRollback": {
         const kernel = createWorkboardSqliteKernel(input.dbPath, undefined, input.postgresInput);
         const { sibling, target, fault } = operation;
+        const { id, updatedAt } = target;
         try {
           kernel.cards.register(sibling.id, { version: 1, card: sibling });
-          kernel.cards.register(target.id, { version: 1, card: target });
+          kernel.cards.register(id, { version: 1, card: target });
           const invalidComment = { ...sibling.metadata!.comments![0]! };
           if (fault === "binding") {
-            Object.defineProperty(invalidComment, "body", {
-              value: { invalid: "native binding" },
-            });
+            Object.defineProperty(invalidComment, "body", { value: { invalid: true } });
           }
+          const comments = Array.from({ length: 65 }, (_, i) => ({
+            id: `replacement-${i}`,
+            body: "Row",
+            createdAt: 1000,
+          }));
+          comments.push(invalidComment);
           const next = {
             ...target,
             title: "Claimed",
-            updatedAt: target.updatedAt + 1,
+            updatedAt: updatedAt + 1,
             labels: ["changed"],
-            metadata: {
-              ...target.metadata,
-              comments: [
-                ...Array.from({ length: 65 }, (_, index) => ({
-                  id: `replacement-comment-${index}`,
-                  body: `Row ${index}`,
-                  createdAt: 1000,
-                })),
-                invalidComment,
-              ],
-            },
+            metadata: { ...target.metadata, comments },
           };
           let failure;
           try {
             kernel.withWriteTransaction(() => {
-              kernel.boards.register("grouped", {
-                version: 1,
-                board: { id: "grouped", createdAt: 1, updatedAt: 2 },
-              });
-              kernel.cards.claimIfOwnerAvailable(
-                target.id,
-                { version: 1, card: next },
-                target.updatedAt,
-                "slot-owner",
-                3000,
-              );
+              const board = { id: "grouped", createdAt: 1, updatedAt: 2 };
+              kernel.boards.register(board.id, { version: 1, board });
+              const replacement = { version: 1, card: next };
+              kernel.cards.claimIfOwnerAvailable(id, replacement, updatedAt, "slot-owner", 3000);
             });
           } catch (error) {
             failure = encodeWorkboardSqliteFailure(error);
@@ -76,7 +64,7 @@ export function createSqliteWorkerBackend(
           return {
             failure,
             board: kernel.boards.lookup("grouped"),
-            target: kernel.cards.lookup(target.id),
+            target: kernel.cards.lookup(id),
             sibling: kernel.cards.lookup(sibling.id),
           };
         } finally {
