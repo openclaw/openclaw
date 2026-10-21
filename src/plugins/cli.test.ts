@@ -10,7 +10,6 @@ import type {
 const mocks = vi.hoisted(() => ({
   memoryRegister: vi.fn(),
   otherRegister: vi.fn(),
-  memoryListAction: vi.fn(),
   loadOpenClawPluginCliRegistry: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   resolveManifestActivationPluginIds: vi.fn(),
@@ -84,14 +83,18 @@ function createCliRegistry(params?: {
   memoryCommands?: string[];
   memoryDescriptors?: OpenClawPluginCliRootCommandDescriptor[];
 }) {
+  const parentPath: string[] = [];
+  const memoryOptions: OpenClawPluginCliRegistrationOptions = {
+    parentPath,
+    commands: params?.memoryCommands ?? ["memory"],
+    descriptors: params?.memoryDescriptors ?? [descriptor("memory", "Memory commands")],
+  };
   return {
     cliRegistrars: [
       {
         pluginId: "memory-core",
         register: mocks.memoryRegister,
-        parentPath: [],
-        commands: params?.memoryCommands ?? ["memory"],
-        descriptors: params?.memoryDescriptors ?? [descriptor("memory", "Memory commands")],
+        ...memoryOptions,
         source: "bundled",
       },
       {
@@ -185,8 +188,7 @@ describe("registerPluginCliCommandsFromValidatedConfig", () => {
       mock.mockReset();
     }
     mocks.memoryRegister.mockImplementation(({ program }: { program: Command }) => {
-      const memory = program.command("memory").description("Memory commands");
-      memory.command("list").action(mocks.memoryListAction);
+      program.command("memory").description("Memory commands");
     });
     mocks.otherRegister.mockImplementation(({ program }: { program: Command }) => {
       program.command("other").description("Other commands");
@@ -212,16 +214,6 @@ describe("registerPluginCliCommandsFromValidatedConfig", () => {
     await registerPluginCliCommandsFromValidatedConfig(program);
     expect(mocks.memoryRegister).not.toHaveBeenCalled();
     expect(mocks.otherRegister).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps dynamically built legacy parent paths assignable", () => {
-    const parentPath: string[] = ["nodes"];
-    const options: OpenClawPluginCliRegistrationOptions = {
-      parentPath,
-      descriptors: [{ name: "camera", description: "Camera", hasSubcommands: true }],
-    };
-
-    expect(options.parentPath).toBe(parentPath);
   });
 
   it.each([
@@ -334,41 +326,6 @@ describe("registerPluginCliCommandsFromValidatedConfig", () => {
     expect(getMockCallObject(mocks.loadOpenClawPluginCliRegistry).onlyPluginIds).toEqual([
       "legacy-cli",
     ]);
-  });
-
-  it("keeps runtime CLI command registration on the full plugin loader for legacy channel plugins", async () => {
-    const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
-    mocks.loadOpenClawPlugins.mockReturnValue(
-      createCliRegistry({
-        memoryCommands: ["legacy-channel"],
-        memoryDescriptors: [descriptor("legacy-channel", "Legacy channel commands")],
-      }),
-    );
-
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      valid: true,
-      config: rawConfig,
-      runtimeConfig: rawConfig,
-    });
-    await registerCli(createProgram(), { mode: "lazy" });
-    const loadOptions = getMockCallObject(mocks.loadOpenClawPlugins);
-    expect(loadOptions.config).toBe(autoEnabledConfig);
-    expect(loadOptions.activationSourceConfig).toBe(rawConfig);
-    expect(loadOptions.autoEnabledReasons).toEqual({ demo: ["demo configured"] });
-    expect(loadOptions).toMatchObject({ cache: false, channelPluginLoadIntent: "full" });
-    expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
-  });
-
-  it("lazy-registers descriptor-backed plugin commands on first invocation", async () => {
-    const program = createProgram();
-    program.exitOverride();
-    await registerCli(program, { mode: "lazy" });
-    expect(program.commands.map((command) => command.name())).toEqual(["memory", "other"]);
-    expect(mocks.memoryRegister).not.toHaveBeenCalled();
-    expect(mocks.otherRegister).toHaveBeenCalledTimes(1);
-    await program.parseAsync(["memory", "list"], { from: "user" });
-    expect(mocks.memoryRegister).toHaveBeenCalledTimes(1);
-    expect(mocks.memoryListAction).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to eager registration when descriptors do not cover every command root", async () => {

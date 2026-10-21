@@ -1,4 +1,3 @@
-// Covers plugin conversation binding persistence and lookup behavior.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -79,10 +78,9 @@ const sessionBindingState = vi.hoisted(() => {
     reset() {
       records.clear();
       nextId = 1;
-      this.bind.mockClear();
-      this.resolveByConversation.mockClear();
-      this.touch.mockClear();
-      this.unbind.mockClear();
+      for (const mock of [this.bind, this.resolveByConversation, this.touch, this.unbind]) {
+        mock.mockClear();
+      }
     },
     setRecord(record: SessionBindingRecord) {
       records.set(toKey(record.conversation), record);
@@ -183,6 +181,26 @@ const discordRequest = (id: string, account = "isolated") =>
   createDiscordCodexBindRequest(id, "Bind Codex.", account);
 const pendingDiscord = (id: string, account = "isolated") =>
   requestPendingBinding(discordRequest(id, account));
+const pendingTelegram = (topic: string, root?: string) =>
+  requestPendingBinding(
+    createTelegramCodexBindRequest(`-10099:topic:${topic}`, topic, "Bind Codex.", root),
+  );
+const controlUiConversation = {
+  channel: "webchat",
+  accountId: "default",
+  conversationId: "agent:main:adopted",
+};
+const bindControlUi = (
+  data: Record<string, unknown>,
+  afterBind?: Parameters<typeof bindPluginSessionConversation>[0]["afterBind"],
+) =>
+  bindPluginSessionConversation({
+    pluginId: "codex",
+    pluginRoot: "/codex",
+    sessionKey: controlUiConversation.conversationId,
+    binding: { data },
+    afterBind,
+  });
 
 async function approveBindingRequest(approvalId: string, decision: PluginBindingDecision) {
   return await resolvePluginConversationBindingApproval({
@@ -259,11 +277,7 @@ describe("plugin conversation binding approvals", () => {
       bindingId: "binding-prior",
       targetSessionKey: "agent:main:adopted",
       targetKind: "session",
-      conversation: {
-        channel: "webchat",
-        accountId: "default",
-        conversationId: "agent:main:adopted",
-      },
+      conversation: controlUiConversation,
       status: "active",
       boundAt: 1,
       metadata: { pluginBindingOwner: "plugin", pluginId: "codex", pluginRoot: "/codex" },
@@ -271,14 +285,8 @@ describe("plugin conversation binding approvals", () => {
     sessionBindingState.setRecord(previous);
 
     await expect(
-      bindPluginSessionConversation({
-        pluginId: "codex",
-        pluginRoot: "/codex",
-        sessionKey: "agent:main:adopted",
-        binding: { data: { kind: "codex-cli-node-session", version: 1 } },
-        afterBind: async () => {
-          throw new Error("publication failed");
-        },
+      bindControlUi({ kind: "codex-cli-node-session", version: 1 }, async () => {
+        throw new Error("publication failed");
       }),
     ).rejects.toThrow("publication failed");
 
@@ -298,34 +306,22 @@ describe("plugin conversation binding approvals", () => {
 
   it("does not roll back a newer successful Control UI binding", async () => {
     const firstPublication = createDeferred();
-    const first = bindPluginSessionConversation({
-      pluginId: "codex",
-      pluginRoot: "/codex",
-      sessionKey: "agent:main:adopted",
-      binding: { data: { kind: "remote-runtime", generation: 1 } },
-      afterBind: async () => await firstPublication.promise,
-    });
+    const first = bindControlUi(
+      { kind: "remote-runtime", generation: 1 },
+      async () => await firstPublication.promise,
+    );
     await vi.waitFor(() => expect(sessionBindingState.bind).toHaveBeenCalledOnce());
 
     // A concurrent Continue for the same session queues behind the failing
     // attempt instead of interleaving with its rollback.
-    const second = bindPluginSessionConversation({
-      pluginId: "codex",
-      pluginRoot: "/codex",
-      sessionKey: "agent:main:adopted",
-      binding: { data: { kind: "remote-runtime", generation: 2 } },
-    });
+    const second = bindControlUi({ kind: "remote-runtime", generation: 2 });
     firstPublication.reject(new Error("older publication failed"));
     await expect(first).rejects.toThrow("older publication failed");
     await second;
 
-    expect(
-      sessionBindingState.resolveByConversation({
-        channel: "webchat",
-        accountId: "default",
-        conversationId: "agent:main:adopted",
-      }),
-    ).toMatchObject({ metadata: { data: { kind: "remote-runtime", generation: 2 } } });
+    expect(sessionBindingState.resolveByConversation(controlUiConversation)).toMatchObject({
+      metadata: { data: { kind: "remote-runtime", generation: 2 } },
+    });
     // Only the failed attempt rolled back its own binding.
     expect(sessionBindingState.unbind).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "plugin-session-bind-rollback" }),
@@ -333,13 +329,12 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("keeps Telegram bind approval callback_data within Telegram's limit", () => {
-    const allowOnce = buildPluginBindingApprovalCustomId("abcdefghijkl", "allow-once");
     const allowAlways = buildPluginBindingApprovalCustomId("abcdefghijkl", "allow-always");
-    const deny = buildPluginBindingApprovalCustomId("abcdefghijkl", "deny");
-
-    expect(Buffer.byteLength(allowOnce, "utf8")).toBeLessThanOrEqual(64);
-    expect(Buffer.byteLength(allowAlways, "utf8")).toBeLessThanOrEqual(64);
-    expect(Buffer.byteLength(deny, "utf8")).toBeLessThanOrEqual(64);
+    for (const decision of ["allow-once", "allow-always", "deny"] as const) {
+      expect(
+        Buffer.byteLength(buildPluginBindingApprovalCustomId("abcdefghijkl", decision), "utf8"),
+      ).toBeLessThanOrEqual(64);
+    }
     expect(parsePluginBindingApprovalCustomId(allowAlways)).toEqual({
       approvalId: "abcdefghijkl",
       decision: "allow-always",
@@ -442,24 +437,19 @@ describe("plugin conversation binding approvals", () => {
     );
 
     // Concurrent publication must retain both cached grants.
-    const firstFollowUp = await requestPluginConversationBinding(
-      discordRequest("channel:race-1b", "default"),
-    );
-    const secondFollowUp = await requestPluginConversationBinding(
-      discordRequest("channel:race-2b", "work"),
-    );
-
-    expect([firstFollowUp.status, secondFollowUp.status]).toEqual(["bound", "bound"]);
+    for (const account of ["default", "work"]) {
+      expect(
+        (
+          await requestPluginConversationBinding(
+            discordRequest(`channel:race-${account}b`, account),
+          )
+        ).status,
+      ).toBe("bound");
+    }
   });
 
   it("expires pending approvals when their Gateway lifecycle closes", async () => {
-    const request = await requestPendingBinding(
-      createTelegramCodexBindRequest(
-        "-10099:topic:79",
-        "79",
-        "Bind this conversation to Codex thread ghi.",
-      ),
-    );
+    const request = await pendingTelegram("79");
 
     await drainGlobalSingletonLifecycleState();
 
@@ -469,32 +459,16 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("does not share persistent approvals across plugin roots even with the same plugin id", async () => {
-    const request = await requestPendingBinding(
-      createTelegramCodexBindRequest(
-        "-10099:topic:77",
-        "77",
-        "Bind this conversation to Codex thread abc.",
-      ),
-    );
+    const request = await pendingTelegram("77");
     await approveBindingRequest(request.approvalId, "allow-always");
 
-    await requestPendingBinding(
-      createTelegramCodexBindRequest(
-        "-10099:topic:78",
-        "78",
-        "Bind this conversation to Codex thread def.",
-        "/plugins/codex-b",
-      ),
-    );
+    await pendingTelegram("78", "/plugins/codex-b");
   });
 
   it("does not wait for an approved bind callback before returning", async () => {
     const pluginRoot = "/plugins/callback-slow-approve";
     const requestInput = {
-      ...createDiscordCodexBindRequest(
-        "channel:slow-approve",
-        "Bind this conversation to Codex thread slow-approve.",
-      ),
+      ...discordRequest("channel:slow-approve"),
       pluginRoot,
     };
     const callbackGate = createDeferred();
