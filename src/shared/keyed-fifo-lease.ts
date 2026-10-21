@@ -1,9 +1,8 @@
-import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 export type KeyedFifoLease = {
-  wait(signal?: AbortSignal): Promise<boolean>;
+  wait(): Promise<void>;
   release(): void;
 };
 
@@ -62,15 +61,8 @@ export function createKeyedFifoLeaseRegistry(globalKey: symbol): KeyedFifoLeaseR
       state.releases.add(release);
 
       return {
-        async wait(signal) {
-          if (signal?.aborted) {
-            return false;
-          }
-          const ready = Promise.all(predecessors).then(() => true);
-          if (!signal) {
-            return await ready;
-          }
-          return await racePromiseWithAbortSignal(ready, signal, () => false).catch(() => false);
+        async wait() {
+          await Promise.all(predecessors);
         },
         release,
       };

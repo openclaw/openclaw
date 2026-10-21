@@ -206,11 +206,12 @@ it("rejects a manifest with an extra valid origin before building pairing", asyn
   await expectManifestRejected(await nativeFixture([ORIGIN, OTHER_ORIGIN]));
 });
 
-it.each([
-  { buildPairing: async () => ({ pairingString: PAIRING, topology: "direct-remote" }) },
-  { platform: "win32" as const },
-])("returns manual_required for unsupported topology/platform: %o", async (overrides) => {
-  await expect(invokeHost(overrides)).resolves.toEqual(failure("manual_required"));
+it("returns manual_required for unsupported topology", async () => {
+  await expect(
+    invokeHost({
+      buildPairing: async () => ({ pairingString: PAIRING, topology: "direct-remote" }),
+    }),
+  ).resolves.toEqual(failure("manual_required"));
 });
 
 it.each([

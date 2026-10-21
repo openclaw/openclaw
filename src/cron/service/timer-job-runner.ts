@@ -320,8 +320,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
     return await createInterruptionOutcome("cancelled");
   }
   const detachedPayload = runsDetachedFromMainSession(job);
+  const awaitsEventAdoption = job.sessionTarget === "main" && job.payload.kind === "systemEvent";
   const releaseCronTaskRun =
-    detachedPayload || job.trigger
+    detachedPayload || job.trigger || awaitsEventAdoption
       ? registerActiveCronTaskRun({
           runId: opts?.runId ?? `cron-active:${job.id}`,
           controller: runAbortController,
@@ -382,24 +383,24 @@ async function executeJobCoreWithTimeoutUnfinalized(
       streamBatch: opts?.streamBatch,
       streamScheduleKey: opts?.streamScheduleKey,
       streamSourceIdentity: opts?.streamSourceIdentity,
-      // Conditions own their pending tools; main payloads hand work to a shared
-      // heartbeat. Release cancellation before that handoff can produce effects.
+      // Main-session receipt adapters defer this handoff until their occurrence is adopted.
       onPayloadExecutionStarted: detachedPayload ? undefined : releaseCronTaskRun,
       onExecutionStarted: trackExecution ? noteRunnerStarted : undefined,
       onExecutionPhase: trackExecution ? (watchdog?.notePhase ?? accumulateExecution) : undefined,
       onLaneWait: watchdog && deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
       // Trigger and preflight keep the cron deadline; the heartbeat gets its own.
-      onHeartbeatExecutionStarted:
-        watchdog && resolveHeartbeatTimeoutMs
-          ? (heartbeat) => {
-              const heartbeatTimeoutMs = resolveHeartbeatTimeoutMs(heartbeat);
-              // The queue owns admission and retries; only attempts spend the deadline.
-              return {
-                onAttemptStarted: () => watchdog.replaceTimeout(heartbeatTimeoutMs),
-                onQueued: () => watchdog.replaceTimeout(undefined),
-              };
-            }
-          : undefined,
+      onHeartbeatExecutionStarted: watchdog
+        ? (heartbeat) => {
+            const heartbeatTimeoutMs = resolveHeartbeatTimeoutMs
+              ? resolveHeartbeatTimeoutMs(heartbeat)
+              : jobTimeoutMs;
+            // The queue owns admission and retries; only attempts spend the deadline.
+            return {
+              onAttemptStarted: () => watchdog.replaceTimeout(heartbeatTimeoutMs),
+              onQueued: () => watchdog.replaceTimeout(undefined),
+            };
+          }
+        : undefined,
       assertRunCurrent,
       executionIdentity: executionIdentity && {
         ...executionIdentity,

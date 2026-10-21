@@ -294,6 +294,8 @@ export type LlmCompleteErrorCode =
   | "LLM_ISOLATED_INPUT_REJECTED"
   | "LLM_ISOLATED_UNSUPPORTED"
   | "LLM_RUNTIME_UNAVAILABLE"
+  /** The plugin or model runtime is reloading or retired; retry from a fresh plugin operation. */
+  | "LLM_RUNTIME_LIFECYCLE"
   | "LLM_COMPLETION_ABORTED"
   | "LLM_COMPLETION_TIMEOUT"
   | "LLM_COMPLETION_OUTPUT_REJECTED"

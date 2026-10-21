@@ -61,6 +61,9 @@ export function PickerContent<Option extends PickerOption>(props: {
   let sheetScroll: { root: Element; top: number } | undefined;
   let hoverTimer: ReturnType<typeof setTimeout> | undefined;
   let hoverOpened = false;
+  // A row the pointer highlights is already where the user is looking. Revealing
+  // it would scroll a clipped edge row against an in-progress wheel or trackpad scroll.
+  let pointerHighlight = false;
   const [searching, setSearching] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [keyboard, setKeyboard] = createSignal(false);
@@ -247,6 +250,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     if (event.isComposing || props.params.disabled) {
       return;
     }
+    pointerHighlight = false;
     const editing = event.target instanceof HTMLInputElement;
     if (!editing || event.key.startsWith("Arrow")) {
       setKeyboard(true);
@@ -326,7 +330,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         ? {
             identity: [opened(), active(), query(), rows()],
             target: () =>
-              overlay.open
+              overlay.open && !pointerHighlight
                 ? optionElements.get(menu.service.context.get("highlightedValue") ?? "")
                 : undefined,
           }
@@ -336,6 +340,7 @@ export function PickerContent<Option extends PickerOption>(props: {
   );
   function onOpenChange(next: boolean) {
     if (next) {
+      pointerHighlight = false;
       props.params.onOpen?.();
       const root = surface.offsetParent;
       if (props.params.sheet && root) {
@@ -402,6 +407,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         onMouseDown={(event) => event.preventDefault()}
         onMouseMove={() => {
           setKeyboard(false);
+          pointerHighlight = true;
           if (!row.option().disabled) {
             menu.read().setHighlightedValue(row.option().value);
           }

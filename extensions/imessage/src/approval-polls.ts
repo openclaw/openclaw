@@ -551,15 +551,8 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
   }
 }
 
-function clearIMessageApprovalPollTargetsForTest(): void {
-  pollTargets.clearForTest();
-  pollTombstones.clearForTest();
-  loadResolveApprovalOverGateway.clear();
-}
-
 export const iMessageApprovalPollTargets = {
   register: registerIMessageApprovalPollTarget,
   unregister: unregisterIMessageApprovalPollTarget,
   registerTombstone: registerIMessageApprovalPollTombstone,
-  clearForTest: clearIMessageApprovalPollTargetsForTest,
 };

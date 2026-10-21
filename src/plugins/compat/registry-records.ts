@@ -11,8 +11,6 @@ import { CRON_STORE_PATH_COMPAT_RECORD } from "./cron-store-path-record.js";
 import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
 import { MEMORY_SESSION_COMPAT_RECORDS } from "./memory-session-records.js";
-import { MENTION_INBOX_COMPAT_RECORD } from "./mention-inbox-record.js";
-import { MODEL_ACCOUNT_CONNECT_COMPAT_RECORD } from "./model-account-connect-record.js";
 import { NATIVE_EXEC_APPROVAL_COMPAT_RECORD } from "./native-exec-approval-record.js";
 import { PLUGIN_SDK_PRIVATE_RUNTIME_EXPORT_COMPAT_RECORD } from "./plugin-sdk-private-runtime-export-record.js";
 import { PLUGIN_SDK_REMOVED_EXPORT_RECORDS } from "./plugin-sdk-removed-export-records.js";
@@ -21,15 +19,10 @@ import {
   PLUGIN_SDK_SUBPATH_RECORDS,
 } from "./plugin-sdk-subpath-records.js";
 import { PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD } from "./progress-receipt-handoff-record.js";
-import { RUNTIME_CONFIG_COMPAT_RECORD } from "./runtime-config-record.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
 import { SESSION_TRANSCRIPT_VIEW_COMPAT_RECORD } from "./session-transcript-view-record.js";
-import { SKILL_COMMAND_DISCOVERY_COMPAT_RECORD } from "./skill-command-discovery-record.js";
-import { SKILL_PROPOSAL_HOOKS_COMPAT_RECORD } from "./skill-proposal-hooks-record.js";
 import { SQLITE_RUNTIME_COMPAT_RECORDS } from "./sqlite-runtime-records.js";
-import { TTS_PREFERENCES_COMPAT_RECORD } from "./tts-preferences-record.js";
 import type { PluginCompatRecord } from "./types.js";
-import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
 import { WEB_SEARCH_PROVIDER_LIST_COMPAT_RECORD } from "./web-search-provider-list-record.js";
 import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
 
@@ -48,19 +41,129 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
   ...BINDING_PERSISTENCE_COMPAT_RECORDS,
   CHANNEL_PAIRING_COMPAT_RECORD,
   CRON_STORE_PATH_COMPAT_RECORD,
-  MENTION_INBOX_COMPAT_RECORD,
-  MODEL_ACCOUNT_CONNECT_COMPAT_RECORD,
+  {
+    code: "mention-inbox-sync-persistence",
+    status: "deprecated",
+    owner: "sdk",
+    deprecated: "2026-10-03",
+    warningStarts: "2026-10-03",
+    removalGate: "stable-deprecation-period",
+    replacement:
+      "Await mentionInbox.listAsync(client, publish), mentionInbox.dismissAsync(client, ids, publish), mentionInbox.recordCommittedInputAsync(input), and mentionInbox.invalidateAsync(sessionKey). Publish list/dismiss responses synchronously inside the supplied callback. Deprecated synchronous signatures remain until an announced later ordinary stable release; list/dismiss return UNAVAILABLE, invalidate throws migration guidance, and recordCommittedInput queues the worker operation after commit.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-mention-inbox-operations",
+    surfaces: [
+      "GatewayRequestHandlerOptions.context.mentionInbox.list",
+      "GatewayRequestHandlerOptions.context.mentionInbox.dismiss",
+      "GatewayRequestHandlerOptions.context.mentionInbox.recordCommittedInput",
+      "GatewayRequestHandlerOptions.context.mentionInbox.invalidate",
+      "getPluginRuntimeGatewayRequestScope().context.mentionInbox",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations, explicit migration-directed rejection, and one DEP_SESSION_PERSISTENCE warning per plugin and capability family per process; unscoped callers share one SDK-level family warning",
+    ],
+  },
+  {
+    code: "model-account-connect-sync-persistence",
+    status: "deprecated",
+    owner: "sdk",
+    deprecated: "2026-10-03",
+    warningStarts: "2026-10-03",
+    removeAfter: "2026-12-31",
+    replacement:
+      "Await modelAccountConnectService.listLinksAsync, linkAsync, unlinkAsync, listAsync, selectAsync, statusAsync, and cancelAsync with the existing arguments. Retain synchronous methods and their completion timing for shipped third-party contracts through 2026-12-31; removal ships in the first January 2027 stable release without an SDK major.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-personal-model-account-operations",
+    surfaces: [
+      "GatewayRequestHandlerOptions.context.modelAccountConnectService.listLinks",
+      "GatewayRequestHandlerOptions.context.modelAccountConnectService.link",
+      "GatewayRequestHandlerOptions.context.modelAccountConnectService.unlink",
+      "GatewayRequestHandlerOptions.context.modelAccountConnectService.list",
+      "GatewayRequestHandlerOptions.context.modelAccountConnectService.select",
+      "GatewayRequestHandlerOptions.context.modelAccountConnectService.status",
+      "GatewayRequestHandlerOptions.context.modelAccountConnectService.cancel",
+      "getPluginRuntimeGatewayRequestScope().context.modelAccountConnectService",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and one DEP_SESSION_PERSISTENCE warning per plugin and capability family per process; unscoped callers share one SDK-level family warning",
+    ],
+  },
   WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,
   ...SESSION_PERSISTENCE_COMPAT_RECORDS,
-  SKILL_COMMAND_DISCOVERY_COMPAT_RECORD,
+  {
+    code: "skill-command-discovery-sync",
+    status: "deprecated",
+    owner: "sdk",
+    deprecated: "2026-10-11",
+    warningStarts: "2026-10-11",
+    removeAfter: "2026-12-31",
+    replacement:
+      "Await prepareSkillCommandsForAgents or prepareSkillCommandsForWorkspace. Synchronous list methods retain their array results through 2026-12-31; removal ships in the first January 2027 stable release without an SDK major.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-skill-command-discovery",
+    surfaces: [
+      "openclaw/plugin-sdk/skill-commands-runtime.listSkillCommandsForAgents",
+      "openclaw/plugin-sdk/skill-commands-runtime.listSkillCommandsForWorkspace",
+      "openclaw/plugin-sdk/command-auth-native.listSkillCommandsForAgents",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and one runtime warning per plugin and capability family",
+    ],
+  },
   ...SQLITE_RUNTIME_COMPAT_RECORDS,
   NATIVE_EXEC_APPROVAL_COMPAT_RECORD,
-  TTS_PREFERENCES_COMPAT_RECORD,
+  {
+    code: "tts-preferences-sync-resolution",
+    status: "deprecated",
+    owner: "sdk",
+    deprecated: "2026-10-03",
+    warningStarts: "2026-10-03",
+    removeAfter: "2026-12-31",
+    replacement:
+      "Await resolveTtsPrefsPathAsync(config) for the machine-owned path. For prompt hints, await the public api.runtime.tts.buildSystemPromptHintAsync method. Bundled plugins can also await private prepareTtsPreferences and pass preparedTtsPreferences to the supported synchronous hint overload. The unprepared synchronous hint and preference-path calls remain compatible through 2026-12-31; removal ships in the first January 2027 stable release.",
+    docsPath: "/plugins/sdk-migration/async-transcript-and-tts",
+    surfaces: [
+      "openclaw/plugin-sdk/agent-runtime resolveTtsPrefsPath",
+      "openclaw/plugin-sdk/tts-runtime resolveTtsPrefsPath",
+      "openclaw/plugin-sdk/tts-runtime buildTtsSystemPromptHint",
+    ],
+    diagnostics: [
+      "Bounded DEP_PLUGIN_SDK warning for legacy path resolution and unprepared synchronous hint calls; prepared hints remain silent",
+    ],
+  },
   ...AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS,
-  WATCHED_SESSIONS_COMPAT_RECORD,
+  {
+    code: "watched-sessions-sync-harness-context",
+    status: "deprecated",
+    owner: "sdk",
+    deprecated: "2026-10-03",
+    warningStarts: "2026-10-03",
+    removeAfter: "2026-12-31",
+    replacement:
+      "Await prepareWatchedSessionsHarnessContext with an assertCurrent callback bound to the current host capability. The released buildWatchedSessionsHarnessContext retains its synchronous string-or-undefined result through 2026-12-31; removal ships in the first January 2027 stable release without an SDK major.",
+    docsPath: "/plugins/sdk-migration/compatibility-policy#watched-session-harness-context",
+    surfaces: ["openclaw/plugin-sdk/agent-harness-runtime.buildWatchedSessionsHarnessContext"],
+    diagnostics: [
+      "TypeScript @deprecated annotation and migration documentation; bounded capability-family warnings on legacy preparation",
+    ],
+  },
   WEB_SEARCH_PROVIDER_LIST_COMPAT_RECORD,
   PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD,
-  RUNTIME_CONFIG_COMPAT_RECORD,
+  {
+    code: "runtime-config-sync-load",
+    status: "deprecated",
+    owner: "config",
+    deprecated: "2026-10-11",
+    warningStarts: "2026-10-11",
+    removeAfter: "2026-12-31",
+    replacement:
+      "Use readRuntimeConfig for the already prepared runtime snapshot. At a cold preparation boundary, await captureRuntimeConfigAsyncReader()() first or use its returned config. The released getRuntimeConfig keeps its synchronous cold-load behavior through 2026-12-31; removal ships in the first January 2027 stable release.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#read-prepared-runtime-config",
+    surfaces: [
+      "openclaw/plugin-sdk/runtime-config-snapshot.getRuntimeConfig",
+      "openclaw/plugin-sdk/memory-core-host-runtime-core.getRuntimeConfig",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotation and one DEP_SESSION_PERSISTENCE warning per plugin and runtime-config family per process on legacy use",
+    ],
+  },
   ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD,
   SESSION_TRANSCRIPT_VIEW_COMPAT_RECORD,
   PLUGIN_SDK_PRIVATE_RUNTIME_EXPORT_COMPAT_RECORD,
@@ -272,7 +375,28 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
     ],
     diagnostics: ["plugin compatibility registry and migration guide"],
   },
-  SKILL_PROPOSAL_HOOKS_COMPAT_RECORD,
+  {
+    code: "removed-skill-proposal-hooks",
+    status: "removed",
+    owner: "sdk",
+    // Removal landed 2026-10-08 (#161057); the prior day was the final compatibility day.
+    removeAfter: "2026-10-07",
+    docsPath: "/plugins/sdk-migration/removed-surfaces#skill-workshop-proposal-hooks",
+    surfaces: [
+      'api.on("skill_proposal_evaluate", ...)',
+      'api.on("skill_proposal_changed", ...)',
+      "openclaw/plugin-sdk/plugin-entry.PluginHookSkillProposalEvaluateEvent",
+      "openclaw/plugin-sdk/plugin-entry.PluginHookSkillProposalEvaluateResult",
+      "openclaw/plugin-sdk/plugin-entry.PluginHookSkillProposalEvaluationOutcome",
+      "openclaw/plugin-sdk/plugin-entry.PluginHookSkillProposalChangedEvent",
+      "openclaw/plugin-sdk/plugin-entry.PluginHookSkillProposalKind",
+      "openclaw/plugin-sdk/plugin-entry.PluginHookSkillEvaluationFinding",
+      "openclaw/plugin-sdk/plugin-entry.PluginHookSkillBundleFile",
+      "openclaw/plugin-sdk/plugin-entry.PluginHookSkillBundleSnapshot",
+      "PluginHookSkillChangedEvent.proposal",
+    ],
+    diagnostics: ["plugin compatibility registry and migration guide"],
+  },
   {
     code: "hook-only-plugin-shape",
     status: "active",

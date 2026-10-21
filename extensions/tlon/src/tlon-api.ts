@@ -204,63 +204,6 @@ async function getStorageCredentials(
   return null;
 }
 
-async function getMemexUploadUrl(params: {
-  config: ClientConfig;
-  cookie: string;
-  contentLength: number;
-  contentType: string;
-  fileName: string;
-}): Promise<{ hostedUrl: string; uploadUrl: string }> {
-  const token = await scryJson<string | { secret?: string }>(
-    params.config,
-    params.cookie,
-    "/genuine/secret.json",
-  );
-  const resolvedToken = typeof token === "string" ? token : token.secret;
-  if (!resolvedToken) {
-    throw new Error("Missing genuine secret");
-  }
-
-  const endpoint = `${MEMEX_BASE_URL}/v1/${params.config.shipName}/upload`;
-  let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
-  try {
-    guarded = await fetchWithSsrFGuard({
-      url: endpoint,
-      init: {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          token: resolvedToken,
-          contentLength: params.contentLength,
-          contentType: params.contentType,
-          fileName: params.fileName,
-        }),
-      },
-      auditContext: "tlon-memex-upload-url",
-      capture: false,
-      maxRedirects: 0,
-      timeoutMs: TLON_MEMEX_UPLOAD_URL_TIMEOUT_MS,
-      beforeRequest: params.config.assertDirectAdapterHandoff,
-    });
-    if (!guarded.response.ok) {
-      throw new Error(`Memex upload request failed: ${guarded.response.status}`);
-    }
-
-    const data = await readProviderJsonResponse<{ url?: string; filePath?: string } | null>(
-      guarded.response,
-      "Memex upload",
-      { maxBytes: MEMEX_UPLOAD_RESPONSE_MAX_BYTES },
-    );
-    if (!data?.url || !data.filePath) {
-      throw new Error("Invalid response from Memex");
-    }
-
-    return { hostedUrl: data.filePath, uploadUrl: data.url };
-  } finally {
-    await releaseUploadResponse(guarded);
-  }
-}
-
 export async function uploadFile(
   params: UploadFileParams,
   clientConfig: ClientConfig,
@@ -315,14 +258,60 @@ export async function uploadFile(
     }
   };
 
-  if (useMemex) {
-    const { hostedUrl, uploadUrl } = await getMemexUploadUrl({
+  async function getMemexUploadUrl(): Promise<{ hostedUrl: string; uploadUrl: string }> {
+    const contentLength = params.blob.size;
+    const token = await scryJson<string | { secret?: string }>(
       config,
       cookie,
-      contentLength: params.blob.size,
-      contentType,
-      fileName: fileKey,
-    });
+      "/genuine/secret.json",
+    );
+    const resolvedToken = typeof token === "string" ? token : token.secret;
+    if (!resolvedToken) {
+      throw new Error("Missing genuine secret");
+    }
+
+    const endpoint = `${MEMEX_BASE_URL}/v1/${config.shipName}/upload`;
+    let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
+    try {
+      guarded = await fetchWithSsrFGuard({
+        url: endpoint,
+        init: {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token: resolvedToken,
+            contentLength,
+            contentType,
+            fileName: fileKey,
+          }),
+        },
+        auditContext: "tlon-memex-upload-url",
+        capture: false,
+        maxRedirects: 0,
+        timeoutMs: TLON_MEMEX_UPLOAD_URL_TIMEOUT_MS,
+        beforeRequest: config.assertDirectAdapterHandoff,
+      });
+      if (!guarded.response.ok) {
+        throw new Error(`Memex upload request failed: ${guarded.response.status}`);
+      }
+
+      const data = await readProviderJsonResponse<{ url?: string; filePath?: string } | null>(
+        guarded.response,
+        "Memex upload",
+        { maxBytes: MEMEX_UPLOAD_RESPONSE_MAX_BYTES },
+      );
+      if (!data?.url || !data.filePath) {
+        throw new Error("Invalid response from Memex");
+      }
+
+      return { hostedUrl: data.filePath, uploadUrl: data.url };
+    } finally {
+      await releaseUploadResponse(guarded);
+    }
+  }
+
+  if (useMemex) {
+    const { hostedUrl, uploadUrl } = await getMemexUploadUrl();
     const trustedUploadUrl = assertTrustedMemexUploadUrl(uploadUrl, "Memex upload URL");
 
     await uploadBlob(trustedUploadUrl, {

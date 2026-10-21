@@ -1,33 +1,29 @@
 import { t } from "../../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { takePreparedCatalogTerminal } from "../../lib/sessions/catalog-terminal-start.ts";
 import {
   TerminalConnection,
-  TerminalOpenTimeoutError,
-  TerminalOpenUnusableSessionError,
   type TerminalGatewayClient,
   type TerminalOpenResult,
   type TerminalSessionInfo,
 } from "./terminal-connection.ts";
 import { disposeTerminalController } from "./terminal-controller-lifecycle.ts";
-import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
 import {
   adoptTerminalPanelSession,
   bootTerminalPanelSession,
   captureTerminalDeliveryError,
+  createTerminalSessionBootOperations,
 } from "./terminal-panel-session-boot.ts";
 import { TerminalPanelSessionRecovery } from "./terminal-panel-session-recovery.ts";
 import { focusTerminalSession } from "./terminal-panel-session-rendering.ts";
-import {
-  resolveTerminalPanelOwnerSessionKey,
-  type TerminalOperation,
-  type TerminalPanelError,
-  type TerminalPanelOpenAction,
-  type TerminalPanelSessionHost,
-  type TerminalPanelSessionState,
-  type TerminalPanelSessionTab,
-  type TerminalRestoreBatch,
+import type {
+  TerminalOperation,
+  TerminalPanelError,
+  TerminalPanelSessionHost,
+  TerminalPanelSessionState,
+  TerminalPanelSessionTab,
+  TerminalRestoreBatch,
+  TerminalSessionListOptions,
+  TerminalStagedInput,
 } from "./terminal-panel-session-types.ts";
 import { createTerminalIntentQueue, terminalIntentQueue } from "./terminal-pending-actions.ts";
 import type { TerminalIntentHost } from "./terminal-pending-actions.ts";
@@ -129,11 +125,15 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
     sessionId: string,
     agentOwned: boolean,
     cancelIntent: () => void,
+    stagedInput?: TerminalStagedInput,
   ): Promise<boolean> {
     const existing = state.tabs.find(
       (tab) => tab.gatewaySessionId === sessionId && tab.status !== "exited",
     );
     if (existing) {
+      if (stagedInput) {
+        existing.stagedInput = stagedInput;
+      }
       api.switchTo(existing.id);
       return true;
     }
@@ -143,7 +143,13 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
     }
     updateState({ booting: true, error: null });
     try {
-      const attached = await attachSession(sessionId, operation, agentOwned);
+      const attached = await attachSession(
+        sessionId,
+        operation,
+        agentOwned,
+        undefined,
+        stagedInput,
+      );
       if (attached && state.activeId) {
         api.switchTo(state.activeId);
       }
@@ -215,141 +221,23 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
     });
   }
 
-  async function openSessionNow(
-    catalog: CatalogSessionKey | undefined,
-    agentId: string | null,
-    cancelIntent: () => void,
-  ): Promise<boolean> {
-    const operation = captureTerminalOperation(cancelIntent);
-    if (!operation) {
-      return false;
-    }
-    updateState({ booting: true, error: null });
-    const action: TerminalPanelOpenAction = catalog
-      ? { kind: "catalog", agentId, catalog }
-      : { kind: "open", agentId };
-    // Freeze the selection for this tab; later agent changes affect only new tabs.
-    const ownerSessionKey = resolveTerminalPanelOwnerSessionKey(host.inputs.sessionKey, catalog);
-    // Tracked outside the try so the catch can dispose a tab whose open failed.
-    let createdTab: TerminalPanelSessionTab | undefined;
-    try {
-      const boot = await bootTab(operation, { awaitFirstOutput: Boolean(catalog) });
-      createdTab = boot.tab;
-      boot.tab.pendingOpen = action;
-      const result = await boot.connection.open(
-        {
-          agentId: agentId ?? undefined,
-          ...(ownerSessionKey ? { sessionKey: ownerSessionKey } : {}),
-          cols: boot.cols,
-          rows: boot.rows,
-          ...(catalog ? { catalog } : {}),
-        },
-        boot.sink,
-      );
-      if (!isTerminalOperationCurrent(operation) || boot.tab.cancelled) {
-        const cancelledByUser = boot.tab.cancelled === "close";
-        // The tab's close button was clicked while the open RPC was in flight.
-        // The server session is live and its sink registered; close it now or
-        // it survives invisibly (eating the session cap) until disconnect.
-        void boot.connection.close(result.sessionId);
-        discardCancelledTab(boot.tab);
-        return cancelledByUser;
-      }
-      adoptSession(boot.tab, result, ownerSessionKey !== undefined);
-      boot.tab.controller.terminal.focus();
-      return true;
-    } catch (error) {
-      // A failed open (e.g. terminal disabled or a sandboxed agent is refused)
-      // must not leave a phantom "live" tab with no server session. Drop it but
-      // keep the panel open so the error stays visible.
-      if (createdTab && !createdTab.gatewaySessionId && state.tabs.includes(createdTab)) {
-        removeTab(createdTab);
-      }
-      if (!isTerminalOperationCurrent(operation)) {
-        return false;
-      }
-      if (createdTab?.cancelled !== "close") {
-        api.setError(
-          terminalOpenErrorText(error),
-          error instanceof TerminalOpenTimeoutError ||
-            error instanceof TerminalOpenUnusableSessionError
-            ? action
-            : undefined,
-        );
-      }
-      return true;
-    } finally {
-      if (isTerminalOperationCurrent(operation)) {
-        updateState({ booting: false });
-      }
-    }
-  }
-
-  async function attachSession(
-    sessionId: string,
-    operation: TerminalOperation,
-    agentOwned = false,
-    restore?: TerminalRestoreBatch,
-  ): Promise<boolean> {
-    let createdTab: TerminalPanelSessionTab | undefined;
-    let createdConnection: TerminalConnection | undefined;
-    const prepared = host.inputs.page
-      ? takePreparedCatalogTerminal(sessionId, operation.client)
-      : null;
-    try {
-      if (prepared) {
-        ownedConnection?.dispose();
-        ownedConnection = prepared.connection;
-      }
-      const boot = await bootTab(operation, {
-        awaitFirstOutput: prepared !== null,
-        restore: restore && { batch: restore, sessionId },
-      });
-      createdTab = boot.tab;
-      createdConnection = boot.connection;
-      if (prepared) {
-        prepared.bind(boot.sink);
-      }
-      const result = prepared?.result ?? (await boot.connection.attach(sessionId, boot.sink));
-      if (!isTerminalOperationCurrent(operation, restore) || boot.tab.cancelled) {
-        // A user close is deliberate; lifecycle cancellation leaves the existing
-        // server session available for the next reconnect to reattach.
-        if (boot.tab.cancelled === "close") {
-          void boot.connection.close(result.sessionId);
-        }
-        discardCancelledTab(boot.tab);
-        return false;
-      }
-      adoptSession(boot.tab, result, agentOwned);
-      return true;
-    } catch (error) {
-      // Claiming cancels the handoff expiry; failed boot or binding must close
-      // this newly started PTY even if the page lifecycle was also cancelled.
-      if (prepared) {
-        void prepared.connection.close(prepared.result.sessionId);
-      }
-      if (!isTerminalOperationCurrent(operation, restore, createdTab)) {
-        return false;
-      }
-      // Failed reads cannot turn transport or authorization errors into authoritative exits.
-      const sessions =
-        restore && createdConnection ? await createdConnection.list().catch(() => null) : null;
-      if (!isTerminalOperationCurrent(operation, restore, createdTab)) {
-        return false;
-      }
-      if (createdTab && !createdTab.gatewaySessionId && state.tabs.includes(createdTab)) {
-        if (sessions && !sessions.some((session) => session.sessionId === sessionId)) {
-          recovery.markExited(createdTab, sessionId);
-        } else {
-          removeTab(createdTab);
-        }
-      }
-      if (!restore) {
-        api.setError(`${t("terminal.attachFailed")}: ${formatUiError(error)}`);
-      }
-      return false;
-    }
-  }
+  const { openSessionNow, attachSession } = createTerminalSessionBootOperations({
+    host,
+    state,
+    captureTerminalOperation,
+    isTerminalOperationCurrent,
+    updateState,
+    bootTab,
+    adoptSession,
+    discardCancelledTab,
+    removeTab,
+    setError: (text, retryAction) => api.setError(text, retryAction),
+    replaceConnection: (connection) => {
+      ownedConnection?.dispose();
+      ownedConnection = connection;
+    },
+    markExited: (tab, sessionId) => recovery.markExited(tab, sessionId),
+  });
 
   function discardCancelledTab(tab: TerminalPanelSessionTab): void {
     if (state.tabs.includes(tab)) {
@@ -632,17 +520,23 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
     get waitingForRefresh(): boolean {
       return ownedIntentQueue.waitingForRefresh;
     },
-    async listSessions(): Promise<TerminalSessionInfo[] | null> {
+    async listSessions(
+      options: TerminalSessionListOptions = {},
+    ): Promise<TerminalSessionInfo[] | null> {
       const operation = captureTerminalOperation();
       if (!operation) {
         return null;
       }
-      api.setError(null);
+      if (!options.preserveError) {
+        api.setError(null);
+      }
       try {
         const sessions = await connectionFor(operation).list();
         return isTerminalOperationCurrent(operation) ? sessions : null;
       } catch (error) {
-        if (isTerminalOperationCurrent(operation)) {
+        // Automatic discovery must not replace an operation's error/retry with
+        // a secondary listing failure. The session owner remains authoritative.
+        if (isTerminalOperationCurrent(operation) && (!options.preserveError || !state.error)) {
           throw error;
         }
         return null;
@@ -709,15 +603,24 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
       // Closed lazy shells must not consume work without a rendered viewport.
       host.terminalPanelOpen &&
       host.isConnected,
-    attach: (sessionId, agentOwned, cancel) => attachSessionNow(sessionId, agentOwned, cancel),
+    attach: (sessionId, agentOwned, cancel, stagedInput) => {
+      host.resetTerminalSessionPicker();
+      return attachSessionNow(sessionId, agentOwned, cancel, stagedInput);
+    },
     client: () => ownedActiveClient,
     showError: (text) => api.setError(text),
     present: (tab) => {
+      host.resetTerminalSessionPicker();
       tab.id = `tab-${++ownedTabSequence}`;
       updateState({ tabs: [...state.tabs, tab], booting: false });
       api.switchTo(tab.id);
     },
-    open: (catalog, agentId, cancel) => openSessionNow(catalog, agentId, cancel),
+    open: (catalog, agentId, cancel) => {
+      // Only admitted explicit intents use this callback. Generic restore opens
+      // through ensureInitial and keeps the approved desktop list presentation.
+      host.resetTerminalSessionPicker();
+      return openSessionNow(catalog, agentId, cancel);
+    },
     reattach: (cancel) => recovery.reattach(cancel),
     cancelledRestoreCompleted: () => {
       if (!state.error) {

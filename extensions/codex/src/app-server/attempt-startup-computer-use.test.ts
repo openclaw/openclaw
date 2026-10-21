@@ -167,7 +167,7 @@ describe("Computer Use attempt startup", () => {
           cause: {
             status: {
               reason: "live_test_failed",
-              liveTest: { attempts: 2, durationMs: 120_000 },
+              liveTest: { attempts: 2 },
             },
           },
         });

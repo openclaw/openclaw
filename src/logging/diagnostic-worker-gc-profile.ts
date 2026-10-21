@@ -18,7 +18,6 @@ export type WorkerGcProfiles = { heap: string; cpu: string };
 /** Runs only in the storming isolate; no inspector listener or guest values are captured. */
 export function captureWorkerGcProfiles() {
   return captureDiagnosticProfile({
-    signal: new AbortController().signal,
     hasAuthority: () => true,
     durationMs: DURATION_MS,
     workerTracingInactive: true,

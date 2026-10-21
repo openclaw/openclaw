@@ -78,25 +78,17 @@ describe("createPtyAdapter", () => {
     vi.clearAllMocks();
   });
 
-  it.each([false, true])("aborts construction (spawned=%s)", async (spawned) => {
+  it("kills a PTY acquired after construction was aborted", async () => {
     const abort = new AbortController();
     const pending = createDeferredCore<ReturnType<typeof createStubPty>>();
     const stub = createStubPty();
-    spawnMock.mockReturnValue(spawned ? pending.promise : stub);
+    spawnMock.mockReturnValue(pending.promise);
     const starting = start({ args: ["-lc", "echo started"], abortSignal: abort.signal });
-    if (spawned) {
-      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
-    }
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
     abort.abort();
-    if (spawned) {
-      pending.resolve(stub);
-    }
+    pending.resolve(stub);
     await expect(starting).rejects.toThrow("PTY construction aborted");
-    if (spawned) {
-      expect(ptyKillMock).toHaveBeenCalledOnce();
-    } else {
-      expect(spawnMock).not.toHaveBeenCalled();
-    }
+    expect(ptyKillMock).toHaveBeenCalledOnce();
   });
 
   it("prefers the explicit child TERM without merging the Windows ambient env", async () => {

@@ -192,6 +192,17 @@ describe("workspace evidence through the guest tool and registered publication a
 
   it("rejects foreign paths, altered bytes, unsafe media and unrelated publication selectors before upload", async () => {
     const f = await evidenceFixture();
+    await expect(
+      f.invoke(
+        "guest",
+        { action: "upload_evidence", ...f.expected, evidence: f.evidence },
+        SESSION_KEY,
+        { raw: true },
+      ),
+    ).rejects.toThrow("not offered to sessions that run directly on the host");
+    f.sandbox.sessionKey = "agent:main:foreign";
+    await expect(f.upload()).rejects.toThrow("this conversation's active sandbox workspace");
+    f.sandbox.sessionKey = SESSION_KEY;
     for (const filename of [
       "../foreign.png",
       "/workspace/proof.png",

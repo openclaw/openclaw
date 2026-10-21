@@ -499,7 +499,8 @@ suite.define(() => {
         await expectOneAccessory();
       }
       await focusChatSidePanel(page);
-      await expectOneAccessory();
+      expect(await accessory.count()).toBe(1);
+      await expect.poll(() => accessory.isVisible()).toBe(false);
       await sidebar(page, "Sessions").click();
       await selectChatLayoutAction(page, "Restore split");
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);

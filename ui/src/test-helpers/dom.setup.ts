@@ -12,6 +12,14 @@ if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
   // mock-isolation: JSDOM rendering tests assume admission; the real browser gate has E2E coverage.
   vi.doMock("../app/boot-capabilities.ts", () => ({ unsupportedControlUiBrowser: false }));
 
+  // JSDOM does not load fonts; browser layout tests retain the native FontFaceSet.
+  if (!document.fonts) {
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
+    });
+  }
+
   // JSDOM has no layout. Geometry/visibility tests install controlled observers;
   // ordinary rendering fixtures treat their mounted content as visible.
   if (typeof matchMedia === "undefined") {

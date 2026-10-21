@@ -8,12 +8,13 @@ import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
-import { openChatLayoutMenu } from "../../test-helpers/chat-layout-menu.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
   createModalDialogTestFixture,
+  submitInputDialog,
   waitForConfirmDialogActions,
+  waitForInputDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { openSubmenu } from "../../test-helpers/session-menu.ts";
@@ -24,6 +25,7 @@ import {
   createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
+  getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
@@ -33,7 +35,6 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
 
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
@@ -224,20 +225,8 @@ describe("chat pane session menu boundary", () => {
     draw();
     await menu.updateComplete;
     expectRetainedMenu();
-    const layout = await openChatLayoutMenu({
-      container,
-      click: async (element) => {
-        element.click();
-        await Promise.resolve();
-        flush();
-      },
-    });
-    layout.querySelector<HTMLButtonElement>('[data-value="session-files"]')!.click();
-    await Promise.resolve();
-    flush();
-
-    expect(workspace.onToggleCollapsed).toHaveBeenCalledOnce();
-
+    menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!.click();
+    await menu.updateComplete;
     state.settings = { ...state.settings };
     session = { ...session };
     draw();
@@ -278,41 +267,6 @@ describe("chat pane session menu boundary", () => {
       chatShowToolCalls: !state.settings.chatShowToolCalls,
     });
   });
-
-  it.each(["subagents", "processes"] as const)(
-    "keeps the selected %s opening intent after Layout closes",
-    async (slot) => {
-      const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
-      const container = document.body.appendChild(document.createElement("div"));
-      const draw = () =>
-        renderPaneHeaderInto(
-          pane.renderPaneHeader(
-            createPaneHeaderWorkspaceFixture(state),
-            undefined,
-            false,
-            undefined,
-            false,
-            null,
-          ),
-          container,
-        );
-      draw();
-      await Promise.resolve();
-      flush();
-      const menu = await openChatLayoutMenu({
-        container,
-        click: async (element) => {
-          element.click();
-          await Promise.resolve();
-          flush();
-        },
-      });
-      menu.querySelector<HTMLButtonElement>(`[value="session-${slot}"]`)!.click();
-      state.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
-      draw();
-      expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(true);
-    },
-  );
 
   it("keeps observed pane titles and renames with their conversations when agent selection changes", async () => {
     const primary: GatewaySessionRow = {
@@ -514,10 +468,14 @@ describe("chat pane session menu boundary", () => {
     expect(draw(undefined)).toBe("Retained conversation");
     expect(draw(row)).toBe("Retained conversation");
     expect(draw({ ...row, label: "Older scoped label" })).toBe("Retained conversation");
+    expect(container.querySelector("openclaw-chat-header-session-menu")).toBeNull();
+    state.connected = true;
+    expect(draw(row)).toBe("Retained conversation");
     const menu = container.querySelector<HTMLElement & { session: { label: string } }>(
       "openclaw-chat-header-session-menu",
     );
     expect(menu?.session.label).toBe("Retained conversation");
+    state.connected = false;
     pane.history.catalogSession = {
       threadId: "catalog",
       name: "Imported conversation",
@@ -728,6 +686,120 @@ describe("chat pane session menu boundary", () => {
       }
     },
   );
+
+  it("keeps the mobile rename draft through reconnect without retargeting session or client", async () => {
+    const modal = createModalDialogTestFixture();
+    const row: GatewaySessionRow = {
+      key: "global",
+      sessionId: "research-global",
+      kind: "global",
+      label: "Research notes",
+    };
+    const patch = vi.fn(async () => ({}));
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture({
+        request: async (method) => {
+          switch (method) {
+            case "agents.list":
+              return {
+                defaultId: "main",
+                mainKey: "main",
+                scope: "per-sender",
+                agents: [{ id: "main" }, { id: "research" }],
+              };
+            case "sessions.describe":
+              return { session: null };
+            default:
+              return {};
+          }
+        },
+      }),
+      sessions: createSessionCapabilityFixture({ patch }),
+    });
+    getPaneTestRuntime(pane).mergedChrome = true;
+    getPaneTestRuntime(pane).agentId = "research";
+    state.sessionKey = row.key;
+    state.assistantAgentId = "research";
+    try {
+      const cancelled = modal.track(pane.handleHeaderSessionAction({ kind: "rename" }, row));
+      const first = await waitForInputDialog();
+      expect(first.value).toBe("Research notes");
+      first.value = "Discarded draft";
+      first.dispatchEvent(new Event("input", { bubbles: true }));
+      const cancel = [
+        ...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
+      ].find((button) => button.textContent === "Cancel");
+      expect(cancel).toBeDefined();
+      cancel!.click();
+      await cancelled;
+      expect(patch).not.toHaveBeenCalled();
+
+      const connected = { ...pane.context.gateway.snapshot };
+      pane.applyGatewaySnapshot({ ...connected, phase: "offline" });
+      patch.mockResolvedValueOnce({ queued: true });
+      const queued = modal.track(pane.handleHeaderSessionAction({ kind: "rename" }, row));
+      const offlineInput = await waitForInputDialog();
+      expect(offlineInput.value).toBe("Research notes");
+      expect(pane.context.gateway.snapshot.phase).toBe("offline");
+      await submitInputDialog("  Queued offline notes  ");
+      await queued;
+      expect(patch).toHaveBeenCalledExactlyOnceWith(
+        "global",
+        { label: "Queued offline notes" },
+        { agentId: "research", expectedSessionId: "research-global" },
+      );
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      pane.applyGatewaySnapshot(connected);
+
+      const saved = modal.track(pane.handleHeaderSessionAction({ kind: "rename" }, row));
+      const input = await waitForInputDialog();
+      expect(input.value).toBe("Research notes");
+      expect(pane.headerPresentation.renameSession).toBeNull();
+      input.value = "Unsent notes";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting", hello: null });
+      flush();
+      expect(document.querySelector("openclaw-modal-dialog input")).toBe(input);
+      expect(input.value).toBe("Unsent notes");
+      expect(input.disabled).toBe(false);
+      expect(
+        input.closest("form")!.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled,
+      ).toBe(true);
+      input
+        .closest("form")!
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      expect(patch).toHaveBeenCalledTimes(1);
+      pane.applyGatewaySnapshot(connected);
+      // A roster refresh must not retarget the draft to a new session instance.
+      row.sessionId = "replacement-global";
+      row.label = "Replacement title";
+      await submitInputDialog("  Renamed notes  ");
+      await saved;
+      expect(patch).toHaveBeenCalledTimes(2);
+      expect(patch).toHaveBeenNthCalledWith(
+        2,
+        "global",
+        { label: "Renamed notes" },
+        { agentId: "research", expectedSessionId: "research-global" },
+      );
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+
+      const retired = modal.track(pane.handleHeaderSessionAction({ kind: "rename" }, row));
+      const retiredInput = await waitForInputDialog();
+      retiredInput.value = "Other client must not inherit this";
+      pane.applyGatewaySnapshot({
+        ...connected,
+        client: createGatewayBrowserClientFixture(),
+        phase: "reconnecting",
+        hello: null,
+      });
+      await retired;
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(patch).toHaveBeenCalledTimes(2);
+    } finally {
+      await modal.cleanup();
+    }
+  });
 
   it.each([
     {

@@ -3,7 +3,7 @@ import { createOverlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
 import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
-import type { ChatDetailPanel } from "../chat/components/chat-detail-panel.tsx";
+import type { ChatDetailPanel } from "../chat/components/chat-sidebar-view-types.ts";
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -55,8 +55,10 @@ function message(page: NewSessionElement): string {
   return page.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.value ?? "";
 }
 
-afterEach(() => {
+afterEach(async () => {
   document.querySelectorAll("openclaw-new-session-page").forEach((element) => element.remove());
+  // Keyboard intent prefetches custom elements; finish registration before the shared graph resets.
+  await vi.dynamicImportSettled();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   sessionStorage.clear();

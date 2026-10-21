@@ -310,13 +310,9 @@ const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();
 export const msteamsSetupWizard: ChannelSetupWizard = {
   ...msteamsSetupWizardBase,
   finalize: async (params) => {
-    const baseFinalize = msteamsSetupWizardBase.finalize;
-    const baseResult = baseFinalize ? await baseFinalize(params) : undefined;
-    let next = baseResult?.cfg ?? params.cfg;
-    const resolvedAccountId =
-      baseResult && "accountId" in baseResult && typeof baseResult.accountId === "string"
-        ? baseResult.accountId
-        : params.accountId;
+    const baseResult = await msteamsSetupWizardBase.finalize(params);
+    let next = baseResult.cfg;
+    const resolvedAccountId = baseResult.accountId;
     const finalCreds = resolveMSTeamsCredentials(
       resolveMSTeamsAccountConfig(next, resolvedAccountId),
       {

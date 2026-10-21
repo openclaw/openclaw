@@ -16,6 +16,9 @@ const atMs = (index: number) => sinceMs + 1000 + index * 30_000;
 const repoName = (index: number) => `fixture/repo-${index % 93}`;
 const login = (index: number) => fixturePeople[index % fixturePeople.length].github[0];
 const snowflake = (index: number) => ((BigInt(atMs(index)) - epochMs) << 22n).toString();
+const emptyRepoActivity =
+  /^\/repos\/fixture\/repo-\d+\/(?:issues\/comments|pulls\/comments|security-advisories)$/;
+const searchRange = /(?:created|updated|closed|merged|committer-date):([^ ]+)\.\.([^ ]+)/;
 
 /** Synthetic wire responses are generated per page, never retained as an input corpus. */
 export function createReportRunFixtureFetch(): NonNullable<SourceRuntime["fetchImpl"]> {
@@ -43,17 +46,15 @@ export function createReportRunFixtureFetch(): NonNullable<SourceRuntime["fetchI
     }
     if (path === "/search/issues" || path === "/search/commits") {
       const query = url.searchParams.get("q") ?? "";
-      const range = /(?:created|updated|closed|merged|committer-date):([^ ]+)\.\.([^ ]+)/.exec(
-        query,
-      );
-      if (!range) {
+      const bounds = searchRange.exec(query);
+      if (!bounds) {
         throw new Error(`Missing fixture search range: ${query}`);
       }
       const commits = path.endsWith("commits");
       const eligible =
         commits || (query.includes("is:issue ") && / (?:created|updated):/.test(query));
-      const firstMs = Date.parse(range[1]);
-      const lastMs = Date.parse(range[2]);
+      const firstMs = Date.parse(bounds[1]);
+      const lastMs = Date.parse(bounds[2]);
       const indexes = eligible
         ? Array.from({ length: commits ? 1000 : 2000 }, (_, index) => index).filter(
             (index) => atMs(index) >= firstMs && atMs(index) <= lastMs,
@@ -87,11 +88,7 @@ export function createReportRunFixtureFetch(): NonNullable<SourceRuntime["fetchI
         page * 100 < indexes.length,
       );
     }
-    if (
-      /^\/repos\/fixture\/repo-\d+\/(?:issues\/comments|pulls\/comments|security-advisories)$/.test(
-        path,
-      )
-    ) {
+    if (emptyRepoActivity.test(path)) {
       return response([]);
     }
     if (path === "/guilds/1000/channels") {

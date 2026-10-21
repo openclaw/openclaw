@@ -109,9 +109,10 @@ describe("line doctor empty group allowlist", () => {
     ]);
   });
 
-  it("stays out of the way unless groups use an allowlist", () => {
+  it.each(["open", "", " "])("respects an authored non-allowlist policy %j", (groupPolicy) => {
     const params = context({
-      account: { groupPolicy: "open", groups: { C222: { allowFrom: ["U1"] } } },
+      account: { groupPolicy, groups: { C222: { allowFrom: ["U1"] } } },
+      parent: { groupPolicy: "allowlist" },
     });
 
     expect(shouldSkip(params)).toBe(false);

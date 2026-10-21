@@ -723,6 +723,16 @@ parent restores a service it stopped for maintenance, as described above.
 Human output ends with a finalization result that distinguishes completion,
 completion with warnings, and failure.
 
+Repair JSON reports `coreUpdate: "completed"` only after required finalization,
+service restoration, and recovery reconciliation finish. Nonfatal advisories
+can still produce `status: "warning"` with completed core work. Deferred
+maintenance or retained recovery reports `coreUpdate: "pending"`, including
+when an inherited update driver requires a successful process exit.
+The Mac app uses this completion fact to settle its repair receipt before
+reconnecting, so advisories or a failed reconnect do not repeat completed repair
+on the next launch. Failed processes and results without completion proof leave
+the repair pending.
+
 When repair finds a configured npm plugin payload but cannot recover its install
 record, it reinstalls from the selected registry source, using the active channel
 or exact version pin. This requires registry access; if verification fails, repair

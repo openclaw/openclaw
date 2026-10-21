@@ -4,7 +4,6 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntries, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { withProgress } from "../cli/progress.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
 import { applyMessageQueueDefaults } from "../config/defaults.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
@@ -19,6 +18,7 @@ import { resolveLegacyAgentRosterOwner } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withDoctorProgress } from "../flows/doctor-health-startup.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
@@ -69,33 +69,24 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 }) {
   await using preparingResources = new AsyncDisposableStack();
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const preflight = await withProgress(
-    {
-      label: "Checking OpenClaw state…",
-      enabled: params.options.nonInteractive !== true && params.options.json !== true,
-      delayMs: 200,
-    },
-    (progress) =>
-      runDoctorConfigPreflight({
-        retiredStateAdmitted: params.retiredStateAdmitted,
-        stateSchemaPreparation: params.stateSchemaPreparation,
-        integrityCheck: params.options.fullIntegrityCheck ? "full" : "quick",
-        observe: false,
-        invocationPurpose: "doctor",
-        repairPrefixedConfig: shouldRepair,
-        doctorOnlyStateMigrations: shouldRepair,
-        preparePluginMetadataSnapshot: true,
-        agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery,
-        beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(
-          params.prompter,
-          progress.done,
-        ),
-        measure: async (name, run) => {
-          progress.setLabel(`${name.slice(name.lastIndexOf(".") + 1).replaceAll("-", " ")}…`);
-          return await run();
-        },
-      }),
-  );
+  const preflight = await runDoctorConfigPreflight({
+    retiredStateAdmitted: params.retiredStateAdmitted,
+    stateSchemaPreparation: params.stateSchemaPreparation,
+    integrityCheck: params.options.fullIntegrityCheck ? "full" : "quick",
+    observe: false,
+    invocationPurpose: "doctor",
+    repairPrefixedConfig: shouldRepair,
+    doctorOnlyStateMigrations: shouldRepair,
+    preparePluginMetadataSnapshot: true,
+    agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery,
+    beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(params.prompter),
+    measure: (name, run) =>
+      withDoctorProgress(
+        name.slice(name.lastIndexOf(".") + 1).replaceAll("-", " "),
+        run,
+        params.options.json !== true,
+      ),
+  });
   const { snapshot, baseConfig: baseCfg } = preflight;
   preparingResources.use(preflight.pluginCache);
   if (!snapshot.exists || snapshot.valid) {
@@ -514,27 +505,32 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (shouldRepair) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
     const prompter = params.prompter;
-    const repairSequence = await runDoctorRepairSequence({
-      state,
-      installedPluginIdRecovery: installedPluginRecovery.recovery,
-      doctorFixCommand,
-      env: process.env,
-      blockedCodexProviderPlan,
-      pluginMetadataSnapshotState,
-      runWithPluginMetadataSnapshot,
-      ...(prompter
-        ? {
-            onCapabilityConsent: createPluginCapabilityConsentPrompter({
-              note: async (message, title) => note(message, title),
-              confirm: (confirmation) =>
-                prompter.confirmRuntimeRepair({
-                  ...confirmation,
-                  requiresInteractiveConfirmation: true,
+    const repairSequence = await withDoctorProgress(
+      "Config repairs",
+      () =>
+        runDoctorRepairSequence({
+          state,
+          installedPluginIdRecovery: installedPluginRecovery.recovery,
+          doctorFixCommand,
+          env: process.env,
+          blockedCodexProviderPlan,
+          pluginMetadataSnapshotState,
+          runWithPluginMetadataSnapshot,
+          ...(prompter
+            ? {
+                onCapabilityConsent: createPluginCapabilityConsentPrompter({
+                  note: async (message, title) => note(message, title),
+                  confirm: (confirmation) =>
+                    prompter.confirmRuntimeRepair({
+                      ...confirmation,
+                      requiresInteractiveConfirmation: true,
+                    }),
                 }),
-            }),
-          }
-        : {}),
-    });
+              }
+            : {}),
+        }),
+      params.options.json !== true,
+    );
     state = repairSequence.state;
     configRepairWarnings.push(...repairSequence.warningNotes);
     if (referenceSource) {

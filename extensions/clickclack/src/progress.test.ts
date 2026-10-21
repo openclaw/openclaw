@@ -166,6 +166,43 @@ describe("ClickClack native agent progress", () => {
     expect(publishEphemeral.mock.calls[2]?.[0].payload).toMatchObject({ op: "clear" });
   });
 
+  it("retains a newer completion when an older line drains before its next flush", async () => {
+    vi.useFakeTimers();
+    let releaseFirstRequest!: () => void;
+    const firstRequest = new Promise<void>((resolve) => {
+      releaseFirstRequest = resolve;
+    });
+    const publishEphemeral = vi
+      .fn()
+      .mockImplementationOnce(() => firstRequest)
+      .mockResolvedValue(undefined);
+    const publisher = createPublisher(publishEphemeral);
+    try {
+      publisher.start();
+      publisher.onItemEvent({ itemId: "tool_1", kind: "tool", title: "Searching" });
+      await vi.advanceTimersByTimeAsync(100);
+      publisher.onItemEvent({
+        itemId: "tool_1",
+        kind: "tool",
+        title: "Done",
+        phase: "end",
+        status: "completed",
+      });
+      releaseFirstRequest();
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(publishEphemeral.mock.calls.map(([call]) => call.payload)).toMatchObject([
+        { seq: 1, op: "append", line: { id: "turn" } },
+        { seq: 2, op: "append", line: { id: "item:tool_1", text: "Searching" } },
+        { seq: 3, op: "finalize", line: { id: "item:tool_1", text: "Done", status: "completed" } },
+      ]);
+    } finally {
+      releaseFirstRequest();
+      await publisher.finalize();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(retractionCases)(
     "retracts an existing $name line without replacing it with a placeholder",
     async ({ initial, end }) => {

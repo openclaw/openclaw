@@ -207,9 +207,7 @@ export async function resolveMemoryWikiStatus(
 export function buildMemoryWikiDoctorReport(status: MemoryWikiStatus) {
   const fixes = status.warnings.map((warning) => ({
     code: warning.code,
-    message: Object.hasOwn(STATUS_WARNING_FIXES, warning.code)
-      ? STATUS_WARNING_FIXES[warning.code]
-      : STATUS_WARNING_FIXES["unsafe-local-without-mode"],
+    message: STATUS_WARNING_FIXES[warning.code],
   }));
   return {
     healthy: status.warnings.length === 0,

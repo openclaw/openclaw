@@ -1,9 +1,15 @@
+import {
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorName,
+} from "openclaw/plugin-sdk/error-runtime";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
   createProviderOperationDeadline,
   executeProviderOperationWithRetry,
   readProviderBinaryResponse,
   readProviderJsonResponse,
+  redactProviderResponseErrorText,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
@@ -162,6 +168,18 @@ function extractGeneratedVideos(operation: unknown): Array<{ video?: unknown }> 
   return Array.isArray(generatedSamples) ? (generatedSamples as Array<{ video?: unknown }>) : [];
 }
 
+function redactGoogleVideoSdkError(error: unknown, headers: Record<string, string>): Error {
+  // Preserve diagnostic metadata without retaining credential-bearing SDK causes or responses.
+  const safeError = new Error(redactProviderResponseErrorText(formatErrorMessage(error), headers));
+  safeError.name = redactProviderResponseErrorText(readErrorName(error) || "Error", headers);
+  const code = extractErrorCode(error);
+  Object.assign(safeError, {
+    status: extractGoogleApiErrorCode(error),
+    ...(code ? { code: redactProviderResponseErrorText(code, headers) } : {}),
+  });
+  return safeError;
+}
+
 async function requestGoogleVideoJson(params: {
   url: string;
   method: "GET" | "POST";
@@ -184,7 +202,7 @@ async function requestGoogleVideoJson(params: {
     } else if (detail && typeof detail === "object") {
       parts.push(JSON.stringify(detail));
     }
-    const error = new Error(parts.join(": "));
+    const error = new Error(redactProviderResponseErrorText(parts.join(": "), params.headers));
     Object.assign(error, { status: response.status, statusCode: response.status });
     return error;
   }
@@ -225,6 +243,7 @@ async function requestGoogleVideoJson(params: {
         }
         return await readProviderJsonResponse(response, "Google video operation response", {
           maxBytes: GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES,
+          requestHeaders: params.headers,
         });
       } finally {
         await release();
@@ -283,7 +302,7 @@ async function generateGoogleVideoViaRest(params: {
   }
   const error = (operation as { error?: unknown }).error;
   if (error) {
-    throw new Error(JSON.stringify(error));
+    throw new Error(redactProviderResponseErrorText(JSON.stringify(error), params.headers));
   }
   return operation;
 }
@@ -369,7 +388,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         });
       } catch (error) {
         if (hasReferenceInputs || extractGoogleApiErrorCode(error) !== 404) {
-          throw error;
+          throw redactGoogleVideoSdkError(error, authHeaders);
         }
         usedRestFallback = true;
         operation = await generateViaRest();
@@ -389,10 +408,14 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
             provider: "google",
             stage: "poll",
             operation: () => client.operations.getVideosOperation({ operation: sdkOperation }),
+          }).catch((error: unknown) => {
+            throw redactGoogleVideoSdkError(error, authHeaders);
           });
         }
         if (sdkOperation.error) {
-          throw new Error(JSON.stringify(sdkOperation.error));
+          throw new Error(
+            redactProviderResponseErrorText(JSON.stringify(sdkOperation.error), authHeaders),
+          );
         }
         operation = sdkOperation;
       }
@@ -464,7 +487,10 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
                     // would hang before the HTTP error and dispatcher can be released.
                     void response.body?.cancel().catch(() => undefined);
                     throw new Error(
-                      `Failed to download Google generated video: ${response.status} ${response.statusText}`,
+                      redactProviderResponseErrorText(
+                        `Failed to download Google generated video: ${response.status} ${response.statusText}`,
+                        { "x-goog-api-key": url.searchParams.get("key") ?? apiKey },
+                      ),
                     );
                   }
                   const downloadLabel = "Google generated video download";

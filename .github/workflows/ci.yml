@@ -766,7 +766,7 @@ jobs:
           def checkout_harness(sha):
               action = ".github/actions/setup-node-env/action.yml"
               node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
-              evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh", "scripts/macos-native-runtime-artifact.mjs")
+              evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/ios-test-results.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh", "scripts/macos-native-runtime-artifact.mjs")
               platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py", "scripts/swift-build-cache-metadata.py")
               upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs", "scripts/lib/canonical-json.mjs", "scripts/lib/upgrade-survivor-policy.mjs", "scripts/lib/upgrade-survivor-scenarios.json")
               # Preflight imports these siblings by file-relative paths.
@@ -5887,36 +5887,6 @@ jobs:
 
       - *select_xcode_step
 
-      - name: Install Watch screenshot runtime
-        run: |
-          set -euo pipefail
-          # Device creation can succeed with stale runtime metadata; require a boot.
-          probe_watch_runtime() {
-            local probe_id probe_status=0
-            probe_id="$(xcrun simctl create "OpenClaw Watch runtime probe" \
-              com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Ultra-4-49mm \
-              com.apple.CoreSimulator.SimRuntime.watchOS-27-0)" || return "$?"
-            xcrun simctl bootstatus "$probe_id" -b || probe_status=$?
-            if [[ "$probe_status" -eq 0 ]]; then
-              # bootstatus can exit zero after a terminated boot; query the running device.
-              xcrun simctl getenv "$probe_id" HOME >/dev/null || probe_status=$?
-            fi
-            # Failed boots may already be shut down. Always delete the task-owned probe.
-            xcrun simctl shutdown "$probe_id" || true
-            xcrun simctl delete "$probe_id" || exit "$?"
-            return "$probe_status"
-          }
-          if ! probe_watch_runtime; then
-            runtime_dir="$(mktemp -d "$RUNNER_TEMP/openclaw-watch-runtime.XXXXXX")"
-            trap 'rm -rf "$runtime_dir"' EXIT
-            xcodebuild -downloadPlatform watchOS -buildVersion 27.0 -exportPath "$runtime_dir"
-            shopt -s nullglob
-            runtime_images=("$runtime_dir"/*.dmg)
-            test "${#runtime_images[@]}" -eq 1
-            xcodebuild -importPlatform "${runtime_images[0]}"
-            probe_watch_runtime
-          fi
-
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
@@ -5941,7 +5911,9 @@ jobs:
         id: device_screenshots
         env:
           OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
-        run: pnpm ios:screenshots
+        run: |
+          node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
+            pnpm ios:screenshots
 
       - name: Package iOS screenshot capture evidence
         id: package_screenshot_evidence
@@ -5987,7 +5959,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-release-screenshot-diagnostics-${{ needs.preflight.outputs.checkout_revision }}
-          path: apps/ios/build/screenshot-diagnostics.json
+          path: |
+            apps/ios/build/screenshot-diagnostics.json
+            ${{ runner.temp }}/ios-resource-timeline.jsonl
           if-no-files-found: warn
           retention-days: 14
 

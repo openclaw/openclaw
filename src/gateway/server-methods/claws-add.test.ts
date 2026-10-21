@@ -12,189 +12,142 @@ import { clawsAddHandlers } from "./claws-add.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import type { RespondFn } from "./types.js";
 
-const planClawAddForGateway = vi.hoisted(() => vi.fn());
-const applyClawAddForGateway = vi.hoisted(() => vi.fn());
-const listConfiguredMcpServers = vi.hoisted(() => vi.fn());
-const readCurrentConfigForPolicyCheck = vi.hoisted(() => vi.fn());
-const readCurrentConfigForPolicyCheckAsync = vi.hoisted(() => vi.fn());
-const assertValidCronCreateDelivery = vi.hoisted(() => vi.fn());
-const reloadManagedPlugin = vi.hoisted(() => vi.fn());
-const deleteAgentConfigEntry = vi.hoisted(() => vi.fn());
+const planAdd = vi.hoisted(() => vi.fn());
+const applyAdd = vi.hoisted(() => vi.fn());
+const listMcp = vi.hoisted(() => vi.fn());
+const readPolicySync = vi.hoisted(() => vi.fn());
+const readPolicy = vi.hoisted(() => vi.fn());
+const validateDelivery = vi.hoisted(() => vi.fn());
+const reloadPlugin = vi.hoisted(() => vi.fn());
+const deleteAgent = vi.hoisted(() => vi.fn());
 vi.mock("../../claws/gateway-add-plan.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../claws/gateway-add-plan.js")>()),
-  planClawAddForGateway,
+  planClawAddForGateway: planAdd,
 }));
 vi.mock("../../claws/gateway-add-apply.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../claws/gateway-add-apply.js")>()),
-  applyClawAddForGateway,
+  applyClawAddForGateway: applyAdd,
 }));
 vi.mock("../../config/mcp-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/mcp-config.js")>()),
-  listConfiguredMcpServers,
+  listConfiguredMcpServers: listMcp,
 }));
 vi.mock("../../config/io.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/io.runtime.js")>()),
-  readCurrentConfigForPolicyCheck,
-  readCurrentConfigForPolicyCheckAsync,
+  readCurrentConfigForPolicyCheck: readPolicySync,
+  readCurrentConfigForPolicyCheckAsync: readPolicy,
 }));
 vi.mock("../../cron/delivery-channel-validation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../cron/delivery-channel-validation.js")>()),
-  assertValidCronCreateDelivery,
+  assertValidCronCreateDelivery: validateDelivery,
 }));
 vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/management-mutations.js")>()),
-  reloadManagedPlugin,
+  reloadManagedPlugin: reloadPlugin,
 }));
 vi.mock("./agents-config-mutations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agents-config-mutations.js")>()),
-  deleteAgentConfigEntry,
+  deleteAgentConfigEntry: deleteAgent,
 }));
 
+const agentId = "workflow-operator";
 const enabled = { gateway: { controlUi: { experimental: { claws: true } } } };
+const source = { packageName: "@openclaw/workflow-operator", version: "1.0.0" };
+const complete = { agentId, status: "complete" };
+const ready = { ...complete, readiness: { ready: true, requirements: [] } };
+const onDisk = { ...enabled, agents: { list: [{ id: agentId }] } };
 
 beforeEach(() => {
-  readCurrentConfigForPolicyCheckAsync.mockResolvedValue(enabled);
+  listMcp.mockResolvedValue({ ok: true, mcpServers: {} });
+  readPolicy.mockResolvedValue(enabled);
 });
 
-afterEach(() => {
-  vi.clearAllMocks();
-  readCurrentConfigForPolicyCheck.mockReset();
-  readCurrentConfigForPolicyCheckAsync.mockReset();
-});
+afterEach(() => vi.clearAllMocks());
 
-function callAddPlan(params: Record<string, unknown>, getRuntimeConfig: () => unknown) {
-  const replies: Parameters<RespondFn>[] = [];
-  return {
-    replies,
-    run: async () =>
-      await expectDefined(
-        clawsAddHandlers["claws.add.plan"],
-        "claws.add.plan handler",
-      )({
-        req: { type: "req", id: "plan", method: "claws.add.plan" },
-        params,
-        respond: (...args) => replies.push(args),
-        context: { getRuntimeConfig } as never,
-        client: null,
-        isWebchatConnect: () => false,
-      }),
-  };
+const params = { source, planIntegrity: "sha256:reviewed", acknowledgeCapabilities: [] };
+const plan = { operation: "add", planIntegrity: "sha256:reviewed", target: { agentId } };
+
+function makeCron<T extends object>(overrides: T) {
+  return { add: vi.fn(), list: vi.fn().mockResolvedValue([]), ...overrides };
 }
 
-function callAddApply(
-  params: Record<string, unknown>,
-  getRuntimeConfig: () => unknown,
+async function callAdd(
+  operation: "plan" | "apply",
+  getRuntimeConfig: () => unknown = () => enabled,
   options: {
     hasCurrentClientAuthority?: () => boolean;
-    client?: unknown;
     cron?: unknown;
     applyPluginLifecycleChange?: unknown;
   } = {},
 ) {
-  const replies: Parameters<RespondFn>[] = [];
-  return {
-    replies,
-    run: async () =>
-      await expectDefined(
-        clawsAddHandlers["claws.add.apply"],
-        "claws.add.apply handler",
-      )({
-        req: { type: "req", id: "apply", method: "claws.add.apply" },
-        params,
-        respond: (...args) => replies.push(args),
-        context: {
-          getRuntimeConfig,
-          cron: options.cron ?? { add: vi.fn(), list: vi.fn() },
-          ...(options.applyPluginLifecycleChange
-            ? { applyPluginLifecycleChange: options.applyPluginLifecycleChange }
-            : {}),
-        } as never,
-        client:
-          options.client === undefined
-            ? ({ connect: { role: "operator", scopes: ["operator.admin"] } } as never)
-            : (options.client as never),
-        ...(options.hasCurrentClientAuthority
-          ? { hasCurrentClientAuthority: options.hasCurrentClientAuthority }
-          : {}),
-        isWebchatConnect: () => false,
-      }),
-  };
+  const {
+    hasCurrentClientAuthority,
+    cron = { add: vi.fn(), list: vi.fn() },
+    ...lifecycle
+  } = options;
+  const method = `claws.add.${operation}`;
+  const respond = vi.fn<RespondFn>();
+  const handler = expectDefined(clawsAddHandlers[method], method);
+  await handler({
+    req: { type: "req", id: "add", method },
+    params: operation === "plan" ? { source } : params,
+    respond,
+    context: {
+      getRuntimeConfig,
+      ...(operation === "apply" ? { cron, ...lifecycle } : {}),
+    } as never,
+    client:
+      operation === "apply"
+        ? ({ connect: { role: "operator", scopes: ["operator.admin"] } } as never)
+        : null,
+    ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
+    isWebchatConnect: () => false,
+  });
+  return respond.mock.calls;
 }
 
 describe("claws.add.plan Gateway method", () => {
-  const source = { packageName: "@openclaw/workflow-operator", version: "1.0.0" };
-
   it("requires operator read scope and blocks previews with Labs off", async () => {
     expect(coreGatewayHandlers["claws.add.plan"]).toBeDefined();
     expect(authorizeOperatorScopesForMethod("claws.add.plan", [])).toEqual({
       allowed: false,
       missingScope: "operator.read",
     });
-    const request = callAddPlan({ source }, () => ({}));
-    await request.run();
-    expect(request.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
-    expect(planClawAddForGateway).not.toHaveBeenCalled();
+    const request = await callAdd("plan", () => ({}));
+    expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(planAdd).not.toHaveBeenCalled();
   });
 
-  it("passes a verified-source plan to the browser without mutating installed state", async () => {
-    const config = enabled;
-    const plan = {
-      schemaVersion: "openclaw.clawsGatewayPlan.v1",
-      operation: "add",
-      planIntegrity: "sha256:reviewed",
-      target: { agentId: "workflow-operator" },
-      actions: [],
-      capabilities: [],
-      pluginReviews: [],
-      blockers: [],
-      riskAcknowledgementRequired: false,
-    };
-    listConfiguredMcpServers.mockResolvedValue({ ok: true, mcpServers: {} });
-    planClawAddForGateway.mockResolvedValue(plan);
-    const request = callAddPlan({ source }, () => config);
-    await request.run();
-    expect(planClawAddForGateway).toHaveBeenCalledWith({
-      source,
-      config,
-      sourceMcpServers: {},
-    });
-    expect(request.replies).toEqual([[true, plan]]);
-  });
-
-  it("plans the next copy from disk when the Gateway roster is stale", async () => {
-    const onDisk = {
-      ...enabled,
-      agents: { list: [{ id: "workflow-operator" }] },
-    };
-    readCurrentConfigForPolicyCheckAsync.mockResolvedValue(onDisk);
-    listConfiguredMcpServers.mockResolvedValue({ ok: true, mcpServers: {} });
-    planClawAddForGateway.mockResolvedValue({ operation: "add" });
-
-    await callAddPlan({ source }, () => enabled).run();
-
-    expect(planClawAddForGateway).toHaveBeenCalledWith(expect.objectContaining({ config: onDisk }));
-  });
+  it.each([enabled, onDisk])(
+    "plans from the persisted roster, not a stale Gateway cache (%j)",
+    async (config) => {
+      readPolicy.mockResolvedValue(config);
+      planAdd.mockResolvedValue(plan);
+      const request = await callAdd("plan");
+      expect(planAdd).toHaveBeenCalledWith({
+        source,
+        config,
+        sourceMcpServers: {},
+      });
+      expect(request).toEqual([[true, plan]]);
+    },
+  );
 
   it("drops a preview if Labs is switched off mid-request", async () => {
     let calls = 0;
-    listConfiguredMcpServers.mockResolvedValue({ ok: true, mcpServers: {} });
-    const plan = { operation: "add", planIntegrity: "sha256:reviewed" };
-    planClawAddForGateway.mockResolvedValue(plan);
-    const request = callAddPlan({ source }, () => (calls++ === 0 ? enabled : {}));
-    await request.run();
-    expect(request.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+    planAdd.mockResolvedValue(plan);
+    const request = await callAdd("plan", () => (calls++ === 0 ? enabled : {}));
+    expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
   });
 });
 
 describe("claws.add.apply Gateway method", () => {
-  const source = { packageName: "@openclaw/workflow-operator", version: "1.0.0" };
-  const params = { source, planIntegrity: "sha256:reviewed", acknowledgeCapabilities: [] };
   const schedule = {
     name: "daily-brief",
     declarationKey: "claw:workflow-operator:daily-brief",
-    owner: { agentId: "workflow-operator" },
+    owner: { agentId },
     enabled: true,
-    agentId: "workflow-operator",
+    agentId,
     schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
     sessionTarget: "isolated",
     wakeMode: "now",
@@ -208,225 +161,149 @@ describe("claws.add.apply Gateway method", () => {
       allowed: false,
       missingScope: "operator.admin",
     });
-    const request = callAddApply(params, () => ({}));
-    await request.run();
-    expect(request.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
-    expect(applyClawAddForGateway).not.toHaveBeenCalled();
+    const request = await callAdd("apply", () => ({}));
+    expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(applyAdd).not.toHaveBeenCalled();
   });
 
-  it("passes the reviewed coordinate to the canonical Add service", async () => {
-    listConfiguredMcpServers.mockResolvedValue({ ok: true, mcpServers: {} });
-    applyClawAddForGateway.mockImplementation(async (input) => {
-      expect(await input.getPlanningContext()).toEqual({
-        config: enabled,
-        sourceMcpServers: {},
+  it.each([
+    { config: enabled, result: ready },
+    { config: onDisk, result: { ...complete, agentId: "workflow-operator-2" } },
+  ])(
+    "applies the reviewed coordinate against the persisted roster (%j)",
+    async ({ config, result }) => {
+      readPolicy.mockResolvedValue(config);
+      applyAdd.mockImplementation(async (input) => {
+        expect(readPolicy).toHaveBeenCalledOnce();
+        expect(await input.getPlanningContext()).toEqual({
+          config,
+          sourceMcpServers: {},
+        });
+        input.assertCurrent();
+        expect(input.policyConfig).toEqual({ configPath: expect.any(String), env: process.env });
+        return result;
       });
-      input.assertCurrent();
-      return {
-        agentId: "workflow-operator",
-        status: "complete",
-        readiness: { ready: true, requirements: [] },
-      };
-    });
-    const request = callAddApply(params, () => enabled);
-    await request.run();
-    expect(applyClawAddForGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ source, planIntegrity: params.planIntegrity }),
-    );
-    expect(request.replies).toEqual([
-      [
-        true,
-        {
-          agentId: "workflow-operator",
-          status: "complete",
-          readiness: { ready: true, requirements: [] },
-        },
-      ],
-    ]);
-  });
-
-  it("adds another copy using the current on-disk agent roster", async () => {
-    const onDisk = {
-      ...enabled,
-      agents: { list: [{ id: "workflow-operator" }] },
-    };
-    readCurrentConfigForPolicyCheckAsync.mockResolvedValue(onDisk);
-    listConfiguredMcpServers.mockResolvedValue({ ok: true, mcpServers: {} });
-    applyClawAddForGateway.mockImplementation(async (input) => {
-      expect(await input.getPlanningContext()).toEqual({
-        config: onDisk,
-        sourceMcpServers: {},
-      });
-      return { agentId: "workflow-operator-2", status: "complete" };
-    });
-
-    const request = callAddApply(params, () => enabled);
-    await request.run();
-
-    expect(request.replies).toEqual([
-      [true, { agentId: "workflow-operator-2", status: "complete" }],
-    ]);
-  });
-
-  it("passes the config source for lease-pinned post-write policy checks", async () => {
-    applyClawAddForGateway.mockImplementation(async (input) => {
-      expect(input.policyConfig).toEqual({
-        configPath: expect.any(String),
-        env: process.env,
-      });
-      return { agentId: "workflow-operator", status: "complete" };
-    });
-
-    const request = callAddApply(params, () => enabled);
-    await request.run();
-
-    expect(readCurrentConfigForPolicyCheckAsync).toHaveBeenCalledOnce();
-    expect(readCurrentConfigForPolicyCheck).not.toHaveBeenCalled();
-    expect(request.replies).toEqual([[true, { agentId: "workflow-operator", status: "complete" }]]);
-  });
+      const request = await callAdd("apply");
+      expect(readPolicySync).not.toHaveBeenCalled();
+      expect(applyAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ source, planIntegrity: params.planIntegrity }),
+      );
+      expect(request).toEqual([[true, result]]);
+    },
+  );
 
   it("guards live authority while leaving post-admission Labs policy to the Add service", async () => {
     let authorized = true;
-    applyClawAddForGateway.mockImplementation(async (input) => {
+    applyAdd.mockImplementation(async (input) => {
       authorized = false;
       input.assertCurrent();
     });
-    const revoked = callAddApply(params, () => enabled, {
+    const revoked = await callAdd("apply", () => enabled, {
       hasCurrentClientAuthority: () => authorized,
     });
-    await revoked.run();
-    expect(revoked.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(revoked[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
 
     let labsEnabled = true;
-    applyClawAddForGateway.mockImplementation(async (input) => {
+    applyAdd.mockImplementation(async (input) => {
       labsEnabled = false;
       input.assertCurrent();
-      return { agentId: "workflow-operator", status: "complete" };
+      return complete;
     });
-    const switchedOff = callAddApply(params, () => (labsEnabled ? enabled : {}));
-    await switchedOff.run();
-    expect(switchedOff.replies).toEqual([
-      [true, { agentId: "workflow-operator", status: "complete" }],
-    ]);
+    const switchedOff = await callAdd("apply", () => (labsEnabled ? enabled : {}));
+    expect(switchedOff).toEqual([[true, complete]]);
   });
 
   it("blocks Add when persisted Labs is off despite a stale Gateway cache", async () => {
-    readCurrentConfigForPolicyCheckAsync.mockResolvedValue({});
+    readPolicy.mockResolvedValue({});
 
-    const request = callAddApply(params, () => enabled);
-    await request.run();
+    const request = await callAdd("apply");
 
-    expect(request.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
-    expect(applyClawAddForGateway).not.toHaveBeenCalled();
+    expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(applyAdd).not.toHaveBeenCalled();
   });
 
-  it("returns review errors for a changed plan or missing plugin or skill acknowledgement", async () => {
-    applyClawAddForGateway.mockRejectedValueOnce(new ClawGatewayPlanChangedError());
-    const changed = callAddApply(params, () => enabled);
-    await changed.run();
-    expect(changed.replies[0]?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
-
-    applyClawAddForGateway.mockRejectedValueOnce(
+  it.each([
+    [new ClawGatewayPlanChangedError(), {}],
+    [
       new ClawGatewayConsentError("Plugin capabilities changed; review the Claw again."),
-    );
-    const consent = callAddApply(params, () => enabled);
-    await consent.run();
-    expect(consent.replies[0]?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      details: { code: "CLAW_REVIEW_REQUIRED", kind: "plugin" },
-    });
-
-    applyClawAddForGateway.mockRejectedValueOnce(
+      {
+        details: { code: "CLAW_REVIEW_REQUIRED", kind: "plugin" },
+      },
+    ],
+    [
       new ClawSkillConsentError("Review and acknowledge each skill trust warning again."),
-    );
-    const skillConsent = callAddApply(params, () => enabled);
-    await skillConsent.run();
-    expect(skillConsent.replies[0]?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "Review and acknowledge each skill trust warning again.",
-      details: { code: "CLAW_REVIEW_REQUIRED", kind: "skill" },
-    });
-  });
-
-  it("returns a specific required-skill blocker", async () => {
-    applyClawAddForGateway.mockRejectedValueOnce(
+      {
+        message: "Review and acknowledge each skill trust warning again.",
+        details: { code: "CLAW_REVIEW_REQUIRED", kind: "skill" },
+      },
+    ],
+    [
       new ClawGatewayPlanBlockedError("A required skill is unavailable from ClawHub."),
-    );
-    const request = callAddApply(params, () => enabled);
-    await request.run();
-    expect(request.replies[0]?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "A required skill is unavailable from ClawHub.",
-    });
-  });
-
-  it("returns a definite rejection when ClawHub now requires trust acknowledgement", async () => {
-    applyClawAddForGateway.mockRejectedValueOnce(
+      {
+        message: "A required skill is unavailable from ClawHub.",
+      },
+    ],
+    [
       new ClawHubSourceError(
         "clawhub_risk_acknowledgement_required",
         "Explicit acknowledgement is required for this ClawHub release.",
         "Security analysis is pending for this release.",
       ),
-    );
-    const request = callAddApply(params, () => enabled);
-    await request.run();
-    expect(request.replies[0]?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "Explicit acknowledgement is required for this ClawHub release.",
-      details: {
-        code: "CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED",
-        warning: "Security analysis is pending for this release.",
+      {
+        message: "Explicit acknowledgement is required for this ClawHub release.",
+        details: {
+          code: "CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED",
+          warning: "Security analysis is pending for this release.",
+        },
       },
-    });
-
-    applyClawAddForGateway.mockRejectedValueOnce(
+    ],
+    [
       new ClawHubSourceError("clawhub_artifact_unavailable", "ClawHub returned no Claw artifact."),
-    );
-    const unavailable = callAddApply(params, () => enabled);
-    await unavailable.run();
-    expect(unavailable.replies[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+      {
+        code: "UNAVAILABLE",
+      },
+    ],
+  ] as const)("maps Add service rejection %s", async (error, expected) => {
+    applyAdd.mockRejectedValueOnce(error);
+    const replies = await callAdd("apply");
+    expect(replies[0]?.[2]).toMatchObject({ code: "INVALID_REQUEST", ...expected });
   });
 
   it("validates Claw schedule delivery before calling the scheduler", async () => {
-    const cron = { add: vi.fn(), list: vi.fn().mockResolvedValue([]) };
+    const cron = makeCron({});
     const config = { ...enabled, cron: { failureAlert: { channel: "unconfigured" } } };
-    assertValidCronCreateDelivery.mockRejectedValueOnce(new Error("Unconfigured failure route"));
-    applyClawAddForGateway.mockImplementation(async (input) => {
+    validateDelivery.mockRejectedValueOnce(new Error("Unconfigured failure route"));
+    applyAdd.mockImplementation(async (input) => {
       await input.cronGateway.add(schedule);
     });
 
-    const request = callAddApply(params, () => config, { cron });
-    await request.run();
+    const request = await callAdd("apply", () => config, { cron });
 
-    expect(assertValidCronCreateDelivery).toHaveBeenCalledWith(
+    expect(validateDelivery).toHaveBeenCalledWith(
       config,
       expect.objectContaining({ declarationKey: schedule.declarationKey }),
     );
     expect(cron.add).not.toHaveBeenCalled();
-    expect(request.replies[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+    expect(request[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
   });
 
   it("exposes guarded scheduler reads and removal for Add rollback", async () => {
-    const job = { id: "job-1", agentId: "workflow-operator" };
-    const cron = {
-      add: vi.fn(),
-      list: vi.fn().mockResolvedValue([]),
+    const job = { id: "job-1", agentId };
+    const cron = makeCron({
       readJob: vi.fn().mockResolvedValue(job),
       remove: vi.fn().mockResolvedValue({ ok: true, removed: true }),
-    };
+    });
     const commitGuard = vi.fn();
-    applyClawAddForGateway.mockImplementation(async (input) => {
+    applyAdd.mockImplementation(async (input) => {
       expect(await input.cronGateway.get("job-1")).toEqual(job);
       await input.cronGateway.remove("job-1", {
         expectedConfigRevision: "revision-1",
         commitGuard,
       });
-      return { agentId: "workflow-operator", status: "complete" };
+      return complete;
     });
-    listConfiguredMcpServers.mockResolvedValue({ ok: true, mcpServers: {} });
 
-    const request = callAddApply(params, () => enabled, { cron });
-    await request.run();
+    const request = await callAdd("apply", () => enabled, { cron });
 
     expect(commitGuard).toHaveBeenCalled();
     expect(cron.readJob).toHaveBeenCalledWith("job-1");
@@ -434,148 +311,123 @@ describe("claws.add.apply Gateway method", () => {
       commitGuard: expect.any(Function),
       expectedConfigRevision: "revision-1",
     });
-    expect(request.replies[0]?.[0]).toBe(true);
+    expect(request[0]?.[0]).toBe(true);
   });
 
   it("rolls back only the unchanged new agent and its scheduled work", async () => {
-    const expectedAgentConfig = { id: "workflow-operator", workspace: "/tmp/workflow-operator" };
+    const expectedAgentConfig = { id: agentId, workspace: "/tmp/workflow-operator" };
     const removeAgentJobsTransactional = vi.fn(async (_agentId, commit) => await commit());
-    const cron = {
-      add: vi.fn(),
-      list: vi.fn().mockResolvedValue([]),
-      removeAgentJobsTransactional,
-    };
-    applyClawAddForGateway.mockImplementation(async (input) => {
-      await input.rollbackNewAgent("workflow-operator", expectedAgentConfig, []);
-      return { agentId: "workflow-operator", status: "complete" };
+    const cron = makeCron({ removeAgentJobsTransactional });
+    applyAdd.mockImplementation(async (input) => {
+      await input.rollbackNewAgent(agentId, expectedAgentConfig, []);
+      return complete;
     });
-    listConfiguredMcpServers.mockResolvedValue({ ok: true, mcpServers: {} });
 
-    const request = callAddApply(params, () => enabled, { cron });
-    await request.run();
+    const request = await callAdd("apply", () => enabled, { cron });
 
-    expect(removeAgentJobsTransactional).toHaveBeenCalledWith(
-      "workflow-operator",
-      expect.any(Function),
+    expect(removeAgentJobsTransactional).toHaveBeenCalledWith(agentId, expect.any(Function));
+    expect(deleteAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId, allowConfigSizeDrop: true }),
     );
-    expect(deleteAgentConfigEntry).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "workflow-operator", allowConfigSizeDrop: true }),
-    );
-    const call = deleteAgentConfigEntry.mock.calls[0];
-    if (!call) {
-      throw new Error("Expected an agent rollback attempt");
-    }
-    const { validate } = call[0];
+    const { validate } = expectDefined(deleteAgent.mock.calls[0], "agent rollback attempt")[0];
     expect(() => validate(expectedAgentConfig)).not.toThrow();
     expect(() => validate({ ...expectedAgentConfig, name: "Edited" })).toThrow(
       "rollback left it intact",
     );
-    expect(request.replies[0]?.[0]).toBe(true);
+    expect(request[0]?.[0]).toBe(true);
   });
 
   it("keeps the new agent when another automation appears before rollback", async () => {
-    const cron = {
-      add: vi.fn(),
-      list: vi.fn().mockResolvedValue([{ id: "user-job", agentId: "workflow-operator" }]),
+    const cron = makeCron({
+      list: vi.fn().mockResolvedValue([{ id: "user-job", agentId }]),
       removeAgentJobsTransactional: vi.fn(),
-    };
-    applyClawAddForGateway.mockImplementation(async (input) => {
-      await input.rollbackNewAgent("workflow-operator", {}, []);
     });
-    listConfiguredMcpServers.mockResolvedValue({ ok: true, mcpServers: {} });
+    applyAdd.mockImplementation(async (input) => {
+      await input.rollbackNewAgent(agentId, {}, []);
+    });
 
-    const request = callAddApply(params, () => enabled, { cron });
-    await request.run();
+    const request = await callAdd("apply", () => enabled, { cron });
 
-    expect(request.replies[0]?.[0]).toBe(false);
+    expect(request[0]?.[0]).toBe(false);
     expect(cron.removeAgentJobsTransactional).not.toHaveBeenCalled();
-    expect(deleteAgentConfigEntry).not.toHaveBeenCalled();
+    expect(deleteAgent).not.toHaveBeenCalled();
   });
 
   it("rejects a declaration created after the Claw list check without mutating it", async () => {
-    const cron = {
-      list: vi.fn().mockResolvedValue([]),
+    const cron = makeCron({
       add: vi.fn(async (_input, options) => {
         options.matchesExisting({
           declarationKey: schedule.declarationKey,
-          agentId: "workflow-operator",
-          owner: { agentId: "workflow-operator" },
+          agentId,
+          owner: { agentId },
         });
         return { id: "intervening-job" };
       }),
-    };
-    assertValidCronCreateDelivery.mockResolvedValue(undefined);
-    applyClawAddForGateway.mockImplementation(async (input) => {
-      expect(await input.cronGateway.list("workflow-operator")).toEqual({ jobs: [] });
+    });
+    validateDelivery.mockResolvedValue(undefined);
+    applyAdd.mockImplementation(async (input) => {
+      expect(await input.cronGateway.list(agentId)).toEqual({ jobs: [] });
       await input.cronGateway.add(schedule);
     });
 
-    const request = callAddApply(params, () => enabled, { cron });
-    await request.run();
+    const request = await callAdd("apply", () => enabled, { cron });
 
     expect(cron.add).toHaveBeenCalledOnce();
-    expect(request.replies[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+    expect(request[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
   });
 
   it("rechecks reviewed access at the scheduler's actual Add commit", async () => {
-    let accessCurrent = true;
+    const commitGuard = vi.fn();
     const persisted = vi.fn();
-    const cron = {
-      list: vi.fn().mockResolvedValue([]),
+    const cron = makeCron({
       add: vi.fn(async (_input, options) => {
-        accessCurrent = false;
+        commitGuard.mockImplementation(() => {
+          throw new Error("Reviewed access revoked");
+        });
         options.commitGuard();
         persisted();
         return { id: "new-job" };
       }),
-    };
-    assertValidCronCreateDelivery.mockResolvedValue(undefined);
-    applyClawAddForGateway.mockImplementation(async (input) => {
+    });
+    validateDelivery.mockResolvedValue(undefined);
+    applyAdd.mockImplementation(async (input) => {
       await input.cronGateway.add(schedule, {
-        commitGuard: () => {
-          if (!accessCurrent) {
-            throw new Error("Reviewed Claw access changed before cron commit.");
-          }
-        },
+        commitGuard,
       });
-      return { agentId: "workflow-operator", status: "complete" };
+      return complete;
     });
 
-    const request = callAddApply(params, () => enabled, { cron });
-    await request.run();
+    const request = await callAdd("apply", () => enabled, { cron });
 
     expect(cron.add).toHaveBeenCalledOnce();
     expect(persisted).not.toHaveBeenCalled();
-    expect(request.replies[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+    expect(request[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
   });
 
   it("rechecks reviewed access at the plugin reload's persistent apply", async () => {
-    let accessCurrent = true;
+    const commitGuard = vi.fn();
     const applied = vi.fn();
-    reloadManagedPlugin.mockImplementation(async ({ beforePersistentApply }) => {
-      accessCurrent = false;
+    reloadPlugin.mockImplementation(async ({ beforePersistentApply }) => {
+      commitGuard.mockImplementation(() => {
+        throw new Error("Reviewed access revoked");
+      });
       beforePersistentApply();
       applied();
       return { application: { status: "applied" } };
     });
-    applyClawAddForGateway.mockImplementation(async (input) => {
+    applyAdd.mockImplementation(async (input) => {
       await input.reloadPlugins(["workflow-plugin"], {
-        commitGuard: () => {
-          if (!accessCurrent) {
-            throw new Error("Reviewed Claw access changed before plugin reload.");
-          }
-        },
+        commitGuard,
       });
-      return { agentId: "workflow-operator", status: "complete" };
+      return complete;
     });
 
-    const request = callAddApply(params, () => enabled, {
+    const request = await callAdd("apply", () => enabled, {
       applyPluginLifecycleChange: vi.fn(),
     });
-    await request.run();
 
-    expect(reloadManagedPlugin).toHaveBeenCalledOnce();
+    expect(reloadPlugin).toHaveBeenCalledOnce();
     expect(applied).not.toHaveBeenCalled();
-    expect(request.replies[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+    expect(request[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
   });
 });

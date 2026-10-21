@@ -7,7 +7,10 @@ type Observation = {
   trackScroll: boolean;
   publish: (state: ScrollState) => void;
 };
-const observations = new Map<HTMLElement, { entries: Set<Observation>; stopScroll: () => void }>();
+const observations = new Map<
+  HTMLElement,
+  { entries: Set<Observation>; stopScroll: () => void; stopFonts?: () => void }
+>();
 let resizeObserver: ResizeObserver | undefined;
 
 function schedule(element: HTMLElement): void {
@@ -67,6 +70,18 @@ export function observeScrollState(
       stopScroll: listen(element, "scroll", onScroll, { passive: true }),
     };
     observations.set(element, group);
+    const fonts = element.ownerDocument.fonts;
+    if (fonts) {
+      const currentGroup = group;
+      const fontsChanged = () => {
+        if (observations.get(element) === currentGroup) {
+          schedule(element);
+        }
+      };
+      // Font metrics can change the overflow without resizing the viewport.
+      group.stopFonts = listen(fonts, "loadingdone", fontsChanged);
+      void fonts.ready.then(fontsChanged);
+    }
     if (!resizeObserver && typeof ResizeObserver !== "undefined") {
       resizeObserver = new ResizeObserver((resized) => {
         for (const { target } of resized) {
@@ -90,6 +105,7 @@ export function observeScrollState(
         observations.delete(element);
         resizeObserver?.unobserve(element);
         stopScroll();
+        group.stopFonts?.();
         cancelLayout(element);
         if (observations.size === 0) {
           resizeObserver?.disconnect();

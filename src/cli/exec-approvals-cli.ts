@@ -1019,7 +1019,7 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts) {
 type WritableAllowlistAgentContext = Awaited<ReturnType<typeof loadWritableAllowlistAgent>> & {
   trimmedPattern: string;
 };
-type AllowlistMutation = (context: WritableAllowlistAgentContext) => boolean | Promise<boolean>;
+type AllowlistMutation = (context: WritableAllowlistAgentContext) => boolean;
 
 function registerAllowlistMutationCommand(params: {
   allowlist: Command;
@@ -1037,7 +1037,7 @@ function registerAllowlistMutationCommand(params: {
       await runApprovalsAction(opts, async () => {
         const trimmedPattern = requireTrimmedNonEmpty(pattern, "Pattern required.");
         const context = await loadWritableAllowlistAgent(opts);
-        const shouldSave = await params.mutate({ ...context, trimmedPattern });
+        const shouldSave = params.mutate({ ...context, trimmedPattern });
         if (!shouldSave) {
           if (opts.json) {
             defaultRuntime.writeJson(redactExecApprovals(context.snapshot), 0);

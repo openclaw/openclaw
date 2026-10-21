@@ -9,6 +9,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { buildDashboardSessionTitleSource } from "../../gateway/dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
@@ -187,8 +188,11 @@ export async function maybeSpawnVisibleSession(params: {
     );
   }
 
-  const { gatewayContextResolver: resolveGatewayContext, requester } =
-    captureSubagentSpawnGatewayContext();
+  const {
+    gatewayContextResolver: resolveGatewayContext,
+    requester,
+    creatorProfileId,
+  } = captureSubagentSpawnGatewayContext();
   const cloudGateway = placement ? resolveGatewayContext?.() : undefined;
   if (placement && (!cloudGateway || cloudGateway.localEmbedded === true)) {
     return {
@@ -403,7 +407,10 @@ export async function maybeSpawnVisibleSession(params: {
           requestParams,
           {
             via: "spawn",
-            actor: { type: "agent", id: requesterAgentId },
+            actor: attributeDelegatedSessionCreator(
+              { type: "agent", id: requesterAgentId },
+              creatorProfileId,
+            ),
             requesterSessionKey: requesterKey,
             ...(childSessionPublication ? { childSessionPublication } : {}),
             requesterSenderIsOwner: params.options?.senderIsOwner === true,

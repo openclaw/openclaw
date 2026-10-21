@@ -27,6 +27,7 @@ export type ChatTranscriptPendingScrollOffset = {
 export type TranscriptCallbacks = {
   /** Sidebar commits originate on the pane element, separate from its state owner. */
   geometryEventTarget?: HTMLElement;
+  getComposerFloat?: () => HTMLElement | null;
   onViewportResize?: () => void;
   onReaderScroll?: (towardEnd?: boolean) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */

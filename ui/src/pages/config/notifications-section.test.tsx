@@ -36,6 +36,8 @@ function webPush(
 ): WebPushSnapshot {
   return {
     supported: true,
+    canManage: true,
+    canReadPreferences: true,
     permission: "granted",
     subscription: "registered",
     loading,

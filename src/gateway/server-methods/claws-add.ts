@@ -22,11 +22,16 @@ import type { ClawAddPlan } from "../../claws/types.js";
 import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
 import { listConfiguredMcpServers } from "../../config/mcp-config.js";
 import { resolveConfigPath } from "../../config/paths.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../../config/runtime-write-application.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
 import { normalizeCronJobCreate } from "../../cron/normalize.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginInstallBatchReload } from "../../plugins/install-runtime-batch.js";
 import { reloadManagedPlugin } from "../../plugins/management-mutations.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { deleteAgentConfigEntry } from "./agents-config-mutations.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -125,6 +130,9 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
             return application;
           }
         : undefined;
+      const application = createRuntimeConfigWriteApplication(
+        captureGatewayRootWorkAdmissionContinuationScope()?.run,
+      );
       const result = await applyClawAddForGateway({
         source: params.source,
         ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -158,6 +166,16 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
         assertCurrent,
         ...(signal ? { signal } : {}),
         ...(reloadPlugins ? { reloadPlugins } : {}),
+        configWriteOptions: attachRuntimeConfigWriteApplication({}, application),
+        waitForAgentRuntime: async () => {
+          const outcome = application.claimed ? await application.result : "unclaimed";
+          assertCurrent();
+          if (outcome !== "applied") {
+            throw new Error(
+              `Claw agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); inspect config.get before retrying.`,
+            );
+          }
+        },
         cronGateway: {
           add: async (input, options) => {
             const assertForwardCurrent = () => {

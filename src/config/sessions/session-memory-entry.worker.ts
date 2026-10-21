@@ -48,7 +48,7 @@ export async function prepareSessionMemoryEntry(request: SessionEntryWorkerInput
   return result!;
 }
 
-export async function prepareSessionMemoryEntries(
+async function prepareSessionMemoryEntries(
   entries: SessionEntriesWorkerInput["entries"],
   publish?: (index: number, value: PreparedEntries[number]) => Promise<void>,
 ): Promise<PreparedEntries> {

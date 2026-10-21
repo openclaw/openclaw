@@ -251,6 +251,13 @@ describes protocol support only. A catalog model is advertised for chat when:
   route); and
 - the provider exposes a matching route for one of the transports below.
 
+A model can declare optional `input` modalities (`["text"]` or `["text", "image"]`).
+A valid declaration takes precedence over built-in modality inference: explicit
+text-only models never gain image support from their names. Malformed declarations
+are treated as text-only. When `input` is absent, OpenClaw retains its existing
+family inference and recognizes exact known native OpenAI image-capable models;
+unknown model names do not inherit image support from a new GPT generation prefix.
+
 Adding a model to a supported ClawRouter provider needs no OpenClaw release.
 Successful catalog responses, including an empty granted-model list, are reused
 for one hour per endpoint and resolved credential. Ordinary model-list reads

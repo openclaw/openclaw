@@ -46,7 +46,10 @@ type ScrollTarget = {
   target: () => HTMLElement | null | undefined;
 };
 
-function scrollIdentityChanged(next: ScrollTarget, previous: ScrollTarget | undefined) {
+function scrollIdentityChanged(
+  next: Pick<ScrollTarget, "identity">,
+  previous: Pick<ScrollTarget, "identity"> | undefined,
+) {
   return (
     !previous ||
     next.identity.length !== previous.identity.length ||
@@ -56,13 +59,33 @@ function scrollIdentityChanged(next: ScrollTarget, previous: ScrollTarget | unde
 
 /** Apply identity-driven scroll commands; resolve targets after DOM commit or in the requested frame. */
 export function createScrollPosition(
-  read: () => { reset?: ScrollTarget; reveal?: ScrollTarget },
+  read: () => {
+    reset?: ScrollTarget;
+    reveal?: ScrollTarget;
+    restore?: {
+      identity: readonly unknown[];
+      target: HTMLElement | null | undefined;
+      top?: number;
+      left?: number | "end";
+    };
+  },
   options: {
     region?: () => HTMLElement;
     revealTiming?: "animation-frame";
   } = {},
 ) {
   createEffect(read, (next, previous) => {
+    if (next.restore && scrollIdentityChanged(next.restore, previous?.restore)) {
+      const target = next.restore.target;
+      if (target) {
+        if (next.restore.top !== undefined) {
+          target.scrollTop = next.restore.top;
+        }
+        if (next.restore.left !== undefined) {
+          target.scrollLeft = next.restore.left === "end" ? target.scrollWidth : next.restore.left;
+        }
+      }
+    }
     if (next.reset && scrollIdentityChanged(next.reset, previous?.reset)) {
       const target = next.reset.target();
       if (target) {

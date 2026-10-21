@@ -1,5 +1,6 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   auditMarkdownTable,
@@ -102,6 +103,10 @@ ${auditMarkdownTable}`,
     await shell.waitFor({ state: "visible" });
     for (const width of [1920, 1440, 1280, 760, 390, 932]) {
       await page.setViewportSize({ width, height: width === 932 ? 430 : 1000 });
+      await waitForLayoutSettled(
+        page,
+        '.chat-thread, [data-entry-id="wrapping-table"] .markdown-table',
+      );
       await page.locator(".chat-thread").evaluate((element) => {
         element.scrollTop = 0;
       });
