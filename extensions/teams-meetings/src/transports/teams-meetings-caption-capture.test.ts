@@ -92,6 +92,13 @@ it("enables live captions and captures the validated Teams caption row DOM", asy
   expect(window[CAPTIONS]).toMatchObject({ identity: "teams-work:19:meeting_test@thread.v2" });
 });
 
+it("watches the page for captions that have not rendered yet", async () => {
+  const page = await runCaptionStatusScript();
+
+  expect(page.result).toMatchObject({ inCall: true, transcriptLines: 0 });
+  expect(page.captionObserverTargets()).toEqual([page.document.body]);
+});
+
 it("retries an unverified live-caption activation", async () => {
   const first = await runCaptionRows([captionRow("Retry captions")], undefined, {
     captionClickIgnored: true,

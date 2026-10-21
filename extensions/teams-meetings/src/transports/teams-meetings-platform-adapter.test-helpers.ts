@@ -240,6 +240,7 @@ export async function runStatusScript(params: StatusScriptParams) {
     | ((records?: Array<{ removedNodes: PageControl[] }>) => void)
     | undefined;
   let captionObserverDisconnects = 0;
+  const captionObserverTargets: unknown[] = [];
   const script = teamsMeetingPageScripts.status({
     allowMicrophone: params.allowMicrophone ?? false,
     allowSessionAdoption: params.allowSessionAdoption ?? true,
@@ -259,7 +260,9 @@ export async function runStatusScript(params: StatusScriptParams) {
       disconnect() {
         captionObserverDisconnects += 1;
       }
-      observe() {}
+      observe(target: unknown) {
+        captionObserverTargets.push(target);
+      }
     },
     URL: globalThis.URL,
     atob: globalThis.atob,
@@ -277,6 +280,9 @@ export async function runStatusScript(params: StatusScriptParams) {
   return {
     captionButton,
     captionObserverDisconnects: () => captionObserverDisconnects,
+    /** Nodes the live-caption observer was attached to. */
+    captionObserverTargets: () => captionObserverTargets,
+    document,
     triggerCaptionMutation(nextUrl?: string, removedNode?: PageControl) {
       if (nextUrl) {
         location.href = nextUrl;

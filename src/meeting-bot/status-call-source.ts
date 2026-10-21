@@ -472,12 +472,14 @@ ${withLiveOwnership("  }\n")}${
       observedMeeting.inCallUrl === location.href
     );
   };
+  // Every control document can hold captions; platforms without a call window list only this page.
+  const captionContents = () =>
+    controlDocuments().map((root) => firstWithin(root, selectors.captionContent)).filter(Boolean);
   const scrapeCaptions = (mutations = []) => {
     if (!captionCaptureMatchesCurrentMeeting()) return;
-    const content = firstRaw(selectors.captionContent);
-    const rows = content
-      ? selectors.captionRows.flatMap((selector) => [...content.querySelectorAll(selector)])
-      : [];
+    const rows = captionContents().flatMap((content) =>
+      selectors.captionRows.flatMap((selector) => [...content.querySelectorAll(selector)])
+    );
     captionState.settled = Array.isArray(captionState.settled) ? captionState.settled : [];
     const removedNodes = mutations.flatMap((mutation) => [...(mutation.removedNodes || [])]);
     const rowWasRemoved = (entry) => removedNodes.some((node) =>
@@ -594,11 +596,14 @@ ${withLiveOwnership("  }\n")}${
     if (!captionsFinalized && canMutateSession && inCall && !captionState.observerInstalled) {
       captionState.observerInstalled = true;
       captionState.observer = new MutationObserver(scrapeCaptions);
-      captionState.observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-      });
+      // Watch every control document, even before captions render: a call window can hold them.
+      for (const root of controlDocuments()) {
+        captionState.observer.observe(root.body, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        });
+      }
       notes.push("Installed ${options.platform.displayName} live-caption observer.");
     }
     if (!captionsFinalized && canMutateSession && inCall) scrapeCaptions();

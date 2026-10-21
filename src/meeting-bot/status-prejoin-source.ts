@@ -35,6 +35,11 @@ type MeetingStatusPreludeSourceOptions = {
     manualActionReasonPrefix: string;
   };
   setupSource?: string;
+  /**
+   * Expression for the same-origin documents that hold call controls, searched in order. Defaults to
+   * this page; a platform whose client renders controls into a window it opened lists that window first.
+   */
+  controlDocumentsSource?: string;
   transcriptMaxLines?: number;
 };
 
@@ -56,6 +61,7 @@ export function createMeetingStatusPreludeSource(
   return `async () => {
   ${params.pageIdentitySource}
   ${options.setupSource ?? ""}
+  const controlDocuments = () => ${options.controlDocumentsSource ?? "[document]"};
   const parseToggleState = ${params.toggleStateFunction};
   const selectors = ${params.selectors};
   const expectedIdentity = ${JSON.stringify(params.expectedIdentity)};
@@ -79,12 +85,16 @@ export function createMeetingStatusPreludeSource(
     : node?.querySelector?.("button") || node?.closest?.("button") || node;
   const first = (list) => clickable(firstRaw(list));
   const firstRaw = (list) => {
-    for (const selector of list) {
-      const node = document.querySelector(selector);
-      if (node) return node;
+    for (const root of controlDocuments()) {
+      for (const selector of list) {
+        const node = root.querySelector(selector);
+        if (node) return node;
+      }
     }
     return undefined;
   };
+  const controlQueryAll = (list) =>
+    controlDocuments().flatMap((root) => list.flatMap((selector) => [...root.querySelectorAll(selector)]));
   const firstWithin = (root, list) => {
     if (!root) return undefined;
     for (const selector of list) {
@@ -96,8 +106,9 @@ export function createMeetingStatusPreludeSource(
   };
   // Keep these names scoped: older plugin lifecycle fragments declare their own helpers.
   const meetingAudioInput = (() => {
+    // Slack appends "(Preferred)" to its selected microphone; it marks selection, not another device.
     const isVirtualAudioDevice = (value) =>
-      /^(?:blackhole 2ch(?: \\(virtual\\))?|openclaw meeting audio)$/i.test(
+      /^(?:blackhole 2ch(?: \\(virtual\\))?|openclaw meeting audio)(?: \\(preferred\\))?$/i.test(
         String(value || "").replace(/\\s+/g, " ").trim()
       );
     const isVirtualAudioDeviceNode = (node) => [
@@ -116,7 +127,7 @@ export function createMeetingStatusPreludeSource(
       const scope = control.closest?.(selectors.microphoneDeviceScope);
       if (scope && !roots.includes(scope)) roots.push(scope);
       const listboxId = control.getAttribute?.("aria-controls");
-      const listbox = listboxId ? document.getElementById?.(listboxId) : undefined;
+      const listbox = listboxId ? (control.ownerDocument || document).getElementById?.(listboxId) : undefined;
       if (listbox && !roots.includes(listbox)) roots.push(listbox);
       const liveMenu = firstRaw(selectors.microphoneDeviceMenu);
       if (liveMenu && !roots.includes(liveMenu)) roots.push(liveMenu);
