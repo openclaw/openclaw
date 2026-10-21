@@ -12,8 +12,10 @@ import {
   createMockServerTestHarness,
   getJson,
   makeToolOutputWithCallId,
+  outputItem,
   outputToolCall,
   postJson,
+  requireRecord,
 } from "./server.test-harness.js";
 
 const { startMockServer, cleanups } = createMockServerTestHarness();
@@ -185,6 +187,40 @@ it("preserves empty tool-result identity without replaying a native patch", asyn
   const recorded = await debug("last-request");
   expect(recorded).toMatchObject({ toolOutput: "", toolOutputCallId: call?.call_id });
   expect(recorded).not.toHaveProperty("plannedToolName");
+});
+
+it("preserves namespaced native custom-tool identity over Responses WebSocket", async () => {
+  const { send } = await startConnection();
+  const events = await send({
+    tools: [
+      {
+        type: "namespace",
+        name: "openclaw_direct",
+        tools: [
+          {
+            type: "custom",
+            name: "apply_patch",
+            format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+          },
+        ],
+      },
+    ],
+    input: userInput(
+      "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+    ),
+  });
+  for (const item of [
+    ...["response.output_item.added", "response.output_item.done"].map((type) =>
+      requireRecord(events.find((event) => event.type === type)?.item, type),
+    ),
+    outputItem(readCompletedResponse(events)),
+  ]) {
+    expect(item).toMatchObject({
+      type: "custom_tool_call",
+      name: "apply_patch",
+      namespace: "openclaw_direct",
+    });
+  }
 });
 
 it("preserves the full warmup prompt when the first real response sends an empty delta", async () => {

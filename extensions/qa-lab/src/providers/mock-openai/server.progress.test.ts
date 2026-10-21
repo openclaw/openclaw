@@ -20,6 +20,7 @@ import {
 } from "./server.fixtures.test-support.js";
 import {
   createMockServerTestHarness,
+  expectAnthropicMessagesJson,
   expectOk,
   makeToolOutputWithCallId,
   outputItems,
@@ -43,6 +44,11 @@ const ERROR_PROMPT =
 
 const RUNNING_OUTPUT =
   "Command still running (session lucky-slug, pid 3128). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
+const EXIT_ZERO = "\n\nProcess exited with code 0.";
+
+function expectStage(payload: unknown, phase: string, text: string) {
+  expect(outputItems(payload)).toMatchObject([{ type: "message", phase, content: [{ text }] }]);
+}
 
 const APPROVAL_OUTPUT =
   "Approval required (id abc123, full abc12345).\nHost: gateway\nCWD: /workspace\nCommand:\n```sh\ntrue\n```\nMode: foreground (interactive approvals available).\nBackground mode requires pre-approved policy (allow-always or ask=off).\nReply with: /approve abc123 allow-once|allow-always|deny\nIf the short code is ambiguous, use the full id in /approve.";
@@ -60,23 +66,20 @@ type ProgressResult = {
   args: Record<string, unknown>;
   output: string | unknown[];
   isError?: boolean;
-  callId?: string | null;
+  callId?: string;
 };
 
-async function requestProgress(
-  route: string,
-  prompt: string,
-  results: ProgressResult[],
-  context?: string,
-) {
+async function requestProgress(route: string, prompt: string, results: ProgressResult[]) {
   const server = await startMockServer();
   const responses = route === "responses";
-  const input = [prompt, ...(context ? [context] : [])].map((text) => ({
-    role: "user",
-    content: responses ? [textBlock(text)] : text,
-  }));
+  const input = [
+    {
+      role: "user",
+      content: responses ? [textBlock(prompt)] : prompt,
+    },
+  ];
   const history = results.flatMap(({ tool, args, output, isError, callId }, index) => {
-    const id = callId === null ? undefined : (callId ?? `progress_${index}`);
+    const id = callId ?? `progress_${index}`;
     return responses
       ? [
           functionCall(tool, args, id),
@@ -117,31 +120,16 @@ describe("Anthropic command progress wire", () => {
     ];
     const pending = await requestProgress("messages", prompt, results);
     expect(pending.content).toMatchObject([{ name: "process" }]);
-    results.push({
-      tool: "process",
-      args: { action: "poll", sessionId: "lucky-slug" },
-      output: "\n\nProcess exited with code 0.",
-    });
+    results.push(pollResult(EXIT_ZERO));
     expect(await requestProgress("messages", prompt, results)).toMatchObject({
       content: [{ text: "BUG-TOOL-DID-NOT-FAIL" }],
     });
   });
   it("rejects empty call IDs even when command failure is allowed", async () => {
-    const callId = "";
-
-    const response = await requestProgress(
-      "messages",
-      EXEC_PROMPT.replace("command completes,", "command completes or fails,"),
-      [
-        { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT, callId },
-        {
-          tool: "process",
-          args: { action: "poll", sessionId: "lucky-slug" },
-          output: "\n\nProcess exited with code 0.",
-          callId,
-        },
-      ],
-    );
+    const response = await requestProgress("messages", FAILURE_ALLOWED_PROMPT, [
+      { ...execResult(RUNNING_OUTPUT), callId: "" },
+      { ...pollResult(EXIT_ZERO), callId: "" },
+    ]);
     expect(response).toMatchObject({ content: [{ text: "BUG-TOOL-PROGRESS-CALL-MISMATCH" }] });
   });
 });
@@ -213,20 +201,12 @@ it("keeps Slack commentary progress open while its exec is running", async () =>
       },
     ],
   });
-  results.push({
-    tool: "process",
-    args: { action: "poll", sessionId: "lucky-slug" },
-    output: "\n\nProcess exited with code 0.",
-  });
-  expect(await requestProgress("responses", prompt, results)).toMatchObject({
-    output: [
-      {
-        type: "message",
-        phase: "final_answer",
-        content: [{ text: "SLACK-QA-COMMENTARY-DONE-A1B2C3D4" }],
-      },
-    ],
-  });
+  results.push(pollResult(EXIT_ZERO));
+  expectStage(
+    await requestProgress("responses", prompt, results),
+    "final_answer",
+    "SLACK-QA-COMMENTARY-DONE-A1B2C3D4",
+  );
 });
 
 it("selects commentary, exec, and final delivery for the actual Telegram scenario prompt", async () => {
@@ -275,13 +255,7 @@ it("selects commentary, exec, and final delivery for the actual Telegram scenari
       "SLACK-QA-OUTPUT-00000000\n\nProcess exited with code 0.",
     ),
   ]);
-  expect(outputItems(final)).toMatchObject([
-    {
-      type: "message",
-      phase: "final_answer",
-      content: [{ text: "SLACK-QA-COMMENTARY-DONE-00000000" }],
-    },
-  ]);
+  expectStage(final, "final_answer", "SLACK-QA-COMMENTARY-DONE-00000000");
 });
 
 async function completeProgress(params: {
@@ -290,28 +264,22 @@ async function completeProgress(params: {
   args: Record<string, unknown>;
   output: string | unknown[];
   isError?: boolean;
-  context?: string;
 }) {
-  const plan = await requestProgress("messages", params.prompt, [], params.context);
+  const plan = await requestProgress("messages", params.prompt, []);
   const call = plan.content[0];
   expect(call).toMatchObject({ type: "tool_use", name: params.tool, input: params.args });
-  return requestProgress(
-    "messages",
-    params.prompt,
-    [{ ...params, callId: call.id }],
-    params.context,
-  );
+  return requestProgress("messages", params.prompt, [{ ...params, callId: call.id }]);
 }
 
 describe("tool progress stdout", () => {
   it.each([
-    ...[APPROVAL_OUTPUT.replaceAll("```", "````")].map((output) => ({
-      label: `exec stdout containing an incomplete or foreign notice: ${output}`,
+    {
+      label: "exec stdout containing a foreign approval fence",
       tool: "exec",
       prompt: EXEC_PROMPT,
-      output,
+      output: APPROVAL_OUTPUT.replaceAll("```", "````"),
       isError: false,
-    })),
+    },
     { label: "an empty read result", tool: "read", prompt: READ_PROMPT, output: "" },
   ])("finishes after $label", async (fixture) => {
     const response = await completeProgress({
@@ -346,13 +314,8 @@ it("distinguishes a successful CodeMode runner from its failed read", async () =
     },
     { name: "wait", input_schema: { type: "object", properties: {} } },
   ];
-  const request = async (messages: unknown[]) => {
-    return (
-      await expectOk(
-        postJson(server, "/v1/messages", { model: "qa-model", max_tokens: 256, tools, messages }),
-      )
-    ).json();
-  };
+  const request = (messages: unknown[]) =>
+    expectAnthropicMessagesJson(server, { model: "qa-model", max_tokens: 256, tools, messages });
   const input = [{ role: "user", content: ERROR_PROMPT }];
   const plan = await request(input);
   expect(plan.content).toMatchObject([{ type: "tool_use", name: "exec" }]);

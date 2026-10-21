@@ -3,7 +3,7 @@ import type { PluginHookRegistration } from "openclaw/plugin-sdk/plugin-test-run
 import { describe, expect, it } from "vitest";
 import qaLabPlugin from "../../../index.js";
 import { QA_SESSION_OBSERVER_HEADER } from "../shared/session-observer-registry.js";
-import { respond, textBlock, userInputs } from "./server.fixtures.test-support.js";
+import { respond, settleParent, textBlock, userInputs } from "./server.fixtures.test-support.js";
 import {
   type MockServer,
   createMockServerTestHarness,
@@ -204,15 +204,6 @@ describe("QA transport session identity", () => {
   it("settles the full requester observed behind a truncated affinity value", async () => {
     const sessionId = `internal-session-effects-${"run-".repeat(20)}parent`;
     const childSessionKey = "agent:qa:subagent:identity-child";
-    const session = {
-      key: "agent:qa:main",
-      agentId: "qa",
-      sessionId,
-      hasActiveRun: false,
-      status: "done",
-      abortedLastRun: false,
-    };
-    const gateway = { call: async () => ({ sessions: [session], nextOffset: null }) };
     const server = await startMockServer();
     await observeSession(server, sessionId);
     const response = await requestJson(
@@ -233,7 +224,7 @@ describe("QA transport session identity", () => {
     );
     expect(outputText(response)).toBe("Worker started.");
     expect(await getJson(server, "/debug/last-request")).toMatchObject({ sessionId });
-    await server.terminalRequesters.settle(gateway);
+    await settleParent(server, sessionId);
     const child = await respond(server, "Subagent terminal reply QA worker: visible.", {
       client_metadata: { session_id: "identity-child" },
       instructions: `- Your session: ${childSessionKey}.`,

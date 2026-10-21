@@ -11,6 +11,23 @@ import {
 
 type Options = Record<string, unknown>;
 
+export function settleParent(server: MockServer, sessionId: string, key = "agent:qa:main") {
+  return server.terminalRequesters.settle({
+    call: async () => ({
+      sessions: [
+        {
+          key,
+          agentId: "qa",
+          sessionId,
+          hasActiveRun: false,
+          status: "done",
+          abortedLastRun: false,
+        },
+      ],
+    }),
+  });
+}
+
 export function userInputs(...items: (string | Record<string, unknown>)[]) {
   return items.map((item) => (typeof item === "string" ? makeUserInput(item) : item));
 }

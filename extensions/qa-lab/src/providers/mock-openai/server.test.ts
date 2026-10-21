@@ -1,7 +1,5 @@
-import { once } from "node:events";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { WebSocket } from "ws";
 import { buildSlackProgressCommentaryRun } from "../../live-transports/slack/slack-live.scenario-fixtures.js";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
@@ -60,7 +58,7 @@ import {
   makeToolOutputWithCallId,
 } from "./server.test-harness.js";
 
-const { startMockServer, cleanups } = createMockServerTestHarness();
+const { startMockServer } = createMockServerTestHarness();
 const QA_FANOUT_PROMPT =
   "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
 
@@ -323,17 +321,6 @@ function buildWhatsAppPendingHistoryContextFixture(
 
 const SESSIONS_SPAWN_TOOL = { type: "function", name: "sessions_spawn" } as const;
 const SESSIONS_YIELD_TOOL = { type: "function", name: "sessions_yield" } as const;
-const CODEX_CUSTOM_PATCH_TOOL = {
-  type: "custom",
-  name: "apply_patch",
-  format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
-} as const;
-const CODEX_CUSTOM_PATCH_NAMESPACE = {
-  type: "namespace",
-  name: "openclaw_direct",
-  tools: [CODEX_CUSTOM_PATCH_TOOL],
-} as const;
-
 const CODE_MODE_TOOLS = [
   {
     type: "function",
@@ -2531,58 +2518,6 @@ describe("qa mock openai server", () => {
       id: entry.expectedQuestionId,
       ...(entry.expectedMultiSelect ? { multiSelect: true } : {}),
     });
-  });
-
-  it("preserves namespaced native custom-tool identity over Responses WebSocket", async () => {
-    const server = await startMockServer();
-    const socket = new WebSocket(`${server.baseUrl.replace(/^http/u, "ws")}/v1/responses`);
-    cleanups.push(async () => socket.terminate());
-    await once(socket, "open");
-
-    const completed = new Promise<Array<Record<string, unknown>>>((resolve, reject) => {
-      const events: Array<Record<string, unknown>> = [];
-      socket.on("error", reject);
-      socket.on("message", (message) => {
-        const event = JSON.parse(Buffer.from(message as Buffer).toString("utf8")) as Record<
-          string,
-          unknown
-        >;
-        events.push(event);
-        if (event.type === "response.completed") {
-          resolve(events);
-        }
-      });
-    });
-    socket.send(
-      JSON.stringify({
-        type: "response.create",
-        tools: [CODEX_CUSTOM_PATCH_NAMESPACE],
-        input: userInputs(
-          "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
-        ),
-      }),
-    );
-
-    const events = await completed;
-    const added = requireRecord(
-      events.find((event) => event.type === "response.output_item.added")?.item,
-      "WebSocket custom-tool added item",
-    );
-    const done = requireRecord(
-      events.find((event) => event.type === "response.output_item.done")?.item,
-      "WebSocket custom-tool completed item",
-    );
-    const response = requireRecord(
-      events.find((event) => event.type === "response.completed")?.response,
-      "WebSocket completed response",
-    );
-    for (const item of [added, done, outputItem(response)]) {
-      expect(item).toMatchObject({
-        type: "custom_tool_call",
-        name: "apply_patch",
-        namespace: "openclaw_direct",
-      });
-    }
   });
 
   it.each([
