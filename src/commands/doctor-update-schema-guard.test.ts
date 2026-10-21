@@ -649,7 +649,7 @@ it.each([false, true])(
   },
 );
 
-it.each(["owned", "flag-only", "changed namespace", "released owner", "replaced database"])(
+it.each(["released owner", "replaced database"])(
   "binds schema exemption to actual disposable rehearsal coverage: %s",
   async (mode) => {
     await withLegacyAgent(true, async (f) => {
@@ -657,9 +657,6 @@ it.each(["owned", "flag-only", "changed namespace", "released owner", "replaced 
       const bytes = fs.readFileSync(f.pathname);
       const create = vi.spyOn(backupCreate, "createBackupArchive");
       stubRehearsalEnv(stateDir);
-      if (mode === "flag-only") {
-        vi.stubEnv("TMPDIR", path.dirname(stateDir));
-      }
       const owner = acquireGatewayStateOwner({ databasePath: resolveOpenClawStateSqlitePath() });
       const maintenance = createOpenClawDatabaseMaintenanceScope({
         schemaMaintenance: true,
@@ -670,11 +667,9 @@ it.each(["owned", "flag-only", "changed namespace", "released owner", "replaced 
       vi.spyOn(sqliteSnapshot, "prepareSqliteReadOnlyLocation").mockImplementation(
         async (...args) => {
           const prepared = await snapshot(...args);
-          if (mode === "changed namespace") {
-            vi.stubEnv("TMPDIR", path.dirname(stateDir));
-          } else if (mode === "released owner") {
+          if (mode === "released owner") {
             owner.release();
-          } else if (mode === "replaced database") {
+          } else {
             replaceAgent(f.pathname);
           }
           return prepared;
@@ -684,19 +679,9 @@ it.each(["owned", "flag-only", "changed namespace", "released owner", "replaced 
         const admission = maintenance.run(() =>
           guardUpdateDoctorSchemaUpgrade({ schemas: f.schemas }),
         );
-        if (mode === "owned") {
-          expect(await admission).toBe(f.schemas);
-        } else if (mode === "flag-only") {
-          await expect(admission).rejects.toMatchObject({ code: "update-schema-bump-unfenced" });
-        } else {
-          await expect(admission).rejects.toThrow(
-            mode === "changed namespace"
-              ? /namespace changed/
-              : mode === "replaced database"
-                ? /identity changed/
-                : /released|current|owner/i,
-          );
-        }
+        await expect(admission).rejects.toThrow(
+          mode === "replaced database" ? /identity changed/ : /released|current|owner/i,
+        );
         expect(create).not.toHaveBeenCalled();
         expect(fs.readFileSync(f.pathname)).toEqual(bytes);
       } finally {

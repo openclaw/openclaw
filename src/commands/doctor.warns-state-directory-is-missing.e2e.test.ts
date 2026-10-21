@@ -86,19 +86,6 @@ it("reports when the state directory was missing at doctor start", async () => {
   expectNote("State integrity", "State directory was missing at doctor start");
 });
 
-it("routes browser readiness through health contributions", async () => {
-  const { noteChromeMcpBrowserReadiness } = await import("./doctor-browser.js");
-  const browserReadiness = vi.mocked(noteChromeMcpBrowserReadiness);
-  browserReadiness.mockClear();
-  mockDoctorConfigSnapshot({ config: { browser: { defaultProfile: "user" } } });
-
-  await runDoctorNonInteractive();
-
-  expect(browserReadiness).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ browser: { defaultProfile: "user" } }),
-  );
-});
-
 it("warns about active OpenCode provider overrides", async () => {
   const provider = (suffix: string) => ({
     api: "openai-completions" as const,

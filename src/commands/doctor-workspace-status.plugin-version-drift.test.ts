@@ -27,14 +27,12 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
-  listAgentIds: (cfg: OpenClawConfig) => mocks.listAgentIds(cfg),
-  resolveAgentWorkspaceDir: (...args: unknown[]) => mocks.resolveAgentWorkspaceDir(...args),
+  listAgentIds: mocks.listAgentIds,
+  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
 }));
 vi.mock("../plugins/status.js", () => ({
-  buildPluginRegistrySnapshotReport: (...args: unknown[]) =>
-    mocks.buildPluginRegistrySnapshotReport(...args),
-  buildPluginCompatibilityWarnings: (...args: unknown[]) =>
-    mocks.buildPluginCompatibilityWarnings(...args),
+  buildPluginRegistrySnapshotReport: mocks.buildPluginRegistrySnapshotReport,
+  buildPluginCompatibilityWarnings: mocks.buildPluginCompatibilityWarnings,
 }));
 
 function setReport(loadResult = createPluginLoadResult({ plugins: [] }), warnings: string[] = []) {
@@ -72,19 +70,6 @@ const codexDrift: Drift = {
   gatewayVersion: "2026.6.1",
   source: "npm",
 };
-function showDrift(entry: Drift) {
-  setReport(
-    createPluginLoadResult({
-      plugins: [createPluginRecord({ id: entry.pluginId })],
-    }),
-  );
-  const spy = spyNotes();
-  noteWorkspaceStatus(
-    { plugins: { entries: { [entry.pluginId]: { enabled: true } } } },
-    readiness(entry),
-  );
-  return noteBody(spy, "Plugin restart readiness");
-}
 
 it("shares scoped workspace inspection while reporting identical registrar failures once", () => {
   const diagnostic = {
@@ -228,8 +213,8 @@ it("collects compatibility warnings and plugin diagnostics", () => {
 });
 
 it("surfaces active official managed plugin version drift", () => {
-  const body = showDrift(codexDrift);
-  expect(collectWorkspaceStatusHealthFindings({}, readiness(codexDrift))).toEqual([
+  const { findings, output } = inspect(readiness(codexDrift).pluginVersionReadiness);
+  expect(findings).toEqual([
     expect.objectContaining({
       checkId: "core/doctor/workspace-status",
       severity: "warning",
@@ -246,7 +231,7 @@ it("surfaces active official managed plugin version drift", () => {
     "openclaw plugins update codex",
     "openclaw gateway restart",
   ]) {
-    expect(body).toContain(text);
+    expect(output).toContain(text);
   }
 });
 
@@ -266,7 +251,7 @@ function inspect(state: PluginVersionRestartReadiness, cfg: OpenClawConfig = dri
   const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
   noteSpy.mockClear();
   noteWorkspaceStatus(cfg, { pluginVersionReadiness: state });
-  return { findings, noteSpy };
+  return { findings, output: noteBody(noteSpy, "Plugin restart readiness") };
 }
 
 function detectCodexDrift(installedVersion: string, gatewayVersion: string) {
@@ -296,7 +281,7 @@ function detectCodexDrift(installedVersion: string, gatewayVersion: string) {
 it.each(["unresolved", "restart"] as const)("reports %s Gateway readiness", (state) => {
   const unresolved = state === "unresolved";
   const runningGatewayVersion = "2026.5.30";
-  const { findings, noteSpy } = inspect(
+  const { findings, output } = inspect(
     unresolved
       ? {
           status: "unresolved",
@@ -320,10 +305,7 @@ it.each(["unresolved", "restart"] as const)("reports %s Gateway readiness", (sta
       ...(!unresolved ? { fixHint: "openclaw gateway restart" } : {}),
     },
   ]);
-  expect(noteSpy).toHaveBeenCalledWith(
-    expect.stringContaining(`Running Gateway: OpenClaw ${runningGatewayVersion}`),
-    "Plugin restart readiness",
-  );
+  expect(output).toContain(`Running Gateway: OpenClaw ${runningGatewayVersion}`);
 });
 
 it("reports older and newer pins as advisory drift while accepting correction suffixes", () => {
@@ -331,7 +313,7 @@ it("reports older and newer pins as advisory drift while accepting correction su
 
   for (const installedVersion of ["2026.5.30", "2026.6.2"]) {
     const report = detectCodexDrift(installedVersion, gatewayVersion);
-    const { findings, noteSpy } = inspect({ status: "resolved", report });
+    const { findings, output } = inspect({ status: "resolved", report });
     expect(findings).toEqual([
       {
         checkId: "core/doctor/workspace-status",
@@ -344,11 +326,6 @@ it("reports older and newer pins as advisory drift while accepting correction su
       },
     ]);
 
-    const driftNotes = noteSpy.mock.calls.filter(
-      ([, title]) => title === "Plugin restart readiness",
-    );
-    expect(driftNotes).toHaveLength(1);
-    const output = driftNotes[0]?.[0];
     for (const text of [
       `1 active official plugin not on post-restart OpenClaw ${gatewayVersion}`,
       `codex: ${installedVersion} (npm) -> expected ${gatewayVersion}`,
@@ -412,10 +389,8 @@ it.each([
         },
       }),
     );
-    const { findings, noteSpy } = inspect({ status: "resolved", report }, {});
+    const { findings, output } = inspect({ status: "resolved", report }, {});
     expect(findings).toHaveLength(1);
-    expect(noteSpy).toHaveBeenCalledOnce();
-    const output = String(noteSpy.mock.calls[0]?.[0]);
     if (result === "current") {
       expect(findings[0]?.severity).toBe("info");
       expect(findings[0]?.message).toContain("registry version 2026.9.3");

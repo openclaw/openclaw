@@ -2,7 +2,6 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayEventLoopHealth } from "../gateway/server/event-loop-health.js";
 
-const noteMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
@@ -12,9 +11,9 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
-const { collectWhatsappResponsivenessHealthFindings, noteWhatsappResponsivenessHealth } =
+const { collectWhatsappResponsivenessHealthFindings } =
   await import("./doctor-whatsapp-responsiveness.js");
 
 const cfg: OpenClawConfig = { channels: { whatsapp: { enabled: true } } };
@@ -56,7 +55,19 @@ it("detects local TUI commands through the advisory finding", () => {
     expect(findings).toEqual([]);
     expect(spawnSyncMock).not.toHaveBeenCalled();
   } else {
-    expect(findings).toEqual([expect.objectContaining({ target: "101, 104, 105" })]);
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/whatsapp-responsiveness",
+        severity: "warning",
+        path: "channels.whatsapp",
+        target: "101, 104, 105",
+        requirement: "local-tui-event-loop-pressure",
+        message:
+          "Gateway reports pressure, and local TUI clients were detected. This snapshot does not identify the source of the pressure.",
+        fixHint:
+          "Inspect Gateway diagnostics with openclaw gateway diagnostics export before deciding whether to close clients.",
+      }),
+    ]);
     expect(spawnSyncMock).toHaveBeenCalledWith("ps", ["-axo", "pid=,command="], {
       encoding: "utf8",
       killSignal: "SIGKILL",
@@ -65,28 +76,8 @@ it("detects local TUI commands through the advisory finding", () => {
   }
 });
 
-it("keeps pressure advice factual and shared with the note", () => {
-  const findings = collectWhatsappResponsivenessHealthFindings(pressured);
-  expect(findings).toEqual([
-    expect.objectContaining({
-      checkId: "core/doctor/whatsapp-responsiveness",
-      severity: "warning",
-      path: "channels.whatsapp",
-      target: "101",
-      requirement: "local-tui-event-loop-pressure",
-      message:
-        "Gateway reports pressure, and local TUI clients were detected. This snapshot does not identify the source of the pressure.",
-      fixHint:
-        "Inspect Gateway diagnostics with openclaw gateway diagnostics export before deciding whether to close clients.",
-    }),
-  ]);
-  noteWhatsappResponsivenessHealth(pressured);
-  expect(noteMock).toHaveBeenCalledWith(
-    [findings[0]?.message, "Local TUI pids: 101", findings[0]?.fixHint].join("\n"),
-    "WhatsApp responsiveness",
-  );
-});
-
+// The real doctor flow owns note rendering and maintenance-mode silence:
+// src/flows/doctor-whatsapp-responsiveness.flow.test.ts.
 it.each([
   { name: "missing status during maintenance", status: undefined },
   {
@@ -101,7 +92,5 @@ it.each([
 ])("stays quiet with $name", ({ name: _name, ...overrides }) => {
   const params = { ...pressured, ...overrides };
   expect(collectWhatsappResponsivenessHealthFindings(params)).toEqual([]);
-  noteWhatsappResponsivenessHealth(params);
-  expect(noteMock).not.toHaveBeenCalled();
   expect(spawnSyncMock).not.toHaveBeenCalled();
 });

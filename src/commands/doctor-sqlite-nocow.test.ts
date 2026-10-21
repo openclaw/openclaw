@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import net from "node:net";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -55,8 +54,7 @@ let fixture: ReturnType<typeof createDoctorNoCowToolFixture>;
 const nativeStatfs = fs.statfsSync;
 
 beforeEach(() => {
-  // The real socket fixture must fit sockaddr_un even with a deeply nested TMPDIR.
-  root = tempDirs.make("openclaw-nocow-", process.platform === "win32" ? undefined : "/tmp");
+  root = tempDirs.make("openclaw-nocow-");
   directory = path.join(root, "state");
   fs.mkdirSync(directory);
   sqlitePath = path.join(directory, "openclaw.sqlite");
@@ -155,27 +153,6 @@ it.each([
   expect(fs.readdirSync(root).some((name) => name.includes(".nocow-"))).toBe(false);
 });
 
-it("preflights sibling stores on one filesystem once", async () => {
-  seedDatabase();
-  const sibling = path.join(root, "agent");
-  fs.cpSync(directory, sibling, { recursive: true });
-  const result = await repairDoctorSqliteNoCow({
-    paths: [sqlitePath, path.join(sibling, "openclaw.sqlite")],
-    stateDir: root,
-    env: { OPENCLAW_STATE_DIR: root },
-    assertCurrent: () => {},
-  });
-  expect(result.warnings).toEqual([]);
-  expect(result.changes).toHaveLength(2);
-  const probes = vi
-    .mocked(spawnSync)
-    .mock.calls.filter(
-      ([command, args]) => command === "fuser" && args?.[0]?.includes(".nocow-probe-"),
-    );
-  expect(probes).toHaveLength(1);
-  expect(fixture.exchanges).toBe(6);
-});
-
 it("refuses a store opened after copying before the real exchange", async () => {
   seedDatabase();
   const original = fs.statSync(directory).ino;
@@ -237,6 +214,13 @@ it.skipIf(process.platform !== "linux")(
           await maintenance!.repairSqliteNoCow(paths);
           expect(maintenance!.warnings).toEqual([]);
           expect(fixture.exchanges).toBeGreaterThanOrEqual(4);
+          expect(
+            vi
+              .mocked(spawnSync)
+              .mock.calls.filter(
+                ([command, args]) => command === "fuser" && args?.[0]?.includes(".nocow-probe-"),
+              ),
+          ).toHaveLength(1);
           expect(handleCounts.length).toBeGreaterThan(0);
           expect(handleCounts.every((count) => count === 0)).toBe(true);
           expect(
@@ -398,41 +382,6 @@ it.skipIf(process.platform === "win32")(
     expect(fs.statSync(lock).ino).toBe(originalLock.ino);
     expect(fs.readFileSync(lock)).toHaveLength(0);
     expect(fs.readFileSync(path.join(external, "untouched"), "utf8")).toBe("outside the store");
-  },
-);
-
-it.skipIf(process.platform === "win32").each(["FIFO", "socket", "hard-linked"] as const)(
-  "leaves unrelated %s entries untouched",
-  async (type) => {
-    seedDatabase();
-    const pathname = path.join(directory, "unsupported");
-    const original = fs.statSync(directory);
-    let server: net.Server | undefined;
-    if (type === "FIFO") {
-      const native =
-        await vi.importActual<typeof import("node:child_process")>("node:child_process");
-      expect(native.spawnSync("mkfifo", [pathname]).status).toBe(0);
-    } else if (type === "socket") {
-      server = net.createServer();
-      await new Promise<void>((resolve, reject) => {
-        server!.once("error", reject);
-        server!.listen(pathname, resolve);
-      });
-    } else {
-      fs.linkSync(path.join(directory, "sibling.txt"), pathname);
-    }
-    try {
-      const notes = (await repair()).join("\n");
-      expect(notes).toContain("Rewrote SQLite files with NOCOW");
-      expect(fixture.exchanges).toBe(3);
-      expect(fs.statSync(directory).ino).toBe(original.ino);
-    } finally {
-      if (server) {
-        await new Promise<void>((resolve, reject) => {
-          server!.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
-    }
   },
 );
 

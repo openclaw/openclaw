@@ -14,8 +14,7 @@ import {
 } from "./doctor.e2e-harness.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
-  useMockProviders: false,
-  resolvePluginProvidersCore: vi.fn((_params?: unknown): ProviderPlugin[] => []),
+  resolvePluginProvidersCore: vi.fn<(_params?: unknown) => ProviderPlugin[] | undefined>(),
 }));
 
 vi.mock("../plugins/providers.runtime.js", async () => {
@@ -27,9 +26,8 @@ vi.mock("../plugins/providers.runtime.js", async () => {
     resolvePluginProvidersCore: (
       params: Parameters<typeof actual.resolvePluginProvidersCore>[0],
     ): ProviderPlugin[] =>
-      providerRuntimeMocks.useMockProviders
-        ? providerRuntimeMocks.resolvePluginProvidersCore(params)
-        : actual.resolvePluginProvidersCore(params),
+      providerRuntimeMocks.resolvePluginProvidersCore(params) ??
+      actual.resolvePluginProvidersCore(params),
   };
 });
 
@@ -58,8 +56,7 @@ beforeEach(async () => {
   ({ doctorCommand } = await import("./doctor.js"));
   ({ healthCommand } = await import("./health.js"));
   vi.clearAllMocks();
-  providerRuntimeMocks.useMockProviders = false;
-  providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([]);
+  providerRuntimeMocks.resolvePluginProvidersCore.mockReset();
 });
 
 it("runs legacy state migrations in yes mode without prompting", async () => {
@@ -116,7 +113,6 @@ it("migrates anthropic oauth config profile id when only email profile exists", 
       },
     },
   });
-  providerRuntimeMocks.useMockProviders = true;
   providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([
     {
       id: "anthropic",
