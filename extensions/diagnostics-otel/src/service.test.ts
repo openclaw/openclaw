@@ -932,6 +932,7 @@ describe("diagnostics-otel service", () => {
   test("retires an exporter failure retained after shutdown rejects", async () => {
     const { events, unsubscribe } = captureExporterEvents();
     const { service, ctx } = await startServiceFixture(["traces"]);
+    const health = getReportedExporterHealth(ctx);
     exporters.traces.shutdown.mockRejectedValueOnce(new TypeError("private shutdown details"));
     traceProviderShutdown.mockImplementationOnce(async () => {
       // Emulate the real provider shutdown chain: the exporter health wrapper
@@ -952,21 +953,18 @@ describe("diagnostics-otel service", () => {
       ["started", "configured"],
       ["failure", "shutdown_failed"],
     ]);
-    expect(project(getReportedExporterHealth(ctx), ["transport", "status", "reason"])).toEqual([
+    expect(project(health, ["transport", "status", "reason"])).toEqual([
       ["otlp-http-protobuf", "started", "configured"],
       ["otlp-http-protobuf", "failure", "shutdown_failed"],
     ]);
+    expect(health.at(-1)?.signal).toBe("traces");
+    expect(health.at(-1)?.errorCategory).toBe("TypeError");
 
     await expect(service.stop?.(ctx)).resolves.toBeUndefined();
     await waitForDiagnosticEventsDrained();
     expect(events.at(-1)).toMatchObject({ status: "dropped" });
-    expect(getReportedExporterHealth(ctx).at(-1)).toMatchObject({
-      transport: "otlp-http-protobuf",
-      status: "dropped",
-    });
-    expect(JSON.stringify({ events, health: getReportedExporterHealth(ctx) })).not.toContain(
-      "private shutdown details",
-    );
+    expect(health.at(-1)).toMatchObject({ transport: "otlp-http-protobuf", status: "dropped" });
+    expect(JSON.stringify({ events, health })).not.toContain("private shutdown details");
     unsubscribe();
   });
 
