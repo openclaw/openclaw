@@ -598,6 +598,5 @@ export function createSubagentResumeReader(params: {
       pendingResumeChecks.has(getSubagentRunRuntimeKey(entry)),
     retirePending: (entry: SubagentRunRecord) =>
       pendingResumeChecks.delete(getSubagentRunRuntimeKey(entry)),
-    reset: () => pendingResumeChecks.clear(),
   };
 }

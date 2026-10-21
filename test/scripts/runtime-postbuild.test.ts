@@ -173,7 +173,8 @@ describe("runtime postbuild static assets", () => {
       outputs: string[];
       sources: string[];
       packageOutputs: string[];
-    }>(`
+    }>(
+      `
       const assets = await import("./scripts/lib/static-extension-assets.mts");
       const discovered = assets.discoverStaticExtensionAssets();
       const packageAssets = assets.discoverStaticExtensionAssets({ includeExternalPlugins: true });
@@ -182,7 +183,9 @@ describe("runtime postbuild static assets", () => {
         sources: assets.listStaticExtensionAssetSources(),
         packageOutputs: packageAssets.map(({ dest }) => dest),
       };
-    `);
+    `,
+      { allowedExistsSyncPaths: [path.join(MODULE_ROOT, ".git")] },
+    );
 
     expect(payload.outputs).toEqual([
       "dist/extensions/apple-fm/assets/AppleFoundationModels.swift",
@@ -1216,7 +1219,7 @@ describe("previous release update compatibility", () => {
     fsSync.writeFileSync(file, contents);
   }
 
-  function recordFixture(): UpdateCompatibilityInventory & {
+  function recordFixture(includePrivateWorker = false): UpdateCompatibilityInventory & {
     releases: [UpdateCompatibilityRelease];
   } {
     const root = createTempDir("update-compat-release-");
@@ -1251,6 +1254,24 @@ describe("previous release update compatibility", () => {
         "export { resolveRunner as r, resolveMode as m };",
       ].join("\n"),
     );
+    if (includePrivateWorker) {
+      const worker = "state/openclaw-state-read.worker";
+      write(
+        root,
+        `dist/${worker}.js`,
+        `//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n`,
+      );
+      write(
+        root,
+        "dist/state/openclaw-state-read-command.mjs",
+        `//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n`,
+      );
+      write(
+        root,
+        "dist/state/openclaw-state-read-service-abcdefgh.mjs",
+        '//#region src/cli/update-cli/runner.ts\nexport function resolveRunner() { return "private worker"; }\n',
+      );
+    }
     return {
       schemaVersion: 1,
       releases: [recordUpdateCompatibilityRelease({ packageDir: root, integrity })],
@@ -2154,7 +2175,8 @@ describe("previous release update compatibility", () => {
   });
 
   it("records emitted aliases and forwards old consumers to the current implementations", async () => {
-    const inventory = recordFixture();
+    const inventory = recordFixture(true);
+    expect(inventory.releases[0].chunks).toHaveLength(1);
     expect(inventory.releases[0].chunks).toMatchObject([
       {
         path: "service-abcdefgh.js",

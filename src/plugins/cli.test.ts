@@ -1,6 +1,11 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { isCommandJsonOutputMode } from "../cli/program/json-mode.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type {
+  OpenClawPluginCliRegistrationOptions,
+  OpenClawPluginCliRootCommandDescriptor,
+} from "./plugin-registration.types.js";
 
 const mocks = vi.hoisted(() => ({
   memoryRegister: vi.fn(),
@@ -77,7 +82,7 @@ const descriptor = (name: string, description: string) => ({
 
 function createCliRegistry(params?: {
   memoryCommands?: string[];
-  memoryDescriptors?: ReturnType<typeof descriptor>[];
+  memoryDescriptors?: OpenClawPluginCliRootCommandDescriptor[];
 }) {
   return {
     cliRegistrars: [
@@ -207,6 +212,42 @@ describe("registerPluginCliCommandsFromValidatedConfig", () => {
     await registerPluginCliCommandsFromValidatedConfig(program);
     expect(mocks.memoryRegister).not.toHaveBeenCalled();
     expect(mocks.otherRegister).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps dynamically built legacy parent paths assignable", () => {
+    const parentPath: string[] = ["nodes"];
+    const options: OpenClawPluginCliRegistrationOptions = {
+      parentPath,
+      descriptors: [{ name: "camera", description: "Camera", hasSubcommands: true }],
+    };
+
+    expect(options.parentPath).toBe(parentPath);
+  });
+
+  it.each([
+    { mode: "eager" as const, primary: undefined },
+    { mode: "lazy" as const, primary: "memory" },
+    { mode: "lazy" as const, primary: undefined },
+  ])("applies machine-output metadata in $mode registration", async ({ mode, primary }) => {
+    mocks.loadOpenClawPlugins.mockReturnValue(
+      createCliRegistry({
+        memoryDescriptors: [
+          {
+            ...descriptor("memory", "Memory commands"),
+            machineOutput: ({ argv }) => argv.includes("--machine"),
+          },
+        ],
+      }),
+    );
+    const program = createProgram();
+    await registerCli(program, { mode, primary });
+    const command = program.commands.find((candidate) => candidate.name() === "memory");
+    if (!command) {
+      throw new Error("expected memory command");
+    }
+    expect(isCommandJsonOutputMode(command, ["node", "openclaw", "memory", "--machine"])).toBe(
+      true,
+    );
   });
 
   it("loads root-help descriptors from manifests without entering the plugin module loader", async () => {

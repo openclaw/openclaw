@@ -29,6 +29,7 @@ import {
   type AttachmentItem,
   type AssistantAttachmentItem,
   type ImageRenderOptions,
+  type MessageMediaAction,
 } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
@@ -499,4 +500,76 @@ function AttachmentContent(
       </Match>
     </Switch>
   );
+}
+
+/** Catalog rows retain the native admission, source, retry and sidebar policies. */
+export function MessageAttachmentAction(
+  props: AttachmentProps & {
+    item: AssistantAttachmentItem;
+    render: (action: () => MessageMediaAction) => SolidJSX.Element;
+  },
+): SolidJSX.Element {
+  return (
+    <Show
+      when={props.item.type === "attachment" && props.item}
+      fallback={props.render(() => ({
+        pending: false,
+        reason:
+          props.item.type === "attachment_error"
+            ? attachmentFailureReason(props.item.attachment.code)
+            : undefined,
+      }))}
+    >
+      {(item) => (
+        <ChatAttachmentAdmission
+          attachments={[item().attachment]}
+          options={props.options}
+          render={(admission) => (
+            <AttachmentActionContent
+              item={item()}
+              options={props.options}
+              onOpenSidebar={props.onOpenSidebar}
+              admission={admission}
+              render={props.render}
+            />
+          )}
+        />
+      )}
+    </Show>
+  );
+}
+
+function AttachmentActionContent(
+  props: AttachmentProps & {
+    item: AttachmentItem;
+    admission: AttachmentAdmission;
+    render: (action: () => MessageMediaAction) => SolidJSX.Element;
+  },
+): SolidJSX.Element {
+  const refreshAttachment = () => void refresh(model);
+  const model = createMemo(() => {
+    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshAttachment);
+    return prepareAttachment({
+      ...props,
+      presentation: "card",
+      options: { ...props.options, onMediaChange: refreshAttachment },
+    });
+  });
+  onCleanup(() => releaseChatMediaResourceOwner(refreshAttachment));
+  const action = createMemo<MessageMediaAction>(() => ({
+    pending: !model().resolved || model().resolved?.status === "checking",
+    reason:
+      model().resolved?.status === "unavailable"
+        ? (model().resolved?.reason ?? t("chat.attachments.unavailable"))
+        : undefined,
+    onOpen: model().resolved?.status === "unavailable" ? undefined : model().openAttachmentSidebar,
+    onRetry: model().resolved?.status === "unavailable" ? model().resolved?.onRetry : undefined,
+    onAllow:
+      model().imageAttachment && model().resolved?.status === "unavailable"
+        ? model().resolved?.onAllow
+        : undefined,
+    observeElement: props.admission.observeElement,
+    onFocus: model().resolved?.status === "unavailable" ? undefined : props.admission.onAdmit,
+  }));
+  return props.render(action);
 }

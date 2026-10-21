@@ -1,7 +1,7 @@
 // Windows schtasks exec tests cover scheduled task command execution.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
-import { execSchtasks } from "./schtasks-exec.js";
+import { execScheduledTaskEnabledChange, execSchtasks } from "./schtasks-exec.js";
 import { isRegisteredScheduledTask } from "./schtasks-runtime.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
@@ -12,6 +12,39 @@ vi.mock("../process/exec.js", () => ({
 
 beforeEach(() => {
   runCommandWithTimeout.mockReset();
+});
+
+describe("execScheduledTaskEnabledChange", () => {
+  it.each([
+    { stdout: "-2147024891\r\n", termination: "exit", hresult: -2147024891 },
+    { stdout: "-2147024894", termination: "exit", hresult: -2147024894 },
+    { stdout: "", termination: "exit", hresult: undefined },
+    { stdout: "-2147024891 trailing diagnostic", termination: "exit", hresult: undefined },
+    { stdout: "-2147483649", termination: "exit", hresult: undefined },
+    { stdout: "-2147024891", termination: "timeout", hresult: undefined },
+    { stdout: "-2147024891", termination: "signal", hresult: undefined },
+  ] as const)(
+    "preserves only a confirmed native HRESULT from $termination: $stdout",
+    async ({ stdout, termination, hresult }) => {
+      runCommandWithTimeout.mockResolvedValue({
+        stdout,
+        stderr: "",
+        code: 1,
+        signal: null,
+        killed: termination !== "exit",
+        termination,
+      });
+
+      const result = await execScheduledTaskEnabledChange("OpenClaw Gateway", false);
+
+      expect(result.code).not.toBe(0);
+      expect(result.hresult).toBe(hresult);
+      expect(runCommandWithTimeout).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({ timeoutMs: 60_000 }),
+      );
+    },
+  );
 });
 
 afterEach(() => vi.unstubAllEnvs());

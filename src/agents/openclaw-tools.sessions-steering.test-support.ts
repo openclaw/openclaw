@@ -5,10 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getSessionControllerOperation } from "../sessions/session-controller.js";
 import { captureSessionTarget } from "../sessions/session-controller.target.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "./admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import {
   detachActiveEmbeddedRun as clearActiveEmbeddedRun,
   attachActiveEmbeddedRun as setActiveEmbeddedRun,
@@ -48,16 +45,23 @@ export function createDurableSessionsSendTestRun(runId: string, afterCommit?: ()
     queueMessage,
     supportsTranscriptCommitWait: true,
   });
-  handle.messageInjectionV2 = {
+  handle.messageInjectionV2 = queueInjection(queueMessage);
+  return { handle, queueMessage };
+}
+
+function queueInjection(
+  queue: EmbeddedAgentQueueHandle["queueMessage"],
+  isAvailable = () => true,
+): NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]> {
+  return {
     version: 2,
-    isAvailable: () => true,
+    isAvailable,
     queueMessage: async (text, options, assertCurrent) => {
       assertCurrent();
-      await queueMessage(text, options);
+      await queue(text, options);
       options?.onQueueAccepted?.(true);
     },
   };
-  return { handle, queueMessage };
 }
 
 const activeOwners: Array<() => Promise<void>> = [];
@@ -86,15 +90,7 @@ export async function setSessionsSendTestActiveRun(
   const operation = getSessionControllerOperation(sessionKey, target);
   const runId = handle.runId ?? `sessions-target:${sessionId}`;
   const sessionFile = `/tmp/${sessionId}.jsonl`;
-  const admission = prepareAgentRunAdmission({
-    cfg: config,
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      agentId,
-      runId,
-      ingress: { kind: "system", state: "present", boundary: "sessions-send-test" },
-    },
-  });
+  const admission = prepareSystemAgentRunAdmission(config, runId, agentId, "sessions-send-test");
   const ready = createDeferred();
   const closed = createDeferred();
   const completion = (async () => {
@@ -172,22 +168,14 @@ export async function activeRun(
   await setSessionsSendTestActiveRun(
     options.sessionId ?? "caller-active-session",
     {
-      queueMessage,
-      messageInjectionV2: {
-        version: 2,
-        isAvailable: () => options.streaming ?? true,
-        queueMessage: async (text, queueOptions, assertCurrent) => {
-          assertCurrent();
-          await queueMessage(text, queueOptions);
-          queueOptions?.onQueueAccepted?.(true);
-        },
-      },
+      ...createEmbeddedRunHandle({
+        queueMessage,
+        isStopped: () => options.streaming === false,
+        supportsTranscriptCommitWait: true,
+      }),
       isStreaming: () => options.streaming ?? true,
-      isStopped: () => options.streaming === false,
-      isCompacting: () => false,
-      supportsTranscriptCommitWait: true,
+      messageInjectionV2: queueInjection(queueMessage, () => options.streaming ?? true),
       sourceReplyDeliveryMode: options.sourceReplyDeliveryMode ?? "message_tool_only",
-      abort: () => {},
     },
     sessionKey,
     options.requesterSessionKey,

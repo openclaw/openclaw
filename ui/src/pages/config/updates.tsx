@@ -165,7 +165,7 @@ function RecordedAttempt(props: UpdatesViewProps) {
                     type="button"
                     title={canRetry() ? "" : t("updates.adminRequired")}
                     disabled={!canRetry()}
-                    onClick={props.onUpdateNow}
+                    onClick={() => props.onUpdateNow()}
                   >
                     {t("updates.page.retryUpdate")}
                   </button>
@@ -648,7 +648,7 @@ export function Updates(props: UpdatesViewProps) {
                   !props.canUpdate ||
                   checkRequired()
                 }
-                onClick={props.onUpdateNow}
+                onClick={() => props.onUpdateNow()}
               >
                 <Icon name="download" />
                 {props.updateBusy ? t("updates.page.updating") : t("updates.page.updateNow")}

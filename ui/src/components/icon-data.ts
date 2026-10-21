@@ -3,6 +3,13 @@ import { keyboardIconData, toolIconData } from "./icon-data-tools.ts";
 import { strokeIconData, strokePathData, type IconData } from "./icon-data-types.ts";
 
 export const iconData = {
+  share: strokeIconData([
+    ["circle", { cx: "18", cy: "5", r: "3" }],
+    ["circle", { cx: "6", cy: "12", r: "3" }],
+    ["circle", { cx: "18", cy: "19", r: "3" }],
+    ["line", { x1: "8.59", x2: "15.42", y1: "13.51", y2: "17.49" }],
+    ["line", { x1: "15.41", x2: "8.59", y1: "6.51", y2: "10.49" }],
+  ]),
   github: brandIconData.github,
   incognito: strokePathData(
     "m7 7 1.5-4.5 3.5 1 3.5-1L17 7M5 7h14",
@@ -238,8 +245,13 @@ export const iconData = {
     "M15 8h-5",
     "M15 12h-5",
   ),
+  hash: strokePathData("M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"),
   folder: strokePathData(
     "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z",
+  ),
+  folders: strokePathData(
+    "M20 5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2.5a1.5 1.5 0 0 1 1.2.6l.6.8a1.5 1.5 0 0 0 1.2.6z",
+    "M3 8.268a2 2 0 0 0-1 1.738V19a2 2 0 0 0 2 2h11a2 2 0 0 0 1.732-1",
   ),
   kanban: strokeIconData([
     ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }],
@@ -383,6 +395,12 @@ export const iconData = {
     ["rect", { width: "18", height: "11", x: "3", y: "11", rx: "2" }],
     ["path", { d: "M7 11V7a5 5 0 0 1 10 0v4" }],
   ]),
+  // Lucide pencil-line (ISC), matching the native 24px/stroke-2 icon contract.
+  pencilLine: strokePathData(
+    "M13 21h8",
+    "m15 5 4 4",
+    "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",
+  ),
   pencil: strokePathData(
     "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",
     "m15 5 4 4",

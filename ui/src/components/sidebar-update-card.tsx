@@ -1,5 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createMemo, createSignal, flush, onCleanup } from "solid-js";
+import {
+  Show,
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  flush,
+  onSettled,
+} from "solid-js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
@@ -66,7 +74,7 @@ export function SidebarUpdateCard(
   },
 ) {
   let host!: HTMLElement;
-  const [holdingCampaignId, setHoldingCampaignId] = createSignal<string | null>(null);
+  const [holdingCampaignId, setHoldingCampaignId] = createOptimistic<string | null>(null);
   const [nativeUpdateAvailable, setNativeUpdateAvailable] = createSignal(hasNativeUpdateBridge());
   const refreshScope = createMemo(() => ({ required: props.refreshRequired }));
   const [refreshState, setRefreshState] = createSignal(() => {
@@ -74,14 +82,16 @@ export function SidebarUpdateCard(
     refreshScope();
     return { inFlight: false, failed: false };
   });
-  const [checkingTarget, setCheckingTarget] = createSignal(false);
+  const [checkingTarget, setCheckingTarget] = createOptimistic(false);
   const [targetCheckFailed, setTargetCheckFailed] = createSignal(false);
   const [expanded, setExpanded] = createSignal(false);
   const [now, setNow] = createSignal(Date.now());
   let refreshPending: ReturnType<typeof refreshScope> | undefined;
   let targetCheckPending = false;
   const updateNativeAvailability = () => setNativeUpdateAvailable(hasNativeUpdateBridge());
-  onCleanup(listen(window, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT, updateNativeAvailability));
+  onSettled(() =>
+    listen(window, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT, updateNativeAvailability),
+  );
   createInterval(
     () => setNow(Date.now()),
     () => {
@@ -114,6 +124,13 @@ export function SidebarUpdateCard(
     !nativeUpdateAvailable() &&
     !isUpdateRunAttentionVisible(props.updateRun ?? null, props.updateRunAcknowledged ?? false);
 
+  const checkStatus = action(async function* (check: () => Promise<boolean>) {
+    setCheckingTarget(true);
+    const refreshed = await check();
+    yield;
+    return refreshed;
+  });
+
   const checkTarget = async () => {
     if (!props.onCheckStatus) {
       return true;
@@ -122,12 +139,11 @@ export function SidebarUpdateCard(
       return false;
     }
     targetCheckPending = true;
-    setCheckingTarget(true);
     setTargetCheckFailed(false);
     try {
-      const refreshed = await props.onCheckStatus();
+      const refreshed = await checkStatus(props.onCheckStatus);
       setTargetCheckFailed(!refreshed);
-      // The overlay publishes before resolving; commit its fresh presentation props.
+      // The action has settled; commit the overlay's fresh props before live checks.
       flush();
       return refreshed;
     } catch {
@@ -135,7 +151,6 @@ export function SidebarUpdateCard(
       return false;
     } finally {
       targetCheckPending = false;
-      setCheckingTarget(false);
     }
   };
 
@@ -187,11 +202,10 @@ export function SidebarUpdateCard(
     });
   }
 
-  const holdUpdate = async (campaignId: string) => {
+  const holdUpdate = action(function* (campaignId: string) {
     setHoldingCampaignId(campaignId);
-    await props.onHoldUpdate?.();
-    setHoldingCampaignId(null);
-  };
+    yield props.onHoldUpdate?.();
+  });
 
   const refreshControlUi = async () => {
     const scope = refreshScope();
@@ -337,7 +351,7 @@ export function SidebarUpdateCard(
                 ref={sidebarAttentionFocusRef()}
                 class="sidebar-update-card__review sidebar-update-card__review--primary"
                 type="button"
-                onClick={props.onReviewUpdate}
+                onClick={() => props.onReviewUpdate?.()}
               >
                 {t("updates.reviewUpdate")}
               </button>
@@ -544,7 +558,7 @@ export function SidebarUpdateCard(
               ref={sidebarAttentionFocusRef()}
               class="sidebar-update-card__review"
               type="button"
-              onClick={props.onReviewUpdate}
+              onClick={() => props.onReviewUpdate?.()}
             >
               {t("updates.reviewUpdate")}
             </button>

@@ -9,11 +9,7 @@ export function parsePairingString(raw: unknown): {
   token: string;
   gatewayUrl?: string;
 } | null;
-export function createPairingConfigStore(storage: {
-  get(keys: string[]): Promise<Record<string, unknown>>;
-  set(values: Record<string, unknown>): Promise<void>;
-  remove(keys: string[]): Promise<void>;
-}): {
+export function createPairingConfigStore(): {
   readonly invalidationRevision: number;
   read(): Promise<{
     relayUrl: string;

@@ -7,10 +7,12 @@ describe("onepassword plugin", () => {
     const store = {
       register: vi.fn(),
       lookup: vi.fn(),
+      lookupMany: vi.fn(async () => []),
       delete: vi.fn(),
       entries: vi.fn(async () => []),
     };
     const openKeyedStore = vi.fn(() => store);
+    const openKeyedStoreV2 = vi.fn(() => store);
     const registerCli = vi.fn();
     const registerTool = vi.fn();
 
@@ -24,6 +26,7 @@ describe("onepassword plugin", () => {
           config: { current: () => ({}) },
           state: {
             openKeyedStore,
+            openKeyedStoreV2,
             resolveStateDir: () => "/tmp/openclaw-onepassword-test",
           },
         } as never,
@@ -32,17 +35,17 @@ describe("onepassword plugin", () => {
       }),
     );
 
-    expect(openKeyedStore).toHaveBeenNthCalledWith(1, {
+    expect(openKeyedStoreV2).toHaveBeenCalledWith({
       namespace: "grants",
       maxEntries: 1_024,
       overflowPolicy: "evict-oldest",
     });
-    expect(openKeyedStore).toHaveBeenNthCalledWith(2, {
+    expect(openKeyedStore).toHaveBeenNthCalledWith(1, {
       namespace: "audit",
       maxEntries: 40_000,
       overflowPolicy: "evict-oldest",
     });
-    expect(openKeyedStore).toHaveBeenNthCalledWith(3, {
+    expect(openKeyedStore).toHaveBeenNthCalledWith(2, {
       namespace: "pending",
       maxEntries: 512,
       overflowPolicy: "evict-oldest",
@@ -77,6 +80,7 @@ describe("onepassword plugin", () => {
     const store = {
       register: vi.fn(async () => undefined),
       lookup: vi.fn(async () => undefined),
+      lookupMany: vi.fn(async () => []),
       delete: vi.fn(async () => undefined),
       entries: vi.fn(async () => []),
     };
@@ -93,6 +97,7 @@ describe("onepassword plugin", () => {
           config: { current },
           state: {
             openKeyedStore: () => store,
+            openKeyedStoreV2: () => store,
             resolveStateDir: () => "/tmp/openclaw-onepassword-test",
           },
         } as never,

@@ -36,7 +36,8 @@ let testState: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>;
 let config: OpenClawConfig;
 function check(readConfig: () => OpenClawConfig = () => config, nowMs?: number) {
-  return checkTelemetryUpdate(readConfig, { surface: "gateway", fetchImpl, nowMs });
+  vi.spyOn(Date, "now").mockReturnValue(nowMs ?? Date.now());
+  return checkTelemetryUpdate(readConfig);
 }
 function pauseOperation<T>(type: SqliteWorkerCommand<TelemetryWorkerOperations>["type"]) {
   const result = createDeferredCore<T>();
@@ -56,6 +57,7 @@ beforeEach(async () => {
   testState = await createOpenClawTestState({ layout: "state-only", prefix: "telemetry-async-" });
   contexts.length = 0;
   fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ version: "2026.8.24" }));
+  vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
   execute.mockReset().mockImplementation(async (command) => {
     switch (command.type) {
       case "telemetry.readState":
@@ -72,6 +74,8 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "");
   vi.stubEnv("OPENCLAW_NIX_MODE", "");
   vi.stubEnv("DO_NOT_TRACK", "");
+  vi.stubEnv("VITEST", undefined);
+  vi.stubEnv("NODE_ENV", undefined);
 });
 afterEach(async () => {
   vi.restoreAllMocks();

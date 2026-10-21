@@ -22,7 +22,7 @@ import {
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import { captureNativeSessionEntryCurrentRead } from "../../config/sessions/session-entry-current-runtime.js";
 import {
-  sessionCreatorProfileId,
+  sessionIsolationProfileId,
   type SessionCreatedActor,
 } from "../../config/sessions/session-entry-provenance.js";
 import { SessionEntryChangedDuringReadError } from "../../config/sessions/session-entry-read-errors.js";
@@ -571,7 +571,7 @@ function resolveSandboxRuntimeStatusForClassification(
           }
         : undefined;
   const sandboxRequired = session?.existing?.sandbox === "required";
-  const profileId = sessionCreatorProfileId(session?.existing?.createdActor)?.trim();
+  const profileId = sessionIsolationProfileId(session?.existing?.createdActor)?.trim();
   const isolation: SandboxRuntimeIsolation = sandboxRequired
     ? {
         sandboxRequired: true,

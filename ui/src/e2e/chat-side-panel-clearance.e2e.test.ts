@@ -79,7 +79,7 @@ async function waitForShellLayout(page: Page): Promise<void> {
 }
 
 async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<void> {
-  const panelControls = page.locator(".chat-pane__actions button:visible");
+  const panelControls = page.locator('[data-region-header="side"] button:visible');
   const panelCount = await panelControls.count();
   expect(panelCount).toBeGreaterThan(0);
 
@@ -89,10 +89,10 @@ async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<vo
         [...document.querySelectorAll(selector)]
           .map((element) => element.getBoundingClientRect())
           .filter((box) => box.width > 0 && box.height > 0);
-      const header = document.querySelector(".chat-pane__header")!;
+      const header = document.querySelector('[data-region-header="side"]')!;
       const headerRect = header.getBoundingClientRect();
       const headerStyle = getComputedStyle(header);
-      const panels = visibleRects(".chat-pane__actions button:not([hidden])");
+      const panels = visibleRects('[data-region-header="side"] button:not([hidden])');
       const shells = visibleRects(
         ":is(.shell-chrome-controls, .macos-titlebar-controls, .sidebar-rail, .sidebar-session-toolbar) button:not([hidden])",
       );
@@ -120,7 +120,7 @@ async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<vo
 
 suite.define(() => {
   it.each([844, 640])(
-    "keeps the mobile empty panel picker below the composer at height %s",
+    "keeps mobile panel choices within the sheet at height %s",
     async (height) => {
       await withPage(
         async ({ page, context }) => {
@@ -145,48 +145,63 @@ suite.define(() => {
             await protocol.send("Emulation.setSafeAreaInsetsOverride", {
               insets: { bottom: safeArea },
             });
-            expect(await bottomGap()).toBe(6 + safeArea);
+            expect(await bottomGap()).toBe(10 + safeArea);
             await textarea.focus();
-            expect(await bottomGap()).toBe(6 + safeArea);
+            expect(await bottomGap()).toBe(10 + safeArea);
             await textarea.blur();
           }
           await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 0 } });
           await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
-          const picker = page.locator(".side-panel-empty--selector");
+          const picker = page.locator(".chat-panel-launcher-mobile");
           await picker.waitFor();
           await waitForShellLayout(page);
           const geometry = await picker.evaluate((element) => {
             const bounds = element.getBoundingClientRect();
-            const body = element.closest(".side-panel__empty-body")!.getBoundingClientRect();
-            const first = element.querySelector("button")!.getBoundingClientRect();
-            const composerBounds = document
-              .querySelector(".agent-chat__input")!
+            const host = element.closest(".chat-mobile-host")!.getBoundingClientRect();
+            const header = element
+              .closest(".chat-mobile-host")!
+              .querySelector(".chat-mobile-host__header")!
               .getBoundingClientRect();
             return {
               pickerTop: bounds.top,
-              panelTop: body.top,
-              firstTop: first.top,
-              composerBottom: composerBounds.bottom,
+              pickerBottom: bounds.bottom,
+              headerBottom: header.bottom,
+              hostBottom: host.bottom,
+              viewportBottom: window.innerHeight,
             };
           });
-          expect(geometry.pickerTop).toBeGreaterThanOrEqual(geometry.panelTop);
-          expect(geometry.firstTop).toBeGreaterThanOrEqual(geometry.composerBottom);
-          const choices = picker.locator("button");
-          expect(await picker.locator(".side-panel-type-option__label").allTextContents()).toEqual([
+          expect(geometry.pickerTop).toBeGreaterThanOrEqual(geometry.headerBottom);
+          expect(geometry.pickerBottom).toBeLessThanOrEqual(geometry.hostBottom);
+          expect(geometry.hostBottom).toBeLessThanOrEqual(geometry.viewportBottom);
+          const choices = picker.getByRole("button");
+          expect(
+            await picker.locator(".chat-panel-launcher-mobile__label").allTextContents(),
+          ).toEqual([
+            "Side chat",
+            "Files",
+            "Browser",
+            "Review",
             "Subagents",
             "Processes",
-            "Review",
             "Terminal",
-            "Browser",
-            "Files",
-            "Side chat",
           ]);
-          for (const choice of [choices.first(), choices.last()]) {
+          for (const [index, choice] of [choices.first(), choices.last()].entries()) {
+            if (index === 1) {
+              await picker.hover();
+              await page.mouse.wheel(0, await picker.evaluate((element) => element.scrollHeight));
+              await expect
+                .poll(() =>
+                  picker.evaluate(
+                    (element) => element.scrollTop + element.clientHeight >= element.scrollHeight,
+                  ),
+                )
+                .toBe(true);
+            }
             await choice.scrollIntoViewIfNeeded();
             await choice.click({ trial: true });
             const contained = await choice.evaluate((button) => {
               const box = button.getBoundingClientRect();
-              const body = button.closest(".side-panel__empty-body")!.getBoundingClientRect();
+              const body = button.closest(".chat-panel-launcher-mobile")!.getBoundingClientRect();
               return box.top >= body.top && box.bottom <= body.bottom;
             });
             expect(contained).toBe(true);

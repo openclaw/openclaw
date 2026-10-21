@@ -110,6 +110,7 @@ vi.mock("../config/io.js", () => ({
 vi.mock("../audit/audit-recorder.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../audit/audit-recorder.js")>();
   return {
+    ...actual,
     createAuditEventRecorder: (options: Parameters<typeof actual.createAuditEventRecorder>[0]) => {
       auditTestState.created += 1;
       return actual.createAuditEventRecorder({
@@ -117,11 +118,11 @@ vi.mock("../audit/audit-recorder.js", async (importOriginal) => {
         writer: {
           ready: Promise.resolve(),
           record: (event) => {
-            if (event.kind === "message") {
-              auditTestState.messages += 1;
-            } else {
-              auditTestState.recorded += 1;
-            }
+            auditTestState[event.kind === "message" ? "messages" : "recorded"] += 1;
+            return true;
+          },
+          recordRun: () => {
+            auditTestState.recorded += 2;
             return true;
           },
           recordExecutionIdentity: () => {

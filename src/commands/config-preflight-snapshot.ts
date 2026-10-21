@@ -215,8 +215,16 @@ export async function readAdmittedConfigSnapshot(params: {
   ) => Promise<ConfigPreflightSnapshotRead>;
   validateConfig?: (snapshot: ConfigFileSnapshot) => void | Promise<void>;
   beforeStatePreparation?: (snapshot: ConfigFileSnapshot) => Promise<boolean>;
+  /** Startup alone migrates credentials after read admission releases its snapshot. */
+  prepareClientCredentials?: (snapshot: ConfigFileSnapshot) => Promise<void>;
 }): Promise<ConfigPreflightSnapshotRead & { recovery?: PreparedConfigRecovery }> {
-  return await withArtifactPreservingStateReads(async () => {
+  const readIdentity = () =>
+    measureDoctorConfigPreflightStep("admission.device-identity", async () => {
+      const { loadDeviceIdentityIfPresentAsync } =
+        await import("../infra/device-identity-async.js");
+      await loadDeviceIdentityIfPresentAsync({ env: params.env });
+    });
+  const admitted = await withArtifactPreservingStateReads(async () => {
     await measureDoctorConfigPreflightStep("admission.live-owner", () =>
       refuseStartupMigrationsForLiveGatewayOwner(params.env),
     );
@@ -243,7 +251,7 @@ export async function readAdmittedConfigSnapshot(params: {
         getDatabaseEngineSelection() ??
         (await resolveDatabaseEngineSelection(selected.config, params.env));
       installDatabaseEngineSelection(selection);
-      const admitted = await measureDoctorConfigPreflightStep("admission.state-snapshot", () =>
+      const admittedRead = await measureDoctorConfigPreflightStep("admission.state-snapshot", () =>
         withOpenClawStateDatabaseReadSnapshot(
           async () => {
             const recoveryOptions = {
@@ -312,11 +320,9 @@ export async function readAdmittedConfigSnapshot(params: {
             }
             if (read.snapshot.valid) {
               await params.validateConfig?.(read.snapshot);
-              await measureDoctorConfigPreflightStep("admission.device-identity", async () => {
-                const { loadDeviceIdentityIfPresentAsync } =
-                  await import("../infra/device-identity-async.js");
-                await loadDeviceIdentityIfPresentAsync({ env: params.env });
-              });
+              if (!params.prepareClientCredentials) {
+                await readIdentity();
+              }
             }
             return { ...read, ...(recovery ? { recovery } : {}) };
           },
@@ -330,19 +336,28 @@ export async function readAdmittedConfigSnapshot(params: {
       if (
         params.beforeStatePreparation &&
         !(await measureDoctorConfigPreflightStep("admission.config-guard", () =>
-          params.beforeStatePreparation?.(admitted.snapshot),
+          params.beforeStatePreparation?.(admittedRead.snapshot),
         ))
       ) {
         throwStartupMigrationGuardRejected();
       }
       return {
-        ...admitted,
+        ...admittedRead,
         databaseEngineSelection: selection,
       };
     } catch (error) {
       return rethrowStartupConfigFailure(error);
     }
   });
+  if (admitted.snapshot.valid && params.prepareClientCredentials) {
+    try {
+      await params.prepareClientCredentials(admitted.snapshot);
+      await withArtifactPreservingStateReads(readIdentity);
+    } catch (error) {
+      return rethrowStartupConfigFailure(error);
+    }
+  }
+  return admitted;
 }
 
 /** Admission runs before lease acquisition: even acquiring a lease commits SQLite writes. */

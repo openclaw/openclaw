@@ -20,10 +20,6 @@ function createChatComposerState(): ChatComposerState {
   const [presentation, updatePresentation] = createStore<ChatComposerState["presentation"]>({
     dictationError: null,
     goalExpandedId: null,
-    activeQuestionKey: null,
-    gatewayQuestionIds: new Set(),
-    asyncQuestionIds: new Set(),
-    questionCollapsed: false,
   });
   return {
     // Admission survives composer remounts while the same goal mode is pending.

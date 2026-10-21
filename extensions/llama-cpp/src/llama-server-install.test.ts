@@ -611,7 +611,7 @@ describe("ensureLlamaServerInstalled", () => {
       });
       const { command, installDir } = resolveManagedLlamaServerPaths(asset);
       if (outcome === "ready") {
-        await expect(result).resolves.toMatchObject({ command, asset: { backend: "cuda" } });
+        await expect(result).resolves.toMatchObject({ command });
         for (const file of runtime.files) {
           expect(await fs.readFile(path.join(installDir, file), "utf8")).toBe(`runtime:${file}`);
         }

@@ -12,10 +12,6 @@ import { captureSessionEventTargetForHost as captureSessionEventTarget } from ".
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import {
-  buildSessionCreationStamp,
-  inheritSessionGitContributorProfileIds,
-} from "../../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
   sessionEntryCommitGuardOptions,
@@ -49,6 +45,7 @@ import {
   inheritedToolAllowPatch,
   inheritedToolDenyPatch,
 } from "../../inherited-tool-deny.js";
+import { requesterCreatorProfileId } from "../../requester-origin.js";
 import { runSpawnPipeline, type SpawnBackendAdapter } from "../../spawn-pipeline.js";
 import {
   mintSpawnSessionKey,
@@ -60,6 +57,7 @@ import {
 import type { SpawnRequesterConversationSource } from "../../spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
 import { countUntrackedActiveAcpRunsForOwner } from "./acp-spawn-admission.js";
 import {
@@ -77,6 +75,7 @@ import {
   resolveAcpSpawnRuntimePolicyError,
 } from "./acp-spawn-policy.js";
 import {
+  buildAcpSpawnCreationStamp,
   resolveAcpSpawnRequesterState,
   readAcpSpawnParentDeliveryContext,
   resolveRequesterInternalSessionKey,
@@ -170,6 +169,9 @@ export async function spawnAcpDirect(
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
   const cfg = getRuntimeConfig();
+  const creatorProfileId = requesterCreatorProfileId(
+    getGatewayToolCallerIdentity()?.requesterOrigin,
+  );
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
@@ -475,15 +477,13 @@ export async function spawnAcpDirect(
         expectedParentSessionId: ctx.expectedParentSessionId,
         senderIsOwner: ctx.senderIsOwner,
       });
-      const creationStamp = buildSessionCreationStamp({
-        via: "spawn",
-        actor: { type: "agent", id: requesterAgentId },
-        inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(parentEntry, {
-          config: cfg,
-          agentId: requesterAgentId,
-          sessionKey: requesterInternalKey,
-          requesterProfileId: ctx.gitContributorProfileId,
-        }),
+      const creationStamp = buildAcpSpawnCreationStamp({
+        cfg,
+        parentEntry,
+        requesterAgentId,
+        requesterSessionKey: requesterInternalKey,
+        creatorProfileId,
+        gitContributorProfileId: ctx.gitContributorProfileId,
       });
       const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: ownerAgentId });
       const childSessionPatch = admission.childSessionPatch

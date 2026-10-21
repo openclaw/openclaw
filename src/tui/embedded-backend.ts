@@ -154,8 +154,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   onEvent?: (evt: TuiEvent) => void;
   onConnected?: () => void;
-  onDisconnected?: (reason: string) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
 
   private readonly deps = createDefaultDeps();
   private readonly localSenderId = randomUUID();

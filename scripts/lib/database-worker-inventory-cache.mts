@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { inventory } from "../database-worker-inventory.mjs";
+import { inventory, loadInventorySources } from "../database-worker-inventory.mjs";
 import {
   acquireBuildArtifactLock,
   finalizeBuildStepCache,
@@ -39,8 +39,12 @@ function analyzerSignature() {
 // Bind to the loaded implementation before the potentially long head analysis.
 const loadedAnalyzerSignature = analyzerSignature();
 
-/** Only historical counts are reusable; the head must still validate credential writers. */
-export function baseInventory(root: string, ref: string): ReturnType<typeof inventory> {
+/** The fresh head validates credential writers even when both source snapshots match. */
+export function baseInventory(
+  root: string,
+  ref: string,
+  current?: { sources: ReadonlyMap<string, string>; rows: ReturnType<typeof inventory> },
+): ReturnType<typeof inventory> {
   const git = (revision: string) =>
     execFileSync("git", ["rev-parse", "--verify", revision], {
       cwd: root,
@@ -80,7 +84,17 @@ export function baseInventory(root: string, ref: string): ReturnType<typeof inve
       );
       return rows;
     }
-    const rows = inventory(root, commit);
+    const sources = loadInventorySources(root, commit);
+    // The semantic project has no disk fallback: path membership and all source
+    // text are its complete inputs. SQL-only or diff-only equality is insufficient.
+    const identical =
+      current &&
+      sources.size === current.sources.size &&
+      [...sources].every(([file, text]) => current.sources.get(file) === text);
+    const rows = identical ? current.rows : inventory(root, commit, false, sources);
+    if (identical) {
+      console.log("SQLite worker snapshots identical: reusing fresh current-tree analysis.");
+    }
     fs.mkdirSync(path.dirname(path.join(root, output)), { recursive: true });
     fs.writeFileSync(path.join(root, output), JSON.stringify(rows));
     if (analyzerSignature() === loadedAnalyzerSignature) {

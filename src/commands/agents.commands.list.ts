@@ -126,6 +126,12 @@ function formatAgentTree(summaries: AgentSummary[], provenance: AgentProvenance[
     }
     visited.add(summary.id);
     lines.push(`${"  ".repeat(depth)}- ${formatSummaryHeader(summary)}`);
+    if (summary.bindingDetails?.length) {
+      lines.push(`${"  ".repeat(depth + 1)}Routing rules:`);
+      for (const binding of summary.bindingDetails) {
+        lines.push(`${"  ".repeat(depth + 2)}- ${sanitizeTerminalText(binding)}`);
+      }
+    }
     for (const child of childrenById.get(summary.id) ?? []) {
       append(child, depth + 1);
     }

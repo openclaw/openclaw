@@ -172,8 +172,14 @@ describe("node worker launch wire", () => {
             role: "operator",
             identity: null,
             onEvent: (event) => {
-              settlement.onEvent(event);
               const payload = event.payload;
+              if (event.event === "sessions.changed" && isRecord(payload)) {
+                // An older snapshot cannot prove this turn's workspace has settled.
+                settlement.onEvent({
+                  event: event.event,
+                  payload: { sessionKey: payload.sessionKey },
+                });
+              }
               if (
                 event.event === "chat" &&
                 isRecord(payload) &&

@@ -10,8 +10,10 @@ import { resolveStateDir } from "../config/paths.js";
 import * as processIdentity from "../shared/pid-alive.js";
 import {
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
+  parseGatewayLockPayload,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
+import * as gatewayLockProcessModule from "./gateway-lock-process.js";
 import {
   acquireGatewayLock,
   GatewayLockError,
@@ -146,41 +148,60 @@ describe("gateway lock namespaces", () => {
     });
   });
 
-  it("uses PID evidence only for a verified local Windows namespace", async () => {
+  it("uses native process identity for local Windows owners without a boot probe", async () => {
     const platform = "win32";
-    if (platform !== process.platform) {
-      vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
-        platform,
-        identity: "2026-10-01T00:00:00.0000000Z",
-      }));
-    }
-    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    const mockedPlatform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const boot = vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader");
+    boot.mockReturnValue(() => ({
+      platform: "darwin",
+      identity: "01234567-89ab-cdef-0123-456789abcdef",
+    }));
+    readGatewayLockProcessNamespace();
+    mockedPlatform.mockReturnValue(platform);
+    boot.mockReturnValue(() => {
+      throw new Error("Windows boot observation unavailable");
+    });
     const namespace = readGatewayLockProcessNamespace();
-    for (const processNamespace of [
-      undefined,
-      null,
-      namespace,
-      {
-        host: os.hostname(),
-        platform: "linux" as const,
-        identity: "01234567-89ab-cdef-0123-456789abcdef",
-        pidNsInode: "foreign",
-      },
-    ]) {
-      const payload = {
-        ...createLockPayload({ configPath: "/unused", startTime: 123 }),
-        processNamespace,
-      };
-      const comparable = processNamespace?.platform === platform;
+    expect(namespace).toEqual({ host: os.hostname(), platform });
+    for (const [processNamespace, comparable] of [
+      [undefined, false],
+      [null, false],
+      [namespace, true],
+      [{ ...namespace, identity: "2026-10-01T00:00:00.0000000Z" }, true],
+      [{ ...namespace, host: "other-host" }, false],
+      [{ ...namespace, host: "" }, false],
+      [{ ...namespace, identity: "malformed" }, false],
+      [
+        {
+          host: os.hostname(),
+          platform: "linux",
+          identity: "01234567-89ab-cdef-0123-456789abcdef",
+          pidNsInode: "foreign",
+        },
+        false,
+      ],
+    ] as const) {
+      const payload = parseGatewayLockPayload(
+        JSON.stringify({
+          ...createLockPayload({ configPath: "/unused", startTime: 123 }),
+          processNamespace,
+        }),
+      );
       await expect(resolveGatewayOwnerStatus(2_147_483_647, payload, platform)).resolves.toBe(
         comparable ? "dead" : "unknown",
       );
-      await expect(
-        resolveGatewayOwnerStatus(process.pid, payload, platform, undefined, () => 123),
-      ).resolves.toBe(comparable ? "alive" : "unknown");
-      await expect(
-        resolveGatewayOwnerStatus(process.pid, payload, platform, undefined, () => 124),
-      ).resolves.toBe(comparable ? "dead" : "unknown");
+      vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+        () => 123,
+      );
+      await expect(resolveGatewayOwnerStatus(process.pid, payload, platform)).resolves.toBe(
+        comparable ? "alive" : "unknown",
+      );
+      vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+        () => 124,
+      );
+      await expect(resolveGatewayOwnerStatus(process.pid, payload, platform)).resolves.toBe(
+        comparable ? "dead" : "unknown",
+      );
     }
   });
 

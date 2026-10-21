@@ -7,16 +7,24 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { createChannelIngressDrain } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearMcpOAuthStore,
+  mcpEnterpriseIdpStoreKey,
+  prepareMcpEventCredentialConnection,
+  seedMcpOAuthStoreForTest,
+  withMcpOAuthTestLease,
+  type McpEnterpriseConfig,
+} from "openclaw/plugin-sdk/mcp-enterprise-test-runtime";
 import type * as Plugin from "openclaw/plugin-sdk/plugin-entry";
 import type * as State from "openclaw/plugin-sdk/plugin-state-runtime";
 import * as state from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as pluginTest from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin, { getMcpEventsDiagnostics } from "../index.js";
 import { createCallbackHandler } from "./http.js";
-import { record } from "./protocol.js";
 import { McpEventsService } from "./service.js";
 import type { QueuedEvent, SubscriptionBinding } from "./state.js";
 import type { EventCron, EventSourceSnapshot, McpEventsDependencies } from "./types.js";
@@ -105,6 +113,34 @@ describe("MCP Events callback and subscription lifecycle", () => {
   let beforeUnsubscribe: (() => void) | undefined;
   let callback: Plugin.OpenClawPluginHttpRouteHandler;
 
+  function createScheduler(): McpEventsDependencies["scheduler"] {
+    const controller = new AbortController();
+    return {
+      signal: controller.signal,
+      beginClose: () => {
+        controller.abort();
+        schedules.clear();
+      },
+      now: () => now,
+      schedule: ({ id, mode, ...job }) => {
+        const requestedAtMs = "atMs" in job ? job.atMs : now + job.delayMs;
+        const atMs =
+          mode === "earliest"
+            ? Math.min(requestedAtMs, schedules.get(id)?.atMs ?? Infinity)
+            : requestedAtMs;
+        schedules.set(id, { atMs, run: job.run });
+        return {
+          cancel: () => {
+            schedules.delete(id);
+          },
+          stop: async () => {
+            schedules.delete(id);
+          },
+        };
+      },
+    };
+  }
+
   beforeAll(async () => {
     server = createServer((req, res) => {
       void callback(req, res);
@@ -192,26 +228,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
           },
         },
       },
-      scheduler: {
-        signal: new AbortController().signal,
-        now: () => now,
-        schedule: ({ id, mode, ...job }) => {
-          const requestedAtMs = "atMs" in job ? job.atMs : now + job.delayMs;
-          const atMs =
-            mode === "earliest"
-              ? Math.min(requestedAtMs, schedules.get(id)?.atMs ?? Infinity)
-              : requestedAtMs;
-          schedules.set(id, { atMs, run: job.run });
-          return {
-            cancel: () => {
-              schedules.delete(id);
-            },
-            stop: async () => {
-              schedules.delete(id);
-            },
-          };
-        },
-      },
+      scheduler: createScheduler(),
       cron: {
         readEventSources: async () => sources,
         runEvent: vi.fn<EventCron["runEvent"]>(async () => ({ kind: "pending", reason: "busy" })),
@@ -376,7 +393,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
       config: { plugins: { entries: { "mcp-events": { enabled: true, config: deps.config } } } },
       stateDir: directory,
       logger: deps.logger,
-      scheduler: { ...scheduler, now: deps.scheduler.now, schedule: deps.scheduler.schedule },
+      scheduler: { ...scheduler, ...deps.scheduler },
       getCron: () => cron,
       mcpEvents: { prepareSource: deps.prepareSource },
     };
@@ -408,6 +425,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
   it("restores subscription state before accepting callbacks or reconciling startup hooks", async () => {
     await current!.start();
     await current!.stop();
+    deps = { ...deps, scheduler: createScheduler() };
     current = new McpEventsService(deps);
     const gate = barrier();
     const preflight = vi.mocked(resolvePinnedHostnameWithPolicy);
@@ -605,6 +623,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     expect((await post(body, "evt-1")).status).toBe(200);
     expect((await post(body, "evt-1")).status).toBe(200);
     await current!.stop();
+    deps = { ...deps, scheduler: createScheduler() };
     current = new McpEventsService(deps);
     await current.start();
     expect((await post(body, "evt-1")).status).toBe(200);
@@ -623,6 +642,78 @@ describe("MCP Events callback and subscription lifecycle", () => {
       replayAvailable: true,
     });
     expect(JSON.stringify(diagnostics())).not.toContain(secret);
+  });
+
+  it("rejects signed callbacks and recovered subscriptions after enterprise logout", async () => {
+    const enterprise: McpEnterpriseConfig = {
+      identity: "shared",
+      idpIssuer: "https://idp.example.test",
+      idpClientId: "fixture-client",
+      idpClientSecret: "fixture-secret",
+      resourceIssuer: "https://auth.example.test",
+      resourceClientId: "fixture-resource-client",
+      resourceClientSecret: "fixture-resource-secret",
+      scope: "mcp.read",
+      redirectUrl: "http://localhost:3097/callback",
+    };
+    const storeKey = mcpEnterpriseIdpStoreKey(enterprise);
+    seedMcpOAuthStoreForTest(storeKey, {
+      tokens: {
+        access_token: "fixture-idp-access",
+        id_token: "fixture-id-token",
+        token_type: "Bearer",
+      },
+      authorizationId: "first-enterprise-account",
+    });
+    const originalPrepare = deps.prepareSource;
+    deps.prepareSource = async (...args) => {
+      const source = await originalPrepare(...args);
+      const connection = await prepareMcpEventCredentialConnection(
+        {
+          serverName: "configured-server",
+          server: {
+            url: "https://mcp.example.test/mcp",
+            transport: "streamable-http",
+            auth: "enterprise",
+            enterprise,
+          },
+          cfg: {},
+          agentDir: directory,
+          requesterResolver: false,
+        },
+        source.assertCurrent,
+      );
+      return {
+        ...source,
+        principalId: connection.authorizationIdentity,
+        assertCurrent: () => {
+          source.assertCurrent();
+          connection.assertCurrent();
+        },
+        revalidate: async () => {
+          await source.revalidate();
+          await connection.revalidate();
+        },
+        dispose: () => {
+          source.dispose();
+          connection.release();
+        },
+      };
+    };
+    current = new McpEventsService(deps);
+    await current.start();
+    await expectEvent(200, "evt-before-logout");
+    expect(await pending()).toHaveLength(1);
+    expect(subscribed).toHaveLength(1);
+
+    await withMcpOAuthTestLease(storeKey, (lease, context) =>
+      clearMcpOAuthStore({ storeKey, lease, context }),
+    );
+    await expectEvent(410, "evt-after-logout");
+    expect(await pending()).toHaveLength(1);
+    await current.reconcile();
+    expect(subscribed).toHaveLength(1);
+    expect(await pending()).toHaveLength(1);
   });
 
   it("rejects authentication, schema, envelope, control, and size failures without queue writes", async () => {

@@ -8,6 +8,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { listAllMcpTools } from "../agents/mcp-catalog-listing.js";
 import {
   connectMcpClient,
   disposeMcpClient,
@@ -16,7 +17,6 @@ import {
 import { redactMcpDiagnosticError } from "../agents/mcp-error.js";
 import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
-import { collectMcpPaginatedItems } from "../agents/mcp-pagination.js";
 import {
   McpSdkCompatibilityError,
   mcpCallToolResultSchema,
@@ -43,9 +43,6 @@ const NODE_MCP_ERROR_MAX_CHARS = 1_024;
 const NODE_MCP_MAX_DESCRIPTORS = 128;
 const NODE_MCP_MAX_DESCRIPTOR_BYTES = 1024 * 1024;
 const NODE_MCP_MAX_CATALOG_BYTES = 10 * 1024 * 1024;
-const NODE_MCP_MAX_LIST_PAGES = NODE_MCP_MAX_DESCRIPTORS;
-// The byte cap charges every response; this separately bounds retained tiny-tool object overhead.
-const NODE_MCP_MAX_LISTED_TOOLS = NODE_MCP_MAX_DESCRIPTORS * NODE_MCP_MAX_LIST_PAGES;
 const NODE_MCP_CONNECT_CONCURRENCY = 6;
 const NODE_MCP_RETRY_INITIAL_MS = 250;
 const NODE_MCP_RETRY_MAX_MS = 60_000;
@@ -289,29 +286,11 @@ export async function startNodeHostMcpManager(
     signal: AbortSignal,
     resetRetryDelay = false,
   ) => {
-    const normalized = await collectMcpPaginatedItems({
-      label: "MCP tool listing",
-      itemLabel: "tools",
-      timeoutMs: session.requestTimeoutMs,
-      maxPages: NODE_MCP_MAX_LIST_PAGES,
-      maxItems: NODE_MCP_MAX_LISTED_TOOLS,
-      maxBytes: NODE_MCP_MAX_CATALOG_BYTES,
-      signal,
-      loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
-        const page = await session.client.request(
-          { method: "tools/list", params: cursor === undefined ? undefined : { cursor } },
-          {
-            timeout: requestTimeoutMs,
-            maxTotalTimeout: requestTimeoutMs,
-            signal: requestSignal,
-          },
-        );
-        return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
-      },
-    }).then((tools) =>
-      normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
-        isMcpToolAllowed(state.config.toolFilter, toolName) ? "include" : "exclude",
-      ),
+    const normalized = await listAllMcpTools(session.client, session.requestTimeoutMs, signal).then(
+      (tools) =>
+        normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
+          isMcpToolAllowed(state.config.toolFilter, toolName) ? "include" : "exclude",
+        ),
     );
     if (closed || state.current !== session) {
       return;
@@ -470,6 +449,13 @@ export async function startNodeHostMcpManager(
   }
 
   const tasks = Array.from(states.values(), (state) => async () => {
+    if (state.config.auth === "enterprise" || state.config.enterprise) {
+      states.delete(state.serverName);
+      console.warn(
+        `node host MCP server "${state.serverName}" skipped: enterprise-managed authorization is not supported on node hosts; configure it in mcp.servers on the Gateway and run openclaw mcp login <server-name> there`,
+      );
+      return;
+    }
     if (state.config.auth === "oauth" || state.config.oauth) {
       states.delete(state.serverName);
       console.warn(`node host MCP server "${state.serverName}" skipped: OAuth is not supported`);

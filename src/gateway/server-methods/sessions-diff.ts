@@ -135,6 +135,7 @@ export async function loadSessionDiff(
         sessionKey: params.sessionKey,
         baseCommit: managedBase?.baseCommit,
         summaryOnly: params.summaryOnly,
+        poll: params.poll,
       };
       let result: SessionsDiffResult;
       if (params.scope === "commit") {
@@ -204,6 +205,7 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
     const read = requestedAgent.agentId
       ? await retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
           requireMaterialized: true,
+          projection: ["skillsSnapshot"],
           entryMatches: (previous, current) =>
             !hasSessionReadAccessChanged(previous, current) &&
             sessionFileWorkspaceMatches(previous, current),

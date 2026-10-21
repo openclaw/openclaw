@@ -97,12 +97,8 @@ export class TerminalOutputController {
     }
   }
 
-  dispose(opts?: { flush?: boolean }): void {
-    if (opts?.flush) {
-      this.flush();
-    } else {
-      this.clear();
-    }
+  dispose(): void {
+    this.clear();
     if (this.reassertTimer) {
       clearInterval(this.reassertTimer);
       this.reassertTimer = null;

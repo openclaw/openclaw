@@ -93,7 +93,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     accumulatedBlockText: "",
     accumulatedBlockTtsText: "",
     acceptedReplyPayload: false,
-    blockCount: 0,
     channelTransformSuppressed: false,
     pendingDirectBlockReplyDelivery: Promise.resolve(),
     progressCallbackStartTail: Promise.resolve(),

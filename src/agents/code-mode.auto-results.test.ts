@@ -260,16 +260,61 @@ it("keeps a large set of action declarations within the complete output allowanc
   expect(file.content).toContain("Promise<unknown>");
 });
 
+it("preserves changed fields, requiredness, and root constraints when reusing object declarations", async () => {
+  const base = Type.Object({ value: Type.String() }, { additionalProperties: false });
+  const extended = Type.Object(
+    { ...base.properties, receipt: Type.String() },
+    { additionalProperties: false },
+  );
+  const file = await createCodeModeToolApiFile("records", {
+    source: "openclaw",
+    parameters: Type.Object({ kind: Type.String() }),
+    outputSchema: defineToolOutputSchema({
+      inputProperty: "kind",
+      variants: {
+        empty: Type.Object({}, { additionalProperties: false }),
+        base,
+        extended,
+        changed: Type.Object(
+          { ...extended.properties, value: Type.Number() },
+          { additionalProperties: false },
+        ),
+        optional: { ...extended, required: ["receipt"] },
+        constrained: { ...extended, allOf: [{ maxProperties: 1 }] },
+      },
+    }),
+  });
+  expect(
+    typeCheckSources({
+      "/extended-records.ts": `${file.content}
+async function consume() {
+  const extended = await records({ kind: "extended" });
+  const accepted: typeof extended = { value: "item", receipt: "approved" };
+  const value: string = extended.value;
+  const receipt: string = extended.receipt;
+  const changed = await records({ kind: "changed" });
+  const numeric: number = changed.value;
+  const optional = await records({ kind: "optional" });
+  const maybe: string | undefined = optional.value;
+  // @ts-expect-error Reuse must not restore requiredness removed by this branch.
+  const required: string = optional.value;
+  const constrained = await records({ kind: "constrained" });
+  // @ts-expect-error Unsupported root constraints must retain an unknown result.
+  constrained.receipt;
+}`,
+    }),
+  ).toEqual([]);
+});
+
 it("bounds inspection and repeated console output under the shared result cap", async () => {
   const maxOutputBytes = 65_536;
   const result = await runCodeModeScriptHeadless({
-    ctx: createHeadlessCodeModeHarness(),
+    ctx: createHeadlessCodeModeHarness([], { codeMode: { maxOutputBytes } }),
     code:
       'const huge = { unicode: "🦞".repeat(100000), values: Array(100000).fill("x") }; ' +
       'console.log(huge); console.error(new Proxy({}, { ownKeys() { throw Error("bad proxy"); } })); ' +
       "for (let i = 0; i < 20000; i++) console.log(); await yield_control(); " +
       'console.log("after exhaustion"); return true;',
-    overrides: { maxOutputBytes },
   });
   expect(result.status).toBe("completed");
   expectCodeModeSharedBudget(result, maxOutputBytes);

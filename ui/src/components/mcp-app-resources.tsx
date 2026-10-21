@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type {
   McpAppMentionResult,
   McpAppResourceLink,
@@ -38,7 +38,7 @@ export function McpAppResources(props: McpAppResourcesProps) {
     sessionKey: props.sessionKey,
     agentId: props.agentId,
   }));
-  onCleanup(() => {
+  onSettled(() => () => {
     mounted = false;
     generation++;
   });

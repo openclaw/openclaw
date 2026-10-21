@@ -12,11 +12,12 @@ import {
 import { computeInlineScriptHashes } from "./control-ui-csp.js";
 import { AUTH_TOKEN, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-const { resolveSession, reader, active, mediaToken } = vi.hoisted(() => ({
+const { resolveSession, reader, active, mediaToken, widgetToken } = vi.hoisted(() => ({
   resolveSession: vi.fn(),
   reader: vi.fn(),
   active: vi.fn(),
   mediaToken: vi.fn(),
+  widgetToken: vi.fn(),
 }));
 vi.mock(import("./control-ui-session-path-resolve.js"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -30,6 +31,7 @@ vi.mock(import("./control-ui-public-session-read.js"), async (importOriginal) =>
 vi.mock(import("./control-ui-public-session-token.js"), async (importOriginal) => ({
   ...(await importOriginal()),
   mintExistingPublicSessionShareToken: mediaToken,
+  mintPublicSessionWidgetToken: widgetToken,
 }));
 vi.mock(import("./session-row-projection-access.js"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -95,6 +97,7 @@ beforeEach(() => {
   });
   active.mockReset().mockReturnValue(true);
   mediaToken.mockReset().mockResolvedValue(`v1.${"a".repeat(96)}`);
+  widgetToken.mockReset().mockResolvedValue("v1.document-only");
 });
 afterEach(() => {
   for (const instance of servers.splice(0)) {
@@ -105,6 +108,19 @@ afterEach(() => {
 });
 
 describe("canonical anonymous HTTP entry", () => {
+  it("renders widgets with document-scoped links on the canonical chat route", async () => {
+    reader.mockResolvedValue({
+      title: "Public chart",
+      messages: [{ role: "assistant", content: '[embed ref="chart" /]' }],
+      truncated: false,
+    });
+    const response = await request(server());
+    expect(response.res.statusCode).toBe(200);
+    expect(widgetToken).toHaveBeenCalledWith(expect.objectContaining({ sessionKey: key }), "chart");
+    expect(response.getBody()).toContain(
+      'src="/control/share/session/media?widget=v1.document-only"',
+    );
+  });
   it("keeps published text available when no token identity is present", async () => {
     mediaToken.mockResolvedValue(undefined);
     const response = await request(server());

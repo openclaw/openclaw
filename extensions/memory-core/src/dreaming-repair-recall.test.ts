@@ -59,40 +59,45 @@ async function seedRecallSources() {
     timezone: "America/Los_Angeles",
   });
   const recalls = await readShortTermRecallEntries({ workspaceDir, nowMs });
-  await recordDreamingPhaseSignals({
-    workspaceDir,
-    phase: "light",
-    keys: recalls.map((entry) => entry.key),
-    nowMs,
-  });
+  const keys = recalls.map((entry) => entry.key);
+  await recordDreamingPhaseSignals({ workspaceDir, phase: "light", keys, nowMs });
   const phases = (await readPhaseSignalStore(workspaceDir, nowIso)).entries;
-  return { workspaceDir, recalls, phases };
+  const survivors = recalls.filter((entry) => entry.path !== corpusPath);
+  const before = { recalls: new Set(recalls), phases };
+  const after = {
+    recalls: new Set(survivors),
+    phases: Object.fromEntries(survivors.map((entry) => [entry.key, phases[entry.key]])),
+  };
+  return {
+    workspaceDir,
+    expectState: async (archived: boolean) => {
+      expect({
+        recalls: new Set(await readShortTermRecallEntries({ workspaceDir, nowMs })),
+        phases: (await readPhaseSignalStore(workspaceDir, nowIso)).entries,
+      }).toEqual(archived ? after : before);
+      if (archived) {
+        await expect(auditShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
+          danglingEntryCount: 0,
+        });
+      }
+    },
+  };
 }
 
 it("prunes archived corpus recalls and phase signals while preserving existing sources", async () => {
-  const { workspaceDir, recalls, phases } = await seedRecallSources();
+  const { workspaceDir, expectState } = await seedRecallSources();
 
   const repair = await repairDreamingArtifacts({ workspaceDir });
 
-  expect(repair.archivedSessionCorpus).toBe(true);
-  expect(repair.warnings).toEqual([]);
-  const retained = await readShortTermRecallEntries({ workspaceDir, nowMs });
-  expect(retained.map((entry) => entry.path).toSorted()).toEqual(livePaths.toSorted());
-  const survivors = recalls.filter((entry) => entry.path !== corpusPath);
-  expect(new Set(retained)).toEqual(new Set(survivors));
-  expect((await readPhaseSignalStore(workspaceDir, nowIso)).entries).toEqual(
-    Object.fromEntries(survivors.map((entry) => [entry.key, phases[entry.key]])),
-  );
-  await expect(auditShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
-    danglingEntryCount: 0,
-  });
+  expect(repair).toMatchObject({ archivedSessionCorpus: true, warnings: [] });
+  await expectState(true);
   await expect(repairShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
     changed: false,
   });
 });
 
 it("preserves recall and phase signals when the archive rename fails", async () => {
-  const { workspaceDir, recalls, phases } = await seedRecallSources();
+  const { workspaceDir, expectState } = await seedRecallSources();
   vi.spyOn(fs, "rename").mockRejectedValueOnce(
     Object.assign(new Error("synthetic archive rename denied"), { code: "EACCES" }),
   );
@@ -102,14 +107,11 @@ it("preserves recall and phase signals when the archive rename fails", async () 
   expect(repair.archivedSessionCorpus).toBe(false);
   expect(repair.warnings).toContain("synthetic archive rename denied");
   await expect(fs.stat(path.join(workspaceDir, corpusPath))).resolves.toBeDefined();
-  expect(new Set(await readShortTermRecallEntries({ workspaceDir, nowMs }))).toEqual(
-    new Set(recalls),
-  );
-  expect((await readPhaseSignalStore(workspaceDir, nowIso)).entries).toEqual(phases);
+  await expectState(false);
 });
 
 it("rolls back interrupted archive pruning and lets nightly repair finish", async () => {
-  const { workspaceDir, recalls, phases } = await seedRecallSources();
+  const { workspaceDir, expectState } = await seedRecallSources();
   const db = openOpenClawStateDatabase().db;
   const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir);
   db.exec(`
@@ -122,17 +124,14 @@ it("rolls back interrupted archive pruning and lets nightly repair finish", asyn
   try {
     const repair = await repairDreamingArtifacts({ workspaceDir });
 
-    expect(repair.archivedSessionCorpus).toBe(true);
-    expect(repair.warnings).toEqual([
-      expect.stringContaining("Archive completed but recall cleanup failed"),
-    ]);
+    expect(repair).toMatchObject({
+      archivedSessionCorpus: true,
+      warnings: [expect.stringContaining("Archive completed but recall cleanup failed")],
+    });
     await expect(fs.stat(path.join(workspaceDir, corpusPath))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    expect(new Set(await readShortTermRecallEntries({ workspaceDir, nowMs }))).toEqual(
-      new Set(recalls),
-    );
-    expect((await readPhaseSignalStore(workspaceDir, nowIso)).entries).toEqual(phases);
+    await expectState(false);
   } finally {
     db.exec("DROP TRIGGER abort_archive_phase_delete");
   }
@@ -141,14 +140,5 @@ it("rolls back interrupted archive pruning and lets nightly repair finish", asyn
     changed: true,
     removedDanglingEntries: 1,
   });
-  const survivors = recalls.filter((entry) => entry.path !== corpusPath);
-  expect(new Set(await readShortTermRecallEntries({ workspaceDir, nowMs }))).toEqual(
-    new Set(survivors),
-  );
-  expect((await readPhaseSignalStore(workspaceDir, nowIso)).entries).toEqual(
-    Object.fromEntries(survivors.map((entry) => [entry.key, phases[entry.key]])),
-  );
-  await expect(auditShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
-    danglingEntryCount: 0,
-  });
+  await expectState(true);
 });

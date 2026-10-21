@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { compareOpenClawReleaseVersions } from "../infra/npm-registry-spec.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -106,6 +107,7 @@ export function prepareRuntimePluginConfig(
 }
 
 export function* loadRuntimePluginCandidate(params: {
+  pendingStateMigration?: DeferredPluginMigration;
   candidate: PluginCandidate;
   manifestRecord: PluginManifestRecord;
   context: PluginLoadCacheContext;
@@ -145,6 +147,19 @@ export function* loadRuntimePluginCandidate(params: {
     finish();
   };
   const recovery = params.options.moduleRecoveries?.get(pluginId);
+  if (enableState.enabled && params.pendingStateMigration && !recovery) {
+    // Doctor's separate contract loader owns repair; neither full nor fallback CLI
+    // metadata entrypoints may evaluate against data that has not migrated yet.
+    const message = recordPluginConfiguredUnavailable({
+      registry,
+      record,
+      seenIds: state.seenIds,
+      pendingStateMigration: params.pendingStateMigration,
+      env: context.env,
+    });
+    params.logger.warn(message);
+    return;
+  }
   const pluginRoot = recovery ? candidate.rootDir : resolveRealpathOrAbsolute(candidate.rootDir);
   const degradedPluginForId = findActiveDegradedPlugin(pluginId);
   const degradedPlugin =

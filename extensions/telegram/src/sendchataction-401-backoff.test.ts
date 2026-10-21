@@ -1,6 +1,6 @@
 import { Api } from "grammy";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { asTelegramClientFetch } from "./client-fetch.js";
 
 const mocks = vi.hoisted(() => ({
@@ -14,26 +14,20 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
 }));
 
 type Handler = import("./sendchataction-401-backoff.js").TelegramSendChatActionHandler;
-type HandlerOptions = Parameters<
-  typeof import("./sendchataction-401-backoff.js").createTelegramSendChatActionHandler
->[0];
 let createHandler: typeof import("./sendchataction-401-backoff.js").createTelegramSendChatActionHandler;
 
 describe("createTelegramSendChatActionHandler", () => {
   let now: number;
   beforeEach(() => {
     now = 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
   });
+  afterEach(() => vi.restoreAllMocks());
   const setup = (
     sendChatActionFn: (...args: Parameters<Handler["sendChatAction"]>) => Promise<true>,
-    options: Omit<HandlerOptions, "logger"> = {},
   ) => {
     const logger = vi.fn();
-    const handler = createHandler({
-      logger,
-      now: () => now,
-      ...options,
-    });
+    const handler = createHandler({ logger });
     return {
       handler,
       logger,
@@ -72,7 +66,7 @@ describe("createTelegramSendChatActionHandler", () => {
   it("coalesces pending actions within topic 1", async () => {
     const pending = createDeferred<true>();
     const fn = vi.fn(() => pending.promise);
-    const { send } = setup(fn, { minIntervalMs: 4000 });
+    const { send } = setup(fn);
 
     const first = send(-100, 1);
     await send(-100, 1);
@@ -87,7 +81,7 @@ describe("createTelegramSendChatActionHandler", () => {
   it("keeps root-chat actions independent from another topic", async () => {
     const pending = createDeferred<true>();
     const fn = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(true);
-    const { send } = setup(fn, { minIntervalMs: 4000 });
+    const { send } = setup(fn);
 
     const first = send(-100);
     await send(-100, 2);
@@ -110,23 +104,23 @@ describe("createTelegramSendChatActionHandler", () => {
   });
 
   it.each([
-    ["network code", makeNetworkError(), 0],
-    ["network snippet", new Error("socket hang up"), 0],
-    ["same-chat keepalive", makeTelegramError("Bad Gateway", 502), 4000],
+    ["network code", makeNetworkError(), false],
+    ["network snippet", new Error("socket hang up"), false],
+    ["same-chat keepalive", makeTelegramError("Bad Gateway", 502), true],
   ] as const)(
     "cools down %s until its retry/coalescing window expires",
-    async (_name, error, interval) => {
-      const chatId = interval ? -100 : 123;
-      const cooldown = interval || 1000;
-      now = interval ? 0 : 10_000;
+    async (_name, error, sameChat) => {
+      const chatId = sameChat ? -100 : 123;
+      const cooldown = 4000;
+      now = sameChat ? 0 : 10_000;
       const fn = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(true);
-      const { send, logger } = setup(fn, { minIntervalMs: interval });
-      await expect(send(chatId, interval ? undefined : 1)).rejects.toThrow(error.message);
+      const { send, logger } = setup(fn);
+      await expect(send(chatId, sameChat ? undefined : 1)).rejects.toThrow(error.message);
       expect(logger.mock.calls.at(-1)).toEqual([
         `sendChatAction transient error (1). Cooling down ${cooldown}ms before retry.`,
       ]);
       now += cooldown - 1;
-      await expect(send(chatId, interval ? undefined : 2)).rejects.toThrow(
+      await expect(send(chatId, sameChat ? undefined : 2)).rejects.toThrow(
         "transient cooldown active",
       );
       expect(fn).toHaveBeenCalledTimes(1);
@@ -172,9 +166,9 @@ describe("createTelegramSendChatActionHandler", () => {
     const { send, logger } = setup(fn);
 
     await expect(send(123)).rejects.toThrow("Bad Gateway");
-    now = 2000;
+    now = 5000;
     await expect(send(123)).rejects.toThrow("400 Bad Request");
-    now = 3000;
+    now = 9000;
     await expect(send(123)).rejects.toThrow("Bad Gateway");
 
     expect(
@@ -182,22 +176,25 @@ describe("createTelegramSendChatActionHandler", () => {
         String(message).startsWith("sendChatAction transient error"),
       ),
     ).toEqual([
-      ["sendChatAction transient error (1). Cooling down 1000ms before retry."],
-      ["sendChatAction transient error (1). Cooling down 1000ms before retry."],
+      ["sendChatAction transient error (1). Cooling down 4000ms before retry."],
+      ["sendChatAction transient error (1). Cooling down 4000ms before retry."],
     ]);
   });
 
   it("is shared across multiple chatIds (global handler)", async () => {
     const fn = vi.fn().mockRejectedValue(make401Error());
-    const { handler, send } = setup(fn, { maxConsecutive401: 3 });
+    const { handler, send } = setup(fn);
 
     await expect(send(111, 1)).rejects.toThrow("401");
     await expect(send(111, 2)).rejects.toThrow("401");
-    await expect(send(333)).rejects.toThrow("401");
+    for (let attempt = 2; attempt < 10; attempt += 1) {
+      now += 4000;
+      await expect(send(333)).rejects.toThrow("401");
+    }
 
     expect(handler.isSuspended()).toBe(true);
     await send(444);
-    expect(fn).toHaveBeenCalledTimes(3);
+    expect(fn).toHaveBeenCalledTimes(10);
   });
 
   it("treats a structured 429 with retry_after=401 as transient, not as a 401 suspension", async () => {
@@ -209,14 +206,12 @@ describe("createTelegramSendChatActionHandler", () => {
 
     now = 0;
     const fn = vi.fn().mockRejectedValue(make429WithRetryAfter401());
-    const { handler, send, logger } = setup(fn, { maxConsecutive401: 3 });
+    const { handler, send, logger } = setup(fn);
 
-    await expect(send(123)).rejects.toThrow("429");
-    // Advance past the transient cooldown (retry_after=401 → 401000ms)
-    now += 402_000;
-    await expect(send(123)).rejects.toThrow("429");
-    now += 402_000;
-    await expect(send(123)).rejects.toThrow("429");
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await expect(send(123)).rejects.toThrow("429");
+      now += 402_000; // Advance past Telegram's 401-second transient cooldown.
+    }
 
     expect(handler.isSuspended()).toBe(false);
 

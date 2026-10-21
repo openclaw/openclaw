@@ -1,90 +1,62 @@
-// Gateway Protocol tests cover openclaw.schema behavior.
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import { SystemAgentChatResultSchema } from "./schema/openclaw.js";
 import type { WizardStep } from "./schema/wizard.js";
 
-/**
- * The chat result carries the awaited wizard step verbatim so control-capable
- * clients can render it. Every step type has to survive the wire, including the
- * fields the card-shaped `question` projection drops.
- */
+// Preserve wizard fields that the card-shaped `question` projection drops.
 describe("SystemAgentChatResultSchema", () => {
   const validate = Compile(SystemAgentChatResultSchema);
   const base = { sessionId: "chat-1", reply: "Bot token", action: "none" };
 
-  const steps: Array<{ name: string; step: WizardStep }> = [
+  const steps: Array<{ name: string; step: Omit<WizardStep, "id" | "message"> }> = [
     {
-      // No initialValue: the schema still permits one (wizard.start/next carry
-      // prefill for editable prompts), but the chat engine strips it from a
-      // sensitive step before serializing, so this is the shape that ships here.
+      // Chat strips secret prefills; wizard.start/next may still carry them.
       name: "sensitive text carrying placeholder but no prefilled secret",
       step: {
-        id: "step-text",
         type: "text",
-        message: "Bot token",
         placeholder: "123:abc",
         sensitive: true,
-        executor: "client",
       },
     },
     {
       name: "non-sensitive text carrying a prefilled value",
       step: {
-        id: "step-text-prefill",
         type: "text",
-        message: "Display name",
         initialValue: "openclaw-bot",
-        executor: "client",
       },
     },
     {
       name: "select with options",
       step: {
-        id: "step-select",
         type: "select",
-        message: "DM mode",
         options: [
           { value: "alpha", label: "Alpha", hint: "First" },
           { value: "beta", label: "Beta" },
         ],
         initialValue: "beta",
-        executor: "client",
       },
     },
     {
       name: "multiselect with options",
       step: {
-        id: "step-multiselect",
         type: "multiselect",
-        message: "Features",
         options: [
           { value: "alerts", label: "Alerts" },
           { value: "logs", label: "Logs" },
         ],
         initialValue: ["alerts"],
-        executor: "client",
       },
     },
     {
       name: "confirm",
-      step: {
-        id: "step-confirm",
-        type: "confirm",
-        message: "Enable delegated auth?",
-        initialValue: false,
-        executor: "client",
-      },
+      step: { type: "confirm", initialValue: false },
     },
     {
-      // The engine auto-answers notes, so this shape only reaches clients on the
-      // wizard methods; the chat result still has to accept it losslessly.
+      // Notes are auto-answered in chat, but still shipped by wizard methods.
       name: "note carrying a device code and an external URL",
       step: {
-        id: "step-note",
         type: "note",
         title: "Sign in",
-        message: "Enter this one-time code on the provider's sign-in page.",
         format: "plain",
         externalUrl: "https://example.com/auth",
         deviceCode: {
@@ -92,33 +64,25 @@ describe("SystemAgentChatResultSchema", () => {
           expiresInMinutes: 15,
           message: "Never share this code.",
         },
-        executor: "client",
       },
     },
     {
       name: "progress",
-      step: {
-        id: "step-progress",
-        type: "progress",
-        message: "Linking your account",
-        executor: "gateway",
-      },
+      step: { type: "progress", executor: "gateway" },
     },
     {
       name: "action executed by the client",
       step: {
-        id: "step-action",
         type: "action",
         title: "Authorize",
-        message: "Approve the app in your browser.",
         externalUrl: "https://example.com/authorize",
-        executor: "client",
       },
     },
   ];
 
   it.each(steps)("accepts a chat result carrying a $name step", ({ step }) => {
-    expect(validate.Check({ ...base, step })).toBe(true);
+    const value = { id: "step", message: "Prompt", executor: "client", ...step };
+    expect(validate.Check({ ...base, step: value })).toBe(true);
   });
 
   it("stays optional for replies with no awaited step", () => {

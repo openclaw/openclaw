@@ -16,7 +16,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
-import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import { MemoryIndexDatabase } from "./manager-database-context.js";
 import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
@@ -24,7 +24,6 @@ type EvictionHarness = {
   db: DatabaseSync;
   cache: { maxEntries?: number };
   dirty: boolean;
-  writeMeta: (meta: MemoryIndexMeta) => Promise<void>;
 };
 
 type CacheIdentity = { provider: string; model: string; provider_key: string };
@@ -202,11 +201,12 @@ describe("memory manager embedding cache eviction at the cap", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now);
     // A sibling caches a vector for a chunk it has not published yet, after this
     // rebuild started and before it publishes. No published chunk carries its hash.
-    const writeMeta = harness.writeMeta.bind(harness);
-    harness.writeMeta = async (meta) => {
+    const metadata = vi.spyOn(MemoryIndexDatabase.prototype, "writeMetadata");
+    metadata.mockImplementationOnce(function (this: MemoryIndexDatabase, meta) {
       insertCacheRow(identity, "pending-sibling", Date.now());
-      return writeMeta(meta);
-    };
+      metadata.mockRestore();
+      return this.writeMetadata(meta);
+    });
     harness.cache.maxEntries = 2;
 
     await memoryManager.sync({ reason: "cli", force: true });

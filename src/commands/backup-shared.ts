@@ -1,8 +1,10 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { readExistingWorktreePaths } from "../agents/worktrees/registry-read.js";
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import {
   createConfigIO,
   resolveConfigPath,
@@ -35,10 +37,10 @@ import {
   type ResolvedSkillDiscoveryLimits,
 } from "../skills/loading/skill-root-discovery.js";
 import { tryRealpath } from "../skills/loading/symlink-targets.js";
+import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
-import { recordBackupRunOutcomeWithOwner } from "./backup-outcome.js";
 import {
   createBackupResourcePlan,
   type BackupAgentRoot,
@@ -50,6 +52,35 @@ import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-
 // DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
 // Keep bounded headroom without disabling node-tar's decompression bomb guard.
 export const BACKUP_MAX_DECOMPRESSION_RATIO = 1100;
+
+/** Route only the ledger write; archive creation keeps its existing backup owner. */
+async function recordBackupRunOutcomeWithOwner(
+  params: Omit<Parameters<typeof recordBackupRunOutcome>[0], "env">,
+): Promise<void> {
+  const databasePath = resolveOpenClawStateSqlitePath();
+  if (!existsSync(databasePath)) {
+    return;
+  }
+  const outcome = {
+    ...params,
+    createdAt: params.createdAt ?? Date.now(),
+    pushFailed: params.pushFailed === true ? true : undefined,
+  };
+  await runWithLocalStateOwner({
+    method: "backup.recordOutcome",
+    params: { outcome },
+    target: "backup outcome ledger",
+    recoveryCommand: "openclaw gateway call backup.status",
+    // Config loading must not recreate a database removed while ownership was acquired.
+    assertTargetCurrent: () => {
+      if (!existsSync(databasePath)) {
+        throw new Error("The state database disappeared; the backup outcome was not recorded.");
+      }
+    },
+    runLocal: ({ env, assertCurrent, signal }) =>
+      recordBackupRunOutcome({ ...outcome, env }, { assertCurrent, signal }),
+  });
+}
 
 export async function recordBackupOutcomeBestEffort(
   runtime: RuntimeEnv,

@@ -178,7 +178,8 @@ it("hides progress and its loading slot without clearing saved progress, then re
   expect(pane.chatProps?.progressCardInitialLoading).toBe(false);
   await loadChatHistory(state, { deferBranches: true });
   await pane.updateComplete;
-  f.expectMethods("chat.history");
+  await vi.waitFor(() => expect(f.progress.get({ sessionKey: f.card.sessionKey })).toEqual(f.card));
+  f.expectMethods("chat.history", "progressCard.get");
   expect(pane.chatProps?.progressCard).toBeNull();
 
   state.settings = { ...state.settings, chatShowTaskProgress: true };
@@ -189,7 +190,9 @@ it("hides progress and its loading slot without clearing saved progress, then re
   expect(pane.chatProps).toMatchObject({ progressCard: null, progressCardInitialLoading: false });
   f.card = progressCard(2);
   emit(f.card);
-  f.expectMethods("chat.history", "progressCard.get");
+  await vi.waitFor(() => expect(f.progress.get({ sessionKey: f.card.sessionKey })).toEqual(f.card));
+  expect(pane.chatProps).toMatchObject({ progressCard: null, progressCardInitialLoading: false });
+  f.expectMethods("chat.history", "progressCard.get", "progressCard.get");
 
   state.settings = { ...state.settings, chatShowTaskProgress: true };
   await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));

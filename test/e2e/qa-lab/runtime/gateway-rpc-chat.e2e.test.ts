@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { z } from "zod";
@@ -49,6 +47,15 @@ const responsesInputSchema = z.object({
       content: z.array(z.object({ type: z.string(), text: z.string().optional() })).optional(),
     }),
   ),
+});
+const describedSessionSchema = z.object({
+  session: z.object({
+    agentId: z.string().optional(),
+    key: z.string(),
+    sessionId: z.string().optional(),
+    placement: z.object({ state: z.string() }).optional(),
+    hasActiveRun: z.boolean().optional(),
+  }),
 });
 const historyTextSchema = z.union([
   z.string(),
@@ -539,29 +546,51 @@ describe("Gateway chat RPCs", () => {
           (otherHistory.messages ?? []).some((message) => messageContains(message, reply)),
         ).toBe(false);
       }
-      const database = new DatabaseSync(
-        path.join(gateway.tempRoot, "state", "state", "openclaw.sqlite"),
-        { readOnly: true },
-      );
-      try {
-        const placements = database.prepare(
-          "SELECT agent_id, session_key, session_id, state, turn_claim_id FROM worker_session_placements WHERE agent_id IN (?, ?) ORDER BY agent_id",
-        );
-        // The terminal event can precede the placement owner's final claim release.
-        await expect
-          .poll(() => placements.all(first, second))
-          .toEqual(
-            [first, second].toSorted().map((agentId) => ({
-              agent_id: agentId,
-              session_key: sessionKey,
-              session_id: expectDefined(sessionIds.get(agentId), "owner session id"),
-              state: "local",
-              turn_claim_id: null,
-            })),
-          );
-      } finally {
-        database.close();
+      // Plain-local turn claims are owner-only; a leaked final claim rejects the next turn.
+      for (const agentId of [first, second]) {
+        const reply = `GLOBAL_OWNER_CLAIM_RELEASED_${agentId}`;
+        const started = (await gateway.call(
+          "agent",
+          {
+            sessionKey,
+            agentId,
+            message: `Gateway claim release QA for ${agentId}. Reply exactly \`${reply}\`.`,
+            deliver: false,
+            idempotencyKey: randomUUID(),
+          },
+          { timeoutMs: 30_000 },
+        )) as GatewayChatRun;
+        const terminal = await waitForRun(gateway, started.runId);
+        expect(terminal, JSON.stringify(terminal)).toMatchObject({ status: "ok" });
       }
+      // Plain-local placements live with the Gateway placement owner, not in SQL rows.
+      // The terminal event can precede the final session row projection.
+      await expect
+        .poll(() =>
+          Promise.all(
+            [first, second].map(async (agentId) => {
+              const { session } = describedSessionSchema.parse(
+                await gateway.call("sessions.describe", { key: sessionKey, agentId }),
+              );
+              return {
+                agentId: session.agentId,
+                key: session.key,
+                sessionId: session.sessionId,
+                placement: session.placement?.state,
+                active: session.hasActiveRun === true,
+              };
+            }),
+          ),
+        )
+        .toEqual(
+          [first, second].map((agentId) => ({
+            agentId,
+            key: sessionKey,
+            sessionId: expectDefined(sessionIds.get(agentId), "owner session id"),
+            placement: "local",
+            active: false,
+          })),
+        );
     },
   );
 

@@ -1,27 +1,12 @@
-// Covers browser sandbox security audit findings.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectSandboxBrowserHashLabelFindings } from "./audit-extra.async.js";
 
-function hasFinding(
-  checkId:
-    | "sandbox.browser_container.hash_label_missing"
-    | "sandbox.browser_container.hash_epoch_stale"
-    | "sandbox.browser_container.non_loopback_publish",
-  severity: "warn" | "critical",
-  findings: Array<{ checkId: string; severity: string; detail: string }>,
-) {
-  return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
+function dockerResult(stdout = "", stderr = "", code = 0) {
+  return { stdout: Buffer.from(stdout), stderr: Buffer.from(stderr), code };
 }
 
-function requireFinding(
-  checkId: "sandbox.browser_container.hash_epoch_stale",
-  findings: Array<{ checkId: string; severity: string; detail: string }>,
-) {
-  const finding = findings.find((entry) => entry.checkId === checkId);
-  if (!finding) {
-    throw new Error(`Expected ${checkId} finding`);
-  }
-  return finding;
+function finding(suffix: string, severity = "warn") {
+  return expect.objectContaining({ checkId: `sandbox.browser_container.${suffix}`, severity });
 }
 
 beforeEach(() => {
@@ -37,38 +22,26 @@ describe("security audit sandbox browser findings", () => {
     const findings = await collectSandboxBrowserHashLabelFindings({
       execDockerRawFn: async (args: string[]) => {
         if (args[0] === "ps") {
-          return {
-            stdout: Buffer.from("openclaw-sbx-browser-old\nopenclaw-sbx-browser-missing-hash\n"),
-            stderr: Buffer.alloc(0),
-            code: 0,
-          };
+          return dockerResult("openclaw-sbx-browser-old\nopenclaw-sbx-browser-missing-hash\n");
         }
         if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-old") {
-          return {
-            stdout: Buffer.from("abc123\tepoch-v0\n"),
-            stderr: Buffer.alloc(0),
-            code: 0,
-          };
+          return dockerResult("abc123\tepoch-v0\n");
         }
         if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-missing-hash") {
-          return {
-            stdout: Buffer.from("<no value>\t<no value>\n"),
-            stderr: Buffer.alloc(0),
-            code: 0,
-          };
+          return dockerResult("<no value>\t<no value>\n");
         }
-        return {
-          stdout: Buffer.alloc(0),
-          stderr: Buffer.from("not found"),
-          code: 1,
-        };
+        return dockerResult("", "not found", 1);
       },
     });
 
-    expect(hasFinding("sandbox.browser_container.hash_label_missing", "warn", findings)).toBe(true);
-    expect(hasFinding("sandbox.browser_container.hash_epoch_stale", "warn", findings)).toBe(true);
-    const staleEpoch = requireFinding("sandbox.browser_container.hash_epoch_stale", findings);
-    expect(staleEpoch.detail).toContain("openclaw-sbx-browser-old");
+    expect(findings).toContainEqual(finding("hash_label_missing"));
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "sandbox.browser_container.hash_epoch_stale",
+        severity: "warn",
+        detail: expect.stringContaining("openclaw-sbx-browser-old"),
+      }),
+    );
   });
 
   it("skips sandbox browser hash label checks when docker inspect is unavailable", async () => {
@@ -77,10 +50,8 @@ describe("security audit sandbox browser findings", () => {
         throw new Error("spawn docker ENOENT");
       },
     });
-    expect(hasFinding("sandbox.browser_container.hash_label_missing", "warn", findings)).toBe(
-      false,
-    );
-    expect(hasFinding("sandbox.browser_container.hash_epoch_stale", "warn", findings)).toBe(false);
+    expect(findings).not.toContainEqual(finding("hash_label_missing"));
+    expect(findings).not.toContainEqual(finding("hash_epoch_stale"));
   });
 
   it("bounds sandbox browser Docker probes that do not return", async () => {
@@ -109,12 +80,7 @@ describe("security audit sandbox browser findings", () => {
     const findings = await findingsPromise;
 
     expect(probeSignal?.aborted).toBe(true);
-    expect(findings).toEqual([
-      expect.objectContaining({
-        checkId: "sandbox.browser_container.docker_probe_timeout",
-        severity: "warn",
-      }),
-    ]);
+    expect(findings).toEqual([finding("docker_probe_timeout")]);
   });
 
   it("stops probing remaining sandbox browser containers after a Docker timeout", async () => {
@@ -130,11 +96,7 @@ describe("security audit sandbox browser findings", () => {
       execDockerRawFn: async (args, opts) => {
         calls.push(`${args[0] ?? ""}:${args.at(-1) ?? ""}`);
         if (args[0] === "ps") {
-          return {
-            stdout: Buffer.from("openclaw-sbx-browser-hung\nopenclaw-sbx-browser-next\n"),
-            stderr: Buffer.alloc(0),
-            code: 0,
-          };
+          return dockerResult("openclaw-sbx-browser-hung\nopenclaw-sbx-browser-next\n");
         }
         markHungProbeStarted();
         return await new Promise((_, reject) => {
@@ -161,36 +123,18 @@ describe("security audit sandbox browser findings", () => {
     const findings = await collectSandboxBrowserHashLabelFindings({
       execDockerRawFn: async (args: string[]) => {
         if (args[0] === "ps") {
-          return {
-            stdout: Buffer.from("openclaw-sbx-browser-exposed\n"),
-            stderr: Buffer.alloc(0),
-            code: 0,
-          };
+          return dockerResult("openclaw-sbx-browser-exposed\n");
         }
         if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-exposed") {
-          return {
-            stdout: Buffer.from("hash123\t2026-02-21-novnc-auth-default\n"),
-            stderr: Buffer.alloc(0),
-            code: 0,
-          };
+          return dockerResult("hash123\t2026-02-21-novnc-auth-default\n");
         }
         if (args[0] === "port" && args.at(-1) === "openclaw-sbx-browser-exposed") {
-          return {
-            stdout: Buffer.from("6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n"),
-            stderr: Buffer.alloc(0),
-            code: 0,
-          };
+          return dockerResult("6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n");
         }
-        return {
-          stdout: Buffer.alloc(0),
-          stderr: Buffer.from("not found"),
-          code: 1,
-        };
+        return dockerResult("", "not found", 1);
       },
     });
 
-    expect(hasFinding("sandbox.browser_container.non_loopback_publish", "critical", findings)).toBe(
-      true,
-    );
+    expect(findings).toContainEqual(finding("non_loopback_publish", "critical"));
   });
 });

@@ -560,6 +560,7 @@ async function refreshChat(
     if (!admitted || !ownsRefresh()) {
       return;
     }
+    const presentation = host.sessions.presentation;
     // The shared roster may belong to another agent. Keep this pane's accepted
     // history separate rather than relabeling or borrowing that roster.
     const scopedHistory =
@@ -582,8 +583,8 @@ async function refreshChat(
             (host.sessionsResultAgentId === refreshedAgentId &&
               host.sessionsResult !== previousSessionsResult),
         )
-      : host.sessions.state.result;
-    host.sessionsResultAgentId = scopedHistory ? refreshedAgentId : host.sessions.state.agentId;
+      : presentation.result;
+    host.sessionsResultAgentId = scopedHistory ? refreshedAgentId : presentation.agentId;
     // Defaults-only admission cannot update descriptor flags or run state from stale history.
     if (admitted === "defaults-only") {
       return;

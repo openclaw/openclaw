@@ -72,7 +72,7 @@ export function createTabList(
   read: () => TabsOptions,
   items: () => readonly { value: string; disabled?: boolean }[],
   root: () => HTMLElement,
-  options: { revealActive?: boolean } = {},
+  options: { revealActive?: boolean | ((selected: HTMLElement) => void) } = {},
 ) {
   const nodes = new Map<string, HTMLElement>();
   const active = createMemo(() => read().active);
@@ -120,7 +120,11 @@ export function createTabList(
             if (!root().isConnected || !selected) {
               return;
             }
-            selected.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+            if (typeof options.revealActive === "function") {
+              options.revealActive(selected);
+            } else {
+              selected.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+            }
             // Keyed movement may blur a retained node; newer user focus always wins.
             if (focused === selected && focusNeedsRecovery(selected)) {
               selected.focus({ preventScroll: true });
@@ -200,7 +204,11 @@ export function createTabList(
       select(target, event, false);
     }
     target.focus({ preventScroll: true });
-    target.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (typeof options.revealActive === "function") {
+      options.revealActive(target);
+    } else {
+      target.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    }
   }
 
   return {

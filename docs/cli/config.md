@@ -12,7 +12,11 @@ Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path
 `config set`, `config patch`, and `config unset` require the local Gateway to be
 stopped. These commands hold exclusive state ownership while publishing the file
 and its database metadata. Stop the Gateway through its service owner, wait for
-it to exit, then rerun the command.
+it to exit, then rerun the command. A running-owner refusal is an offline-only
+restriction, not an authentication failure. For online changes, use
+`openclaw gateway call config.patch` with a `raw` patch and the `hash` returned by
+`openclaw gateway call config.get` as `baseHash`; see
+[Config RPC](/gateway/configuration/config-rpc).
 
 <Note>
 When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse.
@@ -197,6 +201,8 @@ machine-output spelling and keeps stdout reserved for the schema document.
 ### `config validate`
 
 Schema refusals from `config set`, `config patch`, and `config unset` explain the affected setting and confirm that no settings were saved. Correct the reported value or use `openclaw config schema` to inspect supported settings, then retry. These refusals still exit with status 1. Explicit validation reports settings that need correction without changing the file; `config validate --json` retains its `valid: false`, `error`, and `issues` fields for scripts.
+
+Known retired core settings are reported before loading plugin migration diagnostics. Both `config get` and `config validate` include the `openclaw doctor --fix` repair hint. JSON errors keep their existing `error.message` and add the guidance in `repairHint`. Doctor still inspects all applicable core and plugin migrations when applying repairs.
 
 Config read failures name the file being read and preserve the underlying error. Resolve the reported file-access or runtime problem, then retry; a read failure alone does not mean the settings need repair.
 

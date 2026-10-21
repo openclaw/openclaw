@@ -10,7 +10,9 @@ import { asOptionalRecord } from "../../packages/normalization-core/src/record-c
 import { buildControlUiSessionPath } from "../../packages/session-url-contract/src/index.ts";
 import { parseAgentSessionKey } from "../../packages/session-url-contract/src/session-key-normalization.ts";
 import type { ControlUiReadiness } from "../../ui/src/app/control-ui-readiness.ts";
+import type { ChatDetailsSession } from "../../ui/src/pages/chat/components/chat-details-session.tsx";
 import { resolvePlaywrightChromiumExecutablePath } from "../../ui/src/test-helpers/playwright-chromium.ts";
+import { mapColdLoadCpuProfile } from "../lib/control-ui-cold-load-trace.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -28,7 +30,11 @@ const { values } = parseArgs({
     "load-path": { type: "string", default: "/dashboard" },
     "phase-seed": { type: "string", default: "1458" },
     "request-stacks": { type: "boolean", default: false },
+    "reload-census": { type: "boolean", default: false },
+    "asset-dir": { type: "string" },
+    "storage-state": { type: "string" },
     "expect-session": { type: "string" },
+    "min-sidebar-rows": { type: "string" },
     "open-details": { type: "boolean", default: false },
     "activity-session": { type: "string" },
     "activity-patch-sessions": { type: "string" },
@@ -152,8 +158,11 @@ async function measureLoads(runs: number) {
       }
       activityCronJobId = job.id;
     }
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-    const installProbe = (captureStacks: boolean) => {
+    const context = await browser.newContext({
+      viewport: { width: 1440, height: 1000 },
+      storageState: values["storage-state"],
+    });
+    const installProbe = (captureStacks: boolean, reloadCensus: boolean) => {
       const requests: Array<{
         method: string;
         params: unknown;
@@ -165,6 +174,10 @@ async function measureLoads(runs: number) {
         catalog?: unknown;
       }> = [];
       const tasks: Array<{ startTime: number; duration: number }> = [];
+      const frames: Array<{ startTime: number; duration: number; blockingDuration: number }> = [];
+      const rows: Array<{ atMs: number; count: number }> = [];
+      let rowSignature = "";
+      const queries = new Map<string, number>();
       const snapshots: Array<{ atMs: number; bytes: number; catalog: unknown }> = [];
       const events: Array<{ atMs: number; event: string; payload: unknown }> = [];
       // Preserve the native receiver explicitly when forwarding from the diagnostic wrapper.
@@ -195,6 +208,33 @@ async function measureLoads(runs: number) {
           ...list.getEntries().map(({ startTime, duration }) => ({ startTime, duration })),
         );
       }).observe({ type: "longtask", buffered: true });
+      if (reloadCensus) {
+        new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            frames.push({
+              startTime: entry.startTime,
+              duration: entry.duration,
+              blockingDuration: Reflect.get(entry, "blockingDuration"),
+            });
+          }
+        }).observe({ type: "long-animation-frame", buffered: true });
+        new MutationObserver(() => {
+          const keys = Array.from(
+            document.querySelectorAll("openclaw-app-sidebar [data-session-key]"),
+            (row) => row.getAttribute("data-session-key"),
+          );
+          const signature = keys.join("\n");
+          if (signature !== rowSignature) {
+            rowSignature = signature;
+            rows.push({ atMs: performance.now(), count: keys.length });
+          }
+        }).observe(document, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["data-session-key"],
+        });
+      }
       class ObservedWebSocket extends NativeWebSocket {
         constructor(socketUrl: string | URL, protocols?: string | string[]) {
           super(socketUrl, protocols);
@@ -232,7 +272,9 @@ async function measureLoads(runs: number) {
                   payload: {
                     changed: frame.payload?.changed,
                     revision: frame.payload?.revision,
+                    key: frame.payload?.key,
                     sessionKey: frame.payload?.sessionKey,
+                    ts: frame.payload?.ts,
                     reason: frame.payload?.reason,
                     phase: frame.payload?.phase,
                     dataPhase: frame.payload?.data?.phase,
@@ -273,11 +315,37 @@ async function measureLoads(runs: number) {
           const frame = JSON.parse(data);
           if (
             frame.type === "req" &&
-            ["cron.list", "models.list", "users.self"].includes(frame.method)
+            (reloadCensus ||
+              ["cron.list", "models.list", "users.self", "sessions.describe"].includes(
+                frame.method,
+              ))
           ) {
+            let queryId: number | undefined;
+            if (reloadCensus) {
+              // Compare complete queries in memory; retain only keys and an opaque ID.
+              const canonical = JSON.stringify(frame.params, (_key, value) =>
+                value && typeof value === "object" && !Array.isArray(value)
+                  ? Object.fromEntries(
+                      Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b)),
+                    )
+                  : value,
+              );
+              const identity = `${frame.method}:${canonical}`;
+              queryId = queries.get(identity);
+              if (queryId === undefined) {
+                queryId = queries.size + 1;
+                queries.set(identity, queryId);
+              }
+            }
             const request = {
               method: frame.method,
-              params: frame.params,
+              params: reloadCensus ? undefined : frame.params,
+              ...(reloadCensus
+                ? {
+                    paramKeys: Object.keys(frame.params ?? {}).toSorted(),
+                    queryId,
+                  }
+                : {}),
               requestedAtMs: performance.now(),
               stack: captureStacks ? new Error().stack : undefined,
               precedingEvent: events.at(-1),
@@ -288,12 +356,31 @@ async function measureLoads(runs: number) {
         }
         return send.call(this, data);
       };
-      Reflect.set(window, "__catalogLoad", { requests, tasks, snapshots, events });
+      Reflect.set(window, "__catalogLoad", { requests, tasks, frames, rows, snapshots, events });
     };
     await context.addInitScript({
-      content: `;(() => { const __name = (target) => target; (${installProbe.toString()})(${values["request-stacks"]}); })();`,
+      content: `;(() => { const __name = (target) => target; (${installProbe.toString()})(${values["request-stacks"]}, ${values["reload-census"]}); })();`,
     });
     const page = await context.newPage();
+    const openDetails = async () => {
+      const details = page
+        .getByRole("complementary", { name: "Details", exact: true })
+        .or(page.getByRole("dialog", { name: "Details", exact: true }));
+      if (!(await details.isVisible())) {
+        await page
+          .getByRole("button", { name: "Details", exact: true })
+          .or(page.getByRole("button").and(page.locator(".chat-header-session-menu__trigger")))
+          .filter({ visible: true })
+          .first()
+          .click();
+        const menu = page.getByRole("menuitem", { name: "Session details", exact: true });
+        await details.or(menu).filter({ visible: true }).first().waitFor();
+        if (await menu.isVisible()) {
+          await menu.click();
+        }
+      }
+      await details.waitFor();
+    };
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     const scheduleStartAt = startAt ?? Date.now();
@@ -326,23 +413,7 @@ async function measureLoads(runs: number) {
         { timeout: 60_000 },
       );
       if (values["open-details"]) {
-        const details = page
-          .getByRole("complementary", { name: "Details", exact: true })
-          .or(page.getByRole("dialog", { name: "Details", exact: true }));
-        if (!(await details.isVisible())) {
-          await page
-            .getByRole("button", { name: "Details", exact: true })
-            .or(page.getByRole("button").and(page.locator(".chat-header-session-menu__trigger")))
-            .filter({ visible: true })
-            .first()
-            .click();
-          const menu = page.getByRole("menuitem", { name: "Session details", exact: true });
-          await details.or(menu).filter({ visible: true }).first().waitFor();
-          if (await menu.isVisible()) {
-            await menu.click();
-          }
-        }
-        await details.waitFor();
+        await openDetails();
       }
       const readyAtMs = await page.evaluate(() => performance.now());
       const activity: Array<{ method: string; atMs: number; elapsedMs: number; result?: unknown }> =
@@ -459,6 +530,66 @@ async function measureLoads(runs: number) {
       } else {
         await page.waitForTimeout(Math.max(0, durationMs - readyAtMs));
       }
+      let detailsVerification: unknown;
+      if (activityClient && values["open-details"]) {
+        await openDetails();
+        const key = await page.evaluate(() => window.openclawControlUi?.snapshot().sessionKey);
+        const descriptor = await activityRpc("sessions.describe", { key });
+        const session = asOptionalRecord(descriptor?.session);
+        if (!session || session.key !== key) {
+          throw new Error("Final descriptor did not match the visible conversation");
+        }
+        const fields = [
+          "key",
+          "sessionId",
+          "label",
+          "model",
+          "modelProvider",
+          "activeModel",
+          "statusNote",
+          "thinkingLevel",
+        ];
+        const expected = Object.fromEntries(fields.map((field) => [field, session[field] ?? null]));
+        await page.waitForFunction(
+          (expectedFields) => {
+            const details = Array.from(
+              document.querySelectorAll<ChatDetailsSession>("openclaw-chat-details-session"),
+            ).find((element) => element.presented && element.checkVisibility());
+            const selected = details?.props?.selectedSession;
+            return (
+              selected &&
+              Object.entries(expectedFields).every(
+                ([field, value]) => (Reflect.get(selected, field) ?? null) === value,
+              )
+            );
+          },
+          expected,
+          { timeout: 10_000 },
+        );
+        if (typeof session.label === "string" && session.label) {
+          await page
+            .locator(".chat-pane__header")
+            .filter({ visible: true })
+            .getByText(session.label, { exact: true })
+            .filter({ visible: true })
+            .first()
+            .waitFor();
+        }
+        const displayedModel = session.activeModel || session.model;
+        if (typeof displayedModel === "string" && displayedModel) {
+          await page
+            .locator(".chat-details__environment")
+            .filter({ visible: true })
+            .getByText(displayedModel, { exact: true })
+            .waitFor();
+        }
+        detailsVerification = {
+          server: expected,
+          presentedDetailsInputMatch: true,
+          visibleDetailsModel: displayedModel,
+          visibleConversationLabel: session.label,
+        };
+      }
       const result = await page.evaluate(() => {
         const probe = Reflect.get(window, "__catalogLoad");
         return {
@@ -475,6 +606,33 @@ async function measureLoads(runs: number) {
           atMs: performance.now(),
         };
       });
+      if (values["asset-dir"] && values["request-stacks"]) {
+        for (const request of result.requests) {
+          const frames = String(request.stack ?? "")
+            .split("\n")
+            .flatMap((line) => {
+              const match = line.match(/(https?:\/\/[^\s)]+):(\d+):(\d+)/u);
+              return match
+                ? [
+                    {
+                      id: 0,
+                      callFrame: {
+                        functionName: line.trim().replace(/\s*\(?https?:.*$/u, ""),
+                        url: match[1]!,
+                        lineNumber: Number(match[2]) - 1,
+                        columnNumber: Number(match[3]) - 1,
+                      },
+                    },
+                  ]
+                : [];
+            });
+          const mapped = await mapColdLoadCpuProfile(
+            { nodes: frames },
+            { assetBaseUrl: new URL("/assets/", url).href, assetDirectory: values["asset-dir"] },
+          );
+          request.callers = mapped.profile.nodes.map(({ callFrame }) => callFrame);
+        }
+      }
       results.push({
         run,
         phaseDelayMs,
@@ -485,6 +643,7 @@ async function measureLoads(runs: number) {
         activity,
         activityStartedAtMs,
         activityEndedAtMs,
+        detailsVerification,
         activityBlockingMs: result.tasks
           .filter(
             (task: { startTime: number }) =>
@@ -496,6 +655,12 @@ async function measureLoads(runs: number) {
           ),
         ...result,
       });
+      if (
+        values["min-sidebar-rows"] &&
+        (result.rows.at(-1)?.count ?? 0) < integer(values["min-sidebar-rows"], "--min-sidebar-rows")
+      ) {
+        throw new Error("Sidebar did not load the expected fixture rows");
+      }
       if (values.screenshot && run === runs - 1) {
         await page.screenshot({ path: values.screenshot, fullPage: true });
       }
@@ -516,9 +681,10 @@ async function measureLoads(runs: number) {
     }
     const report = {
       measurement:
-        "Real isolated Gateway browser loads. Native long-task blocking is sum(max(duration - 50 ms, 0)); request stack capture adds diagnostic overhead. First context is cold, subsequent documents retain browser cache and storage. Matching seeds randomize reload phase equally across paired sides. Synthetic request parameters and stacks are retained; auth and response payloads are not.",
+        "Real isolated Gateway browser loads. Native long-task blocking is sum(max(duration - 50 ms, 0)); request stack capture adds diagnostic overhead. First context is cold, subsequent documents retain browser cache and storage. Matching seeds randomize reload phase equally across paired sides. Reload census retains parameter keys and opaque query IDs; other modes retain synthetic parameters. Sidebar row milestones describe DOM inventory, not paint or authoritative freshness.",
       durationMs,
       requestStacks: values["request-stacks"],
+      reloadCensus: values["reload-census"],
       path: values["load-path"],
       cleanupErrors,
       results,

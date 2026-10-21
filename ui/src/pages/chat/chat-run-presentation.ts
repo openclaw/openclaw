@@ -1,3 +1,5 @@
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
+
 const RUN_FIELDS = [
   "chatMessages",
   "chatPendingInputs",
@@ -32,7 +34,9 @@ class ChatRunPresentation<T extends object> {
   readonly values: ChatRunFields<T> = {};
   readonly fields = RUN_FIELDS;
   frame: number | null = null;
-  private listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
+  private readonly nonTextListeners = createChangeListeners();
+  private nonTextChanged = false;
   private depth = 0;
   private changed = false;
   private cadence: ChatRunPublication | false = false;
@@ -55,6 +59,7 @@ class ChatRunPresentation<T extends object> {
             return;
           }
           Object.defineProperty(this.values, key, { value });
+          this.nonTextChanged ||= key !== "chatStream";
           if (this.depth > 0) {
             this.changed = true;
           } else {
@@ -71,10 +76,8 @@ class ChatRunPresentation<T extends object> {
     });
   }
 
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
+  readonly subscribeNonText = this.nonTextListeners.subscribe;
 
   batch<TResult>(operation: () => TResult, mode?: ChatRunPublication | false): TResult {
     if (this.depth === 0) {
@@ -90,13 +93,15 @@ class ChatRunPresentation<T extends object> {
       if (this.depth === 0 && this.changed) {
         this.changed = false;
         if (this.cadence) {
-          this.publish(this.cadence);
+          this.publish(this.cadence, true);
         }
       }
     }
   }
 
-  publish(mode: ChatRunPublication = "immediate"): void {
+  publish(mode: ChatRunPublication = "immediate", textOnly = false): void {
+    // Ordinary explicit publications also cover mutations inside retained objects.
+    this.nonTextChanged ||= !textOnly;
     if (this.depth > 0) {
       this.changed = true;
       if (mode === "immediate") {
@@ -132,11 +137,14 @@ class ChatRunPresentation<T extends object> {
     }
   }
 
-  private notify(): void {
-    for (const listener of this.listeners) {
-      listener();
+  private readonly notify = () => {
+    const nonTextChanged = this.nonTextChanged;
+    this.nonTextChanged = false;
+    this.listeners.publish();
+    if (nonTextChanged) {
+      this.nonTextListeners.publish();
     }
-  }
+  };
 }
 
 export function chatRunPresentation<T extends object>(host: T): ChatRunPresentation<T> {

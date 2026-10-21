@@ -1,7 +1,8 @@
-import { readFileSync, writeFileSync, writeSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync, writeSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { availableParallelism } from "node:os";
-import { writeHeapSnapshot } from "node:v8";
+import { fileURLToPath } from "node:url";
+import { getHeapSpaceStatistics, queryObjects, writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
 import { getWorkerMessageMetrics } from "../../src/infra/worker-message-metrics.ts";
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
@@ -41,6 +42,7 @@ function sampleResources(): GatewayResourceSnapshot {
   return {
     ...sampleCpu(),
     memory: process.memoryUsage(),
+    heapSpaces: getHeapSpaceStatistics(),
     // These resource types keep the event loop alive; they are not ownership IDs.
     activeResources: Object.fromEntries(
       [...counts].toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
@@ -54,6 +56,19 @@ function sampleResources(): GatewayResourceSnapshot {
 if (isMainThread) {
   if (!process.send) {
     throw new Error("Gateway profiling requires the benchmark IPC channel");
+  }
+  if (process.env.OPENCLAW_BENCH_FIRST_TEXT === "1") {
+    const { onAgentEvent } = await import("../../src/infra/agent-events.js");
+    onAgentEvent((event) => {
+      if (event.stream === "assistant" && (event.data.delta || event.data.text)) {
+        process.send?.({
+          channel: GATEWAY_PROFILE_CHANNEL,
+          kind: "agent-text",
+          runId: event.runId,
+          atEpochMs: performance.timeOrigin + performance.now(),
+        });
+      }
+    });
   }
   // This begins after preload imports, before the Gateway entry. It is not
   // process birth and does not include the profiler's own module import cost.
@@ -100,6 +115,26 @@ if (isMainThread) {
     }
     if (message.kind === "resource-usage" && message.action === "sample") {
       void (async () => {
+        if (message.initial && message.includeWorkers) {
+          throw new Error("Worker memory requires a current resource sample");
+        }
+        let sessionCensus: GatewayResourceSnapshot["sessionCensus"];
+        if (message.sessionCensus || message.clearPromptCacheObservations) {
+          if (!message.collectGarbage || message.initial) {
+            throw new Error("Session attribution requires a current forced-GC resource sample");
+          }
+          const sourceEntry = fileURLToPath(new URL("../../src/entry.ts", import.meta.url));
+          if (!process.argv[1] || realpathSync(process.argv[1]) !== realpathSync(sourceEntry)) {
+            throw new Error(
+              "Session attribution requires --entry src/entry.ts; bundled modules have a different identity",
+            );
+          }
+        }
+        if (message.clearPromptCacheObservations) {
+          const { clearPromptCacheObservations } =
+            await import("../../src/agents/embedded-agent-runner/prompt-cache-observability.js");
+          clearPromptCacheObservations();
+        }
         if (message.collectGarbage) {
           if (!inspectorConnected) {
             inspector.connect();
@@ -107,7 +142,31 @@ if (isMainThread) {
           }
           await inspector.post("HeapProfiler.collectGarbage");
         }
-        const resources = message.initial ? initialResources : sampleResources();
+        if (message.sessionCensus) {
+          // Match the source runtime's module identities; count-only queries never retain instances.
+          const [{ SessionManager }, { AgentSession }, { Agent }] = await Promise.all([
+            import("../../src/agents/sessions/session-manager.js"),
+            import("../../src/agents/sessions/agent-session.js"),
+            import("../../src/agents/runtime/index.js"),
+          ]);
+          sessionCensus = {
+            scope: "source-main-isolate",
+            SessionManager: queryObjects(SessionManager, { format: "count" }),
+            AgentSession: queryObjects(AgentSession, { format: "count" }),
+            Agent: queryObjects(Agent, { format: "count" }),
+          };
+        }
+        // Native benchmark children do not load the Gateway's source registry or loader.
+        const workerMemory = message.includeWorkers
+          ? (await import("../../src/infra/worker-cpu.ts")).sampleTrackedWorkerMemory()
+          : undefined;
+        const resources = message.initial
+          ? initialResources
+          : {
+              ...sampleResources(),
+              ...(workerMemory ? { workers: workerMemory } : {}),
+              ...(sessionCensus ? { sessionCensus } : {}),
+            };
         if (message.snapshotPath) {
           writeHeapSnapshot(message.snapshotPath);
         }

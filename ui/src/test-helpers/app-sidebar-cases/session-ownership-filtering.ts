@@ -203,8 +203,8 @@ describe("AppSidebar session ownership filtering", () => {
         );
       const everyoneSections = sectionIds();
       if (grouping === "category") {
-        expect(everyoneSections).toContain("category:Empty");
-        expect(everyoneSections).toContain("groups");
+        expect(everyoneSections).not.toContain("category:Empty");
+        expect(everyoneSections).not.toContain("groups");
       }
 
       await selectOwner(sidebar, "profile-ada", filter === "involving-me");

@@ -11,11 +11,13 @@ import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import * as pluginMetadata from "../../plugins/plugin-metadata-snapshot.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { readClientCredentialReceipt } from "../client-credential-readiness.js";
+import { readClientCredentialFileIdentity } from "../client-credential-receipt.js";
 import { openClientCredentialCustody } from "../client-credential-store.js";
 import * as recovery from "../database-port-recovery.js";
 import * as disk from "../disk-space.js";
@@ -199,9 +201,20 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         using db = openNodeSqliteDatabase(shared);
         db.exec(`
           ALTER TABLE agent_deletion_journal DROP COLUMN phase;
+          ALTER TABLE agent_database_leases ADD COLUMN unported_data TEXT;
           INSERT INTO agent_deletion_journal (agent_id, agent_dir, workspace_dir, sessions_dir, created_at)
           VALUES ('retired', '/retired/agent', '/retired/workspace', '/retired/sessions', 17);
         `);
+        assertOpenClawStateDatabaseForMaintenance(db, { pathname: shared });
+      }
+      const unported = hash(shared);
+      await expect(doctorDatabasePort({ to: "postgres", dryRun: true })).rejects.toThrow(
+        "Unknown or missing columns in agent_database_leases",
+      );
+      expect(hash(shared)).toBe(unported);
+      {
+        using db = openNodeSqliteDatabase(shared);
+        db.exec("ALTER TABLE agent_database_leases DROP COLUMN unported_data");
       }
       const original = hash(shared);
       const preview = await doctorDatabasePort({ to: "postgres", dryRun: true });
@@ -213,7 +226,13 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       {
         using credentials = openClientCredentialCustody(state.env);
         assert(credentials);
-        expect(readClientCredentialReceipt(credentials.database)?.receipt.source).toBeNull();
+        expect(readClientCredentialReceipt(credentials.database)).toMatchObject({
+          phase: "complete",
+          receipt: {
+            source: { kind: "canonical", engine: "postgres", identity: anchor.storeId },
+            sharedFile: readClientCredentialFileIdentity(shared),
+          },
+        });
       }
       expect(
         (

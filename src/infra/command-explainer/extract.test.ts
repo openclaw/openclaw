@@ -99,7 +99,6 @@ describe("command explainer tree-sitter runtime", () => {
     expectRisk(explanation.risks, {
       kind: "dynamic-argument",
       command: "export",
-      argumentIndex: 2,
       text,
       span: {
         startIndex,
@@ -206,14 +205,12 @@ describe("command explainer tree-sitter runtime", () => {
     expectRisk(dynamicArgument.risks, {
       kind: "dynamic-argument",
       command: "echo",
-      argumentIndex: 1,
       text: "./ec*",
     });
 
     await expectSourceRisk("bash $FLAGS id", {
       kind: "dynamic-argument",
       command: "bash",
-      argumentIndex: 1,
       text: "$FLAGS",
     });
 

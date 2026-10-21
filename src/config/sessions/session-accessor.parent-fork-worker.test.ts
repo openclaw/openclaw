@@ -1,12 +1,12 @@
 import path from "node:path";
-import { afterAll, expect, it, vi } from "vitest";
+import { afterAll, assert, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
-import { forkSessionEntryFromParentTargetWithPatch } from "./session-accessor.sqlite-parent-session.js";
+import { forkSessionEntryFromParentTargetWithPatch as forkWithPatch } from "./session-accessor.sqlite-parent-session.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as storeTargetRuntime from "./session-store-target-runtime.js";
 import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
@@ -47,44 +47,36 @@ it.each(["executor", "discovery"] as const)(
     const cleanupError = new Error(`synthetic fork ${cleanupFailure} cleanup failure`);
     let cleanupFailures = 0;
     const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
-    const captureSpy =
+    const discover = storeTargetRuntime.withSessionStoreTarget;
+    const cleanupSpy =
       cleanupFailure === "executor"
         ? vi
             .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
             .mockImplementation((...args): ReturnType<typeof capture> => {
               const owner = capture(...args);
-              return {
-                ...owner,
-                get fileIdentity() {
-                  return owner.fileIdentity;
-                },
-                async release() {
-                  await owner.release();
-                  cleanupFailures++;
-                  throw cleanupError;
-                },
+              const release = owner.release.bind(owner);
+              owner.release = async () => {
+                await release();
+                cleanupFailures++;
+                throw cleanupError;
               };
+              return owner;
             })
-        : undefined;
-    const discover = storeTargetRuntime.withSessionStoreTarget;
-    const discoverySpy =
-      cleanupFailure === "discovery"
-        ? vi
+        : vi
             .spyOn(storeTargetRuntime, "withSessionStoreTarget")
             .mockImplementation(async <T>(...args: Parameters<typeof discover<T>>): Promise<T> => {
               await discover(...args);
               cleanupFailures++;
               throw cleanupError;
-            })
-        : undefined;
+            });
     const sql = observeHostDataSql();
-    let fork: Awaited<ReturnType<typeof forkSessionEntryFromParentTargetWithPatch>>;
+    let fork: Awaited<ReturnType<typeof forkWithPatch>>;
     try {
-      fork = await forkSessionEntryFromParentTargetWithPatch(params, {
+      fork = await forkWithPatch(params, {
         forked: { label: "forked child" },
       });
       expect(fork).toMatchObject({ status: "forked", sessionEntry: { label: "forked child" } });
-      const skipped = await forkSessionEntryFromParentTargetWithPatch(params, {
+      const skipped = await forkWithPatch(params, {
         skipExisting: true,
         skipped: { label: "existing child" },
       });
@@ -95,14 +87,11 @@ it.each(["executor", "discovery"] as const)(
       });
       expect(sql.queries).toEqual([]);
     } finally {
-      discoverySpy?.mockRestore();
-      captureSpy?.mockRestore();
+      cleanupSpy.mockRestore();
       sql.restore();
     }
     expect(cleanupFailures).toBeGreaterThan(0);
-    if (fork.status !== "forked") {
-      throw new Error("expected forked session");
-    }
+    assert(fork.status === "forked", "expected forked session");
     expect(fork.fork.sessionFile).toBe(childKey);
     expect(fork.fork.sessionId).not.toBe("typed-parent");
     expect(fork.parentEntry).toEqual(parentEntry);

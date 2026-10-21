@@ -820,9 +820,19 @@ describe("tsdown config", () => {
               "--eval",
               `
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
+import { createRequire, registerHooks } from "node:module";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 const entry = pathToFileURL(process.argv[1]);
+// A nested fixture must not inherit dependencies from the parent checkout.
+const packageRoot = pathToFileURL(process.cwd() + path.sep).href;
+registerHooks({ resolve(specifier, context, nextResolve) {
+  const resolved = nextResolve(specifier, context);
+  if (resolved.url.startsWith("file:") && !resolved.url.startsWith(packageRoot)) {
+    throw Object.assign(new Error("Dependency escaped relocated package: " + specifier), { code: "MODULE_NOT_FOUND" });
+  }
+  return resolved;
+} });
 assert.throws(() => createRequire(entry).resolve("tree-sitter-bash"), { code: "MODULE_NOT_FOUND" });
 const { parseBashForCommandExplanation } = await import(entry.href);
 const tree = await parseBashForCommandExplanation('printf "%s" "$(whoami)" | cat');

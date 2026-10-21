@@ -291,7 +291,11 @@ describe("chat pane read markers", () => {
     const { pane, patch } = createReadMarkerPane();
     const sessionsState = (presented: boolean) => {
       pane.presented = presented;
-      pane.applySessionsState(observedSessions([unreadRow({ label: "Background activity" })]));
+      Object.assign(
+        pane.context.sessions.state,
+        observedSessions([unreadRow({ label: "Background activity" })]),
+      );
+      pane.applySessionsState(pane.context.sessions.state);
     };
 
     // Hidden retained panes keep the subscription alive but must not mark
@@ -312,7 +316,8 @@ describe("chat pane read markers", () => {
     expect(patch).not.toHaveBeenCalled();
 
     pane.presented = false;
-    pane.applySessionsState(observedSessions([row]));
+    Object.assign(pane.context.sessions.state, observedSessions([row]));
+    pane.applySessionsState(pane.context.sessions.state);
     pane.presented = true;
 
     expectRead(patch, sessionKey, 20);

@@ -24,12 +24,7 @@ import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schem
 import { extractSqliteTableSchema } from "../sqlite-schema-sql.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { openEngineStore } from "./open.js";
-import {
-  DatabasePortDataError,
-  inspectSqlitePortSchema,
-  type PortDescriptor,
-  type PortTable,
-} from "./port-descriptor.js";
+import { DatabasePortDataError, type PortDescriptor, type PortTable } from "./port-descriptor.js";
 
 export async function loadStatePortDescriptor(
   sourceVersion = OPENCLAW_STATE_SCHEMA_VERSION,
@@ -145,16 +140,14 @@ export async function loadStatePortDescriptor(
         );
       }
       assertOpenClawStateDatabaseForMaintenance(db, { pathname: "shared-state port source" });
-      const migrationRequired =
+      const needsPhaseColumn =
         tableHasColumn(db, "agent_deletion_journal", "agent_id") &&
         !tableHasColumn(db, "agent_deletion_journal", "phase");
-      const pendingColumns: Record<string, readonly string[]> = migrationRequired
+      const pendingColumns: Record<string, readonly string[]> = needsPhaseColumn
         ? { agent_deletion_journal: ["phase"] }
         : {};
-      if (migrationRequired) {
-        inspectSqlitePortSchema(db, descriptor, pendingColumns);
-      }
-      return { version, migrationRequired, pendingColumns };
+      // First-use columns are valid absent; porting completes them in its private copy.
+      return { version, migrationRequired: false, pendingColumns };
     },
     migrateSqliteSource(file, _version, assertCurrent) {
       using db = openNodeSqliteDatabase(file);

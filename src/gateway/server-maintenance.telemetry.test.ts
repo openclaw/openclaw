@@ -37,12 +37,7 @@ vi.mock("../infra/telemetry.js", () => ({
   checkTelemetryUpdate: checkTelemetryUpdateMock,
 }));
 
-// These default readers are unused by the supplied callbacks and native work fixture.
-vi.mock("../agents/worktrees/owner-protection.js", () => ({
-  createManagedWorktreeOwnerPolicy: () => forbiddenDefaultAdapter("worktree owner policy"),
-}));
-
-// mock-isolation: Worker-free timers inject GC and reject accidental default worktree access.
+// mock-isolation: Worker-free timers mock GC and reject accidental default worktree access.
 vi.mock("../agents/worktrees/service.js", () => ({
   WORKTREE_GC_INTERVAL_MS: 60 * 60_000,
   managedWorktrees: { gc: () => forbiddenDefaultAdapter("worktree GC") },
@@ -91,7 +86,6 @@ function createMaintenanceDeps() {
     broadcast: vi.fn(),
     refreshGatewayHealthSnapshot: vi.fn(state.refreshGatewayHealthSnapshot),
     logHealth: { info: vi.fn(), error: vi.fn() },
-    runWorktreeGc: vi.fn(async (): Promise<void> => {}),
     runDeliveryQueueMediaGc: vi.fn(async (): Promise<void> => {}),
     runManagedOutgoingMediaGc: vi.fn(async (): Promise<void> => {}),
   };
@@ -176,7 +170,10 @@ describe("gateway telemetry maintenance", () => {
           },
         });
       } else if (owner === "worktree") {
-        state.runWorktreeGc.mockImplementation(run);
+        state.worktreeGc.mockImplementation(async () => {
+          await run();
+          return state.worktreeGcResult;
+        });
       }
       devicePairCleanupMock.mockImplementation(({ scheduler }) => {
         if (owner === "device-pair") {
@@ -242,7 +239,7 @@ describe("gateway telemetry maintenance", () => {
       );
       const state = createMaintenanceDeps();
       const {
-        runWorktreeGc,
+        worktreeGc,
         runDeliveryQueueMediaGc,
         logHealth,
         refreshGatewayHealthSnapshot,
@@ -274,7 +271,7 @@ describe("gateway telemetry maintenance", () => {
         expect(logHealth.error).not.toHaveBeenCalled();
         expect(refreshGatewayHealthSnapshot).toHaveBeenCalledOnce();
         expect(broadcast).not.toHaveBeenCalled();
-        expect(runWorktreeGc).not.toHaveBeenCalled();
+        expect(worktreeGc).not.toHaveBeenCalled();
         expect(runDeliveryQueueMediaGc).not.toHaveBeenCalled();
         expect(checkTelemetryUpdateMock).toHaveBeenCalledOnce();
         expect(state.dedupe.has("retained-during-drain")).toBe(true);
@@ -306,9 +303,7 @@ describe("gateway telemetry maintenance", () => {
     expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(checkTelemetryUpdateMock).toHaveBeenCalledWith(maintenanceState.getRuntimeConfig, {
-      surface: "gateway",
-    });
+    expect(checkTelemetryUpdateMock).toHaveBeenCalledWith(maintenanceState.getRuntimeConfig);
     expect(logHealth.error).not.toHaveBeenCalled();
     expect(generateSecureIntMock).toHaveBeenNthCalledWith(2, 5 * 60_000);
 

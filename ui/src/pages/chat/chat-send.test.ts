@@ -21,7 +21,7 @@ import {
   sessionsResult as sessionListFixture,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
-import "../../lib/toast-host.ts";
+import "../../lib/toast-host.tsx";
 import { createResolvedModelPatch } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -1821,7 +1821,7 @@ describe("handleSendChat", () => {
         const approval = structuredClone(host.waitingApprovalStatuses?.get(`approval-${runId}`));
         const compaction = structuredClone(host.compactionStatus);
         expect(tool).toMatchObject({ runId, toolCallId: `tool-${runId}`, name: "exec" });
-        expect(approval).toMatchObject({ runId, approvalId: `approval-${runId}` });
+        expect(approval).toMatchObject({ runId });
         expect(compaction).toMatchObject({ runId, phase: "active" });
         await waitForFast(() => expect(host.chatToolMessages).toContainEqual(tool.message));
         const assertIncomingActivity = () => {

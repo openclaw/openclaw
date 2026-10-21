@@ -562,9 +562,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         !isGatewayClosed()
       ) {
         // Cancellation refused before Gateway admission: keep the unspent durable obligation.
-        await params.transitionBatch(settledBatch, state, () => {
-          refreshBatch();
-        });
+        await params.transitionBatch(settledBatch, state, refreshBatch);
         return true;
       }
       if (
@@ -575,19 +573,14 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       ) {
         return true;
       }
-      if (isBatchDeliveryClosed() || !isRequesterCurrent()) {
-        if (
-          pauseNotice &&
-          !isBatchDeliveryClosed() &&
-          sourceReceiptAdmission.isRequesterCurrent()
-        ) {
-          // Requester turnover closes this attempt, not the child's pending question.
-          return true;
-        }
-        await completeBatch(settledBatch, state);
-        return true;
+      if (!isBatchDeliveryClosed() && isRequesterCurrent()) {
+        return false;
       }
-      return false;
+      // Requester turnover closes this attempt, not the child's pending question.
+      if (!pauseNotice || isBatchDeliveryClosed() || !sourceReceiptAdmission.isRequesterCurrent()) {
+        await completeBatch(settledBatch, state);
+      }
+      return true;
     };
     if (
       isSourceSessionEffectsAllowed() &&
@@ -663,7 +656,14 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
               settledBatch,
               directIdempotencyKey,
               () => !pauseNotice && isSourceSessionEffectsAllowed(),
-              () => subagentRuns.runWithCompletionBatchAuthority(settledBatch, deliver),
+              () => {
+                if (!isSourceSessionEffectsAllowed()) {
+                  throw new Error(
+                    "Requester completion source changed before continuation admission.",
+                  );
+                }
+                return subagentRuns.runWithCompletionBatchAuthority(settledBatch, deliver);
+              },
             );
       };
       delivery = await withSubagentProgressDraft(settledBatch, directIdempotencyKey, () =>

@@ -1,9 +1,20 @@
-// Covers small-model risk audit findings.
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectSmallModelRiskFindings } from "./audit-extra.summary.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
+
+const web = { search: { enabled: true }, fetch: { enabled: true } };
+const browser = { enabled: true };
+function modelConfig(
+  primary: string,
+  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {},
+): OpenClawConfig {
+  return { agents: { defaults: { model: { primary }, ...defaults } }, tools: { web }, browser };
+}
+function risk(cfg: OpenClawConfig, env: NodeJS.ProcessEnv = {}) {
+  return expectDefined(collectSmallModelRiskFindings({ cfg, env }).at(0), "risk finding");
+}
 
 describe("security audit small-model risk findings", () => {
   it("reports canonical paths for agent model references", () => {
@@ -12,12 +23,7 @@ describe("security audit small-model risk findings", () => {
         agents: {
           entries: {
             simple: { model: "ollama/mistral-8b" },
-            structured: {
-              model: {
-                primary: "ollama/gemma-4b",
-                fallbacks: ["ollama/phi-3b"],
-              },
-            },
+            structured: { model: { primary: "ollama/gemma-4b", fallbacks: ["ollama/phi-3b"] } },
           },
         },
       } satisfies OpenClawConfig),
@@ -29,24 +35,18 @@ describe("security audit small-model risk findings", () => {
   });
 
   it("preserves agent policy context for canonical model source paths", () => {
-    const finding = expectDefined(
-      collectSmallModelRiskFindings({
-        cfg: {
-          agents: {
-            entries: {
-              ops: {
-                model: { primary: "ollama/mistral-8b" },
-                tools: { deny: ["web_search", "web_fetch", "browser"] },
-              },
-            },
+    const finding = risk({
+      agents: {
+        entries: {
+          ops: {
+            model: { primary: "ollama/mistral-8b" },
+            tools: { deny: ["web_search", "web_fetch", "browser"] },
           },
-          tools: { web: { search: { enabled: true }, fetch: { enabled: true } } },
-          browser: { enabled: true },
-        } satisfies OpenClawConfig,
-        env: {},
-      }).at(0),
-      "small-model risk finding for agent policy context",
-    );
+        },
+      },
+      tools: { web },
+      browser,
+    });
 
     expect(finding.severity).toBe("info");
     expect(finding.detail).toContain("@ agents.entries.ops.model.primary");
@@ -62,20 +62,14 @@ describe("security audit small-model risk findings", () => {
     }> = [
       {
         name: "small model with web and browser enabled",
-        cfg: {
-          agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
-          tools: { web: { search: { enabled: true }, fetch: { enabled: true } } },
-          browser: { enabled: true },
-        },
+        cfg: modelConfig("ollama/mistral-8b"),
         expectedSeverity: "critical",
         detailIncludes: ["mistral-8b", "web_search", "web_fetch", "browser"],
       },
       {
         name: "small model with sandbox all and web/browser disabled",
         cfg: {
-          agents: {
-            defaults: { model: { primary: "ollama/mistral-8b" }, sandbox: { mode: "all" } },
-          },
+          ...modelConfig("ollama/mistral-8b", { sandbox: { mode: "all" } }),
           tools: { web: { search: { enabled: false }, fetch: { enabled: false } } },
           browser: { enabled: false },
         },
@@ -85,13 +79,7 @@ describe("security audit small-model risk findings", () => {
     ];
 
     for (const testCase of cases) {
-      const finding = expectDefined(
-        collectSmallModelRiskFindings({
-          cfg: testCase.cfg,
-          env: process.env,
-        }).at(0),
-        `small-model risk finding for ${testCase.name}`,
-      );
+      const finding = risk(testCase.cfg, process.env);
       expect(finding.severity, testCase.name).toBe(testCase.expectedSeverity);
       for (const snippet of testCase.detailIncludes) {
         expect(finding.detail, `${testCase.name}:${snippet}`).toContain(snippet);
@@ -100,23 +88,8 @@ describe("security audit small-model risk findings", () => {
   });
 
   it("resolves configured aliases before parameter-size classification", () => {
-    const finding = expectDefined(
-      collectSmallModelRiskFindings({
-        cfg: {
-          agents: {
-            defaults: {
-              model: { primary: "tiny" },
-              models: {
-                "ollama/mistral-8b": { alias: "tiny" },
-              },
-            },
-          },
-          tools: { web: { search: { enabled: true }, fetch: { enabled: true } } },
-          browser: { enabled: true },
-        } satisfies OpenClawConfig,
-        env: {},
-      }).at(0),
-      "small-model risk finding for configured alias",
+    const finding = risk(
+      modelConfig("tiny", { models: { "ollama/mistral-8b": { alias: "tiny" } } }),
     );
 
     expect(finding.checkId).toBe("models.small_params");
@@ -126,30 +99,15 @@ describe("security audit small-model risk findings", () => {
   });
 
   it("honors provider/model tool deny policy before reporting web exposure", () => {
-    const finding = expectDefined(
-      collectSmallModelRiskFindings({
-        cfg: {
-          agents: {
-            defaults: {
-              model: {
-                primary: "openrouter/google/gemma-3-4b-it:free",
-              },
-            },
-          },
-          tools: {
-            web: { search: { enabled: true }, fetch: { enabled: true } },
-            byProvider: {
-              "openrouter/google/gemma-3-4b-it:free": {
-                deny: ["web_search", "web_fetch", "browser"],
-              },
-            },
-          },
-          browser: { enabled: true },
-        } satisfies OpenClawConfig,
-        env: {},
-      }).at(0),
-      "small-model risk finding for provider/model deny",
-    );
+    const finding = risk({
+      ...modelConfig("openrouter/google/gemma-3-4b-it:free"),
+      tools: {
+        web,
+        byProvider: {
+          "openrouter/google/gemma-3-4b-it:free": { deny: ["web_search", "web_fetch", "browser"] },
+        },
+      },
+    });
 
     expect(finding.checkId).toBe("models.small_params");
     expect(finding.severity).toBe("info");

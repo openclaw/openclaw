@@ -17,7 +17,6 @@ import {
   resolveMatrixQaScenarioRoomId,
 } from "./scenario-contract.js";
 import {
-  advanceMatrixQaActorCursor,
   buildMatrixQaToken,
   createMatrixQaDriverScenarioClient,
   createMatrixQaScenarioClient,
@@ -39,24 +38,6 @@ type MatrixQaApprovalOptionReactionParams = {
   roomId: string;
   targetEventId: string;
 };
-
-function requireMatrixQaGatewayCall(context: MatrixQaScenarioContext) {
-  if (!context.gatewayCall) {
-    throw new Error("Matrix approval QA scenario requires a live gateway RPC client");
-  }
-  return context.gatewayCall;
-}
-
-function buildMatrixApprovalArtifact(event: MatrixQaObservedEvent) {
-  if (!event.approval) {
-    throw new Error(`Matrix event ${event.eventId} did not include approval metadata`);
-  }
-  return {
-    ...event.approval,
-    eventId: event.eventId,
-    roomId: event.roomId,
-  };
-}
 
 function isApprovalOptionReaction(
   event: MatrixQaObservedEvent,
@@ -285,8 +266,7 @@ async function requestApproval(
   kind: ChannelApprovalKind,
   request: Record<string, unknown>,
 ) {
-  const gatewayCall = requireMatrixQaGatewayCall(context);
-  return await gatewayCall(
+  return await context.gatewayCall(
     `${kind}.approval.request`,
     {
       ...request,
@@ -326,7 +306,7 @@ async function waitForApprovalDecision(params: {
 }) {
   return waitForLiveQaApprovalDecision({
     approvalId: params.approvalId,
-    gateway: { call: requireMatrixQaGatewayCall(params.context) },
+    gateway: { call: params.context.gatewayCall },
     kind: params.kind,
     timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
   });
@@ -341,7 +321,7 @@ async function resolveApprovalDecision(params: {
   return resolveLiveQaApprovalDecision({
     approvalId: params.approvalId,
     decision: params.decision,
-    gateway: { call: requireMatrixQaGatewayCall(params.context) },
+    gateway: { call: params.context.gatewayCall },
     kind: params.kind,
     timeoutMs: 5_000,
   });
@@ -458,22 +438,7 @@ async function runApprovalReactionScenario(params: {
     decision: params.decision,
     result,
   });
-  if (kind === "exec") {
-    advanceMatrixQaActorCursor({
-      actorId: "driver",
-      syncState: params.context.syncState,
-      nextSince: approval.since,
-      startSince,
-    });
-  }
   return {
-    artifacts: {
-      approval: buildMatrixApprovalArtifact(approval.event),
-      reactionEmoji: reaction.reaction?.key,
-      reactionEventId: reaction.eventId,
-      reactionTargetEventId: reaction.reaction?.eventId,
-      token,
-    },
     details: (kind === "plugin"
       ? [
           `approval event: ${approval.event.eventId}`,
@@ -520,7 +485,7 @@ export async function runApprovalDenyReactionScenario(context: MatrixQaScenarioC
 }
 
 export async function runApprovalThreadTargetScenario(context: MatrixQaScenarioContext) {
-  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const { client } = await primeMatrixQaDriverScenarioClient(context);
   const token = buildMatrixQaToken("MATRIX_QA_APPROVAL_THREAD_ROOT");
   const rootEventId = await client.sendTextMessage({
     body: `Matrix approval thread root ${token}`,
@@ -532,16 +497,7 @@ export async function runApprovalThreadTargetScenario(context: MatrixQaScenarioC
     threadRootEventId: rootEventId,
     tokenPrefix: "MATRIX_QA_APPROVAL_THREAD",
   });
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    startSince,
-  });
   return {
-    artifacts: {
-      ...result.artifacts,
-      rootEventId,
-    },
     details: [result.details, `thread root event: ${rootEventId}`].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }
@@ -607,13 +563,6 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
     throw new Error(`approval ${approvalId} was re-delivered after resolution`);
   }
   return {
-    artifacts: {
-      approvals: [
-        buildMatrixApprovalArtifact(channelApproval.event),
-        buildMatrixApprovalArtifact(dmApproval.event),
-      ],
-      token,
-    },
     details: [
       `channel approval event: ${channelApproval.event.eventId}`,
       `dm approval event: ${dmApproval.event.eventId}`,

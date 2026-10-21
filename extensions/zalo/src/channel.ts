@@ -103,7 +103,7 @@ async function sendZaloDelivery(ctx: {
   mediaUrl?: string;
   assertDirectAdapterHandoff?: () => void;
 }): Promise<{ messageId: string; receipt: MessageReceipt }> {
-  const result = await (
+  return await (
     await loadZaloChannelRuntime()
   ).sendMessageZalo(ctx.to, ctx.text, {
     accountId: ctx.accountId ?? undefined,
@@ -111,10 +111,6 @@ async function sendZaloDelivery(ctx: {
     cfg: ctx.cfg,
     assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
   });
-  if (!result.ok) {
-    throw new Error(result.error ?? `Failed to send Zalo ${ctx.mediaUrl ? "media" : "message"}`);
-  }
-  return { messageId: result.messageId ?? "", receipt: result.receipt };
 }
 
 const zaloSendResultAdapter = createAttachedChannelResultAdapter({

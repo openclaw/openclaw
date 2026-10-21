@@ -238,7 +238,6 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
     itemSchemaAt,
     atomicCandidate,
     canAppend,
-    autoCandidate,
     draftId,
     draftProps,
     patchArrayItem,

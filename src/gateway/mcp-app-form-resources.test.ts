@@ -16,7 +16,7 @@ import {
 } from "../agents/harness/host-private-capabilities.js";
 import { compileStructuredInputForm } from "../agents/harness/structured-input.js";
 import { bindMcpClientElicitation } from "../agents/mcp-client-elicitation.js";
-import { buildMcpClientCapabilities } from "../agents/mcp-metadata.js";
+import { prepareMcpCaps } from "../agents/mcp-metadata.js";
 import { toLegacyMcpCallToolResult } from "../agents/mcp-sdk-compatibility.js";
 import {
   getMcpAppViewLease,
@@ -72,28 +72,23 @@ vi.mock("./server-methods/sessions-files.js", async (importOriginal) => ({
         entry: { sessionId: string; updatedAt: number };
       },
       assertCurrent: () => void,
+      readEntry: () => { sessionId: string; updatedAt: number },
     ) => Promise<unknown>,
-  ) =>
-    consume(
+  ) => {
+    const entry = { sessionId: "session-1", updatedAt: 0 };
+    return consume(
       {
         root: state.root,
         canonicalKey: params.sessionKey,
         agentId: params.agentId ?? "main",
         storePath: state.root,
         cfg,
-        entry: { sessionId: "session-1", updatedAt: 0 },
+        entry,
       },
       () => {},
-    ),
-}));
-vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-facts.js")>()),
-  readRetainedSessionEntryFacts: (_database: unknown, request: { sessionKeys: string[] }) => ({
-    entries: request.sessionKeys.map((sessionKey) => ({
-      sessionKey,
-      entry: { sessionId: "session-1", updatedAt: 0 },
-    })),
-  }),
+      () => entry,
+    );
+  },
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   peekSessionMcpRuntime: () => undefined,
@@ -402,13 +397,16 @@ describe("registered MCP form resource route", () => {
       }),
     );
     options.context.getGatewayMethodRegistry = () => registry;
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client(
       { name: "form-host", version: "1" },
-      { capabilities: buildMcpClientCapabilities(true), versionNegotiation: { mode: "legacy" } },
+      {
+        capabilities: prepareMcpCaps({ transport: clientTransport }, undefined, true),
+        versionNegotiation: { mode: "legacy" },
+      },
     );
     const server = new Server({ name: "origin", version: "1" }, { capabilities: { tools: {} } });
     const call = bindMcpClientElicitation(client);
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
     vi.spyOn(f.runtime, "callTool").mockImplementation(async () =>
       toLegacyMcpCallToolResult(

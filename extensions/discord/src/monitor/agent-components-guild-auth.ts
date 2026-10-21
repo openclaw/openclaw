@@ -239,11 +239,12 @@ export async function resolveAuthorizedComponentInteraction(params: {
     interactionCtx,
     channelCtx: guildContext.channelCtx,
     guildInfo: guildContext.guildInfo,
+    channelConfig: guildContext.channelConfig,
     commandAuthorized,
   };
 }
 
-export async function resolveComponentCommandAuthorized(params: {
+async function resolveComponentCommandAuthorized(params: {
   ctx: AgentComponentContext;
   interactionCtx: ComponentInteractionContext;
   channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;

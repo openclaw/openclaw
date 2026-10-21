@@ -22,7 +22,7 @@ import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
-import { prepareModelsListResult } from "./models-list-result.js";
+import { buildModelsListResult, prepareModelsListResult } from "./models-list-result.js";
 import {
   createModelsListTestContext,
   WITHOUT_OPENAI_ENV_AUTH,
@@ -216,23 +216,28 @@ it.for(["codex", "openclaw"] as const)(
         });
         let current = true;
         await installAccountCatalog(context, () => current);
+        const requestParams = (
+          profile: string,
+          preparedOnly = false,
+          refresh = false,
+        ): Parameters<typeof prepareModelsListResult>[0] => ({
+          source: { kind: "gateway", context },
+          agentId: "main",
+          params: { view: "all", preparedOnly, ...(refresh ? { refresh: true } : {}) },
+          readScope: {
+            agentId: "main",
+            sessionKey: "agent:main:tiers",
+            sessionEntry: {
+              authProfileOverride: profile,
+              authProfileOverrideSource: "user",
+              providerOverride: "openai",
+              modelOverride: model.id,
+            },
+          },
+        });
         const prepare = (profile: string, preparedOnly = false, refresh = false) => {
           mockRouteResolverFactory(routeResolverFactory(dualRoutes));
-          return prepareModelsListResult({
-            source: { kind: "gateway", context },
-            agentId: "main",
-            params: { view: "all", preparedOnly, ...(refresh ? { refresh: true } : {}) },
-            readScope: {
-              agentId: "main",
-              sessionKey: "agent:main:tiers",
-              sessionEntry: {
-                authProfileOverride: profile,
-                authProfileOverrideSource: "user",
-                providerOverride: "openai",
-                modelOverride: model.id,
-              },
-            },
-          });
+          return prepareModelsListResult(requestParams(profile, preparedOnly, refresh));
         };
         const a = await prepare(accountA, false, true);
         const readRuntime = (result: typeof a, runtimeId: string) => {
@@ -296,9 +301,13 @@ it.for(["codex", "openclaw"] as const)(
         expect(discover).toHaveBeenCalledTimes(3);
         expect(a.isCurrent()).toBe(false);
         current = false;
-        expect(() => readRuntime(a, "codex")).toThrow(
+        // Descriptive rows may survive retirement, but cannot carry tiers or publish a result.
+        expect(readRuntime(a, "codex")?.serviceTiers).toBeUndefined();
+        expect(readRuntime(a, "openclaw")?.serviceTiers).toBeUndefined();
+        await expect(buildModelsListResult(requestParams(accountA, true))).rejects.toThrow(
           PreparedModelRuntimePublicationSupersededError,
         );
+        expect(discover).toHaveBeenCalledTimes(3);
       },
     ),
 );

@@ -1,8 +1,7 @@
-// Bundled plugin load-path tests cover doctor validation of bundled plugin paths.
 import path from "node:path";
 import { bundledDistPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BundledPluginSource } from "../../../plugins/bundled-sources.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as bundledSources from "../../../plugins/bundled-sources.js";
 import * as discovery from "../../../plugins/discovery.js";
 import {
@@ -11,41 +10,29 @@ import {
   scanBundledPluginLoadPathMigrations,
 } from "./bundled-plugin-load-paths.js";
 
-function bundled(pluginId: string, localPath: string): BundledPluginSource {
-  return {
-    pluginId,
-    localPath,
-    npmSpec: `@openclaw/${pluginId}`,
-  };
-}
-
-function mockBundledSource(pluginId: string, localPath: string) {
+function mockBundledSource(localPath: string) {
   vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
-    new Map([[pluginId, bundled(pluginId, localPath)]]),
+    new Map([["feishu", { pluginId: "feishu", localPath, npmSpec: "@openclaw/feishu" }]]),
   );
 }
 
-function createPluginLoadPathConfig(
-  paths: Array<string | number>,
-): Parameters<typeof maybeRepairBundledPluginLoadPaths>[0] {
-  return {
-    plugins: {
-      load: {
-        paths,
-      },
-    },
-  } as unknown as Parameters<typeof maybeRepairBundledPluginLoadPaths>[0];
+function createPluginLoadPathConfig(paths: Array<string | number>): OpenClawConfig {
+  return { plugins: { load: { paths } } } as unknown as OpenClawConfig;
 }
+
+const packageRoot = path.resolve("app-node-modules", "openclaw");
+const legacyPath = path.join(packageRoot, "extensions", "feishu");
+const bundledPath = bundledDistPluginRootAt(packageRoot, "feishu");
+const currentBundledPath = bundledDistPluginRootAt(path.resolve("node_modules/openclaw"), "feishu");
 
 describe("bundled plugin load path repair", () => {
   beforeEach(() => {
-    // Layout cases use inspected metadata; the availability test exercises real discovery.
+    // Layout cases use inspected metadata rather than filesystem discovery.
     vi.spyOn(discovery, "discoverConfiguredPluginLoadPaths").mockReturnValue({
       candidates: [],
       diagnostics: [],
     });
-    const packageRoot = "/app/node_modules/openclaw";
-    mockBundledSource("feishu", bundledDistPluginRootAt(packageRoot, "feishu"));
+    mockBundledSource(bundledPath);
   });
 
   afterEach(() => {
@@ -53,17 +40,11 @@ describe("bundled plugin load path repair", () => {
   });
 
   it("removes available bundled aliases from old versioned OpenClaw package roots", () => {
-    const currentPackageRoot = path.resolve("node_modules", "openclaw");
     const stalePackageRoot = path.resolve(
-      "pnpm-global",
-      ".pnpm",
-      "openclaw@2026.3.28_@napi-rs+canvas@0.1.97",
-      "node_modules",
-      "openclaw",
+      "pnpm-global/.pnpm/openclaw@2026.3.28_@napi-rs+canvas@0.1.97/node_modules/openclaw",
     );
-    const currentBundledPath = bundledDistPluginRootAt(currentPackageRoot, "feishu");
     const staleBundledPath = bundledDistPluginRootAt(stalePackageRoot, "feishu");
-    mockBundledSource("feishu", currentBundledPath);
+    mockBundledSource(currentBundledPath);
 
     const result = maybeRepairBundledPluginLoadPaths(
       createPluginLoadPathConfig([staleBundledPath, "/custom/path", "/custom/path"]),
@@ -76,9 +57,8 @@ describe("bundled plugin load path repair", () => {
   });
 
   it("preserves custom paths outside installed OpenClaw package roots", () => {
-    const currentPackageRoot = path.resolve("node_modules", "openclaw");
     const customPath = path.resolve("elsewhere", "dist", "extensions", "feishu");
-    mockBundledSource("feishu", bundledDistPluginRootAt(currentPackageRoot, "feishu"));
+    mockBundledSource(currentBundledPath);
 
     const result = maybeRepairBundledPluginLoadPaths(createPluginLoadPathConfig([customPath]));
 
@@ -87,23 +67,14 @@ describe("bundled plugin load path repair", () => {
   });
 
   it("preserves non-string path entries when repairing legacy bundled paths", () => {
-    const packageRoot = path.resolve("app-node-modules", "openclaw");
-    const legacyPath = path.join(packageRoot, "extensions", "feishu");
-    const bundledPath = path.join(packageRoot, "dist", "extensions", "feishu");
-    mockBundledSource("feishu", bundledPath);
-
-    const cfg = createPluginLoadPathConfig([legacyPath, 42, "/other/path"]);
-
-    const result = maybeRepairBundledPluginLoadPaths(cfg);
+    const result = maybeRepairBundledPluginLoadPaths(
+      createPluginLoadPathConfig([legacyPath, 42, "/other/path"]),
+    );
 
     expect(result.config.plugins?.load?.paths).toEqual([42, "/other/path"]);
   });
 
   it("formats a doctor hint for legacy bundled plugin paths", () => {
-    const packageRoot = path.resolve("app-node-modules", "openclaw");
-    const legacyPath = path.join(packageRoot, "extensions", "feishu");
-    const bundledPath = path.join(packageRoot, "dist", "extensions", "feishu");
-
     const warnings = collectBundledPluginLoadPathWarnings({
       hits: [
         {
@@ -124,18 +95,10 @@ describe("bundled plugin load path repair", () => {
 
   it("ignores bundled plugins that already resolve to source extensions", () => {
     const sourcePath = path.resolve("repo", "openclaw", "extensions", "feishu");
-    vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
-      new Map([["feishu", bundled("feishu", sourcePath)]]),
-    );
+    mockBundledSource(sourcePath);
 
-    const hits = scanBundledPluginLoadPathMigrations({
-      plugins: {
-        load: {
-          paths: [sourcePath],
-        },
-      },
-    });
-
-    expect(hits).toStrictEqual([]);
+    expect(
+      scanBundledPluginLoadPathMigrations(createPluginLoadPathConfig([sourcePath])),
+    ).toStrictEqual([]);
   });
 });

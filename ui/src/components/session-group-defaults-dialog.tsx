@@ -1,5 +1,5 @@
 import { readMissingScopeError } from "@openclaw/gateway-client/browser";
-import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, onSettled } from "solid-js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
@@ -49,21 +49,20 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     let repositoryRequestToken = 0;
     // Admission stays synchronous while the signals publish the visible status.
     let submitting = false;
-    const [saving, setSaving] = createSignal(false);
+    const [saving, setSaving] = createOptimistic(false);
     const [failure, setFailure] = createSignal<string | null>(null);
     const [browserVisible, setBrowserVisible] = createSignal(false);
     let folderPopover: PopoverHandle | undefined;
     const browser = new PlaceBrowserState(options.listDirectory, () => publishBrowser(browser));
     const [browserView, publishBrowser] = createSignal(browser, { equals: false });
 
-    const handleSubmit = async (event: Event) => {
+    const handleSubmit = action(async function* (event: Event) {
       event.preventDefault();
       if (submitting || (repositoryStatus !== "git" && repositoryStatus !== "not_git")) {
         return;
       }
       submitting = true;
       setSaving(true);
-      setFailure(null);
       let errorMessage: string | null;
       try {
         errorMessage = await options.submit({
@@ -73,6 +72,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       } catch (error) {
         errorMessage = formatUiError(error);
       }
+      yield;
       if (modal.settled) {
         return;
       }
@@ -81,9 +81,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         return;
       }
       submitting = false;
-      setSaving(false);
       setFailure(errorMessage);
-    };
+    });
 
     const closePicker = () => {
       folderPopover?.overlay.request(false, "return");
@@ -140,7 +139,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     function Dialog() {
       let folderAnchor!: HTMLButtonElement;
       let rootButton!: HTMLButtonElement;
-      onCleanup(() => {
+      onSettled(() => () => {
         browser.reset();
         repositoryRequestToken += 1;
       });
@@ -402,7 +401,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                 </div>
               </div>
             </div>
-            {failure() ? (
+            {failure() && !saving() ? (
               <div class="exec-approval-error" role="alert">
                 {failure()}
               </div>

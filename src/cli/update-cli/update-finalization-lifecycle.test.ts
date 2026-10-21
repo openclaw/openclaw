@@ -50,6 +50,17 @@ function finalization(timeoutMs: number | undefined, json = false, attach = true
   return { lifecycle, stopChildren, read, hold };
 }
 
+it("reports standalone repair as repairing before Doctor maintenance", () => {
+  const lifecycle = new UpdateFinalizationLifecycle(false, undefined, () => {});
+  const runId = lifecycle.attachLedger(true);
+  lifecycle.recordInstallKind("package", "2026.10.5");
+  expect(getUpdateRun(runId)).toMatchObject({
+    phase: "repairing",
+    status: "running",
+    target: { kind: "package", version: "2026.10.5" },
+  });
+});
+
 it("writes successful finalization progress to stderr and failures as errors", async () => {
   const logPath = path.join(dirs.make("openclaw-finalize-log-"), "openclaw.log");
   setLoggerOverride({ level: "info", file: logPath });
@@ -180,6 +191,12 @@ it("records a returned failed outcome without requiring an exception", async () 
 it.each(["failed", "completed"] as const)(
   "settles a late completion-cache result without hiding its outcome (%s)",
   async (outcome) => {
+    // Exclude performance from fake timers and map it to the mocked wall clock
+    // so admission (performance.now() + budget) and inspection stay in one domain.
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const { lifecycle, read } = finalization(1_000, true);
     const entered = createDeferredCore();

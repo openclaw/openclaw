@@ -277,7 +277,7 @@ export function applyAnthropicConfigDefaults(params: {
     for (const ref of runtimeRefs) {
       const current = nextModels[ref];
       const updated = modelEntryWithClaudeCliRuntime(current);
-      if (JSON.stringify(updated) === JSON.stringify(current ?? {})) {
+      if (updated === current) {
         continue;
       }
       nextModels[ref] = updated;
