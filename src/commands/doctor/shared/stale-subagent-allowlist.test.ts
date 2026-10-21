@@ -28,6 +28,12 @@ describe("stale subagent allowlist doctor repair", () => {
         normalizedAgentId: "stale",
       },
     ]);
+    expect(
+      collectStaleSubagentAllowlistWarnings({ hits, doctorFixCommand: "openclaw doctor --fix" }),
+    ).toStrictEqual([
+      '- agents.defaults.subagents.allowAgents: stale subagent target "stale" is not in the configured agent registry.',
+      '- Run "openclaw doctor --fix" to remove stale subagent target ids, or add a configured agent or ACP target for each intended target.',
+    ]);
   });
 
   it("repairs stale entries without widening an explicit empty allowlist", () => {
@@ -42,23 +48,6 @@ describe("stale subagent allowlist doctor repair", () => {
     expect(result.changes).toStrictEqual([
       "- agents.defaults.subagents.allowAgents: removed 1 stale subagent target id (stale)",
       "- agents.entries.main.subagents.allowAgents: removed 1 stale subagent target id (stale-main)",
-    ]);
-  });
-
-  it("formats preview warnings with the doctor fix command", () => {
-    const warnings = collectStaleSubagentAllowlistWarnings({
-      hits: [
-        {
-          pathLabel: "agents.defaults.subagents.allowAgents",
-          agentId: "research",
-          normalizedAgentId: "research",
-        },
-      ],
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-    expect(warnings).toStrictEqual([
-      '- agents.defaults.subagents.allowAgents: stale subagent target "research" is not in the configured agent registry.',
-      '- Run "openclaw doctor --fix" to remove stale subagent target ids, or add a configured agent or ACP target for each intended target.',
     ]);
   });
 

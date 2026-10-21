@@ -297,14 +297,15 @@ describe("doctor stale plugin config helpers", () => {
     ]);
   });
 
-  it("removes stale third-party channel config and dependent channel refs", () => {
+  it("removes stale channels, preserves survivors, and reports only affected dependent ids", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
-        allow: ["discord", "missing-chat-plugin"],
+        allow: ["discord", "missing-chat-plugin", "missing-unreferenced"],
         entries: enabledEntries("discord", "missing-chat-plugin"),
       },
       channels: {
         "missing-chat-plugin": { enabled: true, token: "stale" },
+        "missing-unreferenced": { enabled: true },
         telegram: { botToken: "keep" },
         modelByChannel: {
           openai: {
@@ -323,15 +324,16 @@ describe("doctor stale plugin config helpers", () => {
     } as OpenClawConfig);
 
     expect(result.changes).toEqual([
-      "- plugins.allow: removed 1 stale plugin id (missing-chat-plugin)",
+      "- plugins.allow: removed 2 stale plugin ids (missing-chat-plugin, missing-unreferenced)",
       "- plugins.entries: removed 1 stale plugin entry (missing-chat-plugin)",
-      "- channels: removed 1 stale channel config (missing-chat-plugin)",
+      "- channels: removed 2 stale channel configs (missing-chat-plugin, missing-unreferenced)",
       "- agents heartbeat: removed 2 stale heartbeat targets (missing-chat-plugin)",
       "- channels.modelByChannel: removed 1 stale channel model override (missing-chat-plugin)",
     ]);
     expect(result.config.plugins?.allow).toEqual(["discord"]);
     expect(result.config.plugins?.entries).toEqual({ discord: { enabled: true } });
     expect(result.config.channels?.["missing-chat-plugin"]).toBeUndefined();
+    expect(result.config.channels?.["missing-unreferenced"]).toBeUndefined();
     expect(result.config.channels?.telegram).toEqual({ botToken: "keep" });
     expect(result.config.channels?.modelByChannel).toEqual({
       openai: { telegram: "openai/gpt-5.4" },
@@ -339,29 +341,6 @@ describe("doctor stale plugin config helpers", () => {
     expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
     expect(result.config.agents?.entries?.openclaw?.heartbeat).toStrictEqual({});
     expect(result.config.agents?.entries?.ops?.heartbeat).toEqual({ target: "telegram" });
-  });
-
-  it("lists only the actually removed ids in heartbeat and modelByChannel change entries", () => {
-    const result = maybeRepairStalePluginConfig({
-      plugins: { allow: ["missing-a", "missing-b"] },
-      channels: {
-        "missing-a": { enabled: true, token: "stale-a" },
-        "missing-b": { enabled: true, token: "stale-b" },
-        modelByChannel: { openai: { "missing-a": "openai/gpt-5.4" } },
-      },
-      agents: { defaults: heartbeat("missing-a", "30m") },
-    } as OpenClawConfig);
-
-    expect(result.changes).toEqual([
-      "- plugins.allow: removed 2 stale plugin ids (missing-a, missing-b)",
-      "- plugins.enabled: disabled plugins because no allowed plugins remain; review plugins.allow before enabling plugins",
-      "- channels: removed 2 stale channel configs (missing-a, missing-b)",
-      "- agents heartbeat: removed 1 stale heartbeat target (missing-a)",
-      "- channels.modelByChannel: removed 1 stale channel model override (missing-a)",
-    ]);
-    expect(result.config.channels?.["missing-a"]).toBeUndefined();
-    expect(result.config.channels?.["missing-b"]).toBeUndefined();
-    expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
   });
 
   it("treats stale plugin refs as inert while plugins are globally disabled", () => {

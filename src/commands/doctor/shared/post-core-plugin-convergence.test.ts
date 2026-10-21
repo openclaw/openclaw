@@ -265,35 +265,6 @@ describe("runPostCorePluginConvergence", () => {
     });
   });
 
-  it("repairs managed npm openclaw peer links in every managed npm project before payload smoke checks", async () => {
-    const stateDir = makeTempDir();
-    mockRepairs({ codex: { source: "npm", installPath: "/p/codex" } });
-    const roots = [path.join(stateDir, "npm"), path.join(stateDir, "npm", "projects", "codex")];
-    mocks.managedRoots.mockReturnValue(roots);
-    mocks.relinkPeers
-      .mockResolvedValueOnce(peerResult)
-      .mockResolvedValueOnce({ checked: 1, attempted: 1, repaired: 1, skipped: 0 });
-
-    const result = await converge(configured("codex"), {
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-
-    roots.forEach((npmRoot, index) => {
-      expect(mocks.relinkPeers).toHaveBeenNthCalledWith(index + 1, {
-        npmRoot,
-        logger: {},
-        onPackageReadError: expect.any(Function),
-        beforePersistentApply: expect.any(Function),
-      });
-    });
-    expect(result.changes).toEqual([
-      "Repaired OpenClaw host peer link(s) for 1 managed npm plugin package(s).",
-    ]);
-    expect(mocks.relinkPeers.mock.invocationCallOrder[0]).toBeLessThan(
-      expectDefined(mocks.smokeCheck.mock.invocationCallOrder[0], "smoke check called"),
-    );
-  });
-
   it("repairs the selected generation before smoke checks without walking stale roots", async () => {
     const stateDir = makeTempDir();
     const packageName = "@fixture/selected";

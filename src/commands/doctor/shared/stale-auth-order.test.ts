@@ -277,20 +277,36 @@ describe("maybeRepairStaleConfiguredAuthOrders", () => {
     expectNoRepair(anthropicOrderConfig("anthropic:missing", { main: {} }));
   });
 
-  it.skipIf(process.platform === "win32")(
-    "fails closed on a dangling retained-agent symlink",
-    async () => {
-      writeMainToken(stateDir);
-      const retainedRoot = path.join(stateDir, "agents", "retained");
-      await fs.mkdir(retainedRoot, { recursive: true });
-      await fs.symlink(
-        path.join(stateDir, "missing-agent"),
-        path.join(retainedRoot, "agent"),
-        "dir",
-      );
-      expectBlocked(anthropicOrderConfig("anthropic:missing"), "unavailable");
-    },
-  );
+  it
+    .skipIf(process.platform === "win32")
+    .each([
+      "retained-agent directory",
+      "active auth database",
+      "legacy auth source beside a legacy database",
+    ])("fails closed on a dangling %s symlink", async (source) => {
+    writeMainToken(stateDir);
+    const retained = source === "retained-agent directory";
+    const agentDir = retained ? path.join(stateDir, "agents", "retained") : workAgentDir;
+    await fs.mkdir(agentDir, { recursive: true });
+    if (source === "legacy auth source beside a legacy database") {
+      mutateDatabase(resolveAuthProfileDatabasePath(agentDir), (db) => {
+        db.exec("CREATE TABLE legacy_state (id INTEGER PRIMARY KEY);");
+      });
+    }
+    await fs.symlink(
+      path.join(agentDir, "missing"),
+      retained
+        ? path.join(agentDir, "agent")
+        : source === "active auth database"
+          ? resolveAuthProfileDatabasePath(agentDir)
+          : resolveAuthStorePath(agentDir),
+      retained ? "dir" : "file",
+    );
+    expectBlocked(
+      anthropicOrderConfig("anthropic:missing", retained ? undefined : { work: {} }),
+      "unavailable",
+    );
+  });
 
   it("preserves profiles in the PI_CODING_AGENT_DIR-selected auth store", async () => {
     const selectedAgentDir = path.join(stateDir, "selected-agent");
@@ -351,35 +367,6 @@ describe("maybeRepairStaleConfiguredAuthOrders", () => {
     expectBlocked(cfg);
     expect(warnings(cfg, env).join("\n")).toContain("SQLite auth profile store is unreadable");
   });
-
-  it.skipIf(process.platform === "win32")(
-    "fails closed on a dangling active auth database symlink",
-    async () => {
-      writeMainToken(stateDir);
-      await fs.mkdir(workAgentDir, { recursive: true });
-      await fs.symlink(
-        path.join(workAgentDir, "missing.sqlite"),
-        resolveAuthProfileDatabasePath(workAgentDir),
-      );
-      expectBlocked(anthropicOrderConfig("anthropic:missing", { work: {} }), "unavailable");
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "fails closed on a dangling legacy auth source beside a legacy database",
-    async () => {
-      writeMainToken(stateDir);
-      await fs.mkdir(workAgentDir, { recursive: true });
-      const legacyDatabase = new DatabaseSync(resolveAuthProfileDatabasePath(workAgentDir));
-      legacyDatabase.exec("CREATE TABLE legacy_state (id INTEGER PRIMARY KEY);");
-      legacyDatabase.close();
-      await fs.symlink(
-        path.join(workAgentDir, "missing-auth-profiles.json"),
-        resolveAuthStorePath(workAgentDir),
-      );
-      expectBlocked(anthropicOrderConfig("anthropic:missing", { work: {} }), "unavailable");
-    },
-  );
 
   it("fails closed when a registered custom auth database is unreadable", async () => {
     const { databasePath } = registeredStore(stateDir);

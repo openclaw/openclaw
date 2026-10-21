@@ -104,25 +104,6 @@ describe("stale OAuth profile shadow doctor repair", () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
-  it("warns about stale local OAuth shadows without modifying the child store", async () => {
-    const profileId = "anthropic:default";
-    await writeRawAuthStore(childAgentDir, shadowStore(profileId, now, "child"));
-    saveAuthProfileStore(shadowStore(profileId, now, "main"));
-
-    const { hits } = await scanStaleOAuthProfileShadows({ cfg: {}, now });
-    const warnings = collectStaleOAuthProfileShadowWarnings({
-      hits,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(hits).toEqual([
-      expect.objectContaining({ authPath: resolveAuthStorePath(childAgentDir), profileId }),
-    ]);
-    expect(warnings[0]).toContain("stale OAuth auth profile anthropic:default");
-    expect(warnings[0]).toContain("openclaw doctor --fix");
-    expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeDefined();
-  });
-
   it("does not classify a cross-tenant GitHub Copilot profile as a removable shadow", async () => {
     const profileId = "github-copilot:default";
     await writeRawAuthStore(
@@ -281,7 +262,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
     },
   );
 
-  it("retires a local OAuth copy under Doctor maintenance without changing the authored order", async () => {
+  it("previews then retires a local OAuth copy under maintenance without changing the authored order", async () => {
     const profileId = "anthropic:default";
     const localId = "anthropic:local";
     const localCredential = oauthCredential({ accountId: "acct-local" });
@@ -308,6 +289,17 @@ describe("stale OAuth profile shadow doctor repair", () => {
       },
       childAgentDir,
     );
+    const { hits } = await scanStaleOAuthProfileShadows({ cfg: {}, now });
+    expect(hits).toEqual([
+      expect.objectContaining({ authPath: resolveAuthStorePath(childAgentDir), profileId }),
+    ]);
+    const warnings = collectStaleOAuthProfileShadowWarnings({
+      hits,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+    expect(warnings[0]).toContain("stale OAuth auth profile anthropic:default");
+    expect(warnings[0]).toContain("openclaw doctor --fix");
+    expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeDefined();
 
     await cleanupSessionStateForTest({ stateDir });
     const maintenance = await beginDoctorMaintenance({
