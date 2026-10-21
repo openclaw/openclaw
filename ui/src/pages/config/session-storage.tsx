@@ -204,7 +204,7 @@ export function SessionStorageSettings(props: SettingsProps) {
     );
   }
   const ageValue = liveValue(() => ageDraft() ?? String(storageConfig().afterDays));
-  const runNow = action(function* () {
+  async function runNow() {
     const currentClient = client();
     const ownsConnection = capture();
     if (!canRun() || !currentClient || !ownsConnection()) {
@@ -212,16 +212,25 @@ export function SessionStorageSettings(props: SettingsProps) {
     }
     const operation = new AbortController();
     runOperation = operation;
-    setSubmitting(true);
-    setRunOutcome(null);
+    const completion = currentClient.request<SessionsStorageStatusResult>(
+      "sessions.storage.run",
+      {},
+      { signal: operation.signal },
+    );
+    return presentRun(completion, operation, ownsConnection);
+  }
+  const presentRun = action(function* (
+    completion: Promise<SessionsStorageStatusResult>,
+    operation: AbortController,
+    ownsConnection: () => boolean,
+  ) {
     const isCurrent = () => runOperation === operation && ownsConnection();
     try {
-      const response: SessionsStorageStatusResult =
-        yield currentClient.request<SessionsStorageStatusResult>(
-          "sessions.storage.run",
-          {},
-          { signal: operation.signal },
-        );
+      if (isCurrent()) {
+        setSubmitting(true);
+        setRunOutcome(null);
+      }
+      const response: SessionsStorageStatusResult = yield completion;
       if (!isCurrent()) {
         return;
       }
