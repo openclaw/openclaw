@@ -723,6 +723,88 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.memoryFlush).toEqual({ kind: "succeeded", compactionCount: 1 });
   });
 
+  it.each([
+    {
+      name: "global write denial overrides an explicit allow",
+      cfg: { tools: { allow: ["write"], deny: ["write"] } },
+      agentId: "main",
+      skipped: true,
+    },
+    {
+      name: "the selected agent denies the filesystem group",
+      cfg: {
+        agents: {
+          entries: { main: {}, worker: { tools: { deny: ["group:fs"] } } },
+        },
+      },
+      agentId: "worker",
+      skipped: true,
+    },
+    {
+      name: "a global wildcard denies writes with the default agent",
+      cfg: { tools: { deny: ["wri*"] } },
+      agentId: undefined,
+      skipped: true,
+    },
+    {
+      name: "another agent's denial does not block the selected agent",
+      cfg: {
+        agents: {
+          entries: { main: {}, worker: { tools: { deny: ["write"] } } },
+        },
+      },
+      agentId: "main",
+      skipped: false,
+    },
+    {
+      name: "allowlists, profiles, and provider rules do not cause an unconditional skip",
+      cfg: {
+        tools: {
+          profile: "messaging",
+          allow: ["read"],
+          byProvider: { anthropic: { deny: ["write"] } },
+        },
+      },
+      agentId: "main",
+      skipped: false,
+    },
+  ] satisfies Array<{
+    name: string;
+    cfg: MemoryFlushTestParams["cfg"];
+    agentId: string | undefined;
+    skipped: boolean;
+  }>)("file flush: $name", async ({ cfg, agentId, skipped }) => {
+    const sessionKey = `agent:${agentId ?? "main"}:main`;
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry = createFlushSessionEntry({
+      memoryFlush: { kind: "failed", failureCount: 1 },
+    });
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    const result = await runDefaultMemoryFlush(sessionEntry, {
+      cfg,
+      sessionKey,
+      storePath,
+      followupRun: createTestFollowupRun({ agentId, sessionKey, workspaceDir: rootDir }),
+    });
+
+    if (skipped) {
+      expect(result).toEqual({ sessionEntry, outcome: "skipped" });
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ storePath, sessionKey })?.memoryFlush).toEqual({
+        kind: "failed",
+        failureCount: 1,
+      });
+      await expect(fs.stat(path.join(rootDir, "memory/2023-11-14.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } else {
+      expect(result.outcome).toBe("completed");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect((await fs.stat(path.join(rootDir, "memory/2023-11-14.md"))).isFile()).toBe(true);
+    }
+  });
+
   it("skips memory flush for incognito sessions", async () => {
     const sessionEntry = createFlushSessionEntry({
       incognito: true,

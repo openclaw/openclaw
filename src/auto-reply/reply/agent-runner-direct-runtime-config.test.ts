@@ -676,8 +676,11 @@ describe("runReplyAgent runtime config", () => {
     },
   );
 
-  it.each([{ name: "runnable", totalTokens: 95_000, expectedHeartbeats: 2 }])(
-    "keeps the ingress watchdog scoped around $name memory flush",
+  it.each([
+    { name: "runnable", totalTokens: 95_000, expectedHeartbeats: 2, denyWrite: false },
+    { name: "write-denied", totalTokens: 95_000, expectedHeartbeats: 0, denyWrite: true },
+  ])(
+    "keeps the ingress watchdog scoped around $name memory flush before compaction and reply",
     async (testCase) => {
       const memory = await vi.importActual<typeof import("./agent-runner-memory.js")>(
         "./agent-runner-memory.js",
@@ -730,6 +733,7 @@ describe("runReplyAgent runtime config", () => {
             cfg: {
               session: { store: storePath },
               agents: { defaults: { compaction: { memoryFlush: {} } } },
+              ...(testCase.denyWrite ? { tools: { deny: ["write"] } } : {}),
             },
             followupRun,
             defaultModel: replyParams.defaultModel,
@@ -742,10 +746,12 @@ describe("runReplyAgent runtime config", () => {
           const release = createDeferred();
           runEmbeddedAgentMock.mockImplementationOnce(async () => {
             entered.resolve();
-            await release.promise;
+            if (testCase.expectedHeartbeats > 0) {
+              await release.promise;
+            }
             return { payloads: [], meta: {} };
           });
-          vi.useFakeTimers();
+          vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
           const pending = runReplyAgent(replyParams);
           try {
             if (testCase.expectedHeartbeats > 0) {
@@ -762,6 +768,18 @@ describe("runReplyAgent runtime config", () => {
               release.resolve();
             }
             await expect(pending).resolves.toEqual({ text: "main reply" });
+            expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
+            expect(executeAgentTurnMock).toHaveBeenCalledOnce();
+            expect(
+              executeAgentTurnMock.mock.calls[0]?.[0].getActiveSessionEntry()?.compactionCount,
+            ).toBe(1);
+            if (testCase.denyWrite) {
+              await expect(
+                runMemoryFlushIfNeededMock.mock.results[0]?.value,
+              ).resolves.toMatchObject({
+                outcome: "skipped",
+              });
+            }
             expect(lifecycle.onAdopted).toHaveBeenCalledOnce();
             lifecycle.onDeferredHeartbeat.mockClear();
             await vi.advanceTimersByTimeAsync(500);

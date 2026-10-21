@@ -290,6 +290,9 @@ are still saved normally.
 Memory Core's file flush requires writable workspace access. Sessions whose sandbox
 requires read-only or no workspace access skip the flush, including sessions
 with a persisted sandbox requirement that overrides the agent's configuration.
+File flushes also skip when global `tools.deny` or the executing agent's
+`tools.deny` explicitly blocks `write`, including matching tool groups and
+wildcards. This check does not disable tools-based memory flushes.
 
 During that flush, `write` appends only to the daily note. Its `content` must
 contain only new text. Replayed whole notes and copied paragraphs are rejected

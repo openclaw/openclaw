@@ -7,6 +7,7 @@ import {
 import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-compaction-constants.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { MemoryFlushToolsUnavailableError } from "../../agents/agent-tools.memory-flush.js";
+import { resolveEffectiveToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
@@ -20,6 +21,7 @@ import {
   resolveSessionRuntimeOverrideForProvider,
 } from "../../agents/session-runtime-compat.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
+import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
@@ -605,8 +607,19 @@ export async function runMemoryFlushIfNeeded(
     return { sessionEntry: entry, outcome: "skipped" };
   }
   const memoryFlushPlan = memoryFlushResolution.plan;
-  if (!isToolsMemoryFlushPlan(memoryFlushPlan) && !memoryFlushWritable) {
-    return { sessionEntry: entry, outcome: "skipped" };
+  if (!isToolsMemoryFlushPlan(memoryFlushPlan)) {
+    const { globalPolicy, agentPolicy } = resolveEffectiveToolPolicy({
+      config: params.cfg,
+      agentId: params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg),
+    });
+    // Only unconditional denials are known before the flush resolves its tools.
+    const writeAllowed = isToolAllowedByPolicies("write", [
+      { deny: globalPolicy?.deny },
+      { deny: agentPolicy?.deny },
+    ]);
+    if (!memoryFlushWritable || !writeAllowed) {
+      return { sessionEntry: entry, outcome: "skipped" };
+    }
   }
 
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(

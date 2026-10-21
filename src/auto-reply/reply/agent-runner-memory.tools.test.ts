@@ -25,6 +25,7 @@ import { clearMemoryPluginState } from "../../plugins/memory-state.test-fixtures
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import {
   createMemoryRunEntryMockImplementation,
@@ -113,7 +114,14 @@ async function runDefaultMemoryFlush(sessionEntry: SessionEntry, overrides: Flus
 }
 
 describe("provider-owned memory flush", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      for (const dir of tempDirs.dirs) {
+        await closeOpenClawAgentDatabasesAsync(dir);
+      }
+      cleanup();
+    }),
+  );
   let rootDir = "";
 
   beforeEach(() => {
@@ -308,7 +316,7 @@ describe("provider-owned memory flush", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("delegates the source audience to detached tools flushes with source sandbox policy", async () => {
+  it("delegates the source audience to tools flushes even when filesystem writes are denied", async () => {
     registerToolsFlushPlan();
     const { entry, overrides } = await createToolsFlushFixture();
     runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -342,12 +350,19 @@ describe("provider-owned memory flush", () => {
 
     const result = await runDefaultMemoryFlush(entry, {
       ...overrides,
-      cfg: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } } },
+      cfg: {
+        tools: { deny: ["write"] },
+        agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } },
+      },
     });
 
     expect(result.outcome).toBe("completed");
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(fs.existsSync(path.join(rootDir, "memory"))).toBe(false);
+    expect(loadSessionEntry(overrides)?.memoryFlush).toEqual({
+      kind: "succeeded",
+      compactionCount: 1,
+    });
   });
 
   it("keeps a tools flush ID across fallback and retry, then changes it after compaction", async () => {
