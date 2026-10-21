@@ -2,25 +2,15 @@ import { fork } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
 export function registerSharedRuntimeReaderDoctorTests(): void {
   describe("shared plugin runtime", () => {
-    let tempDir: string;
-
-    beforeEach(async () => {
-      tempDir = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-shared-runtime-")),
-      );
-    });
-
-    afterEach(async () => {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    });
+    const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
     it.each([
       { selector: "STATE_DIRECTORY", sameInstall: false },
@@ -30,6 +20,7 @@ export function registerSharedRuntimeReaderDoctorTests(): void {
     ])(
       "preserves a live shared runtime reader through Doctor ($selector, same install: $sameInstall)",
       async ({ selector, sameInstall }) => {
+        const tempDir = tempDirs.make("openclaw-doctor-shared-runtime-");
         const stateA = path.join(tempDir, ".openclaw");
         const stateB = path.join(tempDir, ".openclaw-peer");
         const packageRoot = path.join(tempDir, "prefix-a", "node_modules", "openclaw");
@@ -53,18 +44,21 @@ export function registerSharedRuntimeReaderDoctorTests(): void {
         const mirror = path.join(bucket, "dist", "extensions", "fixture-reader");
         const alias = path.join(path.dirname(readerPackageRoot), "fixture-runtime-dependency");
         const unknownFile = path.join(sharedBase, "unknown-consumer", "keep.txt");
-        for (const directory of [
-          packageRoot,
-          readerPackageRoot,
-          dependency,
-          mirror,
-          path.dirname(unknownFile),
-        ]) {
+        const databasePath = (stateDir: string) => path.join(stateDir, "state", "openclaw.sqlite");
+        const runtimeEnv = (stateDir: string) => ({
+          HOME: tempDir,
+          USERPROFILE: tempDir,
+          OPENCLAW_HOME: tempDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          [selector]: selector === "STATE_DIRECTORY" ? path.dirname(sharedBase) : sharedBase,
+        });
+        const writeFixture = async (directory: string, name: string, content: string) => {
           await fs.mkdir(directory, { recursive: true });
-        }
+          await fs.writeFile(path.join(directory, name), content);
+        };
         for (const stateDir of [stateA, stateB]) {
           await fs.mkdir(path.join(stateDir, "state"), { recursive: true });
-          const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
+          const database = new DatabaseSync(databasePath(stateDir));
           database.exec(`
             PRAGMA user_version = 8;
             CREATE TABLE agent_databases (
@@ -76,26 +70,26 @@ export function registerSharedRuntimeReaderDoctorTests(): void {
           database.close();
         }
         for (const installRoot of new Set([packageRoot, readerPackageRoot])) {
-          await fs.writeFile(
-            path.join(installRoot, "package.json"),
+          await writeFixture(
+            installRoot,
+            "package.json",
             '{"name":"openclaw","version":"2026.4.29"}\n',
           );
         }
-        await fs.writeFile(path.join(dependency, "package.json"), '{"main":"index.cjs"}\n');
-        await fs.writeFile(
-          path.join(dependency, "index.cjs"),
-          'exports.value = "dependency-ready";\n',
-        );
-        await fs.writeFile(
-          path.join(dependency, "late.cjs"),
-          'exports.value = "dependency-survived";\n',
-        );
-        await fs.writeFile(
-          path.join(mirror, "index.cjs"),
-          'exports.value = "mirror-ready"; exports.readLater = () => require("./late.cjs").value;\n',
-        );
-        await fs.writeFile(path.join(mirror, "late.cjs"), 'exports.value = "mirror-survived";\n');
-        await fs.writeFile(unknownFile, "another consumer's files\n");
+        for (const [directory, name, content] of [
+          [dependency, "package.json", '{"main":"index.cjs"}\n'],
+          [dependency, "index.cjs", 'exports.value = "dependency-ready";\n'],
+          [dependency, "late.cjs", 'exports.value = "dependency-survived";\n'],
+          [
+            mirror,
+            "index.cjs",
+            'exports.value = "mirror-ready"; exports.readLater = () => require("./late.cjs").value;\n',
+          ],
+          [mirror, "late.cjs", 'exports.value = "mirror-survived";\n'],
+          [path.dirname(unknownFile), "keep.txt", "another consumer's files\n"],
+        ] as const) {
+          await writeFixture(directory, name, content);
+        }
         await fs.symlink(dependency, alias, "junction");
         const readerFile = path.join(tempDir, "runtime-reader.cjs");
         await fs.writeFile(
@@ -124,21 +118,11 @@ process.send({ kind: "ready", version: version(), dependency: fromInstall("fixtu
         );
         const reader = fork(
           readerFile,
-          [
-            path.join(stateB, "state", "openclaw.sqlite"),
-            readerPackageRoot,
-            path.join(mirror, "index.cjs"),
-          ],
+          [databasePath(stateB), readerPackageRoot, path.join(mirror, "index.cjs")],
           {
             cwd: stateB,
             execArgv: [],
-            env: {
-              HOME: tempDir,
-              USERPROFILE: tempDir,
-              OPENCLAW_HOME: tempDir,
-              OPENCLAW_STATE_DIR: stateB,
-              [selector]: selector === "STATE_DIRECTORY" ? path.dirname(sharedBase) : sharedBase,
-            },
+            env: runtimeEnv(stateB),
             stdio: ["ignore", "ignore", "ignore", "ipc"],
           },
         );
@@ -164,13 +148,7 @@ process.send({ kind: "ready", version: version(), dependency: fromInstall("fixtu
           await runDoctorRepairSequence({
             state: { cfg: {}, candidate: {}, pendingChanges: false, fixHints: [] },
             doctorFixCommand: "openclaw doctor --fix",
-            env: {
-              HOME: tempDir,
-              USERPROFILE: tempDir,
-              OPENCLAW_HOME: tempDir,
-              OPENCLAW_STATE_DIR: stateA,
-              [selector]: selector === "STATE_DIRECTORY" ? path.dirname(sharedBase) : sharedBase,
-            },
+            env: runtimeEnv(stateA),
           });
           const response = nextMessage();
           reader.send("read");
