@@ -51,7 +51,14 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
           subscription.signal,
         )
         .then(
-          () => markDirty("unavailable"),
+          () => {
+            markDirty("unavailable");
+            if (!subscription.signal.aborted && !this.closing) {
+              log.warn(
+                "memory workspace watcher ended unexpectedly; restart the Gateway to restore remote file watching",
+              );
+            }
+          },
           (error: unknown) => {
             markDirty("unavailable");
             if (!subscription.signal.aborted) {
