@@ -32,10 +32,9 @@ describe("Apps", () => {
     await i18n.setLocale("en");
   });
 
-  function renderIntoContainer(onNavigate = vi.fn(), onPairDevice?: () => void) {
+  function renderIntoContainer(props: Partial<Parameters<typeof Apps>[0]> = {}) {
     const container = document.createElement("div");
-    mountSolid(() => <Apps onNavigate={onNavigate} onPairDevice={onPairDevice} />, { container });
-    return container;
+    return mountSolid(() => <Apps onNavigate={vi.fn()} {...props} />, { container }).container;
   }
 
   it("renders every external link in order with safe target and rel", () => {
@@ -51,10 +50,8 @@ describe("Apps", () => {
 
   it("navigates to the in-app Plugins hub from the plugins card", () => {
     const onNavigate = vi.fn();
-    const container = renderIntoContainer(onNavigate);
-    const buttons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("button.apps-card__cta"),
-    );
+    const container = renderIntoContainer({ onNavigate });
+    const buttons = container.querySelectorAll<HTMLButtonElement>("button.apps-card__cta");
     expect(buttons).toHaveLength(1);
     expect(buttons[0]?.textContent).toContain("Open Plugins");
     buttons[0]?.click();
@@ -62,30 +59,19 @@ describe("Apps", () => {
   });
 
   it("opens the connected Gateway in the Mac app without losing the download option", () => {
-    const container = document.createElement("div");
-    mountSolid(
-      () => (
-        <Apps
-          onNavigate={vi.fn()}
-          macGatewayLaunchUrl={buildMacGatewayLaunchUrl("wss://research.example:8443/assistant")}
-        />
-      ),
-      { container },
-    );
+    const container = renderIntoContainer({
+      macGatewayLaunchUrl: buildMacGatewayLaunchUrl("wss://research.example:8443/assistant"),
+    });
     const launch = container.querySelector<HTMLAnchorElement>("a[href^='openclaw:']");
     expect(launch?.textContent?.trim()).toBe("Open in Mac app");
-    const url = new URL(launch!.href);
-    expect(url.host).toBe("gateway");
-    expect(url.pathname).toBe("/add");
-    expect([...url.searchParams]).toEqual([["url", "https://research.example:8443/assistant"]]);
+    expect(launch?.href).toBe(
+      "openclaw://gateway/add?url=https%3A%2F%2Fresearch.example%3A8443%2Fassistant",
+    );
     expect(launch?.getAttribute("target")).toBeNull();
     const card = launch?.closest(".apps-card");
     expect(card?.querySelector("h3")?.textContent).toBe("macOS");
-    expect(
-      card
-        ?.querySelector("a[href='https://github.com/openclaw/openclaw/releases']")
-        ?.textContent?.trim(),
-    ).toBe("Download");
+    const download = card?.querySelector("a[href='https://github.com/openclaw/openclaw/releases']");
+    expect(download?.textContent?.trim()).toBe("Download");
   });
 
   it("offers device pairing from the phone section only when permitted", () => {
@@ -93,7 +79,7 @@ describe("Apps", () => {
     expect(withoutPair.querySelector(".apps-pair-hint")).toBeNull();
 
     const onPairDevice = vi.fn();
-    const container = renderIntoContainer(vi.fn(), onPairDevice);
+    const container = renderIntoContainer({ onPairDevice });
     const hint = container.querySelector(".apps-pair-hint");
     expect(hint?.textContent).toContain("Already have the app?");
     hint?.querySelector("button")?.click();
@@ -108,16 +94,15 @@ describe("Apps", () => {
       expect(image.getAttribute("alt")).toBe("");
       expect(image.getAttribute("loading")).toBe("lazy");
     }
-    const lightSrcs = images
-      .filter((image) => image.classList.contains("apps-card__art-img--light"))
-      .map((image) => image.getAttribute("src"));
-    const darkSrcs = images
-      .filter((image) => image.classList.contains("apps-card__art-img--dark"))
-      .map((image) => image.getAttribute("src"));
+    const sources = (theme: string) =>
+      images
+        .filter((image) => image.classList.contains(`apps-card__art-img--${theme}`))
+        .map((image) => image.getAttribute("src"));
+    const lightSrcs = sources("light");
     expect(lightSrcs).toHaveLength(9);
     for (const src of lightSrcs) {
       expect(src).toMatch(/^\/app-art\/[a-z-]+\.webp$/);
     }
-    expect(darkSrcs).toEqual(lightSrcs.map((src) => src?.replace(/\.webp$/, "-dark.webp")));
+    expect(sources("dark")).toEqual(lightSrcs.map((src) => src?.replace(/\.webp$/, "-dark.webp")));
   });
 });
