@@ -14,7 +14,6 @@ import {
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 } from "./state-migrations.doctor.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 
 const tempDirs = createTrackedTempDirs();
 const probeIndex = "sqlite_autoindex_migration_probe_1";
@@ -78,7 +77,6 @@ async function runFullMigration(fixture: Awaited<ReturnType<typeof prepareFixtur
 }
 
 afterEach(async () => {
-  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
 });
