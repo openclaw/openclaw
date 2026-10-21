@@ -37,7 +37,6 @@ describe("Create Claw from the agent's main chat", () => {
         case "claws.drafts.create":
           return {
             draftId,
-            path: `/workspace/.openclaw/claw-drafts/${draftId}.json`,
             prompt: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
           };
         case "chat.send":
@@ -91,6 +90,10 @@ describe("Create Claw from the agent's main chat", () => {
     });
     expect(requests.map((entry) => entry.method)).toEqual(["claws.drafts.create", "chat.send"]);
     expect(requests[1]!.params).toMatchObject({ sessionKey: mainKey, deliver: false });
+    expect(requests[1]!.params.workContext).toMatchObject({
+      page: "claw-create",
+      detail: { draftId },
+    });
     expect(requests[1]!.params.message).toBe(
       "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
     );
@@ -129,6 +132,60 @@ describe("Create Claw from the agent's main chat", () => {
       },
     });
     expect(requests.some((entry) => entry.method === "sessions.create")).toBe(false);
+  });
+
+  it("keeps overlapping skill turns bound to their own draft ids", async () => {
+    vi.useFakeTimers();
+    const ids = {
+      research: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
+      writer: "ed9f46b0-4ca3-4991-8a73-dfdcc8764088",
+    };
+    const createResolvers = new Map<string, (value: unknown) => void>();
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const request = vi.fn((method: string, params: Record<string, unknown>) => {
+      requests.push({ method, params });
+      if (method === "claws.drafts.create") {
+        return new Promise((resolve) => createResolvers.set(params.agentId as string, resolve));
+      }
+      if (method === "chat.send") {
+        return Promise.resolve({ status: "started" });
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const context = createContext(request);
+    const researchFlow = new ClawCreatorFlow(context);
+    const writerFlow = new ClawCreatorFlow(context);
+
+    const researchStart = researchFlow.start("research");
+    const writerStart = writerFlow.start("writer");
+    expect(createResolvers.size).toBe(2);
+
+    // Resolve in reverse order to prove IDs travel with each specific request.
+    createResolvers.get("writer")!({
+      draftId: ids.writer,
+      prompt: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
+    });
+    createResolvers.get("research")!({
+      draftId: ids.research,
+      prompt: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
+    });
+    await Promise.all([researchStart, writerStart]);
+
+    const sends = requests.filter((entry) => entry.method === "chat.send");
+    expect(sends).toHaveLength(2);
+    const attachedIds = sends.map((entry) => {
+      const workContext = entry.params.workContext as { detail: { draftId: string } };
+      return workContext.detail.draftId;
+    });
+    expect(attachedIds.toSorted()).toEqual([ids.research, ids.writer].toSorted());
+    for (const send of sends) {
+      const workContext = send.params.workContext as {
+        agentId: string;
+        detail: { draftId: string };
+      };
+      expect(workContext.detail.draftId).toBe(ids[workContext.agentId as keyof typeof ids]);
+      expect(send.params.message).not.toContain(workContext.detail.draftId);
+    }
   });
 
   it.each(["claws.drafts.create", "chat.send"])(

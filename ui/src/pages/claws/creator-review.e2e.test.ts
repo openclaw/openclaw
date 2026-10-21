@@ -265,10 +265,16 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
         await page.getByRole("button", { name: "Create Claw" }).click();
         await gateway.waitForRequest("claws.drafts.create");
         await gateway.waitForRequest("chat.send");
-        expect((await gateway.getRequests("chat.send"))[0]?.params).toMatchObject({
+        const sent = (await gateway.getRequests("chat.send"))[0]?.params;
+        expect(sent).toMatchObject({
           sessionKey: "agent:main:main",
           message: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
+          workContext: {
+            page: "claw-create",
+            detail: { draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087" },
+          },
         });
+        expect(sent?.message).not.toContain("ec8f46b0-4ca3-4991-8a73-dfdcc8764087");
       } finally {
         await context.close();
       }

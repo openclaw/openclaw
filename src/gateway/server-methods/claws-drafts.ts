@@ -122,7 +122,7 @@ export const clawsDraftsHandlers: GatewayRequestHandlers = {
         const draft = await createClawDraft(authority.workspaceDir, assertCurrent);
         assertCurrent();
         options.respond(true, {
-          ...draft,
+          draftId: draft.draftId,
           prompt: clawDraftPrompt(),
         });
       } finally {

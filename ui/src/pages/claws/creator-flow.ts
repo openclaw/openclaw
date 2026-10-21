@@ -156,6 +156,13 @@ export class ClawCreatorFlow {
         sessionKey: target.sessionKey,
         ...(isUiGlobalSessionKey(target.sessionKey) ? { agentId } : {}),
         message: created.prompt,
+        workContext: {
+          page: "claw-create",
+          title: "Create Claw",
+          agentId,
+          sessionKey: target.sessionKey,
+          detail: { draftId: target.draftId },
+        },
         deliver: false,
         idempotencyKey: generateUUID(),
       });

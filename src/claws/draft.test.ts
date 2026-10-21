@@ -31,9 +31,10 @@ describe("agent-created Claw drafts", () => {
     await writeFile(join(workspaceDir, "USER.md"), "PRIVATE_PERSON_SENTINEL");
     await writeFile(join(workspaceDir, ".env"), "PRIVATE_CREDENTIAL_SENTINEL");
     const draft = await createClawDraft(workspaceDir);
-    expect(
-      JSON.parse(await readFile(join(workspaceDir, ".openclaw/claw-drafts/current.json"), "utf8")),
-    ).toEqual({ draftId: draft.draftId });
+    expect(await readFile(draft.path, "utf8")).toContain('"name": "my-claw"');
+    await expect(
+      readFile(join(workspaceDir, ".openclaw/claw-drafts/current.json"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     await writeFile(draft.path, JSON.stringify(proposal));
 
     await using prepared = await prepareClawDraft({
@@ -54,6 +55,23 @@ describe("agent-created Claw drafts", () => {
         openclaw: { claw: "CLAW.md" },
       },
     );
+  });
+
+  it("keeps overlapping drafts in distinct request-specific files", async () => {
+    const workspaceDir = tempDirs.make("claw-draft-overlap-");
+    const [first, second] = await Promise.all([
+      createClawDraft(workspaceDir),
+      createClawDraft(workspaceDir),
+    ]);
+
+    expect(first.draftId).not.toBe(second.draftId);
+    await writeFile(first.path, JSON.stringify({ ...proposal, name: "first-claw" }));
+    await writeFile(second.path, JSON.stringify({ ...proposal, name: "second-claw" }));
+    await expect(readFile(first.path, "utf8")).resolves.toContain('"name":"first-claw"');
+    await expect(readFile(second.path, "utf8")).resolves.toContain('"name":"second-claw"');
+    await expect(
+      readFile(join(workspaceDir, ".openclaw/claw-drafts/current.json"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.each([
