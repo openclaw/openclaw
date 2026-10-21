@@ -137,11 +137,11 @@ function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: 
     return [];
   }
   try {
-    const parsed = payloadJSON
-      ? // SAFETY: Fields remain unknown until narrowed below; malformed payloads reach catch.
-        (JSON.parse(payloadJSON) as { stdout?: unknown; bins?: unknown })
-      : // SAFETY: Fields remain unknown until narrowed below; malformed payloads reach catch.
-        (payload as { stdout?: unknown; bins?: unknown });
+    // SAFETY: Fields stay unknown until narrowed below; malformed payloads reach catch.
+    const parsed = (payloadJSON ? JSON.parse(payloadJSON) : payload) as {
+      stdout?: unknown;
+      bins?: unknown;
+    };
     if (Array.isArray(parsed.bins)) {
       return normalizeStringEntries(parsed.bins);
     }
