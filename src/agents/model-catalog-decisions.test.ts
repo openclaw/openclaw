@@ -56,7 +56,7 @@ function harnessRegistry(id: string) {
   return registry;
 }
 
-function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => true, cfg = config) {
+function nativeOwner(complete: boolean, loggedIn: boolean, cfg = config) {
   mockRouteResolverFactory(routeResolverFactory(dualRoutes));
   return createModelCatalogDecisions({
     cfg,
@@ -69,7 +69,6 @@ function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => tru
     preparedRuntimeAuthModes: loggedIn ? { codex: { source: "native", mode: "api_key" } } : {},
     preparedSyntheticAuthComplete: complete,
     pluginRegistry: harnessRegistry("codex"),
-    isCurrent,
   });
 }
 
@@ -304,7 +303,7 @@ describe("captured model decisions", () => {
         defaults: { models: { "openai/gpt-5.4": { agentRuntime: { id: "auto" } } } },
       },
     };
-    const owner = nativeOwner(true, true, () => true, cfg);
+    const owner = nativeOwner(true, true, cfg);
     const evaluation = owner.evaluateEntry(entry);
     expect(evaluation).toMatchObject({
       availability: true,
@@ -338,7 +337,7 @@ describe("captured model decisions", () => {
         },
       },
     };
-    const owner = nativeOwner(true, false, () => true, cfg);
+    const owner = nativeOwner(true, false, cfg);
     const evaluation = owner.evaluateEntry(entry);
     expect(evaluation.availability).toBe(true);
     expect(evaluation.runtimeAuth).toBeUndefined();
@@ -496,14 +495,6 @@ describe("captured model decisions", () => {
   it("distinguishes unknown choices from authoritative empty choices", async () => {
     expect(nativeOwner(false, false).runtimeChoices(entry)).toBeUndefined();
     expect(nativeOwner(true, false).runtimeChoices(entry)).toEqual([]);
-  });
-
-  it("rejects a replaced generation instead of returning its old choices", async () => {
-    let current = true;
-    const owner = nativeOwner(true, true, () => current);
-    expect(owner.runtimeChoices(entry)).toEqual(["codex"]);
-    current = false;
-    expect(() => owner.runtimeChoices(entry)).toThrow("Model catalog changed");
   });
 
   it("keeps a different provider's account pin out of the selected route", async () => {

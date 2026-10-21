@@ -2,6 +2,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
@@ -15,15 +16,16 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import type { ChatState } from "../pages/chat/chat-state-contract.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
-import { observeManagedMediaCapture } from "./chat-managed-media-order.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:managed-media-order";
@@ -44,6 +46,7 @@ const expectedOrder = [
 const fixtureKey = "synthetic-managed-media-key";
 
 async function startProvider() {
+  const echoReleased = createDeferred();
   const requests: string[] = [];
   const failures: string[] = [];
   const routes: string[] = [];
@@ -68,27 +71,31 @@ async function startProvider() {
           response.destroy();
         });
         request.on("end", () => {
-          try {
-            const input = asOptionalRecord(JSON.parse(body));
-            const model = input?.model;
-            if (model !== "echo" && model !== "metadata") {
-              throw new Error("Unexpected fixture model");
+          void (async () => {
+            try {
+              const model = asOptionalRecord(JSON.parse(body))?.model;
+              if (model !== "echo" && model !== "metadata") {
+                throw new Error("Unexpected fixture model");
+              }
+              requests.push(model);
+              if (model === "echo" && (!reply || !body.includes(prompt))) {
+                throw new Error("The provider must receive the browser chat.send prompt");
+              }
+              if (model === "echo") {
+                await echoReleased.promise;
+              }
+              // Exactly one assistant message containing two local MEDIA directives.
+              // No tool result, preordered image block, or direct transcript write bypasses delivery.
+              writeOpenAiResponsesText(response, {
+                text: model === "echo" ? reply : "Managed media ordering proof",
+                messageId: `managed-media-message-${requests.length}`,
+                responseId: `managed-media-response-${requests.length}`,
+              });
+            } catch (error) {
+              failures.push(String(error));
+              response.writeHead(500).end("Synthetic provider failed");
             }
-            requests.push(model);
-            if (model === "echo" && (!reply || !body.includes(prompt))) {
-              throw new Error("The provider must receive the browser chat.send prompt");
-            }
-            // Exactly one assistant message containing two local MEDIA directives.
-            // No tool result, preordered image block, or direct transcript write bypasses delivery.
-            writeOpenAiResponsesText(response, {
-              text: model === "echo" ? reply : "Managed media ordering proof",
-              messageId: `managed-media-message-${requests.length}`,
-              responseId: `managed-media-response-${requests.length}`,
-            });
-          } catch (error) {
-            failures.push(String(error));
-            response.writeHead(500).end("Synthetic provider failed");
-          }
+          })();
         });
       }),
   });
@@ -100,8 +107,10 @@ async function startProvider() {
     setReply(text: string) {
       reply = text;
     },
-    close: () =>
-      runQaGatewayFixture(
+    releaseEcho: () => echoReleased.resolve(),
+    close: () => {
+      echoReleased.resolve();
+      return runQaGatewayFixture(
         async () => {},
         async () => {
           const shutdown = reservation.releaseListener();
@@ -109,7 +118,8 @@ async function startProvider() {
           await shutdown;
         },
         reservation.claim.release,
-      ),
+      );
+    },
   };
 }
 
@@ -222,27 +232,29 @@ async function runCli(args: string[]) {
   return result.stdout;
 }
 
-async function capture(
-  page: Page,
-  bubble: Locator,
-  name: string,
-  diagnostic?: Awaited<ReturnType<typeof observeManagedMediaCapture>>,
-) {
+async function callGateway(method: string, params: Record<string, unknown>) {
+  return asOptionalRecord(
+    JSON.parse(
+      await runCli(["gateway", "call", method, "--json", "--params", JSON.stringify(params)]),
+    ),
+  );
+}
+
+const writeEvidence = (name: string, value: unknown) =>
+  writeFile(path.join(suite.artifactDir, name), JSON.stringify(value, null, 2) + "\n");
+const privateFixtureValues = () => ({
+  gatewayToken: instance.gatewayToken,
+  hookToken: instance.hookToken,
+  stateDir: instance.stateDir,
+  homeDir: instance.homeDir,
+  workingDirectory: process.cwd(),
+  fixtureKey,
+});
+
+async function capture(page: Page, bubble: Locator, name: string) {
   const body = (await page.locator("body").textContent()) ?? "";
-  // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- Distinguish rendered disclosure from hidden DOM text.
-  const renderedBody = await page.locator("body").innerText();
-  for (const [field, privateValue] of Object.entries({
-    gatewayToken: instance.gatewayToken,
-    hookToken: instance.hookToken,
-    stateDir: instance.stateDir,
-    homeDir: instance.homeDir,
-    workingDirectory: process.cwd(),
-    fixtureKey,
-  })) {
-    expect(
-      body.includes(privateValue),
-      `Capture must contain only synthetic public content (field: ${field}, rendered: ${renderedBody.includes(privateValue)})`,
-    ).toBe(false);
+  for (const [field, value] of Object.entries(privateFixtureValues())) {
+    expect(body.includes(value), `Capture must not expose ${field}`).toBe(false);
   }
   expect(new URL(page.url()).hash).toBe("");
   const content = [
@@ -253,19 +265,18 @@ async function capture(
     bubble.locator("img.chat-message-image").nth(1),
     bubble.getByText(closing, { exact: true }),
   ];
-  const releaseTargets = diagnostic?.observeTargets([bubble, ...content]);
-  try {
-    const frame = await takeControlUiScreenshotFrame(page, bubble, content, {
-      animations: "disabled",
-      scrollTo: bubble,
-      elements: [bubble],
-    });
-    await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
-    await writeFile(path.join(suite.artifactDir, `${name}-message.png`), frame.elements[0]!.png);
-  } finally {
-    await diagnostic?.finishCapture();
-    releaseTargets?.();
-  }
+  const frame = await takeControlUiScreenshotFrame(page, bubble, content, {
+    animations: "disabled",
+    scrollTo: bubble,
+    elements: [bubble],
+  });
+  await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
+  await writeFile(path.join(suite.artifactDir, `${name}-message.png`), frame.elements[0]!.png);
+}
+
+async function captureOrder(page: Page, bubble: Locator, phase: "live" | "reloaded") {
+  await capture(page, bubble, phase === "live" ? "01-live" : "02-reloaded");
+  return assertRenderedOrder(bubble);
 }
 
 async function renderedOrder(bubble: Locator) {
@@ -298,61 +309,19 @@ async function assertRenderedOrder(bubble: Locator) {
 }
 
 async function recordImageDecodeFailure(bubble: Locator) {
-  const images = await bubble.locator("img.chat-message-image").evaluateAll(async (elements) =>
-    Promise.all(
-      elements.map(async (image) => {
-        if (!(image instanceof HTMLImageElement)) {
-          throw new Error("Expected an image element");
-        }
-        const source = image.src;
-        const url = new URL(source, document.baseURI);
-        const scheme =
-          url.protocol === "blob:"
-            ? "blob"
-            : url.protocol === "data:"
-              ? "data"
-              : url.protocol === "http:" || url.protocol === "https:"
-                ? "http"
-                : "other";
-        const state = {
-          scheme,
-          route:
-            scheme !== "http"
-              ? null
-              : url.pathname.includes("/__openclaw__/assistant-media")
-                ? "assistant-media"
-                : url.pathname.includes("/api/chat/media/outgoing/")
-                  ? "managed-media"
-                  : "other",
-          complete: image.complete,
-          naturalWidth: image.naturalWidth,
-          naturalHeight: image.naturalHeight,
-          currentSrcMatchesSrc: image.currentSrc === source,
-        };
-        try {
-          const response = await fetch(source, { signal: AbortSignal.timeout(5_000) });
-          const bytes = new Uint8Array(await response.arrayBuffer());
-          const hex = (value: Uint8Array) =>
-            Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
-          return {
-            ...state,
-            fetch: {
-              ok: response.ok,
-              status: response.status,
-              contentType: response.headers.get("content-type"),
-              byteLength: bytes.byteLength,
-              first16Hex: hex(bytes.subarray(0, 16)),
-              sha256: hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))),
-            },
-          };
-        } catch (error) {
-          return {
-            ...state,
-            fetch: { errorName: error instanceof Error ? error.name : "UnknownError" },
-          };
-        }
-      }),
-    ),
+  const images = await bubble.locator("img.chat-message-image").evaluateAll((elements) =>
+    elements.map((image) => {
+      if (!(image instanceof HTMLImageElement)) {
+        throw new Error("Expected an image element");
+      }
+      return {
+        protocol: new URL(image.src, document.baseURI).protocol,
+        complete: image.complete,
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+        currentSrcMatchesSrc: image.currentSrc === image.src,
+      };
+    }),
   );
   const record = { schemaVersion: 1, kind: "managed-image-decode", images };
   console.error("[control-ui-e2e] image decode failure", JSON.stringify(record));
@@ -363,7 +332,311 @@ async function recordImageDecodeFailure(bubble: Locator) {
   );
   await writeFile(
     path.join(artifactDir, "failure.public.json"),
-    `${JSON.stringify(record, null, 2)}\n`,
+    JSON.stringify(record, null, 2) + "\n",
+  );
+}
+
+async function runManagedMediaScenario() {
+  await callGateway("sessions.create", {
+    key: sessionKey,
+    agentId: "main",
+    label: "Managed image ordering",
+    permissionMode: "full",
+  });
+  await suite.withPage(
+    { locale: "en-US", serviceWorkers: "block", colorScheme: "dark", viewport },
+    async ({ page }) => {
+      const sends: string[] = [];
+      page.on("websocket", (socket) => {
+        socket.on("framesent", ({ payload }) => {
+          const frame = asOptionalRecord(JSON.parse(payload.toString()));
+          if (frame?.method === "chat.send") {
+            const params = asOptionalRecord(frame.params);
+            if (params?.sessionKey === sessionKey && typeof params.message === "string") {
+              sends.push(params.message);
+            }
+          }
+        });
+      });
+      await page.addInitScript(() => {
+        localStorage.setItem(
+          "openclaw:control-ui:community-invite:v2",
+          JSON.stringify({ dismissedAtMs: 1770000000000 }),
+        );
+      });
+      await pairControlUiPage(page, runCli);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await waitForControlUiGatewayReady(page);
+      await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill(prompt);
+      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      // The recap belongs to a run the pane observed, not a terminal history row.
+      await page.waitForFunction((expectedSessionKey) => {
+        const state = document.querySelector<HTMLElement & { state?: ChatState }>(
+          'openclaw-chat-pane[aria-hidden="false"]',
+        )?.state;
+        return state?.sessionKey === expectedSessionKey && Boolean(state.chatRunId);
+      }, sessionKey);
+      await page
+        .locator('openclaw-chat-pane[aria-hidden="false"] .chat-working-indicator')
+        .waitFor({ state: "visible" });
+      provider.releaseEcho();
+      const bubble = page.locator(".chat-group.assistant .chat-bubble").filter({ hasText: intro });
+      const renderedImages = bubble.locator("img.chat-message-image");
+      // A durable reply can briefly overlap its live tail until the run retires.
+      await expect.poll(() => bubble.count()).toBeGreaterThan(0);
+      await page
+        .getByRole("button", { name: "Stop generating", exact: true })
+        .waitFor({ state: "detached" });
+      await bubble.getByText(closing, { exact: true }).waitFor();
+      const assertDecoded = async () => {
+        // Run retirement starts a final history read that can replace live image nodes.
+        await page.waitForFunction((expectedSessionKey) => {
+          const state = document.querySelector<HTMLElement & { state?: ChatState }>(
+            'openclaw-chat-pane[aria-hidden="false"]',
+          )?.state;
+          return (
+            state?.sessionKey === expectedSessionKey &&
+            state.chatRunId === null &&
+            state.chatStream === null &&
+            !state.chatLoading &&
+            !state.chatError
+          );
+        }, sessionKey);
+        await expect.poll(() => bubble.count()).toBe(1);
+        await expect
+          .poll(() => page.locator(".chat-group.assistant img.chat-message-image").count())
+          .toBe(2);
+        await expect.poll(() => renderedImages.count()).toBe(2);
+        try {
+          await renderedImages.evaluateAll(async (images) => {
+            await Promise.all(
+              images.map(async (image) => {
+                if (!(image instanceof HTMLImageElement)) {
+                  throw new Error("Expected an image element");
+                }
+                await image.decode();
+              }),
+            );
+          });
+        } catch (error) {
+          await recordImageDecodeFailure(bubble).catch((captureError: unknown) => {
+            console.error(
+              "[control-ui-e2e] image decode diagnostics failed",
+              captureError instanceof Error ? captureError.name : "UnknownError",
+            );
+          });
+          throw error;
+        }
+        // History reconciliation can replace the nodes that just finished decoding.
+        await expect
+          .poll(() =>
+            renderedImages.evaluateAll((images) =>
+              images.map(
+                (image) =>
+                  image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0,
+              ),
+            ),
+          )
+          .toEqual([true, true]);
+      };
+      // Read persisted history through its real owner, never pre-seed ordered content.
+      const history = await callGateway("chat.history", { sessionKey, limit: 20 });
+      const messages = Array.isArray(history?.messages) ? history.messages : [];
+      const assistants = messages
+        .map(asOptionalRecord)
+        .filter((message) => message?.role === "assistant");
+      expect(assistants).toHaveLength(1);
+      const content = assistants[0]?.content;
+      const blocks = Array.isArray(content) ? content.map(asOptionalRecord) : [];
+      const persistedOrder = blocks.flatMap((block) => {
+        if (block?.type === "image") {
+          return ["image"];
+        }
+        if (block?.type !== "text" || typeof block.text !== "string") {
+          return [];
+        }
+        const text = block.text;
+        return [intro, firstHeading, secondHeading, closing]
+          .filter((label) => text.includes(label))
+          .toSorted((left, right) => text.indexOf(left) - text.indexOf(right));
+      });
+      expect(persistedOrder).toEqual([
+        intro,
+        firstHeading,
+        "image",
+        secondHeading,
+        "image",
+        closing,
+      ]);
+      const images = blocks.filter((block) => block?.type === "image");
+      expect(images).toHaveLength(2);
+      const artifactIds = images.map((image) => image?.artifactId);
+      for (const id of artifactIds) {
+        expect(id).toMatch(/^artifact_managed_image_/u);
+      }
+      expect(new Set(artifactIds).size).toBe(2);
+      expect(JSON.stringify(assistants)).not.toContain("MEDIA:");
+      expect(JSON.stringify(assistants)).not.toContain(instance.stateDir);
+
+      const assistantId = readSessionMessageIdentity(assistants[0])?.id ?? null;
+      const sessionId = asOptionalRecord(history?.sessionInfo)?.sessionId ?? history?.sessionId;
+      const cursor = history?.deltaCursor;
+      expect(assistantId).toBeTypeOf("string");
+      expect(sessionId).toBeTypeOf("string");
+      expect(cursor).toBeTypeOf("string");
+      // Live previews may decode before history adopts their canonical sources.
+      await expect
+        .poll(async () => {
+          const adopted = await page
+            .locator(".chat-pane-cache__pane--active")
+            .evaluate((element, expectedAssistantId) => {
+              const state = (element as HTMLElement & { state: ChatPageHost }).state;
+              const message = state.chatMessages.find((value) => {
+                if (!value || typeof value !== "object" || !("__openclaw" in value)) {
+                  return false;
+                }
+                const identity = value["__openclaw"];
+                return (
+                  identity &&
+                  typeof identity === "object" &&
+                  "id" in identity &&
+                  identity.id === expectedAssistantId
+                );
+              });
+              return {
+                sessionKey: state.sessionKey,
+                sessionId: state.currentSessionId,
+                loading: state.chatLoading,
+                cursor: state.chatHistoryCursor,
+                message,
+                rendered: Array.from(
+                  element.querySelectorAll(".chat-group.assistant .chat-bubble"),
+                ).some(
+                  (renderedBubble) =>
+                    renderedBubble.getAttribute("data-entry-id") === expectedAssistantId,
+                ),
+              };
+            }, assistantId);
+          const adoptedContent = asOptionalRecord(adopted.message)?.content;
+          return {
+            ...adopted,
+            images: Array.isArray(adoptedContent)
+              ? adoptedContent.map(asOptionalRecord).filter((block) => block?.type === "image")
+              : [],
+          };
+        })
+        .toEqual(
+          expect.objectContaining({
+            sessionKey,
+            sessionId,
+            loading: false,
+            rendered: true,
+            cursor: expect.objectContaining({ cursor, sessionId }),
+            images,
+          }),
+        );
+      // Sidebar rows omit full policy fields. Wait for the pane's own list
+      // read and rendered managed images, not equality with a full CLI row.
+      await expect
+        .poll(() =>
+          page.locator(".chat-pane-cache__pane--active").evaluate((element) => {
+            const state = (element as HTMLElement & { state: ChatPageHost }).state;
+            const selected = state.sessionsResult?.sessions.find(
+              (row) => row.key === state.sessionKey,
+            );
+            return {
+              sessionId: selected?.sessionId,
+              loading: state.sessionsLoading,
+              error: state.sessionsError,
+            };
+          }),
+        )
+        .toEqual({ sessionId, loading: false, error: null });
+      // Stream retirement can precede the durable history receipt. Capture
+      // managed images after that handoff, then retain strict node identity.
+      await expect
+        .poll(() => bubble.locator(".chat-image-frame--managed img.chat-message-image").count())
+        .toBe(2);
+      await assertDecoded();
+      // The terminal session recap arrives independently of final text and image decode.
+      // It adds height beside the bubble, so admit it before freezing live ancestry.
+      try {
+        await page
+          .locator(".chat-group.assistant")
+          .filter({ hasText: intro })
+          .locator(".chat-turn-recap")
+          .waitFor({ state: "visible" });
+      } catch (error) {
+        await withTimeout(
+          page.evaluate(
+            ({ expectedSessionKey, assistantRunId }) => {
+              const pane = document.querySelector<HTMLElement & { state?: ChatPageHost }>(
+                'openclaw-chat-pane[aria-hidden="false"]',
+              );
+              const state = pane?.state;
+              const row = state?.sessionsResult?.sessions.find(
+                (entry) => entry.key === expectedSessionKey,
+              );
+              const recaps = Array.from(pane?.querySelectorAll(".chat-turn-recap") ?? []);
+              return {
+                recapPanePresent: Boolean(pane),
+                recapSessionMatches: state?.sessionKey === expectedSessionKey,
+                recapRunCleared: state?.chatRunId === null,
+                recapCount: recaps.length,
+                recapVisibleCount: recaps.filter((element) =>
+                  element.checkVisibility({ visibilityProperty: true }),
+                ).length,
+                recapAttachedCount: recaps.filter((element) =>
+                  element.closest(".chat-group.assistant"),
+                ).length,
+                recapTerminalRowPresent: Boolean(row),
+                recapTerminalRowDone: row?.status === "done",
+                recapTerminalRuntimeMs:
+                  typeof row?.runtimeMs === "number" && Number.isFinite(row.runtimeMs)
+                    ? row.runtimeMs
+                    : null,
+                recapAssistantRunPresent: assistantRunId !== null,
+                recapTerminalRunMatchesAssistant:
+                  assistantRunId !== null && row?.lastRunId === assistantRunId,
+              };
+            },
+            {
+              expectedSessionKey: sessionKey,
+              assistantRunId: readSessionMessageIdentity(assistants[0])?.runId ?? null,
+            },
+          ),
+          1_000,
+        )
+          .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+          .catch(() => undefined);
+        throw error;
+      }
+      const liveOrder = await captureOrder(page, bubble, "live");
+      expect(await bubble.textContent()).not.toContain("MEDIA:");
+      expect(sends).toEqual([prompt]);
+      expect(provider.requests.filter((model) => model === "echo")).toHaveLength(1);
+      expect(provider.failures).toEqual([]);
+
+      await page.reload();
+      await waitForControlUiGatewayReady(page);
+      await bubble.getByText(closing, { exact: true }).waitFor();
+      await assertDecoded();
+      const reloadedOrder = await captureOrder(page, bubble, "reloaded");
+      expect(await page.locator(".chat-group.assistant .chat-bubble").count()).toBe(1);
+      expect(sends).toEqual([prompt]);
+      expect(provider.requests.filter((model) => model === "echo")).toHaveLength(1);
+      await writeEvidence("proof.json", {
+        gateway: "isolated real Gateway serving the built Control UI",
+        inference: "synthetic loopback OpenAI Responses endpoint",
+        liveOrder,
+        persistedOrder,
+        reloadedOrder,
+        assistantMessages: assistants.length,
+        managedImages: artifactIds.length,
+        chatSends: sends.length,
+        primaryProviderRequests: provider.requests.filter((model) => model === "echo").length,
+      });
+    },
   );
 }
 
@@ -372,360 +645,19 @@ suite.define(() => {
     try {
       await suite.runScenario(test, {
         retainedState: () => instance.stateDir,
-        run: async () => {
-          await runCli([
-            "gateway",
-            "call",
-            "sessions.create",
-            "--json",
-            "--params",
-            JSON.stringify({
-              key: sessionKey,
-              agentId: "main",
-              label: "Managed image ordering",
-              permissionMode: "full",
-            }),
-          ]);
-          await suite.withPage(
-            { locale: "en-US", serviceWorkers: "block", colorScheme: "dark", viewport },
-            async ({ page }) => {
-              const sends: string[] = [];
-              page.on("websocket", (socket) => {
-                socket.on("framesent", ({ payload }) => {
-                  const frame = asOptionalRecord(JSON.parse(payload.toString()));
-                  if (frame?.method === "chat.send") {
-                    const params = asOptionalRecord(frame.params);
-                    if (params?.sessionKey === sessionKey && typeof params.message === "string") {
-                      sends.push(params.message);
-                    }
-                  }
-                });
-              });
-              await page.addInitScript(() => {
-                localStorage.setItem(
-                  "openclaw:control-ui:community-invite:v2",
-                  JSON.stringify({ dismissedAtMs: 1770000000000 }),
-                );
-              });
-              await pairControlUiPage(page, runCli);
-              await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-              await waitForControlUiGatewayReady(page);
-              await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill(prompt);
-              await page.getByRole("button", { name: "Send message", exact: true }).click();
-              const bubble = page
-                .locator(".chat-group.assistant .chat-bubble")
-                .filter({ hasText: intro });
-              // A durable reply can briefly overlap its live tail until the run retires.
-              await expect.poll(() => bubble.count()).toBeGreaterThan(0);
-              await page
-                .getByRole("button", { name: "Stop generating", exact: true })
-                .waitFor({ state: "detached" });
-              await bubble.getByText(closing, { exact: true }).waitFor();
-              const assertDecoded = async () => {
-                // Run retirement starts a final history read that can replace live image nodes.
-                await page.waitForFunction((expectedSessionKey) => {
-                  const state = document.querySelector<HTMLElement & { state?: ChatState }>(
-                    'openclaw-chat-pane[aria-hidden="false"]',
-                  )?.state;
-                  return (
-                    state?.sessionKey === expectedSessionKey &&
-                    state.chatRunId === null &&
-                    state.chatStream === null &&
-                    !state.chatLoading &&
-                    !state.chatError
-                  );
-                }, sessionKey);
-                await expect.poll(() => bubble.count()).toBe(1);
-                await expect
-                  .poll(() => page.locator(".chat-group.assistant img.chat-message-image").count())
-                  .toBe(2);
-                await expect.poll(() => bubble.locator("img.chat-message-image").count()).toBe(2);
-                try {
-                  await bubble.locator("img.chat-message-image").evaluateAll(async (images) => {
-                    await Promise.all(
-                      images.map(async (image) => {
-                        if (!(image instanceof HTMLImageElement)) {
-                          throw new Error("Expected an image element");
-                        }
-                        await image.decode();
-                      }),
-                    );
-                  });
-                } catch (error) {
-                  await recordImageDecodeFailure(bubble).catch((captureError: unknown) => {
-                    console.error(
-                      "[control-ui-e2e] image decode diagnostics failed",
-                      captureError instanceof Error ? captureError.name : "UnknownError",
-                    );
-                  });
-                  throw error;
-                }
-                // History reconciliation can replace the nodes that just finished decoding.
-                await expect
-                  .poll(() =>
-                    bubble
-                      .locator("img.chat-message-image")
-                      .evaluateAll((images) =>
-                        images.map(
-                          (image) =>
-                            image instanceof HTMLImageElement &&
-                            image.complete &&
-                            image.naturalWidth > 0,
-                        ),
-                      ),
-                  )
-                  .toEqual([true, true]);
-              };
-              // Read persisted history through its real owner, never pre-seed ordered content.
-              const history = asOptionalRecord(
-                JSON.parse(
-                  await runCli([
-                    "gateway",
-                    "call",
-                    "chat.history",
-                    "--json",
-                    "--params",
-                    JSON.stringify({ sessionKey, limit: 20 }),
-                  ]),
-                ),
-              );
-              const messages = Array.isArray(history?.messages) ? history.messages : [];
-              const assistants = messages
-                .map(asOptionalRecord)
-                .filter((message) => message?.role === "assistant");
-              expect(assistants).toHaveLength(1);
-              const content = assistants[0]?.content;
-              const blocks = Array.isArray(content) ? content.map(asOptionalRecord) : [];
-              const persistedOrder = blocks.flatMap((block) => {
-                if (block?.type === "image") {
-                  return ["image"];
-                }
-                if (block?.type !== "text" || typeof block.text !== "string") {
-                  return [];
-                }
-                const text = block.text;
-                return [intro, firstHeading, secondHeading, closing]
-                  .filter((label) => text.includes(label))
-                  .toSorted((left, right) => text.indexOf(left) - text.indexOf(right));
-              });
-              expect(persistedOrder).toEqual([
-                intro,
-                firstHeading,
-                "image",
-                secondHeading,
-                "image",
-                closing,
-              ]);
-              const images = blocks.filter((block) => block?.type === "image");
-              expect(images).toHaveLength(2);
-              const artifactIds = images.map((image) => image?.artifactId);
-              for (const id of artifactIds) {
-                expect(id).toMatch(/^artifact_managed_image_/u);
-              }
-              expect(new Set(artifactIds).size).toBe(2);
-              expect(JSON.stringify(assistants)).not.toContain("MEDIA:");
-              expect(JSON.stringify(assistants)).not.toContain(instance.stateDir);
-
-              const assistantId = readSessionMessageIdentity(assistants[0])?.id ?? null;
-              const sessionId =
-                asOptionalRecord(history?.sessionInfo)?.sessionId ?? history?.sessionId;
-              const cursor = history?.deltaCursor;
-              expect(assistantId).toBeTypeOf("string");
-              expect(sessionId).toBeTypeOf("string");
-              expect(cursor).toBeTypeOf("string");
-              // Live previews may decode before history adopts their canonical sources.
-              await expect
-                .poll(async () => {
-                  const adopted = await page
-                    .locator(".chat-pane-cache__pane--active")
-                    .evaluate((element, expectedAssistantId) => {
-                      const state = (element as HTMLElement & { state: ChatPageHost }).state;
-                      const message = state.chatMessages.find((value) => {
-                        if (!value || typeof value !== "object" || !("__openclaw" in value)) {
-                          return false;
-                        }
-                        const identity = value["__openclaw"];
-                        return (
-                          identity &&
-                          typeof identity === "object" &&
-                          "id" in identity &&
-                          identity.id === expectedAssistantId
-                        );
-                      });
-                      return {
-                        sessionKey: state.sessionKey,
-                        sessionId: state.currentSessionId,
-                        loading: state.chatLoading,
-                        cursor: state.chatHistoryCursor,
-                        message,
-                        rendered: Array.from(
-                          element.querySelectorAll(".chat-group.assistant .chat-bubble"),
-                        ).some(
-                          (renderedBubble) =>
-                            renderedBubble.getAttribute("data-entry-id") === expectedAssistantId,
-                        ),
-                      };
-                    }, assistantId);
-                  const adoptedContent = asOptionalRecord(adopted.message)?.content;
-                  return {
-                    sessionKey: adopted.sessionKey,
-                    sessionId: adopted.sessionId,
-                    loading: adopted.loading,
-                    cursor: adopted.cursor?.cursor,
-                    cursorSessionId: adopted.cursor?.sessionId,
-                    rendered: adopted.rendered,
-                    images: Array.isArray(adoptedContent)
-                      ? adoptedContent
-                          .map(asOptionalRecord)
-                          .filter((block) => block?.type === "image")
-                      : [],
-                  };
-                })
-                .toEqual({
-                  sessionKey,
-                  sessionId,
-                  loading: false,
-                  cursor,
-                  cursorSessionId: sessionId,
-                  rendered: true,
-                  images,
-                });
-              // Sidebar rows omit full policy fields. Wait for the pane's own list
-              // read and rendered managed images, not equality with a full CLI row.
-              await expect
-                .poll(() =>
-                  page.locator(".chat-pane-cache__pane--active").evaluate((element) => {
-                    const state = (element as HTMLElement & { state: ChatPageHost }).state;
-                    const selected = state.sessionsResult?.sessions.find(
-                      (row) => row.key === state.sessionKey,
-                    );
-                    return {
-                      sessionId: selected?.sessionId,
-                      loading: state.sessionsLoading,
-                      error: state.sessionsError,
-                    };
-                  }),
-                )
-                .toEqual({ sessionId, loading: false, error: null });
-              // Stream retirement can precede the durable history receipt. Capture
-              // managed images after that handoff, then retain strict node identity.
-              await expect
-                .poll(() =>
-                  bubble.locator(".chat-image-frame--managed img.chat-message-image").count(),
-                )
-                .toBe(2);
-              await assertDecoded();
-              // The terminal session recap arrives independently of final text and image decode.
-              // It adds height beside the bubble, so admit it before freezing live ancestry.
-              await page
-                .locator(".chat-group.assistant")
-                .filter({ hasText: intro })
-                .locator(".chat-turn-recap")
-                .waitFor({ state: "visible" });
-              const diagnostic = await observeManagedMediaCapture(page, bubble, intro, "live");
-              let liveOrder: string[];
-              try {
-                // Capture before the order assertion so an unfixed run retains the actual flattening.
-                // Running this unchanged scenario on the repaired build yields the comparable After.
-                await capture(page, bubble, "01-live", diagnostic);
-                // History reconciliation can replace decoded images across the screenshot await.
-                liveOrder = await assertRenderedOrder(bubble);
-              } catch (error) {
-                try {
-                  await diagnostic.report();
-                } catch (captureError) {
-                  console.error(
-                    "[control-ui-e2e] managed image order diagnostics failed",
-                    captureError instanceof Error ? captureError.name : "UnknownError",
-                  );
-                }
-                throw error;
-              } finally {
-                await diagnostic.stop();
-              }
-              expect(await bubble.textContent()).not.toContain("MEDIA:");
-              expect(sends).toEqual([prompt]);
-              expect(provider.requests.filter((model) => model === "echo")).toHaveLength(1);
-              expect(provider.failures).toEqual([]);
-
-              await page.reload();
-              await waitForControlUiGatewayReady(page);
-              await bubble.getByText(closing, { exact: true }).waitFor();
-              await assertDecoded();
-              const reloadedDiagnostic = await observeManagedMediaCapture(
-                page,
-                bubble,
-                intro,
-                "reloaded",
-              );
-              let reloadedOrder: string[];
-              try {
-                await capture(page, bubble, "02-reloaded", reloadedDiagnostic);
-                reloadedOrder = await assertRenderedOrder(bubble);
-              } catch (error) {
-                try {
-                  await reloadedDiagnostic.report();
-                } catch (captureError) {
-                  console.error(
-                    "[control-ui-e2e] managed image reload diagnostics failed",
-                    captureError instanceof Error ? captureError.name : "UnknownError",
-                  );
-                }
-                throw error;
-              } finally {
-                await reloadedDiagnostic.stop();
-              }
-              expect(await page.locator(".chat-group.assistant .chat-bubble").count()).toBe(1);
-              expect(sends).toEqual([prompt]);
-              expect(provider.requests.filter((model) => model === "echo")).toHaveLength(1);
-              await writeFile(
-                path.join(suite.artifactDir, "proof.json"),
-                JSON.stringify(
-                  {
-                    gateway: "isolated real Gateway serving the built Control UI",
-                    inference: "synthetic loopback OpenAI Responses endpoint",
-                    liveOrder,
-                    persistedOrder,
-                    reloadedOrder,
-                    assistantMessages: assistants.length,
-                    managedImages: artifactIds.length,
-                    chatSends: sends.length,
-                    primaryProviderRequests: provider.requests.filter((model) => model === "echo")
-                      .length,
-                  },
-                  null,
-                  2,
-                ) + "\n",
-              );
-            },
-          );
-        },
+        run: runManagedMediaScenario,
       });
     } catch (error) {
       let gatewayLog = instance.logs();
-      for (const value of [
-        instance.gatewayToken,
-        instance.hookToken,
-        instance.stateDir,
-        instance.homeDir,
-        process.cwd(),
-        fixtureKey,
-      ]) {
+      for (const value of Object.values(privateFixtureValues())) {
         gatewayLog = gatewayLog.replaceAll(value, "<fixture>");
       }
-      await writeFile(
-        path.join(suite.artifactDir, "failure.json"),
-        JSON.stringify(
-          {
-            providerRequests: provider.requests,
-            providerFailures: provider.failures,
-            providerRoutes: provider.routes,
-            gatewayLog,
-          },
-          null,
-          2,
-        ) + "\n",
-      );
+      await writeEvidence("failure.json", {
+        providerRequests: provider.requests,
+        providerFailures: provider.failures,
+        providerRoutes: provider.routes,
+        gatewayLog,
+      });
       throw error;
     }
   }, 180_000);

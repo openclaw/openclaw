@@ -10,7 +10,7 @@ import type {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactOtelAttributes } from "./service-attributes.js";
 import {
-  normalizeOtelContentValue,
+  assignOtelContentAttr,
   normalizeOtelErrorMessage,
 } from "./service-content-normalization.js";
 import { assignOtelModelContentAttributes } from "./service-genai-content.js";
@@ -71,11 +71,8 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
         ...harnessRunMetricAttrs(evt),
       };
       runtime.addRunAttrs(spanAttrs, evt);
-      const inputValue = runtime.captureContent
-        ? normalizeOtelContentValue(privateData.harnessContent?.userPrompt)
-        : undefined;
-      if (inputValue) {
-        spanAttrs["input.value"] = inputValue;
+      if (runtime.captureContent) {
+        assignOtelContentAttr(spanAttrs, "input.value", privateData.harnessContent?.userPrompt);
       }
       runtime.trackInternalOrTrustedSpan(
         evt,
@@ -135,17 +132,9 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       // CLI harnesses attach content at completion rather than startup, so the
       // prompt must be consumable here as well; setSpanAttrs below preserves any
       // input.value already recorded on the tracked span at startup.
-      const inputValue = runtime.captureContent
-        ? normalizeOtelContentValue(privateData.harnessContent?.userPrompt)
-        : undefined;
-      if (inputValue) {
-        spanAttrs["input.value"] = inputValue;
-      }
-      const outputValue = runtime.captureContent
-        ? normalizeOtelContentValue(privateData.harnessContent?.finalResponse)
-        : undefined;
-      if (outputValue) {
-        spanAttrs["output.value"] = outputValue;
+      if (runtime.captureContent) {
+        assignOtelContentAttr(spanAttrs, "input.value", privateData.harnessContent?.userPrompt);
+        assignOtelContentAttr(spanAttrs, "output.value", privateData.harnessContent?.finalResponse);
       }
       const trustedTrace = runtime.trustedTraceContext(evt, metadata);
       const trackedSpan = trustedTrace?.spanId

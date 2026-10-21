@@ -66,6 +66,38 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     vi.unstubAllGlobals();
   });
 
+  it("releases cached view work after connect is sent, before hello", async () => {
+    client = new GatewayBrowserClient({ url: "ws://scopes.example.test" });
+    client.start();
+    const ws = getLatestWebSocket();
+    const dispatch = vi.fn(() => {
+      expect(JSON.parse(ws.sent.at(-1) ?? "{}").method).toBe("connect");
+      expect(client?.hello).toBeNull();
+    });
+    const dispatched = client.initialConnectSent.then(dispatch);
+    ws.emitOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispatch).not.toHaveBeenCalled();
+    ws.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "handshake-challenge", ts: 1_800_000_000_000 },
+    });
+    await dispatched;
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("does not strand cached view work when the connection stops before dispatch", async () => {
+    client = new GatewayBrowserClient({ url: "ws://scopes.example.test" });
+    client.start();
+    const dispatch = vi.fn();
+    void client.initialConnectSent.then(dispatch);
+    client.stop();
+    await client.initialConnectSent;
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(getLatestWebSocket().sent).toEqual([]);
+  });
+
   it("publishes negotiated scopes without a device token and retires them on disconnect", async () => {
     client = new GatewayBrowserClient({ url: "ws://scopes.example.test" });
     const { ws, connectFrame } = await startConnect(client);

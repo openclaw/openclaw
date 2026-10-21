@@ -105,6 +105,10 @@ Sidebar pull-request indicators reuse the last known snapshot. Opening a session
 
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
 
+When a checkout is too large or its Git layout cannot be validated cheaply, summaries reuse the last result for up to ten seconds before probing again. Missing or unavailable checkouts retry after one second. Full patches still require fresh revision validation.
+
+Nested repositories remain separate from the parent checkout's file contents. Untracked repositories appear as directory entries, while tracked submodules report Git's change status. Unchanged results can be reused in both cases, including when the checkout uses an external `core.excludesFile`; editing that ignore file refreshes which files appear.
+
 In the chat’s **Changes** panel, gutter chevrons fold complete functions, classes, and other language-supported multiline blocks within a file. Everything starts expanded, including edits. A folded placeholder shows the hidden line count and additions/deletions; click it to expand. Split and unified views share the same folds. The file menu offers **Collapse Code**, **Collapse Functions and Classes**, and **Expand Code**, separately from collapsing whole files. Incomplete source, omitted gaps, unsupported languages, and oversized previews stay expanded. Changing the patch resets code folds.
 
 Session-start baselines omit SQLite databases and their WAL, SHM, and journal files, as well as hardlinked files. These files remain visible in checkout diffs even when unchanged since the session began; baseline capture never opens them in the Gateway process, preserving live database locks.
@@ -218,13 +222,11 @@ failed-run diagnostics without adding a retry notice to an already successful
 conversation. User-requested missing replies and actual provider or storage
 failures still show their failure notice.
 
-The chat header keeps **Share**, **Layout**, and the session menu together.
-**Layout** contains focus, split, swap, panel selection, and dock-position actions,
-with their keyboard shortcuts. Open **Subagents** there, from the side-panel
-**+** menu, or by clicking the header’s **Subagents · N running** status to inspect
-child runs, including swarm workers. The header status also supports Enter and
-Space. An empty conversation starts with the panel closed. The first running batch adds it automatically,
-preserving another panel you selected; closing it keeps it closed for that batch.
+Open **Panels**, then choose **Subagents** to inspect child runs, including swarm
+workers. **Details** also lists the conversation's subagents and opens a selected
+child. Both entry points support keyboard navigation. An empty conversation starts
+with the panel closed. New running batches stay collapsed until you open the panel;
+closing it keeps it closed for that batch.
 Finished results stay open until you close them. While the parent waits on
 subagents, the conversation keeps each child’s claw, name, and current activity
 together in one clickable row. A single muted timer at the far right shows total

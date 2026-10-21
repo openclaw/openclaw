@@ -19,14 +19,18 @@
   transform-origin: bottom;
 }
 
-.chat-picker-overlay {
-  /* Try the full panel before shrinking it to the preferred side's remaining space. */
+.oc-overlay.chat-picker-overlay {
+  /* Fit above the composer before flipping into the space below its controls. */
   max-height: min(var(--oc-overlay-max-height, 420px), calc(100dvh - 16px));
   position-try-fallbacks:
-    --chat-picker-fit flip-block,
     --chat-picker-fit,
     --chat-picker-fit flip-inline,
-    --chat-picker-fit flip-block flip-inline;
+    --chat-picker-fit flip-block,
+    --chat-picker-fit flip-block flip-inline,
+    --chat-picker-fill,
+    --chat-picker-fill flip-inline,
+    --chat-picker-fill flip-block,
+    --chat-picker-fill flip-block flip-inline;
   padding: 0;
   border: 0;
   background: transparent;
@@ -34,6 +38,12 @@
 }
 
 @position-try --chat-picker-fit {
+  /* A long catalog must leave room for search and choices before this side wins. */
+  max-height: min(var(--oc-overlay-max-height, 420px), max(200px, calc(100% - 16px)));
+}
+
+/* Only accept a smaller panel when neither side can provide a usable catalog. */
+@position-try --chat-picker-fill {
   max-height: min(var(--oc-overlay-max-height, 420px), calc(100% - 16px));
 }
 
@@ -1427,7 +1437,7 @@
     rgb(0 0 0 / 12%) calc(100% - 12px), transparent calc(100% - 4px);
 
   display: flex;
-  gap: calc(var(--chat-composer-editor-inset-block) * 3);
+  gap: calc(var(--chat-attachment-inset-block) * 3);
   flex-wrap: nowrap;
   flex-shrink: 0;
   /* Keep horizontal clipping inside the composer. Reserve remove-target and
@@ -1435,8 +1445,8 @@
   width: 100%;
   max-width: 100%;
   margin-block-start: calc(-1 * var(--chat-attachment-hit-slop));
-  padding-block: calc(var(--chat-composer-editor-inset-block) * 2 + var(--chat-attachment-hit-slop))
-    var(--chat-composer-editor-inset-block);
+  padding-block: calc(var(--chat-attachment-inset-block) * 2 + var(--chat-attachment-hit-slop))
+    var(--chat-attachment-inset-block);
   padding-inline: var(--chat-composer-editor-inset-inline)
     calc(var(--chat-composer-editor-inset-inline) + var(--chat-attachment-hit-slop));
   overflow-x: auto;

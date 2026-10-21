@@ -15,6 +15,12 @@ export function registerCanaryMigrationPolicyTests({
   canaryStateOptions: (timeoutMs?: number) => Parameters<typeof validateUpdateCandidateCanary>[0];
   getChildEnv: () => NodeJS.ProcessEnv;
 }) {
+  const step = (name: string, exitCode: number | null) =>
+    expect.objectContaining({ name, exitCode });
+  const validate = (params: Partial<Parameters<typeof validateUpdateCandidateCanary>[0]>) => {
+    stubHealthyGateway();
+    return validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), ...params });
+  };
   it.each([
     { migrationPolicy: "rehearse", startupMigration: false, expected: "ok" },
     { migrationPolicy: "startup-only", startupMigration: false, expected: "error" },
@@ -44,38 +50,25 @@ export function registerCanaryMigrationPolicyTests({
             migrate();
           } else if (!inputAtBoot?.meta?.lastTouchedVersion) {
             queueMicrotask(() => {
-              child.stderr.write(
-                "Preserved configuration needs a migration this Gateway cannot perform\n",
-              );
+              child.stderr.write("Configuration migration required\n");
               child.emit("close", 1);
             });
           }
         }
         return child;
       });
-      stubHealthyGateway();
-
-      const result = await validateUpdateCandidateCanary({
-        ...canaryStateOptions(3_000),
-        config: original,
-        migrationPolicy,
-      });
+      const result = await validate({ config: original, migrationPolicy });
 
       expect(result, result.logTail.join("\n")).toMatchObject({ status: expected });
       expect(result.steps).toContainEqual(
-        expect.objectContaining({
-          name: "candidate-gateway-startup",
-          exitCode: expected === "ok" ? 0 : 1,
-        }),
+        step("candidate-gateway-startup", expected === "ok" ? 0 : 1),
       );
       if (migrationPolicy === "startup-only") {
         expect(inputAtBoot?.meta?.lastTouchedVersion).toBeUndefined();
         expect(inputAtBoot?.agents?.list?.map(({ id }) => id)).toEqual(["main"]);
         expect(inputAtBoot?.agents?.entries).toBeUndefined();
         expect(result.steps.some(({ name }) => name === "candidate-doctor")).toBe(false);
-        expect(result.steps).toContainEqual(
-          expect.objectContaining({ name: "candidate-recovery", exitCode: 0 }),
-        );
+        expect(result.steps).toContainEqual(step("candidate-recovery", 0));
       } else {
         expect(inputAtBoot?.meta?.lastTouchedVersion).toBe("2026.9.1");
       }
@@ -91,35 +84,25 @@ export function registerCanaryMigrationPolicyTests({
       await fs.rm(
         path.join(canaryStateOptions().root, "dist", "infra", "update-migrated-finalize.worker.js"),
       );
-      stubHealthyGateway();
       const onStep = vi.fn();
-      const result = await validateUpdateCandidateCanary({
-        ...canaryStateOptions(3_000),
-        onStep,
-        migrationPolicy,
-      });
+      const result = await validate({ onStep, migrationPolicy });
+      const rehearsing = migrationPolicy === "rehearse";
       expect(result).toMatchObject({
-        status: migrationPolicy === "startup-only" ? "error" : "ok",
+        status: rehearsing ? "ok" : "error",
         phase: "runtime",
       });
       expect(result.candidateSchemaVersions).toBeUndefined();
       expect(result).not.toHaveProperty("checkpointContinuation");
-      if (migrationPolicy === "rehearse") {
-        expect(result.steps).toEqual([
-          expect.objectContaining({
-            name: "candidate-recovery",
-            exitCode: null,
-            stdoutTail: "This version uses the current updater to finish installation",
-          }),
-        ]);
-      } else {
-        expect(result.steps).toEqual([
-          expect.objectContaining({ name: "candidate-runtime", exitCode: 1 }),
-        ]);
+      expect(result.steps).toEqual([
+        step(rehearsing ? "candidate-recovery" : "candidate-runtime", rehearsing ? null : 1),
+      ]);
+      if (rehearsing) {
+        expect(result.steps[0]?.stdoutTail).toBe(
+          "This version uses the current updater to finish installation",
+        );
       }
       expect(onStep).toHaveBeenCalledWith(result.steps[0]);
-      expect(mocks.snapshot).not.toHaveBeenCalled();
-      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect([mocks.snapshot.mock.calls, mocks.spawn.mock.calls]).toEqual([[], []]);
     },
   );
 }

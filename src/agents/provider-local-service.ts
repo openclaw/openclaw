@@ -558,7 +558,7 @@ function stopManagedService(
       }
       // Startup reports its error to its caller; shutdown must still join its tail.
       await starting?.catch(() => {});
-      await stopManagedProcess(managed, new AbortController().signal);
+      await stopManagedProcess(managed);
       if (services.get(key) === managed) {
         services.delete(key);
       }
@@ -575,7 +575,7 @@ function stopManagedService(
   return pending;
 }
 
-async function stopManagedProcess(managed: ManagedLocalService, signal: AbortSignal) {
+async function stopManagedProcess(managed: ManagedLocalService, signal?: AbortSignal) {
   throwIfAborted(signal);
   const owned = managed.process;
   managed.lastExit = undefined;

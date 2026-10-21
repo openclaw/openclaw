@@ -1,5 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -9,6 +8,10 @@ import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
+const cfg = { agents: { entries: { main: {} } } };
+const title = "Investigate why the gateway times out";
+const user = (content: string) => ({ role: "user", content });
+const messages = [user(title), { role: "assistant", content: "reply" }];
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback,
 }));
@@ -17,146 +20,100 @@ beforeEach(() => generateConversationLabelWithFallback.mockReset());
 afterEach(() => vi.restoreAllMocks());
 
 async function withSession(
-  run: (params: {
-    agentId: string;
-    storePath: string;
-    sessionKey: string;
-    sessionId: string;
-    lifecycleRevision: string;
-    sessionEntry: SessionEntry;
-  }) => Promise<void>,
-  messages: Array<{ role: string; content: string; provenance?: unknown }> = [
-    { role: "user", content: "Investigate why the gateway times out" },
-    { role: "assistant", content: "**Found** the slow query" },
-  ],
+  run: (params: sessionAccessor.SessionTranscriptRuntimeScope) => Promise<void>,
+  transcript: Array<{ role: string; content: string; provenance?: unknown }> = messages,
 ) {
-  await withOpenClawTestState(
-    { scenario: "minimal", label: "doctor-session-title" },
-    async (state) => {
-      setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
-      const params = {
-        agentId: "main",
-        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-        sessionKey: "agent:main:dashboard:legacy",
-        sessionId: "legacy-session",
-        lifecycleRevision: "legacy-lifecycle",
-      };
-      await sessionAccessor.persistSessionTranscriptTurn(params, {
-        messages: messages.map((message) => ({ message })),
-        touchSessionEntry: false,
-      });
-      await sessionAccessor.replaceSessionEntry(params, {
-        sessionId: params.sessionId,
-        lifecycleRevision: params.lifecycleRevision,
-        status: "done",
-        updatedAt: 12,
-        lastActivityAt: 11,
-        lastInteractionAt: 10,
-      });
-      await run({
-        ...params,
-        sessionEntry: expectDefined(
-          sessionAccessor.loadSessionEntry(params),
-          "seeded session entry",
-        ),
-      });
-    },
-  );
+  await withOpenClawTestState({ scenario: "minimal", label: "doctor-title" }, async (state) => {
+    setRuntimeConfigSnapshot(cfg);
+    const params = {
+      agentId: "main",
+      storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+      sessionKey: "agent:main:dashboard:legacy",
+      sessionId: "legacy-session",
+      lifecycleRevision: "legacy-lifecycle",
+    };
+    await sessionAccessor.persistSessionTranscriptTurn(params, {
+      messages: transcript.map((message) => ({ message })),
+      touchSessionEntry: false,
+    });
+    await sessionAccessor.replaceSessionEntry(params, {
+      sessionId: params.sessionId,
+      lifecycleRevision: params.lifecycleRevision,
+      status: "done",
+      updatedAt: 12,
+      lastActivityAt: 11,
+      lastInteractionAt: 10,
+    });
+    await run(params);
+  });
 }
 
 function repair() {
   return noteSessionTranscriptHealth({
-    cfg: { agents: { entries: { main: {} } } },
+    cfg,
     shouldRepair: true,
     postSessionPluginMigrationPlanBound: true,
   });
 }
 
-describe("Doctor session title repair", () => {
-  it.each(["first user request", "oversized prefix", "user request after the first 100 messages"])(
-    "derives a title only from a complete %s",
-    async (kind) => {
-      const complete = kind === "first user request";
-      const messages = complete
-        ? [
-            { role: "user", content: "Internal relay", provenance: { kind: "inter_session" } },
-            { role: "user", content: "Investigate why the gateway times out" },
-            { role: "assistant", content: "**Found** the slow query" },
-          ]
-        : [
-            ...(kind === "oversized prefix"
-              ? [{ role: "user", content: `oversized-title-payload ${"x".repeat(70 * 1024)}` }]
-              : Array.from({ length: 100 }, () => ({
-                  role: "assistant",
-                  content: "Earlier reply",
-                }))),
-            { role: "user", content: "A later task must not become the title" },
-          ];
-      await withSession(async (params) => {
-        let oversizedParses = 0;
-        if (!complete) {
-          const parse = JSON.parse;
-          vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-            if (text.includes("oversized-title-payload")) {
-              oversizedParses++;
-            }
-            return parse(text, reviver);
-          });
-        }
-        const before = sessionAccessor.loadSessionEntry(params);
-        await repair();
-        expect(sessionAccessor.loadSessionEntry(params)).toEqual(
-          complete ? { ...before, displayName: "Investigate why the gateway times out" } : before,
-        );
-        if (complete) {
-          expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
-        } else {
-          expect(oversizedParses).toBe(0);
-        }
-      }, messages);
-    },
-  );
+const relay = { ...user("Internal relay"), provenance: { kind: "inter_session" } };
+const later = user("A later task must not become the title");
+it.each([
+  ["first user request", [relay, ...messages], true],
+  ["oversized prefix", [user(`oversized-title-payload ${"x".repeat(70 * 1024)}`), later], false],
+  ["message-limited prefix", [...Array.from({ length: 100 }, () => messages[1]!), later], false],
+])("derives a title only from a complete %s", async (_label, transcript, complete) => {
+  await withSession(async (params) => {
+    const parses = vi.spyOn(JSON, "parse");
+    const before = sessionAccessor.loadSessionEntry(params);
+    await repair();
+    expect(sessionAccessor.loadSessionEntry(params)).toEqual(
+      complete ? { ...before, displayName: title } : before,
+    );
+    if (complete) {
+      expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
+    } else {
+      expect(
+        parses.mock.calls.filter(([text]) => text.includes("oversized-title-payload")),
+      ).toEqual([]);
+    }
+  }, transcript);
+});
 
-  it.each([
-    ["a manual rename", { label: "Manual title" }],
-    ["an incognito session", { incognito: true }],
-  ] satisfies Array<[string, Partial<SessionEntry>]>)(
-    "preserves %s during title repair",
-    async (_name, mutation) => {
-      await withSession(async (params) => {
-        await sessionAccessor.patchSessionEntryCore(params, () => mutation);
-        await repair();
-        expect(sessionAccessor.loadSessionEntry(params)).toMatchObject(mutation);
-        expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
-      });
-    },
-  );
-
-  it("does not commit after Doctor maintenance authority expires", async () => {
+it.each([
+  ["a manual rename", { label: "Manual title" }],
+  ["an incognito session", { incognito: true }],
+] satisfies Array<[string, Partial<SessionEntry>]>)(
+  "preserves %s during title repair",
+  async (_name, mutation) => {
     await withSession(async (params) => {
-      await withDoctorSqliteMaintenanceLock({
-        operation: "session title repair",
-        run: async (authority) => {
-          const patch = sessionAccessor.patchSessionEntryCore;
-          vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(
-            (scope, update, options) => {
-              vi.spyOn(authority, "assertCurrent").mockImplementation(() => {
-                throw new Error("Doctor maintenance authority expired");
-              });
-              return patch(scope, update, options);
-            },
-          );
-          await expect(
-            repairLegacySessionTitles({
-              cfg: { agents: { entries: { main: {} } } },
-              env: process.env,
-              apply: true,
-              authority,
-            }),
-          ).rejects.toThrow("Doctor maintenance authority expired");
-          expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
-        },
-      });
+      await sessionAccessor.patchSessionEntryCore(params, () => mutation);
+      await repair();
+      expect(sessionAccessor.loadSessionEntry(params)).toMatchObject(mutation);
+      expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
+    });
+  },
+);
+
+it("does not commit after Doctor maintenance authority expires", async () => {
+  await withSession(async (params) => {
+    await withDoctorSqliteMaintenanceLock({
+      operation: "session title repair",
+      run: async (authority) => {
+        const patch = sessionAccessor.patchSessionEntryCore;
+        vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(
+          (scope, update, options) => {
+            vi.spyOn(authority, "assertCurrent").mockImplementation(() => {
+              throw new Error("Doctor maintenance authority expired");
+            });
+            return patch(scope, update, options);
+          },
+        );
+        await expect(
+          repairLegacySessionTitles({ cfg, env: process.env, apply: true, authority }),
+        ).rejects.toThrow("Doctor maintenance authority expired");
+        expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
+      },
     });
   });
 });

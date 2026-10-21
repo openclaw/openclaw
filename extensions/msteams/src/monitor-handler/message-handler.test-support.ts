@@ -33,9 +33,7 @@ export function createTurnContext(
   return {
     activity,
     sendActivity: vi.fn(async () => ids && { id: ids.sent }),
-    sendActivities: vi.fn(async () => []),
     updateActivity: vi.fn(async () => ids && { id: ids.updated }),
-    deleteActivity: vi.fn(async () => undefined),
   };
 }
 

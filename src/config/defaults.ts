@@ -226,10 +226,8 @@ export function applyModelDefaults(
   cfg: OpenClawConfig,
   options: ProviderPolicyDefaultsOptions = {},
 ): OpenClawConfig {
-  let mutated = false;
-  let nextCfg = cfg;
-
-  const providerConfig = nextCfg.models?.providers;
+  const providerConfig = cfg.models?.providers;
+  const nextProviders = { ...providerConfig };
   if (providerConfig) {
     const manifestRegistry = options.manifestRegistry ?? options.loadManifestRegistry?.();
     const modelIdNormalizationPolicies = manifestRegistry
@@ -240,7 +238,6 @@ export function applyModelDefaults(
       modelIdNormalizationPolicies,
       new Set(Object.keys(providerConfig).map(normalizeProviderId)),
     );
-    const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
       const normalizedProvider = materializeConfiguredProviderModelRows(
         normalizeProviderConfigForConfigDefaults({
@@ -257,18 +254,11 @@ export function applyModelDefaults(
       );
       const models = normalizedProvider.models;
       if (!Array.isArray(models) || models.length === 0) {
-        if (normalizedProvider !== provider) {
-          nextProviders[providerId] = normalizedProvider;
-          mutated = true;
-        }
+        nextProviders[providerId] = normalizedProvider;
         continue;
       }
       const providerApi = normalizedProvider.api;
       const providerMaxTokens = asPositiveFiniteNumber(normalizedProvider.maxTokens);
-      if (normalizedProvider !== provider) {
-        mutated = true;
-      }
-      let providerMutated = false;
       const nextModels = models.map((model) => {
         const raw = model as ModelDefinitionLike;
         const id = raw.id;
@@ -341,7 +331,6 @@ export function applyModelDefaults(
         if (!modelMutated) {
           return model;
         }
-        providerMutated = true;
         return Object.assign(
           {},
           raw,
@@ -359,155 +348,90 @@ export function applyModelDefaults(
         ) as ModelDefinitionConfig;
       });
 
-      if (providerMutated) {
-        nextProviders[providerId] = { ...normalizedProvider, models: nextModels };
-        mutated = true;
-      } else if (normalizedProvider !== provider) {
-        nextProviders[providerId] = normalizedProvider;
-      }
-    }
-
-    if (mutated) {
-      nextCfg = {
-        ...nextCfg,
-        models: {
-          ...nextCfg.models,
-          providers: nextProviders,
-        },
-      };
+      nextProviders[providerId] = { ...normalizedProvider, models: nextModels };
     }
   }
 
-  let nextAgents = nextCfg.agents;
-  const agentEntries = nextAgents?.entries;
-  if (agentEntries) {
-    let entriesMutated = false;
-    const entries = Object.fromEntries(
-      Object.entries(agentEntries).map(([id, agent]) => {
+  const agents = cfg.agents ? { ...cfg.agents } : undefined;
+  if (agents?.entries) {
+    agents.entries = Object.fromEntries(
+      Object.entries(agents.entries).map(([id, agent]) => {
         if (!isRecord(agent)) {
           return [id, agent];
         }
-        let nextAgent = agent;
+        const nextAgent = { ...agent };
         if (Object.hasOwn(agent, "model")) {
-          const normalizedModel = normalizeAgentModelSelectionForConfig(agent.model);
-          if (normalizedModel !== agent.model) {
-            nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
-            entriesMutated = true;
-          }
+          nextAgent.model = normalizeAgentModelSelectionForConfig(
+            agent.model,
+          ) as typeof agent.model;
         }
         if (isRecord(agent.models)) {
-          const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
-          if (normalizedModels !== agent.models) {
-            nextAgent = { ...nextAgent, models: normalizedModels };
-            entriesMutated = true;
-          }
+          nextAgent.models = normalizeAgentModelMapForConfig(agent.models);
         }
         return [id, nextAgent];
       }),
     );
-    if (entriesMutated) {
-      nextAgents = { ...nextAgents, entries };
-      mutated = true;
+  }
+
+  const existingAgent = agents?.defaults;
+  if (agents && existingAgent) {
+    const nextAgent = { ...existingAgent };
+    const normalizedModel = normalizeAgentModelSelectionForConfig(existingAgent.model);
+    if (normalizedModel !== existingAgent.model) {
+      nextAgent.model = normalizedModel as typeof existingAgent.model;
     }
-  }
-
-  const existingAgent = nextAgents?.defaults;
-  if (!existingAgent) {
-    return nextAgents === nextCfg.agents ? nextCfg : { ...nextCfg, agents: nextAgents };
-  }
-
-  let nextAgent = existingAgent;
-  const normalizedModel = normalizeAgentModelSelectionForConfig(existingAgent.model);
-  if (normalizedModel !== existingAgent.model) {
-    nextAgent = { ...nextAgent, model: normalizedModel as typeof existingAgent.model };
-    mutated = true;
-  }
-
-  const rawExistingModels = existingAgent.models ?? {};
-  const existingModels = normalizeAgentModelMapForConfig(rawExistingModels);
-  if (existingModels !== rawExistingModels) {
-    mutated = true;
-  }
-  if (Object.keys(existingModels).length === 0) {
-    return mutated
-      ? {
-          ...nextCfg,
-          agents: {
-            ...nextAgents,
-            defaults: nextAgent,
-          },
-        }
-      : cfg;
-  }
-
-  const nextModels: Record<string, { alias?: string }> = {
-    ...existingModels,
-  };
-
-  for (const [alias, target] of Object.entries(DEFAULT_MODEL_ALIASES)) {
-    const entry = nextModels[target];
-    if (!entry) {
-      continue;
+    const existingModels = normalizeAgentModelMapForConfig(existingAgent.models ?? {});
+    const nextModels: Record<string, { alias?: string }> = { ...existingModels };
+    for (const [alias, target] of Object.entries(DEFAULT_MODEL_ALIASES)) {
+      const entry = nextModels[target];
+      if (!entry) {
+        continue;
+      }
+      if (entry.alias !== undefined) {
+        continue;
+      }
+      const normalizedAlias = normalizeLowercaseStringOrEmpty(alias);
+      const aliasAlreadyOwned = Object.entries(nextModels).some(
+        ([modelRef, candidate]) =>
+          modelRef !== target &&
+          normalizeLowercaseStringOrEmpty(candidate.alias) === normalizedAlias,
+      );
+      // Preserve explicit alias ownership when a newer default target is also configured.
+      if (aliasAlreadyOwned) {
+        continue;
+      }
+      nextModels[target] = { ...entry, alias };
     }
-    if (entry.alias !== undefined) {
-      continue;
+    if (Object.keys(existingModels).length > 0) {
+      nextAgent.models = nextModels;
     }
-    const normalizedAlias = normalizeLowercaseStringOrEmpty(alias);
-    const aliasAlreadyOwned = Object.entries(nextModels).some(
-      ([modelRef, candidate]) =>
-        modelRef !== target && normalizeLowercaseStringOrEmpty(candidate.alias) === normalizedAlias,
-    );
-    // Preserve explicit alias ownership when a newer default target is also configured.
-    if (aliasAlreadyOwned) {
-      continue;
-    }
-    nextModels[target] = { ...entry, alias };
-    mutated = true;
-  }
-
-  if (!mutated) {
-    return cfg;
-  }
-
-  return {
-    ...nextCfg,
-    agents: {
-      ...nextAgents,
-      defaults: { ...nextAgent, models: nextModels },
-    },
-  };
-}
-
-export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
-  const agents = cfg.agents;
-  const defaults = agents?.defaults;
-  const hasMax = asFiniteNumber(defaults?.maxConcurrent) !== undefined;
-  const hasSubMax = asFiniteNumber(defaults?.subagents?.maxConcurrent) !== undefined;
-  const hasSubArchive = asFiniteNumber(defaults?.subagents?.archiveAfterMinutes) !== undefined;
-  if (hasMax && hasSubMax && hasSubArchive) {
-    return cfg;
-  }
-
-  const nextDefaults = defaults ? { ...defaults } : {};
-  if (!hasMax) {
-    nextDefaults.maxConcurrent = resolveAgentMaxConcurrent();
-  }
-
-  const nextSubagents = defaults?.subagents ? { ...defaults.subagents } : {};
-  if (!hasSubMax) {
-    nextSubagents.maxConcurrent = DEFAULT_SUBAGENT_MAX_CONCURRENT;
-  }
-  if (!hasSubArchive) {
-    nextSubagents.archiveAfterMinutes = DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES;
+    agents.defaults = nextAgent;
   }
 
   return {
     ...cfg,
+    ...(providerConfig ? { models: { ...cfg.models, providers: nextProviders } } : {}),
+    ...(agents ? { agents } : {}),
+  };
+}
+
+export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
+  const defaults = cfg.agents?.defaults;
+  return {
+    ...cfg,
     agents: {
-      ...agents,
+      ...cfg.agents,
       defaults: {
-        ...nextDefaults,
-        subagents: nextSubagents,
+        ...defaults,
+        maxConcurrent: asFiniteNumber(defaults?.maxConcurrent) ?? resolveAgentMaxConcurrent(),
+        subagents: {
+          ...defaults?.subagents,
+          maxConcurrent:
+            asFiniteNumber(defaults?.subagents?.maxConcurrent) ?? DEFAULT_SUBAGENT_MAX_CONCURRENT,
+          archiveAfterMinutes:
+            asFiniteNumber(defaults?.subagents?.archiveAfterMinutes) ??
+            DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
+        },
       },
     },
   };
@@ -556,11 +480,7 @@ export function applyContextPruningDefaults(
 
 export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
-  if (!defaults) {
-    return cfg;
-  }
-  const compaction = defaults?.compaction;
-  if (compaction?.mode) {
+  if (!defaults || defaults.compaction?.mode) {
     return cfg;
   }
 
@@ -571,7 +491,7 @@ export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {
       defaults: {
         ...defaults,
         compaction: {
-          ...compaction,
+          ...defaults.compaction,
           mode: "safeguard",
         },
       },

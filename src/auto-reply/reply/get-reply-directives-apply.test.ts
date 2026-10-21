@@ -287,7 +287,7 @@ describe("applyInlineDirectiveOverrides", () => {
         await expect(pending).rejects.toMatchObject({
           name: "AgentSelectionRequiredError",
           code: "AGENT_SELECTION_REQUIRED",
-          surface: "session agent resolution",
+          message: expect.stringContaining("session agent resolution"),
           hint: 'The agent-scoped session key belongs to "main", not "target".',
         });
       } else {

@@ -5,41 +5,22 @@ import type {
   CodeModeWorkerResult,
 } from "./code-mode-executor-types.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
-import { resolveCodeModeConfig } from "./code-mode-runtime.js";
-import { createCodeModeRunOwner, disposeAllCodeModeRuns } from "./code-mode-state.js";
+import { createRunFixture } from "./code-mode-lifecycle.test-support.js";
+import { disposeAllCodeModeRuns } from "./code-mode-state.js";
 import {
   captureAgentPluginRuntimeRefresh,
   createAgentPluginRuntimeRefresh,
 } from "./plugin-runtime-refresh.js";
-import {
-  clearToolSearchCatalog,
-  createToolSearchCatalogRef,
-  registerHeadlessToolSearchCatalog,
-} from "./tool-search-catalog.js";
+import { clearToolSearchCatalog } from "./tool-search-catalog.js";
 
-function createOwner(abortSignal?: AbortSignal) {
-  const config = { tools: { codeMode: true } };
-  const catalogRef = createToolSearchCatalogRef();
-  registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
-  const ctx = { config, runtimeConfig: config, catalogRef, abortSignal };
-  return { owner: createCodeModeRunOwner(ctx, resolveCodeModeConfig(config)), ctx };
-}
-
-function controlledContinuation() {
+function controlledRun(abortSignal?: AbortSignal) {
   const started = createDeferredCore();
   const release = createDeferredCore();
-  const continuation: CodeModeExecutorContinuation = {
-    executor: "node",
-    retainedBytes: 1,
-    resume: async () => {
-      throw new Error("The test does not resume its guest.");
-    },
-    dispose: vi.fn(async () => {
-      started.resolve();
-      await release.promise;
-    }),
+  const dispose = async () => {
+    started.resolve();
+    await release.promise;
   };
-  return { continuation, started, release };
+  return { ...createRunFixture(undefined, dispose, abortSignal), started, release };
 }
 
 function waiting(continuation: CodeModeExecutorContinuation): CodeModeWorkerResult {
@@ -58,117 +39,87 @@ afterEach(async () => {
 });
 
 describe("Code Mode continuation ownership", () => {
-  it.each([false, true])(
-    "revokes authority until cleanup completes, with retry: %s",
-    async (retry) => {
-      const refresh = createAgentPluginRuntimeRefresh();
-      try {
-        await refresh.run(async () => {
-          const refreshState = captureAgentPluginRuntimeRefresh();
-          refreshState.bindConsumer(() => true);
-          const { owner } = createOwner();
-          const parked = controlledContinuation();
-          const reply = owner.inbox.createReply("pending");
-          const failure = new Error("worker termination failed");
-          if (retry) {
-            vi.mocked(parked.continuation.dispose).mockRejectedValueOnce(failure);
-          }
-          try {
-            await owner.retainContinuation(parked.continuation);
-            expect(refreshState.request()).toBe(true);
-            const firstClose = owner.close();
-            expect(owner.close()).toBe(firstClose);
-            expect(owner.signal.aborted).toBe(true);
-            reply.settle(true, "late result");
-            expect(() => reply.take()).toThrow("Code Mode reply is unavailable");
-            let closing = firstClose;
-            if (retry) {
-              await expect(firstClose).rejects.toMatchObject({ cause: { errors: [failure] } });
-              expect(owner.signal.aborted).toBe(true);
-              expect(refreshState.isPending()).toBe(false);
-              expect(owner.close()).not.toBe(firstClose);
-              closing = disposeAllCodeModeRuns();
-            }
-            await parked.started.promise;
-            expect(owner.bindCall().aborted).toBe(true);
-            expect(refreshState.isPending()).toBe(false);
-
-            parked.release.resolve();
-            await closing;
-            expect(refreshState.isPending()).toBe(true);
-            expect(parked.continuation.dispose).toHaveBeenCalledTimes(retry ? 2 : 1);
-            const staleExecution = vi.fn(async () => waiting(parked.continuation));
-            await expect(owner.runExecution(staleExecution)).rejects.toThrow();
-            expect(staleExecution).not.toHaveBeenCalled();
-            await disposeAllCodeModeRuns();
-            expect(parked.continuation.dispose).toHaveBeenCalledTimes(retry ? 2 : 1);
-          } finally {
-            parked.release.resolve();
-            await owner.close();
-          }
-        });
-      } finally {
-        refresh.close();
-      }
-    },
-  );
-
-  it.each(["catalog", "abort"] as const)(
-    "joins an in-flight worker and disposes its late continuation after %s revocation",
-    async (reason) => {
-      const refresh = createAgentPluginRuntimeRefresh();
-      try {
-        await refresh.run(async () => {
-          const refreshState = captureAgentPluginRuntimeRefresh();
-          refreshState.bindConsumer(() => true);
-          const abort = new AbortController();
-          const { owner, ctx } = createOwner(abort.signal);
-          const workerStarted = createDeferredCore();
-          const workerResult = createDeferredCore<CodeModeWorkerResult>();
-          const parked = controlledContinuation();
-          const execution = owner.runExecution(async () => {
-            workerStarted.resolve();
-            return await workerResult.promise;
-          });
-          try {
+  it.each(["close", "retry", "catalog", "abort"] as const)("revokes %s", async (reason) => {
+    const refresh = createAgentPluginRuntimeRefresh();
+    try {
+      await refresh.run(async () => {
+        const refreshState = captureAgentPluginRuntimeRefresh();
+        refreshState.bindConsumer(() => true);
+        const abort = new AbortController();
+        const parked = controlledRun(abort.signal);
+        const { owner, ctx } = parked;
+        const workerStarted = createDeferredCore();
+        const workerResult = createDeferredCore<CodeModeWorkerResult>();
+        const inFlight = reason === "catalog" || reason === "abort";
+        const execution = inFlight
+          ? owner.runExecution(async () => {
+              workerStarted.resolve();
+              return await workerResult.promise;
+            })
+          : undefined;
+        const reply = owner.inbox.createReply("pending");
+        const failure = new Error("worker termination failed");
+        if (reason === "retry") {
+          vi.mocked(parked.continuation.dispose).mockRejectedValueOnce(failure);
+        }
+        try {
+          if (inFlight) {
             await workerStarted.promise;
-            refreshState.request();
-            if (reason === "catalog") {
-              clearToolSearchCatalog(ctx);
-            } else {
-              abort.abort();
-            }
-            expect(owner.signal.aborted).toBe(true);
-            const closing = owner.close();
-            expect(refreshState.isPending()).toBe(false);
-            workerResult.resolve(waiting(parked.continuation));
-            await parked.started.promise;
-            expect(refreshState.isPending()).toBe(false);
-
-            parked.release.resolve();
-            await Promise.all([execution, closing]);
-            expect(parked.continuation.dispose).toHaveBeenCalledOnce();
-            expect(refreshState.isPending()).toBe(true);
-            const staleExecution = vi.fn(async () => waiting(parked.continuation));
-            await expect(owner.runExecution(staleExecution)).rejects.toThrow();
-            expect(staleExecution).not.toHaveBeenCalled();
-          } finally {
-            workerResult.resolve(waiting(parked.continuation));
-            parked.release.resolve();
-            await Promise.allSettled([execution, owner.close()]);
+          } else {
+            await owner.retainContinuation(parked.continuation);
           }
-        });
-      } finally {
-        refresh.close();
-      }
-    },
-  );
+          expect(refreshState.request()).toBe(true);
+          if (reason === "catalog") {
+            clearToolSearchCatalog(ctx);
+          } else if (reason === "abort") {
+            abort.abort();
+          }
+          expect(owner.signal.aborted).toBe(inFlight);
+          const firstClose = owner.close();
+          expect(owner.close()).toBe(firstClose);
+          expect(owner.signal.aborted).toBe(true);
+          reply.settle(true, "late result");
+          expect(() => reply.take()).toThrow("Code Mode reply is unavailable");
+          let closing = firstClose;
+          if (reason === "retry") {
+            await expect(firstClose).rejects.toMatchObject({ cause: { errors: [failure] } });
+            expect(owner.signal.aborted).toBe(true);
+            expect(refreshState.isPending()).toBe(false);
+            expect(owner.close()).not.toBe(firstClose);
+            closing = disposeAllCodeModeRuns();
+          }
+          if (inFlight) {
+            expect(refreshState.isPending()).toBe(false);
+            workerResult.resolve(waiting(parked.continuation));
+          }
+          await parked.started.promise;
+          expect([owner.bindCall().aborted, refreshState.isPending()]).toEqual([true, false]);
+          parked.release.resolve();
+          await Promise.all([execution, closing]);
+          expect(refreshState.isPending()).toBe(true);
+          const calls = reason === "retry" ? 2 : 1;
+          expect(parked.continuation.dispose).toHaveBeenCalledTimes(calls);
+          const staleExecution = vi.fn(async () => waiting(parked.continuation));
+          await expect(owner.runExecution(staleExecution)).rejects.toThrow();
+          expect(staleExecution).not.toHaveBeenCalled();
+          await disposeAllCodeModeRuns();
+          expect(parked.continuation.dispose).toHaveBeenCalledTimes(calls);
+        } finally {
+          workerResult.resolve(waiting(parked.continuation));
+          parked.release.resolve();
+          await Promise.all([execution, owner.close()]);
+        }
+      });
+    } finally {
+      refresh.close();
+    }
+  });
 
   it("revokes every run before Gateway shutdown waits for their cleanup", async () => {
-    const first = createOwner().owner;
-    const second = createOwner().owner;
-    const firstParked = controlledContinuation();
-    const secondParked = controlledContinuation();
+    const firstParked = controlledRun();
+    const secondParked = controlledRun();
+    const first = firstParked.owner;
+    const second = secondParked.owner;
     try {
       await first.retainContinuation(firstParked.continuation);
       await second.retainContinuation(secondParked.continuation);

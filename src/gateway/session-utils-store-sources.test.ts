@@ -474,12 +474,11 @@ it("does not resume directory observation after its root closes during preparati
   });
 });
 
-it("cancels one waiter while retaining shared source preparation", async ({ signal }) => {
+it("shares pending source preparation", async ({ signal }) => {
   await withState(async () => {
     const { main, params } = mainSources();
     const { entered, resume, spy } = holdRegistryRead();
-    const controller = new AbortController();
-    const first = prepareSourcesAsync(params, controller.signal);
+    const first = prepareSourcesAsync(params);
     void first.catch(() => undefined);
     let second: ReturnType<typeof prepareSourcesAsync> | undefined;
     try {
@@ -488,11 +487,9 @@ it("cancels one waiter while retaining shared source preparation", async ({ sign
         signal,
       );
       second = prepareSourcesAsync(params);
-      const reason = new Error("Caller cancelled source discovery");
-      controller.abort(reason);
-      await withinTest(expect(first).rejects.toBe(reason), signal);
       resume.resolve();
       const prepared = await withinTest(second, signal);
+      expect(await withinTest(first, signal)).toEqual(prepared);
       expectRegistered(prepared, main);
       expect(spy).toHaveBeenCalledOnce();
     } finally {

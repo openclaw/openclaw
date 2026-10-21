@@ -34,6 +34,7 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
@@ -47,7 +48,7 @@ import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import { prepareCronRunContext, type PreparedCronRunContext } from "./run-prepare.js";
-import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-session-state.js";
+import type { MutableCronSession } from "./run-session-state.js";
 import { applyCronRunUsage, recordCronRunUsage } from "./run-usage.js";
 import { logWarn } from "./run.runtime.js";
 import type { CronCompletedPromptRun, RunCronAgentTurnResult } from "./run.types.js";

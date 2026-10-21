@@ -8,12 +8,12 @@ import {
   type OpenBlobStoreOptions,
 } from "../plugin-state/plugin-blob-store.js";
 import {
+  createPluginStateKeyedStore,
   createPluginStateRuntimeStores,
   type OpenAsyncKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
-import { createPluginRuntimeKeyedStore } from "./plugin-runtime-keyed-store.js";
 import { capturePluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
 import { PluginTrustRefusalError } from "./plugin-trust.js";
 import {
@@ -201,8 +201,21 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 assertRuntimeCurrent,
               ),
             ),
-            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
-              createPluginRuntimeKeyedStore<T>(record, options, assertRuntimeCurrent),
+            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
+              // Bind storage and operation code to the same admitted instance before yielding.
+              if (options.retention === "retained") {
+                assertRuntimeCurrent();
+              }
+              return createPluginStateKeyedStore<T>(
+                record.id,
+                options,
+                assertRuntimeCurrent,
+                capturePluginStateOperationModuleSource(
+                  getPluginInstance(record),
+                  assertRuntimeCurrent,
+                ),
+              );
+            },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
             ) => {
@@ -683,5 +696,3 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     revokePluginRuntimeRecord: channelRuntime.revoke,
   };
 }
-
-export type PluginRuntimeResolver = ReturnType<typeof createPluginRuntimeResolver>;

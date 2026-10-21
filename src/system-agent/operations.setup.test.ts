@@ -214,8 +214,6 @@ function setupResult(
 ): SystemAgentSetupApplyResult {
   return {
     configPath,
-    configHashBefore: "mock-hash-0",
-    configHashAfter: "mock-hash-1",
     bootstrapPending: true,
     workspaceReady: true,
     gateway: { status: "ready", action: "reused" },

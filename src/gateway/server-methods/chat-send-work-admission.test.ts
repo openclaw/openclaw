@@ -21,11 +21,8 @@ import {
   recordSessionProviderReview,
   retireProviderReviewAcknowledgment,
 } from "../../sessions/provider-review.js";
-import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
-import {
-  retireSessionControllerInput,
-  type SessionControllerInput,
-} from "../../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import {
@@ -49,32 +46,34 @@ import {
 } from "./chat-send-work-admission.js";
 import { registerRpcSourceForTest } from "./rpc-source-fixtures.test-support.js";
 
-it.each([
+const failure = (message: string, fields: Record<string, unknown>) =>
+  Object.assign(new Error(message), fields);
+const inspectionFailure = (pending: boolean) =>
   new AgentDatabaseAdmissionError(
     createAgentDatabaseInspectionRefusal({
       agentId: "main",
       paths: ["/isolated/main.sqlite"],
-      reason: "Inspection pending.",
-      pending: true,
+      reason: pending ? "Inspection pending." : "Inspection refused.",
+      pending,
     }),
-  ),
-  new AgentDatabaseAdmissionError(
-    createAgentDatabaseInspectionRefusal({
-      agentId: "main",
-      paths: ["/isolated/main.sqlite"],
-      reason: "Inspection refused.",
-      pending: false,
-    }),
-  ),
-  new SessionMutationAuthorizationChangedError({ code: "FORBIDDEN", message: "Access changed." }),
-  new Error("Unclassified admission failure"),
-  Object.assign(new Error("Validation failed"), { retryable: false }),
-  Object.assign(new Error("Not a canonical worker outcome"), { code: "outcome-unknown" }),
-  Object.assign(new Error("Workspace access denied"), { code: "EACCES" }),
-])("keeps non-storage admission failures RPC-only: %s", (error) => {
+  );
+function reportAdmissionError(error: unknown) {
   const respond = vi.fn();
   const terminal = vi.fn();
   respondChatSendAdmissionError(error, respond, terminal);
+  return { respond, terminal };
+}
+
+it.each([
+  inspectionFailure(true),
+  inspectionFailure(false),
+  new SessionMutationAuthorizationChangedError({ code: "FORBIDDEN", message: "Access changed." }),
+  new Error("Unclassified admission failure"),
+  failure("Validation failed", { retryable: false }),
+  failure("Not a canonical worker outcome", { code: "outcome-unknown" }),
+  failure("Workspace access denied", { code: "EACCES" }),
+])("keeps non-storage admission failures RPC-only: %s", (error) => {
+  const { respond, terminal } = reportAdmissionError(error);
   expect(respond).toHaveBeenCalledExactlyOnceWith(
     false,
     undefined,
@@ -86,24 +85,22 @@ it.each([
 });
 
 it.each([
-  Object.assign(new Error("database or disk is full"), { errcode: 13 }),
-  Object.assign(new Error("No space left on device"), { code: "ENOSPC" }),
-  Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" }),
+  failure("database or disk is full", { errcode: 13 }),
+  failure("No space left on device", { code: "ENOSPC" }),
+  failure("disk I/O error", { code: "SQLITE_IOERR" }),
   new SqliteWorkerError("Persistence outcome is unknown", "outcome-unknown"),
   new AggregateError([new SqliteWorkerError("Persistence outcome is unknown", "outcome-unknown")]),
 ])("publishes storage and unknown-outcome admission failures: %s", (error) => {
-  const respond = vi.fn();
-  const terminal = vi.fn();
-  respondChatSendAdmissionError(error, respond, terminal);
+  const { respond, terminal } = reportAdmissionError(error);
   expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, expect.anything());
   expect(terminal).toHaveBeenCalledOnce();
 });
 
 it.each([
-  [Object.assign(new Error("write failed"), { code: "SQLITE_FULL" }), "disk is full"],
-  [Object.assign(new Error("write failed"), { code: "ENOSPC" }), "disk is full"],
-  [Object.assign(new Error("write failed"), { code: "SQLITE_IOERR" }), "Check the storage"],
-  [Object.assign(new Error("write failed"), { code: "EIO" }), "Check the storage"],
+  [failure("write failed", { code: "SQLITE_FULL" }), "disk is full"],
+  [failure("write failed", { code: "ENOSPC" }), "disk is full"],
+  [failure("write failed", { code: "SQLITE_IOERR" }), "Check the storage"],
+  [failure("write failed", { code: "EIO" }), "Check the storage"],
   [
     new SqliteWorkerError("Write settlement was lost", "outcome-unknown"),
     "reopen the conversation",
@@ -117,9 +114,7 @@ it.each([
     ),
     { cause },
   );
-  const respond = vi.fn();
-  const terminal = vi.fn();
-  respondChatSendAdmissionError(error, respond, terminal);
+  const { respond, terminal } = reportAdmissionError(error);
   expect(terminal).toHaveBeenCalledOnce();
   const message: unknown = terminal.mock.calls[0]?.[0];
   expect(message).toEqual(expect.stringContaining(expected));
@@ -353,8 +348,7 @@ it.each([
           })
         : undefined;
       request.providerReviewAcknowledgment = acknowledgment;
-      const operations: ReplyOperation[] = [];
-      const inputs: SessionControllerInput[] = [];
+      const occupied: Array<{ release: () => void; settled: Promise<unknown> }> = [];
       const occupy = (storePath: string) => {
         if (kind === "active") {
           const operation = createReplyOperation({
@@ -363,7 +357,10 @@ it.each([
             resetTriggered: false,
             target: captureSessionTarget({ storeScope: storePath, sessionKey, agentId: "main" }),
           });
-          operations.push(operation);
+          occupied.push({
+            release: () => operation.complete(),
+            settled: operation.ownerSettlement,
+          });
           return;
         }
         const source = createQueueTestRun({ prompt: "Waiting input" });
@@ -377,7 +374,11 @@ it.each([
         expect(
           enqueueFollowupRun(sessionKey, source, createQueueSettings(), "none", undefined, false),
         ).toBe(true);
-        inputs.push(expectDefined(source.controllerInput, "queued source"));
+        const input = expectDefined(source.controllerInput, "queued source");
+        occupied.push({
+          release: () => retireSessionControllerInput(input),
+          settled: input.settlement.promise,
+        });
       };
       try {
         occupy(`${session.storePath}.foreign`);
@@ -398,16 +399,10 @@ it.each([
         if (acknowledgment) {
           retireProviderReviewAcknowledgment(acknowledgment);
         }
-        for (const input of inputs) {
-          retireSessionControllerInput(input);
+        for (const work of occupied) {
+          work.release();
         }
-        for (const operation of operations) {
-          operation.complete();
-        }
-        await Promise.all([
-          ...inputs.map((input) => input.settlement.promise),
-          ...operations.map((operation) => operation.ownerSettlement),
-        ]);
+        await Promise.all(occupied.map((work) => work.settled));
         session.releaseSessionStorage?.();
       }
     }),

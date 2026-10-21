@@ -1,6 +1,4 @@
 import { execFile } from "node:child_process";
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { requireNodeTool } from "../../test/helpers/node-toolchain.js";
@@ -19,10 +17,7 @@ it.skipIf(process.platform !== "linux")(
     const loader = execUrl.pathname.endsWith(".ts")
       ? new URL("../../scripts/tsx.mjs", import.meta.url).href
       : undefined;
-    const driver = path.join(directory, "driver.mjs");
-    await writeFile(
-      driver,
-      `
+    const driver = `
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -44,7 +39,6 @@ const unrelated = spawn(process.execPath, ["-e", \`
 \`], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
 const unrelatedExit = once(unrelated, "exit");
 await once(unrelated, "message");
-const reports = [];
 try {
   for (const mode of ["runner", "scope"]) {
     const receipt = path.join(directory, mode + ".json");
@@ -64,11 +58,11 @@ try {
       const child = spawn(process.execPath, ["-e", \${JSON.stringify(descendant)}], {
         stdio: ["ignore", "ignore", "ignore", "ipc"],
       });
-      require("node:fs").writeFileSync(\${JSON.stringify(receipt)},
-        JSON.stringify({ root: process.pid, descendant: child.pid }));
+      const record = (ready = false) => require("node:fs").writeFileSync(\${JSON.stringify(receipt)},
+        JSON.stringify({ root: process.pid, descendant: child.pid, ready }));
+      record();
       child.once("message", () => {
-        require("node:fs").writeFileSync(\${JSON.stringify(receipt)},
-          JSON.stringify({ root: process.pid, descendant: child.pid, ready: true }));
+        record(true);
         child.disconnect();
         child.unref();
       });
@@ -98,17 +92,13 @@ try {
     const remaining = existsSync(descendantPath) ? readFileSync(descendantPath, "utf8") : undefined;
     const fields = remaining?.slice(remaining.lastIndexOf(")") + 2).split(" ");
     try {
-      assert.equal(pids.ready, true, "descendant must be ready before root exit");
-      reports.push({
-        mode,
-        rootCode: mode === "runner" ? result?.code : result?.exitCode,
-        rootSignal: result?.signal ?? null,
-        cleanup: mode === "runner" ? result?.cleanup : failure ? "failed" : "settled",
-        descendantPresent: fields !== undefined,
-        cooperative: existsSync(marker),
-        ...(fields ? { descendant: { state: fields[0], parent: Number(fields[1]), group: Number(fields[2]) } } : {}),
-        ...(failure ? { failure } : {}),
-      });
+      assert.deepEqual({ ready: pids.ready, failure,
+        code: mode === "runner" ? result?.code : result?.exitCode,
+        signal: result?.signal ?? null },
+        { ready: true, failure: undefined, code: 0, signal: null }, mode);
+      if (mode === "runner") assert.equal(result?.cleanup, "cooperative");
+      assert.equal(fields, undefined, mode + ": descendant must be reaped");
+      assert.equal(existsSync(marker), mode === "runner", mode + ": cooperative stop");
     } finally {
       // A red regression can leave our adopted zombie. Never consume the tracked root.
       if (fields) {
@@ -137,35 +127,17 @@ try {
   assert.equal(unrelated.exitCode, null, "cleanup must leave the unrelated child running");
   unrelated.send("finish");
   assert.deepEqual(await unrelatedExit, [37, null], "libuv must retain unrelated exit status");
-  process.stdout.write(JSON.stringify(reports));
+  process.stdout.write("reaped");
 } finally {
   if (unrelated.exitCode === null && unrelated.signalCode === null) unrelated.kill("SIGKILL");
   await unrelatedExit;
 }
-`,
+`;
+    const { stdout } = await promisify(execFile)(
+      requireNodeTool("node"),
+      ["--input-type=module", "-e", driver],
+      { timeout: 15_000 },
     );
-    const { stdout } = await promisify(execFile)(requireNodeTool("node"), [driver], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      timeout: 15_000,
-    });
-    expect(JSON.parse(stdout)).toEqual([
-      {
-        mode: "runner",
-        rootCode: 0,
-        rootSignal: null,
-        cleanup: "cooperative",
-        descendantPresent: false,
-        cooperative: true,
-      },
-      {
-        mode: "scope",
-        rootCode: 0,
-        rootSignal: null,
-        cleanup: "settled",
-        descendantPresent: false,
-        cooperative: false,
-      },
-    ]);
+    expect(stdout).toBe("reaped");
   },
 );

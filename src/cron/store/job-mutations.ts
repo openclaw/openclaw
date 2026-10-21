@@ -2,7 +2,11 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { declarativeFields } from "../service/jobs-declarative.js";
-import { cloneCronJobForMutation, finalizeUpdatedJob } from "../service/jobs-mutation.js";
+import {
+  applyCronStreamSandboxTarget,
+  cloneCronJobForMutation,
+  finalizeUpdatedJob,
+} from "../service/jobs-mutation.js";
 import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js";
 import {
   reconcileCronChannelRequesterAuthority,
@@ -68,6 +72,7 @@ export function planCronJobMutation(
           enabledExplicit: options.enabledExplicit === true,
           nowMs: now,
         });
+        applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
         finalizeUpdatedJob({
           job: previousJob,
           nextJob,
@@ -89,6 +94,7 @@ export function planCronJobMutation(
             scheduledToolPolicy: options.scheduledToolPolicy ?? undefined,
           },
         );
+        applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
         if (options.createdActor) {
           nextJob.createdActor = options.createdActor;
         }
@@ -109,12 +115,14 @@ export function planCronJobMutation(
       }
       nextJob = cloneCronJobForMutation(previousJob);
       applyJobPatch(nextJob, mutation.patch, { ...validation, scheduleValidationNowMs: now });
+      applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
       finalizeUpdatedJob({
         job: previousJob,
         nextJob,
         now,
         schedulingInputsRequested:
           mutation.patch.schedule !== undefined ||
+          options.streamSandbox !== undefined ||
           mutation.patch.enabled !== undefined ||
           "trigger" in mutation.patch ||
           "pacing" in mutation.patch,

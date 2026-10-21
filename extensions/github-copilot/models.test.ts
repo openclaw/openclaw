@@ -114,7 +114,6 @@ describe("github-copilot runtime auth", () => {
     expect(await authenticate(fetchImpl)).toEqual({
       apiKey: "github-source-token",
       baseUrl: "https://api.individual.githubcopilot.com",
-      source: "validated:https://api.github.com/copilot_internal/user",
     });
     expect(fetchImpl).toHaveBeenCalledWith(
       "https://api.github.com/copilot_internal/user",

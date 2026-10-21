@@ -112,7 +112,7 @@ describe("Solid menu navigation", () => {
             {
               kind: "group",
               id: "agents",
-              class: "agent-list",
+              render: (children) => <div class="agent-list">{children}</div>,
               items: [
                 {
                   id: "alpha",
@@ -135,7 +135,7 @@ describe("Solid menu navigation", () => {
                     </>
                   ),
                 },
-                { id: "beta", label: "Beta" },
+                { id: "beta", label: revision() ? "Beta refreshed" : "Beta" },
               ],
             },
             {
@@ -169,12 +169,12 @@ describe("Solid menu navigation", () => {
     await userEvent.keyboard("{ArrowUp}");
     expect(document.activeElement).toBe(search);
     await userEvent.keyboard("{ArrowDown}{ArrowDown}");
-    expect(document.activeElement).toBe(item("Beta"));
+    expect(document.activeElement).toBe(item("Beta refreshed"));
     await userEvent.click(surface().querySelector<HTMLButtonElement>("[data-form-control]")!);
     expect(pins).toBe(1);
     expect(selected).toEqual([]);
     await userEvent.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(item("Beta"));
+    expect(document.activeElement).toBe(item("Beta refreshed"));
     await userEvent.keyboard("{Enter}");
     await phase(surface(), "hidden");
     expect(selected).toEqual(["beta"]);

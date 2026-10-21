@@ -22,7 +22,6 @@ type DiffRevisionUnavailableReason =
   | "no-revision-reftable"
   | "no-revision-alternates"
   | "no-revision-symlink"
-  | "no-revision-nested-repository"
   | "no-revision-status"
   | "no-revision-unmerged"
   | "no-revision-submodule"

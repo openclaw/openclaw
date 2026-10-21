@@ -278,7 +278,15 @@ describe.skipIf(!connection)("PostgreSQL memory_search product flows", () => {
     await write("main", "source-target.md", "sourcefilter gemstone");
     await write("other", "agent-decoy.md", "sourcefilter sourcefilter sourcefilter gemstone");
     await transcript("main", "source-decoy", "sourcefilter sourcefilter sourcefilter gemstone");
-    await sync();
+    const manager = await sync();
+    // A broad sync can join an in-flight memory-only watch pass. Explicitly queue
+    // this transcript instead of depending on the background session debounce.
+    await run(() =>
+      manager.sync!({
+        reason: "cli",
+        sessions: [{ agentId: "main", sessionId: "source-decoy" }],
+      }),
+    );
     await sync("other");
     expect(
       (await search("sourcefilter", { maxResults: 1 })).results.map((hit) => hit.path),

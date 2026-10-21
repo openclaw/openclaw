@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -12,14 +12,12 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { holdForeignWriter } from "./sqlite-worker-shared-state-admission.test-support.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
 import { readUpdateRunDriver } from "./update-run-driver.js";
+import { deadDriverFixture, updateRunFixture } from "./update-run-fixture.test-support.js";
 import {
   adoptUpdateRun,
-  createUpdateRun,
   getUpdateRun,
-  getUpdateRunAsync,
   getUpdateRunWithReconciliationAsync,
   reconcileAbandonedUpdateRunsAsync,
-  recordUpdateRunPhase,
 } from "./update-run-ledger.js";
 import { loadUpdateRecovery } from "./update-run-recovery.js";
 import { readUpdateRunStatus } from "./update-run-status.js";
@@ -32,10 +30,9 @@ vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) => {
   return {
     ...actual,
     createSqliteWorkerOperationAdmission: (
-      ...args: Parameters<typeof actual.createSqliteWorkerOperationAdmission>
+      ...[admit, attachment]: Parameters<typeof actual.createSqliteWorkerOperationAdmission>
     ) => {
       admission.created?.();
-      const [admit, attachment] = args;
       return actual.createSqliteWorkerOperationAdmission((request, grant) => {
         admission.beforeGrant?.(request.stage);
         admit(request, grant);
@@ -43,22 +40,36 @@ vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) => {
     },
   };
 });
-
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    admission.created = undefined;
-    admission.beforeGrant = undefined;
+    admission.created = admission.beforeGrant = undefined;
     await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );
-
-async function expiredLegacyRun() {
+function fixture(input: Parameters<typeof updateRunFixture>[1]) {
   const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-reconciliation-") } };
-  const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
+  const run = updateRunFixture(options, input);
+  return {
+    ...run,
+    options,
+    reconcile: (
+      selection: Parameters<typeof reconcileAbandonedUpdateRunsAsync>[0] = {},
+      snapshot?: true,
+    ) =>
+      reconcileAbandonedUpdateRunsAsync(selection, {
+        ...options,
+        ...(snapshot ? { snapshot } : {}),
+      }),
+    history: (signal?: AbortSignal) =>
+      getUpdateRunWithReconciliationAsync(run.id, { ...options, signal }),
+  };
+}
+async function expiredLegacyRun() {
+  const run = fixture({ trigger: "cli", before: { version: "2026.9.2" } });
   const createdAtMs = Date.now() - 25 * 60 * 60_000;
-  // Seed stored legacy history without changing the clocks used by database custody.
-  openOpenClawStateDatabase(options)
+  // Seed legacy history without changing the clocks used by database custody.
+  openOpenClawStateDatabase(run.options)
     .db.prepare(
       "UPDATE update_runs SET created_at_ms = ?, updated_at_ms = ?, steps_json = ? WHERE run_id = ?",
     )
@@ -66,197 +77,159 @@ async function expiredLegacyRun() {
       createdAtMs,
       createdAtMs,
       JSON.stringify([{ step: "requested", status: "in_progress", startedAtMs: createdAtMs }]),
-      run.runId,
+      run.id,
     );
   await closeOpenClawStateDatabaseAsync();
-
-  return { options, run };
+  return run;
+}
+async function deadDriverRun() {
+  const { driver, dead } = deadDriverFixture();
+  const run = fixture({ trigger: "cli", origin: { driver: dead } });
+  const recorded = run.phase("activating");
+  await closeOpenClawStateDatabaseAsync();
+  return { ...run, driver, recorded };
 }
 
-describe("update run reconciliation workers", () => {
-  it("releases the live ledger when admission has no prior runs to reconcile", async () => {
-    const state = tempDirs.make("update-empty-reconciliation-");
-    const options = { env: { OPENCLAW_STATE_DIR: state } };
-    const run = createUpdateRun(
-      { trigger: "cli", origin: { driver: readUpdateRunDriver() } },
-      options,
-    );
-    expect(
-      await reconcileAbandonedUpdateRunsAsync(
-        { excludeRunId: run.runId },
-        { ...options, snapshot: true },
-      ),
-    ).toEqual([]);
-    const recorded = recordUpdateRunPhase(run.runId, "validating", {}, options);
-    closeOpenClawStateDatabaseForTest();
-    const displaced = path.join(state, "displaced.sqlite");
-    fs.renameSync(path.join(state, "state", "openclaw.sqlite"), displaced);
-    expect(getUpdateRun(run.runId, { path: displaced })).toEqual(recorded);
+it("releases the live ledger when admission has no prior runs to reconcile", async () => {
+  const run = fixture({ trigger: "cli", origin: { driver: readUpdateRunDriver() } });
+  await expect(run.reconcile({ excludeRunId: run.id }, true)).resolves.toEqual([]);
+  const recorded = run.phase("validating");
+  closeOpenClawStateDatabaseForTest();
+  const state = run.options.env.OPENCLAW_STATE_DIR;
+  const displaced = path.join(state, "displaced.sqlite");
+  fs.renameSync(path.join(state, "state", "openclaw.sqlite"), displaced);
+  expect(getUpdateRun(run.id, { path: displaced })).toEqual(recorded);
+});
+it("preserves an owner that adopts dead-driver work before reconciliation commits", async () => {
+  const run = await deadDriverRun();
+  let adopted: ReturnType<typeof adoptUpdateRun> | undefined;
+  admission.created = () => {
+    admission.created = undefined;
+    adopted = adoptUpdateRun(run.id, run.options);
+  };
+  await expect(run.reconcile({}, true)).resolves.toEqual([]);
+  expect(adopted).toMatchObject({
+    status: "running",
+    phase: "activating",
+    origin: { driver: run.driver },
   });
-
-  it("preserves an owner that adopts dead-driver work before reconciliation commits", async () => {
-    const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-settling-owner-") } };
-    const driver = readUpdateRunDriver();
-    if (!driver) {
-      throw new Error("The fixture requires process start identity");
-    }
-    const run = createUpdateRun(
-      {
-        trigger: "cli",
-        origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
+  expect(await run.readAsync()).toEqual(adopted);
+});
+it("status projects recent driver loss until explicit reconciliation", async () => {
+  const run = await deadDriverRun();
+  vi.stubEnv("OPENCLAW_STATE_DIR", run.options.env.OPENCLAW_STATE_DIR);
+  try {
+    expect(await readUpdateRunStatus()).toMatchObject({
+      activeRun: { runId: run.id, status: "running", phase: "activating" },
+      abandonedRun: {
+        runId: run.id,
+        rule: "inactive-driver-dead",
+        nextAction: "Run `openclaw update repair` before retrying the update.",
       },
-      options,
-    );
-    recordUpdateRunPhase(run.runId, "activating", {}, options);
-    await closeOpenClawStateDatabaseAsync();
-    let adopted: ReturnType<typeof adoptUpdateRun> | undefined;
-    admission.created = () => {
-      admission.created = undefined;
-      adopted = adoptUpdateRun(run.runId, options);
-    };
-    expect(await reconcileAbandonedUpdateRunsAsync({}, { ...options, snapshot: true })).toEqual([]);
-    expect(adopted).toMatchObject({ status: "running", phase: "activating", origin: { driver } });
-    expect(await getUpdateRunAsync(run.runId, options)).toEqual(adopted);
-  });
-
-  it("status projects recent driver loss until explicit reconciliation", async () => {
-    const state = tempDirs.make("update-driver-loss-");
-    const options = { env: { OPENCLAW_STATE_DIR: state } };
-    const driver = readUpdateRunDriver();
-    if (!driver) {
-      throw new Error("The fixture requires process start identity");
-    }
-    const run = createUpdateRun(
-      {
-        trigger: "cli",
-        origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
-      },
-      options,
-    );
-    const recorded = recordUpdateRunPhase(run.runId, "activating", {}, options);
-    await closeOpenClawStateDatabaseAsync();
-    vi.stubEnv("OPENCLAW_STATE_DIR", state);
+    });
+    expect(await run.readAsync()).toEqual(run.recorded);
+    await run.reconcile({ explicit: true });
+    expect(await run.readAsync()).toMatchObject({
+      status: "failed",
+      phase: "finished",
+      finishedAtMs: expect.any(Number),
+    });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+it.each(["history", "reconciliation"] as const)(
+  "settles expired legacy history through %s without host SQLite",
+  async (entryPoint) => {
+    const run = await expiredLegacyRun();
+    const sql = observeMainThreadSql();
+    sql.calibrate();
+    let nativeCalls = 0;
     try {
-      expect(await readUpdateRunStatus()).toMatchObject({
-        activeRun: { runId: run.runId, status: "running", phase: "activating" },
-        abandonedRun: {
-          runId: run.runId,
-          rule: "inactive-driver-dead",
-          nextAction: "Run `openclaw update repair` before retrying the update.",
-        },
-      });
-      expect(await getUpdateRunAsync(run.runId, options)).toEqual(recorded);
-      await reconcileAbandonedUpdateRunsAsync({ explicit: true }, options);
-      expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({
-        status: "failed",
+      const reconciled =
+        entryPoint === "history" ? (await run.history()).run : (await run.reconcile())[0];
+      expect(reconciled).toMatchObject({
+        runId: run.id,
         phase: "finished",
-        finishedAtMs: expect.any(Number),
-      });
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it.each(["history", "reconciliation"] as const)(
-    "settles expired legacy history through %s without host SQLite",
-    async (entryPoint) => {
-      const { options, run } = await expiredLegacyRun();
-
-      const sql = observeMainThreadSql();
-      sql.calibrate();
-      let nativeCalls = 0;
-      try {
-        const reconciled =
-          entryPoint === "history"
-            ? (await getUpdateRunWithReconciliationAsync(run.runId, options)).run
-            : (await reconcileAbandonedUpdateRunsAsync({}, options))[0];
-        expect(reconciled).toMatchObject({
-          runId: run.runId,
-          phase: "finished",
-          status: "failed",
-          reason: "legacy-driver-expired",
-        });
-        nativeCalls = sql.count();
-      } finally {
-        sql.restore();
-      }
-      expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({
         status: "failed",
         reason: "legacy-driver-expired",
       });
-      expect(nativeCalls).toBe(0);
-    },
-  );
-  it("rejects cancellation at commit instead of returning stale history", async () => {
-    const { options, run } = await expiredLegacyRun();
-    const before = await getUpdateRunAsync(run.runId, options);
-    const controller = new AbortController();
-    const failure = new Error("fixture update owner canceled");
-    const stages: string[] = [];
-    admission.beforeGrant = (stage) => {
-      stages.push(stage);
-      if (stage === "commit") {
-        controller.abort(failure);
-      }
-    };
-    await expect(
-      getUpdateRunWithReconciliationAsync(run.runId, { ...options, signal: controller.signal }),
-    ).rejects.toThrow(failure.message);
-    expect(stages).toEqual(["transaction", "commit"]);
-    expect(await getUpdateRunAsync(run.runId, options)).toEqual(before);
-  });
-
-  it("retains recovery recorded after selection and before writer admission", async () => {
-    const { options, run } = await expiredLegacyRun();
-    const before = await getUpdateRunAsync(run.runId, options);
-    const from = {
-      root: options.env.OPENCLAW_STATE_DIR,
-      nodePath: process.execPath,
-      version: "2026.9.3",
-      buildId: null,
-    };
-    let recovery: ReturnType<typeof createRetainedUpdateRecovery> | undefined;
-    admission.created = () => {
-      admission.created = undefined;
-      recovery = createRetainedUpdateRecovery(
-        { runId: run.runId, from, to: { ...from, version: "2026.9.4" } },
-        options,
-      );
-    };
-    expect(await reconcileAbandonedUpdateRunsAsync({}, options)).toEqual([]);
-    expect(recovery).toBeDefined();
-    expect(await getUpdateRunAsync(run.runId, options)).toEqual(before);
-    expect(loadUpdateRecovery(run.runId, options)).toEqual(recovery);
-  });
-
-  it("allows the host event loop to release a contending native writer", async () => {
-    const { options, run } = await expiredLegacyRun();
-    const context = captureOpenClawStateWorkerContext(options);
-    let foreign: ReturnType<typeof holdForeignWriter> | undefined;
-    let releasedBeforeSettlement = false;
-    let settled = false;
-    let releaseTimer: ReturnType<typeof setImmediate> | undefined;
-    admission.created = () => {
-      admission.created = undefined;
-      foreign = holdForeignWriter(context);
-      releaseTimer = setImmediate(() => {
-        releasedBeforeSettlement = !settled;
-        foreign?.release();
-      });
-    };
-    try {
-      const result = await reconcileAbandonedUpdateRunsAsync({}, options);
-      settled = true;
-      expect(releasedBeforeSettlement).toBe(true);
-      expect(result).toMatchObject([
-        { runId: run.runId, status: "failed", reason: "legacy-driver-expired" },
-      ]);
-      expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({ status: "failed" });
+      nativeCalls = sql.count();
     } finally {
-      if (releaseTimer) {
-        clearImmediate(releaseTimer);
-      }
-      foreign?.close();
+      sql.restore();
     }
-  });
+    expect(await run.readAsync()).toMatchObject({
+      status: "failed",
+      reason: "legacy-driver-expired",
+    });
+    expect(nativeCalls).toBe(0);
+  },
+);
+it("rejects cancellation at commit instead of returning stale history", async () => {
+  const run = await expiredLegacyRun();
+  const before = await run.readAsync();
+  const controller = new AbortController();
+  const failure = new Error("fixture update owner canceled");
+  const stages: string[] = [];
+  admission.beforeGrant = (stage) => {
+    stages.push(stage);
+    if (stage === "commit") {
+      controller.abort(failure);
+    }
+  };
+  await expect(run.history(controller.signal)).rejects.toThrow(failure.message);
+  expect(stages).toEqual(["transaction", "commit"]);
+  expect(await run.readAsync()).toEqual(before);
+});
+it("retains recovery recorded after selection and before writer admission", async () => {
+  const run = await expiredLegacyRun();
+  const before = await run.readAsync();
+  const from = {
+    root: run.options.env.OPENCLAW_STATE_DIR,
+    nodePath: process.execPath,
+    version: "2026.9.3",
+    buildId: null,
+  };
+  let recovery: ReturnType<typeof createRetainedUpdateRecovery> | undefined;
+  admission.created = () => {
+    admission.created = undefined;
+    recovery = createRetainedUpdateRecovery(
+      { runId: run.id, from, to: { ...from, version: "2026.9.4" } },
+      run.options,
+    );
+  };
+  await expect(run.reconcile()).resolves.toEqual([]);
+  expect(recovery).toBeDefined();
+  expect(await run.readAsync()).toEqual(before);
+  expect(loadUpdateRecovery(run.id, run.options)).toEqual(recovery);
+});
+it("allows the host event loop to release a contending native writer", async () => {
+  const run = await expiredLegacyRun();
+  const context = captureOpenClawStateWorkerContext(run.options);
+  let foreign: ReturnType<typeof holdForeignWriter> | undefined;
+  let releasedBeforeSettlement = false,
+    settled = false;
+  let releaseTimer: ReturnType<typeof setImmediate> | undefined;
+  admission.created = () => {
+    admission.created = undefined;
+    foreign = holdForeignWriter(context);
+    releaseTimer = setImmediate(() => {
+      releasedBeforeSettlement = !settled;
+      foreign?.release();
+    });
+  };
+  try {
+    const result = await run.reconcile();
+    settled = true;
+    expect(releasedBeforeSettlement).toBe(true);
+    expect(result).toMatchObject([
+      { runId: run.id, status: "failed", reason: "legacy-driver-expired" },
+    ]);
+    expect(await run.readAsync()).toMatchObject({ status: "failed" });
+  } finally {
+    if (releaseTimer) {
+      clearImmediate(releaseTimer);
+    }
+    foreign?.close();
+  }
 });

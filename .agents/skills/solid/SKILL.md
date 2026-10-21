@@ -5,7 +5,7 @@ description: Write, refactor, review, or test Solid 2 UI in OpenClaw (Control UI
 
 # Solid 2 in OpenClaw
 
-The Control UI and plugin views (`extensions/x`, `extensions/workboard`) render with **Solid 2** (`solid-js`, `@solidjs/web`, `@solidjs/signals`, compiled by `@solidjs/vite-plugin`/`@solidjs/compiler`). Lit and Web Awesome are removed from these surfaces; new code is Solid only. The Canvas hosts also use Solid, but the sandboxed upstream A2UI v0.8 catalog retains its separate `@a2ui/lit` dependency.
+The Control UI and plugin views (`extensions/x`, `extensions/workboard`) render with **Solid 2** (`solid-js`, `@solidjs/web`, `@solidjs/signals`, compiled by `@solidjs/vite-plugin`/`@solidjs/compiler`). Lit and Web Awesome are removed from these surfaces; new code is Solid only. The Canvas hosts and A2UI v0.8 catalog also use Solid; the v0.9 catalog still uses the upstream renderer from `@a2ui/web_core`.
 
 Read [ui/AGENTS.md](../../../ui/AGENTS.md) first; its state-ownership rules apply to Solid unchanged. Use the exact installed Solid pins from the owning `package.json`: the runtime and compiler are `2.0.0-rc.14`, and `@solidjs/vite-plugin` is `3.0.0-next.49`. `solid-js` and `@solidjs/*` are exempt from the repository's seven-day release-age gate (Peter, 2026-10-11); third-party Solid ecosystem packages remain subject to it.
 

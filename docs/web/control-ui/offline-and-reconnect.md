@@ -113,8 +113,11 @@ Unique display-name links use the same cached route resolution, including the
 
 Exact conversation links also wait for the scoped cached roster before presenting
 their header. Dashboard layouts restore before the pane renders, and embedded
-HTML widgets keep one loading surface while their board metadata and document
-arrive. Widget requests still require the current Gateway connection.
+HTML widgets restore their last board metadata from the same scoped conversation
+cache and start loading the isolated sandbox while connecting. Document requests
+still require the current Gateway connection and overlap the live board refresh.
+Unchanged widgets keep their iframe; changed, removed, or forbidden boards replace
+or clear the cached view. Pending or rejected MCP apps wait for live board data.
 
 Loading more sessions keeps the sidebar's warm-reload snapshot usable. The
 routing roster retains its first page; the sidebar separately keeps its visible
@@ -127,6 +130,9 @@ up to 80 recent rows (plus rows from the same history entry) for a warm reload.
 The snapshot also retains the slash-command catalog and its revision. Warm
 startup reuses that list when the Gateway confirms it is unchanged; config,
 plugin, and skill changes refresh it through the existing metadata owner.
+Saved dashboards restore independently of transcript validation, so a slow
+transcript download does not delay their layout. The Gateway still revalidates
+the board, its grants, and document tickets on connection.
 Older history loads from the Gateway as you scroll up. Cache upgrades discard
 older, unbounded transcript records; a connected visit fills the new cache.
 The first upward scroll or **Show earlier** refills the Gateway's current history

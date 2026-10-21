@@ -1,7 +1,6 @@
 import type { SessionEntry } from "../../config/sessions.js";
 
 export type ReplySessionEntryHandle = {
-  adoptCurrent(entry: SessionEntry): void;
   clearCurrent(): void;
   get(sessionKey: string): SessionEntry | undefined;
   getCurrent(): SessionEntry | undefined;
@@ -53,7 +52,6 @@ export function createReplySessionEntryHandle(params: {
     }
   };
   return {
-    adoptCurrent: replaceCurrent,
     clearCurrent: () => {
       currentEntry = undefined;
       if (sessionKey) {

@@ -9,10 +9,26 @@ import {
   type ChatSubagentActivity as ChatSubagentActivityRow,
 } from "../chat-subagent-wait.ts";
 import type { ProcessesPanelData } from "../processes-panel-data.ts";
+import {
+  ChatDetailsDesktopSection,
+  createDetailsDesktopReveal,
+} from "./chat-details-desktop-section.tsx";
+import { ChatDetailsSubagents, type ChatDetailsSubagentsProps } from "./chat-details-subagents.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatSubagentActivity } from "./chat-subagent-activity-live.ts";
 
-type Props = { details: ChatDetailsProps; presented: boolean };
+type Props = {
+  details: ChatDetailsProps;
+  presented: boolean;
+  /** Desktop Details omits Processes; other consumers retain the native summary. */
+  showProcesses?: boolean;
+  /** Supplied only by the native desktop composition; mobile keeps its own body. */
+  desktopSubagents?: {
+    expanded: boolean;
+    onExpandedChange: (expanded: boolean) => void;
+    workingLabel: string;
+  };
+};
 type State = "running" | "queued" | "failed" | "stopped" | "done";
 type Tally = Record<State, number>;
 
@@ -64,6 +80,8 @@ function BackgroundGroup(props: {
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   children: JSX.Element;
+  desktop?: Props["desktopSubagents"];
+  presented?: boolean;
 }) {
   const summary = () =>
     SUMMARY.filter((state) => props.tally[state] > 0)
@@ -72,26 +90,28 @@ function BackgroundGroup(props: {
       )
       .join(" · ");
   const hidden = () => props.total - PREVIEW_ROWS;
-  return (
-    <details class="chat-details__group" data-details-group={props.kind} open>
-      <summary class="chat-details__caption chat-details__caption--tally">
-        <span class="chat-details__caption-title">{props.title}</span>
-        <span class="chat-details__tally-summary">{summary()}</span>
-        <Icon name="chevronDown" />
-        <Show when={props.total > 0}>
-          <span class="chat-details__tally" role="img" aria-label={`${props.title}: ${summary()}`}>
-            <For each={SEGMENTS.filter((state) => props.tally[state] > 0)}>
-              {(state) => (
-                <span
-                  class="chat-details__tally-segment"
-                  data-state={state}
-                  style={{ "flex-grow": props.tally[state] }}
-                />
-              )}
-            </For>
-          </span>
-        </Show>
-      </summary>
+  const heading = () => (
+    <>
+      <span class="chat-details__caption-title">{props.title}</span>
+      <span class="chat-details__tally-summary">{summary()}</span>
+      <Icon name="chevronDown" />
+      <Show when={props.total > 0}>
+        <span class="chat-details__tally" role="img" aria-label={`${props.title}: ${summary()}`}>
+          <For each={SEGMENTS.filter((state) => props.tally[state] > 0)}>
+            {(state) => (
+              <span
+                class="chat-details__tally-segment"
+                data-state={state}
+                style={{ "flex-grow": props.tally[state] }}
+              />
+            )}
+          </For>
+        </span>
+      </Show>
+    </>
+  );
+  const content = () => (
+    <>
       {props.children}
       <Show when={hidden() > 0}>
         <button
@@ -116,6 +136,64 @@ function BackgroundGroup(props: {
           <Icon name="chevronRight" />
         </button>
       </Show>
+    </>
+  );
+  return (
+    <Show
+      when={props.desktop}
+      fallback={
+        <details class="chat-details__group" data-details-group={props.kind} open>
+          <summary class="chat-details__caption chat-details__caption--tally">{heading()}</summary>
+          {content()}
+        </details>
+      }
+    >
+      {(desktop) => (
+        <DesktopBackgroundGroup
+          kind={props.kind}
+          desktop={desktop()}
+          presented={props.presented ?? false}
+          heading={heading()}
+        >
+          {content()}
+        </DesktopBackgroundGroup>
+      )}
+    </Show>
+  );
+}
+
+/** Keep the native fallback's tally/actions while giving desktop the same reveal. */
+function DesktopBackgroundGroup(props: {
+  kind: "subagents" | "processes";
+  desktop: NonNullable<Props["desktopSubagents"]>;
+  presented: boolean;
+  heading: JSX.Element;
+  children: JSX.Element;
+}) {
+  const reveal = createDetailsDesktopReveal(() => [props.desktop.expanded, props.presented]);
+  return (
+    <details ref={reveal.details} class="chat-details__group" data-details-group={props.kind}>
+      <summary
+        class="chat-details__caption chat-details__caption--tally"
+        aria-expanded={props.desktop.expanded ? "true" : "false"}
+        onClick={(event) => {
+          event.preventDefault();
+          if (props.presented) {
+            reveal.prepareClick(event);
+            props.desktop.onExpandedChange(!props.desktop.expanded);
+          }
+        }}
+      >
+        {props.heading}
+      </summary>
+      <div
+        ref={reveal.body}
+        class="chat-details-desktop-section__body"
+        inert={!props.desktop.expanded || !props.presented}
+        aria-hidden={props.desktop.expanded ? "false" : "true"}
+      >
+        <div ref={reveal.content}>{props.children}</div>
+      </div>
     </details>
   );
 }
@@ -166,88 +244,169 @@ export function ChatDetailsBackground(
   processes: () => ProcessesPanelData | undefined,
 ) {
   const [subagentsExpanded, setSubagentsExpanded] = createSignal(false);
-  const [processesExpanded, setProcessesExpanded] = createSignal(false);
-  const subagents = createMemo(() => attentionOrder(listSubagents(props.details), subagentState));
+  const roster = createMemo(() => listSubagents(props.details));
+  const subagents = createMemo(() => attentionOrder(roster(), subagentState));
+  const unlisted = createMemo(() => subagents().filter((row) => !row.listed));
+  const desktopPresentation = createMemo(() => props.desktopSubagents);
+  const desktopSubagents = createMemo<ChatDetailsSubagentsProps | undefined>(() => {
+    const presentation = desktopPresentation();
+    const snapshot = props.details;
+    const openChild = snapshot.onOpenSubagent;
+    const openCollection = snapshot.onOpenSubagents;
+    if (!presentation || !openChild || !openCollection) {
+      return undefined;
+    }
+    const current = () => props.presented && props.details === snapshot;
+    return {
+      // Keep launch order for T36; its collection summary must name only collection members.
+      rows: roster().filter((row) => row.listed),
+      mobile: false,
+      workingLabel: presentation.workingLabel,
+      onOpenSubagent: (key) => {
+        if (current()) {
+          openChild(key);
+        }
+      },
+      onOpenSubagents: () => {
+        if (current()) {
+          openCollection();
+        }
+      },
+    };
+  });
   const subagentTally = createMemo(() => tally(subagents(), subagentState));
-  const processRows = createMemo(() =>
-    attentionOrder(processes()?.snapshot.rows ?? [], processState),
-  );
-  const processTally = createMemo(() => tally(processRows(), processState));
-  const visibleProcesses = createMemo(() =>
-    processesExpanded() ? processRows() : processRows().slice(0, PREVIEW_ROWS),
-  );
-  const processError = () => (processRows().length === 0 ? processes()?.snapshot.error : null);
   const openSubagents = () => {
     if (props.presented) {
       props.details.onOpenSubagents?.();
     }
   };
+  return (
+    <>
+      <Show when={subagents().length > 0}>
+        <Show
+          when={desktopSubagents()}
+          fallback={
+            <BackgroundGroup
+              desktop={desktopPresentation()}
+              presented={props.presented}
+              kind="subagents"
+              title={t("chat.sessionDetails.subagents")}
+              tally={subagentTally()}
+              total={subagents().length}
+              icon="bot"
+              openAllLabel={t("chat.sessionDetails.allSubagents")}
+              onOpenAll={props.details.onOpenSubagents ? openSubagents : undefined}
+              expanded={subagentsExpanded()}
+              onExpandedChange={setSubagentsExpanded}
+            >
+              {props.presented && (
+                <ChatSubagentActivity
+                  rows={subagents()}
+                  limit={subagentsExpanded() ? undefined : PREVIEW_ROWS}
+                  compact={true}
+                  onOpenSubagent={props.details.onOpenSubagent}
+                  onOpenSession={props.details.onSessionSelect}
+                />
+              )}
+            </BackgroundGroup>
+          }
+        >
+          {(data) => (
+            <ChatDetailsDesktopSection
+              section="subagents"
+              title={t("chat.sessionDetails.subagents")}
+              expanded={desktopPresentation()!.expanded}
+              presented={props.presented}
+              onExpandedChange={desktopPresentation()!.onExpandedChange}
+              metadata={
+                <Show when={!desktopPresentation()!.expanded}>
+                  <ChatDetailsSubagents {...data()} collapsed />
+                </Show>
+              }
+            >
+              <ChatDetailsSubagents {...data()} />
+              {/* Children outside the collection keep their native session destination/activity. */}
+              <Show
+                when={props.presented && desktopPresentation()!.expanded && unlisted().length > 0}
+              >
+                <ChatSubagentActivity
+                  rows={unlisted()}
+                  compact={true}
+                  onOpenSession={props.details.onSessionSelect}
+                />
+              </Show>
+            </ChatDetailsDesktopSection>
+          )}
+        </Show>
+      </Show>
+      <Show when={props.showProcesses !== false}>
+        <DetailsProcesses
+          details={props.details}
+          presented={props.presented}
+          processes={processes}
+        />
+      </Show>
+    </>
+  );
+}
+
+/** Render the native host's shared process observation. */
+function DetailsProcesses(
+  props: Pick<Props, "details" | "presented"> & {
+    processes: () => ProcessesPanelData | undefined;
+  },
+) {
+  const [processesExpanded, setProcessesExpanded] = createSignal(false);
+  const processRows = createMemo(() =>
+    attentionOrder(props.processes()?.snapshot.rows ?? [], processState),
+  );
+  const processTally = createMemo(() => tally(processRows(), processState));
+  const visibleProcesses = createMemo(() =>
+    processesExpanded() ? processRows() : processRows().slice(0, PREVIEW_ROWS),
+  );
+  const processError = () =>
+    processRows().length === 0 ? props.processes()?.snapshot.error : null;
   const openProcesses = () => {
     if (props.presented) {
       props.details.onOpenProcesses?.();
     }
   };
   return (
-    <>
-      <Show when={subagents().length > 0}>
-        <BackgroundGroup
-          kind="subagents"
-          title={t("chat.sessionDetails.subagents")}
-          tally={subagentTally()}
-          total={subagents().length}
-          icon="bot"
-          openAllLabel={t("chat.sessionDetails.allSubagents")}
-          onOpenAll={props.details.onOpenSubagents ? openSubagents : undefined}
-          expanded={subagentsExpanded()}
-          onExpandedChange={setSubagentsExpanded}
-        >
-          {props.presented && (
-            <ChatSubagentActivity
-              rows={subagents()}
-              limit={subagentsExpanded() ? undefined : PREVIEW_ROWS}
-              compact={true}
-              onOpenSubagent={props.details.onOpenSubagent}
-              onOpenSession={props.details.onSessionSelect}
-            />
-          )}
-        </BackgroundGroup>
-      </Show>
-      <Show when={processRows().length > 0 || processError()}>
-        <BackgroundGroup
-          kind="processes"
-          title={t("chat.sessionDetails.processes")}
-          tally={processTally()}
-          total={processRows().length}
-          icon="terminal"
-          openAllLabel={t("chat.sessionDetails.allProcesses")}
-          onOpenAll={props.details.onOpenProcesses ? openProcesses : undefined}
-          expanded={processesExpanded()}
-          onExpandedChange={setProcessesExpanded}
-        >
-          <Show when={processError()}>
-            <div class="chat-summary__automation-error">
-              <span role="status">{t("chat.sessionDetails.processesError")}</span>
-              <button
-                type="button"
-                class="chip chat-summary__automation-retry"
-                onClick={() => void processes()?.refresh()}
-              >
-                {t("common.retry")}
-              </button>
-            </div>
-          </Show>
-          <div role="list" aria-label={t("chat.sessionDetails.processes")}>
-            <For each={visibleProcesses()} keyed={(row) => row.instanceId}>
-              {(row) => (
-                <ProcessRow
-                  row={row()}
-                  onOpen={props.details.onOpenProcesses ? openProcesses : undefined}
-                />
-              )}
-            </For>
+    <Show when={processRows().length > 0 || processError()}>
+      <BackgroundGroup
+        kind="processes"
+        title={t("chat.sessionDetails.processes")}
+        tally={processTally()}
+        total={processRows().length}
+        icon="terminal"
+        openAllLabel={t("chat.sessionDetails.allProcesses")}
+        onOpenAll={props.details.onOpenProcesses ? openProcesses : undefined}
+        expanded={processesExpanded()}
+        onExpandedChange={setProcessesExpanded}
+      >
+        <Show when={processError()}>
+          <div class="chat-summary__automation-error">
+            <span role="status">{t("chat.sessionDetails.processesError")}</span>
+            <button
+              type="button"
+              class="chip chat-summary__automation-retry"
+              onClick={() => void props.processes()?.refresh()}
+            >
+              {t("common.retry")}
+            </button>
           </div>
-        </BackgroundGroup>
-      </Show>
-    </>
+        </Show>
+        <div role="list" aria-label={t("chat.sessionDetails.processes")}>
+          <For each={visibleProcesses()} keyed={(row) => row.instanceId}>
+            {(row) => (
+              <ProcessRow
+                row={row()}
+                onOpen={props.details.onOpenProcesses ? openProcesses : undefined}
+              />
+            )}
+          </For>
+        </div>
+      </BackgroundGroup>
+    </Show>
   );
 }

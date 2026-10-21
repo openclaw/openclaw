@@ -104,7 +104,11 @@ async function runStructuredDoctorHealthContribution(params: {
     allowExecSecretRefs: params.ctx.options.allowExec === true,
     agentDatabaseRefusals: params.ctx.agentDatabaseRefusals,
   };
-  const result = await runDoctorHealthRepairs(context, { checks: params.checks, dryRun });
+  const result = await runDoctorHealthRepairs(context, {
+    checks: params.checks,
+    dryRun,
+    progress: params.ctx.options.json !== true,
+  });
   params.ctx.cfg = result.config;
   renderStructuredHealthFindings(params.ctx, result.findings);
   // Display retains original findings; finalization records only unresolved warnings.

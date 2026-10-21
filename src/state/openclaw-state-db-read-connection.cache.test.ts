@@ -18,6 +18,7 @@ import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
 import {
@@ -110,7 +111,7 @@ function fixture() {
     );
   const value = () => read(({ db }) => db.prepare("SELECT value FROM sample").get()?.value);
   const countOpens = () => opens.mock.calls.filter(([location]) => location === pathname).length;
-  const workerRead = (command: OpenClawStateReadRequest["command"]) =>
+  const workerRead = (command: OpenClawStateReadRequest["command"], expectedIdentity?: string) =>
     worker.read({
       context: {
         environment: { OPENCLAW_STATE_DIR: root },
@@ -118,6 +119,7 @@ function fixture() {
       databasePath: pathname,
       location: pathname,
       checkFreshAdmission: false,
+      expectedIdentity,
       command,
     });
   const workerValue = async () => {
@@ -531,4 +533,60 @@ it("retains readers, replaces files, and reports cleanup as native close capabil
   expect(failedCleanup.nativeCleanupFailure?.error?.nodes).toEqual(
     expect.arrayContaining([expect.objectContaining({ message: failure.message })]),
   );
+});
+
+it("refuses replacement during worker preparation, then reopens it and keeps private snapshots task-scoped", async () => {
+  const { root, pathname, read, value, workerRead } = fixture();
+  const previous = read(({ db }) => db);
+  const expectedIdentity = readDatabasePathIdentitySync(pathname).key;
+  const replacementPath = path.join(root, "replacement.sqlite");
+  const replacement = sqlite.openNodeSqliteDatabase(replacementPath);
+  replacement.exec("CREATE TABLE sample(value INTEGER); INSERT INTO sample VALUES (7)");
+  replacement.exec(
+    "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER); INSERT INTO config_machine_state VALUES ('nodeHost.config', '7', 7)",
+  );
+  replacement.close();
+  const preparing = createDeferredCore();
+  const releasePreparation = createDeferredCore();
+  vi.doMock("./config-machine-state.read.worker.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./config-machine-state.read.worker.js")>();
+    preparing.resolve();
+    await releasePreparation.promise;
+    return actual;
+  });
+  const pending = workerRead(
+    { type: "machineState.read", input: { key: "nodeHost.config" } },
+    expectedIdentity,
+  );
+  try {
+    await Promise.race([
+      preparing.promise,
+      pending.then(() => {
+        throw new Error("Worker read settled before controlled preparation");
+      }),
+    ]);
+    fs.renameSync(pathname, path.join(root, "previous.sqlite"));
+    fs.renameSync(replacementPath, pathname);
+    releasePreparation.resolve();
+    const reply = await pending;
+    expect(reply).toMatchObject({
+      ok: false,
+      message: expect.stringMatching(/identity|changed/i),
+    });
+    expect(reply).not.toHaveProperty("sourceAdmitted", true);
+  } finally {
+    releasePreparation.resolve();
+    try {
+      await pending;
+    } finally {
+      vi.doUnmock("./config-machine-state.read.worker.js");
+    }
+  }
+  expect(value()).toBe(7);
+  expect(previous.isOpen).toBe(false);
+  const snapshot = path.join(root, "snapshot.sqlite");
+  fs.copyFileSync(pathname, snapshot);
+  const privateReader = read(({ db }) => db, snapshot);
+  expect(privateReader.isOpen).toBe(false);
+  fs.rmSync(snapshot);
 });

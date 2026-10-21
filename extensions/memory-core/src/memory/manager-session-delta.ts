@@ -16,25 +16,6 @@ export type PreparedMemoryIndexEntry = {
   structuredInputBytes?: number;
 };
 
-/** A shadow's empty tombstone table cannot authorize publication into the live index. */
-export async function assertMemorySessionNotForgotten(
-  database: MemoryIndexDatabase,
-  { agentId, sessionId }: { agentId: string; sessionId: string },
-  assertCurrent: () => void,
-): Promise<void> {
-  // Callers may carry all source chunks; only identity belongs in this worker read.
-  const predicate = await database.read(
-    { type: "session.current", input: { agentId, sessionId } },
-    assertCurrent,
-  );
-  assertCurrent();
-  if (predicate === "forgotten") {
-    throw new Error(
-      "A session was forgotten while memory indexing was running; retry the memory index.",
-    );
-  }
-}
-
 // The index owner plans once; publication consumes the plan without rereading it.
 export async function retainIndexedSessionChunks(
   prepared: PreparedMemoryIndexEntry,

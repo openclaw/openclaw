@@ -1,3 +1,14 @@
+/* Details and the desktop menus share the same block-divider color. Keep the
+   token available before lazy menu/Details styles load, without changing other borders. */
+.chat-details-desktop-body,
+.chat-dashboard-menu__panel,
+.side-panel-position-menu,
+.chat-pr-menu,
+.chat-header-session-menu__panel,
+.session-menu__panel {
+  --details-separator: color-mix(in srgb, var(--border-strong) 70%, var(--border));
+}
+
 :root {
   --bg: #0e1015;
   --bg-accent: #13151b;
@@ -85,7 +96,7 @@
   --inbox-attention: #e5243b;
   --inbox-attention-foreground: #ffffff;
 
-  /* Lobster mascot icon (icons-tools.ts). Dark surfaces swallowed the shipped
+  /* Lobster mascot icon (icon-data-tools.ts). Dark surfaces swallowed the shipped
      #ff4d4d→#991b1b gradient, so dark mode lifts both stops; light mode
      restores the original artwork below. */
   --lobster-icon-body: #ff6d5a;

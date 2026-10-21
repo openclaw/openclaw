@@ -24,13 +24,11 @@ export interface AppRegistrationResult {
 }
 
 interface InitResponse {
-  nonce: string;
   supported_auth_methods: string[];
 }
 
 interface RawBeginResponse {
   device_code: string;
-  verification_uri: string;
   verification_uri_complete: string;
   interval: number;
   expire_in: number;

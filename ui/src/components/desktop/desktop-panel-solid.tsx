@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { merge, onSettled } from "solid-js";
+import { createMemo, merge, onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -7,6 +7,7 @@ import { createDesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
 import { FullscreenButton } from "../fullscreen-solid.tsx";
+import { StrokeIcon } from "../solid/stroke-icon.tsx";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
 import { createDesktopAudio } from "./desktop-audio.ts";
@@ -14,7 +15,10 @@ import { desktopCanvas, DesktopClient } from "./desktop-client.ts";
 import { DesktopDocumentView } from "./desktop-document-view.tsx";
 import { openDesktopFocus } from "./desktop-focus-window.ts";
 import { createDesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
-import type { DesktopPanelInputs } from "./desktop-panel-inputs.ts";
+import type {
+  DesktopPanelInputs,
+  DesktopPanelPresentationContext,
+} from "./desktop-panel-inputs.ts";
 import { createDesktopPanel, type DesktopPanelOwner } from "./desktop-panel-owner.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import {
@@ -70,7 +74,7 @@ defineSolidBridge<DesktopPanelInputs, Methods>(
         <style>{`${dockStyles}\n${desktopStyles}`}</style>
         {inputs.available &&
           (inputs.documentMode || inputs.embedded || state.read().dockLayout.open) && (
-            <DesktopPresentation view={state.read().view} />
+            <DesktopPresentation view={state.read().view} presentation={inputs.presentation} />
           )}
       </>
     );
@@ -82,6 +86,7 @@ defineSolidBridge<DesktopPanelInputs, Methods>(
       available: { default: false, type: Boolean },
       suppressed: { default: false, type: Boolean },
       documentMode: { default: false, type: Boolean, reflect: true },
+      presentation: { default: null, attribute: false },
       requestedSource: { default: null, attribute: false },
       sessionKey: { default: null, attribute: false },
       documentControl: { default: false, type: Boolean },
@@ -119,6 +124,7 @@ function PictureInPictureButton(props: {
   controller: DesktopPictureInPicture;
   connected: boolean;
   documentMode: boolean;
+  showLabel?: boolean;
 }) {
   const label = () =>
     t(
@@ -144,23 +150,24 @@ function PictureInPictureButton(props: {
       }
       onClick={() => void props.controller.toggle()}
     >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      >
+      <StrokeIcon>
         <rect x="2" y="3" width="20" height="18" rx="2" />
         <rect x="12" y="11" width="7" height="7" rx="1" />
-      </svg>
+      </StrokeIcon>
+      {props.showLabel && <span class="desktop-rail__action-label">{label()}</span>}
     </button>
   );
 }
 
 /** Compose the document and dock views without owning connection state. */
-function DesktopPresentation(props: { view: DesktopPanelOwner["view"] }) {
+function DesktopPresentation(props: {
+  view: DesktopPanelOwner["view"];
+  presentation?: DesktopPanelPresentationContext | null;
+}) {
+  const platform = createMemo(() =>
+    props.view.documentMode ? undefined : props.presentation?.platform,
+  );
+  const desktop = createMemo(() => platform() === "desktop");
   const content = {
     get state(): DesktopPanelState {
       return props.view.content.state === "picker" &&
@@ -179,11 +186,13 @@ function DesktopPresentation(props: { view: DesktopPanelOwner["view"] }) {
               props.view.fullscreenMode.errorText() ??
               props.view.content.errorText
             }
-            noticeText={props.view.content.noticeText}
+            noticeText={
+              desktop() && props.view.content.takeoverText ? null : props.view.content.noticeText
+            }
             availability={props.view.content.availability}
           />
           <DesktopAudioNotice state={props.view.audio.state()} />
-          {props.view.startup && (
+          {!desktop() && props.view.startup && (
             <DesktopNotice
               errorText={null}
               noticeText={t(
@@ -197,16 +206,39 @@ function DesktopPresentation(props: { view: DesktopPanelOwner["view"] }) {
       );
     },
     picker(): SolidJSX.Element {
-      return <DesktopPicker {...props.view.content.picker} loading={props.view.content.loading} />;
+      return (
+        <DesktopPicker
+          {...props.view.content.picker}
+          loading={props.view.content.loading}
+          presentation={platform()}
+          openWindowHref={desktop() ? props.presentation?.openWindowHref : undefined}
+          genuineEmpty={
+            !props.view.content.loading &&
+            !props.view.content.errorText &&
+            !props.view.content.noticeText &&
+            !props.view.content.hasTarget &&
+            !props.view.startup &&
+            props.view.content.availability?.state !== "locked" &&
+            props.view.content.availability?.state !== "unknown"
+          }
+        />
+      );
     },
     credentials(): SolidJSX.Element {
-      return <DesktopCredentials {...props.view.content.credentials} />;
+      return (
+        <DesktopCredentials
+          {...props.view.content.credentials}
+          presentation={platform()}
+          machineName={props.view.machine?.name}
+        />
+      );
     },
     recovery(): SolidJSX.Element {
       return (
         <DesktopPanelRecovery
           {...props.view.content.recovery}
           inventoryError={props.view.content.state === "inventory-error"}
+          presentation={platform()}
         />
       );
     },
@@ -226,6 +258,104 @@ function DesktopPresentation(props: { view: DesktopPanelOwner["view"] }) {
       onToggle={() => props.view.audio.toggle()}
     />
   );
+  const openWindow = () => {
+    const target = props.view.focusTarget();
+    // Read the current target at click time; workspace pop-outs never take input.
+    openDesktopFocus(
+      target.basePath,
+      target.source,
+      target.workspaceControls ? false : target.control,
+    );
+  };
+  // Stable options identity; getters consume current owner facts without remounting the viewer.
+  const rail = {
+    get platform(): "desktop" | "mobile" {
+      return platform() ?? "desktop";
+    },
+    get machine() {
+      return props.view.machine;
+    },
+    get fullscreen() {
+      return props.view.fullscreenMode.active();
+    },
+    get fullscreenSupported() {
+      return props.view.fullscreenMode.supported();
+    },
+    get expanded() {
+      return props.presentation?.expanded ?? false;
+    },
+    get onToggleExpanded() {
+      return props.presentation?.onToggleExpanded;
+    },
+    get onOpenWindow() {
+      return props.view.workspaceControls ? openWindow : undefined;
+    },
+    get openWindowHref() {
+      return props.presentation?.openWindowHref;
+    },
+    get takeoverText() {
+      return props.view.content.takeoverText;
+    },
+    get failureKind() {
+      return props.view.content.recovery.kind;
+    },
+    get pendingLabel() {
+      if (props.view.startup) {
+        return t(
+          props.view.startup.worker?.state === "bootstrapping"
+            ? "desktop.preparing"
+            : "desktop.starting",
+        );
+      }
+      const transition =
+        props.view.content.state === "connecting" ? props.view.content.transition : "connecting";
+      return t(
+        transition === "taking-control"
+          ? "desktop.takingControl"
+          : transition === "switching-to-viewing"
+            ? "desktop.switchingToViewing"
+            : "desktop.connecting",
+      );
+    },
+    get controlTransition() {
+      return (
+        props.view.content.state === "connecting" && props.view.content.transition !== "connecting"
+      );
+    },
+    onFullscreen: (button: HTMLButtonElement) => void props.view.fullscreenMode.toggle(button),
+    audioControl: () =>
+      (!props.view.fullscreenMode.active() ||
+        (props.view.audio.state() !== "unavailable" &&
+          props.view.audio.state() !== "unsupported")) &&
+      audioControl(),
+    pictureInPictureControl: () =>
+      (!props.view.fullscreenMode.active() || props.view.pictureInPicture.supported()) && (
+        <PictureInPictureButton
+          controller={props.view.pictureInPicture}
+          connected={props.view.content.state === "connected"}
+          documentMode={false}
+          showLabel
+        />
+      ),
+  };
+  const connection = merge(() => props.view, {
+    get rail() {
+      return platform() ? rail : undefined;
+    },
+    get showApps() {
+      const target = props.view.focusTarget();
+      return (
+        target.source !== null &&
+        desktopSourceForEnvironment({ id: target.source }).kind === "environment"
+      );
+    },
+    get pictureInPictureControl() {
+      return pictureInPictureControl();
+    },
+    get audioControl() {
+      return audioControl();
+    },
+  });
   return (
     <>
       {props.view.documentMode ? (
@@ -243,6 +373,8 @@ function DesktopPresentation(props: { view: DesktopPanelOwner["view"] }) {
       ) : (
         <DesktopPanelView
           embedded={props.view.embedded}
+          desktopPresentation={desktop()}
+          mobilePresentation={platform() === "mobile"}
           workspaceControls={props.view.workspaceControls}
           dock={props.view.dockLayout.dock}
           height={props.view.dockLayout.height}
@@ -262,32 +394,10 @@ function DesktopPresentation(props: { view: DesktopPanelOwner["view"] }) {
             <FullscreenButton controller={props.view.fullscreenMode} />
           )}
           onDock={(dock) => props.view.dockLayout.setDock(dock)}
-          onOpenWindow={() => {
-            const target = props.view.focusTarget();
-            // Read the current target at click time; workspace pop-outs never take input.
-            openDesktopFocus(
-              target.basePath,
-              target.source,
-              target.workspaceControls ? false : target.control,
-            );
-          }}
+          onOpenWindow={openWindow}
           onClose={props.view.onClose}
           content={content}
-          connection={merge(() => props.view, {
-            get showApps() {
-              const target = props.view.focusTarget();
-              return (
-                target.source !== null &&
-                desktopSourceForEnvironment({ id: target.source }).kind === "environment"
-              );
-            },
-            get pictureInPictureControl() {
-              return pictureInPictureControl();
-            },
-            get audioControl() {
-              return audioControl();
-            },
-          })}
+          connection={connection}
         />
       )}
     </>

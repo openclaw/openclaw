@@ -111,19 +111,16 @@ export async function runBrowserNativeHost(params: {
   /** Ensure the standalone extension relay daemon is running (ensure_relay op). */
   ensureRelay: (port: number) => Promise<BrowserNativeRelayEnsureStatus>;
   stateDir?: string;
-  platform?: NodeJS.Platform;
 }): Promise<BrowserNativeBootstrapResponse> {
   let response: BrowserNativeBootstrapResponse;
   try {
     const decoded = decodeBrowserNativeFrame(await readBrowserNativeFrame(params.input));
     if (!decoded.ok) {
       response = { v: 1, ok: false, code: decoded.code };
-    } else if ((params.platform ?? process.platform) === "win32" && process.platform !== "win32") {
-      response = { v: 1, ok: false, code: "manual_required" };
     } else {
       let boundProfile: string | undefined;
       try {
-        if ((params.platform ?? process.platform) === "win32") {
+        if (process.platform === "win32") {
           const { validateWindowsNativeContext } = await import("./extension-windows-host.js");
           boundProfile = await validateWindowsNativeContext(params);
           // Windows was admitted against its fixed Known Folder generation, not the POSIX state root.

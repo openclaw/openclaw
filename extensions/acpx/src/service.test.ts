@@ -57,13 +57,12 @@ const { reapStaleOpenClawOwnedAcpxOrphansMock } = vi.hoisted(() => ({
 }));
 const { acpxRuntimeConstructorMock, createAgentRegistryMock, createFileSessionStoreMock } =
   vi.hoisted(() => ({
-    acpxRuntimeConstructorMock: vi.fn(function MockAcpxRuntime() {
-      return {
-        doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
-        shutdown: vi.fn(async () => {}),
-        isHealthy: vi.fn(() => true),
-      };
-    }),
+    acpxRuntimeConstructorMock:
+      vi.fn<
+        (
+          options: ConstructorParameters<typeof AcpxRuntime>[0],
+        ) => Pick<AcpxRuntime, "doctor" | "shutdown" | "isHealthy">
+      >(),
     createAgentRegistryMock: vi.fn(() => ({})),
     createFileSessionStoreMock: vi.fn(() => ({})),
   }));
@@ -76,6 +75,11 @@ vi.mock("node:os", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:os")>()),
   availableParallelism: availableParallelismMock,
 }));
+
+vi.mock("acpx/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("acpx/runtime")>();
+  return { ...actual, createFileSessionStore: vi.fn(actual.createFileSessionStore) };
+});
 
 vi.mock("./runtime.js", () => ({
   ACPX_BACKEND_ID: "acpx",
@@ -112,6 +116,10 @@ import {
 let testWorkspace: TempWorkspace;
 
 beforeEach(async () => {
+  acpxRuntimeConstructorMock.mockReset();
+  acpxRuntimeConstructorMock.mockImplementation(function MockAcpxRuntime() {
+    return createMockRuntime();
+  });
   testWorkspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-acpx-service-",
@@ -293,7 +301,11 @@ describe("createAcpxRuntimeService", () => {
         });
       }
       const runtime = createMockRuntime();
-      let selected = "";
+      const sessionStores = vi.mocked(createFileSessionStore);
+      const selected = () => sessionStores.mock.calls.at(-1)![0].stateDir;
+      acpxRuntimeConstructorMock.mockImplementation(function MockAcpxRuntime() {
+        return runtime;
+      });
       let markerWrites = 0;
       const openKeyedStore = createOpenKeyedStore(ctx);
       const service = createAcpxRuntimeService(ctx, {
@@ -312,25 +324,21 @@ describe("createAcpxRuntimeService", () => {
           return store;
         },
         probeAtStartup: false,
-        runtimeFactory: ({ pluginConfig }) => {
-          selected = pluginConfig.stateDir;
-          return runtime as never;
-        },
       });
       try {
         await service.start(ctx);
         const retained = scenario === "move-failed";
-        expect(selected).toBe(retained ? legacy : destination);
+        expect(selected()).toBe(retained ? legacy : destination);
         if (scenario === "occupied") {
           expect(await fs.readFile(recordPath, "utf8")).toContain("upstream-retained");
           expect(await fs.readFile(path.join(destination, "existing"), "utf8")).toBe(
             "do not overwrite",
           );
         } else {
-          expect(await createFileSessionStore({ stateDir: selected }).load(recordId)).toEqual(
+          expect(await createFileSessionStore({ stateDir: selected() }).load(recordId)).toEqual(
             original,
           );
-          expect(await fs.readFile(path.join(selected, "retained-history.bin"), "utf8")).toBe(
+          expect(await fs.readFile(path.join(selected(), "retained-history.bin"), "utf8")).toBe(
             "opaque history",
           );
         }
@@ -349,7 +357,7 @@ describe("createAcpxRuntimeService", () => {
           await service.stop?.(ctx);
           await fs.writeFile(path.join(destination, "adapter-wrapper"), "generated wrapper");
           await service.start(ctx);
-          expect(selected).toBe(legacy);
+          expect(selected()).toBe(legacy);
         }
         if (scenario === "marker-failed") {
           expect(ctx.logger.warn).toHaveBeenCalledWith(
@@ -378,7 +386,7 @@ describe("createAcpxRuntimeService", () => {
             return readdir(...args);
           });
           await service.start(ctx);
-          expect(selected).toBe(destination);
+          expect(selected()).toBe(destination);
           expect(await fs.readFile(recordPath, "utf8")).toBe(
             "stale source must not be adopted twice",
           );
@@ -426,10 +434,12 @@ describe("createAcpxRuntimeService", () => {
       events.push("retract");
       expect(ownedRuntime).toBe(runtime);
     });
+    acpxRuntimeConstructorMock.mockImplementation(function MockAcpxRuntime() {
+      return runtime;
+    });
     const service = createAcpxRuntimeService(ctx, {
       backendLifecycle: { publish, retract },
       openKeyedStore: createEmptyAcpxKeyedStore,
-      runtimeFactory: () => runtime as never,
     });
 
     let resolved = false;
@@ -463,10 +473,12 @@ describe("createAcpxRuntimeService", () => {
     const ctx = createServiceContext(testWorkspace.dir);
     const stateDir = path.join(testWorkspace.dir, "custom-state");
     const runtime = createMockRuntime({ isHealthy: () => false });
+    acpxRuntimeConstructorMock.mockImplementation(function MockAcpxRuntime() {
+      return runtime;
+    });
     const service = createAcpxRuntimeService(ctx, {
       pluginConfig: { stateDir },
       openKeyedStore: createEmptyAcpxKeyedStore,
-      runtimeFactory: () => runtime as never,
     });
     await service.start(ctx);
     await fs.access(stateDir);
@@ -490,9 +502,10 @@ describe("createAcpxRuntimeService", () => {
     cleanupOpenClawOwnedAcpxProcessTreeMock.mockResolvedValueOnce({
       terminatedPids: [101, 102],
     });
-    const service = createAcpxRuntimeService(ctx, {
-      runtimeFactory: () => runtime as never,
+    acpxRuntimeConstructorMock.mockImplementation(function MockAcpxRuntime() {
+      return runtime;
     });
+    const service = createAcpxRuntimeService(ctx);
 
     await service.start(ctx);
 
@@ -516,9 +529,10 @@ describe("createAcpxRuntimeService", () => {
       sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
       rootPid: 0,
     });
-    const service = createAcpxRuntimeService(ctx, {
-      runtimeFactory: () => runtime as never,
+    acpxRuntimeConstructorMock.mockImplementation(function MockAcpxRuntime() {
+      return runtime;
     });
+    const service = createAcpxRuntimeService(ctx);
 
     await service.start(ctx);
 
@@ -603,10 +617,12 @@ describe("createAcpxRuntimeService", () => {
         return releaseDoctor.promise;
       }),
     });
+    acpxRuntimeConstructorMock.mockImplementation(function MockAcpxRuntime() {
+      return runtime;
+    });
     const service = createAcpxRuntimeService(ctx, {
       pluginConfig: { timeoutSeconds: 0.001 },
       openKeyedStore: createEmptyAcpxKeyedStore,
-      runtimeFactory: () => runtime as never,
     });
     vi.useFakeTimers();
     let settled = false;
@@ -635,26 +651,23 @@ describe("createAcpxRuntimeService", () => {
     ctx.config = { acp: { allowedAgents: ["claude"] } };
     let currentAllowedAgents: readonly string[] | undefined;
     const runtime = createMockRuntime();
-    const runtimeFactory = vi.fn<
-      NonNullable<Parameters<typeof createRealAcpxRuntimeService>[0]["runtimeFactory"]>
-    >(() => runtime as never);
+    acpxRuntimeConstructorMock.mockImplementation(function MockAcpxRuntime() {
+      return runtime;
+    });
     const service = createAcpxRuntimeService(ctx, {
       pluginConfig: {},
       openKeyedStore: createEmptyAcpxKeyedStore,
       getAllowedAgents: () => currentAllowedAgents,
-      runtimeFactory,
     });
     try {
       await service.start(ctx);
-      const input = runtimeFactory.mock.calls[0]![0];
-      expect(input.pluginConfig).toMatchObject({
-        timeoutSeconds: 120,
-      });
-      expect(input.getProbeAgent()).toBeUndefined();
+      const input = acpxRuntimeConstructorMock.mock.calls[0]![0];
+      expect(input.timeoutMs).toBe(120_000);
+      expect(input.getProbeAgent?.()).toBeUndefined();
       currentAllowedAgents = ["gemini"];
-      expect(input.getProbeAgent()).toBe("gemini");
+      expect(input.getProbeAgent?.()).toBe("gemini");
       currentAllowedAgents = undefined;
-      expect(input.getProbeAgent()).toBeUndefined();
+      expect(input.getProbeAgent?.()).toBeUndefined();
       expect(runtime.shutdown).not.toHaveBeenCalled();
     } finally {
       await service.stop?.(ctx);
@@ -664,16 +677,11 @@ describe("createAcpxRuntimeService", () => {
   it("can skip the embedded runtime backend via env", async () => {
     vi.stubEnv("OPENCLAW_SKIP_ACPX_RUNTIME", "1");
     const ctx = createServiceContext(testWorkspace.dir);
-    const runtimeFactory = vi.fn(() => {
-      throw new Error("runtime factory should not run when ACPX is skipped");
-    });
-    const service = createAcpxRuntimeService(ctx, {
-      runtimeFactory: runtimeFactory as never,
-    });
+    const service = createAcpxRuntimeService(ctx);
 
     await service.start(ctx);
 
-    expect(runtimeFactory).not.toHaveBeenCalled();
+    expect(acpxRuntimeConstructorMock).not.toHaveBeenCalled();
     expect(getAcpRuntimeBackend("acpx")).toBeUndefined();
     expect(ctx.logger.info).toHaveBeenCalledWith(
       "skipping embedded acpx runtime backend (OPENCLAW_SKIP_ACPX_RUNTIME=1)",
@@ -689,18 +697,22 @@ it("catalog-only acquisition and disposal preserve another active runtime lease"
   });
   const primary = createRuntimeWithoutProcesses();
   const primaryShutdown = vi.spyOn(primary, "shutdown");
+  acpxRuntimeConstructorMock.mockImplementationOnce(function MockAcpxRuntime() {
+    return primary;
+  });
   const owner = createAcpxRuntimeService(ctx, {
     probeAtStartup: false,
-    runtimeFactory: () => primary,
   });
   await owner.start(ctx);
   const lease = await seedActiveLease(ctx);
   const inspectionRuntime = createRuntimeWithoutProcesses();
   const inspectionShutdown = vi.spyOn(inspectionRuntime, "shutdown");
+  acpxRuntimeConstructorMock.mockImplementationOnce(function MockAcpxRuntime() {
+    return inspectionRuntime;
+  });
   const inspection = createAcpxRuntimeService(ctx, {
     startupPurpose: "inspection",
     probeAtStartup: false,
-    runtimeFactory: () => inspectionRuntime,
     backendLifecycle: { publish: () => {}, retract: () => {} },
   });
   await inspection.start(ctx);

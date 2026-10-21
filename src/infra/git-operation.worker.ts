@@ -1,23 +1,15 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type { DiffReadTiming } from "./diff-read-timing.js";
 import { serializeGitWorkerFailure, withGitWorkerContext } from "./git-worker-context.js";
 import type { GitWorkerCommand, GitWorkerReply, GitWorkerResult } from "./git-worker-contract.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
-serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
-  async (input, channel, control) => {
+serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
+  async (command, channel, control) => {
     try {
-      if (
-        !channel ||
-        !isRecord(input) ||
-        typeof input.type !== "string" ||
-        !isRecord(input.input)
-      ) {
+      if (!channel) {
         throw new Error("Git worker requires a typed operation and host channel");
       }
-      // SAFETY: This private entry consumes only commands created by its typed host broker.
-      const command = input as GitWorkerCommand;
       channel.consumeInput();
       const diffTiming: DiffReadTiming | undefined =
         command.type === "checkout.revision" && command.input.scope === "diff"

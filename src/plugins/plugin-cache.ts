@@ -13,7 +13,10 @@ import type { PluginSourceCacheRecord } from "./plugin-cache-artifacts.js";
 import type { PluginCacheFact } from "./plugin-cache-management.js";
 import { createPluginCacheSdk } from "./plugin-cache-sdk.js";
 import type { PluginCache, PluginRootCacheRecord } from "./plugin-cache.types.js";
-import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
+import {
+  PluginInstanceDrainTimeoutError,
+  PluginInventoryRetiredError,
+} from "./plugin-instance-error.js";
 import {
   createPluginExecutionFrame,
   getPluginExecutionFrame,
@@ -110,7 +113,7 @@ export function getPluginCacheRetirementSignal(cache: PluginCache): AbortSignal 
 export function retainPluginCache(cache: PluginCache): () => void {
   const retained = getPluginCacheRetainers(cache);
   if (cache.retirement || retained.retirement) {
-    throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+    throw new PluginInventoryRetiredError();
   }
   if (retained.references.size === 0) {
     retained.settled = createDeferredCore();

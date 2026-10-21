@@ -1,6 +1,3 @@
-/**
- * Tests channel lifecycle queue ordering and failure handling.
- */
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createChannelRunQueue } from "./channel-lifecycle.core.js";
@@ -11,6 +8,26 @@ async function flushAsyncWork() {
   }
 }
 
+async function finish(task: ReturnType<typeof createDeferred<void>>) {
+  task.resolve();
+  await task.promise;
+  await flushAsyncWork();
+}
+
+async function startConcurrentRuns() {
+  const first = createDeferred();
+  const second = createDeferred();
+  const setStatus = vi.fn();
+  const queue = createChannelRunQueue({ setStatus });
+  vi.setSystemTime(1_000);
+  queue.enqueue("first", async () => first.promise);
+  await flushAsyncWork();
+  vi.setSystemTime(2_000);
+  queue.enqueue("second", async () => second.promise);
+  await flushAsyncWork();
+  return { first, second, setStatus, queue };
+}
+
 describe("createChannelRunQueue", () => {
   it("serializes work per key while allowing unrelated keys to run", async () => {
     const first = createDeferred();
@@ -19,33 +36,22 @@ describe("createChannelRunQueue", () => {
     const order: string[] = [];
     const queue = createChannelRunQueue({});
 
-    queue.enqueue("same", async () => {
-      order.push("start:first");
-      await first.promise;
-      order.push("end:first");
-    });
-    queue.enqueue("same", async () => {
-      order.push("start:second");
-      await second.promise;
-      order.push("end:second");
-    });
-    queue.enqueue("other", async () => {
-      order.push("start:third");
-      await third.promise;
-      order.push("end:third");
-    });
+    const track = (name: string, task: ReturnType<typeof createDeferred<void>>) => async () => {
+      order.push(`start:${name}`);
+      await task.promise;
+      order.push(`end:${name}`);
+    };
+    queue.enqueue("same", track("first", first));
+    queue.enqueue("same", track("second", second));
+    queue.enqueue("other", track("third", third));
 
     await flushAsyncWork();
     expect(order).toEqual(["start:first", "start:third"]);
 
-    third.resolve?.();
-    await third.promise;
-    await flushAsyncWork();
+    await finish(third);
     expect(order).toEqual(["start:first", "start:third", "end:third"]);
 
-    first.resolve?.();
-    await first.promise;
-    await flushAsyncWork();
+    await finish(first);
     expect(order).toEqual(["start:first", "start:third", "end:third", "end:first", "start:second"]);
 
     second.resolve?.();
@@ -67,101 +73,51 @@ describe("createChannelRunQueue", () => {
     expect(setStatus).toHaveBeenCalledTimes(3);
     const [initialStatus, busyStatus, finalStatus] = setStatus.mock.calls.map(([status]) => status);
     expect(initialStatus).toEqual({ activeRuns: 0, busy: false, activeRunStartedAt: null });
-    expect(busyStatus?.activeRuns).toBe(1);
-    expect(busyStatus?.busy).toBe(true);
-    expect(typeof busyStatus?.lastRunActivityAt).toBe("number");
-    expect(typeof busyStatus?.activeRunStartedAt).toBe("number");
-    expect(finalStatus?.activeRuns).toBe(0);
-    expect(finalStatus?.busy).toBe(false);
-    expect(typeof finalStatus?.lastRunActivityAt).toBe("number");
-    expect(finalStatus?.activeRunStartedAt).toBeNull();
+    expect(busyStatus).toMatchObject({
+      activeRuns: 1,
+      busy: true,
+      lastRunActivityAt: expect.any(Number),
+      activeRunStartedAt: expect.any(Number),
+    });
+    expect(finalStatus).toMatchObject({
+      activeRuns: 0,
+      busy: false,
+      lastRunActivityAt: expect.any(Number),
+      activeRunStartedAt: null,
+    });
     expect(onError).toHaveBeenCalledWith(taskError);
   });
 
-  it("keeps the oldest run start while a newer concurrent task completes", async () => {
-    vi.useFakeTimers();
-    try {
-      const first = createDeferred();
-      const second = createDeferred();
-      const setStatus = vi.fn();
-      const queue = createChannelRunQueue({ setStatus });
-
-      vi.setSystemTime(1_000);
-      queue.enqueue("first", async () => {
-        await first.promise;
-      });
-      await flushAsyncWork();
-
-      vi.setSystemTime(2_000);
-      queue.enqueue("second", async () => {
-        await second.promise;
-      });
-      await flushAsyncWork();
-
-      second.resolve?.();
-      await second.promise;
-      await flushAsyncWork();
-
-      expect(setStatus.mock.calls.at(-1)?.[0]).toMatchObject({
-        activeRuns: 1,
-        busy: true,
-        activeRunStartedAt: 1_000,
-      });
-
-      queue.deactivate();
-      first.resolve?.();
-      await first.promise;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("advances to the next-oldest run start when the oldest run ends", async () => {
-    vi.useFakeTimers();
-    try {
-      const first = createDeferred();
-      const second = createDeferred();
-      const setStatus = vi.fn();
-      const queue = createChannelRunQueue({ setStatus });
-
-      vi.setSystemTime(1_000);
-      queue.enqueue("first", async () => {
-        await first.promise;
-      });
-      await flushAsyncWork();
-
-      vi.setSystemTime(2_000);
-      queue.enqueue("second", async () => {
-        await second.promise;
-      });
-      await flushAsyncWork();
-
-      first.resolve?.();
-      await first.promise;
-      await flushAsyncWork();
-
-      expect(setStatus.mock.calls.at(-1)?.[0]).toMatchObject({
-        activeRuns: 1,
-        busy: true,
-        activeRunStartedAt: 2_000,
-      });
-
-      queue.deactivate();
-      second.resolve?.();
-      await second.promise;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  it.each([
+    { done: "second", remaining: "first", startedAt: 1_000 },
+    { done: "first", remaining: "second", startedAt: 2_000 },
+  ] as const)(
+    "tracks the oldest active run after $done completes",
+    async ({ done, remaining, startedAt }) => {
+      vi.useFakeTimers();
+      try {
+        const runs = await startConcurrentRuns();
+        await finish(runs[done]);
+        expect(runs.setStatus.mock.calls.at(-1)?.[0]).toMatchObject({
+          activeRuns: 1,
+          busy: true,
+          activeRunStartedAt: startedAt,
+        });
+        runs.queue.deactivate();
+        runs[remaining].resolve();
+        await runs[remaining].promise;
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("contains reporting hook errors", async () => {
     const taskError = new Error("boom");
     const onError = vi.fn(() => {
       throw new Error("report failed");
     });
-    const queue = createChannelRunQueue({
-      onError,
-    });
+    const queue = createChannelRunQueue({ onError });
 
     queue.enqueue("key", async () => {
       throw taskError;
@@ -183,9 +139,7 @@ describe("createChannelRunQueue", () => {
     await flushAsyncWork();
 
     queue.deactivate();
-    first.resolve?.();
-    await first.promise;
-    await flushAsyncWork();
+    await finish(first);
 
     expect(task).not.toHaveBeenCalled();
   });

@@ -30,7 +30,7 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
-import type { ExtensionEvent } from "./extensions/types.js";
+import type { ExtensionFactory, ExtensionEvent } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -52,12 +52,12 @@ it("does not append when a compaction extension rejects the finalized summary", 
   });
   const sessionManager = SessionManager.open(target, dir);
   sessionManager.appendMessage(createAssistant(testModel, "authoritative answer"));
-  const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-    ["session_before_compact", [async () => ({ cancel: true })]],
-  ]);
+  const handlers: ExtensionFactory = (api) => {
+    api.on("session_before_compact", async () => ({ cancel: true }));
+  };
   const { session } = await createTestSession({
     sessionManager,
-    resourceLoader: createResourceLoader(handlers),
+    resourceLoader: await createResourceLoader(handlers),
   });
   const persistedBefore = await loadTranscriptEvents(target);
   const contextBefore = sessionManager.buildSessionContext();
@@ -91,21 +91,16 @@ it("does not publish a cancelled compaction while waiting for the writer", async
     const { firstKeptEntryId, tokensBefore } = (event as BeforeCompactionEvent).preparation;
     return { compaction: { summary: "condensed history", firstKeptEntryId, tokensBefore } };
   };
-  const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-    ["session_before_compact", [beforeCompact]],
-    [
-      "session_compact",
-      [
-        async () => {
-          published.push("compaction");
-        },
-      ],
-    ],
-  ]);
+  const handlers: ExtensionFactory = (api) => {
+    api.on("session_before_compact", beforeCompact);
+    api.on("session_compact", async () => {
+      published.push("compaction");
+    });
+  };
   const { session } = await createTestSession({
     sessionManager: manager,
     settingsManager: compactionSettings(),
-    resourceLoader: createResourceLoader(handlers),
+    resourceLoader: await createResourceLoader(handlers),
   });
   const before = await loadTranscriptEvents(target);
   const messagesBefore = [...session.messages];

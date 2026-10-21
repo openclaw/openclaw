@@ -58,7 +58,6 @@ describe("POSIX command settlement", () => {
       settlementFailureMessage: "settlement failed",
       executionTimeoutMs: params.executionTimeoutMs,
       forceKillAfterMs: params.forceKillAfterMs ?? 20,
-      initialSignal: "SIGTERM",
       onSettled: settled,
       processGroupId: 42,
       verifyAfterMs: 10,

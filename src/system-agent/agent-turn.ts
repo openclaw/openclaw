@@ -231,7 +231,7 @@ export async function runSystemAgentTurn(
   params: SystemAgentTurnParams,
 ): Promise<SystemAgentTurnReply | null> {
   const binding = params.session.verifiedInference;
-  const plan = await requireSystemAgentInferenceRoute(binding, undefined, "agent-turn", () =>
+  const plan = await requireSystemAgentInferenceRoute(binding, "agent-turn", () =>
     clearFailedSystemAgentSessionState(params.session),
   );
   let expectedAgentHarnessRuntimeArtifact: ReturnType<

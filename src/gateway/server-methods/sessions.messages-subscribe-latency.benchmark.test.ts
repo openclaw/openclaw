@@ -11,7 +11,11 @@ import * as approvals from "../operator-approval-store.js";
 import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import {
+  roleClient,
+  rolePolicyConfig,
+  sharingPolicyClient,
+} from "../session-sharing.test-utils.js";
 import * as lifetime from "../session-utils-read-lifetime.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
@@ -20,11 +24,8 @@ import { proveSubscriptionDoesNotWaitForDisplayRows } from "./sessions.messages-
 
 afterEach(() => vi.restoreAllMocks());
 
-it("subscribes during an active turn among 8,000 sessions without waiting for display facts", async ({
-  signal,
-}) => {
-  await proveSubscriptionDoesNotWaitForDisplayRows(8_000, signal);
-});
+it("subscribes during an active turn among 8,000 sessions", ({ signal }) =>
+  proveSubscriptionDoesNotWaitForDisplayRows(8_000, signal));
 
 it("measures subscription dispatch with a 160k-token transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -45,13 +46,7 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
     const subscribers = createSessionMessageSubscriberRegistry();
     const client = { ...roleClient("view", "perf-reader"), connId: "perf-reader" };
     client.connect.scopes = ["operator.sessions.read", "operator.approvals"];
-    client.connect.device = {
-      id: "perf-device",
-      publicKey: "key",
-      signature: "signature",
-      signedAt: 1,
-      nonce: "nonce",
-    };
+    client.connect.device = sharingPolicyClient({ deviceId: "perf-device" }).connect.device;
     const runtime = createOperatorApprovalSessionEventRuntime({
       clients: [client],
       sessionMessageSubscribers: subscribers,

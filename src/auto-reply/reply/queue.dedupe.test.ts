@@ -19,43 +19,30 @@ import { resetRecentQueuedMessageIdDedupe } from "./queue/recent-message-ids.tes
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
-const collectSettings: QueueSettings = {
-  mode: "collect",
-  debounceMs: 0,
-  cap: 50,
-  dropPolicy: "summarize",
-};
 const settings = createQueueSettings();
 let sequence = 0;
 let key: string;
 
-function createFollowupCollector(expectedCalls = 1): {
-  calls: FollowupRun[];
-  done: ReturnType<typeof createDeferred<void>>;
-  runFollowup: (run: FollowupRun) => Promise<void>;
-} {
-  const calls: FollowupRun[] = [];
-  const done = createDeferred();
-  return {
-    calls,
-    done,
-    runFollowup: async (run: FollowupRun) => {
-      calls.push(run);
-      if (calls.length >= expectedCalls) {
-        done.resolve();
-      }
+function source(
+  prompt: string,
+  overrides: Partial<Parameters<typeof createRun>[0]> = {},
+  execution?: Partial<FollowupRun["run"]>,
+) {
+  return createRun(
+    {
+      prompt,
+      messageId: "same-id",
+      originatingChannel: "line",
+      originatingTo: "group:G1",
+      ...overrides,
     },
-  };
+    execution,
+  );
 }
 
-function source(prompt: string, overrides: Partial<Parameters<typeof createRun>[0]> = {}) {
-  return createRun({
-    prompt,
-    messageId: "same-id",
-    originatingChannel: "line",
-    originatingTo: "group:G1",
-    ...overrides,
-  });
+function routeEnqueuer(queueKey: string, route: Partial<Parameters<typeof createRun>[0]>) {
+  return (prompt: string, overrides: Partial<Parameters<typeof createRun>[0]>) =>
+    enqueueFollowupRun(queueKey, source(prompt, { ...route, ...overrides }), settings);
 }
 
 beforeEach(() => {
@@ -68,33 +55,25 @@ afterEach(() => {
 });
 
 describe("followup queue deduplication", () => {
-  beforeEach(() => {
-    resetRecentQueuedMessageIdDedupe();
-  });
-
   it("deduplicates settled redeliveries within their physical store, not across stores", async () => {
     const queueKey = "agent:main:physical-dedupe";
-    const makeRun = (store: string) => {
-      const run = createRun({
-        prompt: store,
-        messageId: "same-id",
-        originatingChannel: "discord",
-        originatingTo: "channel:physical",
-      });
-      run.run.sessionKey = queueKey;
-      run.run.config = { session: { store } };
-      return run;
-    };
+    const makeRun = (store: string) =>
+      source(
+        store,
+        {
+          originatingChannel: "discord",
+          originatingTo: "channel:physical",
+        },
+        { sessionKey: queueKey, config: { session: { store } } },
+      );
     const originals = [
       makeRun("/synthetic/store-a/sessions.json"),
       makeRun("/synthetic/store-b/sessions.json"),
     ];
-    const { calls, done, runFollowup } = createFollowupCollector(2);
+    const { calls, done, runFollowup } = createDrainRecorder(2);
     try {
       for (const run of originals) {
-        expect(enqueueFollowupRun(queueKey, run, collectSettings, "message-id", runFollowup)).toBe(
-          true,
-        );
+        expect(enqueueFollowupRun(queueKey, run, settings, "message-id", runFollowup)).toBe(true);
       }
       await done.promise;
       await Promise.all(
@@ -107,13 +86,7 @@ describe("followup queue deduplication", () => {
       );
       for (const run of originals) {
         expect(
-          enqueueFollowupRun(
-            queueKey,
-            makeRun(run.prompt),
-            collectSettings,
-            "message-id",
-            runFollowup,
-          ),
+          enqueueFollowupRun(queueKey, makeRun(run.prompt), settings, "message-id", runFollowup),
         ).toBe(false);
       }
       expect(calls).toHaveLength(2);
@@ -157,52 +130,24 @@ describe("followup queue deduplication", () => {
       scheduleFollowupDrain(key, runFollowup);
       await settled.promise;
       expect(runFollowup).toHaveBeenCalledExactlyOnceWith(original);
-      expect(onAdopted).toHaveBeenCalledOnce();
-      expect(onSettled).toHaveBeenCalledOnce();
-      expect(onAbandoned).not.toHaveBeenCalled();
+      expect([onAdopted, onSettled, onAbandoned].map((fn) => fn.mock.calls.length)).toEqual([
+        1, 1, 0,
+      ]);
     },
   );
 
   it("deduplicates messages with same Discord message_id", async () => {
     const queueKey = `test-dedup-message-id-${Date.now()}`;
-    const { calls, done, runFollowup } = createFollowupCollector();
-
-    const first = enqueueFollowupRun(
-      queueKey,
-      createRun({
-        prompt: "[Discord Guild #test channel id:123] Hello",
-        messageId: "m1",
-        originatingChannel: "discord",
-        originatingTo: "channel:123",
-      }),
-      collectSettings,
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const enqueue = routeEnqueuer(queueKey, {
+      originatingChannel: "discord",
+      originatingTo: "channel:123",
+    });
+    expect(enqueue("[Discord Guild #test channel id:123] Hello", { messageId: "m1" })).toBe(true);
+    expect(enqueue("[Discord Guild #test channel id:123] Hello (dupe)", { messageId: "m1" })).toBe(
+      false,
     );
-    expect(first).toBe(true);
-
-    const second = enqueueFollowupRun(
-      queueKey,
-      createRun({
-        prompt: "[Discord Guild #test channel id:123] Hello (dupe)",
-        messageId: "m1",
-        originatingChannel: "discord",
-        originatingTo: "channel:123",
-      }),
-      collectSettings,
-    );
-    expect(second).toBe(false);
-
-    const third = enqueueFollowupRun(
-      queueKey,
-      createRun({
-        prompt: "[Discord Guild #test channel id:123] World",
-        messageId: "m2",
-        originatingChannel: "discord",
-        originatingTo: "channel:123",
-      }),
-      collectSettings,
-    );
-    expect(third).toBe(true);
-
+    expect(enqueue("[Discord Guild #test channel id:123] World", { messageId: "m2" })).toBe(true);
     scheduleFollowupDrain(queueKey, runFollowup);
     await done.promise;
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
@@ -210,72 +155,28 @@ describe("followup queue deduplication", () => {
 
   it("deduplicates message ids when numeric and string thread ids share a route", () => {
     const queueKey = `test-dedup-thread-normalized-${Date.now()}`;
-
-    const first = enqueueFollowupRun(
-      queueKey,
-      createRun({
-        prompt: "first",
-        messageId: "same-id",
-        originatingChannel: "telegram",
-        originatingTo: "-100123",
-        originatingThreadId: 42.9,
-      }),
-      collectSettings,
-    );
-    expect(first).toBe(true);
-
-    const second = enqueueFollowupRun(
-      queueKey,
-      createRun({
-        prompt: "second",
-        messageId: "same-id",
-        originatingChannel: "telegram",
-        originatingTo: "-100123",
-        originatingThreadId: "42",
-      }),
-      collectSettings,
-    );
-    expect(second).toBe(false);
+    const enqueue = routeEnqueuer(queueKey, {
+      originatingChannel: "telegram",
+      originatingTo: "-100123",
+    });
+    expect(enqueue("first", { originatingThreadId: 42.9 })).toBe(true);
+    expect(enqueue("second", { originatingThreadId: "42" })).toBe(false);
   });
 
   it("deduplicates redelivery after reply policy changes", async () => {
     const queueKey = `test-dedup-policy-change-${Date.now()}`;
-    const { calls, done, runFollowup } = createFollowupCollector();
-
-    expect(
-      enqueueFollowupRun(
-        queueKey,
-        createRun({
-          prompt: "first",
-          messageId: "same-id",
-          originatingChannel: "slack",
-          originatingTo: "U123",
-          originatingReplyToId: "101.001",
-          originatingReplyToMode: "off",
-          originatingChatType: "direct",
-        }),
-        collectSettings,
-      ),
-    ).toBe(true);
-
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const enqueue = routeEnqueuer(queueKey, {
+      originatingChannel: "slack",
+      originatingTo: "U123",
+      originatingReplyToId: "101.001",
+      originatingChatType: "direct",
+    });
+    expect(enqueue("first", { originatingReplyToMode: "off" })).toBe(true);
     scheduleFollowupDrain(queueKey, runFollowup);
     await done.promise;
 
-    expect(
-      enqueueFollowupRun(
-        queueKey,
-        createRun({
-          prompt: "redelivery",
-          messageId: "same-id",
-          originatingChannel: "slack",
-          originatingTo: "U123",
-          originatingReplyToId: "101.001",
-          originatingReplyToMode: "first",
-          originatingChatType: "direct",
-        }),
-        collectSettings,
-      ),
-    ).toBe(false);
+    expect(enqueue("redelivery", { originatingReplyToMode: "first" })).toBe(false);
     expect(calls).toHaveLength(1);
   });
 
@@ -303,28 +204,15 @@ describe("followup queue deduplication", () => {
 
   it("does not collide recent message-id keys when routing contains delimiters", async () => {
     const { done, runFollowup } = createDrainRecorder();
-    expect(
-      enqueueFollowupRun(
-        key,
-        source("first", {
-          originatingChannel: "signal|group",
-          originatingTo: "peer",
-        }),
-        settings,
-      ),
-    ).toBe(true);
+    const enqueue = routeEnqueuer(key, {});
+    expect(enqueue("first", { originatingChannel: "signal|group", originatingTo: "peer" })).toBe(
+      true,
+    );
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(
-      enqueueFollowupRun(
-        key,
-        source("second", {
-          originatingChannel: "signal",
-          originatingTo: "group|peer",
-        }),
-        settings,
-      ),
-    ).toBe(true);
+    expect(enqueue("second", { originatingChannel: "signal", originatingTo: "group|peer" })).toBe(
+      true,
+    );
   });
 
   it.each([
@@ -341,23 +229,16 @@ describe("followup queue deduplication", () => {
         expect(run.abortSignal?.aborted).toBe(true);
       });
       const capped: QueueSettings = { ...settings, cap };
+      const enqueue = (run: FollowupRun, policy = capped) =>
+        enqueueFollowupRun(key, run, policy, "message-id", runFollowup, false);
       const first = source("retry me");
       first.abortSignal = controller.signal;
       first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned, onSettled };
-      expect(enqueueFollowupRun(key, first, capped, "message-id", runFollowup, false)).toBe(true);
+      expect(enqueue(first)).toBe(true);
       for (let index = 0; index < siblings; index += 1) {
-        expect(
-          enqueueFollowupRun(
-            key,
-            source(`healthy sibling ${index}`, {
-              messageId: `healthy-${index}`,
-            }),
-            capped,
-            "message-id",
-            runFollowup,
-            false,
-          ),
-        ).toBe(true);
+        expect(enqueue(source(`healthy sibling ${index}`, { messageId: `healthy-${index}` }))).toBe(
+          true,
+        );
       }
       const queue = getExistingFollowupQueue(key);
       const sources =
@@ -375,7 +256,7 @@ describe("followup queue deduplication", () => {
       const retry = source("retry me");
       retry.turnAdoptionLifecycle = { onAdopted: () => {} };
       // Retrying ingress must not need a drain or an owner-clear event.
-      expect(enqueueFollowupRun(key, retry, settings, "message-id", runFollowup, false)).toBe(true);
+      expect(enqueue(retry, settings)).toBe(true);
       expect(onAbandoned).toHaveBeenCalledOnce();
       await first.controllerInput!.settlement.promise;
       expect(onSettled).toHaveBeenCalledOnce();

@@ -666,7 +666,7 @@ export function readVisibleTranscriptStats(
         .onRef("event.seq", "=", "active.event_seq"),
     )
     .select((eb) => [
-      eb.fn.count<number>("active.event_seq").as("event_count"),
+      eb.fn.countAll<number>().as("event_count"),
       /* kysely-allow-raw: JSONL size includes one terminating newline per event. */
       sql<number>`CAST(COALESCE(SUM(${transcriptEventReadBytesSql("event")} ), 0)
         + COUNT(*) AS BIGINT)`.as("size_bytes"),

@@ -412,11 +412,14 @@ it("renders the saved chip identity before agent discovery without reviving anot
     );
     expect(card!.querySelector("[data-avatar='⚓']")).not.toBeNull();
   });
+  // The visible name already labels the trigger; no hover tooltip repeats it.
+  expect(dom.query("openclaw-tooltip")).toBeNull();
   host.sessionKey = "agent:other:thread";
   context.agentSelection.set("other");
   update();
   expect(dom.query("openclaw-sidebar-agent-card")).toBeNull();
   expect(dom.query(".sidebar-workspace-header")).not.toBeNull();
+  expect(dom.query("openclaw-tooltip")).toBeNull();
 });
 
 it("retains the workspace name DOM across unrelated sidebar publications and renames", () => {

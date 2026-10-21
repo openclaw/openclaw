@@ -25,23 +25,25 @@ import {
   hasLegacyDeviceIdentityPath,
   repairInvalidCanonicalIdentity,
 } from "./state-migrations.device-identity-repair.js";
-import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
+import type {
+  LegacyDeviceIdentityDetection,
+  LegacyDeviceIdentitySource,
+} from "./state-migrations.device-identity.types.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import { readLegacyMigrationSourceSnapshot } from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 export { detectLegacyDeviceIdentity } from "./state-migrations.device-identity-repair.js";
-const IDENTITY_KEY = "primary";
 const MAX_BYTES = 128 * 1024;
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
-function readCanonicalIdentity(db: DatabaseSync) {
+function readCanonicalIdentity(db: DatabaseSync, identityKey: string) {
   return executeSqliteQueryTakeFirstSync(
     db,
     getNodeSqliteKysely<Pick<ClientCredentialDatabase, "device_identities">>(db)
       .selectFrom("device_identities")
       .selectAll()
-      .where("identity_key", "=", IDENTITY_KEY),
+      .where("identity_key", "=", identityKey),
   );
 }
 
@@ -85,6 +87,27 @@ export async function migrateLegacyDeviceIdentity(params: {
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
 }): Promise<MigrationMessages> {
+  const results: MigrationMessages[] = [];
+  for (const detected of params.detected.sources) {
+    results.push(await migrateLegacyDeviceIdentitySource({ ...params, detected }));
+  }
+  return {
+    changes: results.flatMap((result) => result.changes),
+    warnings: results.flatMap((result) => result.warnings),
+    ...(results.some((result) => result.notices?.length)
+      ? { notices: results.flatMap((result) => result.notices ?? []) }
+      : {}),
+  };
+}
+
+async function migrateLegacyDeviceIdentitySource(params: {
+  detected: LegacyDeviceIdentitySource;
+  stateDir: string;
+  env?: NodeJS.ProcessEnv;
+  doctorOnlyStateMigrations?: boolean;
+}): Promise<MigrationMessages> {
+  const identityKey = params.detected.identityKey;
+  const claimKey = `identity:${identityKey}` as const;
   if (
     (!params.detected.hasLegacy && !params.detected.hasInvalidCanonical) ||
     params.doctorOnlyStateMigrations !== true
@@ -100,7 +123,7 @@ export async function migrateLegacyDeviceIdentity(params: {
     run: async (env) => {
       if (!hasLegacyDeviceIdentityPath(params.detected)) {
         return params.detected.hasInvalidCanonical
-          ? repairInvalidCanonicalIdentity(env)
+          ? repairInvalidCanonicalIdentity(env, identityKey)
           : { changes: [], warnings: [] };
       }
       const owner = openClientCredentialCustody(env, { createIfMissing: true, migration: true });
@@ -111,10 +134,10 @@ export async function migrateLegacyDeviceIdentity(params: {
         const stored = readClientCredentialReceipt(owner.database);
         if (stored) {
           owner.transaction(() => assertClientCredentialStoreReady(owner.database, env, false));
-          if (stored.receipt.legacyImports["identity:primary"]) {
+          if (stored.receipt.legacyImports[claimKey]) {
             if (params.detected.hasInvalidCanonical) {
               owner.close();
-              return repairInvalidCanonicalIdentity(env);
+              return repairInvalidCanonicalIdentity(env, identityKey);
             }
             return {
               changes: [],
@@ -163,7 +186,7 @@ export async function migrateLegacyDeviceIdentity(params: {
               "complete",
             );
           }
-          const existing = readCanonicalIdentity(owner.database);
+          const existing = readCanonicalIdentity(owner.database, identityKey);
           if (existing) {
             let valid: DeviceIdentity | undefined;
             try {
@@ -174,7 +197,7 @@ export async function migrateLegacyDeviceIdentity(params: {
                   privateKeyPem: existing.private_key_pem,
                   createdAtMs: existing.created_at_ms,
                 },
-                IDENTITY_KEY,
+                identityKey,
               );
             } catch {
               /* Explicit Doctor repair below. */
@@ -190,7 +213,7 @@ export async function migrateLegacyDeviceIdentity(params: {
                 owner.database,
                 getNodeSqliteKysely<ClientCredentialDatabase>(owner.database)
                   .deleteFrom("device_identities")
-                  .where("identity_key", "=", IDENTITY_KEY),
+                  .where("identity_key", "=", identityKey),
               );
             }
             imported = !valid;
@@ -198,10 +221,10 @@ export async function migrateLegacyDeviceIdentity(params: {
             imported = true;
           }
           importClientCredentialLegacy(owner, {
-            key: "identity:primary",
+            key: claimKey,
             sha256: snapshot.sha256,
             identity: {
-              identity_key: IDENTITY_KEY,
+              identity_key: identityKey,
               device_id: snapshot.identity.deviceId,
               public_key_pem: snapshot.identity.publicKeyPem,
               private_key_pem: snapshot.identity.privateKeyPem,
@@ -213,8 +236,8 @@ export async function migrateLegacyDeviceIdentity(params: {
         return {
           changes: [
             imported
-              ? "Migrated primary device identity to SQLite."
-              : "Preserved identical primary device identity already in SQLite.",
+              ? `Migrated ${identityKey} device identity to SQLite.`
+              : `Preserved identical ${identityKey} device identity already in SQLite.`,
           ],
           warnings: [],
           notices: [

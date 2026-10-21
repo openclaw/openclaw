@@ -5,8 +5,10 @@ import {
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiChatHistoryMessage as historyMessage } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openPicker, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { selectFileAction } from "./chat-file-actions.test-support.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createThemedChatOpener, themeConfigResponse } from "./theme-typography.test-support.ts";
@@ -184,7 +186,10 @@ suite.define(() => {
     // Capture CodeMirror while online; disconnecting replaces its editable node.
     await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
     await page.locator(".cm-content").waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "Edit file" }).first().click();
+    await selectFileAction(
+      page.locator(".sidebar-file-view").filter({ visible: true }),
+      "Edit file",
+    );
     const editableContent = page.locator('.cm-content[contenteditable="true"]');
     await editableContent.waitFor();
 
@@ -282,7 +287,7 @@ suite.define(() => {
     await page.goBack();
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
     await expectChrome(chatColor);
-    await page.locator(".chat-pane__nav-toggle").first().click();
+    await navigationDrawerToggle(page).click();
     await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
     await page.locator(".new-session-page__message").waitFor();
     await expectChrome(chatColor);

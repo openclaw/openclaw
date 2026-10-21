@@ -10,20 +10,16 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   execFileSync: execFileSyncMock,
 }));
-type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
-function toCommandResult(response?: CommandResponse) {
-  return {
-    stdout: response?.stdout ?? "",
-    stderr: response?.stderr ?? "",
-    code: response?.code === undefined ? 0 : response.code,
-  };
-}
-function createRunner(responses: Record<string, CommandResponse>) {
+function createRunner(responses: Record<string, string>) {
   const calls: string[] = [];
   const runner = async (argv: string[]) => {
     const key = argv.join(" ");
     calls.push(key);
-    return toCommandResult(responses[key]);
+    const stdout = responses[key];
+    if (stdout === undefined) {
+      throw new Error(`unexpected command: ${key}`);
+    }
+    return { stdout, stderr: "", code: 0 };
   };
   return { runner, calls };
 }
@@ -36,14 +32,15 @@ describe("update install surface and command ownership", () => {
     execFileSyncMock.mockClear();
     tempDir = await fixtureRootTracker.make("case");
   });
+  const writePackage = (root: string, manifest: object) =>
+    fs.writeFile(path.join(root, "package.json"), JSON.stringify(manifest), "utf8");
+  const resolveSurface = (
+    root: string,
+    installKind: "git" | "package",
+    runCommand: ReturnType<typeof createRunner>["runner"],
+  ) => resolveUpdateInstallSurface({ root, installKind, timeoutMs: 1000, runCommand });
   it("owns default updater subprocess trees", async () => {
-    const runCommandWithTimeoutMock = vi.fn(async () => ({
-      stdout: "",
-      stderr: "",
-      code: 0,
-      killed: false,
-      signal: null,
-    }));
+    const runCommandWithTimeoutMock = vi.fn(async () => ({ stdout: "", stderr: "", code: 0 }));
     vi.resetModules();
     vi.doMock("../process/exec.js", () => ({ runCommandWithTimeout: runCommandWithTimeoutMock }));
     vi.doMock("./update-global.js", () => ({
@@ -79,44 +76,20 @@ describe("update install surface and command ownership", () => {
       await fs.mkdir(path.dirname(packageRoot), { recursive: true });
       await fs.mkdir(storeRoot, { recursive: true });
       await Promise.all([
-        fs.writeFile(
-          path.join(installDir, "package.json"),
-          JSON.stringify({ private: true, dependencies: { openclaw: "1.0.0" } }),
-          "utf8",
-        ),
-        fs.writeFile(
-          path.join(storeRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-          "utf8",
-        ),
+        writePackage(installDir, { private: true, dependencies: { openclaw: "1.0.0" } }),
+        writePackage(storeRoot, { name: "openclaw", version: "1.0.0" }),
       ]);
       await Promise.all([
         fs.symlink(storeRoot, packageRoot, "dir"),
         fs.symlink(installDir, path.join(globalRoot, "hash-openclaw"), "dir"),
       ]);
 
-      const runCommand = async (argv: string[]) => {
-        const command = argv.join(" ");
-        if (command.startsWith("git -C ")) {
-          return toCommandResult({ code: 1 });
-        }
-        if (command === "npm root -g") {
-          return toCommandResult({ stdout: `${path.join(tempDir, "npm", "node_modules")}\n` });
-        }
-        if (command === "pnpm root -g") {
-          return toCommandResult({ stdout: `${globalRoot}\n` });
-        }
-        throw new Error(`unexpected command: ${command}`);
-      };
+      const { runner } = createRunner({
+        "npm root -g": `${path.join(tempDir, "npm", "node_modules")}\n`,
+        "pnpm root -g": `${globalRoot}\n`,
+      });
 
-      await expect(
-        resolveUpdateInstallSurface({
-          root: packageRoot,
-          installKind: "package",
-          timeoutMs: 1000,
-          runCommand,
-        }),
-      ).resolves.toMatchObject({
+      await expect(resolveSurface(packageRoot, "package", runner)).resolves.toMatchObject({
         kind: "global",
         mode: "pnpm",
         root: packageRoot,
@@ -125,36 +98,22 @@ describe("update install surface and command ownership", () => {
     },
   );
 
-  it("uses a prepared Git checkout without probing process artifacts again", async () => {
-    const sourceRoot = path.join(tempDir, "source");
-    const { runner, calls } = createRunner({});
-
-    await expect(
-      resolveUpdateInstallSurface({
-        root: sourceRoot,
-        installKind: "git",
-        timeoutMs: 1000,
-        runCommand: runner,
-      }),
-    ).resolves.toMatchObject({
-      kind: "git",
-      mode: "git",
-      root: sourceRoot,
-      packageRoot: sourceRoot,
-    });
-    expect(calls).toEqual([]);
-  });
-
-  it("preserves non-global package roots without probing Git or the process cwd", async () => {
-    const root = path.join(tempDir, "standalone-package");
-    const { runner, calls } = createRunner({
-      "npm root -g": { stdout: path.join(tempDir, "npm-global") },
-      "pnpm root -g": { stdout: path.join(tempDir, "pnpm-global") },
-    });
-
-    await expect(
-      resolveUpdateInstallSurface({ root, installKind: "package", runCommand: runner }),
-    ).resolves.toEqual({ kind: "package-root", mode: "unknown", root, packageRoot: root });
-    expect(calls).toEqual(["npm root -g", "pnpm root -g"]);
-  });
+  it.each(["git", "package"] as const)(
+    "preserves prepared %s roots without Git probes",
+    async (installKind) => {
+      const root = path.join(tempDir, installKind);
+      const responses = {
+        "npm root -g": path.join(tempDir, "npm-global"),
+        "pnpm root -g": path.join(tempDir, "pnpm-global"),
+      };
+      const { runner, calls } = createRunner(installKind === "git" ? {} : responses);
+      await expect(resolveSurface(root, installKind, runner)).resolves.toEqual({
+        kind: installKind === "git" ? "git" : "package-root",
+        mode: installKind === "git" ? "git" : "unknown",
+        root,
+        packageRoot: root,
+      });
+      expect(calls).toEqual(installKind === "git" ? [] : ["npm root -g", "pnpm root -g"]);
+    },
+  );
 });

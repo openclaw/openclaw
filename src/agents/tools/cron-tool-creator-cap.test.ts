@@ -1,6 +1,11 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { mergeCronPayload } from "../../cron/service/payload-merge.js";
+import {
+  cronCreateRequiresStreamExecAuthority,
+  cronMutationRequiresStreamExecAuthority,
+  cronUpdateRequiresStreamExecAuthority,
+} from "../../cron/stream-exec-authority.js";
 import type { CronPayloadPatch } from "../../cron/types.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "./common.js";
@@ -53,6 +58,62 @@ const agentPayload = { kind: "agentTurn" as const, message: "work" };
 const wakePayload = { kind: "systemEvent" as const, text: "wake" };
 
 describe("cron tool creator cap", () => {
+  it("distinguishes explicit stream creates from kindless stream update fields", () => {
+    const malformedCreate = {
+      schedule: { kind: "every", everyMs: 60_000, command: ["node", "events.mjs"] },
+    };
+    expect(cronCreateRequiresStreamExecAuthority(malformedCreate)).toBe(false);
+    expect(cronMutationRequiresStreamExecAuthority(malformedCreate)).toBe(false);
+    expect(
+      cronMutationRequiresStreamExecAuthority({
+        schedule: { command: ["node", "events.mjs"] },
+      }),
+    ).toBe(true);
+    expect(
+      cronCreateRequiresStreamExecAuthority({
+        schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      }),
+    ).toBe(true);
+  });
+
+  it("uses Gateway replacement semantics for stream schedule updates", () => {
+    const current = {
+      enabled: true,
+      schedule: { kind: "stream", command: ["node", "events.mjs"], cwd: "/workspace" },
+    };
+
+    expect(
+      cronUpdateRequiresStreamExecAuthority(
+        {
+          schedule: {
+            kind: "stream",
+            command: ["node", "events.mjs"],
+            cwd: "/workspace",
+          },
+        },
+        current,
+      ),
+    ).toBe(false);
+    expect(
+      cronUpdateRequiresStreamExecAuthority(
+        { schedule: { kind: "stream", command: ["node", "events.mjs"] } },
+        current,
+      ),
+    ).toBe(true);
+    expect(
+      cronUpdateRequiresStreamExecAuthority(
+        { schedule: { command: ["node", "replacement.mjs"] } },
+        current,
+      ),
+    ).toBe(true);
+    expect(
+      cronUpdateRequiresStreamExecAuthority(
+        { schedule: { command: ["node", "invalid-on-every.mjs"] } },
+        { enabled: true, schedule: { kind: "every", everyMs: 60_000 } },
+      ),
+    ).toBe(false);
+  });
+
   it("lets default agent turns follow their owner while scripts and Codex apps keep the creator's tools", () => {
     const triggerJob = {
       trigger: { script: "return true" },
@@ -183,6 +244,7 @@ describe("cron tool creator cap", () => {
       {
         name: "exec",
         aliasName: "gateway_exec",
+        execOrigin: "openclaw",
         execTarget: { host: "gateway", ask: "always" },
       },
       { name: "read" },
@@ -206,8 +268,12 @@ describe("cron tool creator cap", () => {
     const aliasFirst = capture([alias, execTool]);
     const directFirst = capture([execTool, alias]);
 
-    expect(aliasFirst).toEqual([{ name: "exec", aliasName: "gateway_exec" }]);
-    expect(directFirst).toEqual([{ name: "exec", aliasName: "gateway_exec" }]);
+    expect(aliasFirst).toEqual([
+      { name: "exec", aliasName: "gateway_exec", execOrigin: "openclaw" },
+    ]);
+    expect(directFirst).toEqual([
+      { name: "exec", aliasName: "gateway_exec", execOrigin: "openclaw" },
+    ]);
     expect(resolveCronCreatorExecToolTarget(aliasFirst)).toBeUndefined();
     expect(resolveCronCreatorExecToolTarget(directFirst)).toBeUndefined();
   });
@@ -218,7 +284,12 @@ describe("cron tool creator cap", () => {
     });
 
     expect(target).toEqual([
-      { name: "exec", aliasName: "gateway_exec", execTarget: { host: "gateway", ask: "always" } },
+      {
+        name: "exec",
+        aliasName: "gateway_exec",
+        execOrigin: "openclaw",
+        execTarget: { host: "gateway", ask: "always" },
+      },
       { name: "process" },
     ]);
     expect(resolveCronCreatorExecToolTarget(target)).toEqual({ host: "gateway", ask: "always" });
@@ -235,12 +306,16 @@ describe("cron tool creator cap", () => {
 
     expect(pinned).toEqual([
       { name: "read" },
-      { name: "exec", execTarget: { host: "gateway" } },
+      { name: "exec", execOrigin: "native", execTarget: { host: "gateway" } },
       { name: "process" },
       { name: "web_fetch" },
     ]);
     expect(resolveCronCreatorExecToolTarget(pinned)).toEqual({ host: "gateway" });
-    expect(unpinned).toEqual([{ name: "read" }, { name: "exec" }, { name: "process" }]);
+    expect(unpinned).toEqual([
+      { name: "read" },
+      { name: "exec", execOrigin: "native" },
+      { name: "process" },
+    ]);
     expect(resolveCronCreatorExecToolTarget(unpinned)).toBeUndefined();
   });
 
@@ -250,7 +325,7 @@ describe("cron tool creator cap", () => {
       nativeExecTarget: { host: "gateway" },
     });
 
-    expect(target).toEqual([{ name: "exec" }]);
+    expect(target).toEqual([{ name: "exec", execOrigin: "openclaw" }]);
     expect(resolveCronCreatorExecToolTarget(target)).toBeUndefined();
   });
 

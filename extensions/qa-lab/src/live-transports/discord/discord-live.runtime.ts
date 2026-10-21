@@ -320,16 +320,8 @@ function validateDiscordQaRuntimeEnv(runtimeEnv: DiscordQaRuntimeEnv, prefix: st
 
 export function parseDiscordQaCredentialPayload(payload: unknown): DiscordQaRuntimeEnv {
   const parsed = discordQaCredentialPayloadSchema.parse(payload);
-  const runtimeEnv = {
-    guildId: parsed.guildId,
-    channelId: parsed.channelId,
-    driverBotToken: parsed.driverBotToken,
-    sutBotToken: parsed.sutBotToken,
-    sutApplicationId: parsed.sutApplicationId,
-    ...(parsed.voiceChannelId ? { voiceChannelId: parsed.voiceChannelId } : {}),
-  };
-  validateDiscordQaRuntimeEnv(runtimeEnv, "Discord credential payload");
-  return runtimeEnv;
+  validateDiscordQaRuntimeEnv(parsed, "Discord credential payload");
+  return parsed;
 }
 
 export function buildDiscordQaConfig(

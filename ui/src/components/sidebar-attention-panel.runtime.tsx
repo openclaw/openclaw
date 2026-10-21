@@ -10,12 +10,9 @@ import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway, projectMentions, projectOverlays } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
-import {
-  projectAgents,
-  projectAgentIdentity,
-  projectSessions,
-} from "../lib/reactive/domain-capabilities.ts";
+import { projectAgents, projectAgentIdentity } from "../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { registerModalSurface } from "./overlay-registry.ts";
 import "../styles/sidebar-menus.css";
 import "../styles/sidebar-issues.css";
@@ -253,7 +250,7 @@ export function SidebarAttentionPanel(
   const gateway = projectGateway(context.gateway);
   const overlays = context.overlays && projectOverlays(context.overlays);
   const agents = context.agents && projectAgents(context.agents);
-  const sessions = context.sessions && projectSessions(context.sessions);
+  const sessions = context.sessions && projectOwner(context.sessions, () => undefined);
   const identities =
     context.agentIdentity &&
     projectAgentIdentity({ identities: context.agentIdentity, agentId: null });

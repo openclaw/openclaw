@@ -1,9 +1,19 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { delimiter, join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const dirs = useAutoCleanupTempDirTracker(afterAll);
+let bin: string;
+beforeAll(() => {
+  bin = dirs.make("mobile-store-routing-");
+  // The diagnostics wrapper spawns pnpm outside the workflow's Bash process.
+  fs.writeFileSync(join(bin, "pnpm"), "#!/bin/sh\nprintf '%s\\n' \"$@\"\n", { mode: 0o755 });
+});
 
 type WorkflowStep = {
   env?: Record<string, string>;
@@ -147,18 +157,12 @@ function assertUpload(
   );
   const output = execFileSync(
     "bash",
-    [
-      "-c",
-      [
-        "gh() { :; }",
-        "pnpm() { printf '%s\\n' \"$@\"; }",
-        expectDefined(upload.run, "release upload command"),
-      ].join("\n"),
-    ],
+    ["-c", ["gh() { :; }", expectDefined(upload.run, "release upload command")].join("\n")],
     {
       encoding: "utf8",
       env: {
         ...process.env,
+        PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
         [`${platform.toUpperCase()}_RELEASE_DESTINATION`]: String(evaluate(expression)),
         RUNNER_TEMP: "/synthetic-runner-temp",
       },

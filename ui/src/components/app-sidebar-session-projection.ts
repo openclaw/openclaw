@@ -54,7 +54,8 @@ type SidebarProjectionInput = {
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
   emptyGroupsMode: SidebarEmptyGroupsMode;
-  ownerFiltered: boolean;
+  /** "owner" selects exactly one owner; "involvingMe" can span several. */
+  ownerFilter: "owner" | "involvingMe" | null;
   visibleSessionLimits: ReadonlyMap<string, number>;
   sortMode: SidebarSessionSortMode;
   statusFilter: SidebarSessionStatusFilter;
@@ -504,8 +505,10 @@ export class SidebarSessionProjection {
 
     const { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds } = input;
     const hideEmptyGroups =
-      input.emptyGroupsMode === "always" ||
-      (input.emptyGroupsMode === "filtering" && input.ownerFiltered);
+      input.listLoaded &&
+      (input.emptyGroupsMode === "always" ||
+        (input.emptyGroupsMode === "filtering" &&
+          (input.ownerFilter !== null || input.statusFilter !== "all")));
     const sections =
       input.sections ??
       groupSidebarSessionRows(input.rows, {
@@ -532,11 +535,19 @@ export class SidebarSessionProjection {
     // preference is deliberately inert here; it re-applies once a peer returns.
     // Flat mode ("none") holds every native row, so its "Other" label would
     // lie; it stays headerless even beside catalog sections.
+    // With one owner selected, Person grouping yields that owner's section;
+    // its header repeats the owner filter, so its rows render inline.
+    const soloOwnerSectionId =
+      input.grouping === "person" && input.ownerFilter === "owner"
+        ? sections.find((section) => section.id.startsWith("person:"))?.id
+        : undefined;
     const ungroupedHasPeerHeader =
       input.grouping !== "none" &&
       sections.some(
         (section) =>
-          section.id !== "ungrouped" && (section.id !== "work" || section.rows.length > 0),
+          section.id !== "ungrouped" &&
+          section.id !== soloOwnerSectionId &&
+          (section.id !== "work" || section.rows.length > 0),
       );
     const visibleRows: SidebarRecentSession[] = [];
     const limitedSections: SidebarVisibleSections["sections"] = [];
@@ -545,7 +556,9 @@ export class SidebarSessionProjection {
       // checks must not mistake a page-filtered section for an empty one.
       const totalRowCount = section.rows.length;
       const renderHeader =
-        !section.id.startsWith("agent:") && (section.id !== "ungrouped" || ungroupedHasPeerHeader);
+        !section.id.startsWith("agent:") &&
+        section.id !== soloOwnerSectionId &&
+        (section.id !== "ungrouped" || ungroupedHasPeerHeader);
       const collapsed =
         (renderHeader || section.id.startsWith("agent:")) &&
         input.collapsedSections.has(section.id);

@@ -26,7 +26,6 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
 import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
-  clearIMessageApprovalReactionPollTargetsForTest,
   deleteIMessageApprovalReactionPollTargets,
   recordIMessageApprovalReactionPollTarget,
   resolveIMessageApprovalReactionPollExpiry,
@@ -54,12 +53,7 @@ type IMessageApprovalReactionResolution = {
 };
 type IMessageApprovalReactionHandleResult =
   | { handled: false; stopPolling: false }
-  | { handled: true; stopPolling: false }
-  | {
-      handled: true;
-      stopPolling: true;
-      stopPollingReason: "resolved" | "not-found";
-    };
+  | { handled: true; stopPolling: boolean };
 
 type IMessageApprovalReactionTarget = ApprovalReactionTargetRecord & {
   approvalKind: ChannelApprovalKind;
@@ -520,13 +514,5 @@ export async function handleIMessageApprovalReaction(params: {
     },
     logVerboseMessage: logVerbose,
   });
-  return settlement === "denied"
-    ? { handled: true, stopPolling: false }
-    : { handled: true, stopPolling: true, stopPollingReason: settlement };
-}
-
-export function clearIMessageApprovalReactionTargetsForTest(): void {
-  imessageApprovalReactionTargets.clearForTest();
-  clearIMessageApprovalReactionPollTargetsForTest();
-  loadResolveApprovalOverGateway.clear();
+  return { handled: true, stopPolling: settlement !== "denied" };
 }

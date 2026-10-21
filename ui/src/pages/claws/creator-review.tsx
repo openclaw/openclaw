@@ -172,7 +172,7 @@ function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
           <button type="button" class="btn" onClick={() => props.flow.close()}>
             {t("clawsDraft.askChanges")}
           </button>
-          <Show when={!state().reviewCurrent && state().busy !== "reviewing"}>
+          <Show when={!state().reviewCurrent && state().busy === null}>
             <button type="button" class="btn" onClick={() => props.flow.retryReview()}>
               {t("clawsDraft.refreshReview")}
             </button>
@@ -181,8 +181,12 @@ function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
             type="button"
             class="btn primary"
             disabled={!state().reviewCurrent || state().busy !== null}
+            aria-busy={state().busy === "publishing" ? "true" : undefined}
             onClick={() => void props.flow.publish()}
           >
+            <Show when={state().busy === "publishing"}>
+              <span class="btn__spinner" aria-hidden="true" />
+            </Show>
             {t(state().busy === "publishing" ? "clawsDraft.publishing" : "clawsDraft.publish")}
           </button>
         </openclaw-modal-actions>
@@ -202,22 +206,6 @@ export function ClawCreatorReview(props: { context: ApplicationContext }) {
     <>
       <Show when={view().read().modalOpen && view().read().review}>
         <ClawReviewDialog flow={flow()} view={view()} />
-      </Show>
-      <Show when={view().read().publication}>
-        {(result) => (
-          <div class="claw-creator__notice" role="status">
-            <strong>
-              {t(
-                result().publicationStatus === "published"
-                  ? "clawsDraft.published"
-                  : "clawsDraft.pending",
-              )}
-            </strong>
-            <a href={result().url} target="_blank" rel="noopener noreferrer">
-              {t("clawsDraft.viewPublication")}
-            </a>
-          </div>
-        )}
       </Show>
       <Show
         when={

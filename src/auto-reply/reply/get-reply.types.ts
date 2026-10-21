@@ -29,7 +29,10 @@ import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import type { QueuedFollowupReplyDelivery } from "./queue/types.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplySourceBinding } from "./reply-source-binding.types.js";
-import type { SessionEventExecution } from "./session-event-contract.js";
+import type {
+  ScheduledSessionAutomation,
+  SessionEventExecution,
+} from "./session-event-contract.js";
 
 export type ReplySessionBinding = {
   sessionKey?: string;
@@ -51,6 +54,10 @@ export type ReplyRunVerbosity = {
 type InternalReplySessionOptions = {
   /** Settles attribution before tool effects; model preparation may run concurrently. */
   awaitSessionDiffBaseline?: () => Promise<void>;
+  /** One-shot model selection for host-owned turns; never persisted as a user preference. */
+  modelOverride?: string;
+  /** Host-owned scheduling authority retained through ordinary session execution. */
+  scheduledAutomation?: ScheduledSessionAutomation;
   /** Producer callbacks follow this occurrence through queueing and delivery. */
   internalEventExecution?: SessionEventExecution;
   /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */

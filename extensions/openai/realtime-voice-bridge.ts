@@ -671,33 +671,18 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
       response: event.response,
       responseId: event.response_id,
     });
-    let callbackError: unknown;
     let providerTerminated = false;
-    const invoke = (callback: () => void) => {
-      try {
-        callback();
-      } catch (error) {
-        callbackError ??= error;
-      }
-    };
     try {
       // Terminal output still belongs to this response until observers retire its owner.
-      invoke(() => {
-        providerTerminated = this.handleCompletedResponse(event, connection);
-      });
-      invoke(() => this.config.onResponseDone?.(outcome));
-      invoke(emitServerEvent);
+      providerTerminated = this.handleCompletedResponse(event, connection);
+      this.config.onResponseDone?.(outcome);
+      emitServerEvent();
     } finally {
       // response.done owns response state regardless of observer success. A fatal tool
       // boundary still clears state, but must not start queued work on a closing socket.
       const canDrain =
         !providerTerminated && this.acceptsEvent(connection) && this.isTransportOpen();
       this.releaseResponseState({ drain: canDrain });
-    }
-    if (callbackError) {
-      throw callbackError instanceof Error
-        ? callbackError
-        : new Error("OpenAI realtime response callback failed", { cause: callbackError });
     }
   }
 

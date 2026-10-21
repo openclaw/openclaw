@@ -138,7 +138,7 @@ describe("PostgreSQL conformance selection", () => {
     expect(job.strategy.matrix.shard).toEqual(
       readCiWorkflow().jobs["postgres-conformance"].strategy.matrix.shard,
     );
-    expect(job["timeout-minutes"]).toBe(30);
+    expect(job["timeout-minutes"]).toBe(50);
     expect(job.name).toBe("PostgreSQL conformance (${{ matrix.version }}, ${{ matrix.shard }})");
     expect(job.strategy.matrix.include.map((row: { image: string }) => row.image)).toEqual([
       "pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a",
@@ -8765,6 +8765,15 @@ describe("ci workflow guards", () => {
         selectedJobs: [],
       }),
     ),
+    ...["scripts/lib/ios-test-results.mjs", "scripts/lib/ios-test-results.d.mts"].map(
+      (changedPath) => ({
+        label: `Screenshot input ${changedPath}`,
+        changedPath,
+        eventName: "push" as const,
+        screenshots: true,
+        selectedJobs: ["ios-build"],
+      }),
+    ),
     {
       label: "iOS unit tests do not select screenshot capture",
       changedPath: "apps/ios/Tests/SettingsTests.swift",
@@ -12305,19 +12314,24 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it("captures all iOS families in one native job and retains phase timings", () => {
+  it("captures all iOS families in one native job and retains phase and resource diagnostics", () => {
     const capture = readCiWorkflow().jobs["ios-screenshot-capture"];
     expect(capture.strategy).toBeUndefined();
     const step = capture.steps.find(
       (candidate: WorkflowStep) => candidate.id === "device_screenshots",
     );
-    expect(step.run).toBe("pnpm ios:screenshots");
+    expect(step.run.trim()).toBe(
+      'node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \\\n  pnpm ios:screenshots',
+    );
     expect(step.env).toEqual({ OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1" });
     const diagnostics = capture.steps.find(
       (candidate: WorkflowStep) => candidate.name === "Upload iOS screenshot timing diagnostics",
     );
     expect(diagnostics.if).toBe("always()");
-    expect(diagnostics.with.path).toBe("apps/ios/build/screenshot-diagnostics.json");
+    expect(diagnostics.with.path.trim().split("\n")).toEqual([
+      "apps/ios/build/screenshot-diagnostics.json",
+      "${{ runner.temp }}/ios-resource-timeline.jsonl",
+    ]);
   });
 
   it("reduces iOS screenshots only after the combined capture succeeded", () => {

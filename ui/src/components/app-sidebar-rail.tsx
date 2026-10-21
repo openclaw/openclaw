@@ -45,7 +45,6 @@ import {
   renderSessionUnreadBadge,
   renderSessionOwnerAvatar,
 } from "./solid/session-presentation.tsx";
-import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 type SidebarZone = ReturnType<AppSidebarRenderHost["reconciledSidebarZone"]>;
 type RailPinTouchPress = {
@@ -96,17 +95,8 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
       <div class="sidebar-rail__views">
         <For each={views}>
           {(view) => {
-            const toggleHint = () => host.navigationView === view && view !== "online";
             return (
-              <openclaw-tooltip prop:content={toggleHint() ? undefined : viewLabel(view)}>
-                <Show when={toggleHint()}>
-                  <span slot="content">
-                    <ShortcutHint
-                      label={`${viewLabel(view)} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")}`}
-                      combo={KEYBOARD_SHORTCUT_COMBOS.toggleSidebar}
-                    />
-                  </span>
-                </Show>
+              <openclaw-tooltip prop:content={viewLabel(view)}>
                 <button
                   ref={[
                     elementRef((element: HTMLButtonElement) => {
@@ -210,17 +200,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
           }}
         </For>
       </div>
-      <div class="sidebar-rail__bottom">
-        <Show
-          when={
-            host.sessionDataContext?.theme.branding.communityLinks &&
-            host.sessionDataContext.config.current.communityInvite
-          }
-        >
-          <SidebarCommunityInvite />
-        </Show>
-        {renderAppSidebarFooterBar(host)}
-      </div>
+      <div class="sidebar-rail__bottom">{renderAppSidebarFooterBar(host)}</div>
     </nav>
   );
 }

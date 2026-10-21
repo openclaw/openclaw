@@ -128,7 +128,7 @@ describeLive("AgentSession Responses EOF live", () => {
           execute: inspect,
         },
       ],
-      resourceLoader: createResourceLoader(),
+      resourceLoader: await createResourceLoader(),
       modelRegistry: ModelRegistry.inMemory(authStorage),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({

@@ -9,7 +9,6 @@ import {
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -23,7 +22,10 @@ import { withSessionTurn } from "../../sessions/session-controller.admission.js"
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import { buildCronCommandBody } from "../run-prompt.js";
+import type { CronWorkspaceLease } from "../run-workspace.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
 import { resolveCronRunToolsAllow } from "../tools-allow.js";
@@ -41,7 +43,6 @@ import {
 } from "./run-delivery-trace.js";
 import { resolveCronPreflight } from "./run-fallback-policy.js";
 import {
-  buildCronCommandBody,
   resolveCronAuthSelection,
   createCronSessionRowWriter,
   retireRolledCronSessionMcpRuntime,
@@ -49,7 +50,6 @@ import {
   type WithRunSession,
 } from "./run-prepare-runtime.js";
 import {
-  CronSessionLifecycleClaimError,
   beginCronPreparationEffect,
   withCronSessionPreparation,
   createCronRunContinuationSession,
@@ -58,7 +58,7 @@ import {
   setCronSessionAgentHarnessId,
 } from "./run-session-state.js";
 import { resolveCronRunTimeoutOverrideMs } from "./run-timeout.js";
-import { prepareCronSessionWorkspace, type CronWorkspaceLease } from "./run-workspace.js";
+import { prepareCronSessionWorkspace } from "./run-workspace.js";
 import {
   logWarn,
   normalizeAgentId,
@@ -342,16 +342,8 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         };
       }
       const cfgWithAgentDefaults = resolvedModelSelection.cfgWithAgentDefaults;
-      const ownerAgentConfig = resolveAgentConfig(modelOwner.config, modelOwner.agentId);
-      const matchesDefaultFallbackAgentStringModel =
-        typeof ownerAgentConfig?.model === "string" &&
-        resolveAgentModelPrimaryValue(ownerAgentConfig.model) ===
-          resolveAgentModelPrimaryValue(modelOwner.config.agents?.defaults?.model);
-      const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
-      const inheritDefaultFallbacksForAgentStringModel =
-        matchesDefaultFallbackAgentStringModel &&
-        (resolvedModelSelection.modelSource === "default" ||
-          resolvedModelSelection.modelSource === "agent");
+      const { useSubagentFallbacks, inheritDefaultFallbacksForAgentStringModel } =
+        resolvedModelSelection;
 
       const preflight = await resolveCronPreflight({
         cfg: cfgWithAgentDefaults,

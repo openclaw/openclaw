@@ -21,8 +21,8 @@ afterEach(() => vi.restoreAllMocks());
 
 it.each(["current", "stale-attempt", "revoked-capability"] as const)(
   "commits a scheduled source reply through the worker with %s authority",
-  async (mode) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  async (mode) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = createSessionCompoundWorkerFixture();
       const jobId = "source-reply-job";
       const runId = "source-reply-run";
@@ -113,16 +113,14 @@ it.each(["current", "stale-attempt", "revoked-capability"] as const)(
         }
         const events = f.events();
         if (mode === "current") {
-          expect(events).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                type: "message",
-                message: expect.objectContaining({
-                  role: "assistant",
-                  content: [{ type: "text", text: "Scheduled source reply" }],
-                }),
+          expect(events).toContainEqual(
+            expect.objectContaining({
+              type: "message",
+              message: expect.objectContaining({
+                role: "assistant",
+                content: [{ type: "text", text: "Scheduled source reply" }],
               }),
-            ]),
+            }),
           );
           await send();
           expect(f.events()).toEqual(events);
@@ -133,6 +131,5 @@ it.each(["current", "stale-attempt", "revoked-capability"] as const)(
         run.close();
         clearCronJobActive(jobId, marker);
       }
-    });
-  },
+    }),
 );

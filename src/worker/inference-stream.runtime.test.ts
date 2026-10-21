@@ -84,7 +84,7 @@ function createAdapterFixture(
   const client = createClient();
   const start = vi.spyOn(client, "start").mockImplementation(async (request, handlers) => {
     if (gap) {
-      handlers?.onStreamGap?.({ expectedSeq: 1, receivedSeq: 2 });
+      handlers?.onStreamGap?.();
     }
     events.forEach((event, index) =>
       handlers?.onEvent?.({ ...request, seq: index + (gap ? 2 : 1), event }),

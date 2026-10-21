@@ -18,7 +18,6 @@ import type {
   SlackQaCodexApprovalScenarioRun,
   SlackQaApprovalContext,
   SlackQaScenarioMetadata,
-  SlackApprovalArtifact,
 } from "./slack-live.contracts.js";
 
 export async function runSlackCodexApprovalScenario(params: {
@@ -139,7 +138,7 @@ async function runSlackCodexApprovalScenarioInner(params: {
     sessionKey: params.codexRun.sessionKey,
     sutAccountId: params.sutAccountId,
   });
-  const completed = await completeSlackApprovalScenario({
+  return completeSlackApprovalScenario({
     approvalId,
     gateway: params.context.gateway,
     observation,
@@ -163,14 +162,4 @@ async function runSlackCodexApprovalScenarioInner(params: {
       });
     },
   });
-  return {
-    ...completed,
-    artifact: {
-      ...completed.artifact,
-      appServerMethod: params.run.appServerMethod,
-      codexModelKey: params.primaryModel,
-      finalCodexTurnStatus: "ok",
-      operationVerified: true,
-    } satisfies SlackApprovalArtifact,
-  };
 }

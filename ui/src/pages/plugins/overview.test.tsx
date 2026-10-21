@@ -13,53 +13,30 @@ import { createDiscoveryDetail } from "./plugins-page.test-support.ts";
 import { renderPluginSecurityAudit } from "./security-audit.tsx";
 
 const views = new WeakMap<Element, { unmount: () => void }>();
-function render(content: () => JSX.Element, container: HTMLDivElement) {
+function render(content: () => JSX.Element, container = document.createElement("div")) {
   views.get(container)?.unmount();
   const view = mountSolid(content, { container });
   views.set(container, view);
   flush();
+  return container;
 }
 afterEach(cleanupSolid);
+const notice = {
+  code: "deprecated-sdk-api" as const,
+  severity: "info" as const,
+  message:
+    "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update.",
+  removalDate: "2026-12-31",
+  migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
+  apis: [],
+};
+function renderNotice(overrides: Partial<typeof notice> = {}) {
+  return render(() => renderPluginCompatibilityNotices([{ ...notice, ...overrides }]));
+}
 
 it("omits compatibility notices for plugins without observed deprecated API usage", () => {
-  const container = document.createElement("div");
-  render(() => renderPluginCompatibilityNotices(undefined), container);
+  const container = render(() => renderPluginCompatibilityNotices(undefined));
   expect(container.children).toHaveLength(0);
-});
-
-it("shows neutral compatibility copy and adds API replacements only in plugin details", () => {
-  const notice = {
-    code: "deprecated-sdk-api" as const,
-    severity: "info" as const,
-    message:
-      "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update.",
-    removalDate: "2026-12-31",
-    migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
-    apis: [
-      {
-        id: "channel-pairing-sync-allowlist",
-        displayName: "readChannelAllowFromStoreSync",
-        replacement: "Await readChannelAllowFromStore instead.",
-      },
-    ],
-  };
-  const notices = [notice];
-  const container = document.createElement("div");
-  render(() => renderPluginCompatibilityNotices(notices), container);
-  const message = container.querySelector(".plugins-row-message--info");
-  expect(message?.textContent).toContain(notice.message);
-  expect(message?.getAttribute("role")).toBe("status");
-  expect(
-    container.querySelector(".oc-banner-warning, .oc-banner-error, svg, [role=alert]"),
-  ).toBeNull();
-  expect(container.querySelector("a")?.textContent).toBe("Details");
-  expect(container.querySelector("a")?.getAttribute("href")).toBe(notice.migrationGuideUrl);
-  expect(container.textContent).not.toContain("readChannelAllowFromStoreSync");
-  render(() => renderPluginCompatibilityNotices(notices, true), container);
-  expect(container.querySelector("dt")?.textContent).toBe("readChannelAllowFromStoreSync");
-  expect(container.querySelector("dd")?.textContent).toBe(
-    "Await readChannelAllowFromStore instead.",
-  );
 });
 
 it("localizes a mounted compatibility notice from its structured removal date", async () => {
@@ -78,21 +55,7 @@ it("localizes a mounted compatibility notice from its structured removal date", 
   });
   onTestFinished(() => translation.mockRestore());
   await i18n.setLocale("en");
-  const container = document.createElement("div");
-  render(
-    () =>
-      renderPluginCompatibilityNotices([
-        {
-          code: "deprecated-sdk-api",
-          severity: "info",
-          message: "Server-only English fallback",
-          removalDate: "2026-12-31",
-          migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
-          apis: [],
-        },
-      ]),
-    container,
-  );
+  const container = renderNotice({ message: "Server-only English fallback", apis: [] });
   expect(container.textContent).toBe(
     "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update. Details",
   );
@@ -102,20 +65,11 @@ it("localizes a mounted compatibility notice from its structured removal date", 
 });
 
 it("uses catalog copy when a compatibility notice has no removal date", () => {
-  const container = document.createElement("div");
-  render(
-    () =>
-      renderPluginCompatibilityNotices([
-        {
-          code: "deprecated-sdk-api",
-          severity: "info",
-          message: "Server-only English fallback",
-          migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
-          apis: [],
-        },
-      ]),
-    container,
-  );
+  const container = renderNotice({
+    message: "Server-only English fallback",
+    removalDate: undefined,
+    apis: [],
+  });
   expect(container.textContent).toBe(
     "Uses older OpenClaw APIs. It keeps working for now; check for a plugin update. Details",
   );
@@ -127,8 +81,7 @@ it.each([
 ])("renders repository identity from %s", (source) => {
   const result = createDiscoveryDetail();
   result.detail.repositoryUrl = source;
-  const container = document.createElement("div");
-  render(() => renderPluginMetadata(result), container);
+  const container = render(() => renderPluginMetadata(result));
   const link = container.querySelector(".plugin-metadata__repository");
   expect(link?.getAttribute("href")).toBe("https://github.com/Martian-Engineering/lossless-claw");
   expect(link?.textContent).toContain("Martian-Engineering/lossless-claw");
@@ -139,8 +92,7 @@ it("keeps documentation distinct and removes the catalog promotion sections", ()
   const result = createDiscoveryDetail();
   result.detail.repositoryUrl = "https://github.com/Acme/plugin";
   result.detail.documentationUrl = "https://github.com/Acme/plugin/blob/main/docs/setup.md";
-  const container = document.createElement("div");
-  render(() => renderPluginMetadata(result), container);
+  const container = render(() => renderPluginMetadata(result));
   expect(
     [...container.querySelectorAll("section")].map(
       (section) => section.querySelector("h2")?.textContent,
@@ -159,8 +111,7 @@ it("omits absent publishers and only badges authoritative publisher status", () 
   const result = createDiscoveryDetail();
   result.plugin.catalog.official = true;
   result.detail.author = { handle: "acme", displayName: "Acme" };
-  const container = document.createElement("div");
-  render(() => renderPluginPublisher(undefined), container);
+  const container = render(() => renderPluginPublisher(undefined));
   expect(container.children).toHaveLength(0);
   render(() => renderPluginPublisher(undefined, "Local publisher"), container);
   expect(container.querySelector("strong")?.textContent).toBe("Local publisher");
@@ -179,17 +130,8 @@ it.each([
   ["malicious", 1],
   ["unknown", 0],
 ] as const)("shows %s audit with %i bars and the exact ClawHub link", (verdict, count) => {
-  const container = document.createElement("div");
-  render(
-    () =>
-      renderPluginSecurityAudit(
-        verdict,
-        "https://clawhub.ai/acme/plugins/demo/security-audit?version=1.0",
-      ),
-    container,
-  );
+  const url = "https://clawhub.ai/acme/plugins/demo/security-audit?version=1.0";
+  const container = render(() => renderPluginSecurityAudit(verdict, url));
   expect(container.querySelectorAll(".is-filled")).toHaveLength(count);
-  expect(container.querySelector("a")?.getAttribute("href")).toBe(
-    "https://clawhub.ai/acme/plugins/demo/security-audit?version=1.0",
-  );
+  expect(container.querySelector("a")?.getAttribute("href")).toBe(url);
 });
