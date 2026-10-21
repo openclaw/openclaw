@@ -274,169 +274,9 @@ async function fetchCurrentMattermostCommandUncached(params: {
   }
 }
 
-async function fetchCurrentMattermostCommand(params: {
-  accountId: string;
-  client: ReturnType<typeof createMattermostClient>;
-  registered: MattermostRegisteredCommand;
-  log?: (msg: string) => void;
-}): Promise<MattermostCommandResponse | null> {
-  const key = commandLookupKey(params.client, params.registered, params.accountId);
-  const existing = commandLookupInflight.get(key);
-  if (existing) {
-    return await existing.promise;
-  }
-
-  const lookup = fetchCurrentMattermostCommandUncached(params).finally(() => {
-    commandLookupInflight.delete(key);
-  });
-  commandLookupInflight.set(key, { accountId: params.accountId, promise: lookup });
-  return await lookup;
-}
-
-async function validateMattermostSlashCommandToken(params: {
-  accountId: string;
-  client: ReturnType<typeof createMattermostClient>;
-  registeredCommand: MattermostRegisteredCommand;
-  payload: MattermostSlashCommandPayload;
-  log?: (msg: string) => void;
-}): Promise<boolean> {
-  const lookupKey = commandLookupKey(params.client, params.registeredCommand, params.accountId);
-  if (hasCachedCommandValidationFailure(lookupKey)) {
-    return false;
-  }
-  if (!commandLookupInflight.has(lookupKey)) {
-    const reservation = reserveCommandValidationLookup({
-      key: lookupKey,
-      accountId: params.accountId,
-    });
-    if (!reservation.allowed) {
-      if (reservation.shouldLog) {
-        params.log?.(
-          `mattermost: slash command validation lookup rate-limited for /${params.registeredCommand.trigger}`,
-        );
-      }
-      return false;
-    }
-  }
-  const current = await fetchCurrentMattermostCommand({
-    accountId: params.accountId,
-    client: params.client,
-    registered: params.registeredCommand,
-    log: params.log,
-  });
-  if (!current || isDeletedMattermostCommand(current)) {
-    cacheCommandValidationFailure(lookupKey, params.accountId);
-    return false;
-  }
-  if (
-    current.id !== params.registeredCommand.id ||
-    current.team_id !== params.registeredCommand.teamId ||
-    current.trigger !== params.registeredCommand.trigger ||
-    current.method !== MATTERMOST_SLASH_POST_METHOD ||
-    current.url !== params.registeredCommand.url
-  ) {
-    cacheCommandValidationFailure(lookupKey, params.accountId);
-    return false;
-  }
-  if (!current.token || !safeEqualSecret(params.payload.token, current.token)) {
-    cacheCommandValidationFailure(lookupKey, params.accountId);
-    return false;
-  }
-  commandValidationFailureCache.delete(lookupKey);
-  return true;
-}
-
 type SlashInvocationAuth =
   | Extract<Awaited<ReturnType<typeof authorizeMattermostCommandInvocation>>, { ok: true }>
   | { ok: false; denyText: string };
-
-async function authorizeSlashInvocation(params: {
-  account: ResolvedMattermostAccount;
-  cfg: OpenClawConfig;
-  client: ReturnType<typeof createMattermostClient>;
-  commandText: string;
-  channelId: string;
-  senderId: string;
-  senderName: string;
-  log?: (msg: string) => void;
-}): Promise<SlashInvocationAuth> {
-  const { account, cfg, client, commandText, channelId, senderId, senderName, log } = params;
-  const core = getMattermostRuntime();
-
-  let channelInfo: MattermostChannel | null = null;
-  try {
-    channelInfo = await fetchMattermostChannel(client, channelId);
-  } catch (err) {
-    log?.(
-      `mattermost: slash channel lookup failed (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
-    );
-  }
-
-  if (!channelInfo) {
-    return {
-      ok: false,
-      denyText: "Temporary error: unable to determine channel type. Please try again.",
-    };
-  }
-
-  const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
-    cfg,
-    surface: "mattermost",
-  });
-  const hasControlCommand = core.channel.text.hasControlCommand(commandText, cfg);
-  const storeAllowFrom = normalizeMattermostAllowList(
-    await core.channel.pairing
-      .readAllowFromStore({
-        channel: "mattermost",
-        accountId: account.accountId,
-      })
-      .catch(() => []),
-  );
-  const decision = await authorizeMattermostCommandInvocation({
-    account,
-    cfg,
-    senderId,
-    senderName,
-    channelId,
-    channelInfo,
-    storeAllowFrom,
-    allowTextCommands,
-    hasControlCommand,
-  });
-
-  if (!decision.ok) {
-    if (decision.denyReason === "dm-pairing") {
-      const { code } = await core.channel.pairing.upsertPairingRequest({
-        channel: "mattermost",
-        accountId: account.accountId,
-        id: senderId,
-        meta: { name: senderName },
-      });
-      return {
-        ok: false,
-        denyText: core.channel.pairing.buildPairingReply({
-          channel: "mattermost",
-          idLine: `Your Mattermost user id: ${senderId}`,
-          code,
-        }),
-      };
-    }
-
-    const denyText =
-      decision.denyReason === "unknown-channel"
-        ? "Temporary error: unable to determine channel type. Please try again."
-        : decision.denyReason === "dm-disabled"
-          ? "This bot is not accepting direct messages."
-          : decision.denyReason === "channels-disabled"
-            ? "Slash commands are disabled in channels."
-            : decision.denyReason === "channel-no-allowlist"
-              ? "Slash commands are not configured for this channel (no allowlist)."
-              : "Unauthorized.";
-    return { ok: false, denyText };
-  }
-
-  return decision;
-}
 
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
   const { account, cfg, runtime, registeredCommands, triggerMap, log, bodyTimeoutMs } = params;
@@ -486,13 +326,65 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
     });
 
-    const tokenIsCurrent = await validateMattermostSlashCommandToken({
-      accountId: account.accountId,
-      client,
-      registeredCommand,
-      payload,
-      log,
-    });
+    const validationAccountId = account.accountId;
+    const admittedCommand = registeredCommand;
+    const token = payload.token;
+    async function validateMattermostSlashCommandToken(): Promise<boolean> {
+      const lookupKey = commandLookupKey(client, admittedCommand, validationAccountId);
+      if (hasCachedCommandValidationFailure(lookupKey)) {
+        return false;
+      }
+      if (!commandLookupInflight.has(lookupKey)) {
+        const reservation = reserveCommandValidationLookup({
+          key: lookupKey,
+          accountId: validationAccountId,
+        });
+        if (!reservation.allowed) {
+          if (reservation.shouldLog) {
+            log?.(
+              `mattermost: slash command validation lookup rate-limited for /${admittedCommand.trigger}`,
+            );
+          }
+          return false;
+        }
+      }
+      let current: MattermostCommandResponse | null;
+      const existing = commandLookupInflight.get(lookupKey);
+      if (existing) {
+        current = await existing.promise;
+      } else {
+        const lookup = fetchCurrentMattermostCommandUncached({
+          client,
+          registered: admittedCommand,
+          log,
+        }).finally(() => {
+          commandLookupInflight.delete(lookupKey);
+        });
+        commandLookupInflight.set(lookupKey, { accountId: validationAccountId, promise: lookup });
+        current = await lookup;
+      }
+      if (!current || isDeletedMattermostCommand(current)) {
+        cacheCommandValidationFailure(lookupKey, validationAccountId);
+        return false;
+      }
+      if (
+        current.id !== admittedCommand.id ||
+        current.team_id !== admittedCommand.teamId ||
+        current.trigger !== admittedCommand.trigger ||
+        current.method !== MATTERMOST_SLASH_POST_METHOD ||
+        current.url !== admittedCommand.url
+      ) {
+        cacheCommandValidationFailure(lookupKey, validationAccountId);
+        return false;
+      }
+      if (!current.token || !safeEqualSecret(token, current.token)) {
+        cacheCommandValidationFailure(lookupKey, validationAccountId);
+        return false;
+      }
+      commandValidationFailureCache.delete(lookupKey);
+      return true;
+    }
+    const tokenIsCurrent = await validateMattermostSlashCommandToken();
     if (!tokenIsCurrent) {
       sendSlashCommandResponse(res, 401, "Unauthorized: invalid command token.");
       return;
@@ -506,16 +398,84 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     const senderId = payload.user_id;
     const senderName = payload.user_name ?? senderId;
 
-    const auth = await authorizeSlashInvocation({
-      account,
-      cfg,
-      client,
-      commandText,
-      channelId,
-      senderId,
-      senderName,
-      log,
-    });
+    async function authorizeSlashInvocation(): Promise<SlashInvocationAuth> {
+      const core = getMattermostRuntime();
+
+      let channelInfo: MattermostChannel | null = null;
+      try {
+        channelInfo = await fetchMattermostChannel(client, channelId);
+      } catch (err) {
+        log?.(
+          `mattermost: slash channel lookup failed (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
+        );
+      }
+
+      if (!channelInfo) {
+        return {
+          ok: false,
+          denyText: "Temporary error: unable to determine channel type. Please try again.",
+        };
+      }
+
+      const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+        cfg,
+        surface: "mattermost",
+      });
+      const hasControlCommand = core.channel.text.hasControlCommand(commandText, cfg);
+      const storeAllowFrom = normalizeMattermostAllowList(
+        await core.channel.pairing
+          .readAllowFromStore({
+            channel: "mattermost",
+            accountId: account.accountId,
+          })
+          .catch(() => []),
+      );
+      const decision = await authorizeMattermostCommandInvocation({
+        account,
+        cfg,
+        senderId,
+        senderName,
+        channelId,
+        channelInfo,
+        storeAllowFrom,
+        allowTextCommands,
+        hasControlCommand,
+      });
+
+      if (!decision.ok) {
+        if (decision.denyReason === "dm-pairing") {
+          const { code } = await core.channel.pairing.upsertPairingRequest({
+            channel: "mattermost",
+            accountId: account.accountId,
+            id: senderId,
+            meta: { name: senderName },
+          });
+          return {
+            ok: false,
+            denyText: core.channel.pairing.buildPairingReply({
+              channel: "mattermost",
+              idLine: `Your Mattermost user id: ${senderId}`,
+              code,
+            }),
+          };
+        }
+
+        const denyText =
+          decision.denyReason === "unknown-channel"
+            ? "Temporary error: unable to determine channel type. Please try again."
+            : decision.denyReason === "dm-disabled"
+              ? "This bot is not accepting direct messages."
+              : decision.denyReason === "channels-disabled"
+                ? "Slash commands are disabled in channels."
+                : decision.denyReason === "channel-no-allowlist"
+                  ? "Slash commands are not configured for this channel (no allowlist)."
+                  : "Unauthorized.";
+        return { ok: false, denyText };
+      }
+
+      return decision;
+    }
+    const auth = await authorizeSlashInvocation();
 
     if (!auth.ok) {
       sendSlashCommandResponse(res, 200, auth.denyText);

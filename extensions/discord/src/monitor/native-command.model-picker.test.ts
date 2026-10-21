@@ -180,7 +180,6 @@ async function openProviders(cfg = context.cfg, interaction = createInteraction(
     userId: "owner",
     accountId: context.accountId,
     threadBindings: context.threadBindings,
-    preferFollowUp: false,
     safeInteractionCall,
   });
   return interaction;
@@ -831,7 +830,7 @@ it("opens the first visible provider when the current model provider is filtered
   const interaction = await openProviders(cfg);
 
   expect(loadSpy).toHaveBeenCalledWith(cfg, "main", { sessionEntry: undefined });
-  const payload = replyText(interaction, "reply");
+  const payload = replyText(interaction, "followUp");
   expect(payload).toContain("openai");
   expect(payload).toContain("gpt-5.5-codex");
   expect(payload).not.toContain("Provider not found");
@@ -845,7 +844,7 @@ it("opens the current provider bucket on initial large-provider renders", async 
 
   const interaction = await openProviders();
 
-  const payload = replyText(interaction, "reply");
+  const payload = replyText(interaction, "followUp");
   expect(payload).toContain("provider-30");
   expect(payload).toContain(";a=back;v=providers;");
   expect(payload).toContain(";pb=");

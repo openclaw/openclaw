@@ -339,7 +339,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   });
   const pluginRefresh = captureAgentPluginRuntimeRefresh();
   const preparedSessionTarget =
-    !sessionManager &&
+    (!sessionManager || params.sessionPersistence === "detached") &&
     resolvedSessionTarget?.agentId &&
     resolvedSessionTarget.sessionId &&
     resolvedSessionTarget.sessionKey &&

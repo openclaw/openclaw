@@ -6,7 +6,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
-import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import {
+  tableExists,
+  tableHasColumn,
+  tablePrimaryKeyColumns,
+} from "./openclaw-state-db-schema-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -77,7 +81,10 @@ it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
 
 it("reuses admitted columns without SQL and follows committed or rolled-back DDL", () => {
   using database = openNodeSqliteDatabase(":memory:");
-  database.exec("CREATE TABLE entries (id INTEGER)");
+  database.exec(`CREATE TABLE entries (
+    -- Keep the same shape as fresh databases.
+    id INTEGER, label TEXT DEFAULT 'AS'
+  )`);
   admitSqliteSchema(database);
   expect(tableHasColumn(database, "entries", "id")).toBe(true);
   const observation = observeSqliteReadSql(StatementSync.prototype);
@@ -95,6 +102,35 @@ it("reuses admitted columns without SQL and follows committed or rolled-back DDL
   database.exec("ROLLBACK");
   expect(tableHasColumn(database, "entries", "pending")).toBe(false);
   expect(tableHasColumn(database, "entries", "title")).toBe(true);
+});
+
+it("reads ordered admitted primary keys without SQL and follows DDL rollback", () => {
+  using database = openNodeSqliteDatabase(":memory:");
+  database.exec(`CREATE TABLE entries (
+    a TEXT DEFAULT 'PRIMARY KEY', b TEXT,
+    CONSTRAINT "entry key" PRIMARY KEY (b, b, a)
+  )`);
+  admitSqliteSchema(database);
+  const observation = observeSqliteReadSql(StatementSync.prototype);
+  using _ = { [Symbol.dispose]: observation.restore };
+  expect(tablePrimaryKeyColumns(database, "entries")).toEqual(["b", "a"]);
+  expect(observation.queries).toEqual([]);
+  database.exec("BEGIN; DROP TABLE entries; CREATE TABLE entries (a INTEGER PRIMARY KEY)");
+  expect(tablePrimaryKeyColumns(database, "entries")).toEqual(["a"]);
+  database.exec("ROLLBACK");
+  expect(tablePrimaryKeyColumns(database, "entries")).toEqual(["b", "a"]);
+  database.exec("DROP TABLE entries; CREATE TABLE entries (a INTEGER)");
+  expect(tablePrimaryKeyColumns(database, "entries")).toEqual([]);
+});
+
+it.each([
+  "CREATE TABLE entries (a TEXT, b TEXT, PRIMARY KEY ((b), a))",
+  "CREATE TABLE entries (a TEXT, b TEXT, constraint 'entry key' PRIMARY KEY (b, a))",
+])("preserves native primary-key inspection for %s", (sql) => {
+  using database = openNodeSqliteDatabase(":memory:");
+  database.exec(sql);
+  admitSqliteSchema(database);
+  expect(tablePrimaryKeyColumns(database, "entries")).toEqual(["b", "a"]);
 });
 
 it("preserves native column visibility for generated columns, views, and virtual tables", () => {

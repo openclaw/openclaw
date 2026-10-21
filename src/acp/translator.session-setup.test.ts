@@ -187,7 +187,8 @@ it("streams partial tool output and retains file locations through completion", 
   sessionUpdate.mockClear();
   const prompt = agent.prompt(createPromptRequest(sessionId, "Inspect app.ts"));
   const tool = { sessionKey: sessionId, toolCallId: "tool-1", name: "read" };
-  const args = { path: "src/app.ts", line: 12 };
+  const args = { path: "src/app.ts", line: 12.9 };
+  const location = { path: "src/app.ts", line: 12 };
   const output = (text: string) => ({
     content: [{ type: "text", text }],
     details: { path: "src/app.ts" },
@@ -204,11 +205,11 @@ it("streams partial tool output and retains file locations through completion", 
   expectUpdate({
     sessionUpdate: "tool_call",
     toolCallId: "tool-1",
-    title: "read: path: src/app.ts, line: 12",
+    title: "read: path: src/app.ts, line: 12.9",
     status: "in_progress",
     rawInput: args,
     kind: "read",
-    locations: [args],
+    locations: [location],
   });
   for (const [rawOutput, status, text] of [
     [partial, "in_progress", "partial output"],
@@ -220,7 +221,7 @@ it("streams partial tool output and retains file locations through completion", 
       status,
       rawOutput,
       content: [{ type: "content", content: { type: "text", text } }],
-      locations: [args],
+      locations: [location],
     });
   }
 });

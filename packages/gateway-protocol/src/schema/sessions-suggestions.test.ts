@@ -1,3 +1,4 @@
+import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,6 +10,10 @@ import {
   SessionTypingParamsSchema,
 } from "./sessions-suggestions.js";
 
+function check(schema: TSchema, expected: boolean, value: unknown) {
+  expect(Value.Check(schema, value)).toBe(expected);
+}
+
 const suggestion = {
   id: "suggestion-1",
   sessionKey: "agent:main:main",
@@ -18,96 +23,47 @@ const suggestion = {
   createdAt: 1,
   state: "pending",
 };
+const params = { sessionKey: "agent:main:main", sessionId: "session-main", typing: true };
+const event = { ...params, agentId: "main", actor: suggestion.author, ts: 1 };
 
 describe("session suggestions protocol", () => {
   it("accepts suggestion RPC and event payloads", () => {
-    expect(
-      Value.Check(SessionSuggestionsAddParamsSchema, {
-        sessionKey: "agent:main:main",
-        text: "Try the smaller refactor",
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionSuggestionsResolveParamsSchema, {
-        sessionKey: "agent:main:main",
-        id: "suggestion-1",
-        resolution: "queue",
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionSuggestionsListResultSchema, {
-        suggestions: [suggestion],
-        role: "owner",
-      }),
-    ).toBe(true);
-    expect(Value.Check(SessionSuggestionEventSchema, { action: "added", suggestion })).toBe(true);
-    expect(
-      Value.Check(SessionTypingParamsSchema, {
-        sessionKey: "agent:main:main",
-        sessionId: "session-main",
-        typing: true,
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionTypingEventSchema, {
-        sessionKey: "agent:main:main",
-        sessionId: "session-main",
-        agentId: "main",
-        actor: { type: "human", id: "alice", label: "Alice" },
-        typing: true,
-        ts: 1,
-      }),
-    ).toBe(true);
+    check(SessionSuggestionsAddParamsSchema, true, {
+      sessionKey: "agent:main:main",
+      text: "Try the smaller refactor",
+    });
+    check(SessionSuggestionsResolveParamsSchema, true, {
+      sessionKey: "agent:main:main",
+      id: "suggestion-1",
+      resolution: "queue",
+    });
+    check(SessionSuggestionsListResultSchema, true, { suggestions: [suggestion], role: "owner" });
+    check(SessionSuggestionEventSchema, true, { action: "added", suggestion });
+    check(SessionTypingParamsSchema, true, params);
+    check(SessionTypingEventSchema, true, event);
   });
 
   it("rejects empty suggestions and unknown resolutions", () => {
-    expect(
-      Value.Check(SessionSuggestionsAddParamsSchema, {
-        sessionKey: "agent:main:main",
-        text: "",
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(SessionSuggestionsResolveParamsSchema, {
-        sessionKey: "agent:main:main",
-        id: "suggestion-1",
-        resolution: "accept",
-      }),
-    ).toBe(false);
+    check(SessionSuggestionsAddParamsSchema, false, { sessionKey: "agent:main:main", text: "" });
+    check(SessionSuggestionsResolveParamsSchema, false, {
+      sessionKey: "agent:main:main",
+      id: "suggestion-1",
+      resolution: "accept",
+    });
   });
 
   it("accepts optional bounded typing previews without requiring them", () => {
-    const params = {
-      sessionKey: "agent:main:main",
-      sessionId: "session-main",
-      typing: true,
-    };
-    const event = {
-      ...params,
-      agentId: "main",
-      actor: { type: "human", id: "alice", label: "Alice" },
-      ts: 1,
-    };
-
     for (const cursor of [0, 4, 800]) {
-      expect(Value.Check(SessionTypingParamsSchema, { ...params, preview: "draft", cursor })).toBe(
-        true,
-      );
-      expect(Value.Check(SessionTypingEventSchema, { ...event, preview: "draft", cursor })).toBe(
-        true,
-      );
+      check(SessionTypingParamsSchema, true, { ...params, preview: "draft", cursor });
+      check(SessionTypingEventSchema, true, { ...event, preview: "draft", cursor });
     }
     for (const cursor of [-1, 0.5, 801, "2"]) {
-      expect(Value.Check(SessionTypingParamsSchema, { ...params, cursor })).toBe(false);
-      expect(Value.Check(SessionTypingEventSchema, { ...event, cursor })).toBe(false);
+      check(SessionTypingParamsSchema, false, { ...params, cursor });
+      check(SessionTypingEventSchema, false, { ...event, cursor });
     }
-    expect(Value.Check(SessionTypingParamsSchema, { ...params, preview: "draft" })).toBe(true);
-    expect(Value.Check(SessionTypingEventSchema, { ...event, preview: "draft" })).toBe(true);
-    expect(Value.Check(SessionTypingParamsSchema, { ...params, preview: "x".repeat(401) })).toBe(
-      false,
-    );
-    expect(Value.Check(SessionTypingEventSchema, { ...event, preview: "x".repeat(401) })).toBe(
-      false,
-    );
+    check(SessionTypingParamsSchema, true, { ...params, preview: "draft" });
+    check(SessionTypingEventSchema, true, { ...event, preview: "draft" });
+    check(SessionTypingParamsSchema, false, { ...params, preview: "x".repeat(401) });
+    check(SessionTypingEventSchema, false, { ...event, preview: "x".repeat(401) });
   });
 });

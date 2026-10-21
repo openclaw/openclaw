@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -104,6 +106,17 @@ describe("publication policy inherited by a managed child", () => {
     expected: boolean;
   }>([
     { name: "permitted publication", tools: { allow: allowed }, expected: true },
+    {
+      name: "preparation-only deployment policy",
+      tools: {
+        allow: allowed,
+        gatewayPolicy: {
+          allow: ["github_publish"],
+          actions: { github_publish: ["prepare_pr"] },
+        },
+      },
+      expected: true,
+    },
     {
       name: "explicit denial",
       tools: { allow: allowed, deny: ["github_publish"] },
@@ -222,6 +235,19 @@ describe("publication policy inherited by a managed child", () => {
         }),
       });
       expect(child.some((tool) => tool.name === "github_publish")).toBe(expected);
+      if (tools.gatewayPolicy?.actions?.github_publish?.includes("prepare_pr")) {
+        const publisher = expectDefined(
+          child.find((tool) => tool.name === "github_publish"),
+          "child preparation tool",
+        );
+        expect(
+          Value.Check(publisher.parameters, {
+            action: "prepare_pr",
+            pullRequestUrl: "https://github.com/example/repository/pull/1",
+          }),
+        ).toBe(true);
+        expect(Value.Check(publisher.parameters, { action: "publish" })).toBe(false);
+      }
     },
   );
 });

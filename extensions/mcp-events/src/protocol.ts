@@ -158,9 +158,6 @@ export function parseCallback(
   webhookId: string,
   definition: EventDefinition,
 ): { kind: "verification"; challenge: string } | { kind: "event"; event: ApplicationEvent } {
-  if (body.length > MAX_EVENT_BYTES) {
-    throw new CallbackError(413, "Event exceeds 256 KiB");
-  }
   let value: Record<string, unknown> | undefined;
   try {
     value = record(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)));

@@ -1,5 +1,5 @@
 import "./account-usage.tsx";
-import { createMemo, For, onCleanup, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
@@ -329,49 +329,56 @@ function ProfileIdentity(props: {
   );
 }
 
-export function renderProviderAccountSummary(
-  cards: ModelProviderCard[],
+export function ProviderAccountSummary(props: {
+  cards: ModelProviderCard[];
   recovery?: {
     authProvider: string;
     disabled: boolean;
     onUse: (profileId: string) => void;
-  },
-) {
-  const profiles = cards.flatMap((card) =>
-    card.profiles.map((profile) => ({
-      profile,
-      authRejected: card.catalogStatus === "auth-rejected",
-      // A display card can combine providers whose credentials are not interchangeable.
-      canUse:
-        card.profileProviderIds[profile.profileId] === recovery?.authProvider &&
-        (profile.source === "saved" || profile.source === "inherited"),
-    })),
+  };
+}) {
+  const profiles = createMemo(() =>
+    props.cards.flatMap((card) =>
+      card.profiles.map((profile) => ({
+        key: JSON.stringify([
+          card.id,
+          card.profileProviderIds[profile.profileId],
+          profile.profileId,
+        ]),
+        profile,
+        authRejected: card.catalogStatus === "auth-rejected",
+        // A display card can combine providers whose credentials are not interchangeable.
+        canUse:
+          card.profileProviderIds[profile.profileId] === props.recovery?.authProvider &&
+          (profile.source === "saved" || profile.source === "inherited"),
+      })),
+    ),
   );
-  const sources = [...new Set(cards.map(apiKeySource).filter(Boolean))];
+  const sources = createMemo(() => [...new Set(props.cards.map(apiKeySource).filter(Boolean))]);
   return (
     <section class="model-provider-login__accounts" aria-label={t("modelProviders.login.accounts")}>
       <h3>{t("modelProviders.login.accounts")}</h3>
-      {profiles.length ? (
+      {profiles().length ? (
         <div role="list">
-          <For each={profiles}>
+          <For each={profiles()} keyed={(entry) => entry.key}>
             {(entry, index) => (
               <div
                 class="model-provider-login__account"
                 role="listitem"
-                data-profile-id={entry.profile.profileId}
+                data-profile-id={entry().profile.profileId}
               >
                 <ProfileIdentity
-                  profile={entry.profile}
-                  identity={profileIdentity(entry.profile, index())}
+                  profile={entry().profile}
+                  identity={profileIdentity(entry().profile, index())}
                   showDetails={false}
                 />
-                {profileStatus(entry.profile, entry.authRejected)}
-                {entry.canUse && recovery ? (
+                {profileStatus(entry().profile, entry().authRejected)}
+                {entry().canUse && props.recovery ? (
                   <button
                     class="btn"
                     data-models-use-account
-                    disabled={recovery.disabled}
-                    onClick={() => recovery.onUse(entry.profile.profileId)}
+                    disabled={props.recovery.disabled}
+                    onClick={() => props.recovery?.onUse(entry().profile.profileId)}
                   >
                     {t("modelProviders.login.useAccount")}
                   </button>
@@ -381,8 +388,8 @@ export function renderProviderAccountSummary(
           </For>
         </div>
       ) : undefined}
-      <For each={sources}>{(source) => <p class="muted">{source}</p>}</For>
-      {!profiles.length && !sources.length ? (
+      <For each={sources()}>{(source) => <p class="muted">{source}</p>}</For>
+      {!profiles().length && !sources().length ? (
         <p class="muted">{t("modelProviders.login.noAccounts")}</p>
       ) : undefined}
     </section>
@@ -496,7 +503,7 @@ function ProviderProfileRow(
   let registeredId: string | undefined;
   const drag = createPointerDrag();
   let releaseUsage: (() => void) | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     releaseUsage?.();
     if (registeredId) {
       props.rowElements.delete(registeredId);

@@ -57,6 +57,8 @@ Onboarding imports require a fresh OpenClaw setup. If you already have local Ope
     - Claude skills with a `SKILL.md` file are copied into the OpenClaw workspace skills directory.
     - Claude command Markdown files under `.claude/commands/` or `~/.claude/commands/` are converted into OpenClaw skills with `disable-model-invocation: true`.
 
+    If a discovered skills directory cannot be read, migration stops before importing anything. Fix access to the directory named in the error, then retry.
+
   </Accordion>
 </AccordionGroup>
 

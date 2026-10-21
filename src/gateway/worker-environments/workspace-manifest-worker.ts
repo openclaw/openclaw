@@ -168,8 +168,7 @@ export async function preflightWorkspaceApply(
     signal?: AbortSignal;
   },
 ) {
-  const { root, base, current, signal } = params;
-  const input = { root, base, current };
+  const { signal, ...input } = params;
   if (hasGitWorkerContext()) {
     const { preflightWorkspaceApplyImpl } = await import("./workspace-reconcile-preflight.js");
     return await preflightWorkspaceApplyImpl(input);

@@ -402,6 +402,7 @@ it("does not replace a successfully recovered final assistant after a prompt-tim
       recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
       payloads,
       payloadsWithToolMedia: payloads,
+      payloadsForVisibleCompletion: payloads,
       agentMeta: { sessionId: "session-1", provider: "openai", model: "gpt-5.4" },
       attemptToolSummary: undefined,
       failureSignal: undefined,

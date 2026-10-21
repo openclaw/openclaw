@@ -60,7 +60,7 @@ export function registerMattermostPreviewDeliveryTests(harness: {
   const dispatcher = () =>
     mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
   const expectParticipation = (root: string) => {
-    const expected = ["default", "chan-1", root, { agentId: "main" }];
+    const expected = ["default", "chan-1", root];
     expect(mockState.recordMattermostThreadParticipation.mock.calls).toContainEqual(expected);
   };
   it("keeps Mattermost progress with tools disabled and no label", async () => {

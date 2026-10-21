@@ -258,7 +258,7 @@ suite.define(() => {
           .locator("openclaw-chat-html-preview [role=status]")
           .waitFor({ state: "hidden" });
         await document.getByRole("button", { name: "Count", exact: true }).click();
-        expect(await document.locator("output").textContent()).toBe("1");
+        await expect.poll(() => document.locator("output").textContent()).toBe("1");
         expect(
           await document.locator("body").evaluate(() => {
             let topDenied = false;

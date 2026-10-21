@@ -1,10 +1,9 @@
-import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { connectRelay, relayConfig } from "./background.lifecycle-test-helpers.js";
 import {
   cleanupBackgroundHarnesses,
   loadBackground,
   sendRuntimeMessage,
-  TEST_RELAY_KEY,
 } from "./background.test-harness.js";
 
 beforeEach(() => vi.resetModules());
@@ -13,36 +12,34 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function setup(accessMode: "all" | "selected") {
+type Harness = Awaited<ReturnType<typeof loadBackground>>;
+async function dispatch(
+  accessMode: "all" | "selected",
+  duringCommand: (harness: Harness) => void | Promise<unknown>,
+  method = "Network.setCacheDisabled",
+  params: Record<string, unknown> = { cacheDisabled: true },
+) {
   const harness = await loadBackground({
-    storedConfig: {
-      relayUrl: "ws://127.0.0.1:18797/extension",
-      token: TEST_RELAY_KEY,
-      authVersion: 2,
-      accessMode,
-    },
+    storedConfig: relayConfig(accessMode),
     initialTabs: [{ id: 7, url: "https://example.com/source", groupId: 7, windowId: 1 }],
   });
-  const socket = harness.relaySockets[0];
-  assert(socket);
-  await harness.authenticate(socket);
-  let seq = 0;
-  const request = (message: Record<string, unknown>) =>
-    new Promise<Record<string, unknown>>((resolve) => {
-      const id = ++seq;
-      socket.send.mockImplementation((raw) => {
-        const frame = JSON.parse(raw);
-        if (frame.seq === id) {
-          resolve(frame);
-        }
-      });
-      socket.receive({ ...message, seq: id });
-    });
+  const { request } = await connectRelay(harness);
   expect(await request({ type: "attach", tabId: 7 })).toMatchObject({ type: "result" });
-  return { ...harness, request };
+  const native = harness.debuggerSendCommand.getMockImplementation()!;
+  harness.debuggerSendCommand.mockImplementation(async (source, command, args) => {
+    if (command !== method) {
+      return await native(source, command, args);
+    }
+    await duringCommand(harness);
+    return {};
+  });
+  return await request({ type: "cdp", tabId: 7, method, params });
 }
 
-type Harness = Awaited<ReturnType<typeof setup>>;
+function expectError(response: Record<string, unknown>, message?: string) {
+  expect(response).toMatchObject({ type: "error", ...(message ? { message } : {}) });
+  expect(response.result).toBeUndefined();
+}
 
 function commitDocument(harness: Harness) {
   const url = "https://example.com/destination";
@@ -57,23 +54,6 @@ function commitDocument(harness: Harness) {
   });
 }
 
-async function dispatch(
-  harness: Harness,
-  method: string,
-  params: Record<string, unknown>,
-  duringCommand: () => void | Promise<unknown>,
-) {
-  const native = harness.debuggerSendCommand.getMockImplementation()!;
-  harness.debuggerSendCommand.mockImplementation(async (source, command, args) => {
-    if (command !== method) {
-      return await native(source, command, args);
-    }
-    await duringCommand();
-    return {};
-  });
-  return await harness.request({ type: "cdp", tabId: 7, method, params });
-}
-
 describe.each(["all", "selected"] as const)("network configuration in %s mode", (mode) => {
   it.each([
     { method: "Network.setCacheDisabled", params: { cacheDisabled: true } },
@@ -82,8 +62,7 @@ describe.each(["all", "selected"] as const)("network configuration in %s mode", 
   ])(
     "delivers $method after an allowed document commit during dispatch",
     async ({ method, params }) => {
-      const harness = await setup(mode);
-      expect(await dispatch(harness, method, params, () => commitDocument(harness))).toMatchObject({
+      expect(await dispatch(mode, commitDocument, method, params)).toMatchObject({
         type: "result",
         result: {},
       });
@@ -91,44 +70,31 @@ describe.each(["all", "selected"] as const)("network configuration in %s mode", 
   );
 
   it("rejects a cache-setting receipt after genuine access revocation", async () => {
-    const harness = await setup(mode);
-    const response = await dispatch(
-      harness,
-      "Network.setCacheDisabled",
-      { cacheDisabled: true },
-      () =>
-        sendRuntimeMessage(harness, {
-          type: "toggleTabAccess",
-          tabId: 7,
-          accessMode: mode,
-          grant: false,
-        }),
+    const response = await dispatch(mode, (harness) =>
+      sendRuntimeMessage(harness, {
+        type: "toggleTabAccess",
+        tabId: 7,
+        accessMode: mode,
+        grant: false,
+      }),
     );
-    expect(response).toMatchObject({ type: "error" });
-    expect(response.result).toBeUndefined();
+    expectError(response);
   });
 });
 
 it("rejects a cache-setting receipt after debugger detach", async () => {
-  const harness = await setup("selected");
-  const response = await dispatch(
-    harness,
-    "Network.setCacheDisabled",
-    { cacheDisabled: true },
-    () => harness.debuggerDetachListener?.({ tabId: 7 }, "canceled_by_user"),
+  const response = await dispatch("selected", (harness) =>
+    harness.debuggerDetachListener?.({ tabId: 7 }, "canceled_by_user"),
   );
-  expect(response).toMatchObject({ type: "error" });
-  expect(response.result).toBeUndefined();
+  expectError(response);
 });
 
 it.each(["Network.getResponseBody", "Fetch.getResponseBody"])(
   "rejects document-sensitive %s after an allowed document commit",
   async (method) => {
-    const harness = await setup("selected");
-    const response = await dispatch(harness, method, { requestId: "synthetic" }, () =>
-      commitDocument(harness),
-    );
-    expect(response).toMatchObject({ type: "error", message: "tab 7 access was revoked" });
-    expect(response.result).toBeUndefined();
+    const response = await dispatch("selected", commitDocument, method, {
+      requestId: "synthetic",
+    });
+    expectError(response, "tab 7 access was revoked");
   },
 );

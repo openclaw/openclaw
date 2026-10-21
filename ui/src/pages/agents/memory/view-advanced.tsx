@@ -101,7 +101,7 @@ function AdvancedEntryList(params: {
   );
 }
 
-export function renderAdvancedSection(props: DreamingProps) {
+export function DreamingAdvancedSection(props: DreamingProps) {
   const state = () => props.viewState;
   const groundedEntries = createMemo(() =>
     props.shortTermEntries.filter((entry) => entry.groundedCount > 0),

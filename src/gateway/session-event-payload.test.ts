@@ -20,25 +20,20 @@ function wire(value: unknown): unknown {
 }
 
 it.each([
-  ["titlePending", true, false, true],
-  ["lastAssistantMessage", { text: "Previous answer", timestamp: 100 }, null, true],
-  ["autoLabel", "Device", null, false],
-  ["displayName", "Device", null, false],
-  ["contextBudgetStatus", contextBudgetStatusFixture(), null, false],
-  ["deviceFolder", { deviceId: "paired-device", path: "/home/example/project" }, null, false],
-] as const)(
-  "publishes and clears %s in subscribed snapshots",
-  (field, value, cleared, includeSession) => {
-    const previous = snapshot({ [field]: value }, { includeSession });
-    expect(previous).toHaveProperty(field, value);
-    if (includeSession) {
-      expect(previous).toHaveProperty(`session.${field}`, value);
-    }
-    const expected = { [field]: cleared };
-    const current = { ...previous, ...snapshot({}, { includeSession }) };
-    expect(current).toMatchObject(includeSession ? { ...expected, session: expected } : expected);
-  },
-);
+  ["titlePending", true, false],
+  ["lastAssistantMessage", { text: "Previous answer", timestamp: 100 }, null],
+  ["autoLabel", "Device", null],
+  ["displayName", "Device", null],
+  ["contextBudgetStatus", contextBudgetStatusFixture(), null],
+  ["deviceFolder", { deviceId: "paired-device", path: "/home/example/project" }, null],
+] as const)("publishes and clears %s in subscribed snapshots", (field, value, cleared) => {
+  const previous = snapshot({ [field]: value });
+  expect(previous).toHaveProperty(field, value);
+  expect(previous).toHaveProperty(`session.${field}`, value);
+  const expected = { [field]: cleared };
+  const current = { ...previous, ...snapshot() };
+  expect(current).toMatchObject({ ...expected, session: expected });
+});
 
 it("projects the prepared permission boundary only for an explicit mode", () => {
   const ordinary = snapshot({ sessionRoot: "/workspace/private", updatedAt: 3 });
@@ -51,16 +46,13 @@ it("projects the prepared permission boundary only for an explicit mode", () => 
 
 it("serializes merge tombstones without flattening row-only execution fields", () => {
   const serialized = wire(
-    snapshot(
-      {
-        updatedAt: 5,
-        traceLevel: "full",
-        worktree: { id: "wt-1", branch: "feature", repoRoot: "/private/repo" },
-        execNode: "private-node",
-        execCwd: "/private/cwd",
-      },
-      { includeSession: true },
-    ),
+    snapshot({
+      updatedAt: 5,
+      traceLevel: "full",
+      worktree: { id: "wt-1", branch: "feature", repoRoot: "/private/repo" },
+      execNode: "private-node",
+      execCwd: "/private/cwd",
+    }),
   );
   const tombstones = {
     agentStatus: null,
@@ -100,17 +92,17 @@ it("scopes the global goal to its resolved agent", () => {
       continuationTurns: 0,
     },
   };
-  const unscoped = buildGatewaySessionSnapshot({ sessionRow, includeSession: true });
+  const unscoped = buildGatewaySessionSnapshot({ sessionRow });
   expect(unscoped).not.toHaveProperty("goal");
   expect(unscoped).not.toHaveProperty("session.goal");
-  expectBoth(buildGatewaySessionSnapshot({ sessionRow, agentId: "main", includeSession: true }), {
+  expectBoth(buildGatewaySessionSnapshot({ sessionRow, agentId: "main" }), {
     goal: sessionRow.goal,
   });
 });
 
 it("preserves active run id ownership across omitted, liveness, and exact states", () => {
   const build = (activeRunState?: { active: boolean; runIds?: string[] }) =>
-    wire(snapshot({ kind: "global", updatedAt: 7 }, { includeSession: true, activeRunState }));
+    wire(snapshot({ kind: "global", updatedAt: 7 }, { activeRunState }));
   const omitted = build();
   for (const field of [
     "hasActiveRun",
@@ -149,7 +141,6 @@ it.each([false, true])(
         },
         {
           lifecycle: true,
-          includeSession: true,
           activeRunState: active ? { active: true, runIds: ["next-run"] } : undefined,
           event: {
             runId: "next-run",
@@ -203,7 +194,6 @@ it.each([
         startedAt: 100,
       },
       {
-        includeSession: true,
         lifecycle: true,
         lifecycleRunId: "terminal-run",
         activeRunState: { active: true, status: "queued" },

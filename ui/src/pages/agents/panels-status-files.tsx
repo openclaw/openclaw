@@ -1,4 +1,4 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { ChannelAccountSnapshot, ChannelsStatusSnapshot } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
@@ -247,6 +247,11 @@ export function AgentCron(
         title={t("agents.cronPanel.agentJobsTitle")}
         description={t("agents.cronPanel.agentJobsSubtitle")}
       >
+        <Show when={params.readState().cronJobsError}>
+          <div class="callout danger" role="alert">
+            {params.readState().cronJobsError}
+          </div>
+        </Show>
         {params.readState().cronJobs.length === 0 ? (
           <SettingsEmpty message={t("agents.cronPanel.noJobs")} />
         ) : (

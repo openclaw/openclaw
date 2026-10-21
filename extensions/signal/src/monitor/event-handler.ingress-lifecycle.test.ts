@@ -1,42 +1,35 @@
-// Signal tests cover drain claim ownership through debounce, merge, and skip.
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
 
 vi.useRealTimers();
-let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
-let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
-let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
+const waitOptions = { timeout: 5_000 };
 
 type DispatchParams = {
   ctx: MsgContext;
   replyOptions?: { turnAdoptionLifecycle?: { onAdopted: () => Promise<void> | void } };
 };
 
-const { dispatchInboundMessageMock, recordInboundSessionMock, dispatchCapture, dispatchBehavior } =
-  vi.hoisted(() => {
-    const captured: DispatchParams[] = [];
-    const behavior = {
-      adoptDuringDispatch: true,
-      failBeforeAdoption: undefined as Error | undefined,
-    };
-    return {
-      dispatchCapture: captured,
-      dispatchBehavior: behavior,
-      recordInboundSessionMock: vi.fn(),
-      dispatchInboundMessageMock: vi.fn(async (params: DispatchParams) => {
-        captured.push(params);
-        if (behavior.failBeforeAdoption) {
-          throw behavior.failBeforeAdoption;
-        }
-        if (behavior.adoptDuringDispatch) {
-          // Mirror the real reply lane: adoption fires while dispatch runs.
-          await params.replyOptions?.turnAdoptionLifecycle?.onAdopted();
-        }
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-      }),
-    };
-  });
+const { dispatchMock, recordMock, dispatchBehavior } = vi.hoisted(() => {
+  const behavior = {
+    adoptDuringDispatch: true,
+    failBeforeAdoption: undefined as Error | undefined,
+  };
+  return {
+    dispatchBehavior: behavior,
+    recordMock: vi.fn(),
+    dispatchMock: vi.fn(async (params: DispatchParams) => {
+      if (behavior.failBeforeAdoption) {
+        throw behavior.failBeforeAdoption;
+      }
+      if (behavior.adoptDuringDispatch) {
+        // Mirror the real reply lane: adoption fires while dispatch runs.
+        await params.replyOptions?.turnAdoptionLifecycle?.onAdopted();
+      }
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    }),
+  };
+});
 
 vi.mock("../send.js", () => ({
   sendMessageSignal: vi.fn(),
@@ -58,9 +51,9 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
     ...actual,
     runChannelInboundEvent: createSignalPreparedDispatchRunner(
       actual.runChannelInboundEvent,
-      recordInboundSessionMock,
+      recordMock,
       async (resolved) =>
-        await dispatchInboundMessageMock({
+        await dispatchMock({
           ctx: resolved.ctxPayload,
           replyOptions: resolved.replyOptions,
         }),
@@ -68,129 +61,81 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   };
 });
 
-beforeAll(async () => {
-  const harness = await import("./event-handler.test-harness.js");
-  createBaseSignalEventHandlerDeps = harness.createBaseSignalEventHandlerDeps;
-  createSignalReceiveEvent = harness.createSignalReceiveEvent;
-  ({ createSignalEventHandler } = await import("./event-handler.js"));
-});
+const { createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
+  await import("./event-handler.test-harness.js");
+const { createSignalEventHandler } = await import("./event-handler.js");
 
-function createTrackedLifecycle(): SignalIngressLifecycle & {
-  adoptedCount: () => number;
-  abandonedCount: () => number;
-  failedCount: () => number;
-} {
-  let adopted = 0;
-  let abandoned = 0;
-  let failed = 0;
+function createTrackedLifecycle() {
   return {
     abortSignal: new AbortController().signal,
-    onAdopted: async () => {
-      adopted += 1;
-    },
+    onAdopted: vi.fn(async () => {}),
     onDeferred: () => {},
     onAdoptionFinalizing: () => {},
-    onFailed: () => {
-      failed += 1;
-    },
-    onAbandoned: () => {
-      abandoned += 1;
-    },
-    adoptedCount: () => adopted,
-    abandonedCount: () => abandoned,
-    failedCount: () => failed,
-  };
+    onFailed: vi.fn(),
+    onAbandoned: vi.fn(),
+  } satisfies SignalIngressLifecycle;
 }
 
-function createDataEvent(params: { timestamp: number; message: string; source?: string }) {
+function createDataEvent(timestamp: number, message: string) {
   return createSignalReceiveEvent({
     sourceUuid: "11111111-2222-3333-4444-555555555555",
-    timestamp: params.timestamp,
-    dataMessage: { timestamp: params.timestamp, message: params.message },
-    ...(params.source ? { sourceNumber: params.source } : {}),
+    timestamp,
+    dataMessage: { timestamp, message },
   });
+}
+
+async function enqueueMergedClaims(timestamp: number) {
+  const handler = createSignalEventHandler(
+    createBaseSignalEventHandlerDeps({ cfg: { messages: { inbound: { debounceMs: 40 } } } }),
+  );
+  const first = createTrackedLifecycle();
+  const second = createTrackedLifecycle();
+  expect([
+    await handler(createDataEvent(timestamp, "part one"), first),
+    await handler(createDataEvent(timestamp + 100, "part two"), second),
+  ]).toEqual([{ kind: "deferred" }, { kind: "deferred" }]);
+  return [first, second];
 }
 
 describe("signal drain claim ownership", () => {
   beforeEach(() => {
-    dispatchCapture.length = 0;
     dispatchBehavior.adoptDuringDispatch = true;
     dispatchBehavior.failBeforeAdoption = undefined;
-    dispatchInboundMessageMock.mockClear();
+    dispatchMock.mockClear();
   });
 
   it("completes every constituent claim when debounced entries merge into one turn", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 40 } } },
-      }),
-    );
-    const first = createTrackedLifecycle();
-    const second = createTrackedLifecycle();
-
-    const results = [
-      await handler(createDataEvent({ timestamp: 1700000002000, message: "part one" }), first),
-      await handler(createDataEvent({ timestamp: 1700000003000, message: "part two" }), second),
-    ];
-    expect(results).toEqual([{ kind: "deferred" }, { kind: "deferred" }]);
-
-    await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1), {
-      timeout: 5_000,
-    });
+    const claims = await enqueueMergedClaims(1700000002000);
+    await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1), waitOptions);
     await vi.waitFor(
-      () => {
-        expect(first.adoptedCount()).toBe(1);
-        expect(second.adoptedCount()).toBe(1);
-      },
-      { timeout: 5_000 },
+      () => expect(claims.map((c) => c.onAdopted.mock.calls.length)).toEqual([1, 1]),
+      waitOptions,
     );
   });
 
   it("fails every constituent claim when a merged dispatch rejects before adoption", async () => {
     dispatchBehavior.failBeforeAdoption = new Error("merged dispatch failed");
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 40 } } },
-      }),
-    );
-    const first = createTrackedLifecycle();
-    const second = createTrackedLifecycle();
-
-    const results = [
-      await handler(createDataEvent({ timestamp: 1700000003500, message: "part one" }), first),
-      await handler(createDataEvent({ timestamp: 1700000003600, message: "part two" }), second),
-    ];
-    expect(results).toEqual([{ kind: "deferred" }, { kind: "deferred" }]);
-
-    await vi.waitFor(
-      () => {
-        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-        expect(first.failedCount()).toBe(1);
-        expect(second.failedCount()).toBe(1);
-      },
-      { timeout: 5_000 },
-    );
-    expect(first.adoptedCount()).toBe(0);
-    expect(second.adoptedCount()).toBe(0);
-    expect(first.abandonedCount()).toBe(0);
-    expect(second.abandonedCount()).toBe(0);
+    const claims = await enqueueMergedClaims(1700000003500);
+    await vi.waitFor(() => {
+      expect(dispatchMock).toHaveBeenCalledOnce();
+      expect(claims.map((c) => c.onFailed.mock.calls.length)).toEqual([1, 1]);
+    }, waitOptions);
+    for (const claim of claims) {
+      expect(claim.onAdopted).not.toHaveBeenCalled();
+      expect(claim.onAbandoned).not.toHaveBeenCalled();
+    }
   });
 
   it("settles the claim for a turn that finishes without adoption", async () => {
-    // Dispatch resolves without the reply lane ever adopting (gated/no-reply):
-    // the flush must complete the claim, or the stall watchdog would
-    // dead-letter a deliberately handled message.
+    // A gated/no-reply dispatch must settle rather than dead-letter via the watchdog.
     dispatchBehavior.adoptDuringDispatch = false;
     const handler = createSignalEventHandler(createBaseSignalEventHandlerDeps());
     const lifecycle = createTrackedLifecycle();
 
-    const result = await handler(
-      createDataEvent({ timestamp: 1700000004000, message: "no adoption" }),
-      lifecycle,
-    );
+    const result = await handler(createDataEvent(1700000004000, "no adoption"), lifecycle);
 
     expect(result).toEqual({ kind: "deferred" });
-    await vi.waitFor(() => expect(lifecycle.adoptedCount()).toBe(1), { timeout: 5_000 });
-    expect(lifecycle.abandonedCount()).toBe(0);
+    await vi.waitFor(() => expect(lifecycle.onAdopted).toHaveBeenCalledTimes(1), waitOptions);
+    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import type { CronEvent } from "../cron/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners } from "../shared/listeners.js";
 
@@ -69,6 +70,38 @@ export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
   };
   state.lastHeartbeat = enriched;
   notifyListeners([state.notifications.onEvent], enriched);
+}
+
+/** Called only for receipt-owned converted/default jobs after canonical settlement. */
+export function emitLegacyHeartbeatCronOutcome(evt: CronEvent): void {
+  if (evt.action !== "finished") {
+    return;
+  }
+  emitHeartbeatEvent({
+    status:
+      evt.status === "error" ||
+      evt.deliveryError ||
+      (evt.completionStatus === "failed" && evt.status !== "skipped")
+        ? "failed"
+        : evt.status === "skipped" || evt.completionStatus === "unknown"
+          ? "skipped"
+          : evt.delivered
+            ? "sent"
+            : "ok-empty",
+    preview: evt.summary?.slice(0, 2000),
+    reason:
+      evt.error ??
+      evt.deliveryError ??
+      evt.deliverySuppressionReason ??
+      (evt.completionStatus === "unknown"
+        ? "Automation completion is unknown; inspect its run history."
+        : undefined),
+    durationMs: evt.durationMs,
+    silent: !evt.delivered,
+    channel: evt.delivery?.resolved?.channel,
+    to: evt.delivery?.resolved?.to ?? undefined,
+    accountId: evt.delivery?.resolved?.accountId,
+  });
 }
 
 export function getLastHeartbeatEvent(): HeartbeatEventPayload | null {

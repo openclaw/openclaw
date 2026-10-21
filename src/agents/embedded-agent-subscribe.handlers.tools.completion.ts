@@ -454,7 +454,7 @@ export async function prepareToolExecutionEnd(
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
-      params: startArgs,
+      params: adjustedArgs === undefined ? startArgs : structuredClone(startArgs),
       runId,
       toolCallId,
       result: sanitizedResult,

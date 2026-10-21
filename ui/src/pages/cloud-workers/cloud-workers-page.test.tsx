@@ -94,6 +94,76 @@ function osSelect(page: Element) {
   return page.querySelector<HTMLSelectElement>('select[aria-label="Operating system"]');
 }
 
+it("keeps the profile draft and accepted catalog through refresh failure and retry", async () => {
+  const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };
+  const catalog = {
+    environments: [],
+    profiles: [{ id: "worker", providerId: "crabbox", operatingSystems }],
+  };
+  let hash = "initial";
+  let response = Promise.resolve<EnvironmentsListResult>(catalog);
+  const request = createGatewayRequestMock(async (method, params) => {
+    if (method === "config.get") {
+      return configSnapshot(config, hash);
+    }
+    if (method === "environments.list") {
+      return isRecord(params) && params.projection === "profiles" ? response : { environments: [] };
+    }
+    throw new Error(`Unexpected request ${method}`);
+  });
+  const client = createTestGatewayClient(request);
+  const transport = vi.spyOn(client, "request");
+  const { runtimeConfig, view, page } = mountProfiles(client);
+  const catalogCalls = () =>
+    transport.mock.calls.filter(
+      ([method, params]) =>
+        method === "environments.list" && isRecord(params) && params.projection === "profiles",
+    ).length;
+  try {
+    await waitForSolid(() =>
+      expect(profileRow(page, "worker").textContent).toContain("Advertised"),
+    );
+    click(profileRow(page, "worker"), "Edit");
+    const lifetime = await waitForSolid(() =>
+      expectDefined(
+        page.querySelector<HTMLInputElement>('input[aria-label="Max lifetime"]'),
+        "Profile lifetime",
+      ),
+    );
+    change(lifetime, "9h");
+    const refresh = async (nextHash: string) => {
+      const pending = createDeferred<EnvironmentsListResult>();
+      response = pending.promise;
+      hash = nextHash;
+      const before = catalogCalls();
+      await runtimeConfig.refresh();
+      await waitForSolid(() => expect(catalogCalls()).toBeGreaterThan(before));
+      return pending;
+    };
+    const pending = await refresh("second");
+    expect(profileRow(page, "worker").textContent).toContain("Advertised");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
+    pending.reject(new Error("Synthetic catalog unavailable"));
+    await waitText(() => page, "Synthetic catalog unavailable");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
+
+    const retry = await refresh("third");
+    expect(page.textContent).toContain("Synthetic catalog unavailable");
+    retry.resolve(catalog);
+    await waitForSolid(() =>
+      expect(page.textContent).not.toContain("Synthetic catalog unavailable"),
+    );
+    expect(profileRow(page, "worker").textContent).toContain("Advertised");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
+  } finally {
+    view.unmount();
+    runtimeConfig.dispose();
+  }
+});
+
 it("retires a pending profile catalog when permissions change on the same connection", async () => {
   const pendingCatalog = createDeferred<EnvironmentsListResult>();
   const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };

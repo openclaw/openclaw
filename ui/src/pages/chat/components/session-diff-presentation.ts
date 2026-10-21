@@ -22,7 +22,8 @@ export type SessionDiffViewBindings = {
   props: SessionDiffProps;
   desktop: Accessor<boolean>;
   mobile: Accessor<boolean>;
-  collapsedPaths: Accessor<Set<string>>;
+  collapsedFiles: Readonly<Record<string, true>>;
+  isCollapsed: (path: string) => boolean;
   scope: Accessor<SessionDiffScope>;
   split: Accessor<boolean>;
   wrap: Accessor<boolean>;

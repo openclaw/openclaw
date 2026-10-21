@@ -15,7 +15,7 @@ import type {
 } from "./link-reader-hovercard.types.ts";
 import { renderPagePreview, type PageActivation } from "./link-reader-page-preview.tsx";
 import { LinkReaderPreviewCache } from "./link-reader-preview-cache.ts";
-import { disposePreview } from "./link-reader-preview-root.ts";
+import { disposePreview } from "./link-reader-preview-root.tsx";
 import {
   previewContextFor,
   type PreviewContext,

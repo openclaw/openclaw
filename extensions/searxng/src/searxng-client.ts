@@ -54,28 +54,6 @@ function normalizeSearxngResult(value: unknown): SearxngResult | null {
   };
 }
 
-function buildSearxngSearchUrl(params: {
-  baseUrl: string;
-  query: string;
-  categories?: string;
-  language?: string;
-}): string {
-  const url = new URL(params.baseUrl);
-  const basePathname = url.pathname.replace(/\/+$/u, "");
-  const pathname = basePathname.endsWith("/search") ? basePathname : `${basePathname}/search`;
-  url.pathname = pathname;
-  url.search = "";
-  url.searchParams.set("q", params.query);
-  url.searchParams.set("format", "json");
-  if (params.categories) {
-    url.searchParams.set("categories", params.categories);
-  }
-  if (params.language) {
-    url.searchParams.set("language", params.language);
-  }
-  return url.toString();
-}
-
 function shouldRetryEmptyCategorySearchWithGeneral(categories: string | undefined): boolean {
   if (!categories) {
     return false;
@@ -164,11 +142,17 @@ export async function runSearxngSearch(params: {
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
-  const count = resolveSearchCount(params.count, DEFAULT_SEARCH_COUNT);
+  const count = resolveSearchCount(
+    params.count ?? params.config?.tools?.web?.search?.maxResults,
+    DEFAULT_SEARCH_COUNT,
+  );
   const categories = params.categories ?? resolveSearxngCategories(params.config);
   const language = params.language ?? resolveSearxngLanguage(params.config);
   const baseUrl = params.baseUrl ?? resolveSearxngBaseUrl(params.config);
-  const timeoutSeconds = resolveTimeoutSeconds(params.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
+  const timeoutSeconds = resolveTimeoutSeconds(
+    params.timeoutSeconds ?? params.config?.tools?.web?.search?.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS,
+  );
   const cacheTtlMs = resolveCacheTtlMs(
     params.cacheTtlMinutes ?? params.config?.tools?.web?.search?.cacheTtlMinutes,
     DEFAULT_CACHE_TTL_MINUTES,
@@ -203,12 +187,18 @@ export async function runSearxngSearch(params: {
   const fetchSearxngResults = async (
     searchCategories: string | undefined,
   ): Promise<SearxngResult[]> => {
-    const url = buildSearxngSearchUrl({
-      baseUrl,
-      query,
-      categories: searchCategories,
-      language,
-    });
+    const url = new URL(baseUrl);
+    const basePathname = url.pathname.replace(/\/+$/u, "");
+    url.pathname = basePathname.endsWith("/search") ? basePathname : `${basePathname}/search`;
+    url.search = "";
+    url.searchParams.set("q", query);
+    url.searchParams.set("format", "json");
+    if (searchCategories) {
+      url.searchParams.set("categories", searchCategories);
+    }
+    if (language) {
+      url.searchParams.set("language", language);
+    }
 
     const withEndpoint =
       endpointMode === "selfHosted"
@@ -216,7 +206,7 @@ export async function runSearxngSearch(params: {
         : withTrustedWebSearchEndpoint;
     return await withEndpoint(
       {
-        url,
+        url: url.toString(),
         timeoutSeconds,
         signal,
         init: {

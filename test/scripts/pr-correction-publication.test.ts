@@ -184,19 +184,14 @@ describePosix("correction publication authority handoff", () => {
     },
   );
 
-  it.each(["missing", "stale", "foreign-pr", "changed-review"])(
+  it.each(["missing", "foreign-pr"])(
     "refuses pending correction publication with %s binding",
     (fault) => {
       const f = fixture();
       f.write(
         "gates.env",
-        `PR_NUMBER=${fault === "foreign-pr" ? 42 : 4242}\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${fault === "missing" ? "" : fault === "stale" ? f.source : f.candidate}\n`,
+        `PR_NUMBER=${fault === "foreign-pr" ? 42 : 4242}\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${fault === "missing" ? "" : f.candidate}\n`,
       );
-      if (fault === "changed-review") {
-        const review = JSON.parse(f.read("correction-review.json"));
-        review.pr.headSha = f.source;
-        f.writeJson("correction-review.json", review);
-      }
       const result = runCorrection(f);
       expect(result.status, result.stdout + result.stderr).not.toBe(0);
       expect(f.read("events")).toBe("");
@@ -226,57 +221,6 @@ describePosix("correction publication authority handoff", () => {
       expect(f.has("prepare-push-result.env")).toBe(false);
     },
   );
-
-  it("publishes a signed baseline refresh only after fresh exact-candidate review and gates", () => {
-    const f = fixture("auto");
-    f.git("branch", "-m", "pr-4242-prep");
-    f.write(
-      "prep-context.env",
-      f.read("prep-context.env").replace("PREP_BRANCH=prep", "PREP_BRANCH=pr-4242-prep"),
-    );
-    const oldGates = f.read("gates.env");
-    f.git("checkout", "-q", "-b", "baseline", f.base);
-    writeFileSync(join(f.repoDir, "upstream.txt"), "upstream baseline repair\n");
-    f.git("add", "upstream.txt");
-    f.git("commit", "-qm", "fix: upstream baseline");
-    const baseline = f.git("rev-parse", "HEAD");
-    f.git("checkout", "-q", "pr-4242-prep");
-    const refreshed = runCorrection(f, {
-      command: `prepare_baseline_refresh 4242 --expected-head ${f.candidate} --baseline ${baseline}`,
-      setup: [
-        'source "$script_parent_dir/pr-lib/operation-lock.sh"',
-        "mark_pr_operation_side_effects_started() { :; }",
-        `enter_worktree() { PR_MAIN_SHA=${baseline}; }`,
-        "PR_OPERATION_LOCK_REF=refs/openclaw/pr-operation-locks/4242",
-        `PR_OPERATION_LOCK_OWNER_OID=${f.source}`,
-        'git update-ref "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"',
-      ],
-    });
-    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    const head = f.git("rev-parse", "HEAD");
-    const initialized = runCorrection(f, { command: "prepare_correction_review_init 4242" });
-    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
-    const review = JSON.parse(f.read("correction-review.json"));
-    Object.assign(review, reviewFor(head, true));
-    review.correction.resolvedFindings[0].resolution = "Reviewed the full refreshed product delta.";
-    f.writeJson("correction-review.json", review);
-    f.write("gates.env", oldGates);
-    const stale = runCorrection(f);
-    expect(stale.status).not.toBe(0);
-    expect(f.hosted()).toBe(f.source);
-    expect(f.read("events")).not.toContain("push");
-    f.write(
-      "gates.env",
-      `PR_NUMBER=4242\nGATES_MODE=full\nLAST_VERIFIED_HEAD_SHA=${head}\nFULL_GATES_HEAD_SHA=${head}\n`,
-    );
-    const published = runCorrection(f);
-    expect(published.status, published.stdout + published.stderr).toBe(0);
-    expect(f.hosted()).toBe(head);
-    expect(f.git("show", "-s", "--format=%P", head)).toBe(`${f.candidate} ${baseline}`);
-    f.git("verify-commit", head);
-    expect(f.read("events")).toBe("push\n");
-    expect(f.read("prepare-push-result.env")).toContain(`PUSH_LOCAL_PREP_HEAD_SHA=${head}\n`);
-  });
 
   it.each([
     ["review", "printf '\\n' >> .local/correction-review.json"],

@@ -6,6 +6,7 @@ import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -43,6 +44,8 @@ import type {
   SidebarContent,
   TranscriptAttachments,
 } from "./chat-sidebar-content-types.ts";
+
+registerChatSessionEnglish();
 
 registerFilePreviewEnglish();
 

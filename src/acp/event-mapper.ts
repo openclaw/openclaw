@@ -5,6 +5,7 @@ import type {
   ToolKind,
 } from "@agentclientprotocol/sdk";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   hasNonEmptyString,
@@ -102,17 +103,9 @@ function normalizeToolLocationPath(value: string): string | undefined {
   return trimmed;
 }
 
-function normalizeToolLocationLine(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const line = Math.floor(value);
-  return line > 0 ? line : undefined;
-}
-
 function extractToolLocationLine(record: Record<string, unknown>): number | undefined {
   for (const key of TOOL_LOCATION_LINE_KEYS) {
-    const line = normalizeToolLocationLine(record[key]);
+    const line = floorPositiveFiniteNumber(record[key]) || undefined;
     if (line !== undefined) {
       return line;
     }

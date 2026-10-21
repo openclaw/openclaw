@@ -123,8 +123,10 @@ describe("runSessionRegistryMaintenance", () => {
     "agent-database-inspection-failed",
     "agent-database-ownership-mismatch",
   ] as const)(
-    "maintains healthy stores and their retention deadlines while another agent has %s",
+    "defers registry pruning while another agent has %s",
     withMaintenanceState(async (code: AgentDatabaseAdmissionRefusal["code"]) => {
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now);
       const config: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { slow: {}, healthy: {} } },
       };
@@ -132,6 +134,13 @@ describe("runSessionRegistryMaintenance", () => {
       setRuntimeConfigSnapshot(config);
       const slow = await writeStaleCronSession("slow");
       const healthy = await writeStaleCronSession("healthy");
+      const child = { storePath: slow.storePath, sessionKey: "agent:slow:dashboard:child" };
+      const childEntry = {
+        sessionId: "cross-agent-child",
+        updatedAt: now,
+        spawnedBy: healthy.sessionKey,
+      };
+      await replaceSessionEntry(child, childEntry);
       const inspection = createAgentDatabaseInspectionRefusal({
         agentId: "slow",
         paths: [resolveSqliteTargetFromSessionStorePath(slow.storePath).path],
@@ -148,9 +157,10 @@ describe("runSessionRegistryMaintenance", () => {
       const waiting = await runSessionRegistryMaintenance(params);
 
       expect(waiting).toMatchObject({
-        pruned: 1,
+        pruned: 0,
         skippedStores: 1,
-        nextSweepAtMs: null,
+        nextSweepAtMs: now + 60_000,
+        skippedReason: "session child inventory incomplete",
         stores: expect.arrayContaining([
           {
             agentId: "slow",
@@ -158,15 +168,6 @@ describe("runSessionRegistryMaintenance", () => {
             skippedReason: code,
           },
         ]),
-      });
-      expect(loadSessionEntry(healthy)).toBeUndefined();
-      const updatedAt = Date.now();
-      await replaceSessionEntry(healthy, { sessionId: "healthy-recent-run", updatedAt });
-      const retained = await runSessionRegistryMaintenance(params);
-      expect(retained).toMatchObject({
-        pruned: 0,
-        skippedStores: 1,
-        nextSweepAtMs: updatedAt + 7 * DAY_MS + 1,
       });
       expect(loadSessionEntry(healthy)).toBeDefined();
       if (code !== "agent-database-inspection-pending") {
@@ -180,6 +181,14 @@ describe("runSessionRegistryMaintenance", () => {
 
       expect(resumed).toMatchObject({ pruned: 1, skippedStores: 0 });
       expect(loadSessionEntry(slow)).toBeUndefined();
+      expect(loadSessionEntry(healthy)).toBeDefined();
+      await replaceSessionEntry(child, { ...childEntry, archivedAt: now });
+
+      expect(await runSessionRegistryMaintenance(params)).toMatchObject({
+        pruned: 1,
+        skippedStores: 0,
+      });
+      expect(loadSessionEntry(healthy)).toBeUndefined();
     }),
   );
 
@@ -266,7 +275,7 @@ describe("runSessionRegistryMaintenance", () => {
   );
 
   it.each(["missing", "reconstructed"])(
-    "preserves stores held by %s deletion history while continuing eligible retention",
+    "defers registry pruning while stores are held by %s deletion history",
     withMaintenanceState(async (history: string) => {
       const main = await writeStaleCronSession("main");
       const retained = await writeStaleCronSession("retained");
@@ -286,8 +295,9 @@ describe("runSessionRegistryMaintenance", () => {
       });
 
       expect(summary).toMatchObject({
-        pruned: history === "missing" ? 0 : 1,
+        pruned: 0,
         skippedStores: history === "missing" ? 2 : 1,
+        skippedReason: "session child inventory incomplete",
       });
       expect(summary.stores).toContainEqual({
         agentId: "retained",
@@ -299,7 +309,7 @@ describe("runSessionRegistryMaintenance", () => {
       expect(held).toMatchObject({ warning: expect.stringContaining("openclaw doctor --fix") });
       expect(await fs.readFile(databasePath)).toEqual(bytes);
       expect(loadSessionEntry(retained)).toBeDefined();
-      expect(loadSessionEntry(main) !== undefined).toBe(history === "missing");
+      expect(loadSessionEntry(main)).toBeDefined();
     }),
   );
 

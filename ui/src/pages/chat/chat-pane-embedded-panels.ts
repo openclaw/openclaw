@@ -1,6 +1,7 @@
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
 import type { IconName } from "../../components/solid/icon.tsx";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
@@ -11,6 +12,8 @@ import { resolveSessionDiffSidebarContent } from "./components/chat-session-work
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout-geometry.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
+
+registerChatSessionEnglish();
 
 registerFilePreviewEnglish();
 

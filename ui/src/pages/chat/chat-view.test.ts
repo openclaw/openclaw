@@ -4705,7 +4705,10 @@ describe("chat transcript rendering cache", () => {
         onOpenWorkspaceFile,
       };
       renderChatInto(container, { ...props, allowExternalEmbedUrls: false });
-      const frame = expectDefined(container.querySelector("iframe"), "blocked widget frame");
+      await vi.dynamicImportSettled();
+      const frame = await waitForSolid(() =>
+        expectDefined(container.querySelector("iframe"), "blocked widget frame"),
+      );
       expect(frame.getAttribute("src")).toBeNull();
       expect(frame.getAttribute("sandbox")).toBe("");
 

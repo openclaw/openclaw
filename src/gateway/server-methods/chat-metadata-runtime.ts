@@ -76,6 +76,7 @@ export function createGatewayChatMetadataRuntime(params: {
   getContext: () => GatewayModelCatalogContext;
   onChanged?: (change: {
     modelCatalogChanged: boolean;
+    modelCatalogStatusChanged?: true;
     authChanged: boolean;
     commandsChanged?: false;
   }) => void;
@@ -101,12 +102,13 @@ export function createGatewayChatMetadataRuntime(params: {
   const notifyChanged = (facts?: PreparedGenerationFacts, catalogStatusChanged = false) => {
     const previous = lastNotifiedFacts;
     lastNotifiedFacts = facts;
+    const modelCatalogChanged =
+      !previous || !facts || !generationFactsMatch(previous, facts, "catalog");
     params.onChanged?.({
-      modelCatalogChanged:
-        catalogStatusChanged ||
-        !previous ||
-        !facts ||
-        !generationFactsMatch(previous, facts, "catalog"),
+      modelCatalogChanged,
+      ...(!modelCatalogChanged && catalogStatusChanged
+        ? { modelCatalogStatusChanged: true as const }
+        : {}),
       authChanged: !previous || !facts || !generationFactsMatch(previous, facts, "auth"),
       ...(previous && facts && generationFactsMatch(previous, facts, "commands")
         ? { commandsChanged: false as const }

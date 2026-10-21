@@ -195,7 +195,7 @@ the main Gateway port keeps its existing JSON check responses.
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
 - Public DMs: `channels.nextcloud-talk.dmPolicy="open"` plus `channels.nextcloud-talk.allowFrom=["*"]`.
-- `allowFrom` matches Nextcloud user IDs only (lowercased); display names are ignored.
+- Sender allowlists accept bare Nextcloud user IDs (`alice`) or typed Talk actor IDs (`users/alice`), case-insensitively; display names are ignored. This applies to `allowFrom`, `groupAllowFrom`, room `allowFrom`, `mediaAllowFrom`, and configured approvers. Other actor types such as `guests/alice` remain distinct from `alice`.
 
 ## Rooms (groups)
 

@@ -521,6 +521,15 @@ const stateClientCredentialMigration = {
   applied: "Moved client credentials and native socket material to the local owner (v29)",
 };
 
+const stateAutomationPolicyMigration = {
+  version: 30,
+  tables: [],
+  columns: [],
+  // Only the version fence changes; Doctor owns the subsequent job conversion.
+  migrate: () => false,
+  applied: "Fenced ordinary automation timing and delivery policies from older schedulers (v30)",
+};
+
 /** Version-gated column and row migrations, oldest first; each runs inside the caller's schema transaction. */
 export const versionedStateMigrations: ReadonlyArray<{
   migrate: (db: DatabaseSync, previousVersion: number) => boolean;
@@ -571,6 +580,7 @@ export function migrateBoundedStateSchema(
     stateWriteIndexMigration,
     statePublicationDraftMigration,
     stateClientCredentialMigration,
+    stateAutomationPolicyMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.
