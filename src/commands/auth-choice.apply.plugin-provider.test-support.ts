@@ -1,5 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import type { ProviderPlugin } from "../plugins/types.js";
+import { createApiKeyCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
+import type { ProviderPlugin, ProviderAuthResult } from "../plugins/types.js";
 
 export const LOCAL_PROVIDER_ID = "local-provider";
 export const LOCAL_PROVIDER_LABEL = "Local Provider";
@@ -8,10 +8,23 @@ export const LOCAL_PROFILE_ID = `${LOCAL_PROVIDER_ID}:default`;
 export const LOCAL_API_KEY = "local-provider-key";
 export const LOCAL_DEFAULT_MODEL = `${LOCAL_PROVIDER_ID}/demo-model`;
 
-export function buildProvider(): ProviderPlugin {
+export function buildProvider({
+  id = LOCAL_PROVIDER_ID,
+  aliases,
+  key = LOCAL_API_KEY,
+  method,
+  result,
+}: {
+  id?: string;
+  aliases?: string[];
+  key?: string;
+  method?: Partial<ProviderPlugin["auth"][number]>;
+  result?: Partial<ProviderAuthResult>;
+} = {}): ProviderPlugin {
   return {
-    id: LOCAL_PROVIDER_ID,
-    label: LOCAL_PROVIDER_LABEL,
+    id,
+    label: id === LOCAL_PROVIDER_ID ? LOCAL_PROVIDER_LABEL : id,
+    aliases,
     auth: [
       {
         id: LOCAL_AUTH_METHOD_ID,
@@ -20,39 +33,17 @@ export function buildProvider(): ProviderPlugin {
         run: async () => ({
           profiles: [
             {
-              profileId: LOCAL_PROFILE_ID,
-              credential: {
-                type: "api_key",
-                provider: LOCAL_PROVIDER_ID,
-                key: LOCAL_API_KEY,
-              },
+              profileId: `${id}:default`,
+              credential: createApiKeyCredential(id, key),
             },
           ],
           defaultModel: LOCAL_DEFAULT_MODEL,
+          ...result,
         }),
+        ...method,
       },
     ],
   };
-}
-
-export function buildProviderWithDefaultModelPatch(): ProviderPlugin {
-  const provider = buildProvider();
-  const method = expectDefined(provider.auth[0], "auth method");
-  const run = method.run;
-  method.run = async (ctx) => ({
-    ...(await run(ctx)),
-    configPatch: {
-      agents: {
-        defaults: {
-          model: { primary: LOCAL_DEFAULT_MODEL },
-          models: {
-            [LOCAL_DEFAULT_MODEL]: { alias: "Local default" },
-          },
-        },
-      },
-    },
-  });
-  return provider;
 }
 
 export function buildLocalProviderInstallCatalogEntry() {

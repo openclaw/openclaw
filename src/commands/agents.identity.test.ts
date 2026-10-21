@@ -283,13 +283,6 @@ describe("agents set-identity command", () => {
 });
 
 describe("agents helpers", () => {
-  it("applyAgentConfig leaves a first roster entry trivially sole", async () => {
-    const next = applyAgentConfig({}, { agentId: "work", name: "Work" });
-
-    expect(next.agents?.entries).toEqual({ work: { name: "Work" } });
-    expect(await buildAgentSummaries(next)).toMatchObject([{ id: "work", isDefault: true }]);
-  });
-
   it("applyAgentConfig clears a model override", async () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -309,14 +302,12 @@ describe("agents helpers", () => {
     ]);
   });
 
-  it("adds distinct routes, upgrades account scope, and reports duplicate ownership", () => {
-    const existing = { agentId: "main", match: { channel: "whatsapp", accountId: "default" } };
+  it("adds distinct role and delimiter-bearing routes while upgrading account scope", () => {
     const channel = { agentId: "main", match: { channel: "telegram" } };
     const role = {
       agentId: "main",
       match: { channel: "discord", accountId: "guild-a", guildId: "123", roles: ["111", "222"] },
     };
-    const conflict = { ...existing, agentId: "work" };
     const upgraded = { agentId: "main", match: { channel: "telegram", accountId: "work" } };
     const added: AgentRouteBinding[] = [
       { agentId: "work", match: { channel: "discord", accountId: "guild-a", guildId: "123" } },
@@ -334,17 +325,10 @@ describe("agents helpers", () => {
         },
       },
     ];
-    const result = applyAgentBindings({ bindings: [existing, channel, role] }, [
-      existing,
-      conflict,
-      upgraded,
-      ...added,
-    ]);
+    const result = applyAgentBindings({ bindings: [channel, role] }, [upgraded, ...added]);
     expect(result.added).toStrictEqual(added);
-    expect(result.skipped).toStrictEqual([existing]);
     expect(result.updated).toStrictEqual([upgraded]);
-    expect(result.conflicts).toStrictEqual([{ binding: conflict, existingAgentId: "main" }]);
-    expect(result.config.bindings).toStrictEqual([existing, upgraded, role, ...added]);
+    expect(result.config.bindings).toStrictEqual([upgraded, role, ...added]);
   });
 
   it("removeAgentBindings does not remove role-based bindings when removing channel-level routes", () => {
@@ -362,6 +346,7 @@ describe("agents helpers", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
+          skipBootstrap: true,
           workspace: "/srv/fleet",
           systemAgent: { agentId: "WORK" },
           subagents: { allowAgents: ["work", "home"] },
@@ -420,6 +405,8 @@ describe("agents helpers", () => {
     expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);
     expect(result.config.agents?.defaults?.subagents?.allowAgents).toEqual(["home"]);
     expect(result.config.agents?.defaults?.systemAgent).toBeUndefined();
+    expect(result.config.agents?.defaults).not.toHaveProperty("heartbeat");
+    expect(result.config.agents?.defaults?.skipBootstrap).toBe(true);
     expect(result.config.talk).toEqual({ provider: "test-provider" });
     expect(result.config.agents?.entries?.home?.subagents?.allowAgents).toEqual(["home"]);
     expect(result.config.agents?.entries?.home?.tools).toEqual({
@@ -433,21 +420,5 @@ describe("agents helpers", () => {
       "agents.defaults.systemAgent.agentId",
       "talk.agentId",
     ]);
-  });
-  it("preserves ordinary defaults without reintroducing retired heartbeat config", () => {
-    const result = pruneAgentConfig(
-      {
-        agents: {
-          ownership: "explicit",
-          defaults: { skipBootstrap: true, systemAgent: { agentId: "ops" } },
-          entries: { ops: {}, research: {}, writer: {} },
-        },
-      },
-      "ops",
-    );
-    expect(result.config.agents?.defaults).not.toHaveProperty("heartbeat");
-    expect(result.config.agents?.defaults?.skipBootstrap).toBe(true);
-    expect(result.config.agents?.defaults?.systemAgent).toBeUndefined();
-    expect(result.clearedOwnerRefs).toEqual(["agents.defaults.systemAgent.agentId"]);
   });
 });

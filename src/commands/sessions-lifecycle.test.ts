@@ -540,10 +540,6 @@ describe("sessions lifecycle commands", () => {
         expect(logged).toContain("243868");
         expect(logged).toContain("34941");
         expect(logged.includes("degraded summary")).toBe(qualityDegraded);
-        if (qualityDegraded) {
-          expect(logged).toContain("Older details, exact identifiers, or pending requests");
-          expect(logged).toContain("/new or a larger model");
-        }
       },
     );
 

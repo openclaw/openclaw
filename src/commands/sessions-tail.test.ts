@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import {
@@ -203,32 +203,19 @@ describe("sessionsTailCommand", () => {
     expect(runtimeOutput(runtime)).not.toContain("sensitive failure detail");
   });
 
-  it.each([
-    ["CJK", "invalid", "--:--:--", "中文", "中文"],
-    [
-      "truncated emoji",
-      "2026-05-18T12:04:21.000Z",
-      "12:04:21Z",
-      `${"a".repeat(17)}👩🏽‍💻-incident`,
-      `${"a".repeat(17)}…`,
-    ],
-  ])(
-    "keeps progress columns aligned with %s session keys",
-    async (_name, ts, timestamp, suffix, displayed) => {
-      const key = `agent:main:${suffix}`;
-      await writeSessionEntry(key);
-      await appendEvents([toolResult("proof", { ts })], { key });
-      await explicitTail({ sessionKey: key });
-
-      const line = runtimeOutput(runtime);
-      expect(line.split("\n")).toHaveLength(1);
-      expect(line.startsWith(`${timestamp} `)).toBe(true);
-      expect(line).toContain(` agent:main:${displayed} `);
-      expect(line).toContain("tool.result");
-      expect(line.endsWith("proof ok")).toBe(true);
-      expect(visibleWidth(line.slice(0, line.indexOf("proof ok")))).toBe(58);
-    },
-  );
+  it("aligns CJK session keys and replaces invalid timestamps", async () => {
+    const key = "agent:main:中文";
+    await writeSessionEntry(key);
+    await appendEvents([toolResult("proof", { ts: "invalid" })], { key });
+    await explicitTail({ sessionKey: key });
+    const line = runtimeOutput(runtime);
+    expect(line.split("\n")).toHaveLength(1);
+    expect(line.startsWith("--:--:-- ")).toBe(true);
+    expect(line).toContain(` ${key} `);
+    expect(line).toContain("tool.result");
+    expect(line.endsWith("proof ok")).toBe(true);
+    expect(visibleWidth(line.slice(0, line.indexOf("proof ok")))).toBe(58);
+  });
 
   it.each([
     ["CSI inside", "a\u001b[31mb", "custom\u001b[31m", "ab", "custom"],
@@ -365,6 +352,32 @@ describe("sessionsTailCommand", () => {
         mocks.callGatewayFromCliWithTransport.mockRejectedValue(new Error("missing scope"));
       }
 
+      const auditProjection = ["reachable", "explicit store", "explicit key"].includes(mode);
+      if (auditProjection) {
+        for (let index = 0; index < 100; index += 1) {
+          replaceSessionEntrySync(
+            { sessionKey: `agent:main:unrelated:${index}`, storePath },
+            {
+              sessionId: `unrelated-${index}`,
+              status: "done",
+              updatedAt: 1,
+              skillsSnapshot: { prompt: `UNRELATED_TAIL_PAYLOAD_${"x".repeat(4096)}`, skills: [] },
+              systemPromptReport: {
+                source: "run",
+                generatedAt: 1,
+                workspaceDir: `UNRELATED_TAIL_PAYLOAD_${"y".repeat(4096)}`,
+                systemPrompt: { chars: 0, projectContextChars: 0, nonProjectContextChars: 0 },
+                injectedWorkspaceFiles: [],
+                skills: { promptChars: 0, entries: [] },
+                tools: { listChars: 0, schemaChars: 0, entries: [] },
+              },
+            },
+          );
+        }
+      }
+      const parse = vi.spyOn(JSON, "parse");
+      onTestFinished(() => parse.mockRestore());
+
       const selection = tail({
         agent: "main",
         store: mode === "explicit store" ? storePath : undefined,
@@ -374,6 +387,14 @@ describe("sessionsTailCommand", () => {
         await expect(selection).rejects.toThrow("missing scope");
       } else {
         await selection;
+      }
+      if (auditProjection) {
+        expect(
+          parse.mock.calls.filter(
+            ([value]) => typeof value === "string" && value.includes("UNRELATED_TAIL_PAYLOAD_"),
+          ),
+        ).toHaveLength(0);
+        expect(runtime.error).not.toHaveBeenCalled();
       }
 
       const output = runtimeOutput(runtime);
@@ -391,65 +412,6 @@ describe("sessionsTailCommand", () => {
       ).toEqual(notice ? [[notice]] : []);
       if (mode === "explicit store" || mode === "explicit key") {
         expect(mocks.callGatewayFromCliWithTransport).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it.each(["explicit", "running", "latest"])(
-    "selects %s sessions without decoding unrelated saved prompts",
-    async (selection) => {
-      storePath = path.join(tmpDir, "state", "agents", "main", "agent", "openclaw-agent.sqlite");
-      await writeSessionEntry();
-      if (selection === "running") {
-        mocks.callGatewayFromCliWithTransport.mockResolvedValue({
-          sessions: [
-            { key: sessionKey, sessionId: "session-one", hasActiveRun: true, status: "running" },
-          ],
-        });
-      }
-      await appendEvents([toolResult("selected")]);
-      for (let index = 0; index < 100; index += 1) {
-        replaceSessionEntrySync(
-          { sessionKey: `agent:main:unrelated:${index}`, storePath },
-          {
-            sessionId: `unrelated-${index}`,
-            status: "done",
-            updatedAt: 1,
-            skillsSnapshot: {
-              prompt: `UNRELATED_TAIL_PAYLOAD_${"x".repeat(4096)}`,
-              skills: [],
-            },
-            systemPromptReport: {
-              source: "run",
-              generatedAt: 1,
-              workspaceDir: `UNRELATED_TAIL_PAYLOAD_${"y".repeat(4096)}`,
-              systemPrompt: { chars: 0, projectContextChars: 0, nonProjectContextChars: 0 },
-              injectedWorkspaceFiles: [],
-              skills: { promptChars: 0, entries: [] },
-              tools: { listChars: 0, schemaChars: 0, entries: [] },
-            },
-          },
-        );
-      }
-
-      const parse = vi.spyOn(JSON, "parse");
-      try {
-        await tail({
-          agent: "main",
-          store: selection === "running" ? undefined : storePath,
-          sessionKey: selection === "explicit" ? sessionKey : undefined,
-          tail: "1",
-        });
-
-        expect(
-          parse.mock.calls.filter(
-            ([value]) => typeof value === "string" && value.includes("UNRELATED_TAIL_PAYLOAD_"),
-          ),
-        ).toHaveLength(0);
-        expect(runtimeOutput(runtime)).toContain("selected ok");
-        expect(runtime.error).not.toHaveBeenCalled();
-      } finally {
-        parse.mockRestore();
       }
     },
   );

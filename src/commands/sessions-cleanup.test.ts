@@ -5,6 +5,7 @@ import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { sessionsCleanupLargeLabelsEntrypoint } from "./sessions-cleanup-runtime.test-support.js";
+import { cleanupSummary } from "./sessions-cleanup-summary.test-support.js";
 import { createCapturingTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -86,22 +87,13 @@ function cleanupPreview(
   entries: Partial<Omit<CleanupPreview, "summary">> = {},
 ) {
   return {
-    summary: {
-      agentId: "main",
+    summary: cleanupSummary({
       storePath: "/resolved/sessions.json",
-      mode: "warn",
-      dryRun: true,
       beforeCount: 1,
-      afterCount: 0,
-      missing: 0,
-      dmScopeRetired: 0,
-      modelRunPruned: 0,
-      pruned: 0,
-      capped: 0,
-      diskBudget: null,
       wouldMutate: true,
+      unreferencedArtifacts: undefined,
       ...summary,
-    },
+    }),
     beforeStore: {},
     missingKeys: new Set<string>(),
     staleKeys: new Set<string>(),
