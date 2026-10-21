@@ -1583,7 +1583,6 @@ src/commands/doctor-session-incognito-key-repair-state.ts	4
 src/commands/doctor-session-snapshots.ts	3
 src/commands/doctor-session-sqlite-recover-report.ts	1
 src/commands/doctor-session-transcript-headers.ts	2
-src/commands/doctor-session-transcript-labels.ts	1
 src/commands/doctor-session-transcripts.ts	1
 src/commands/doctor-skills.ts	1
 src/commands/doctor-sqlite-compact.ts	1
