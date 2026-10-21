@@ -1,7 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -120,56 +119,39 @@ export function ChatDetailsProcesses(props: Props) {
       void props.processes()?.stop(row);
     }
   };
+  const hasRunning = () => rows().some((row) => row.status === "running");
+  const ProcessError = () => (
+    <Show when={snapshot()?.error}>
+      {(error) => (
+        <div class="chat-details-processes__error" role="alert">
+          <span>{error()}</span>
+          <button
+            class="chip"
+            type="button"
+            disabled={!props.presented || snapshot()?.loading}
+            onClick={() => void props.processes()?.refresh()}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      )}
+    </Show>
+  );
   return (
     <Show when={props.onOpen}>
-      <ChatDetailsDesktopSection
-        section="processes"
-        title={t("chat.sessionDetails.processes")}
-        expanded={props.expanded}
-        presented={props.presented}
-        onExpandedChange={(expanded) => props.onExpandedChange(expanded)}
-      >
-        <div class="chat-details-processes" aria-busy={snapshot()?.loading ? "true" : "false"}>
-          <Show when={snapshot()?.error}>
-            {(error) => (
-              <div class="chat-details-processes__error" role="alert">
-                <span>{error()}</span>
-                <button
-                  class="chip"
-                  type="button"
-                  disabled={!props.presented || snapshot()?.loading}
-                  onClick={() => void props.processes()?.refresh()}
-                >
-                  {t("common.retry")}
-                </button>
-              </div>
-            )}
-          </Show>
-          <Show
-            when={rows().length > 0}
-            fallback={
-              <Show
-                when={snapshot()?.loading}
-                fallback={
-                  <Show when={!snapshot()?.error}>
-                    <div class="chat-details__muted" role="status">
-                      {t(
-                        snapshot()?.hasResult
-                          ? "chat.processesPanel.empty"
-                          : "chat.processesPanel.disconnected",
-                      )}
-                    </div>
-                  </Show>
-                }
-              >
-                <PanelLoadingSkeleton
-                  compact
-                  variant="file-list"
-                  label={t("chat.sessionDetails.processes")}
-                />
-              </Show>
-            }
-          >
+      <Show when={!hasRunning()}>
+        <ProcessError />
+      </Show>
+      <Show when={hasRunning()}>
+        <ChatDetailsDesktopSection
+          section="processes"
+          title={t("chat.sessionDetails.processes")}
+          expanded={props.expanded}
+          presented={props.presented}
+          onExpandedChange={(expanded) => props.onExpandedChange(expanded)}
+        >
+          <div class="chat-details-processes" aria-busy={snapshot()?.loading ? "true" : "false"}>
+            <ProcessError />
             <div
               class="chat-details-processes__list"
               role="list"
@@ -187,12 +169,12 @@ export function ChatDetailsProcesses(props: Props) {
                 )}
               </For>
             </div>
-          </Show>
-          <Show when={snapshot()?.truncated}>
-            <div class="chat-details__muted">{t("chat.processesPanel.listTruncated")}</div>
-          </Show>
-        </div>
-      </ChatDetailsDesktopSection>
+            <Show when={snapshot()?.truncated}>
+              <div class="chat-details__muted">{t("chat.processesPanel.listTruncated")}</div>
+            </Show>
+          </div>
+        </ChatDetailsDesktopSection>
+      </Show>
     </Show>
   );
 }
