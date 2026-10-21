@@ -51,6 +51,20 @@ function createMockDb(checkpointResult = { busy: 0, log: 0, checkpointed: 0 }): 
   } as unknown as DatabaseSync;
 }
 
+function mockQuery(
+  db: DatabaseSync,
+  get: (sql: string) => unknown,
+  all?: (sql: string) => unknown,
+) {
+  vi.mocked(db.prepare).mockImplementation(
+    (sql) =>
+      ({
+        get: () => get(sql),
+        ...(all ? { all: () => all(sql) } : {}),
+      }) as ReturnType<DatabaseSync["prepare"]>,
+  );
+}
+
 function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
   return {
     type,
@@ -73,42 +87,33 @@ function mockMountCommand(output: string): void {
 }
 
 describe("sqlite WAL maintenance", () => {
-  it("uses rollback journaling for databases on NFS-backed volumes", () => {
-    const tempDir = tempDirs.make("openclaw-sqlite-nfs-");
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const statfs = vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0x6969));
-
-    const maintenance = configureSqliteWalMaintenance(db, {
-      checkpointIntervalMs: 0,
-      databasePath: path.join(tempDir, "missing", "openclaw.sqlite"),
-    });
-
-    expect(statfs).toHaveBeenCalledWith(fs.realpathSync(tempDir));
-    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
-    expect(db["exec"]).not.toHaveBeenCalled();
-    expect(maintenance.checkpoint()).toBe(true);
-    expect(maintenance.close()).toBe(true);
-    expect(db["exec"]).not.toHaveBeenCalled();
-  });
-
   it.each([
+    ["NFS", 0x6969],
     ["SMB", 0x517b],
     ["CIFS", 0xff534d42],
     ["SMB2", 0xfe534d42],
     ["9p (V9FS)", 0x01021997],
-  ])("uses rollback journaling for databases on Linux %s volumes", (_label, fsType) => {
+  ])("uses rollback journaling for databases on Linux %s volumes", (label, fsType) => {
     const tempDir = tempDirs.make("openclaw-sqlite-network-");
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(fsType));
+    const statfs = vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(fsType));
 
-    configureSqliteWalMaintenance(db, {
-      checkpointIntervalMs: 0,
-      databasePath: path.join(tempDir, "openclaw.sqlite"),
+    const maintenance = configure(db, {
+      databasePath: path.join(
+        tempDir,
+        label === "NFS" ? "missing/openclaw.sqlite" : "openclaw.sqlite",
+      ),
     });
 
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
+    if (label === "NFS") {
+      expect(statfs).toHaveBeenCalledWith(fs.realpathSync(tempDir));
+      expect(db["exec"]).not.toHaveBeenCalled();
+      expect(maintenance.checkpoint()).toBe(true);
+      expect(maintenance.close()).toBe(true);
+      expect(db["exec"]).not.toHaveBeenCalled();
+    }
   });
 
   it.each([
@@ -155,9 +160,7 @@ describe("sqlite WAL maintenance", () => {
   it("refuses network-backed databases when SQLite keeps WAL active", () => {
     const tempDir = tempDirs.make("openclaw-sqlite-nfs-");
     const db = createMockDb();
-    vi.mocked(db["prepare"]).mockReturnValue({
-      get: vi.fn(() => ({ journal_mode: "wal" })),
-    } as unknown as ReturnType<DatabaseSync["prepare"]>);
+    mockQuery(db, () => ({ journal_mode: "wal" }));
     vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0x6969));
 
     expect(() =>
@@ -195,16 +198,11 @@ describe("sqlite WAL maintenance", () => {
 
   it("rejects a memory journal for a file-backed database", () => {
     const db = createMockDb();
-    vi.mocked(db["prepare"]).mockImplementation(
+    mockQuery(
+      db,
+      () => ({ journal_mode: "memory" }),
       (sql) =>
-        ({
-          all: vi.fn(() =>
-            sql === "PRAGMA database_list;"
-              ? [{ name: "main", file: "/tmp/file-backed.sqlite" }]
-              : [],
-          ),
-          get: vi.fn(() => ({ journal_mode: "memory" })),
-        }) as unknown as ReturnType<DatabaseSync["prepare"]>,
+        sql === "PRAGMA database_list;" ? [{ name: "main", file: "/tmp/file-backed.sqlite" }] : [],
     );
 
     expect(() => configure(db, { databaseLabel: "file-backed-test-db" })).toThrow(
@@ -641,15 +639,13 @@ describe("sqlite WAL maintenance", () => {
     const error = new Error("busy");
     const onCheckpointError = vi.fn();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.mocked(db["prepare"]).mockImplementation((sql) => {
+    vi.mocked(db.prepare).mockImplementation((sql) => {
       if (sql.includes("wal_checkpoint")) {
         throw error;
       }
       return {
-        get: vi.fn(() => ({
-          journal_mode: sql === "PRAGMA journal_mode = WAL;" ? "wal" : "delete",
-        })),
-      } as unknown as ReturnType<DatabaseSync["prepare"]>;
+        get: () => ({ journal_mode: sql === "PRAGMA journal_mode = WAL;" ? "wal" : "delete" }),
+      } as ReturnType<DatabaseSync["prepare"]>;
     });
 
     const maintenance = configureSqliteWalMaintenance(db, {
@@ -700,17 +696,15 @@ describe("sqlite WAL maintenance", () => {
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     let journalModeAttempts = 0;
-    vi.mocked(db["prepare"]).mockReturnValue({
-      get: vi.fn(() => {
-        if (journalModeAttempts++ === 0) {
-          throw Object.assign(new Error("database is locked"), {
-            code: "ERR_SQLITE_ERROR",
-            errcode: 5,
-          });
-        }
-        return { journal_mode: "wal" };
-      }),
-    } as unknown as ReturnType<DatabaseSync["prepare"]>);
+    mockQuery(db, () => {
+      if (journalModeAttempts++ === 0) {
+        throw Object.assign(new Error("database is locked"), {
+          code: "ERR_SQLITE_ERROR",
+          errcode: 5,
+        });
+      }
+      return { journal_mode: "wal" };
+    });
 
     configureSqliteConnectionPragmas(db, {
       busyTimeoutMs: 50,
@@ -730,14 +724,9 @@ describe("sqlite WAL maintenance", () => {
   it("rejects a WAL transition that SQLite silently declines", () => {
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.mocked(db["prepare"]).mockImplementation(
-      (sql) =>
-        ({
-          get: vi.fn(() => ({
-            journal_mode: sql === "PRAGMA journal_mode = WAL;" ? "delete" : "wal",
-          })),
-        }) as unknown as ReturnType<DatabaseSync["prepare"]>,
-    );
+    mockQuery(db, (sql) => ({
+      journal_mode: sql === "PRAGMA journal_mode = WAL;" ? "delete" : "wal",
+    }));
 
     expect(() =>
       configureSqliteConnectionPragmas(db, {
@@ -750,12 +739,7 @@ describe("sqlite WAL maintenance", () => {
 
   it("configures lock retry before inspecting a fresh database header", () => {
     const db = createMockDb();
-    vi.mocked(db["prepare"]).mockImplementation(
-      (sql: string) =>
-        ({
-          get: vi.fn(() => (sql === "PRAGMA page_count" ? { page_count: 0 } : undefined)),
-        }) as unknown as ReturnType<DatabaseSync["prepare"]>,
-    );
+    mockQuery(db, (sql) => (sql === "PRAGMA page_count" ? { page_count: 0 } : undefined));
 
     configureSqlitePreSchemaPragmas(db, { busyTimeoutMs: 5000 });
 
