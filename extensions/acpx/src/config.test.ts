@@ -11,7 +11,7 @@ const TSX_IMPORT = requireFromTest.resolve("tsx");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workspaceDir = path.resolve("/tmp/openclaw-acpx");
 const resolve = (
-  rawConfig: unknown = undefined,
+  rawConfig?: unknown,
   options: Omit<Parameters<typeof resolveAcpxPluginConfig>[0], "rawConfig"> = {},
 ) => resolveAcpxPluginConfig({ workspaceDir, rawConfig, ...options });
 

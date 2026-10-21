@@ -1,4 +1,5 @@
 import { resolveConfiguredRealtimeVoiceProviderAsync } from "openclaw/plugin-sdk/realtime-voice";
+import type { InternalRealtimeVoiceBrowserSessionCreateRequest } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { buildOpenAIRealtimeVoiceProvider as createProvider } from "./realtime-voice-provider-factory.js";
@@ -96,12 +97,13 @@ describe("OpenAI Talk account defaults", () => {
       const api = readInternalRealtimeVoiceProviderApi(provider);
       const capabilities = await api.resolveBrowserSessionCapabilitiesAsync(sessionContext);
       expect(capabilities).toMatchObject({ handlesAgentConsult: true, supportsToolCalls: false });
-      await provider.createBrowserSession?.({
+      const request: InternalRealtimeVoiceBrowserSessionCreateRequest = {
         ...sessionContext,
         workspaceDir: "/tmp/openclaw-voice-workspace",
         initialItems: [],
         runAgentConsult: async () => ({ text: "Done" }),
-      });
+      };
+      await provider.createBrowserSession?.(request);
       expect(createBrowserSession).toHaveBeenCalledWith(
         expect.objectContaining({ model }),
         model === "gpt-live-1"

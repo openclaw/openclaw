@@ -69,11 +69,12 @@ describe("security audit rosterless configs", () => {
   });
 
   it("still reports a legacy default marker on an explicit roster", async () => {
+    const config: OpenClawConfigWithLegacyRoster = {
+      agents: { ownership: "explicit", entries: { alpha: { default: true }, beta: {} } },
+    };
     const report = await runSecurityAuditCore({
       ...makeAuditPaths("explicit-roster-with-default"),
-      config: {
-        agents: { ownership: "explicit", entries: { alpha: { default: true }, beta: {} } },
-      } satisfies OpenClawConfigWithLegacyRoster,
+      config,
     });
 
     expect(report.findings).toContainEqual(rosterFinding("Expected no"));

@@ -46,10 +46,11 @@ it(
     await fs.writeFile(credsPath, sentinel, "utf8");
     await instance.startGateway();
 
+    const started = instance;
     const connect = (owner: boolean) =>
       connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
+        url: started.url,
+        token: started.gatewayToken,
         scopes: owner ? [ADMIN_SCOPE, WRITE_SCOPE] : [WRITE_SCOPE],
         clientDisplayName: `whatsapp-login-${owner ? "owner" : "non-owner"}`,
         deviceFamily: `whatsapp-login-${owner ? "owner" : "non-owner"}`,

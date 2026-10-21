@@ -113,10 +113,13 @@ it.each(["abort", "producer failure"] as const)(
   async (mode) => {
     const archivePath = archivePathFor("backup-sync-failure-");
     const controller = new AbortController();
+    const producerError = Object.assign(new Error("Producer failed before returning a stream"), {
+      code: "EACCES",
+    });
     const reason =
       mode === "abort"
         ? Object.freeze(new DOMException("Owner stopped backup", "AbortError"))
-        : Object.assign(new Error("Producer failed before returning a stream"), { code: "EACCES" });
+        : producerError;
     const previousOutputs = outputs.length;
     const writing = writeStream(
       archivePath,
@@ -128,7 +131,7 @@ it.each(["abort", "producer failure"] as const)(
           throw new Error("Expected cancellation");
         }
         controller.abort();
-        throw reason;
+        throw producerError;
       },
       controller,
     );

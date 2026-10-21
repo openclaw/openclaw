@@ -33,7 +33,7 @@ function expectOwner(cfg: OpenClawConfig, agentId: string) {
 
 it("removes crestodian without mutating the separately retired systemAgent block", () => {
   const raw = {
-    crestodian: {},
+    crestodian: { rescue: { enabled: true, ownerDmOnly: false } },
     systemAgent: { rescue: { enabled: false } },
   };
   LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT[0]?.apply(raw, []);
@@ -95,7 +95,7 @@ it("stamps ownership without selecting an ambient owner", () => {
   expect(migrate(result.next)).toEqual({ next: null, changes: [] });
 });
 
-it.each([{}, config({ entries: { main: {} }, defaults: { systemAgent: null } })])(
+it.each([{}, { agents: { entries: { main: {} }, defaults: { systemAgent: null } } }])(
   "leaves absent and explicit owners alone: %j",
   (raw) => {
     expect(migrate(raw)).toEqual({ next: null, changes: [] });

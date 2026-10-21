@@ -22,7 +22,7 @@ export function createTestGate() {
     release: released.resolve,
     settle: async (...pending: (Promise<unknown> | undefined)[]) => {
       released.resolve();
-      await Promise.allSettled(pending);
+      await Promise.allSettled(pending.filter((operation) => operation !== undefined));
     },
     hold: async () => {
       entered.resolve();
