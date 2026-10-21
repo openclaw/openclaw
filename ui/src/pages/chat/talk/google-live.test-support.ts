@@ -169,7 +169,7 @@ class MockAudioContext {
 }
 
 export function createSession(
-  websocketUrl: string,
+  websocketUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
   clientSecret = "auth_tokens/browser-session",
 ): RealtimeTalkJsonPcmWebSocketSessionResult {
   return {
@@ -198,18 +198,60 @@ export async function createTransport(
   callbacks: RealtimeTalkTransportContext["callbacks"] = {},
   client = createClient(),
   inputDeviceId?: string,
+  session: Partial<RealtimeTalkJsonPcmWebSocketSessionResult> = {},
+  videoDeviceId?: string,
 ) {
   return new GoogleLiveRealtimeTalkTransport(
-    createSession(
-      "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
-    ),
+    { ...createSession(), ...session },
     {
       input: await prepareRealtimeTalkTestInput(inputDeviceId),
       callbacks,
       client,
       sessionKey: "main",
+      videoDeviceId,
     },
   );
+}
+
+export async function startFixture(...args: Parameters<typeof createTransport>) {
+  const transport = await createTransport(...args);
+  return { transport, ws: await startTransport(transport) };
+}
+
+export function audioTurn(data = "AAAAAA==", count = 1) {
+  return {
+    modelTurn: {
+      parts: Array.from({ length: count }, () => ({
+        inlineData: { data, mimeType: "audio/pcm;rate=24000" },
+      })),
+    },
+  };
+}
+
+export function toolResponse(id: string, name: string, response: unknown, scheduling = {}) {
+  return { toolResponse: { functionResponses: [{ id, name, ...scheduling, response }] } };
+}
+
+export function expectAudioReleased() {
+  expect(googleLiveTestFixture.stopInputTrack).toHaveBeenCalledOnce();
+  for (const context of audioContexts) {
+    expect(context.close).toHaveBeenCalledOnce();
+  }
+}
+
+export async function beginTimedTransport(transport: GoogleLiveRealtimeTalkTransport) {
+  const start = transport.start();
+  await vi.advanceTimersByTimeAsync(0);
+  return { start, ws: latestWebSocket() };
+}
+
+export async function startTimedTransport(transport: GoogleLiveRealtimeTalkTransport) {
+  const { start, ws } = await beginTimedTransport(transport);
+  ws.emitOpen();
+  ws.emitJson({ setupComplete: {} });
+  await expect(start).resolves.toBe("ready");
+  transport.activate();
+  return ws;
 }
 
 export function encodeJsonFrame(value: unknown): ArrayBuffer {

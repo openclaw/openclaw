@@ -10,8 +10,8 @@ import {
   processors,
   getUserMedia,
   installGatewayRelayTestFixture,
+  talkEvent,
 } from "./gateway-relay.test-support.ts";
-import type { RealtimeTalkEvent } from "./shared.ts";
 
 describe("Gateway relay lifecycle callbacks", () => {
   installGatewayRelayTestFixture();
@@ -27,17 +27,11 @@ describe("Gateway relay lifecycle callbacks", () => {
     const event = {
       relaySessionId: "relay-other",
       type,
-      talkEvent: {
+      talkEvent: talkEvent({
         id: "relay-other:1",
         type: lifecycleType,
         sessionId: "relay-other",
-        seq: 1,
-        timestamp: "2026-05-05T00:00:00.000Z",
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        payload: {},
-      } satisfies RealtimeTalkEvent,
+      }),
     };
     emitTalkEvent(event);
 
@@ -77,21 +71,7 @@ describe("Gateway relay lifecycle callbacks", () => {
           relaySessionId: "relay-1",
           type: "close",
           reason: "error",
-          talkEvent:
-            callbackKind === "talk event"
-              ? ({
-                  id: "relay-1:1",
-                  type: "session.closed",
-                  sessionId: "relay-1",
-                  seq: 1,
-                  timestamp: "2026-05-05T00:00:00.000Z",
-                  mode: "realtime",
-                  transport: "gateway-relay",
-                  brain: "agent-consult",
-                  payload: {},
-                  final: true,
-                } satisfies RealtimeTalkEvent)
-              : undefined,
+          talkEvent: callbackKind === "talk event" ? talkEvent({ final: true }) : undefined,
         }),
       ).toThrow("consumer failed");
 

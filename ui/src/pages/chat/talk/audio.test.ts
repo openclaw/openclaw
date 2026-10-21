@@ -206,7 +206,7 @@ describe("RealtimeTalkPcmOutputQueue", () => {
     expect(context.sources).toHaveLength(0);
   });
 
-  it("hard-caps source ownership across ten thousand suspended-context chunks", () => {
+  it("caps suspended-context sources and releases capacity when a source ends", () => {
     queue = openQueue(48_000);
     const results = { queued: 0, overflow: 0, ignored: 0 };
     const frame = silentPcmBase64(1);
@@ -215,20 +215,8 @@ describe("RealtimeTalkPcmOutputQueue", () => {
     }
     expect(results).toEqual({ queued: 4_096, overflow: 5_904, ignored: 0 });
     expect(context.sources).toHaveLength(4_096);
-  });
-
-  it("releases source ownership on ended", () => {
-    queue = openQueue(48_000);
-    const chunk = silentPcmBase64(1);
-
-    for (let index = 0; index < 4_096; index += 1) {
-      expect(queue.play(chunk)).toBe("queued");
-    }
-    expect(queue.play(chunk)).toBe("overflow");
-
     context.sources[0]?.emitEnded();
-
-    expect(queue.play(chunk)).toBe("queued");
+    expect(queue.play(frame)).toBe("queued");
     expect(context.sources).toHaveLength(4_097);
   });
 

@@ -13,7 +13,8 @@ import {
   dispatchRealtimeEvent,
   FakePeerConnection,
   sentRealtimeEvents,
-  stubMicrophone,
+  stubWebRtc,
+  expectRequest,
   startWebRtcTransport,
 } from "./webrtc.test-support.ts";
 import type { WebRtcSdpRealtimeTalkTransport } from "./webrtc.ts";
@@ -32,13 +33,7 @@ function dispatchControlToolCall(
 
 describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
   beforeEach(() => {
-    FakePeerConnection.instances = [];
-    ({ stopInputTrack } = stubMicrophone());
-    vi.stubGlobal("RTCPeerConnection", FakePeerConnection as unknown as typeof RTCPeerConnection);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
-    );
+    ({ stopInputTrack } = stubWebRtc());
   });
 
   afterEach(() => {
@@ -46,21 +41,16 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
   });
 
   it("submits control results without optional response and item ids", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "steer",
-          sessionKey: "main",
-          active: true,
-          queued: true,
-          message: "Got it. I steered the active run.",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
+    const request = expectRequest("talk.client.steer", {
+      ok: true,
+      mode: "steer",
+      sessionKey: "main",
+      active: true,
+      queued: true,
+      message: "Got it. I steered the active run.",
+      speak: true,
+      show: true,
+      suppress: false,
     });
     const { transport } = await createWebRtcTransport({
       client: { addEventListener: vi.fn(() => () => undefined), request },
@@ -131,12 +121,7 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
   );
 
   it("executes completed calls once and ignores provisional events", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
+    const request = expectRequest("talk.client.toolCall", { runId: "run-1" });
     const { transport, peer } = await startWebRtcTransport({
       addEventListener: vi.fn(() => () => undefined),
       request,
@@ -205,12 +190,7 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
   });
 
   it("enforces the authoritative 256000-byte UTF-8 argument limit", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.steer") {
-        return { ok: true, mode: "status" };
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
+    const request = expectRequest("talk.client.steer", { ok: true, mode: "status" });
     const { transport, peer } = await startWebRtcTransport({ request });
     const baseArgs = JSON.stringify({ text: "status" });
     const argumentsAtLimit = baseArgs + " ".repeat(256_000 - baseArgs.length);
@@ -267,17 +247,12 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
   });
 
   it("surfaces OpenAI tool-result send failures without an unhandled rejection", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "status",
-          sessionKey: "main",
-          active: true,
-          message: "Still working.",
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
+    const request = expectRequest("talk.client.steer", {
+      ok: true,
+      mode: "status",
+      sessionKey: "main",
+      active: true,
+      message: "Still working.",
     });
     const { transport, peer, onStatus } = await startWebRtcTransport({ request });
 

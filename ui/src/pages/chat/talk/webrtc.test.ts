@@ -14,7 +14,7 @@ import {
   FakePeerConnection,
   requirePeer,
   type SentRealtimeEvent,
-  stubMicrophone,
+  stubWebRtc,
   startWebRtcTransport,
   userMessage,
 } from "./webrtc.test-support.ts";
@@ -151,10 +151,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
   });
 
   beforeEach(() => {
-    stubAnswerSdpFetch();
-    FakePeerConnection.instances = [];
-    ({ stopInputTrack } = stubMicrophone());
-    vi.stubGlobal("RTCPeerConnection", FakePeerConnection as unknown as typeof RTCPeerConnection);
+    ({ stopInputTrack } = stubWebRtc());
   });
 
   it("reclaims the input meter when its first level update stops the transport", async () => {

@@ -5,6 +5,7 @@ import { GatewayRelayRealtimeTalkTransport } from "./gateway-relay.ts";
 import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  type RealtimeTalkEvent,
   type RealtimeTalkGatewayRelaySessionResult,
   type RealtimeTalkTransportContext,
 } from "./shared.ts";
@@ -132,19 +133,31 @@ export function createClient(
 }
 
 export function createConsultClient() {
-  const client = createClient();
-  vi.mocked(client["request"]).mockImplementation(async (method) => {
-    if (method === "talk.client.toolCall") {
-      return {
-        runId: "run-1",
-        idempotencyKey: "run-1",
-        agentId: "main",
-        agentSessionKey: "agent:main:main",
-      };
-    }
-    return defaultRelayResponse(method);
-  });
-  return client;
+  return createClient(undefined, async (method) =>
+    method === "talk.client.toolCall"
+      ? {
+          runId: "run-1",
+          idempotencyKey: "run-1",
+          agentId: "main",
+          agentSessionKey: "agent:main:main",
+        }
+      : defaultRelayResponse(method),
+  );
+}
+
+export function talkEvent(overrides: Partial<RealtimeTalkEvent> = {}): RealtimeTalkEvent {
+  return {
+    id: "relay-1:1",
+    type: "session.closed",
+    sessionId: "relay-1",
+    seq: 1,
+    timestamp: "2026-05-05T00:00:00.000Z",
+    mode: "realtime",
+    transport: "gateway-relay",
+    brain: "agent-consult",
+    payload: {},
+    ...overrides,
+  };
 }
 
 export function createAudioAppendClient(client = createClient()) {

@@ -2,29 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import {
   createClient,
-  createSession,
+  createTransport,
+  toolResponse,
   flushMicrotasks,
   installGoogleLiveTestFixture,
   startTransport,
 } from "./google-live.test-support.ts";
-import { GoogleLiveRealtimeTalkTransport } from "./google-live.ts";
-import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
-
-const GOOGLE_LIVE_URL =
-  "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 
 async function startModel(model?: string) {
   const onTranscript = vi.fn();
   const onStatus = vi.fn();
-  const transport = new GoogleLiveRealtimeTalkTransport(
-    { ...createSession(GOOGLE_LIVE_URL), ...(model ? { model } : {}) },
-    {
-      input: await prepareRealtimeTalkTestInput(),
-      callbacks: { onTranscript, onStatus },
-      client: createClient(),
-      sessionKey: "main",
-    },
-  );
+  const transport = await createTransport({ onTranscript, onStatus }, createClient(), undefined, {
+    model,
+  });
   return { transport, ws: await startTransport(transport), onTranscript, onStatus };
 }
 
@@ -156,17 +146,11 @@ describe("Google Live browser transcript finality", () => {
 
     ws.emitCalls({ id: "call-unknown", name: "unknown_tool", args: {} });
     await waitForFast(() =>
-      expect(ws.messages).toContainEqual({
-        toolResponse: {
-          functionResponses: [
-            {
-              id: "call-unknown",
-              name: "unknown_tool",
-              response: { error: 'Tool "unknown_tool" is not available in browser Talk' },
-            },
-          ],
-        },
-      }),
+      expect(ws.messages).toContainEqual(
+        toolResponse("call-unknown", "unknown_tool", {
+          error: 'Tool "unknown_tool" is not available in browser Talk',
+        }),
+      ),
     );
     expect(ws.readyState).toBe(1);
 

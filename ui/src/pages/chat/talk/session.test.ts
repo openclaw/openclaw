@@ -26,6 +26,18 @@ const googleInstances: MockTransport[] = [];
 const relayInstances: MockTransport[] = [];
 const webRtcInstances: MockTransport[] = [];
 const requestTimeoutOptions = { timeoutMs: 30_000 };
+const clientParams = { sessionKey: "main", capabilities: ["voice-transcript", "voice-selection"] };
+const cameraParams = {
+  ...clientParams,
+  capabilities: [...clientParams.capabilities, "camera-frame"],
+};
+const relayParams = {
+  sessionKey: "main",
+  transport: "gateway-relay",
+  mode: "realtime",
+  brain: "agent-consult",
+  capabilities: ["voice-selection"],
+};
 
 function createWebRtcSession(voiceSessionId = "voice-1") {
   return { provider: "openai", transport: "webrtc", voiceSessionId, clientSecret: "secret" };
@@ -62,11 +74,26 @@ function videoRequest(voiceSessionId = "voice-1") {
 function sessionFor(
   request: unknown,
   callbacks: ConstructorParameters<typeof RealtimeTalkSession>[2] = {},
+  options: ConstructorParameters<typeof RealtimeTalkSession>[3] = {},
+  local: ConstructorParameters<typeof RealtimeTalkSession>[4] = {},
 ) {
-  return new RealtimeTalkSession({ request } as never, "main", callbacks);
+  return new RealtimeTalkSession({ request } as never, "main", callbacks, options, local);
 }
 function called(request: { mock: { calls: [string, ...unknown[]][] } }, method: string) {
   return request.mock.calls.some(([name]) => name === method);
+}
+function expectRequest(
+  request: ReturnType<typeof vi.fn>,
+  method: string,
+  params: object,
+  nth?: number,
+) {
+  const assertion = expect(request);
+  if (nth !== undefined) {
+    assertion.toHaveBeenNthCalledWith(nth, method, params, requestTimeoutOptions);
+  } else {
+    assertion.toHaveBeenCalledWith(method, params, requestTimeoutOptions);
+  }
 }
 
 function transportContext(transport: object | undefined): RealtimeTalkTransportContext {
@@ -232,11 +259,7 @@ describe("RealtimeTalkSession", () => {
     create.resolve(createRelaySession("openai", "relay-stale"));
     await starting;
 
-    expect(request).toHaveBeenCalledWith(
-      "talk.session.close",
-      { sessionId: "relay-stale" },
-      { timeoutMs: 30_000 },
-    );
+    expectRequest(request, "talk.session.close", { sessionId: "relay-stale" });
     expect(relayInstances).toHaveLength(0);
   });
 
@@ -306,31 +329,12 @@ describe("RealtimeTalkSession", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const onVideoCapability = vi.fn();
-    const session = new RealtimeTalkSession({ request } as never, "main", { onVideoCapability });
+    const session = sessionFor(request, { onVideoCapability });
 
     await session.start();
 
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "talk.client.create",
-      {
-        sessionKey: "main",
-        capabilities: ["voice-transcript", "voice-selection", "camera-frame"],
-      },
-      requestTimeoutOptions,
-    );
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "talk.session.create",
-      {
-        sessionKey: "main",
-        transport: "gateway-relay",
-        mode: "realtime",
-        brain: "agent-consult",
-        capabilities: ["voice-selection"],
-      },
-      requestTimeoutOptions,
-    );
+    expectRequest(request, "talk.client.create", cameraParams, 2);
+    expectRequest(request, "talk.session.create", relayParams, 4);
     expect(onVideoCapability).toHaveBeenCalledOnce();
     expect(onVideoCapability).toHaveBeenCalledWith(false);
     expect(relayInstances).toHaveLength(1);
@@ -338,9 +342,8 @@ describe("RealtimeTalkSession", () => {
 
   it("passes voice-change options and camera choice to client-owned realtime session creation", async () => {
     const request = vi.fn(async () => createWebRtcSession());
-    const session = new RealtimeTalkSession(
-      { request } as never,
-      "main",
+    const session = sessionFor(
+      request,
       {},
       {
         voice: "marin",
@@ -352,20 +355,13 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(request).toHaveBeenCalledWith(
-      "talk.client.create",
-      {
-        sessionKey: "main",
-        voice: "marin",
-        voiceChangeId: "voice-change-1",
-        transport: "webrtc",
-        capabilities: ["voice-transcript", "voice-selection"],
-      },
-      requestTimeoutOptions,
-    );
-    expect(transportContext(webRtcInstances[0])).toEqual(
-      expect.objectContaining({ videoDeviceId: "desk-camera" }),
-    );
+    expectRequest(request, "talk.client.create", {
+      ...clientParams,
+      voice: "marin",
+      voiceChangeId: "voice-change-1",
+      transport: "webrtc",
+    });
+    expect(transportContext(webRtcInstances[0])).toMatchObject({ videoDeviceId: "desk-camera" });
   });
 
   it("requests camera-frame for the active video-capable provider without enabling camera", async () => {
@@ -375,21 +371,8 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "talk.catalog",
-      { sessionKey: "main" },
-      requestTimeoutOptions,
-    );
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "talk.client.create",
-      {
-        sessionKey: "main",
-        capabilities: ["voice-transcript", "voice-selection", "camera-frame"],
-      },
-      requestTimeoutOptions,
-    );
+    expectRequest(request, "talk.catalog", { sessionKey: "main" }, 1);
+    expectRequest(request, "talk.client.create", cameraParams, 2);
     expect(onVideoCapability).toHaveBeenCalledWith(true);
     expect(transportContext(webRtcInstances[0])).toEqual(
       expect.not.objectContaining({ videoEnabled: expect.anything() }),
@@ -398,19 +381,10 @@ describe("RealtimeTalkSession", () => {
     await session.setVideoEnabled(true);
     expect(webRtcSetVideoEnabled).toHaveBeenCalledWith(true);
 
-    await session.switchCamera("back-camera");
-    expect(webRtcSwitchCamera).toHaveBeenCalledWith("back-camera");
-    void session.stop();
-  });
-
-  it("applies a Settings camera selection to an active video session", async () => {
-    const request = videoRequest("voice-settings-camera");
-    const session = sessionFor(request, { onVideoCapability: vi.fn() });
-
-    await session.start();
-    await session.setVideoEnabled(true);
     await switchActiveRealtimeTalkCameras("back-camera");
-
+    expect(webRtcSwitchCamera).toHaveBeenCalledWith("back-camera");
+    webRtcSwitchCamera.mockClear();
+    await session.switchCamera("back-camera");
     expect(webRtcSwitchCamera).toHaveBeenCalledWith("back-camera");
     void session.stop();
   });
@@ -425,6 +399,7 @@ describe("RealtimeTalkSession", () => {
     const enabling = session.setVideoEnabled(true);
     await switchActiveRealtimeTalkCameras("back-camera");
     expect(webRtcSwitchCamera).toHaveBeenCalledOnce();
+    expect(webRtcSwitchCamera).toHaveBeenCalledWith("back-camera");
 
     void session.stop();
     enable.resolve(undefined);
@@ -441,21 +416,11 @@ describe("RealtimeTalkSession", () => {
       return createWebRtcSession();
     });
     const onVideoCapability = vi.fn();
-    const session = new RealtimeTalkSession({ request } as never, "main", {
-      onVideoCapability,
-    });
+    const session = sessionFor(request, { onVideoCapability });
 
     await session.start();
 
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "talk.client.create",
-      {
-        sessionKey: "main",
-        capabilities: ["voice-transcript", "voice-selection"],
-      },
-      requestTimeoutOptions,
-    );
+    expectRequest(request, "talk.client.create", clientParams, 2);
     expect(onVideoCapability).toHaveBeenCalledWith(false);
   });
 
@@ -489,11 +454,7 @@ describe("RealtimeTalkSession", () => {
     await expect(session.start()).rejects.toBe(clientError);
 
     expect(request.mock.calls).toEqual([
-      [
-        "talk.client.create",
-        { sessionKey: "main", capabilities: ["voice-transcript", "voice-selection"] },
-        requestTimeoutOptions,
-      ],
+      ["talk.client.create", clientParams, requestTimeoutOptions],
       ["talk.config", {}, requestTimeoutOptions],
     ]);
     expect(relayInstances).toHaveLength(0);
@@ -515,22 +476,11 @@ describe("RealtimeTalkSession", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const session = new RealtimeTalkSession({ request } as never, "main");
+    const session = sessionFor(request);
 
     await session.start();
 
-    expect(request).toHaveBeenNthCalledWith(
-      3,
-      "talk.session.create",
-      {
-        sessionKey: "main",
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        capabilities: ["voice-selection"],
-      },
-      requestTimeoutOptions,
-    );
+    expectRequest(request, "talk.session.create", relayParams, 3);
     expect(relayInstances).toHaveLength(1);
     expect(relayStart).toHaveBeenCalledTimes(1);
   });

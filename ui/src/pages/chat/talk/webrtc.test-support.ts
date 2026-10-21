@@ -75,6 +75,25 @@ export function userMessage(content: unknown[]) {
   return { type: "conversation.item.create", item: { type: "message", role: "user", content } };
 }
 
+export function stubWebRtc() {
+  FakePeerConnection.instances = [];
+  vi.stubGlobal("RTCPeerConnection", FakePeerConnection as unknown as typeof RTCPeerConnection);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async () => new Response("answer-sdp")),
+  );
+  return stubMicrophone();
+}
+
+export function expectRequest(method: string, result: unknown) {
+  return vi.fn(async (actual: string) => {
+    if (actual !== method) {
+      throw new Error(`unexpected request: ${actual}`);
+    }
+    return result;
+  });
+}
+
 export function audioFixture() {
   const track = Object.assign(new EventTarget(), { stop: vi.fn() });
   const stream = {

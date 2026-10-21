@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import {
+  audioTurn,
   createClient,
   createdSources,
   createTransport,
@@ -34,11 +35,7 @@ async function startActiveControlFixture(controlResult: Record<string, unknown>)
   });
   const transport = await createTransport({}, client);
   const ws = await startTransport(transport);
-  ws.emitContent({
-    modelTurn: {
-      parts: [{ inlineData: { data: "AAAAAA==", mimeType: "audio/pcm;rate=24000" } }],
-    },
-  });
+  ws.emitContent(audioTurn());
   await waitForFast(() => expect(createdSources).toHaveLength(1));
   ws.emitCalls({
     id: "call-1",

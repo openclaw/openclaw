@@ -40,6 +40,19 @@ type ConsultParams = Parameters<typeof submitRealtimeTalkConsult>[0];
 function consultContext(client: object, overrides: Partial<ConsultParams["ctx"]> = {}) {
   return { client, sessionKey: "agent:main:main", callbacks: {}, ...overrides } as never;
 }
+function startConsult(
+  ctx: ConsultParams["ctx"],
+  submit: ConsultParams["submit"],
+  signal?: AbortSignal,
+) {
+  return submitRealtimeTalkConsult({
+    ctx,
+    submit,
+    signal,
+    callId: "call-1",
+    args: { question: "Check status" },
+  });
+}
 function consultFixture(
   onStart: (events: ReturnType<typeof createChatEvents>) => void,
   wait?: () => unknown,
@@ -60,23 +73,21 @@ function consultFixture(
     request,
     submit,
     start: () =>
-      submitRealtimeTalkConsult({
-        ctx: consultContext({ request, addEventListener: events.addEventListener }),
-        callId: "call-1",
-        args: { question: "Check status" },
-        submit,
-      }),
+      startConsult(consultContext({ request, addEventListener: events.addEventListener }), submit),
   };
 }
 
-function steeringFixture(suppressed = false) {
+function steeringFixture(mode: "steer" | "cancel", suppressed = false) {
   const request = vi.fn(async () => ({
     ok: true,
-    mode: "steer",
+    mode,
     sessionKey: "agent:main:main",
     active: true,
-    queued: true,
-    message: "Got it. I steered the active run.",
+    ...(mode === "cancel" ? { aborted: true } : { queued: true }),
+    message:
+      mode === "cancel"
+        ? "Cancelled the active OpenClaw run."
+        : "Got it. I steered the active run.",
     speak: !suppressed,
     show: true,
     suppress: suppressed,
@@ -137,13 +148,11 @@ describe("RealtimeTalkSession consult handoff", () => {
     const submit = vi.fn();
     const controller = new AbortController();
 
-    const consult = submitRealtimeTalkConsult({
-      ctx: consultContext({ request }, { voiceSessionId: "voice-1", flushTranscriptWrites }),
-      callId: "call-1",
-      args: { question: "Check status" },
+    const consult = startConsult(
+      consultContext({ request }, { voiceSessionId: "voice-1", flushTranscriptWrites }),
       submit,
-      signal: controller.signal,
-    });
+      controller.signal,
+    );
     await vi.waitFor(() => expect(flushTranscriptWrites).toHaveBeenCalledOnce());
 
     controller.abort();
@@ -181,13 +190,11 @@ describe("RealtimeTalkSession consult handoff", () => {
       const submit = vi.fn();
       const controller = new AbortController();
 
-      const consult = submitRealtimeTalkConsult({
-        ctx: consultContext({ request }, { sessionKey: "main" }),
-        callId: "call-1",
-        args: { question: "Check status" },
+      const consult = startConsult(
+        consultContext({ request }, { sessionKey: "main" }),
         submit,
-        signal: controller.signal,
-      });
+        controller.signal,
+      );
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 
       controller.abort();
@@ -204,24 +211,13 @@ describe("RealtimeTalkSession consult handoff", () => {
   );
 
   it.each([
-    {
-      when: "pending",
-      text: "The slow source reply wins.",
-      checkpoint: 251,
-      remaining: 50,
-      wait: () => new Promise(() => {}),
-    },
-    {
-      when: "completed first",
-      text: "The source reply beats the fallback.",
-      checkpoint: 0,
-      remaining: 300,
-      wait: () => ({ runId: "run-1", status: "ok" }),
-    },
-  ])(
-    "keeps delayed source text when the empty-final wait is $when",
-    async ({ text, checkpoint, remaining, wait }) => {
+    ["pending", 251, 50, () => new Promise(() => {})],
+    ["completed first", 0, 300, () => ({ runId: "run-1", status: "ok" })],
+  ] as const)(
+    "keeps delayed source text when the empty-final wait is %s",
+    async (_when, checkpoint, remaining, wait) => {
       vi.useFakeTimers();
+      const text = "The source reply wins.";
       const { submit, start } = consultFixture((events) => scheduleReply(events, text), wait);
       const consult = start();
       if (checkpoint) {
@@ -240,9 +236,7 @@ describe("RealtimeTalkSession consult handoff", () => {
       (events) => {
         setImmediate(() => {
           events.final();
-          setImmediate(() => {
-            events.reply("The source reply still wins.");
-          });
+          setImmediate(() => events.reply("The source reply still wins."));
         });
       },
       () => waitResult.promise,
@@ -256,8 +250,7 @@ describe("RealtimeTalkSession consult handoff", () => {
       runId: "run-1",
       timeoutMs: 120_000,
     });
-    expect(submit).toHaveBeenCalledTimes(1);
-    expect(submit).toHaveBeenCalledWith("call-1", {
+    expect(submit).toHaveBeenCalledExactlyOnceWith("call-1", {
       result: "The source reply still wins.",
     });
   });
@@ -288,92 +281,42 @@ describe("RealtimeTalkSession consult handoff", () => {
   });
 
   it.each([
-    {
-      waitResult: { runId: "run-1", status: "error", error: "provider authentication failed" },
-      expected: "provider authentication failed",
-    },
-    {
-      waitResult: {
-        runId: "run-1",
-        status: "timeout",
-        stopReason: "rpc",
-        error: "aborted by operator",
-      },
-      expected: "aborted by operator",
-    },
-  ])("submits $expected from terminal empty-final waits", async ({ waitResult, expected }) => {
+    { runId: "run-1", status: "error", error: "provider authentication failed" },
+    { runId: "run-1", status: "timeout", stopReason: "rpc", error: "aborted by operator" },
+  ])("submits $error from terminal empty-final waits", async (waitResult) => {
     const { submit, start } = consultFixture(
       (events) => {
-        setImmediate(() => {
-          events.final();
-        });
+        setImmediate(() => events.final());
       },
       () => waitResult,
     );
 
     await start();
 
-    expect(submit).toHaveBeenCalledWith("call-1", { error: expected });
+    expect(submit).toHaveBeenCalledWith("call-1", { error: waitResult.error });
   });
 
-  it("routes active consult steering through Gateway control endpoints", async () => {
-    const { request, ctx } = steeringFixture(false);
-
-    await steerRealtimeTalkActiveConsult({
-      ctx,
-      text: "use the safer path",
-    });
-
-    expect(request).toHaveBeenCalledWith("talk.client.steer", {
-      sessionKey: "agent:main:main",
-      text: "use the safer path",
-    });
-  });
-
-  it("can suppress cancel control speech while the original consult submits the cancel result", async () => {
-    const request = vi.fn(async () => ({
-      ok: true,
-      mode: "cancel",
-      sessionKey: "agent:main:main",
-      active: true,
-      aborted: true,
-      message: "Cancelled the active OpenClaw run.",
-      speak: true,
-      show: true,
-      suppress: false,
-    }));
-    const speakControlResult = vi.fn();
-
-    await steerRealtimeTalkActiveConsult({
-      ctx: {
-        client: { request, addEventListener: vi.fn() },
+  it.each([
+    ["steer", false],
+    ["cancel", false],
+    ["steer", true],
+  ] as const)(
+    "routes %s controls (suppressed: %s) and only speaks steer results",
+    async (mode, suppressed) => {
+      const { request, ctx } = steeringFixture(mode, suppressed);
+      const speakControlResult = vi.fn();
+      await steerRealtimeTalkActiveConsult({ ctx, text: "use the safer path", speakControlResult });
+      expect(request).toHaveBeenCalledWith("talk.client.steer", {
         sessionKey: "agent:main:main",
-        callbacks: {},
-      } as never,
-      text: "cancel that",
-      speakControlResult,
-    });
-
-    expect(request).toHaveBeenCalledWith("talk.client.steer", {
-      sessionKey: "agent:main:main",
-      text: "cancel that",
-    });
-    expect(speakControlResult).not.toHaveBeenCalled();
-  });
-
-  it("speaks legacy suppressed steer acknowledgements instead of leaving voice silent", async () => {
-    const { ctx } = steeringFixture(true);
-
-    const speakControlResult = vi.fn();
-
-    await steerRealtimeTalkActiveConsult({
-      ctx,
-      text: "use the safer path",
-      speakControlResult,
-    });
-
-    expect(speakControlResult).toHaveBeenCalledWith(
-      expect.stringContaining('Status: "Got it. I steered the active run."'),
-    );
-  });
+        text: "use the safer path",
+      });
+      if (mode === "cancel") {
+        expect(speakControlResult).not.toHaveBeenCalled();
+      } else {
+        expect(speakControlResult).toHaveBeenCalledWith(
+          expect.stringContaining('Status: "Got it. I steered the active run."'),
+        );
+      }
+    },
+  );
 });
