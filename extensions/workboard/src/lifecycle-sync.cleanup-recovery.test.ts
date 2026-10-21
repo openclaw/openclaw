@@ -146,8 +146,15 @@ describe("Workboard managed-worktree cleanup recovery", () => {
     await expectCleaned(card.id, 2);
   });
 
-  it("does not clean a matched card after a newer running attempt wins the race", async () => {
-    const card = await createManagedCard();
+  it("does not backfill or clean a matched card after a newer running attempt wins", async () => {
+    const created = await createManagedCard();
+    const provisionalKey = "subagent:workboard-cleanup-recovery";
+    const provisionalRunId = `workboard:${created.id}:${created.updatedAt}`;
+    const card = await store.update(created.id, {
+      sessionKey: provisionalKey,
+      runId: provisionalRunId,
+      execution: execution(provisionalKey, provisionalRunId),
+    });
     const newerSessionKey = "agent:newer:subagent:workboard-cleanup-recovery";
     const originalSync = store.syncLifecycle.bind(store);
     vi.spyOn(store, "syncLifecycle").mockImplementationOnce(async (id, input) => {
@@ -164,7 +171,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
         worktrees: { removeIfLossless },
         event: {
           targetSessionKey: SESSION_KEY,
-          runId: RUN_ID,
+          runId: "accepted-run",
           endedAt: card.updatedAt + 1,
           outcome: "ok",
         },
@@ -173,8 +180,9 @@ describe("Workboard managed-worktree cleanup recovery", () => {
     expect(removeIfLossless).not.toHaveBeenCalled();
     await expect(store.get(card.id)).resolves.toMatchObject({
       status: "running",
+      sessionKey: newerSessionKey,
       runId: "newer-run",
-      execution: { status: "running", runId: "newer-run" },
+      execution: { status: "running", sessionKey: newerSessionKey, runId: "newer-run" },
     });
   });
 });

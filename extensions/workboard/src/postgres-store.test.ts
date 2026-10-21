@@ -70,10 +70,10 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     return { fixture, schema, close };
   }
 
-  const insertBoard = (id: string) => ({
-    sql: "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, ?, ?)",
+  const insertBoard = (id: string, name: string | null = null) => ({
+    sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
     method: "run" as const,
-    args: [id, 1, 2],
+    args: [id, name, 1, 2],
   });
 
   const get = (sql: string, args: string[] = []) => ({ sql, args, method: "get" as const });
@@ -107,16 +107,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
   it("retains a real SQLite anchor and reopens the same PostgreSQL schema", async () => {
     const dbPath = databasePath();
     const first = await openDatabase(dbPath);
-    await first.fixture.statements(
-      [
-        {
-          sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-          method: "run",
-          args: ["board", "Persisted remotely", 1, 2],
-        },
-      ],
-      true,
-    );
+    await first.fixture.statements([insertBoard("board", "Persisted remotely")], true);
     const persisted = await observer.query<{ name: string }>(
       `SELECT name FROM ${quoteIdentifier(first.schema)}.workboard_boards WHERE id = $1`,
       ["board"],
@@ -230,16 +221,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     const dbPath = databasePath();
     const opened = await openDatabase(dbPath);
     const schema = opened.schema;
-    await opened.fixture.statements(
-      [
-        {
-          sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-          method: "run",
-          args: ["remote", "Keep remote data", 1, 2],
-        },
-      ],
-      true,
-    );
+    await opened.fixture.statements([insertBoard("remote", "Keep remote data")], true);
     await opened.close();
     const snapshotAnchor = () => {
       using anchor = new DatabaseSync(dbPath, { readOnly: true });

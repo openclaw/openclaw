@@ -23,6 +23,15 @@ import {
   sqliteTestAuxStores,
 } from "./test/sqlite-store.js";
 
+const createStore = () => createWorkboardSqliteTestStore({ createStores: createKernelStores });
+function createCard(
+  storeFixture: WorkboardStore,
+  title: string,
+  input: Omit<Parameters<WorkboardStore["create"]>[0], "title"> = {},
+) {
+  return storeFixture.create({ title, ...input });
+}
+
 const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint);
 
 function createPausedCardStore(delegate: WorkboardCardStore) {
@@ -57,69 +66,40 @@ function createPausedCardStore(delegate: WorkboardCardStore) {
     current.reached();
     await current.waitForResume;
   };
+  async function write<T>(
+    key: string,
+    value: PersistedWorkboardCard | undefined,
+    perform: () => Promise<T>,
+    committed: (result: T) => boolean = () => true,
+  ) {
+    await beforeWrite();
+    const result = await perform();
+    if (committed(result)) {
+      await afterWrite(key, value);
+    }
+    return result;
+  }
   return {
     store: {
-      async register(key, value) {
-        await beforeWrite();
-        await delegate.register(key, value);
-        await afterWrite(key, value);
-      },
-      async registerIfAbsent(key, value) {
-        await beforeWrite();
-        const inserted = await delegate.registerIfAbsent(key, value);
-        if (inserted) {
-          await afterWrite(key, value);
-        }
-        return inserted;
-      },
-      async registerIfUpdatedAt(key, value, expectedUpdatedAt) {
-        await beforeWrite();
-        const updated = await delegate.registerIfUpdatedAt(key, value, expectedUpdatedAt);
-        if (updated) {
-          await afterWrite(key, value);
-        }
-        return updated;
-      },
-      async claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now) {
-        await beforeWrite();
-        const result = await delegate.claimIfOwnerAvailable(
+      register: (key, value) => write(key, value, () => delegate.register(key, value)),
+      registerIfAbsent: (key, value) =>
+        write(key, value, () => delegate.registerIfAbsent(key, value), Boolean),
+      registerIfUpdatedAt: (key, value, revision) =>
+        write(key, value, () => delegate.registerIfUpdatedAt(key, value, revision), Boolean),
+      claimIfOwnerAvailable: (key, value, revision, ownerId, now) =>
+        write(
           key,
           value,
-          expectedUpdatedAt,
-          ownerId,
-          now,
-        );
-        if (result === "updated") {
-          await afterWrite(key, value);
-        }
-        return result;
-      },
-      async deleteIfUpdatedAt(key, expectedUpdatedAt) {
-        await beforeWrite();
-        const deleted = await delegate.deleteIfUpdatedAt(key, expectedUpdatedAt);
-        if (deleted) {
-          await afterWrite(key);
-        }
-        return deleted;
-      },
-      async lookup(key) {
-        return await delegate.lookup(key);
-      },
-      async delete(key) {
-        await beforeWrite();
-        const deleted = await delegate.delete(key);
-        if (deleted) {
-          await afterWrite(key);
-        }
-        return deleted;
-      },
-      async entries(boardId) {
-        return await delegate.entries(boardId);
-      },
+          () => delegate.claimIfOwnerAvailable(key, value, revision, ownerId, now),
+          (result) => result === "updated",
+        ),
+      deleteIfUpdatedAt: (key, revision) =>
+        write(key, undefined, () => delegate.deleteIfUpdatedAt(key, revision), Boolean),
+      lookup: (key) => delegate.lookup(key),
+      delete: (key) => write(key, undefined, () => delegate.delete(key), Boolean),
+      entries: (boardId) => delegate.entries(boardId),
       listCardStatuses: (ids) => delegate.listCardStatuses(ids),
-      async listBoardAggregates() {
-        return await delegate.listBoardAggregates();
-      },
+      listBoardAggregates: () => delegate.listBoardAggregates(),
       listStatsAggregates: (boardId) => delegate.listStatsAggregates(boardId),
       hasCards: (boardId) => delegate.hasCards(boardId),
     } satisfies WorkboardCardStore,
@@ -176,14 +156,14 @@ function metadataPressure() {
 
 describe("WorkboardStore", () => {
   it("emits monotonic committed changes, ignores no-ops, and isolates listener failures", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const store = createStore();
     const changes = vi.fn();
     changes.mockImplementation(() => {
       throw new Error("listener failed");
     });
     store.onChange = changes;
-    const card = await store.create({ title: "Idempotent", idempotencyKey: "same" });
-    await store.create({ title: "Duplicate", idempotencyKey: "same" });
+    const card = await createCard(store, "Idempotent", { idempotencyKey: "same" });
+    await createCard(store, "Duplicate", { idempotencyKey: "same" });
     await store.delete("missing");
     expect(card.title).toBe("Idempotent");
     expect(changes).toHaveBeenCalledOnce();
@@ -196,9 +176,9 @@ describe("WorkboardStore", () => {
 
   it("reports a reference cleanup conflict without overwriting a concurrent peer edit", async () => {
     await using harness = createConcurrentSqliteHarness("openclaw-workboard-delete-references-");
-    const parent = await harness.host.create({ title: "Selected parent" });
-    const child = await harness.host.create({ title: "Selected child" });
-    const unrelated = await harness.host.create({ title: "Unrelated" });
+    const parent = await createCard(harness.host, "Selected parent");
+    const child = await createCard(harness.host, "Selected child");
+    const unrelated = await createCard(harness.host, "Unrelated");
     await harness.host.linkCards(parent.id, child.id);
     const deleted = harness.paused.pauseAfterMatchingWrite(
       (key, value) => key === parent.id && value === undefined,
@@ -236,7 +216,7 @@ describe("WorkboardStore", () => {
     "rejects stale %s when another host writes after read",
     async (action) => {
       await using harness = createConcurrentSqliteHarness("openclaw-workboard-action-cas-");
-      const base = await harness.host.create({ title: "Original", status: "todo" });
+      const base = await createCard(harness.host, "Original", { status: "todo" });
       const options = { expectedUpdatedAt: base.updatedAt };
       const pause = harness.paused.pauseNextWrite();
       const pending = (
@@ -265,7 +245,7 @@ describe("WorkboardStore", () => {
     async (change) => {
       await using harness = createConcurrentSqliteHarness("openclaw-workboard-metadata-guard-");
       const { operation, host, paused } = harness;
-      const base = await host.create({ title: "Guard metadata" });
+      const base = await createCard(host, "Guard metadata");
       const pause = paused.pauseNextWrite();
       const pending = operation
         .addWorkerLog(base.id, { message: "Stale log" }, { ownerId: "original-worker" })
@@ -288,8 +268,8 @@ describe("WorkboardStore", () => {
   );
 
   it("reports stale revisions before invalid status policy", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const base = await store.create({ title: "Scheduled", status: "scheduled" });
+    const store = createStore();
+    const base = await createCard(store, "Scheduled", { status: "scheduled" });
     const newer = await store.update(base.id, { title: "Newer scheduled card" });
     await expect(
       store.move(base.id, "running", 0, undefined, { expectedUpdatedAt: base.updatedAt }),
@@ -347,12 +327,8 @@ describe("WorkboardStore", () => {
   it("allows only one cross-host claim per owner", async () => {
     await using harness = createConcurrentSqliteHarness("openclaw-workboard-claim-race-");
     const { operation: first, host: second } = harness;
-    const firstCard = await first.create({ title: "First", status: "ready", agentId: "worker" });
-    const secondCard = await first.create({
-      title: "Second",
-      status: "ready",
-      agentId: "worker",
-    });
+    const firstCard = await createCard(first, "First", { status: "ready", agentId: "worker" });
+    const secondCard = await createCard(first, "Second", { status: "ready", agentId: "worker" });
 
     const claims = await Promise.allSettled([
       first.claim(firstCard.id, { ownerId: "worker" }),
@@ -381,8 +357,7 @@ describe("WorkboardStore", () => {
         description: "Operational work",
         defaultWorkspace: { kind: "dir", path: "/tmp/openclaw-ops" },
       });
-      const card = await store.create({
-        title: "Persist it",
+      const card = await createCard(store, "Persist it", {
         boardId: board.id,
         labels: ["sqlite", "doctor"],
         execution: {
@@ -398,8 +373,7 @@ describe("WorkboardStore", () => {
           updatedAt: 2,
         },
       });
-      const unresolvedRuntimeCard = await store.create({
-        title: "Persist unresolved runtime",
+      const unresolvedRuntimeCard = await createCard(store, "Persist unresolved runtime", {
         boardId: board.id,
         execution: {
           id: "exec-unresolved",
@@ -470,14 +444,14 @@ describe("WorkboardStore", () => {
 
       expect(await reopened.listBoards()).toMatchObject({
         boards: [
-          expect.objectContaining({ id: "default" }),
-          expect.objectContaining({
+          { id: "default" },
+          {
             id: board.id,
             name: "Planning",
             automationJobId: "job-categorize-planning",
             description: "Operational work",
             defaultWorkspace: { kind: "dir", path: "/tmp/openclaw-ops" },
-          }),
+          },
         ],
       });
       expect(await reopened.get(card.id)).toMatchObject({
@@ -486,7 +460,7 @@ describe("WorkboardStore", () => {
         metadata: {
           automation: { boardId: "planning" },
           lifecycleStatusSourceUpdatedAt: 1234,
-          comments: [expect.objectContaining({ body: "round trip" })],
+          comments: [{ body: "round trip" }],
           attachments: expect.arrayContaining([
             expect.objectContaining({ fileName: "proof.txt" }),
             expect.objectContaining({ fileName: "large-proof.bin" }),
@@ -507,7 +481,7 @@ describe("WorkboardStore", () => {
       await reopened.delete(card.id);
       expect(await reopened.getAttachment(attachmentId ?? "")).toBeUndefined();
       expect(await reopened.listNotificationSubscriptions({ boardId: board.id })).toMatchObject({
-        subscriptions: [expect.objectContaining({ id: subscription.id })],
+        subscriptions: [{ id: subscription.id }],
       });
       await reopenedStores.close();
     } finally {
@@ -525,11 +499,10 @@ describe("WorkboardStore", () => {
       try {
         const initial = new WorkboardStore(initialStores.cards, sqliteTestAuxStores(initialStores));
         await initial.upsertBoard({ id: "ops", name: "Ops" });
-        const card = await initial.create({ title: "Summarize me", boardId: "ops" });
+        const card = await createCard(initial, "Summarize me", { boardId: "ops" });
         cardId = card.id;
         await initial.addComment(card.id, { body: "valid before corruption" });
-        const archived = await initial.create({
-          title: "Summarize archived card",
+        const archived = await createCard(initial, "Summarize archived card", {
           boardId: "ops",
           status: "ready",
         });
@@ -632,7 +605,7 @@ describe("WorkboardStore", () => {
   ])(
     "rejects invalid board patch $patch without modifying existing appearance",
     async ({ patch, existing, message }) => {
-      const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+      const store = createStore();
       if (existing) {
         await store.upsertBoard({ id: "planning", icon: "rocket", color: "blue" });
       }
@@ -649,29 +622,29 @@ describe("WorkboardStore", () => {
   );
 
   it("creates and lists cards by status order and position", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const store = createStore();
 
-    const review = await store.create({
-      title: "Review release notes",
+    const review = await createCard(store, "Review release notes", {
       status: "review",
       priority: "high",
       labels: "release, docs",
     });
-    const todo = await store.create({ title: "Fix dashboard copy", status: "todo", position: 0 });
+    const todo = await createCard(store, "Fix dashboard copy", { status: "todo", position: 0 });
     expect(todo.position).toBe(0);
     expect(todo.metadata).toBeUndefined();
 
     expect((await store.list()).map((card) => card.id)).toEqual([todo.id, review.id]);
-    expect(review.labels).toEqual(["release", "docs"]);
-    expect(review.priority).toBe("high");
+    expect(review).toMatchObject({
+      labels: ["release", "docs"],
+      priority: "high",
+    });
     expect(review.events?.[0]).toMatchObject({ kind: "created", toStatus: "review" });
   });
 
   it("ignores dependency links from generic metadata writes", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const parent = await store.create({ title: "Parent" });
-    const child = await store.create({
-      title: "Child",
+    const store = createStore();
+    const parent = await createCard(store, "Parent");
+    const child = await createCard(store, "Child", {
       metadata: {
         links: [{ id: "raw-parent", type: "parent", targetCardId: parent.id, createdAt: 1 }],
       },
@@ -688,9 +661,8 @@ describe("WorkboardStore", () => {
   });
 
   it("only accepts workspace authority from trusted top-level provenance", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Restricted card",
+    const store = createStore();
+    const card = await createCard(store, "Restricted card", {
       workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
       metadata: {
         automation: { workspaceAccess: { unrestricted: true } },
@@ -712,17 +684,15 @@ describe("WorkboardStore", () => {
       writable: true,
     });
 
-    const untrusted = await store.create({
-      title: "Untrusted metadata",
+    const untrusted = await createCard(store, "Untrusted metadata", {
       metadata: { automation: { workspaceAccess: { unrestricted: true } } },
     });
     expect(untrusted.metadata?.automation?.workspaceAccess).toBeUndefined();
   });
 
   it("only accepts launch state from store-owned transitions", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Trusted launch",
+    const store = createStore();
+    const card = await createCard(store, "Trusted launch", {
       status: "ready",
       workspaceAccess: { unrestricted: true },
       metadata: {
@@ -778,8 +748,8 @@ describe("WorkboardStore", () => {
   });
 
   it("does not let a delayed launch failure overwrite a newer retry", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Retried launch", status: "ready" });
+    const store = createStore();
+    const card = await createCard(store, "Retried launch", { status: "ready" });
     const firstClaim = await store.claim(card.id, { ownerId: "worker" });
     const first = await store.prepareExecutionLaunch(card.id, {
       requestedSessionKey: "subagent:workboard-default-retried",
@@ -825,14 +795,16 @@ describe("WorkboardStore", () => {
   });
 
   it("moves cards and records lifecycle timestamps", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Ship workboard", execution: {} });
+    const store = createStore();
+    const card = await createCard(store, "Ship workboard", { execution: {} });
     expect(card.execution).toBeUndefined();
 
     const running = await store.move(card.id, "running", 500);
-    expect(running.status).toBe("running");
-    expect(running.position).toBe(500);
     expect(running.startedAt).toBeGreaterThanOrEqual(card.createdAt);
+    expect(running).toMatchObject({
+      status: "running",
+      position: 500,
+    });
     expect(running.events?.at(-1)).toMatchObject({
       kind: "moved",
       fromStatus: "todo",
@@ -856,8 +828,8 @@ describe("WorkboardStore", () => {
     try {
       vi.setSystemTime(1000);
       const store = createWorkboardSqliteTestStore();
-      const staleCard = await store.create({ title: "Stale bulk target" });
-      const freshCard = await store.create({ title: "Fresh bulk target" });
+      const staleCard = await createCard(store, "Stale bulk target");
+      const freshCard = await createCard(store, "Fresh bulk target");
       vi.setSystemTime(3000);
       await store.move(staleCard.id, "running", 1000);
 
@@ -884,9 +856,8 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps non-status fields from stale lifecycle patches", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Keep stale sync details",
+    const store = createStore();
+    const card = await createCard(store, "Keep stale sync details", {
       execution: codexExecution("exec-1", 1, {
         sessionKey: "agent:main:dashboard:1",
         runId: "run-1",
@@ -939,9 +910,8 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps execution session links aligned with edited card links", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Relink me",
+    const store = createStore();
+    const card = await createCard(store, "Relink me", {
       sessionKey: "agent:main:dashboard:1",
       execution: codexExecution("exec-1", 10, {
         sessionKey: "agent:main:dashboard:1",
@@ -949,8 +919,10 @@ describe("WorkboardStore", () => {
     });
 
     const relinked = await store.update(card.id, { sessionKey: "agent:main:dashboard:2" });
-    expect(relinked.sessionKey).toBe("agent:main:dashboard:2");
-    expect(relinked.execution?.sessionKey).toBe("agent:main:dashboard:2");
+    expect(relinked).toMatchObject({
+      sessionKey: "agent:main:dashboard:2",
+      execution: { sessionKey: "agent:main:dashboard:2" },
+    });
     expect(relinked.events?.at(-1)).toMatchObject({
       kind: "linked",
       sessionKey: "agent:main:dashboard:2",
@@ -965,11 +937,8 @@ describe("WorkboardStore", () => {
   });
 
   it("adds comments, links, proof, and archive metadata", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Track proof",
-      metadata: { archivedAt: Date.now() },
-    });
+    const store = createStore();
+    const card = await createCard(store, "Track proof", { metadata: { archivedAt: Date.now() } });
     expect(card.metadata?.archivedAt).toBeUndefined();
     expect(card.events?.map((event) => event.kind)).toEqual(["created"]);
 
@@ -1024,9 +993,8 @@ describe("WorkboardStore", () => {
   });
 
   it("retains the correlated proof when metadata budget trimming is required", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Keep proof under metadata pressure",
+    const store = createStore();
+    const card = await createCard(store, "Keep proof under metadata pressure", {
       status: "running",
       metadata: metadataPressure(),
     });
@@ -1068,7 +1036,7 @@ describe("WorkboardStore", () => {
   });
 
   it("resolves only correlated proof and refuses to rewrite terminal evidence", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const store = createStore();
     const proofInput = { command: "review poem", note: "Checked each line." };
     const older = {
       id: "proof-older",
@@ -1077,10 +1045,7 @@ describe("WorkboardStore", () => {
       ...proofInput,
     };
     const latest = { ...older, id: "proof-latest", createdAt: 2_000 };
-    const card = await store.create({
-      title: "Proof history",
-      metadata: { proof: [older, latest] },
-    });
+    const card = await createCard(store, "Proof history", { metadata: { proof: [older, latest] } });
     await expect(
       store.complete(card.id, {
         proofId: latest.id,
@@ -1105,9 +1070,8 @@ describe("WorkboardStore", () => {
   });
 
   it("records worker logs and protocol violations on cards", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Protocol card",
+    const store = createStore();
+    const card = await createCard(store, "Protocol card", {
       status: "running",
       sessionKey: "session-protocol",
       runId: "run-protocol",
@@ -1138,32 +1102,22 @@ describe("WorkboardStore", () => {
       sessionKey: "observed-session",
       runId: "observed-run",
     });
-    expect(violated.status).toBe("blocked");
-    expect(violated.execution).toMatchObject({ status: "blocked", engine: "claude-cli" });
-    expect(violated.metadata?.attempts).toEqual([
-      expect.objectContaining({
-        status: "blocked",
-        error: "Worker exited without workboard_complete.",
-      }),
-    ]);
-    expect(violated.metadata?.workerProtocol).toMatchObject({
-      state: "violated",
-      detail: "Worker exited without workboard_complete.",
+    expect(violated).toMatchObject({
+      status: "blocked",
+      execution: { status: "blocked", engine: "claude-cli" },
+      metadata: {
+        attempts: [{ status: "blocked", error: "Worker exited without workboard_complete." }],
+        workerProtocol: { state: "violated", detail: "Worker exited without workboard_complete." },
+        failureCount: 1,
+        notifications: [{ kind: "failed", sessionKey: "observed-session", runId: "observed-run" }],
+      },
     });
-    expect(violated.metadata?.failureCount).toBe(1);
-    expect(violated.metadata?.notifications).toEqual([
-      expect.objectContaining({
-        kind: "failed",
-        sessionKey: "observed-session",
-        runId: "observed-run",
-      }),
-    ]);
     expect(violated.events?.at(-1)).toMatchObject({ kind: "protocol_violation" });
   });
 
   it("claims cards, heartbeats, and releases the claim", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Coordinate worker", status: "todo" });
+    const store = createStore();
+    const card = await createCard(store, "Coordinate worker", { status: "todo" });
 
     const claimed = await store.claim(card.id, { ownerId: "main", ttlSeconds: 60 });
 
@@ -1191,7 +1145,7 @@ describe("WorkboardStore", () => {
     expect(released.status).toBe("review");
     expect(released.metadata?.claim).toBeUndefined();
 
-    const tokenCard = await store.create({ title: "Token-authorized worker", status: "todo" });
+    const tokenCard = await createCard(store, "Token-authorized worker", { status: "todo" });
     const tokenClaim = await store.claim(tokenCard.id, { ownerId: "main", ttlSeconds: 60 });
 
     await expect(
@@ -1212,8 +1166,8 @@ describe("WorkboardStore", () => {
   });
 
   it("atomically guards and adopts dispatcher workspace authority", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Legacy dispatch", status: "ready" });
+    const store = createStore();
+    const card = await createCard(store, "Legacy dispatch", { status: "ready" });
     const expectedAuthority = {
       boardId: "default",
       status: card.status,
@@ -1246,7 +1200,7 @@ describe("WorkboardStore", () => {
       },
     });
 
-    const legacy = await store.create({ title: "Legacy scratch", status: "ready" });
+    const legacy = await createCard(store, "Legacy scratch", { status: "ready" });
     const claimed = await store.claim(
       legacy.id,
       { ownerId: "dispatcher" },
@@ -1269,7 +1223,7 @@ describe("WorkboardStore", () => {
     try {
       vi.setSystemTime(1_000);
       const store = createWorkboardSqliteTestStore();
-      const card = await store.create({ title: "Grace-protected worker", status: "ready" });
+      const card = await createCard(store, "Grace-protected worker", { status: "ready" });
       const claimed = await store.claim(card.id, { ownerId: "original", ttlSeconds: 1 });
       const expiresAt = claimed.card.metadata?.claim?.expiresAt;
       if (expiresAt === undefined) {
@@ -1319,7 +1273,7 @@ describe("WorkboardStore", () => {
     try {
       vi.setSystemTime(1_000);
       const store = createWorkboardSqliteTestStore();
-      const card = await store.create({ title: "Bound claim", status: "todo" });
+      const card = await createCard(store, "Bound claim", { status: "todo" });
       const claimed = await store.claim(card.id, {
         ownerId: "main",
         ttlSeconds: Number.MAX_VALUE,
@@ -1331,9 +1285,8 @@ describe("WorkboardStore", () => {
   });
 
   it("does not let invalid stored claim expiry block a fresh claim", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Invalid claim expiry",
+    const store = createStore();
+    const card = await createCard(store, "Invalid claim expiry", {
       status: "todo",
       metadata: {
         claim: {
@@ -1355,7 +1308,7 @@ describe("WorkboardStore", () => {
   });
 
   it("accepts POSIX and Windows absolute directory workspaces", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const store = createStore();
 
     for (const workspacePath of [
       "/Users/me/repo",
@@ -1363,12 +1316,12 @@ describe("WorkboardStore", () => {
       String.raw`\\server\share\repo`,
     ]) {
       const workspace = { kind: "dir", path: workspacePath };
-      await expect(store.create({ title: workspacePath, workspace })).resolves.toMatchObject({
+      await expect(createCard(store, workspacePath, { workspace })).resolves.toMatchObject({
         metadata: { automation: { workspace } },
       });
     }
     await expect(
-      store.create({ title: "Relative workspace", workspace: { kind: "dir", path: "repo" } }),
+      createCard(store, "Relative workspace", { workspace: { kind: "dir", path: "repo" } }),
     ).rejects.toThrow(/absolute/);
   });
 
@@ -1377,28 +1330,16 @@ describe("WorkboardStore", () => {
     try {
       vi.setSystemTime(0);
       const store = createWorkboardSqliteTestStore();
-      const card = await store.create({
-        title: "Later",
-        status: "scheduled",
-        scheduledAt: 10_000,
-      });
-      const manual = await store.create({
-        title: "Manual scheduled",
-        status: "scheduled",
-      });
-      const implicit = await store.create({
-        title: "Implicit later",
-        scheduledAt: 10_000,
-      });
-      const activeRequested = await store.create({
-        title: "Active requested later",
+      const card = await createCard(store, "Later", { status: "scheduled", scheduledAt: 10_000 });
+      const manual = await createCard(store, "Manual scheduled", { status: "scheduled" });
+      const implicit = await createCard(store, "Implicit later", { scheduledAt: 10_000 });
+      const activeRequested = await createCard(store, "Active requested later", {
         status: "running",
         scheduledAt: 10_000,
         execution: codexExecution("exec-scheduled", 0),
       });
-      const parent = await store.create({ title: "Parent", status: "running" });
-      const dependent = await store.create({
-        title: "Dependent later",
+      const parent = await createCard(store, "Parent", { status: "running" });
+      const dependent = await createCard(store, "Dependent later", {
         status: "scheduled",
         parents: [parent.id],
         scheduledAt: 10_000,
@@ -1434,10 +1375,9 @@ describe("WorkboardStore", () => {
   });
 
   it("holds dependent cards out of runnable statuses until parents finish", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const parent = await store.create({ title: "Parent", status: "running" });
-    const child = await store.create({
-      title: "Child",
+    const store = createStore();
+    const parent = await createCard(store, "Parent", { status: "running" });
+    const child = await createCard(store, "Child", {
       status: "running",
       parents: [parent.id],
       execution: codexExecution("exec-held", 1),
@@ -1496,24 +1436,24 @@ describe("WorkboardStore", () => {
     await store.dispatch();
     await expect(store.get(child.id)).resolves.toMatchObject({
       status: "running",
-      metadata: { claim: expect.objectContaining({ ownerId: "main" }) },
+      metadata: { claim: { ownerId: "main" } },
     });
     await expect(store.releaseClaim(child.id, { ownerId: "main", status: "done" })).rejects.toThrow(
       /dependencies/,
     );
     await expect(store.get(child.id)).resolves.toMatchObject({
       status: "running",
-      metadata: { claim: expect.objectContaining({ ownerId: "main" }) },
+      metadata: { claim: { ownerId: "main" } },
     });
 
-    const lateParent = await store.create({ title: "Late parent" });
+    const lateParent = await createCard(store, "Late parent");
     await expect(store.linkCards(lateParent.id, child.id)).rejects.toThrow(/active child/);
   });
 
   it("lets a released review card be claimed again once its parents are done", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const parent = await store.create({ title: "Parent" });
-    const child = await store.create({ title: "Child", parents: [parent.id] });
+    const store = createStore();
+    const parent = await createCard(store, "Parent");
+    const child = await createCard(store, "Child", { parents: [parent.id] });
     await store.complete(parent.id, { summary: "Parent done." });
     await store.claim(child.id, { ownerId: "worker" });
     await store.releaseClaim(child.id, { ownerId: "worker", status: "review" });
@@ -1524,8 +1464,8 @@ describe("WorkboardStore", () => {
       store.complete(child.id, { summary: "Accepted.", ownerId: "reviewer" }),
     ).resolves.toMatchObject({ status: "done" });
 
-    const reopened = await store.create({ title: "Reopened parent" });
-    const dependent = await store.create({ title: "Dependent", parents: [reopened.id] });
+    const reopened = await createCard(store, "Reopened parent");
+    const dependent = await createCard(store, "Dependent", { parents: [reopened.id] });
     await store.complete(reopened.id, { summary: "Done." });
     await store.claim(dependent.id, { ownerId: "worker" });
     await store.releaseClaim(dependent.id, { ownerId: "worker", status: "review" });
@@ -1539,10 +1479,10 @@ describe("WorkboardStore", () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
     const entriesSpy = vi.spyOn(stores.cards, "entries");
 
-    const parent = await store.create({ title: "Parent" });
+    const parent = await createCard(store, "Parent");
     const children = await Promise.all(
       Array.from({ length: 8 }, (_, i) =>
-        store.create({ title: `Child ${i}`, status: "todo", parents: [parent.id] }),
+        createCard(store, `Child ${i}`, { status: "todo", parents: [parent.id] }),
       ),
     );
 
@@ -1563,16 +1503,16 @@ describe("WorkboardStore", () => {
   });
 
   it("rejects terminal children with incomplete dependency parents", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const runningParent = await store.create({ title: "Running parent", status: "running" });
-    const doneChild = await store.create({ title: "Done child", status: "done" });
+    const store = createStore();
+    const runningParent = await createCard(store, "Running parent", { status: "running" });
+    const doneChild = await createCard(store, "Done child", { status: "done" });
 
     await expect(store.linkCards(runningParent.id, doneChild.id)).rejects.toThrow(/terminal child/);
     await expect(
-      store.create({ title: "Already done", status: "done", parents: [runningParent.id] }),
+      createCard(store, "Already done", { status: "done", parents: [runningParent.id] }),
     ).rejects.toThrow(/terminal child/);
 
-    const doneParent = await store.create({ title: "Done parent", status: "done" });
+    const doneParent = await createCard(store, "Done parent", { status: "done" });
     await expect(store.linkCards(doneParent.id, doneChild.id)).resolves.toMatchObject({
       id: doneChild.id,
       status: "done",
@@ -1580,9 +1520,9 @@ describe("WorkboardStore", () => {
   });
 
   it("preserves dependency links across link caps and parent deletion", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const parent = await store.create({ title: "Parent", status: "running" });
-    const child = await store.create({ title: "Child", parents: [parent.id] });
+    const store = createStore();
+    const parent = await createCard(store, "Parent", { status: "running" });
+    const child = await createCard(store, "Child", { parents: [parent.id] });
 
     for (let index = 0; index < 60; index += 1) {
       await store.addLink(child.id, {
@@ -1603,46 +1543,35 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps a created card visible when dependency link capacity rejects the parent", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const parent = await store.create({ title: "Fanout parent" });
+    const store = createStore();
+    const parent = await createCard(store, "Fanout parent");
     for (let index = 0; index < 50; index += 1) {
-      await store.create({ title: `Child ${index}`, parents: [parent.id] });
+      await createCard(store, `Child ${index}`, { parents: [parent.id] });
     }
 
     await expect(
-      store.create({
-        title: "Overflow child",
-        parents: [parent.id],
-        idempotencyKey: "overflow",
-      }),
+      createCard(store, "Overflow child", { parents: [parent.id], idempotencyKey: "overflow" }),
     ).rejects.toThrow(/link limit/);
 
     expect((await store.list()).some((card) => card.title === "Overflow child")).toBe(true);
   });
 
   it("rejects invalid parent creates without persisting partial cards", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const store = createStore();
     const parents: string[] = [];
     for (let index = 0; index < 21; index += 1) {
-      parents.push((await store.create({ title: `Parent ${index}` })).id);
+      parents.push((await createCard(store, `Parent ${index}`)).id);
     }
 
+    await expect(createCard(store, "Too many parents", { parents })).rejects.toThrow(
+      /parents supports at most 20 entries/,
+    );
     await expect(
-      store.create({
-        title: "Too many parents",
-        parents,
-      }),
-    ).rejects.toThrow(/parents supports at most 20 entries/);
-    await expect(
-      store.create({
-        title: "Malformed parents",
-        parents: [parents[0], 123],
-      }),
+      createCard(store, "Malformed parents", { parents: [parents[0], 123] }),
     ).rejects.toThrow(/parents entries must be strings/);
 
     await expect(
-      store.create({
-        title: "Orphan child",
+      createCard(store, "Orphan child", {
         parents: ["missing-parent"],
         idempotencyKey: "fanout:missing",
       }),
@@ -1654,9 +1583,9 @@ describe("WorkboardStore", () => {
   });
 
   it("rejects dependency cycles", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const first = await store.create({ title: "First" });
-    const second = await store.create({ title: "Second", parents: [first.id] });
+    const store = createStore();
+    const first = await createCard(store, "First");
+    const second = await createCard(store, "Second", { parents: [first.id] });
 
     await expect(store.linkCards(second.id, first.id)).rejects.toThrow(/cycle/);
   });
@@ -1664,15 +1593,15 @@ describe("WorkboardStore", () => {
   it.each(["execution", "card"] as const)(
     "rejects over-limit %s run IDs at admission without changing cards",
     async (association) => {
-      const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-      const card = await store.create({ title: "Keep existing work", status: "running" });
+      const store = createStore();
+      const card = await createCard(store, "Keep existing work", { status: "running" });
       const runId = "r".repeat(MAX_RUN_ID_LENGTH + 1);
       const input =
         association === "execution"
           ? { execution: codexExecution("exec-too-long", 1_000, { runId }) }
           : { runId };
 
-      await expect(store.create({ title: "Reject oversized identity", ...input })).rejects.toThrow(
+      await expect(createCard(store, "Reject oversized identity", { ...input })).rejects.toThrow(
         "run id must be 512 characters or fewer (got 513).",
       );
       await expect(store.update(card.id, input)).rejects.toThrow(
@@ -1687,8 +1616,7 @@ describe("WorkboardStore", () => {
     const { store, stores } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });
-    const card = await store.create({
-      title: "Existing run",
+    const card = await createCard(store, "Existing run", {
       status: "running",
       runId: "original-run",
       execution: codexExecution("exec-legacy", 1_000, { runId: "original-run" }),
@@ -1735,10 +1663,9 @@ describe("WorkboardStore", () => {
   ])(
     "completes a $runIdLength-character run with trimMetadata=$trimMetadata",
     async ({ runIdLength, trimMetadata }) => {
-      const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+      const store = createStore();
       const runId = "r".repeat(runIdLength);
-      const card = await store.create({
-        title: "Complete long run ID",
+      const card = await createCard(store, "Complete long run ID", {
         status: "running",
         execution: codexExecution("exec-long-run", 1_000, { runId }),
         ...(trimMetadata ? { metadata: metadataPressure() } : {}),
@@ -1761,20 +1688,17 @@ describe("WorkboardStore", () => {
         status: "done",
         execution: { status: "done", runId },
         metadata: {
-          proof: [expect.objectContaining({ status: "passed", command: "test-command" })],
+          proof: [{ status: "passed", command: "test-command" }],
         },
       });
       if (!trimMetadata) {
         expect(logged).toBeDefined();
         expect(completed).toMatchObject({
-          events: [
-            ...(logged?.events ?? []),
-            expect.objectContaining({ kind: "moved", toStatus: "done" }),
-          ],
+          events: [...(logged?.events ?? []), { kind: "moved", toStatus: "done" }],
           metadata: {
-            attempts: [expect.objectContaining({ status: "succeeded", runId })],
-            workerLogs: [expect.objectContaining({ message: "Verification ready.", runId })],
-            notifications: [expect.objectContaining({ kind: "completed", runId })],
+            attempts: [{ status: "succeeded", runId }],
+            workerLogs: [{ message: "Verification ready.", runId }],
+            notifications: [{ kind: "completed", runId }],
           },
         });
       }
@@ -1787,15 +1711,14 @@ describe("WorkboardStore", () => {
         );
       }
       expect(await store.notificationEvents({ subscriptionId: subscription.id })).toMatchObject({
-        events: [expect.objectContaining({ kind: "completed", runId })],
+        events: [{ kind: "completed", runId }],
       });
     },
   );
 
   it("leaves the card unchanged when completion notification validation fails", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Reject invalid notification",
+    const store = createStore();
+    const card = await createCard(store, "Reject invalid notification", {
       status: "running",
       execution: codexExecution("exec-invalid-notification", 1_000, {
         sessionKey: "s".repeat(241),
@@ -1812,13 +1735,12 @@ describe("WorkboardStore", () => {
   });
 
   it("completes and blocks claimed cards with structured handoff metadata", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Ship child",
+    const store = createStore();
+    const card = await createCard(store, "Ship child", {
       status: "running",
       execution: codexExecution("exec-complete", 1_000),
     });
-    const child = await store.create({ title: "Follow-up", parents: [card.id] });
+    const child = await createCard(store, "Follow-up", { parents: [card.id] });
     const claimed = await store.claim(card.id, { ownerId: "main", token: "token-1" });
 
     const completed = await store.complete(claimed.card.id, {
@@ -1834,18 +1756,17 @@ describe("WorkboardStore", () => {
       status: "done",
       execution: { status: "done" },
       metadata: {
-        attempts: [expect.objectContaining({ status: "succeeded", endedAt: expect.any(Number) })],
-        comments: [expect.objectContaining({ body: "Implemented and verified." })],
-        proof: [expect.objectContaining({ status: "passed" })],
-        artifacts: [expect.objectContaining({ path: "/tmp/log.txt" })],
+        attempts: [{ status: "succeeded", endedAt: expect.any(Number) }],
+        comments: [{ body: "Implemented and verified." }],
+        proof: [{ status: "passed" }],
+        artifacts: [{ path: "/tmp/log.txt" }],
         automation: { summary: "Implemented and verified.", createdCardIds: [child.id] },
-        notifications: [expect.objectContaining({ kind: "completed" })],
+        notifications: [{ kind: "completed" }],
       },
     });
     expect(completed.metadata?.claim).toBeUndefined();
 
-    const blockedCard = await store.create({
-      title: "Blocked work",
+    const blockedCard = await createCard(store, "Blocked work", {
       status: "running",
       execution: {
         id: "exec-block",
@@ -1865,25 +1786,22 @@ describe("WorkboardStore", () => {
       reason: "Needs owner decision.",
     });
 
-    expect(blocked.status).toBe("blocked");
-    expect(blocked.execution?.status).toBe("blocked");
-    expect(blocked.metadata?.attempts).toEqual([
-      expect.objectContaining({
-        status: "blocked",
-        endedAt: expect.any(Number),
-        error: "Needs owner decision.",
-      }),
-    ]);
-    expect(blocked.metadata?.failureCount).toBe(1);
+    expect(blocked).toMatchObject({
+      status: "blocked",
+      execution: { status: "blocked" },
+      metadata: {
+        attempts: [
+          { status: "blocked", endedAt: expect.any(Number), error: "Needs owner decision." },
+        ],
+        failureCount: 1,
+        notifications: [{ kind: "failed", message: "Needs owner decision." }],
+      },
+    });
     expect(blocked.metadata?.claim).toBeUndefined();
-    expect(blocked.metadata?.notifications).toEqual([
-      expect.objectContaining({ kind: "failed", message: "Needs owner decision." }),
-    ]);
 
     const recovered = await store.complete(
       (
-        await store.create({
-          title: "Recovered work",
+        await createCard(store, "Recovered work", {
           status: "running",
           metadata: { failureCount: 2 },
         })
@@ -1900,13 +1818,12 @@ describe("WorkboardStore", () => {
     const stores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
     try {
       const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
-      const poisoned = await store.create({
-        title: "Oversized notification",
+      const poisoned = await createCard(store, "Oversized notification", {
         status: "running",
         startedAt: 1,
         maxRuntimeSeconds: 1,
       });
-      const sibling = await store.create({ title: "Unaffected sibling", status: "ready" });
+      const sibling = await createCard(store, "Unaffected sibling", { status: "ready" });
       const oversized = `${"x".repeat(238)}🦞${" tail".repeat(60)}`;
       const rawDb = new DatabaseSync(dbPath);
       try {
@@ -1948,17 +1865,15 @@ describe("WorkboardStore", () => {
     try {
       vi.setSystemTime(1_000);
       const store = createWorkboardSqliteTestStore();
-      const ready = await store.create({ title: "Ready", status: "ready" });
-      const expired = await store.create({ title: "Expired", status: "running" });
+      const ready = await createCard(store, "Ready", { status: "ready" });
+      const expired = await createCard(store, "Expired", { status: "running" });
       await store.claim(expired.id, { ownerId: "main", token: "token-1", ttlSeconds: 1 });
-      const timed = await store.create({
-        title: "Timed",
+      const timed = await createCard(store, "Timed", {
         status: "running",
         maxRuntimeSeconds: 1,
         execution: codexExecution("exec-1", 1_000),
       });
-      const claimedTimed = await store.create({
-        title: "Claimed timed",
+      const claimedTimed = await createCard(store, "Claimed timed", {
         status: "ready",
         maxRuntimeSeconds: 1,
       });
@@ -1967,8 +1882,7 @@ describe("WorkboardStore", () => {
         token: "token-2",
         ttlSeconds: 60,
       });
-      const createdRunningTimed = await store.create({
-        title: "Created running timed",
+      const createdRunningTimed = await createCard(store, "Created running timed", {
         status: "running",
         maxRuntimeSeconds: 1,
       });
@@ -1986,7 +1900,7 @@ describe("WorkboardStore", () => {
         status: "blocked",
         execution: { status: "blocked" },
         metadata: {
-          attempts: [expect.objectContaining({ status: "blocked", endedAt: 600_000 })],
+          attempts: [{ status: "blocked", endedAt: 600_000 }],
         },
       });
       const blockedClaimed = await store.get(claimedTimed.id);
@@ -2011,9 +1925,8 @@ describe("WorkboardStore", () => {
   });
 
   it("lets in-flight retries finish before enforcing the retry budget", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const retrying = await store.create({
-      title: "Retrying",
+    const store = createStore();
+    const retrying = await createCard(store, "Retrying", {
       status: "ready",
       maxRetries: 1,
       metadata: { failureCount: 1 },
@@ -2025,20 +1938,17 @@ describe("WorkboardStore", () => {
     expect(retryDispatch.blocked).toEqual([]);
     await expect(store.get(retrying.id)).resolves.toMatchObject({ status: "running" });
 
-    const exhausted = await store.create({
-      title: "Exhausted",
+    const exhausted = await createCard(store, "Exhausted", {
       status: "ready",
       maxRetries: 1,
       metadata: { failureCount: 2 },
     });
-    const exhaustedTodo = await store.create({
-      title: "Exhausted todo",
+    const exhaustedTodo = await createCard(store, "Exhausted todo", {
       status: "todo",
       maxRetries: 1,
       metadata: { failureCount: 2 },
     });
-    const exhaustedBacklog = await store.create({
-      title: "Exhausted backlog",
+    const exhaustedBacklog = await createCard(store, "Exhausted backlog", {
       status: "backlog",
       maxRetries: 1,
       metadata: { failureCount: 2 },
@@ -2057,13 +1967,12 @@ describe("WorkboardStore", () => {
     await expect(store.get(exhausted.id)).resolves.toMatchObject({
       status: "blocked",
       metadata: {
-        notifications: [expect.objectContaining({ message: "Card exhausted its retry budget." })],
+        notifications: [{ message: "Card exhausted its retry budget." }],
       },
     });
 
-    const parent = await store.create({ title: "Parent retry gate", status: "running" });
-    const dependent = await store.create({
-      title: "Dependent exhausted",
+    const parent = await createCard(store, "Parent retry gate", { status: "running" });
+    const dependent = await createCard(store, "Dependent exhausted", {
       parents: [parent.id],
       maxRetries: 1,
       metadata: { failureCount: 2 },
@@ -2079,15 +1988,15 @@ describe("WorkboardStore", () => {
   });
 
   it("checks mutation claim scope inside queued card writes", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Scoped mutation" });
+    const store = createStore();
+    const card = await createCard(store, "Scoped mutation");
     await store.claim(card.id, { ownerId: "main", token: "token-1" });
 
     await expect(
       store.addComment(card.id, { body: "stale write" }, { ownerId: "other" }),
     ).rejects.toThrow(/claimed by main/);
     await expect(store.get(card.id)).resolves.not.toMatchObject({
-      metadata: { comments: [expect.objectContaining({ body: "stale write" })] },
+      metadata: { comments: [{ body: "stale write" }] },
     });
 
     await expect(
@@ -2096,23 +2005,20 @@ describe("WorkboardStore", () => {
     await expect(
       store.addComment(card.id, { body: "token write" }, { ownerId: "other", token: "token-1" }),
     ).resolves.toMatchObject({
-      metadata: { comments: [expect.objectContaining({ body: "token write" })] },
+      metadata: { comments: [{ body: "token write" }] },
     });
     await expect(
       store.addComment(card.id, { body: "owner write" }, { ownerId: "main" }),
     ).resolves.toMatchObject({
       metadata: {
-        comments: [
-          expect.objectContaining({ body: "token write" }),
-          expect.objectContaining({ body: "owner write" }),
-        ],
+        comments: [{ body: "token write" }, { body: "owner write" }],
       },
     });
   });
 
   it("lets operators override claims while enforcing agent-scoped moves", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Scoped move", status: "todo" });
+    const store = createStore();
+    const card = await createCard(store, "Scoped move", { status: "todo" });
     await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
 
     await expect(store.move(card.id, "review", undefined, { ownerId: "agent-b" })).rejects.toThrow(
@@ -2126,8 +2032,8 @@ describe("WorkboardStore", () => {
   });
 
   it("does not commit proof when proof artifact validation fails", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Atomic proof" });
+    const store = createStore();
+    const card = await createCard(store, "Atomic proof");
 
     await expect(
       store.addProofWithArtifact(
@@ -2138,27 +2044,19 @@ describe("WorkboardStore", () => {
     ).rejects.toThrow(/artifact path/);
 
     await expect(store.get(card.id)).resolves.not.toMatchObject({
-      metadata: { proof: [expect.objectContaining({ label: "CI" })] },
+      metadata: { proof: [{ label: "CI" }] },
     });
   });
 
   it("computes and refreshes card diagnostics", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const ready = await store.create({
-      title: "Ready too long",
-      agentId: "main",
-      position: 10,
-    });
-    const running = await store.create({ title: "Loose run", status: "running", sessionKey: "s1" });
-    const failed = await store.create({
-      title: "Failed twice",
+    const store = createStore();
+    const ready = await createCard(store, "Ready too long", { agentId: "main", position: 10 });
+    const running = await createCard(store, "Loose run", { status: "running", sessionKey: "s1" });
+    const failed = await createCard(store, "Failed twice", {
       status: "blocked",
       metadata: { failureCount: 2 },
     });
-    const doneWithAttachment = await store.create({
-      title: "Done with attachment",
-      status: "done",
-    });
+    const doneWithAttachment = await createCard(store, "Done with attachment", { status: "done" });
     await store.addAttachment(doneWithAttachment.id, {
       fileName: "result.log",
       contentBase64: Buffer.from("x").toString("base64"),
@@ -2171,7 +2069,7 @@ describe("WorkboardStore", () => {
     const diagnosedReady = await store.get(ready.id);
     expect(diagnosedReady?.updatedAt).toBeGreaterThan(ready.updatedAt);
     expect(diagnosedReady).toMatchObject({
-      metadata: { diagnostics: [expect.objectContaining({ kind: "stranded_ready" })] },
+      metadata: { diagnostics: [{ kind: "stranded_ready" }] },
     });
     await expect(store.get(running.id)).resolves.toMatchObject({
       metadata: {
@@ -2199,8 +2097,8 @@ describe("WorkboardStore", () => {
   it.each(["done", "ready"] as const)(
     "keeps archived %s diagnostics transient without rewriting history",
     async (status) => {
-      const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-      const card = await store.create({ title: "Archived work", status });
+      const store = createStore();
+      const card = await createCard(store, "Archived work", { status });
       const now = Date.now();
       const missingProof = {
         diagnostics: [
@@ -2227,16 +2125,16 @@ describe("WorkboardStore", () => {
         await expect(store.get(card.id)).resolves.not.toHaveProperty("metadata.diagnostics");
         await expect(store.diagnostics(now + 1)).resolves.toMatchObject({
           diagnostics: [
-            expect.objectContaining({
-              card: expect.objectContaining({ id: card.id }),
+            {
+              card: { id: card.id },
               diagnostics: [
-                expect.objectContaining({
+                {
                   kind: "archived_but_active",
                   severity: "warning",
                   actions: [],
-                }),
+                },
               ],
-            }),
+            },
           ],
           count: 1,
         });
@@ -2258,9 +2156,8 @@ describe("WorkboardStore", () => {
   );
 
   it("builds bounded worker context from card metadata", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Write docs",
+    const store = createStore();
+    const card = await createCard(store, "Write docs", {
       notes: "Acceptance:\n- mention tools",
       agentId: "main",
       metadata: {
@@ -2278,7 +2175,7 @@ describe("WorkboardStore", () => {
   });
 
   it("scopes idempotent creates and stats by board", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const store = createStore();
     await expect(store.stats()).resolves.toEqual({
       id: "all",
       total: 0,
@@ -2287,18 +2184,12 @@ describe("WorkboardStore", () => {
       byStatus: {},
       byAgent: {},
     });
-    const ops = await store.create({
-      title: "Ops work",
-      boardId: "ops",
-      idempotencyKey: "same",
-    });
-    const product = await store.create({
-      title: "Product work",
+    const ops = await createCard(store, "Ops work", { boardId: "ops", idempotencyKey: "same" });
+    const product = await createCard(store, "Product work", {
       boardId: "product",
       idempotencyKey: "same",
     });
-    const repeatedOps = await store.create({
-      title: "Duplicate ops",
+    const repeatedOps = await createCard(store, "Duplicate ops", {
       boardId: "ops",
       idempotencyKey: "same",
     });
@@ -2320,8 +2211,7 @@ describe("WorkboardStore", () => {
       byStatus: { todo: 1 },
     });
     const prototypeAgentId = ["__", "proto__"].join("");
-    const secondProduct = await store.create({
-      title: "Prototype safe",
+    const secondProduct = await createCard(store, "Prototype safe", {
       boardId: "product",
       agentId: prototypeAgentId,
     });
@@ -2339,17 +2229,15 @@ describe("WorkboardStore", () => {
       byStatus: {},
       byAgent: {},
     });
-    const metadataBoardFirst = await store.create({
-      title: "Metadata board first",
+    const metadataBoardFirst = await createCard(store, "Metadata board first", {
       metadata: { automation: { boardId: "metadata-board" } },
     });
-    const metadataBoardSecond = await store.create({
-      title: "Metadata board second",
+    const metadataBoardSecond = await createCard(store, "Metadata board second", {
       metadata: { automation: { boardId: "metadata-board" } },
     });
     expect(metadataBoardFirst.position).toBe(1000);
     expect(metadataBoardSecond.position).toBe(2000);
-    const defaultCard = await store.create({ title: "Default board" });
+    const defaultCard = await createCard(store, "Default board");
     await expect(store.stats({ boardId: "default" })).resolves.toMatchObject({
       id: "default",
       total: 1,
@@ -2374,8 +2262,7 @@ describe("WorkboardStore", () => {
     try {
       vi.setSystemTime(1_000);
       const { store, stores } = createWorkboardSqliteTestHarness();
-      const oldReady = await store.create({
-        title: "Archived ready work",
+      const oldReady = await createCard(store, "Archived ready work", {
         boardId: "ops",
         status: "ready",
       });
@@ -2393,11 +2280,7 @@ describe("WorkboardStore", () => {
       );
 
       vi.setSystemTime(3_000);
-      await store.create({
-        title: "Active ready work",
-        boardId: "ops",
-        status: "ready",
-      });
+      await createCard(store, "Active ready work", { boardId: "ops", status: "ready" });
       await expect(store.stats({ boardId: "ops" }, 5_000)).resolves.toMatchObject({
         total: 2,
         active: 1,
@@ -2409,8 +2292,7 @@ describe("WorkboardStore", () => {
       await expect(store.stats({ boardId: "ops" }, 1_000)).resolves.toMatchObject({
         oldestReadyAgeMs: 0,
       });
-      const epochReady = await store.create({
-        title: "Epoch ready",
+      const epochReady = await createCard(store, "Epoch ready", {
         boardId: "epoch",
         status: "ready",
       });
@@ -2437,23 +2319,20 @@ describe("WorkboardStore", () => {
   });
 
   it("rejects completed manifests for cards not created from the parent", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const parent = await store.create({ title: "Parent", status: "running" });
-    const unrelated = await store.create({ title: "Unrelated" });
+    const store = createStore();
+    const parent = await createCard(store, "Parent", { status: "running" });
+    const unrelated = await createCard(store, "Unrelated");
 
     await expect(
       store.complete(parent.id, { createdCardIds: [unrelated.id] }, null),
     ).rejects.toThrow(/not linked/);
-    const spoofed = await store.create({
-      title: "Spoofed",
-      createdByCardId: parent.id,
-    });
+    const spoofed = await createCard(store, "Spoofed", { createdByCardId: parent.id });
 
     await expect(store.complete(parent.id, { createdCardIds: [spoofed.id] }, null)).rejects.toThrow(
       /not linked/,
     );
 
-    const child = await store.create({ title: "Child", parents: [parent.id] });
+    const child = await createCard(store, "Child", { parents: [parent.id] });
 
     await expect(
       store.complete(parent.id, { createdCardIds: [child.id], summary: "done" }, null),
@@ -2464,9 +2343,8 @@ describe("WorkboardStore", () => {
   });
 
   it("promotes, reassigns, and reclaims cards for operator recovery", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({
-      title: "Recover me",
+    const store = createStore();
+    const card = await createCard(store, "Recover me", {
       status: "blocked",
       agentId: "old-agent",
       metadata: { failureCount: 2 },
@@ -2495,8 +2373,7 @@ describe("WorkboardStore", () => {
     expect(reclaimed.metadata?.claim).toBeUndefined();
     await expect(store.get(reclaimed.id)).resolves.toEqual(reclaimed);
 
-    const running = await store.create({
-      title: "Running recovery",
+    const running = await createCard(store, "Running recovery", {
       status: "running",
       execution: codexExecution("exec-reclaim", 100),
     });
@@ -2512,8 +2389,7 @@ describe("WorkboardStore", () => {
       store,
       stores: { subscriptions },
     } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
-    const historical = await store.create({
-      title: "Archived notifications",
+    const historical = await createCard(store, "Archived notifications", {
       boardId: "ops",
       status: "done",
       metadata: {
@@ -2525,7 +2401,7 @@ describe("WorkboardStore", () => {
       },
     });
     const archived = await store.archive(historical.id, true);
-    const active = await store.create({ title: "Active notifications", boardId: "ops" });
+    const active = await createCard(store, "Active notifications", { boardId: "ops" });
     await store.complete(active.id, { summary: "Still active." });
     const boardSubscription = await store.subscribeNotifications({
       boardId: "ops",
@@ -2539,7 +2415,7 @@ describe("WorkboardStore", () => {
     await expect(
       store.notificationEvents({ subscriptionId: boardSubscription.id }),
     ).resolves.toMatchObject({
-      events: [expect.objectContaining({ kind: "completed", message: "Still active." })],
+      events: [{ kind: "completed", message: "Still active." }],
     });
     await expect(
       store.notificationEvents({ subscriptionId: archivedSubscription.id }),
@@ -2568,14 +2444,8 @@ describe("WorkboardStore", () => {
   });
 
   it("does not resurrect a subscription deleted during cursor advancement", async () => {
-    let markCursorWriteStarted!: () => void;
-    let releaseCursorWrite!: () => void;
-    const cursorWriteStarted = new Promise<void>((resolve) => {
-      markCursorWriteStarted = resolve;
-    });
-    const cursorWriteReleased = new Promise<void>((resolve) => {
-      releaseCursorWrite = resolve;
-    });
+    const cursorWriteStarted = createDeferred<void>();
+    const cursorWriteReleased = createDeferred<void>();
     const {
       store,
       stores: { subscriptions },
@@ -2583,12 +2453,12 @@ describe("WorkboardStore", () => {
     const registerSubscription = subscriptions.register.bind(subscriptions);
     subscriptions.register = async (key, value) => {
       if (value.subscription.lastEventId) {
-        markCursorWriteStarted();
-        await cursorWriteReleased;
+        cursorWriteStarted.resolve();
+        await cursorWriteReleased.promise;
       }
       await registerSubscription(key, value);
     };
-    const card = await store.create({ title: "Delete in-flight notification", boardId: "ops" });
+    const card = await createCard(store, "Delete in-flight notification", { boardId: "ops" });
     const subscription = await store.subscribeNotifications({
       boardId: "ops",
       target: "session:operator",
@@ -2597,9 +2467,9 @@ describe("WorkboardStore", () => {
     await store.complete(card.id, { summary: "Done." });
 
     const advancing = store.advanceNotificationEvents({ subscriptionId: subscription.id });
-    await cursorWriteStarted;
+    await cursorWriteStarted.promise;
     const deleting = store.deleteNotificationSubscription(subscription.id);
-    releaseCursorWrite();
+    cursorWriteReleased.resolve();
 
     await expect(Promise.all([advancing, deleting])).resolves.toEqual([
       expect.objectContaining({
@@ -2620,8 +2490,7 @@ describe("WorkboardStore", () => {
       ["a-event", 1234001],
       ["0-event", undefined],
     ] as const) {
-      await store.create({
-        title: id,
+      await createCard(store, id, {
         boardId: "ops",
         metadata: {
           notifications: [{ id, kind: "completed", createdAt: 1234, sequence, message: id }],
@@ -2664,21 +2533,18 @@ describe("WorkboardStore", () => {
   });
 
   it("filters replayed notification events by session and run subscriptions", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const matching = await store.create({
-      title: "Matching session",
+    const store = createStore();
+    const matching = await createCard(store, "Matching session", {
       boardId: "ops",
       sessionKey: "session-1",
       runId: "run-1",
     });
-    const unrelated = await store.create({
-      title: "Other session",
+    const unrelated = await createCard(store, "Other session", {
       boardId: "ops",
       sessionKey: "session-2",
       runId: "run-2",
     });
-    await store.create({
-      title: "Card-scoped failed notification",
+    await createCard(store, "Card-scoped failed notification", {
       boardId: "ops",
       sessionKey: "session-1",
       runId: "run-1",
@@ -2713,7 +2579,7 @@ describe("WorkboardStore", () => {
   });
 
   it("uses the default orchestration cap and skips already considered cards", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const store = createStore();
     const cap = 3;
     await store.upsertBoard({
       id: "planning",
@@ -2722,16 +2588,14 @@ describe("WorkboardStore", () => {
     const cards: WorkboardCard[] = [];
     for (let index = 0; index <= cap; index++) {
       cards.push(
-        await store.create({
-          title: "Break down flow " + index,
+        await createCard(store, "Break down flow " + index, {
           status: "triage",
           boardId: "planning",
           position: index,
         }),
       );
     }
-    const archived = await store.create({
-      title: "Archived import flow",
+    const archived = await createCard(store, "Archived import flow", {
       status: "triage",
       boardId: "planning",
     });
@@ -2751,7 +2615,7 @@ describe("WorkboardStore", () => {
             state: "idle",
             detail: "Awaiting workboard_specify or workboard_decompose.",
           },
-          workerLogs: [expect.objectContaining({ level: "info" })],
+          workerLogs: [{ level: "info" }],
         },
         events: expect.arrayContaining([expect.objectContaining({ kind: "orchestration" })]),
       });
@@ -2786,20 +2650,17 @@ describe("WorkboardStore", () => {
         id: "product",
         orchestration: { autoDecompose: true, autoDecomposePerDispatch: 1 },
       });
-      const ops = await store.create({
-        title: "Ops rough",
+      const ops = await createCard(store, "Ops rough", {
         status: "triage",
         boardId: "ops",
         position: 0,
       });
-      const second = await store.create({
-        title: "More ops work",
+      const second = await createCard(store, "More ops work", {
         status: "triage",
         boardId: "ops",
         position: 1,
       });
-      const product = await store.create({
-        title: "Product rough",
+      const product = await createCard(store, "Product rough", {
         status: "triage",
         boardId: "product",
         position: 2,
@@ -2839,7 +2700,7 @@ describe("WorkboardStore", () => {
   });
 
   it("scopes dispatch mutations by board", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const store = createStore();
     await store.upsertBoard({
       id: "ops",
       orchestration: { autoDecompose: true, autoDecomposePerDispatch: 1 },
@@ -2848,9 +2709,8 @@ describe("WorkboardStore", () => {
       id: "product",
       orchestration: { autoDecompose: true, autoDecomposePerDispatch: 1 },
     });
-    const ops = await store.create({ title: "Ops rough", status: "triage", boardId: "ops" });
-    const product = await store.create({
-      title: "Product rough",
+    const ops = await createCard(store, "Ops rough", { status: "triage", boardId: "ops" });
+    const product = await createCard(store, "Product rough", {
       status: "triage",
       boardId: "product",
     });
@@ -2869,7 +2729,7 @@ describe("WorkboardStore", () => {
   // Injects a failing SQLite trigger through a native file handle.
   test("rolls back attachment deletion when the card deletion fails", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness();
-    const card = await store.create({ title: "Atomic deletion" });
+    const card = await createCard(store, "Atomic deletion");
     const attached = await store.addAttachment(card.id, {
       fileName: "retained.txt",
       contentBase64: Buffer.from("keep on rollback").toString("base64"),
@@ -2926,8 +2786,8 @@ describe("WorkboardStore", () => {
   });
 
   it("deletes card notification subscriptions with the card", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Notify me" });
+    const store = createStore();
+    const card = await createCard(store, "Notify me");
     await store.subscribeNotifications({
       cardId: card.id,
       target: "session:operator",
@@ -2946,9 +2806,8 @@ describe("WorkboardStore", () => {
   ])(
     "specifies and decomposes rough cards with parent key $parentKey",
     async ({ parentKey, childKey }) => {
-      const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-      const parent = await store.create({
-        title: "Rough idea",
+      const store = createStore();
+      const parent = await createCard(store, "Rough idea", {
         status: "triage",
         boardId: "planning",
         tenant: "qa",
@@ -2967,9 +2826,7 @@ describe("WorkboardStore", () => {
         notes: "Acceptance: two concrete follow-up cards.",
         labels: ["planning"],
         metadata: {
-          comments: [
-            expect.objectContaining({ body: "Clarified the outcome and acceptance criteria." }),
-          ],
+          comments: [{ body: "Clarified the outcome and acceptance criteria." }],
         },
       });
       expect(specified.events?.at(-1)).toMatchObject({ kind: "specified" });
@@ -3016,8 +2873,8 @@ describe("WorkboardStore", () => {
   );
 
   it("keeps completed decomposition steps visible when a later child is invalid", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const parent = await store.create({ title: "Parent" });
+    const store = createStore();
+    const parent = await createCard(store, "Parent");
 
     await expect(
       store.decompose(parent.id, {
@@ -3029,7 +2886,7 @@ describe("WorkboardStore", () => {
     expect(children).toHaveLength(1);
     expect(children[0]).toMatchObject({
       title: "Valid child",
-      metadata: { links: [expect.objectContaining({ type: "parent", targetCardId: parent.id })] },
+      metadata: { links: [{ type: "parent", targetCardId: parent.id }] },
     });
     expect((await store.get(parent.id))?.metadata?.links).toEqual([
       expect.objectContaining({ type: "child", targetCardId: children[0]?.id }),
@@ -3037,9 +2894,9 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps specify as a todo-only clarification step", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Rough idea", status: "triage" });
-    const blocked = await store.create({ title: "Blocked idea", status: "blocked" });
+    const store = createStore();
+    const card = await createCard(store, "Rough idea", { status: "triage" });
+    const blocked = await createCard(store, "Blocked idea", { status: "blocked" });
 
     await expect(store.specify(card.id, { status: "done" })).rejects.toThrow(/must move to todo/);
     await expect(store.specify(card.id, { status: "running" })).rejects.toThrow(
@@ -3055,8 +2912,8 @@ describe("WorkboardStore", () => {
   });
 
   it("preserves parent child links when decomposition leaves the parent open", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const parent = await store.create({ title: "Parent", status: "triage" });
+    const store = createStore();
+    const parent = await createCard(store, "Parent", { status: "triage" });
     await store.addLink(parent.id, { type: "relates_to", url: "https://example.com/context" });
 
     const result = await store.decompose(parent.id, {
@@ -3086,7 +2943,7 @@ describe("WorkboardStore attachments", () => {
     const { store, stores } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });
-    const card = await store.create({ title: "Review attached log" });
+    const card = await createCard(store, "Review attached log");
 
     const attached = await store.addAttachment(card.id, {
       fileName: "failure.log",
@@ -3145,8 +3002,7 @@ describe("WorkboardStore attachments", () => {
     expect(deleted.events?.at(-1)).toMatchObject({ kind: "edited" });
     expect(await store.getAttachment(attachment.id)).toBeUndefined();
 
-    const budgetCard = await store.create({
-      title: "Attachment budget boundary",
+    const budgetCard = await createCard(store, "Attachment budget boundary", {
       metadata: {
         comments: Array.from({ length: 12 }, (_, index) => ({
           id: `comment-${index}`,
@@ -3184,7 +3040,7 @@ describe("WorkboardStore attachments", () => {
   // Inspects pruned physical blob rows through a native SQLite file handle.
   test("removes attachment blobs when the card attachment index prunes old entries", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness();
-    const card = await store.create({ title: "Many attachments", templateId: "docs" });
+    const card = await createCard(store, "Many attachments", { templateId: "docs" });
     let firstAttachmentId = "";
 
     for (let index = 0; index < 21; index += 1) {
@@ -3226,10 +3082,9 @@ describe("WorkboardStore attachments", () => {
 
 describe("Workboard dependency and scheduled promotion", () => {
   it("creates idempotent child cards and promotes them when parents finish", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const parent = await store.create({ title: "Parent", status: "running" });
-    const child = await store.create({
-      title: "Child",
+    const store = createStore();
+    const parent = await createCard(store, "Parent", { status: "running" });
+    const child = await createCard(store, "Child", {
       status: "todo",
       parents: [parent.id],
       tenant: "release",
@@ -3243,24 +3098,16 @@ describe("Workboard dependency and scheduled promotion", () => {
       expect.objectContaining({ type: "parent", targetCardId: parent.id }),
     ]);
     await expect(store.get(parent.id)).resolves.toMatchObject({
-      metadata: { links: [expect.objectContaining({ type: "child", targetCardId: child.id })] },
+      metadata: { links: [{ type: "child", targetCardId: child.id }] },
     });
     await expect(
-      store.create({
-        title: "Duplicate child",
-        tenant: "release",
-        idempotencyKey: "fanout:1",
-      }),
+      createCard(store, "Duplicate child", { tenant: "release", idempotencyKey: "fanout:1" }),
     ).resolves.toMatchObject({ id: child.id });
     await expect(
-      store.create({
-        title: "Different tenant child",
-        tenant: "qa",
-        idempotencyKey: "fanout:1",
-      }),
+      createCard(store, "Different tenant child", { tenant: "qa", idempotencyKey: "fanout:1" }),
     ).resolves.toMatchObject({ title: "Different tenant child" });
     await expect(
-      store.create({ title: "Unscoped child", idempotencyKey: "fanout:1" }),
+      createCard(store, "Unscoped child", { idempotencyKey: "fanout:1" }),
     ).resolves.toMatchObject({ title: "Unscoped child" });
 
     await store.complete(parent.id, { summary: "Parent done." });
@@ -3285,8 +3132,7 @@ describe("Workboard dependency and scheduled promotion", () => {
     try {
       vi.setSystemTime(1_000);
       const store = createWorkboardSqliteTestStore();
-      const card = await store.create({
-        title: "Archived scheduled work",
+      const card = await createCard(store, "Archived scheduled work", {
         status: "scheduled",
         scheduledAt: 2_000,
       });

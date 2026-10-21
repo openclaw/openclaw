@@ -17,7 +17,7 @@ import {
   syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./lifecycle-sync.js";
-import { createDeferred, createLinkedCard } from "./lifecycle-sync.test-support.js";
+import { createLinkedCard } from "./lifecycle-sync.test-support.js";
 import { workboardSessionKeyForCard } from "./session-link.js";
 import type { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
@@ -465,34 +465,40 @@ describe("Workboard gateway lifecycle sync", () => {
     expect(readSessions).not.toHaveBeenCalled();
   });
 
-  it("reconciles a captured unknown session when agent ownership is unambiguous", async () => {
-    const { card, read } = await linked({ sessionKey: "unknown" });
-    const request = vi.fn().mockImplementation(async (method: string) => {
-      if (method === "agents.list") {
-        return { selectionRequired: false };
-      }
-      return {
-        sessions: [lifecycleSession("unknown", "done", card.updatedAt + 1)],
-      };
-    });
-    const readSessions = vi.fn(
-      async (options: { sessionKey: string }) =>
-        await readWorkboardLifecycleSessions({ isAvailable: async () => true, request }, options),
-    );
-    const service = createWorkboardLifecycleService({ store, readSessions });
-
-    await sweepService(service);
-    expect((await read())?.status).toBe("review");
-
-    expect(readSessions).toHaveBeenCalledWith(expect.objectContaining({ sessionKey: "unknown" }));
-    expect(request).toHaveBeenNthCalledWith(1, "agents.list", {}, { scopes: ["operator.read"] });
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "sessions.list",
-      expect.objectContaining({ includeGlobal: false, includeUnknown: true }),
-      { scopes: ["operator.read"] },
-    );
-  });
+  it.each([false, true])(
+    "reconciles unknown sessions only without required agent selection (%s)",
+    async (selectionRequired) => {
+      const { card, read } = await linked({ sessionKey: "unknown" });
+      const request = vi.fn(async (method: string, query: Record<string, unknown> = {}) => {
+        if (method === "agents.list") {
+          return { selectionRequired };
+        }
+        return {
+          sessions: query.includeUnknown
+            ? [lifecycleSession("unknown", "done", card.updatedAt + 1)]
+            : [],
+        };
+      });
+      const readSessions = vi.fn((options: { sessionKey: string }) =>
+        readWorkboardLifecycleSessions({ isAvailable: async () => true, request }, options),
+      );
+      await sweepService(createWorkboardLifecycleService({ store, readSessions }));
+      expect((await read())?.status).toBe(selectionRequired ? "running" : "review");
+      expect(await readSessions.mock.results[0]?.value).toEqual(
+        lifecycleSnapshot(
+          ...(selectionRequired ? [] : [lifecycleSession("unknown", "done", card.updatedAt + 1)]),
+        ),
+      );
+      expect(readSessions).toHaveBeenCalledWith(expect.objectContaining({ sessionKey: "unknown" }));
+      expect(request).toHaveBeenNthCalledWith(1, "agents.list", {}, { scopes: ["operator.read"] });
+      expect(request).toHaveBeenNthCalledWith(
+        2,
+        "sessions.list",
+        expect.objectContaining({ includeGlobal: false, includeUnknown: !selectionRequired }),
+        { scopes: ["operator.read"] },
+      );
+    },
+  );
 
   it("does not suffix-match a uniquely wrong agent for an explicit target", async () => {
     const { card, read, sweep } = await linked({ agentId: "worker", boardId: "ops" });
@@ -502,43 +508,6 @@ describe("Workboard gateway lifecycle sync", () => {
     await sweep([lifecycleSession(`agent:other:${suffix}`, "done", card.updatedAt + 1)]);
 
     expect((await read())?.status).toBe("running");
-  });
-
-  it("does not backfill over a newer attempt after lifecycle matching", async () => {
-    const provisionalSessionKey = "subagent:workboard-default-match-race";
-    const created = await createLinkedCard(store, { sessionKey: provisionalSessionKey });
-    const provisionalRunId = `workboard:${created.id}:${created.updatedAt}`;
-    const card = await store.update(created.id, {
-      runId: provisionalRunId,
-      execution: execution(provisionalSessionKey, provisionalRunId),
-    });
-    const newerSessionKey = "agent:newer:subagent:workboard-default-match-race";
-    const originalSync = store.syncLifecycle.bind(store);
-    vi.spyOn(store, "syncLifecycle").mockImplementationOnce(async (id, input) => {
-      await store.update(id, {
-        sessionKey: newerSessionKey,
-        runId: "newer-run",
-        execution: execution(newerSessionKey, "newer-run"),
-      });
-      return await originalSync(id, input);
-    });
-
-    await syncWorkboardSubagentEnded({
-      store,
-      event: {
-        targetSessionKey: `agent:worker:${provisionalSessionKey}`,
-        runId: "accepted-run",
-        endedAt: card.updatedAt + 1,
-        outcome: "ok",
-      },
-    });
-
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "running",
-      sessionKey: newerSessionKey,
-      runId: "newer-run",
-      execution: { status: "running", sessionKey: newerSessionKey, runId: "newer-run" },
-    });
   });
 
   it("does not apply a delayed terminal event from an older accepted run", async () => {
@@ -700,8 +669,8 @@ describe("Workboard lifecycle service", () => {
     await createLinkedCard(store, { sessionKey: "agent:main:dashboard:draining" });
     const runOperation = vi.spyOn(store, "runOperation");
     const lifetime = new AbortController();
-    const readEntered = createDeferred<void>();
-    const readResult = createDeferred<{ sessions: []; complete: boolean }>();
+    const readEntered = Promise.withResolvers<void>();
+    const readResult = Promise.withResolvers<{ sessions: []; complete: boolean }>();
     const readSessions = vi.fn(async () => {
       readEntered.resolve();
       return await readResult.promise;
@@ -733,24 +702,6 @@ describe("Workboard lifecycle service", () => {
 });
 
 describe("Workboard lifecycle session discovery", () => {
-  it("keeps unknown excluded when explicit ownership requires agent selection", async () => {
-    const request = vi.fn().mockImplementation(async (method: string, options: object) => {
-      if (method === "agents.list") {
-        return { selectionRequired: true };
-      }
-      expect(method).toBe("sessions.list");
-      expect(options).toMatchObject({ includeGlobal: false, includeUnknown: false });
-      return { sessions: [] };
-    });
-
-    await expect(
-      readWorkboardLifecycleSessions(
-        { isAvailable: async () => true, request },
-        { sessionKey: "unknown" },
-      ),
-    ).resolves.toEqual({ sessions: [], complete: true });
-  });
-
   it("returns an incomplete empty snapshot without requesting while Gateway is unavailable", async () => {
     const request = vi.fn();
 

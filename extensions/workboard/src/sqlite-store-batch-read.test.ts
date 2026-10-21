@@ -115,6 +115,8 @@ function fixtureCard(index: number): WorkboardCard {
   };
 }
 
+const persisted = (card: WorkboardCard) => ({ version: 1 as const, card });
+
 function withStores<T>(run: (dbPath: string) => Promise<T>): Promise<T> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-batch-"));
   const dbPath = path.join(dir, "workboard.sqlite");
@@ -169,12 +171,12 @@ describe("workboard sqlite batch card persistence", () => {
           workerLogs: children.flatMap((card) => card.metadata!.workerLogs!),
         },
       };
-      await stores.cards.register(original.id, { version: 1, card: original });
+      await stores.cards.register(original.id, persisted(original));
       const before = sqliteStatements.count;
       await expect(
         stores.cards.registerIfUpdatedAt(
           replacement.id,
-          { version: 1, card: replacement },
+          persisted(replacement),
           original.updatedAt,
         ),
       ).resolves.toBe(true);
@@ -182,10 +184,7 @@ describe("workboard sqlite batch card persistence", () => {
         // A row-at-a-time write exceeds 700 statements for this bounded fixture.
         expect(sqliteStatements.count - before).toBeLessThan(100);
       }
-      await expect(stores.cards.lookup(original.id)).resolves.toEqual({
-        version: 1,
-        card: replacement,
-      });
+      await expect(stores.cards.lookup(original.id)).resolves.toEqual(persisted(replacement));
       const cleared = {
         ...replacement,
         updatedAt: replacement.updatedAt + 1,
@@ -194,16 +193,11 @@ describe("workboard sqlite batch card persistence", () => {
         metadata: undefined,
       };
       await expect(
-        stores.cards.registerIfUpdatedAt(
-          cleared.id,
-          { version: 1, card: cleared },
-          replacement.updatedAt,
-        ),
+        stores.cards.registerIfUpdatedAt(cleared.id, persisted(cleared), replacement.updatedAt),
       ).resolves.toBe(true);
-      await expect(stores.cards.lookup(original.id)).resolves.toEqual({
-        version: 1,
-        card: { ...cleared, events: undefined },
-      });
+      await expect(stores.cards.lookup(original.id)).resolves.toEqual(
+        persisted({ ...cleared, events: undefined }),
+      );
     });
   });
 
@@ -234,7 +228,7 @@ describe("workboard sqlite batch card persistence", () => {
     await withKernelStores(async (stores) => {
       const prepared = async (cardCount: number): Promise<number> => {
         for (let index = 0; index < cardCount; index++) {
-          await stores.cards.register(`card-${index}`, { version: 1, card: fixtureCard(index) });
+          await stores.cards.register(`card-${index}`, persisted(fixtureCard(index)));
         }
         const before = sqliteStatements.count;
         await stores.cards.entries();
@@ -251,67 +245,57 @@ describe("workboard sqlite batch card persistence", () => {
   // Injects malformed values through a native SQLite file handle.
   test("preserves native, child, and execution error order through entries and remains reusable", async () => {
     await withKernelStores(async (stores, dbPath) => {
-      const raw = new DatabaseSync(dbPath);
+      using raw = new DatabaseSync(dbPath);
       const card = fixtureCard(1);
       card.events = [...(card.events ?? []), { id: "late-event", kind: "created", at: 1002 }];
       const read = () => stores.cards.entries();
-      try {
-        await stores.cards.register(card.id, { version: 1, card });
-        raw.prepare("UPDATE workboard_card_events SET kind = '' WHERE ordinal = 0").run();
-        raw
-          .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE id = ?")
-          .run(9007199254740993n, "late-event");
-        await expect(read()).rejects.toMatchObject({ code: "ERR_OUT_OF_RANGE" });
+      await stores.cards.register(card.id, persisted(card));
+      raw.prepare("UPDATE workboard_card_events SET kind = '' WHERE ordinal = 0").run();
+      raw
+        .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE id = ?")
+        .run(9007199254740993n, "late-event");
+      await expect(read()).rejects.toMatchObject({ code: "ERR_OUT_OF_RANGE" });
 
-        raw.prepare("UPDATE workboard_card_events SET ordinal = 1 WHERE id = ?").run("late-event");
-        await expect(read()).rejects.toThrow("workboard sqlite row missing kind");
-        raw
-          .prepare("UPDATE workboard_cards SET execution_mode = NULL, automation_json = '{'")
-          .run();
-        await expect(read()).rejects.toThrow(SyntaxError);
-        raw.prepare("UPDATE workboard_cards SET automation_json = NULL").run();
-        await expect(read()).rejects.toThrow("workboard sqlite row missing kind");
-        raw.prepare("UPDATE workboard_card_events SET kind = 'created'").run();
-        await expect(read()).rejects.toThrow("workboard sqlite row missing execution_mode");
-        raw.prepare("UPDATE workboard_cards SET execution_mode = 'autonomous'").run();
+      raw.prepare("UPDATE workboard_card_events SET ordinal = 1 WHERE id = ?").run("late-event");
+      await expect(read()).rejects.toThrow("workboard sqlite row missing kind");
+      raw.prepare("UPDATE workboard_cards SET execution_mode = NULL, automation_json = '{'").run();
+      await expect(read()).rejects.toThrow(SyntaxError);
+      raw.prepare("UPDATE workboard_cards SET automation_json = NULL").run();
+      await expect(read()).rejects.toThrow("workboard sqlite row missing kind");
+      raw.prepare("UPDATE workboard_card_events SET kind = 'created'").run();
+      await expect(read()).rejects.toThrow("workboard sqlite row missing execution_mode");
+      raw.prepare("UPDATE workboard_cards SET execution_mode = 'autonomous'").run();
 
-        const expected = { version: 1, card };
-        await expect(read()).resolves.toEqual([{ key: card.id, value: expected }]);
-      } finally {
-        raw.close();
-      }
+      const expected = persisted(card);
+      await expect(read()).resolves.toEqual([{ key: card.id, value: expected }]);
     });
   });
 
   // Injects malformed rows and counts native SQLite statements.
   test("checks the claim revision before decoding unrelated malformed children", async () => {
     await withKernelStores(async (stores, dbPath) => {
-      const raw = new DatabaseSync(dbPath);
+      using raw = new DatabaseSync(dbPath);
       const target = fixtureCard(2);
       const busy = { ...fixtureCard(0), status: "running" as const, agentId: "slot-owner" };
-      try {
-        await stores.cards.register(busy.id, { version: 1, card: busy });
-        await stores.cards.register("card-1", { version: 1, card: fixtureCard(1) });
-        await stores.cards.register(target.id, { version: 1, card: target });
-        raw
-          .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE card_id = ?")
-          .run(9007199254740993n, "card-1");
-        const before = sqliteStatements.count;
-        const claim = stores.cards.claimIfOwnerAvailable(
-          target.id,
-          { version: 1, card: { ...target, updatedAt: target.updatedAt + 1 } },
-          target.updatedAt - 1,
-          "slot-owner",
-          3000,
-        );
-        await expect(claim).resolves.toBe("conflict");
-        expect(sqliteStatements.count - before).toBe(1);
-        expect(
-          raw.prepare("SELECT updated_at FROM workboard_cards WHERE id = ?").get(target.id),
-        ).toEqual({ updated_at: target.updatedAt });
-      } finally {
-        raw.close();
-      }
+      await stores.cards.register(busy.id, persisted(busy));
+      await stores.cards.register("card-1", persisted(fixtureCard(1)));
+      await stores.cards.register(target.id, persisted(target));
+      raw
+        .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE card_id = ?")
+        .run(9007199254740993n, "card-1");
+      const before = sqliteStatements.count;
+      const claim = stores.cards.claimIfOwnerAvailable(
+        target.id,
+        persisted({ ...target, updatedAt: target.updatedAt + 1 }),
+        target.updatedAt - 1,
+        "slot-owner",
+        3000,
+      );
+      await expect(claim).resolves.toBe("conflict");
+      expect(sqliteStatements.count - before).toBe(1);
+      expect(
+        raw.prepare("SELECT updated_at FROM workboard_cards WHERE id = ?").get(target.id),
+      ).toEqual({ updated_at: target.updatedAt });
     });
   });
 
@@ -353,55 +337,48 @@ describe("workboard sqlite batch card persistence", () => {
           updatedAt: 1,
         };
       }
-      await stores.cards.register(occupied.id, { version: 1, card: occupied });
-      await stores.cards.register(target.id, { version: 1, card: target });
+      await stores.cards.register(occupied.id, persisted(occupied));
+      await stores.cards.register(target.id, persisted(target));
       const next = { ...target, updatedAt: target.updatedAt + 1 };
       await expect(
         stores.cards.claimIfOwnerAvailable(
           target.id,
-          { version: 1, card: next },
+          persisted(next),
           target.updatedAt,
           "slot-owner",
           1_000_000,
         ),
       ).resolves.toBe(scenario.expected);
-      await expect(stores.cards.lookup(target.id)).resolves.toEqual({
-        version: 1,
-        card: scenario.expected === "updated" ? next : target,
-      });
+      await expect(stores.cards.lookup(target.id)).resolves.toEqual(
+        persisted(scenario.expected === "updated" ? next : target),
+      );
     });
   });
 
   // Injects an unsafe integer through a native SQLite file handle.
   test("claims an available owner without reading or replacing unrelated malformed children", async () => {
-    await withStores(async (dbPath) => {
-      const stores = createKernelStores(dbPath);
-      const raw = new DatabaseSync(dbPath);
+    await withKernelStores(async (stores, dbPath) => {
+      using raw = new DatabaseSync(dbPath);
       const target = fixtureCard(2);
-      try {
-        await stores.cards.register("card-0", { version: 1, card: fixtureCard(0) });
-        await stores.cards.register(target.id, { version: 1, card: target });
-        raw
-          .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE card_id = 'card-0'")
-          .run(9007199254740993n);
-        const next = { ...target, updatedAt: target.updatedAt + 1 };
-        await expect(
-          stores.cards.claimIfOwnerAvailable(
-            target.id,
-            { version: 1, card: next },
-            target.updatedAt,
-            "slot-owner",
-            3000,
-          ),
-        ).resolves.toBe("updated");
-        await expect(stores.cards.lookup(target.id)).resolves.toEqual({ version: 1, card: next });
-        await expect(stores.cards.lookup("card-0")).rejects.toMatchObject({
-          code: "ERR_OUT_OF_RANGE",
-        });
-      } finally {
-        raw.close();
-        await stores.close();
-      }
+      await stores.cards.register("card-0", persisted(fixtureCard(0)));
+      await stores.cards.register(target.id, persisted(target));
+      raw
+        .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE card_id = 'card-0'")
+        .run(9007199254740993n);
+      const next = { ...target, updatedAt: target.updatedAt + 1 };
+      await expect(
+        stores.cards.claimIfOwnerAvailable(
+          target.id,
+          persisted(next),
+          target.updatedAt,
+          "slot-owner",
+          3000,
+        ),
+      ).resolves.toBe("updated");
+      await expect(stores.cards.lookup(target.id)).resolves.toEqual(persisted(next));
+      await expect(stores.cards.lookup("card-0")).rejects.toMatchObject({
+        code: "ERR_OUT_OF_RANGE",
+      });
     });
   });
 
@@ -422,16 +399,16 @@ describe("workboard sqlite batch card persistence", () => {
               fault === "constraint"
                 ? { error: { message: expect.stringContaining("UNIQUE constraint failed") } }
                 : { name: "TypeError" },
-            target: { version: 1, card: target },
-            sibling: { version: 1, card: sibling },
+            target: persisted(target),
+            sibling: persisted(sibling),
           });
           expect(result).toHaveProperty("board", undefined);
           return;
         }
         const stores = createWorkboardSqliteKernel(dbPath);
         try {
-          stores.cards.register(sibling.id, { version: 1, card: sibling });
-          stores.cards.register(target.id, { version: 1, card: target });
+          stores.cards.register(sibling.id, persisted(sibling));
+          stores.cards.register(target.id, persisted(target));
           const invalidComment = { ...sibling.metadata!.comments![0]! };
           if (fault === "binding") {
             Object.defineProperty(invalidComment, "body", { value: { invalid: "native binding" } });
@@ -461,7 +438,7 @@ describe("workboard sqlite batch card persistence", () => {
               });
               stores.cards.claimIfOwnerAvailable(
                 target.id,
-                { version: 1, card: next },
+                persisted(next),
                 target.updatedAt,
                 "slot-owner",
                 3000,
@@ -469,14 +446,8 @@ describe("workboard sqlite batch card persistence", () => {
             }),
           ).toThrow(fault === "constraint" ? "UNIQUE constraint failed" : TypeError);
           expect(stores.boards.lookup("grouped")).toBeUndefined();
-          expect(stores.cards.lookup(target.id)).toEqual({
-            version: 1,
-            card: target,
-          });
-          expect(stores.cards.lookup(sibling.id)).toEqual({
-            version: 1,
-            card: sibling,
-          });
+          expect(stores.cards.lookup(target.id)).toEqual(persisted(target));
+          expect(stores.cards.lookup(sibling.id)).toEqual(persisted(sibling));
         } finally {
           stores.close();
         }
@@ -554,7 +525,7 @@ describe("workboard sqlite batch card persistence", () => {
             { ...attachments[0]!.attachment, id: "metadata-without-blob" },
           ],
         };
-        await stores.cards.register(card.id, { version: 1, card });
+        await stores.cards.register(card.id, persisted(card));
         for (const attachment of attachments.toReversed()) {
           await stores.attachments.register(attachment.attachment.id, attachment);
         }

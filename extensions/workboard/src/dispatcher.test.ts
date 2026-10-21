@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -8,8 +9,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import { createWorktreeRuntime } from "./test/interaction-fixtures.js";
-import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
-import type { WorkboardTargetWorkspaceRuntime } from "./workspace-access.js";
+import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
+import type {
+  WorkboardTargetWorkspaceRuntime,
+  WorkboardWorkspaceAccess,
+} from "./workspace-access.js";
 
 type DispatchParams = Parameters<typeof dispatchAndStartWorkboardCards>[0];
 const targetOptions = (runtime: WorkboardTargetWorkspaceRuntime, root = "/workspace") => ({
@@ -35,18 +39,23 @@ const writable = {
 
 describe("dispatchAndStartWorkboardCards", () => {
   let store: WorkboardStore;
+  let managedPath: string;
   beforeEach(() => {
-    store = createWorkboardSqliteTestStore();
+    const fixture = createWorkboardSqliteTestHarness();
+    store = fixture.store;
+    managedPath = path.dirname(fixture.dbPath);
   });
-  const createCard = (input: Parameters<WorkboardStore["create"]>[0]) =>
-    store.create({ status: "ready", ...input });
+  const expectStatus = (id: string, status: string) =>
+    expect(store.get(id)).resolves.toMatchObject({ status });
+  const createCard = (input: Omit<Parameters<WorkboardStore["create"]>[0], "title"> = {}) =>
+    store.create({ title: "Worker", status: "ready", ...input });
   const dispatch = (
     run: DispatchParams["subagent"]["run"],
     options: DispatchParams["options"],
     worktrees?: DispatchParams["worktrees"],
   ) => dispatchAndStartWorkboardCards({ store, subagent: { run }, options, worktrees });
   const rejectCard = async (
-    input: Parameters<WorkboardStore["create"]>[0],
+    input: Omit<Parameters<WorkboardStore["create"]>[0], "title">,
     error: unknown,
     options: DispatchParams["options"],
     worktrees?: DispatchParams["worktrees"],
@@ -63,7 +72,6 @@ describe("dispatchAndStartWorkboardCards", () => {
       setRuntimeConfigSnapshot({ agents: { entries: { worker: {} } } });
       try {
         const card = await createCard({
-          title: "Archived worker",
           ...(assignment === "assigned" ? { agentId: "worker" } : {}),
           workspaceAccess: { unrestricted: true },
           maxRetries: 1,
@@ -109,10 +117,7 @@ describe("dispatchAndStartWorkboardCards", () => {
 
   it("does not let an implicit target agent workspace widen caller access", async () => {
     const card = await rejectCard(
-      {
-        title: "Other agent scratch",
-        agentId: "other",
-      },
+      { agentId: "other" },
       "workspace path must equal one of the caller's allowed workspace roots.",
       {
         maxStarts: 1,
@@ -121,14 +126,11 @@ describe("dispatchAndStartWorkboardCards", () => {
         workspaceAccess: writable,
       },
     );
-    await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
+    await expectStatus(card.id, "ready");
   });
 
   it("persists the resolved subagent runtime on new executions", async () => {
-    const card = await createCard({
-      title: "Claude worker",
-      workspaceAccess: { unrestricted: true },
-    });
+    const card = await createCard({ workspaceAccess: { unrestricted: true } });
     const run = vi.fn().mockResolvedValue({
       runId: "run-claude",
       runtime: {
@@ -152,7 +154,6 @@ describe("dispatchAndStartWorkboardCards", () => {
 
   it("materializes managed worktrees, supplies cwd, and persists them", async () => {
     const card = await createCard({
-      title: "Isolated worker",
       workspace: { kind: "worktree", path: "/repo", branch: "main" },
       workspaceAccess: { unrestricted: true },
     });
@@ -206,7 +207,6 @@ describe("dispatchAndStartWorkboardCards", () => {
 
   it("does not claim a card whose workspace authority changed after preflight", async () => {
     const card = await createCard({
-      title: "Racing authority update",
       workspace: { kind: "dir", path: "/workspace" },
       workspaceAccess: { unrestricted: true },
     });
@@ -226,56 +226,53 @@ describe("dispatchAndStartWorkboardCards", () => {
     const result = await dispatch(run, { maxStarts: 1, workspaceAccess: { unrestricted: true } });
 
     expectRejected(result, card.id, "card workspace authority changed before claim.", run);
-    await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
+    await expectStatus(card.id, "ready");
   });
 
-  it("rejects a restricted card when the target agent is not sandboxed", async () => {
-    await rejectCard(
-      {
-        title: "Restricted worker",
-        agentId: "broad",
-        workspaceAccess: writable,
-      },
-      "target agent is not sandboxed for this restricted Workboard card.",
-      targetOptions({
-        sandboxed: false,
-        workspaceAccess: { unrestricted: true },
-      }),
-      createWorktreeRuntime(),
-    );
-  });
-
-  it("rejects a restricted card when the target workspace is read-only", async () => {
-    await rejectCard(
-      {
-        title: "Read-only worker",
-        workspaceAccess: writable,
-      },
-      "target agent does not have writable workspace-only access.",
-      targetOptions({
+  it.each([
+    {
+      name: "unsandboxed target",
+      runtime: { sandboxed: false, workspaceAccess: { unrestricted: true } },
+      error: "target agent is not sandboxed for this restricted Workboard card.",
+    },
+    {
+      name: "read-only target",
+      runtime: { sandboxed: true, workspaceAccess: { ...writable, writable: false } },
+      error: "target agent does not have writable workspace-only access.",
+    },
+    {
+      name: "sandbox escape",
+      runtime: {
         sandboxed: true,
-        workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: false },
-      }),
-      createWorktreeRuntime(),
-    );
-  });
+        workspaceAccess: writable,
+        confinementError: "target sandbox routes shell execution outside the sandbox.",
+      },
+      error: "target sandbox routes shell execution outside the sandbox.",
+    },
+  ] satisfies { name: string; runtime: WorkboardTargetWorkspaceRuntime; error: string }[])(
+    "rejects a restricted card with $name",
+    async ({ runtime, error }) => {
+      await rejectCard(
+        { workspaceAccess: writable },
+        error,
+        targetOptions(runtime),
+        createWorktreeRuntime(),
+      );
+    },
+  );
 
   it("keeps read-only card authority after a later full-host dispatch", async () => {
     const card = await rejectCard(
-      {
-        title: "Persisted read-only worker",
-        workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: false },
-      },
+      { workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: false } },
       expect.stringContaining("manual movement is allowed"),
       { maxStarts: 1, workspaceAccess: { unrestricted: true } },
     );
-    await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
+    await expectStatus(card.id, "ready");
   });
 
   it("rejects a target sandbox root broader than the card authority", async () => {
     await rejectCard(
       {
-        title: "Broader target worker",
         workspace: { kind: "dir", path: "/workspace/project" },
         workspaceAccess: {
           unrestricted: false,
@@ -295,48 +292,32 @@ describe("dispatchAndStartWorkboardCards", () => {
     );
   });
 
-  it("rejects a restricted card when the target sandbox has an escape path", async () => {
-    await rejectCard(
-      {
-        title: "Escaping worker",
-        workspaceAccess: writable,
-      },
-      "target sandbox routes shell execution outside the sandbox.",
-      targetOptions({
-        sandboxed: true,
-        workspaceAccess: writable,
-        confinementError: "target sandbox routes shell execution outside the sandbox.",
-      }),
-      createWorktreeRuntime(),
-    );
-  });
-
-  it("rejects a restricted workspace nested inside a broader Git checkout", async () => {
-    await rejectCard(
-      {
-        title: "Nested checkout worker",
-        workspace: { kind: "dir", path: "/repo/workspace" },
-        workspaceAccess: { unrestricted: false, roots: ["/repo/workspace"], writable: true },
-      },
-      "workspace root is nested inside a broader Git checkout.",
-      targetOptions(
-        {
-          sandboxed: true,
-          workspaceAccess: {
-            unrestricted: false,
-            roots: ["/repo/workspace"],
-            writable: true,
-          },
-        },
-        "/repo/workspace",
-      ),
-      createWorktreeRuntime({ resolveCheckoutRoot: vi.fn().mockResolvedValue("/repo") }),
-    );
-  });
+  it.each([
+    ["/repo/workspace", "/repo", true, "workspace root is nested inside a broader Git checkout."],
+    [
+      "/workspace",
+      "/workspace",
+      false,
+      "restricted workspace Git metadata must be contained inside its root.",
+    ],
+  ] as const)(
+    "rejects unsafe checkout metadata in %s",
+    async (root, checkout, contained, error) => {
+      const workspaceAccess = { ...writable, roots: [root] };
+      await rejectCard(
+        { workspace: { kind: "dir", path: root }, workspaceAccess },
+        error,
+        targetOptions({ sandboxed: true, workspaceAccess }, root),
+        createWorktreeRuntime({
+          resolveCheckoutRoot: vi.fn().mockResolvedValue(checkout),
+          hasSelfContainedCheckoutMetadata: vi.fn().mockResolvedValue(contained),
+        }),
+      );
+    },
+  );
 
   it("keeps a card's persisted workspace ceiling during a later admin dispatch", async () => {
     const card = await createCard({
-      title: "Persisted restricted worker",
       workspace: { kind: "worktree", path: "/workspace" },
       workspaceAccess: writable,
     });
@@ -372,28 +353,8 @@ describe("dispatchAndStartWorkboardCards", () => {
     });
   });
 
-  it("rejects linked-worktree metadata outside a restricted workspace mount", async () => {
-    await rejectCard(
-      {
-        title: "Linked worktree worker",
-        workspace: { kind: "dir", path: "/workspace" },
-        workspaceAccess: writable,
-      },
-      "restricted workspace Git metadata must be contained inside its root.",
-      targetOptions({
-        sandboxed: true,
-        workspaceAccess: writable,
-      }),
-      createWorktreeRuntime({
-        resolveCheckoutRoot: vi.fn().mockResolvedValue("/workspace"),
-        hasSelfContainedCheckoutMetadata: vi.fn().mockResolvedValue(false),
-      }),
-    );
-  });
-
   it("does not reuse a generated branch as an omitted source base", async () => {
     const card = await createCard({
-      title: "Branchless retry",
       workspace: {
         kind: "worktree",
         path: "/state/worktrees/fingerprint/wb-card",
@@ -421,14 +382,10 @@ describe("dispatchAndStartWorkboardCards", () => {
   });
 
   it("preserves ready-card history on idle Gateway dispatch passes", async () => {
-    await createCard({ title: "Occupied owner", status: "running", agentId: "main" });
+    await createCard({ status: "running", agentId: "main" });
     const cards = await Promise.all(
       [undefined, { dispatchCount: 225, lastDispatchAt: 1 }].map((automation) =>
-        createCard({
-          title: "Waiting for owner capacity",
-          agentId: "main",
-          metadata: { automation },
-        }),
+        createCard({ agentId: "main", metadata: { automation } }),
       ),
     );
     const run = vi.fn();
@@ -446,16 +403,11 @@ describe("dispatchAndStartWorkboardCards", () => {
 
   it("shares one worker slot across cards dispatched with the same explicit owner", async () => {
     const first = await createCard({
-      title: "First shared worker",
       priority: "urgent",
       agentId: "alpha",
       workspaceAccess: { unrestricted: true },
     });
-    const second = await createCard({
-      title: "Second shared worker",
-      agentId: "beta",
-      workspaceAccess: { unrestricted: true },
-    });
+    const second = await createCard({ agentId: "beta", workspaceAccess: { unrestricted: true } });
     const run = vi.fn().mockResolvedValue({ runId: "run-shared" });
 
     const result = await dispatch(run, { now: 10, maxStarts: 3, ownerId: " shared-worker " });
@@ -468,6 +420,169 @@ describe("dispatchAndStartWorkboardCards", () => {
       status: "running",
       metadata: { claim: { ownerId: "shared-worker" } },
     });
-    await expect(store.get(second.id)).resolves.toMatchObject({ status: "ready" });
+    await expectStatus(second.id, "ready");
+  });
+  const createAuthorizedCard = (input: Omit<Parameters<WorkboardStore["create"]>[0], "title">) =>
+    createCard({ workspaceAccess: { unrestricted: true }, ...input });
+  it.each([
+    { name: "archived", archive: true },
+    { name: "completed", status: "done" as const },
+    { name: "moved to another board", boardId: "product" },
+  ])("does not start a card $name during dispatch preflight", async (transition) => {
+    const card = await createAuthorizedCard({ boardId: "ops" });
+    const originalClaim = store.claim.bind(store);
+    vi.spyOn(store, "claim").mockImplementationOnce(async (id, input, options) => {
+      if ("archive" in transition) {
+        await store.archive(id, true);
+      } else if ("boardId" in transition) {
+        await store.update(id, { boardId: transition.boardId });
+      } else {
+        await store.update(id, { status: transition.status });
+      }
+      return await originalClaim(id, input, options);
+    });
+    const run = vi.fn();
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { maxStarts: 1, boardId: "ops", workspaceAccess: { unrestricted: true } },
+    });
+
+    expect(run).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      started: [],
+      startFailures: [{ cardId: card.id, error: expect.stringMatching(/archived|authority/) }],
+    });
+    const current = await store.get(card.id);
+    expect(current?.metadata?.claim).toBeUndefined();
+    if ("archive" in transition) {
+      expect(current?.metadata?.archivedAt).toBeGreaterThan(0);
+    } else if ("boardId" in transition) {
+      expect(current?.metadata?.automation?.boardId).toBe("product");
+    } else {
+      expect(current?.status).toBe(transition.status);
+    }
+  });
+
+  it("does not spend worker attempts on cards that change before they can be claimed", async () => {
+    const first = await createAuthorizedCard({ priority: "urgent", agentId: "first-worker" });
+    const second = await createAuthorizedCard({ priority: "high", agentId: "second-worker" });
+    const healthy = await createAuthorizedCard({ priority: "normal", agentId: "healthy-worker" });
+    const originalClaim = store.claim.bind(store);
+    const staleCardIds = new Set([first.id, second.id]);
+    vi.spyOn(store, "claim").mockImplementation(async (id, input, options) => {
+      if (staleCardIds.delete(id)) {
+        await store.archive(id, true);
+      }
+      return await originalClaim(id, input, options);
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "healthy-run" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { maxStarts: 1, workspaceAccess: { unrestricted: true } },
+    });
+
+    expect(result.startFailures.map((failure) => failure.cardId)).toEqual([first.id, second.id]);
+    expect(result.started).toMatchObject([{ cardId: healthy.id, runId: "healthy-run" }]);
+    expect(run).toHaveBeenCalledOnce();
+    await expect(store.get(healthy.id)).resolves.toMatchObject({ status: "running" });
+    for (const cardId of [first.id, second.id]) {
+      const archived = await store.get(cardId);
+      expect(archived?.metadata?.archivedAt).toBeGreaterThan(0);
+      expect(archived?.metadata?.claim).toBeUndefined();
+    }
+  });
+
+  it("retains a managed worktree when pre-start lossless cleanup declines", async () => {
+    const card = await createAuthorizedCard({
+      workspace: { kind: "worktree", path: "/repo", branch: "main" },
+    });
+    const removeIfLossless = vi.fn().mockResolvedValue(false);
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run: vi.fn().mockRejectedValue(new Error("model unavailable")) },
+      worktrees: {
+        resolveCheckoutRoot: vi.fn().mockResolvedValue(undefined),
+        create: vi
+          .fn()
+          .mockResolvedValue({ id: "managed-id", path: managedPath, branch: "managed" }),
+        release: vi.fn(),
+        removeIfLossless,
+      },
+      options: { now: 10, maxStarts: 1, materializeWorktree: true },
+    });
+
+    expect(result.startFailures).toMatchObject([{ cardId: card.id, error: "model unavailable" }]);
+    expect(removeIfLossless).toHaveBeenCalledOnce();
+    const blocked = await store.get(card.id);
+    expect(blocked?.status).toBe("blocked");
+    expect(blocked?.metadata?.automation?.workspace).toMatchObject({
+      kind: "worktree",
+      path: managedPath,
+      sourcePath: "/repo",
+    });
+    expect([blocked?.execution, blocked?.runId]).toEqual([undefined, undefined]);
+  });
+  const fullHostAccess: WorkboardWorkspaceAccess = { unrestricted: true };
+  const workspaceAccess = writable;
+  const readOnlyAccess: WorkboardWorkspaceAccess = { ...workspaceAccess, writable: false };
+
+  async function setupDiagnostics(persisted: WorkboardWorkspaceAccess | undefined) {
+    const card = await store.create({
+      title: "Outside checkout",
+      status: "ready",
+      workspace: { kind: "worktree", path: "/repo" },
+      workspaceAccess: persisted,
+    });
+    return { card, run: vi.fn() };
+  }
+
+  it.each([
+    ["host-authorized card", fullHostAccess, workspaceAccess, true],
+    ["unknown card authority", undefined, workspaceAccess, false],
+    ["workspace-bound card", workspaceAccess, workspaceAccess, false],
+    ["admin caller with restricted card", workspaceAccess, fullHostAccess, false],
+    ["read-only caller", fullHostAccess, readOnlyAccess, false],
+  ] as const)("offers an admin retry for %s", async (_name, persisted, caller, hint) => {
+    const { card, run } = await setupDiagnostics(persisted);
+    const create = vi.fn();
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      worktrees: createWorktreeRuntime({ create }),
+      options: { maxStarts: 1, materializeWorktree: true, workspaceAccess: caller },
+    });
+
+    expect(result).toMatchObject({ started: [], startFailures: [{ cardId: card.id }] });
+    expect(result.startFailures[0]?.error.includes("--admin")).toBe(hint);
+    expect(result.startFailures[0]?.error.includes("operator.admin")).toBe(hint);
+    expect(run).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    await expect(store.get(card.id)).resolves.toEqual(card);
+  });
+
+  it("does not classify arbitrary error prose as an admin-recoverable refusal", async () => {
+    const { card, run } = await setupDiagnostics(fullHostAccess);
+    const message = "workspace path is outside the caller's allowed workspaces.";
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: {
+        maxStarts: 1,
+        workspaceAccess,
+        resolveAgentWorkspace: () => {
+          throw new Error(message);
+        },
+      },
+    });
+
+    expect(result.startFailures).toEqual([{ cardId: card.id, title: card.title, error: message }]);
+    expect(run).not.toHaveBeenCalled();
+    await expect(store.get(card.id)).resolves.toEqual(card);
   });
 });

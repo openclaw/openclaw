@@ -6,7 +6,6 @@ import {
   type LifecycleSnapshot,
 } from "./lifecycle-sync-fixtures.test-support.js";
 import { createWorkboardLifecycleService, syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
-import { createDeferred } from "./lifecycle-sync.test-support.js";
 import { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteTestHarness, sqliteTestAuxStores } from "./test/sqlite-store.js";
 
@@ -17,15 +16,19 @@ async function beginPreparedDispatch() {
     status: "ready",
     workspaceAccess: { unrestricted: true },
   });
-  const reachedRun = createDeferred<{ sessionKey: string; provisionalRunId: string }>();
-  const runResult = createDeferred<{ sessionKey?: string; runId: string }>();
-  const run = vi.fn().mockImplementation(async (input) => {
-    reachedRun.resolve({ sessionKey: input.sessionKey, provisionalRunId: input.idempotencyKey });
-    return await runResult.promise;
-  });
+  const reachedRun = Promise.withResolvers<{ sessionKey: string; provisionalRunId: string }>();
+  const runResult = Promise.withResolvers<{ sessionKey?: string; runId: string }>();
   const dispatch = dispatchAndStartWorkboardCards({
     store: dispatchStore,
-    subagent: { run },
+    subagent: {
+      run: vi.fn(async (input) => {
+        reachedRun.resolve({
+          sessionKey: input.sessionKey,
+          provisionalRunId: input.idempotencyKey,
+        });
+        return await runResult.promise;
+      }),
+    },
     options: { maxStarts: 1 },
   });
   const prepared = await reachedRun.promise;
@@ -119,25 +122,17 @@ describe("Workboard prepared launch restart recovery", () => {
     });
 
     const accepted = await read();
-    expect(accepted).toMatchObject({
+    const attempt = {
       status: "running",
       sessionKey: canonicalSessionKey,
       runId: interrupted.prepared.provisionalRunId,
+    };
+    expect(accepted).toMatchObject({
+      ...attempt,
       metadata: {
         claim: { ownerId: "workboard-dispatcher" },
-        attempts: [
-          {
-            status: "running",
-            sessionKey: canonicalSessionKey,
-            runId: interrupted.prepared.provisionalRunId,
-          },
-        ],
-        automation: {
-          launch: {
-            phase: "accepted",
-            acceptedSessionKey: canonicalSessionKey,
-          },
-        },
+        attempts: [attempt],
+        automation: { launch: { phase: "accepted", acceptedSessionKey: canonicalSessionKey } },
       },
     });
     expect(accepted?.metadata?.automation?.launch).not.toHaveProperty("acceptedRunId");
@@ -157,13 +152,7 @@ describe("Workboard prepared launch restart recovery", () => {
       runId: "accepted-run",
       metadata: {
         automation: { launch: { phase: "accepted", acceptedRunId: "accepted-run" } },
-        attempts: [
-          {
-            id: expect.any(String),
-            status: "succeeded",
-            runId: "accepted-run",
-          },
-        ],
+        attempts: [{ id: expect.any(String), status: "succeeded", runId: "accepted-run" }],
       },
     });
     expect(terminal?.metadata?.attempts).toHaveLength(1);
@@ -193,9 +182,7 @@ describe("Workboard prepared launch restart recovery", () => {
       status: "review",
       sessionKey: canonicalSessionKey,
       metadata: {
-        automation: {
-          launch: { phase: "accepted", acceptedSessionKey: canonicalSessionKey },
-        },
+        automation: { launch: { phase: "accepted", acceptedSessionKey: canonicalSessionKey } },
         attempts: [{ status: "succeeded" }],
       },
     });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { serviceContext } from "./lifecycle-sync-fixtures.test-support.js";
 import {
   createWorkboardLifecycleService,
   readWorkboardLifecycleSessions,
@@ -53,11 +54,7 @@ it.each([
       store,
       readSessions: (options) => readWorkboardLifecycleSessions(gateway, options),
     });
-    const context = {
-      config: {},
-      stateDir: "unused",
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    };
+    const context = serviceContext();
     using operations = vi.spyOn(store, "runOperation");
     const recover = async () => {
       await service.start(context);

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
@@ -23,85 +22,65 @@ const WORKBOARD_CARD_CHILD_INDEXES = [
   ["workboard_worker_logs", "workboard_worker_logs_card_idx"],
 ] as const;
 
-function explainWorkboardQueryPlan(
-  db: DatabaseSync,
-  sql: string,
-  params: readonly (number | string | null)[] = [],
-): string {
-  const rows = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{
-    detail?: unknown;
-  }>;
-  return rows
-    .map((row) => (typeof row.detail === "string" ? row.detail : JSON.stringify(row.detail ?? "")))
-    .join("\n");
+async function reopen(dbPath: string) {
+  const stores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
+  await stores.ready;
+  await stores.close();
+}
+
+async function legacyDatabase() {
+  const dbPath = path.join(tempDirs.make("openclaw-workboard-migration-"), "workboard.sqlite");
+  await reopen(dbPath);
+  // Build the old format on a physical file this process has not admitted.
+  fs.renameSync(dbPath, `${dbPath}.seed`);
+  fs.copyFileSync(`${dbPath}.seed`, dbPath);
+  return dbPath;
 }
 
 describe("Workboard SQLite schema admission", () => {
   // Inspects and repairs native SQLite indexes and EXPLAIN QUERY PLAN output.
   test("restores dropped card child indexes without changing the schema version", async () => {
-    const dir = tempDirs.make("openclaw-workboard-index-reopen-");
-    const dbPath = path.join(dir, "workboard.sqlite");
-    const initialized = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-    await initialized.ready;
-    await initialized.close();
-    // Build the old format on a physical file this process has not admitted.
-    fs.renameSync(dbPath, `${dbPath}.seed`);
-    fs.copyFileSync(`${dbPath}.seed`, dbPath);
-    const db = new DatabaseSync(dbPath);
+    const dbPath = await legacyDatabase();
     let initialMigrationIds: Array<{ id: string }>;
-    try {
+    {
+      using db = new DatabaseSync(dbPath);
       initialMigrationIds = db
         .prepare("SELECT id FROM workboard_schema_migrations ORDER BY id")
         .all() as Array<{ id: string }>;
       for (const [, index] of WORKBOARD_CARD_CHILD_INDEXES) {
         db.exec(`DROP INDEX ${index}`);
       }
-    } finally {
-      db.close();
     }
 
-    const reopened = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-    await reopened.ready;
-    await reopened.close();
-    const verified = new DatabaseSync(dbPath, { readOnly: true });
-    try {
-      const indexes = new Set(
-        (
-          verified.prepare("SELECT name FROM sqlite_schema WHERE type = 'index'").all() as Array<{
-            name: string;
-          }>
-        ).map((row) => row.name),
-      );
-      for (const [table, index] of WORKBOARD_CARD_CHILD_INDEXES) {
-        expect(indexes).toContain(index);
-        const plan = explainWorkboardQueryPlan(
-          verified,
-          `SELECT * FROM ${table} WHERE card_id = ? ORDER BY ordinal ASC`,
-          ["card-1"],
-        );
-        expect(plan).toContain(index);
-        expect(plan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
-      }
-      expect(
-        verified.prepare("SELECT id FROM workboard_schema_migrations ORDER BY id").all(),
-      ).toEqual(initialMigrationIds);
-    } finally {
-      verified.close();
+    await reopen(dbPath);
+    using verified = new DatabaseSync(dbPath, { readOnly: true });
+    const indexes = new Set(
+      (
+        verified.prepare("SELECT name FROM sqlite_schema WHERE type = 'index'").all() as Array<{
+          name: string;
+        }>
+      ).map((row) => row.name),
+    );
+    for (const [table, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+      expect(indexes).toContain(index);
+      const plan = verified
+        .prepare(`EXPLAIN QUERY PLAN SELECT * FROM ${table} WHERE card_id = ? ORDER BY ordinal ASC`)
+        .all("card-1")
+        .map((row) => row.detail)
+        .join("\n");
+      expect(plan).toContain(index);
+      expect(plan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
     }
+    expect(
+      verified.prepare("SELECT id FROM workboard_schema_migrations ORDER BY id").all(),
+    ).toEqual(initialMigrationIds);
   });
 
   // Builds a legacy SQLite file and verifies its STRICT-table migration.
   test("migrates a version 2 workboard table to STRICT without losing rows", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-strict-migration-"));
-    const dbPath = path.join(dir, "workboard.sqlite");
-    const initialized = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-    await initialized.ready;
-    await initialized.close();
-    // Build the old format on a physical file this process has not admitted.
-    fs.renameSync(dbPath, `${dbPath}.seed`);
-    fs.copyFileSync(`${dbPath}.seed`, dbPath);
-    const legacy = new DatabaseSync(dbPath);
-    try {
+    const dbPath = await legacyDatabase();
+    {
+      using legacy = new DatabaseSync(dbPath);
       legacy.exec(`
         INSERT INTO workboard_boards (
           id, name, description, icon, color, default_workspace_json, orchestration_json,
@@ -132,36 +111,26 @@ describe("Workboard SQLite schema admission", () => {
         INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at)
         VALUES ('schema-2', 1);
       `);
-    } finally {
-      legacy.close();
     }
 
+    const migratedStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
     try {
-      const migratedStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-      try {
-        await expect(migratedStores.boards.lookup("legacy")).resolves.toMatchObject({
-          board: { id: "legacy", name: "Legacy board" },
-        });
-      } finally {
-        await migratedStores.close();
-      }
-      const migrated = new DatabaseSync(dbPath, { readOnly: true });
-      try {
-        expect(
-          migrated
-            .prepare("SELECT strict FROM pragma_table_list WHERE name = 'workboard_boards'")
-            .get(),
-        ).toEqual({ strict: 1 });
-        expect(
-          migrated
-            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
-            .get(),
-        ).toEqual({ found: 1 });
-      } finally {
-        migrated.close();
-      }
+      await expect(migratedStores.boards.lookup("legacy")).resolves.toMatchObject({
+        board: { id: "legacy", name: "Legacy board" },
+      });
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      await migratedStores.close();
     }
+    using migrated = new DatabaseSync(dbPath, { readOnly: true });
+    expect(
+      migrated
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'workboard_boards'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    expect(
+      migrated
+        .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
+        .get(),
+    ).toEqual({ found: 1 });
   });
 });
