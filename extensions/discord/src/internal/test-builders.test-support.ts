@@ -1,4 +1,3 @@
-// Discord plugin module implements test builders support behavior.
 import { ComponentType, InteractionType } from "discord-api-types/v10";
 import { vi, type Mock } from "vitest";
 import { Client } from "./client.js";
@@ -24,15 +23,10 @@ type FakeRestCall = {
   query?: RequestQuery;
 };
 
-type FakeRestClient = RequestClient & {
-  calls: FakeRestCall[];
-};
+type FakeRestClient = RequestClient & { calls: FakeRestCall[] };
 
 export function createJsonResponse(body: unknown, init?: ResponseInit): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    ...init,
-  });
+  return new Response(JSON.stringify(body), { status: 200, ...init });
 }
 
 export function createAbortableFetchMock() {
@@ -58,29 +52,18 @@ export function createInternalTestClient(
   commands: DiscordCommand[] = [],
   options?: Partial<ClientOptions>,
 ): Client {
-  return new Client(
-    {
-      clientId: "app1",
-      token: "token",
-      ...options,
-    },
-    { commands },
-  );
+  return new Client({ clientId: "app1", token: "token", ...options }, { commands });
 }
 
-function createRestMock(overrides: RestMock = {}) {
-  return {
+export function attachRestMock(client: Client, rest: RestMock) {
+  const mock = {
     get: vi.fn(async () => undefined),
     post: vi.fn(async () => undefined),
     patch: vi.fn(async () => undefined),
     put: vi.fn(async () => undefined),
     delete: vi.fn(async () => undefined),
-    ...overrides,
+    ...rest,
   };
-}
-
-export function attachRestMock(client: Client, rest: RestMock) {
-  const mock = createRestMock(rest);
   client.rest = mock as RestMock & RequestClient;
   return mock;
 }
@@ -88,22 +71,17 @@ export function attachRestMock(client: Client, rest: RestMock) {
 export function createFakeRestClient(responses: unknown[] = []): FakeRestClient {
   const calls: FakeRestCall[] = [];
   const queued = [...responses];
-  const request = async (
-    method: RestMethod,
-    path: string,
-    data?: RequestData,
-    query?: RequestQuery,
-  ) => {
-    calls.push({ method, path, data, query });
+  const request = async (call: FakeRestCall) => {
+    calls.push(call);
     return queued.shift();
   };
   return {
     calls,
-    get: async (path, query) => await request("GET", path, undefined, query),
-    post: async (path, data, query) => await request("POST", path, data, query),
-    patch: async (path, data, query) => await request("PATCH", path, data, query),
-    put: async (path, data, query) => await request("PUT", path, data, query),
-    delete: async (path, data, query) => await request("DELETE", path, data, query),
+    get: async (path, query) => await request({ method: "GET", path, data: undefined, query }),
+    post: async (path, data, query) => await request({ method: "POST", path, data, query }),
+    patch: async (path, data, query) => await request({ method: "PATCH", path, data, query }),
+    put: async (path, data, query) => await request({ method: "PUT", path, data, query }),
+    delete: async (path, data, query) => await request({ method: "DELETE", path, data, query }),
   } as FakeRestClient;
 }
 
@@ -114,11 +92,7 @@ export function createInternalInteractionPayload(
     application_id: "app1",
     type: InteractionType.ApplicationCommand,
     version: 1,
-    data: {
-      id: "command1",
-      name: "test",
-      type: 1,
-    },
+    data: { id: "command1", name: "test", type: 1 },
     ...overrides,
   } as unknown as RawInteraction;
 }
@@ -126,33 +100,32 @@ export function createInternalInteractionPayload(
 export function createInternalComponentInteractionPayload(
   overrides: RawInteractionOverrides,
 ): RawInteraction {
-  const { data, ...rest } = overrides;
-  return {
-    application_id: "app1",
-    version: 1,
-    data: {
-      component_type: ComponentType.Button,
-      custom_id: "component1",
-      ...data,
-    },
-    ...rest,
-    type: InteractionType.MessageComponent,
-  } as unknown as RawInteraction;
+  return createInteractivePayload(InteractionType.MessageComponent, overrides, {
+    component_type: ComponentType.Button,
+    custom_id: "component1",
+  });
 }
 
 export function createInternalModalInteractionPayload(
   overrides: RawInteractionOverrides,
 ): RawInteraction {
+  return createInteractivePayload(InteractionType.ModalSubmit, overrides, {
+    custom_id: "modal1",
+    components: [],
+  });
+}
+
+function createInteractivePayload(
+  type: InteractionType.MessageComponent | InteractionType.ModalSubmit,
+  overrides: RawInteractionOverrides,
+  defaults: Record<string, unknown>,
+): RawInteraction {
   const { data, ...rest } = overrides;
   return {
     application_id: "app1",
     version: 1,
-    data: {
-      custom_id: "modal1",
-      components: [],
-      ...data,
-    },
+    data: { ...defaults, ...data },
     ...rest,
-    type: InteractionType.ModalSubmit,
+    type,
   } as unknown as RawInteraction;
 }
