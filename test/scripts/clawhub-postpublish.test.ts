@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { crc32 } from "node:zlib";
@@ -19,6 +18,7 @@ import {
 } from "../../scripts/clawhub-prepared-artifact.mjs";
 import { waitForClawHubPublicVersion } from "../../scripts/lib/clawhub-publication-state.mjs";
 import { verifyPublishedClawHubPackage } from "../../scripts/verify-clawhub-published-artifact.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 function requestUrl(input: Parameters<typeof fetch>[0]) {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -26,11 +26,8 @@ function requestUrl(input: Parameters<typeof fetch>[0]) {
 
 vi.mock("node:timers/promises", () => ({ setTimeout: vi.fn(async () => {}) }));
 
-const directories: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.clearAllMocks());
-afterEach(() =>
-  directories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true })),
-);
 const sha = "a".repeat(40);
 const ref = `release-publish/${sha.slice(0, 12)}-1`;
 const repository = "openclaw/openclaw";
@@ -50,9 +47,6 @@ function job(name: string, run_id = 20, run_attempt = 1, steps: string[] = []) {
     ...completed,
     ...(steps.length ? { steps: steps.map((stepName) => ({ name: stepName, ...completed })) } : {}),
   };
-}
-function jobPage(jobs: unknown[]) {
-  return { total_count: jobs.length, jobs };
 }
 function replaceJsonArtifact(
   f: ReturnType<typeof fixture>,
@@ -127,8 +121,7 @@ function fixture(
 ) {
   const parentRef = parentOnMain ? "main" : ref;
   const parentFullRef = parentOnMain ? "refs/heads/main" : `refs/tags/${ref}`;
-  const directory = mkdtempSync(join(tmpdir(), "clawhub-postpublish-"));
-  directories.push(directory);
+  const directory = tempDirs.make("clawhub-postpublish-");
   const packageDir = join(directory, "package");
   const artifactDir = join(directory, "artifact");
   mkdirSync(packageDir);
@@ -207,19 +200,21 @@ function fixture(
       workflow_run: { id: runId, head_sha: sha },
     };
   };
-  const receiptArtifact = artifact(
+  const jsonArtifact = (id: number, name: string, runId: number, file: string, value: unknown) =>
+    artifact(id, name, runId, file, Buffer.from(JSON.stringify(value)));
+  const receiptArtifact = jsonArtifact(
     1,
     `openclaw-clawhub-parent-authorization-v2-10-${parentRunAttempt}-20-1`,
     10,
     "authorization.json",
-    Buffer.from(JSON.stringify(receipt)),
+    receipt,
   );
-  const transactionsArtifact = artifact(
+  const transactionsArtifact = jsonArtifact(
     2,
     "openclaw-clawhub-transactions-20-1",
     20,
     "transactions.json",
-    Buffer.from(JSON.stringify(transactions)),
+    transactions,
   );
   const packageArtifact = artifact(3, `package-${packageId}`, 20, `${packageId}.tgz`, tarball);
   const recoveryManifest = {
@@ -228,12 +223,12 @@ function fixture(
     identity,
     packages: [{ ...entry, publicationStatus: "pending", attemptId: "attempt-1" }],
   };
-  const recoveryArtifact = artifact(
+  const recoveryArtifact = jsonArtifact(
     6,
     "openclaw-clawhub-recovery-manifest-20-1",
     20,
     "recovery-manifest.json",
-    Buffer.from(JSON.stringify(recoveryManifest)),
+    recoveryManifest,
   );
   const dispatch = {
     schemaVersion: 1,
@@ -248,51 +243,50 @@ function fixture(
     normalClawHubRunId: "20",
     normalClawHubRunAttempt: "1",
   };
-  const dispatchArtifact = artifact(
+  const dispatchArtifact = jsonArtifact(
     4,
     `openclaw-release-children-10-${parentRunAttempt}`,
     10,
     "dispatch.json",
-    Buffer.from(JSON.stringify(dispatch)),
+    dispatch,
   );
-  const metadata = new Map<string, unknown>([
-    [`actions/runs/10/attempts/${parentRunAttempt}`, parent],
-    ["actions/runs/20/attempts/1", child],
-    ["actions/runs/20", child],
-    [artifactsPath(10), { total_count: 2, artifacts: [receiptArtifact, dispatchArtifact] }],
-    [
-      artifactsPath(20),
-      { total_count: 3, artifacts: [transactionsArtifact, packageArtifact, recoveryArtifact] },
-    ],
-    [
-      "actions/runs/20/artifacts?name=openclaw-clawhub-transactions-20-1&per_page=100",
-      { total_count: 1, artifacts: [transactionsArtifact] },
-    ],
-    [
-      jobsPath(20, 1),
-      jobPage([
-        job("Seal exact ClawHub recovery manifest", 20, 1, ["Upload sealed recovery manifest"]),
-        job("Seal ClawHub package transactions"),
-        job(`Pack ClawHub package (${entry.name})`, 20, 1, ["Upload ClawHub package artifact"]),
-      ]),
-    ],
-    [`git/ref/tags/${ref}`, { ref: `refs/tags/${ref}`, object: { type: "commit", sha } }],
-    [`git/matching-refs/heads/${ref}`, []],
-    [`compare/${sha}...main`, { status: "identical" }],
-    [`compare/${sha}...${verifierSha}`, { status: "identical" }],
-    [`compare/${sha}...${verifierSha}?per_page=1&page=2`, { status: "identical" }],
-    ...[
-      receiptArtifact,
-      transactionsArtifact,
-      packageArtifact,
-      dispatchArtifact,
-      recoveryArtifact,
-    ].map((item): [string, unknown] => [`actions/artifacts/${item.id}`, item]),
-  ]);
+  const allArtifacts = [
+    receiptArtifact,
+    transactionsArtifact,
+    packageArtifact,
+    dispatchArtifact,
+    recoveryArtifact,
+  ];
+  const metadata = new Map<string, unknown>(
+    allArtifacts.map((item) => [`actions/artifacts/${item.id}`, item]),
+  );
   const setJobs = (id: number, attempt: number, jobs: unknown[], total = jobs.length, page = 1) =>
     metadata.set(jobsPath(id, attempt, page), { total_count: total, jobs });
   const setArtifacts = (id: number, artifacts: unknown[], total = artifacts.length) =>
     metadata.set(artifactsPath(id), { total_count: total, artifacts });
+  metadata.set(`actions/runs/10/attempts/${parentRunAttempt}`, parent);
+  metadata.set("actions/runs/20/attempts/1", child);
+  metadata.set("actions/runs/20", child);
+  setArtifacts(10, [receiptArtifact, dispatchArtifact]);
+  setArtifacts(20, [transactionsArtifact, packageArtifact, recoveryArtifact]);
+  metadata.set("actions/runs/20/artifacts?name=openclaw-clawhub-transactions-20-1&per_page=100", {
+    total_count: 1,
+    artifacts: [transactionsArtifact],
+  });
+  setJobs(20, 1, [
+    job("Seal exact ClawHub recovery manifest", 20, 1, ["Upload sealed recovery manifest"]),
+    job("Seal ClawHub package transactions"),
+    job(`Pack ClawHub package (${entry.name})`, 20, 1, ["Upload ClawHub package artifact"]),
+  ]);
+  metadata.set(`git/ref/tags/${ref}`, { ref: `refs/tags/${ref}`, object: { type: "commit", sha } });
+  metadata.set(`git/matching-refs/heads/${ref}`, []);
+  for (const comparison of [
+    `${sha}...main`,
+    `${sha}...${verifierSha}`,
+    `${sha}...${verifierSha}?per_page=1&page=2`,
+  ]) {
+    metadata.set(`compare/${comparison}`, { status: "identical" });
+  }
   const githubReads: string[] = [];
   const registryReads: string[] = [];
   const archiveIdentity = {

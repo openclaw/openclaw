@@ -288,6 +288,10 @@ describe("ClawHub packed artifact identity", () => {
     expectedName: "@openclaw/meta-provider",
     expectedVersion: "2026.7.1-beta.3",
   };
+  const packageJson = (
+    name = expectedIdentity.expectedName,
+    version = expectedIdentity.expectedVersion,
+  ) => JSON.stringify({ name, version });
 
   function verifyPack(
     pack: Pick<ReturnType<typeof writeClawPack>, "artifactPath" | "sha256" | "bytes">,
@@ -330,18 +334,12 @@ describe("ClawHub packed artifact identity", () => {
     const pack = writeClawPack([
       {
         name: "package/package.json",
-        contents: JSON.stringify({
-          name: "@openclaw/meta-provider",
-          version: "2026.7.1-beta.3",
-        }),
+        contents: packageJson(),
       },
       {
         name: " package.json ",
         prefix: " package ",
-        contents: JSON.stringify({
-          name: "@openclaw/other",
-          version: "9.9.9",
-        }),
+        contents: packageJson("@openclaw/other", "9.9.9"),
       },
     ]);
 

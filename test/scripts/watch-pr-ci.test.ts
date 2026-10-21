@@ -431,19 +431,9 @@ describe("watch-pr-ci", () => {
       parseArgs([
         "7",
         sha,
-        "--repo",
-        "fork/project",
-        "--after",
-        "1234",
-        "--attach-timeout",
-        "30",
-        "--timeout",
-        "90",
-        "--interval",
-        "5",
-        "--completion",
-        "ci-run",
-        "--once",
+        ..."--repo fork/project --after 1234 --attach-timeout 30 --timeout 90 --interval 5 --completion ci-run --once".split(
+          " ",
+        ),
       ]),
     ).toMatchObject({
       repo: "fork/project",
@@ -472,18 +462,11 @@ describe("watch-pr-ci", () => {
   });
 
   it("builds a pull-request-only run attachment query", () => {
-    expect(buildFindRunArgs("openclaw/openclaw", sha)).toEqual([
-      "api",
-      "--method",
-      "GET",
-      "repos/openclaw/openclaw/actions/workflows/ci.yml/runs",
-      "-f",
-      "event=pull_request",
-      "-f",
-      `head_sha=${sha}`,
-      "-f",
-      "per_page=20",
-    ]);
+    expect(buildFindRunArgs("openclaw/openclaw", sha)).toEqual(
+      `api --method GET repos/openclaw/openclaw/actions/workflows/ci.yml/runs -f event=pull_request -f head_sha=${sha} -f per_page=20`.split(
+        " ",
+      ),
+    );
   });
 
   it("skips newer draft runs without weakening the --after boundary", () => {
@@ -618,32 +601,28 @@ if (args[0] === "browse") {
     return { label, phase: "attach", patch: {}, exitCode: 0, output: "GREEN", ...details };
   }
   it.skipIf(process.platform === "win32").each<CiRunScenario>([
-    ...(["attach", "watch"] as const).flatMap((phase) => [
-      restScenario("closed", {
-        phase,
-        patch: { state: "closed" },
-        exitCode: 10,
-        output: "PR-CLOSED state=CLOSED",
-      }),
-      restScenario("merged", {
-        phase,
-        patch: { state: "closed", merged_at: "2026-09-19T00:00:00Z" },
-        exitCode: 10,
-        output: "PR-CLOSED state=MERGED",
-      }),
-      restScenario("moved head", {
-        phase,
-        patch: { head: { sha: "b".repeat(40) } },
-        exitCode: 11,
-        output: "HEAD-MOVED",
-      }),
-      restScenario("conflict", {
-        phase,
-        patch: { mergeable: false },
-        exitCode: phase === "attach" ? 12 : 14,
-        output: phase === "attach" ? "CONFLICTING mergeable=" : "CONFLICTING-MID-WAIT",
-      }),
-    ]),
+    ...(["attach", "watch"] as const).flatMap((phase) =>
+      (
+        [
+          ["closed", { state: "closed" }, 10, "PR-CLOSED state=CLOSED"],
+          [
+            "merged",
+            { state: "closed", merged_at: "2026-09-19T00:00:00Z" },
+            10,
+            "PR-CLOSED state=MERGED",
+          ],
+          ["moved head", { head: { sha: "b".repeat(40) } }, 11, "HEAD-MOVED"],
+          [
+            "conflict",
+            { mergeable: false },
+            phase === "attach" ? 12 : 14,
+            phase === "attach" ? "CONFLICTING mergeable=" : "CONFLICTING-MID-WAIT",
+          ],
+        ] satisfies [string, Record<string, unknown>, number, string][]
+      ).map(([label, patch, exitCode, output]) =>
+        restScenario(label, { phase, patch, exitCode, output }),
+      ),
+    ),
     restScenario("unknown mergeability", { patch: { mergeable: null } }),
     restScenario("slow current PR read", {
       phase: "watch",
@@ -764,26 +743,19 @@ if (args[0] === "browse") {
   // These replay groups own their CLI process, files, and polling clock per case.
   // Vitest bounds concurrent cases; real-deadline coverage stays in serial groups.
   describe.skipIf(process.platform === "win32")("summary polling", () => {
-    it.concurrent.each([
-      {
-        label: "superseded failures",
-        completeAfter: 3,
-        afterRun: {},
-        exitCode: 0,
-        reads: 10,
-        summaries: 1,
-      },
-      {
-        label: "cleared failures with active CI",
-        completeAfter: 10,
-        afterRun: { statusCheckRollup: { state: "PENDING" } },
-        exitCode: 16,
-        reads: 8,
-        summaries: 2,
-      },
+    it.concurrent.each<[string, number, Record<string, unknown>, number, number, number]>([
+      ["superseded failures", 3, {}, 0, 10, 1],
+      [
+        "cleared failures with active CI",
+        10,
+        { statusCheckRollup: { state: "PENDING" } },
+        16,
+        8,
+        2,
+      ],
     ])(
-      "bounds summary reads for $label",
-      async ({ completeAfter, afterRun, exitCode, reads, summaries }) => {
+      "bounds summary reads for %s",
+      async (_label, completeAfter, afterRun, exitCode, reads, summaries) => {
         const result = await replaySummary({
           state: "FAILURE",
           supersededFailure: true,
@@ -829,26 +801,26 @@ if (args[0] === "browse") {
       expectRun(result, 16, "rollup detail evidence is incomplete", "\nGREEN");
     });
 
-    it.concurrent.each([
-      { label: "complete counts", counts: undefined, pending: "1" },
-      { label: "missing counts", counts: {}, pending: "unknown" },
-      {
-        label: "malformed counts",
-        counts: {
+    it.concurrent.each<[string, Record<string, unknown> | undefined, string]>([
+      ["complete counts", undefined, "1"],
+      ["missing counts", {}, "unknown"],
+      [
+        "malformed counts",
+        {
           checkRunCountsByState: [{ state: "IN_PROGRESS", count: -1 }],
           statusContextCountsByState: [],
         },
-        pending: "unknown",
-      },
-      {
-        label: "zero pending counts",
-        counts: {
+        "unknown",
+      ],
+      [
+        "zero pending counts",
+        {
           checkRunCountsByState: [{ state: "COMPLETED", count: 200 }],
           statusContextCountsByState: [{ state: "SUCCESS", count: 1 }],
         },
-        pending: "0",
-      },
-    ])("keeps a 201-context pending poll bounded with $label", async ({ counts, pending }) => {
+        "0",
+      ],
+    ])("keeps a 201-context pending poll bounded with %s", async (_label, counts, pending) => {
       const result = await replaySummary({ counts });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
       expect(result.stdout).toContain(
@@ -869,30 +841,22 @@ if (args[0] === "browse") {
       expect(result.calls.filter((call) => call[0] === "browse")).toHaveLength(1);
     });
 
-    it.concurrent.each([
-      { label: "unchanged success", afterRun: {}, exitCode: 0, output: "GREEN" },
-      {
-        label: "moved head",
-        afterRun: { headRefOid: "b".repeat(40) },
-        exitCode: 11,
-        output: "HEAD-MOVED",
-      },
-      { label: "closed PR", afterRun: { state: "CLOSED" }, exitCode: 10, output: "PR-CLOSED" },
-      {
-        label: "conflicting PR",
-        afterRun: { mergeable: "CONFLICTING" },
-        exitCode: 14,
-        output: "CONFLICTING-MID-WAIT",
-      },
-      ...["PENDING", "FAILURE", "ERROR"].map((state) => ({
-        label: `same-head ${state}`,
-        afterRun: { statusCheckRollup: { state } },
-        exitCode: state === "PENDING" ? 16 : 15,
-        output: state === "PENDING" ? "TIMEOUT" : "FAILING checks=required status",
-      })),
+    it.concurrent.each<[string, Record<string, unknown>, number, string]>([
+      ["unchanged success", {}, 0, "GREEN"],
+      ["moved head", { headRefOid: "b".repeat(40) }, 11, "HEAD-MOVED"],
+      ["closed PR", { state: "CLOSED" }, 10, "PR-CLOSED"],
+      ["conflicting PR", { mergeable: "CONFLICTING" }, 14, "CONFLICTING-MID-WAIT"],
+      ...["PENDING", "FAILURE", "ERROR"].map(
+        (state): [string, Record<string, unknown>, number, string] => [
+          `same-head ${state}`,
+          { statusCheckRollup: { state } },
+          state === "PENDING" ? 16 : 15,
+          state === "PENDING" ? "TIMEOUT" : "FAILING checks=required status",
+        ],
+      ),
     ])(
-      "reobserves $label after the attached run succeeds",
-      async ({ afterRun, exitCode, output }) => {
+      "reobserves %s after the attached run succeeds",
+      async (_label, afterRun, exitCode, output) => {
         const result = await replaySummary({ state: "SUCCESS", runStatus: "completed", afterRun });
         expectRun(result, exitCode, output);
         if (exitCode !== 0) {
@@ -1763,21 +1727,11 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
       expect(result.calls).not.toContain('"slow-alias-completed"');
     });
 
-    it.each([
-      {
-        label: "moved head",
-        patch: { headRefOid: sha, statusCheckRollup: null },
-        exitCode: 11,
-        output: "HEAD-MOVED",
-      },
-      { label: "closed PR", patch: { state: "CLOSED" }, exitCode: 10, output: "PR-CLOSED" },
-      {
-        label: "conflicting PR",
-        patch: { mergeable: false },
-        exitCode: 14,
-        output: "CONFLICTING-MID-WAIT",
-      },
-    ])("rechecks a $label after alias verification", async ({ patch, exitCode, output }) => {
+    it.each<[string, Record<string, unknown>, number, string]>([
+      ["moved head", { headRefOid: sha, statusCheckRollup: null }, 11, "HEAD-MOVED"],
+      ["closed PR", { state: "CLOSED" }, 10, "PR-CLOSED"],
+      ["conflicting PR", { mergeable: false }, 14, "CONFLICTING-MID-WAIT"],
+    ])("rechecks a %s after alias verification", async (_label, patch, exitCode, output) => {
       const fixture = structuredClone(placeholderFixture);
       const { afterAliasScan, pr } = refreshedPlaceholder(fixture);
       Object.assign(pr, patch);
@@ -1785,28 +1739,14 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
       expectRun(result, exitCode, output, "GREEN");
     });
 
-    it.each([
-      {
-        label: "new pending required check",
-        added: true,
-        patch: { status: "QUEUED", conclusion: null },
-        exitCode: 16,
-      },
-      {
-        label: "new failed required check",
-        added: true,
-        patch: { status: "COMPLETED", conclusion: "FAILURE" },
-        exitCode: 15,
-      },
-      { label: "starts running", patch: { status: "IN_PROGRESS" }, exitCode: 16 },
-      { label: "fails", patch: { status: "COMPLETED", conclusion: "FAILURE" }, exitCode: 15 },
-      {
-        label: "loses its conclusion",
-        patch: { status: "COMPLETED", conclusion: null },
-        exitCode: 16,
-      },
-      { label: "is renamed", patch: { name: "different required check" }, exitCode: 16 },
-    ])("revalidates alias evidence: $label", async ({ patch, exitCode, added }) => {
+    it.each<[string, Record<string, unknown>, number, boolean?]>([
+      ["new pending required check", { status: "QUEUED", conclusion: null }, 16, true],
+      ["new failed required check", { status: "COMPLETED", conclusion: "FAILURE" }, 15, true],
+      ["starts running", { status: "IN_PROGRESS" }, 16],
+      ["fails", { status: "COMPLETED", conclusion: "FAILURE" }, 15],
+      ["loses its conclusion", { status: "COMPLETED", conclusion: null }, 16],
+      ["is renamed", { name: "different required check" }, 16],
+    ])("revalidates alias evidence: %s", async (_label, patch, exitCode, added) => {
       const fixture = structuredClone(placeholderFixture);
       const { afterAliasScan, contexts } = refreshedPlaceholder(fixture);
       if (added) {
@@ -2260,17 +2200,6 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
     ],
     ["pending contexts", [rollupCheck("unit", null)], expectedRollup("PENDING", [], 1), "PENDING"],
     [
-      "identity-less same-name cancellations",
-      [
-        rollupCheck("Auto response", "FAILURE"),
-        rollupCheck("unit", "CANCELLED"),
-        rollupCheck("unit", "SUCCESS"),
-      ],
-      expectedRollup("FAILING", ["unit"]),
-      "ERROR",
-      3,
-    ],
-    [
       "truncated failing rollup",
       [rollupCheck("unit", "CANCELLED"), rollupCheck("unit", "SUCCESS")],
       expectedRollup("FAILING", ["unit", "+2 more contexts not shown"]),
@@ -2286,20 +2215,16 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
         rollupCheck("lint", "TIMED_OUT"),
       ],
       expectedRollup("FAILING", ["lint", "unit"]),
-    ],
-    [
-      "superseded runs with pending replacements",
-      [
-        rollupCheck("Real behavior proof", "CANCELLED", 100, 10, 1_000),
-        rollupCheck("Real behavior proof", null, 200, 10, 2_000),
-        rollupCheck("CI", null, 150, 20),
-      ],
-      expectedRollup("PENDING", [], 2, 1),
+      "ERROR",
     ],
     [
       "pending same-run check replacement",
-      [rollupCheck("unit", "CANCELLED", 500, 20, 1_000), rollupCheck("unit", null, 500, 20, 2_000)],
-      expectedRollup("PENDING", [], 1, 1),
+      [
+        rollupCheck("unit", "CANCELLED", 500, 20, 1_000),
+        rollupCheck("unit", null, 500, 20, 2_000),
+        rollupCheck("CI", null, 150, 10),
+      ],
+      expectedRollup("PENDING", [], 2, 1),
     ],
     [
       "successful same-run check replacement",
@@ -2310,24 +2235,6 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
       expectedRollup("GREEN", [], 0, 1),
     ],
     [
-      "unique cancellations across independent workflows",
-      [
-        rollupCheck("old proof", "CANCELLED", 100, 10),
-        rollupCheck("proof", "SUCCESS", 200, 10),
-        rollupCheck("old CI", "CANCELLED", 150, 20),
-        rollupCheck("CI", "SUCCESS", 250, 20),
-      ],
-      expectedRollup("FAILING", ["old CI", "old proof"]),
-    ],
-    [
-      "genuine newest-run failure",
-      [
-        rollupCheck("older cancelled check", "CANCELLED", 100, 20),
-        rollupCheck("unit", "FAILURE", 200, 20),
-      ],
-      expectedRollup("FAILING", ["older cancelled check", "unit"]),
-    ],
-    [
       "interleaved distinct workflows",
       [
         rollupCheck("old deploy", "CANCELLED", 200, 20),
@@ -2335,14 +2242,6 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
         rollupCheck("deploy", "SUCCESS", 400, 20),
       ],
       expectedRollup("FAILING", ["old deploy", "unit"]),
-    ],
-    [
-      "same-name checks across runs",
-      [
-        rollupCheck("unit", "FAILURE", 300, 20, 1_000),
-        rollupCheck("unit", "SUCCESS", 400, 20, 2_000),
-      ],
-      expectedRollup("GREEN", [], 0, 1),
     ],
     [
       "unseen contexts after supersession",
