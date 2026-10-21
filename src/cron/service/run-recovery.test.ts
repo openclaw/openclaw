@@ -35,6 +35,7 @@ import {
 } from "./run-recovery.test-support.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { createCronServiceState } from "./state.js";
+import { runPostPersistCronNotifications } from "./store.js";
 import { onTimer } from "./timer.test-support.js";
 
 function tryCreateCronTaskRun(

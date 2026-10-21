@@ -516,7 +516,7 @@ describe("tool display details", () => {
           detailMode: "explain",
         }),
       ),
-    ).toBe("🛠️ git fetch (agent)");
+    ).toBe("git fetch (agent)");
 
     expect(
       formatToolSummary(
