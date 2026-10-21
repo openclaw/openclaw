@@ -26,7 +26,6 @@ const auditMaintenance = vi.hoisted(() => ({
 it("joins managed reload acquisition during Gateway close", async () => {
   const fixture = await createGatewayMetadataCloseFixture("managed-model-close");
   process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-  fixture.config.cron = { enabled: false };
   fixture.config.gateway = { reload: { mode: "hybrid" } };
   fixture.config.agents = {
     defaults: { workspace: fixture.state.workspaceDir, model: `${fixture.pluginId}/before` },
@@ -48,6 +47,10 @@ it("joins managed reload acquisition during Gateway close", async () => {
     });
   });
   const restorers: Array<() => void> = [];
+  const postReadyMaintenance = vi
+    .spyOn(await import("./server-runtime-services.js"), "scheduleGatewayPostReadyMaintenance")
+    .mockImplementation(() => {});
+  restorers.push(() => postReadyMaintenance.mockRestore());
   const bridgeKey = `__managed_model_close_${path.basename(fixture.state.root)}`;
   Object.defineProperty(globalThis, bridgeKey, {
     configurable: true,
