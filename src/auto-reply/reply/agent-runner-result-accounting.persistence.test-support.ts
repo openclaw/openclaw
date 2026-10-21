@@ -276,6 +276,9 @@ export async function createAgentAccountingPersistenceFixture({
       ...meta,
     };
   };
+  const read = () => loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
+  const replace = (next: InternalSessionEntry) =>
+    replaceSessionEntry({ storePath, sessionKey }, next);
   return {
     sessionId,
     context,
@@ -324,8 +327,13 @@ export async function createAgentAccountingPersistenceFixture({
       }
       return accountQueued({ kind: "aborted", reason, compaction });
     },
-    read: () => loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
-    replace: (next: InternalSessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
+    read,
+    replace,
+    patch: async (patch: Partial<InternalSessionEntry>) => {
+      const next = { ...read()!, ...patch };
+      await replace(next);
+      return next;
+    },
     account: async (lane: "ordinary" | "followup", meta: Partial<EmbeddedAgentMeta>) => {
       setMeta({ contextTokens: 1_000, contextBudgetStatus: diagnostic, ...meta });
       if (lane === "ordinary") {

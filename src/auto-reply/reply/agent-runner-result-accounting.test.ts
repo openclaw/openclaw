@@ -1,8 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../../config/sessions.js";
-import type { FollowupExecutionResult } from "./followup-turn-execution.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
+import { useAccountingFixture } from "./agent-runner-accounting.test-support.js";
 
 const mocks = vi.hoisted(() => ({ refreshQueuedFollowupSession: vi.fn() }));
 
@@ -40,78 +37,7 @@ vi.mock("./reply-usage-state.js", () => ({
   recordReplyUsageState: vi.fn(),
 }));
 
-import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
-
-function createParams(
-  authProfileOverrideCompactionCount?: number,
-): Parameters<typeof accountFollowupTurn>[0] {
-  const entry: SessionEntry = {
-    sessionId: "session-1",
-    updatedAt: 1,
-    authProfileOverride: "openai:work",
-    authProfileOverrideCompactionCount,
-  };
-  const sessionStore = { main: entry };
-  const turn = {
-    runId: "run-1",
-    queued: createQueueTestRun(
-      { prompt: "queued prompt", enqueuedAt: 1 },
-      {
-        sessionId: "session-1",
-        sessionKey: "main",
-        provider: "anthropic",
-        model: "claude",
-      },
-    ),
-    operation: {},
-    config: {},
-    session: {
-      kind: "session",
-      key: "main",
-      current: () => sessionStore.main,
-      publish: (next: SessionEntry | undefined) =>
-        next && Object.assign(sessionStore, { main: next }),
-    },
-    sessionStore,
-    sendPolicy: "allow",
-    preflightCompactionApplied: false,
-  } as unknown as AdmittedFollowupTurn;
-  const defaults = {
-    typing: {} as FollowupRunnerParams["typing"],
-    typingMode: "never",
-    defaultModel: "claude",
-    sessionKey: "main",
-  } satisfies FollowupRunnerParams;
-  const execution = {
-    commentaryPayloadsEnabled: false,
-    execution: {
-      runId: "run-1",
-      outcome: {
-        kind: "settled",
-        status: "ok",
-        result: { payloads: [], meta: { durationMs: 0 } },
-        resolved: { provider: "openai", model: "gpt-4o" },
-        fallback: {
-          exhausted: false,
-          attempts: [
-            {
-              provider: "anthropic",
-              model: "claude",
-              error: "rate limited",
-              reason: "rate_limit",
-            },
-          ],
-        },
-        autoCompactionCount: 0,
-      },
-    },
-    runStartedAt: 1,
-    sessionCtx: {},
-    pendingToolTasks: new Set(),
-    progress: { drain: async () => {} },
-  } as FollowupExecutionResult;
-  return { turn, defaults, execution };
-}
+const { createFixture } = useAccountingFixture("openclaw-accounting-pin-");
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -121,12 +47,22 @@ it.each([
 ] as const)(
   "forwards a source-less pin with compaction count %s as %s during fallback queue refresh",
   async (authProfileOverrideCompactionCount, expectedSource) => {
-    await accountFollowupTurn(createParams(authProfileOverrideCompactionCount));
+    const fixture = await createFixture();
+    Object.assign(fixture.context.followupRun.run, { provider: "anthropic", model: "claude" });
+    fixture.context.execution.resolved = { provider: "openai", model: "gpt-4o" };
+    fixture.context.execution.fallback.attempts = [
+      { provider: "anthropic", model: "claude", error: "rate limited", reason: "rate_limit" },
+    ];
+    await fixture.patch({
+      authProfileOverride: "openai:work",
+      authProfileOverrideCompactionCount,
+    });
+    await fixture.account("followup", { provider: "openai", model: "gpt-4o" });
 
     expect(mocks.refreshQueuedFollowupSession).toHaveBeenCalledOnce();
     expect(mocks.refreshQueuedFollowupSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        key: "main",
+        key: fixture.context.sessionKey,
         nextProvider: "openai",
         nextModel: "gpt-4o",
         nextAuthProfileId: "openai:work",

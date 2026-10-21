@@ -66,19 +66,12 @@ afterEach(() => {
 async function createFixture(
   options: Partial<Parameters<typeof createAgentAccountingPersistenceFixture>[0]> = {},
 ) {
-  const fixture = await createAgentAccountingPersistenceFixture({
+  return createAgentAccountingPersistenceFixture({
     storePath,
     root: options.root ?? tempDirs.make("openclaw-context-pressure-"),
     fixtureId: ++fixtureSequence,
     registerOperation: (operation) => operations.push(operation),
     ...options,
-  });
-  return Object.assign(fixture, {
-    patch: async (patch: Partial<SessionEntry>) => {
-      const next = { ...fixture.read()!, ...patch };
-      await fixture.replace(next);
-      return next;
-    },
   });
 }
 
@@ -637,8 +630,7 @@ describe("cancelled followup compaction accounting", () => {
   it("accounts cancellation against the committed successor despite a predecessor cache", async () => {
     const fixture = await createFixture();
     const sessionId = `${fixture.sessionId}-accepted-successor`;
-    await fixture.replace({
-      ...fixture.context.activeSessionEntry!,
+    await fixture.patch({
       sessionId,
       compactionCount: 3,
     });
