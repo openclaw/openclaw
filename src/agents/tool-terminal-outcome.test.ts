@@ -5,7 +5,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { Message, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
-  buildAdjustedParamsKey,
   peekAdjustedParamsForToolCall,
   recordAdjustedParamsForToolCall,
   recordPreExecutionBlockedToolCall,
