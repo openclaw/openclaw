@@ -16,17 +16,16 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   listUsableProviderAuthProfileIdsAsync: async () => ({ agentDir: "", profileIds: [] }),
 }));
 
-function createAuthSearchTool(webSearch?: { apiKey: string }) {
+function search(query: string, apiKey?: string, signal?: AbortSignal) {
   const tool = createXaiWebSearchProvider().createTool({
     config: {
-      tools: { web: { search: { provider: "grok" } } },
-      plugins: { entries: { xai: { enabled: true, config: { webSearch } } } },
+      plugins: { entries: { xai: { enabled: true, config: { webSearch: { apiKey } } } } },
     },
   });
   if (!tool) {
     throw new Error("Expected xAI web search tool");
   }
-  return tool;
+  return tool.execute({ query }, { signal });
 }
 
 const mockFetch = vi.fn<(_input?: unknown, _init?: RequestInit) => Promise<Response>>();
@@ -49,31 +48,24 @@ it.each(["initial lookup", "refresh after 401"])(
     const authError = new Error("OAuth token refresh failed for xai: refresh did not settle");
     if (phase === "refresh after 401") {
       resolveAuth.mockResolvedValueOnce({
-        apiKey: "expired-oauth-token",
-        source: "profile:xai:default",
+        apiKey: "expired",
         mode: "oauth",
         profileId: "xai:default",
       });
     }
     resolveAuth.mockRejectedValueOnce(authError);
-    mockFetch.mockImplementation(
-      async () => new Response("expired", { status: 401, statusText: "Unauthorized" }),
-    );
-    await expect(
-      createAuthSearchTool().execute({ query: `search auth failure: ${phase}` }),
-    ).rejects.toBe(authError);
+    mockFetch.mockImplementation(async () => new Response("expired", { status: 401 }));
+    await expect(search(`search auth failure: ${phase}`)).rejects.toBe(authError);
     expect(mockFetch).toHaveBeenCalledTimes(phase === "initial lookup" ? 0 : 1);
   },
 );
 
 it("keeps configured API-key fallback when OAuth credential resolution fails", async () => {
   resolveAuth.mockRejectedValueOnce(new Error("OAuth token refresh failed for xai"));
-  const result = await createAuthSearchTool({ apiKey: "configured-fallback-key" }).execute({
-    query: "configured search fallback after auth failure",
-  });
+  const result = await search("configured fallback", "fallback-key");
   expect(result.content).toContain("Grounded Grok answer");
   expect(new Headers(mockFetch.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
-    "Bearer configured-fallback-key",
+    "Bearer fallback-key",
   );
 });
 
@@ -81,7 +73,7 @@ it("reports genuinely absent credentials as a missing API key", async () => {
   resolveAuth.mockImplementationOnce(() =>
     requireApiKey({ source: "test", mode: "api-key" }, "xai"),
   );
-  const result = await createAuthSearchTool().execute({ query: "search without credentials" });
+  const result = await search("search without credentials");
   expect(result.error).toBe("missing_xai_api_key");
   expect(mockFetch).not.toHaveBeenCalled();
 });
@@ -100,10 +92,7 @@ it.each(["deadline", "caller"] as const)(
       started.resolve();
       return lookup.promise;
     });
-    const searching = createAuthSearchTool().execute(
-      { query: `search credential ${cancellation} cancellation` },
-      { signal: controller.signal },
-    );
+    const searching = search(`${cancellation} cancellation`, undefined, controller.signal);
     const rejected =
       cancellation === "caller"
         ? expect(searching).rejects.toBe(reason)
