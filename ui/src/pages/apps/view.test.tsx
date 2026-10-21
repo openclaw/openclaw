@@ -10,9 +10,7 @@ const EXPECTED_EXTERNAL_HREFS = [
   "https://apps.apple.com/app/openclaw-ai-that-does-things/id6780396132",
   "https://docs.openclaw.ai/platforms/ios",
   "https://play.google.com/store/apps/details?id=ai.openclaw.app",
-  "https://docs.openclaw.ai/platforms/android",
-  "https://docs.openclaw.ai/platforms/ios",
-  "https://docs.openclaw.ai/platforms/android",
+  ...["android", "ios", "android"].map((os) => `https://docs.openclaw.ai/platforms/${os}`),
   "https://github.com/openclaw/openclaw/releases",
   "https://docs.openclaw.ai/platforms/macos",
   "https://github.com/openclaw/openclaw-windows-node/releases/latest",
@@ -21,15 +19,10 @@ const EXPECTED_EXTERNAL_HREFS = [
   "https://docs.openclaw.ai/platforms/linux",
   "https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig",
   "https://docs.openclaw.ai/tools/chrome-extension",
-  "https://clawhub.ai",
-  "https://discord.gg/clawd",
-  "https://docs.openclaw.ai",
+  ...["clawhub.ai", "discord.gg/clawd", "docs.openclaw.ai"].map((host) => `https://${host}`),
 ];
 
-beforeEach(async () => {
-  document.body.innerHTML = "";
-  await i18n.setLocale("en");
-});
+beforeEach(() => i18n.setLocale("en"));
 
 function renderIntoContainer(props: Partial<Parameters<typeof Apps>[0]> = {}) {
   const container = document.createElement("div");
@@ -75,8 +68,7 @@ it("offers device pairing from the phone section only when permitted", () => {
   expect(renderIntoContainer().querySelector(".apps-pair-hint")).toBeNull();
 
   const onPairDevice = vi.fn();
-  const container = renderIntoContainer({ onPairDevice });
-  const hint = container.querySelector(".apps-pair-hint");
+  const hint = renderIntoContainer({ onPairDevice }).querySelector(".apps-pair-hint");
   expect(hint?.textContent).toContain("Already have the app?");
   hint?.querySelector("button")?.click();
   expect(onPairDevice).toHaveBeenCalledOnce();
