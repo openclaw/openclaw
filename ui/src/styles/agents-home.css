@@ -189,6 +189,12 @@
   color: var(--accent);
 }
 
+.agents-home__claw-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .agents-home__claw-art svg {
   width: 20px;
   height: 20px;

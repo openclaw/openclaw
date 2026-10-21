@@ -14,7 +14,9 @@ const suite = createControlUiE2eSuite({ name: "single widget chrome" });
 const sessionKey = "agent:main:dashboard:42d71fe0-1234-4567-8901-234567890abc";
 const chrome =
   ".board-widget__bar, .board-widget__drag-handle, .board-widget__resize-handle, .board-widget__grant-dot";
-const menuSelector = "openclaw-chat-header-session-menu";
+const menuSelector = ".chat-dashboard-menu";
+const widgetActions =
+  '[data-value^="resize:"], [data-value^="height:"], [data-value^="move:"], [data-value="page-move"], [data-value="remove"]';
 
 function snapshot(overrides: Partial<BoardSnapshot> = {}): BoardSnapshot {
   return {
@@ -86,21 +88,21 @@ async function openDashboard(page: Page, source: BoardSnapshot, readOnly = false
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
   await gateway.waitForRequest("board.get");
   await page.locator(".board-session-surface").waitFor();
-  if (await page.locator(".sidebar-region--mobile-host > .chat-mobile-host").isVisible()) {
+  if (await page.locator(".agent-chat__header--mobile").isVisible()) {
     await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
-    await selectChatLayoutAction(page, "Expand Side panel");
+    await selectChatLayoutAction(page, "Focus");
     await page.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
   } else {
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
   }
-  await page.locator(".chat-header-session-menu__trigger").waitFor();
+  await page.getByRole("button", { name: "Dashboard options", exact: true }).waitFor();
   return { gateway, board };
 }
 
-async function showHeaderMenu(page: Page, input: "pointer" | "keyboard" = "pointer") {
+async function showDashboardMenu(page: Page, input: "pointer" | "keyboard" = "pointer") {
   const menu = page.locator(menuSelector);
-  const surface = menu.locator(".chat-header-session-menu__panel");
-  const trigger = page.locator(".chat-header-session-menu__trigger");
+  const surface = menu.locator(".chat-dashboard-menu__panel");
+  const trigger = page.locator(".chat-dashboard-menu__trigger");
   if (input === "keyboard") {
     await trigger.focus();
     await page.keyboard.press("Enter");
@@ -108,7 +110,7 @@ async function showHeaderMenu(page: Page, input: "pointer" | "keyboard" = "point
     await trigger.click();
   }
   await surface.waitFor({ state: "visible" });
-  await expect.poll(() => surface.getAttribute("data-phase")).toBe("open");
+  await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
   return menu;
 }
 
@@ -131,24 +133,31 @@ suite.define(() => {
         await widget.focus();
         expect(await widget.locator(chrome).count()).toBe(0);
 
-        await showHeaderMenu(page);
+        await showDashboardMenu(page);
         await page.keyboard.press("Escape");
-        const menu = await showHeaderMenu(page, "keyboard");
+        const menu = await showDashboardMenu(page, "keyboard");
         const capabilities = menu.getByRole("note", { name: "Active widget capabilities" });
         await capabilities.waitFor({ state: "visible" });
         expect(await capabilities.textContent()).toContain("Tool: health");
-        await menu.locator('[value="board-widget:resize:xl"]').waitFor();
+        await menu.locator('[data-value="resize:xl"]').waitFor();
         const itemFonts = await menu.evaluate((element) =>
-          Array.from(
-            element.querySelectorAll('[role^="menuitem"]'),
-            (item) => getComputedStyle(item).font,
-          ),
+          Array.from(element.querySelectorAll('[role^="menuitem"]'), (item) => {
+            const style = getComputedStyle(item);
+            // Numeric presets use tabular-nums, which prevents font shorthand serialization.
+            return [
+              style.fontFamily,
+              style.fontSize,
+              style.fontWeight,
+              style.fontStyle,
+              style.lineHeight,
+            ].join(" / ");
+          }),
         );
         expect([...new Set(itemFonts)]).toEqual([expect.any(String)]);
 
         const resized = { ...board, revision: 2 };
         await gateway.setMethodResponse("board.update", resized);
-        await menu.locator('[value="board-widget:resize:xl"]').click();
+        await menu.locator('[data-value="resize:xl"]').click();
         const resize = await gateway.waitForRequest("board.update");
         expect(resize.params).toMatchObject({
           sessionKey,
@@ -171,8 +180,8 @@ suite.define(() => {
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await widget.focus();
         expect(await widget.locator(chrome).count()).toBe(0);
-        const splitMenu = await showHeaderMenu(page);
-        await splitMenu.locator('[value="board-widget:resize:xl"]').waitFor();
+        const splitMenu = await showDashboardMenu(page);
+        await splitMenu.locator('[data-value="resize:xl"]').waitFor();
         await page.keyboard.press("Escape");
 
         await selectChatLayoutAction(page, "Focus");
@@ -194,8 +203,8 @@ suite.define(() => {
         await updateBoard(gateway, multiple);
         await expect.poll(() => page.locator(".board-widget").count()).toBe(2);
         await widget.locator(".board-widget__menu-trigger").waitFor({ state: "attached" });
-        await showHeaderMenu(page);
-        expect(await page.locator(menuSelector + ' [value^="board-widget:"]').count()).toBe(0);
+        await showDashboardMenu(page);
+        expect(await page.locator(menuSelector).locator(widgetActions).count()).toBe(0);
         await page.keyboard.press("Escape");
         expect(await frame.evaluate((element, previous) => element === previous, original)).toBe(
           true,
@@ -217,20 +226,22 @@ suite.define(() => {
         await expect.poll(() => widget.locator(chrome).count()).toBe(0);
         await page.getByRole("tab", { name: "Research", exact: true }).click();
         await page.locator('[data-widget-name="research-widget"]').waitFor();
-        const researchMenu = await showHeaderMenu(page);
+        const researchMenu = await showDashboardMenu(page);
         expect(
-          await researchMenu.locator(".board-widget__page-menu-heading").textContent(),
-        ).toContain("Research widget");
+          await page
+            .getByRole("tab", { name: "Research", exact: true })
+            .getAttribute("aria-selected"),
+        ).toBe("true");
         await gateway.setMethodResponse("board.update", { ...board, revision: 5 });
-        await researchMenu.locator('[value="board-widget:remove"]').click();
+        await researchMenu.locator('[data-value="remove"]').click();
         const remove = await gateway.waitForRequest("board.update", { after: 1 });
         expect(remove.params).toMatchObject({
           sessionKey,
           ops: [{ kind: "widget_remove", name: "research-widget" }],
         });
         await page.locator('[data-test-id="board-empty"]').waitFor();
-        await showHeaderMenu(page);
-        expect(await page.locator(menuSelector + ' [value^="board-widget:"]').count()).toBe(0);
+        await showDashboardMenu(page);
+        expect(await page.locator(menuSelector).locator(widgetActions).count()).toBe(0);
         await page.keyboard.press("Escape");
         await page.getByRole("tab", { name: "Overview", exact: true }).click();
         await frame.waitFor();
@@ -264,12 +275,8 @@ suite.define(() => {
             await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches),
           ).toBe(false);
           expect(await widget.locator(chrome).count()).toBe(0);
-          await selectChatLayoutAction(page, "Restore split");
-          await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
-          const menu = await showHeaderMenu(page);
-          expect(await menu.locator('[value="board-widget:remove"]').count()).toBe(
-            readOnly ? 0 : 1,
-          );
+          const menu = await showDashboardMenu(page);
+          expect(await menu.locator('[data-value="remove"]').count()).toBe(readOnly ? 0 : 1);
           expect(await gateway.getRequests("board.update")).toHaveLength(0);
         },
       );

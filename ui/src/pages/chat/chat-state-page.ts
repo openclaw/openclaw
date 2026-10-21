@@ -149,6 +149,7 @@ export function createPageState(
     canvasPluginSurfaceUrl: null,
     terminalAvailable: false,
     browserPanelAvailable: false,
+    browserPanelUnavailableReason: "disconnected",
     assistantAgentId: context.agentSelection.state.selectedId,
     sessionKey: initialSessionKey,
     currentSessionId: undefined,
@@ -530,7 +531,7 @@ export function createPageState(
     }
     // Internal catalog navigation updates the retained reader, never the panel selection.
     if (content?.fileTab?.intent === "navigate") {
-      return;
+      return undefined;
     }
     const targetSlot = fileTab ? "workspace" : "detail";
     let opened = openSlot(state.sidebarLayout, targetSlot);
@@ -549,6 +550,7 @@ export function createPageState(
     if (targetPanel) {
       state.updateSidebarActivePanel(targetPanel.id);
     }
+    return targetSlot;
   };
   state.handleCloseSidebar = (slot) => {
     if (slot === "workspace") {

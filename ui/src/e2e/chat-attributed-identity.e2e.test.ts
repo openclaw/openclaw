@@ -414,6 +414,14 @@ suite.define(() => {
         await expect(longNamePeerGroup).not.toHaveClass(/\bchat-group--meta-revealed\b/u);
       }
 
+      // Leave the mobile editor before measuring metadata-only interactions.
+      // Otherwise focus transfer also collapses the composer and changes the scroll range.
+      await page.locator(".chat-thread").focus();
+      await expect(page.locator(".agent-chat__composer-shell")).toHaveAttribute(
+        "data-composer-editing",
+        "false",
+      );
+      await waitForChatScrollIdle(page);
       for (const group of [
         userGroups.first(),
         peerGroup,

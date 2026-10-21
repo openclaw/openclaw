@@ -33,11 +33,17 @@ suite.define(() => {
             sessionKey: original.key,
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, original.key));
-          const header = page.locator(".chat-pane-cache__pane--active .chat-pane__header");
+          const header = page.locator(
+            mobile
+              ? ".chat-pane-cache__pane--active .agent-chat__header--mobile"
+              : ".chat-pane-cache__pane--active .chat-pane__header",
+          );
           const actions = header.locator(".chat-header-session-menu__trigger");
           const openRename = async () => {
             await actions.click();
-            await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
+            await page
+              .getByRole("menuitem", { name: mobile ? "Rename" : "Rename…", exact: true })
+              .click();
           };
           await openRename();
           const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
@@ -93,7 +99,11 @@ suite.define(() => {
           expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
           await input.waitFor({ state: "detached" });
           await expect
-            .poll(() => header.locator(".chat-pane__session-title-text").textContent())
+            .poll(() =>
+              header
+                .locator(mobile ? ".mobile-header__title-text" : ".chat-pane__session-title-text")
+                .textContent(),
+            )
             .toContain("Renamed from Actions");
         },
       );

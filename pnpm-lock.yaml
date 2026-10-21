@@ -952,9 +952,6 @@ importers:
 
   extensions/clickclack:
     dependencies:
-      ws:
-        specifier: 8.22.0
-        version: 8.22.0
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -965,6 +962,9 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+      ws:
+        specifier: 8.22.0
+        version: 8.22.0
 
   extensions/cloudflare:
     dependencies:

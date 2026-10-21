@@ -8,6 +8,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Shell presentation continuity" });
@@ -74,12 +75,11 @@ suite.define(() => {
           };
           const prefix = `${width}-${colorScheme}`;
           await saveFrame(page, `${prefix}-navigation-initial`, [shell]);
-          await page
-            .locator(
-              '.topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible, [data-navigation-view][aria-pressed="true"]:visible',
-            )
-            .first()
-            .click();
+          const navigationToggle =
+            width < 900
+              ? navigationDrawerToggle(page)
+              : page.locator('[data-navigation-view][aria-pressed="true"]:visible');
+          await navigationToggle.click();
           if (width < 900) {
             await page.locator(".shell--nav-drawer-open").waitFor();
             await saveFrame(page, `${prefix}-drawer-open`, [shell, sidebar.locator(".sidebar")]);

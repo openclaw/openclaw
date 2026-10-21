@@ -61,8 +61,8 @@ export function defineQuestionFooterTests({
           },
         },
       });
-      const pullRequest = page.locator(".chat-pr__link");
-      await openDetailsPullRequests(page);
+      const pullRequests = await openDetailsPullRequests(page);
+      const pullRequest = pullRequests.locator(".chat-pr-mobile__row");
       await pullRequest.waitFor();
       await page.keyboard.press("Escape");
       await draft.fill("Keep this follow-up draft");

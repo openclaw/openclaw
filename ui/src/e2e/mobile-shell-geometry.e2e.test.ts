@@ -7,9 +7,10 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   closeChatDetails,
-  openChatDetails,
+  openChatTaskProgress,
   openDetailsPullRequests,
 } from "./chat-details.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
@@ -88,11 +89,15 @@ async function expectReachableAction(
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(visibleBottom);
   const point = { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
   if (mobile) {
-    // Compact Send is 36px, Stop 32px; model/effort retain independent 44px targets.
-    const compact = await page
-      .locator(".agent-chat__input")
-      .evaluate((element) => element.getBoundingClientRect().width <= 560);
-    const targetSize = compact && label === "Send message" ? 36 : 32;
+    const { compact, resting, narrowViewport } = await page
+      .locator(".agent-chat__composer-shell")
+      .evaluate((element) => ({
+        compact: element.getBoundingClientRect().width <= 560,
+        resting: element.matches('[data-mobile-composer="true"][data-composer-editing="false"]'),
+        narrowViewport: matchMedia("(max-width: 560px)").matches,
+      }));
+    const targetSize =
+      label === "Stop generating" && narrowViewport ? 32 : resting || compact ? 36 : 32;
     expect([bounds!.width, bounds!.height]).toEqual([targetSize, targetSize]);
     for (const picker of await page
       .locator(".chat-controls__model-trigger, .chat-controls__effort-trigger")
@@ -310,7 +315,15 @@ suite.define(() => {
         }
         const firstMessage = page.locator(".chat-group.user").first();
         const bubble = firstMessage.locator(".chat-bubble").first();
-        const details = page.locator(".chat-pane__layout-trigger");
+        const details = page
+          .locator(".mobile-header__title")
+          .or(
+            page
+              .getByRole("button", { name: "Details", exact: true })
+              .and(page.locator(".chat-details-toggle")),
+          )
+          .filter({ visible: true })
+          .first();
         await takeControlUiScreenshotFrame(page, bubble, [details, textarea], {
           animations: "disabled",
         });
@@ -352,8 +365,12 @@ suite.define(() => {
             },
           },
         });
-        await openDetailsPullRequests(page);
-        await expect(page.locator('.chat-pr[data-state="merged"]').first()).toBeVisible();
+        const pullRequests = await openDetailsPullRequests(page);
+        const mergedRequest = pullRequests
+          .locator('.chat-pr[data-state="merged"], .chat-pr-mobile__row[data-state="merged"]')
+          .first();
+        await expect(mergedRequest).toBeVisible();
+        await expect(mergedRequest).toContainText("Synthetic mobile layout repair");
         const setProgress = async (
           revision: number,
           markdown: string,
@@ -378,7 +395,8 @@ suite.define(() => {
           { step: "Verify the controls", status: "completed" },
           { step: "Review the result", status: "completed" },
         ]);
-        await expect(page.locator('[data-progress-card-placement="details"]')).toBeVisible();
+        const progress = await openChatTaskProgress(page);
+        await expect(progress).toContainText("Mobile layout checks completed.");
         await closeChatDetails(page);
         const chat = await geometry(page);
         await textarea.fill("Please continue the layout check.");
@@ -395,14 +413,13 @@ suite.define(() => {
           { step: "Inspect the layout", status: "completed" },
           { step: "Verify the controls", status: "in_progress" },
         ]);
-        const progress = page.locator('[data-progress-card-placement="details"]');
         // A progress update must not reopen explicitly closed Details.
         await expect(progress).toBeHidden();
         if (mobile) {
           await expect(page.locator(".chat-mobile-host")).toBeHidden();
         }
-        await openChatDetails(page);
-        await expect(progress).toBeVisible();
+        const updatedProgress = await openChatTaskProgress(page);
+        await expect(updatedProgress).toContainText("Checking the usable mobile canvas.");
         const withProgress = await geometry(page);
         await closeChatDetails(page);
         if (mobile) {
@@ -470,14 +487,12 @@ suite.define(() => {
             expect(bounds.top, surfaceName).toBeGreaterThanOrEqual(top);
             expect(bounds.bottom, surfaceName).toBeLessThanOrEqual(height);
           };
+          await textarea.tap();
           await page.locator("[data-chat-model-select]").click();
           await expect(page.locator(".chat-controls__model-menu")).toBeVisible();
           await readSurface(".chat-controls__model-menu", "model-menu");
           await page.keyboard.press("Escape");
-          await page
-            .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-            .first()
-            .click();
+          await navigationDrawerToggle(page).click();
           await expect(page.locator(".shell--nav-drawer-open")).toBeVisible();
           await readSurface(".shell-nav", "drawer");
           await page.getByRole("button", { name: "Filter & sort", exact: true }).click();

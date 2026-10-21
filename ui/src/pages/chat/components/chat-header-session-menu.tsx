@@ -120,8 +120,11 @@ const VIEW_SETTINGS = [
   ["commentary", "chatPersistCommentary", "chat.view.commentary", undefined],
 ] as const;
 
-type HeaderMenuMethods = { openMenu(): boolean };
-const openMenus = new WeakMap<HTMLElement, () => boolean>();
+type HeaderMenuMethods = {
+  openMenu(): boolean;
+  readTrigger(): HTMLElement | undefined;
+};
+const menus = new WeakMap<HTMLElement, () => MenuHandle | undefined>();
 let nextMenuId = 0;
 
 function ChatHeaderSessionMenuContent(
@@ -151,6 +154,7 @@ function ChatHeaderSessionMenuContent(
   const close = () => {
     menu?.close();
   };
+  const onAction = (action: HeaderMenuAction) => props.onAction(action);
   const actions = new SessionMenuActions(
     {
       get updateComplete() {
@@ -165,7 +169,7 @@ function ChatHeaderSessionMenuContent(
       },
     },
     readState,
-    (action) => props.onAction(action),
+    onAction,
     close,
     createSessionOwnerMenu(presented, preparation),
   );
@@ -200,14 +204,14 @@ function ChatHeaderSessionMenuContent(
     ),
     controls,
   );
-  openMenus.set(host, () => menu?.open() ?? false);
+  menus.set(host, () => menu);
   const shortcut = (event: KeyboardEvent) => {
     if (props.paneTitle !== undefined || !actions.handleKeydown(event, view.appearance)) {
       activateMenuShortcut(menu?.overlay.surface, event);
     }
   };
   onCleanup(() => {
-    openMenus.delete(host);
+    menus.delete(host);
     stopShortcut?.();
   });
   const content = (id: string, value: JSX.Element): MenuEntry => ({
@@ -466,6 +470,9 @@ function ChatHeaderSessionMenuContent(
         (candidate) => candidate.id === value.slice("layout:".length),
       );
       if (action && action.kind !== "status" && !action.disabled) {
+        // Restore the pane trigger before an action can remove its menu and pane.
+        event.preventDefault();
+        close();
         void action.onActivate();
       }
       return;
@@ -515,7 +522,7 @@ function ChatHeaderSessionMenuContent(
       value.startsWith("public:")
     ) {
       if (props.sharing) {
-        selectChatSessionSharingItem(props.sharing, value);
+        void selectChatSessionSharingItem(props.sharing, value);
       }
       return;
     }
@@ -594,7 +601,10 @@ export const ChatHeaderSessionMenu = defineSolidBridge<HeaderMenuProps, HeaderMe
   "openclaw-chat-header-session-menu",
   ChatHeaderSessionMenuContent,
   {
-    methods: { openMenu: (host) => openMenus.get(host)?.() ?? false },
+    methods: {
+      openMenu: (host) => menus.get(host)?.()?.open() ?? false,
+      readTrigger: (host) => menus.get(host)?.()?.overlay.trigger ?? undefined,
+    },
     properties: {
       session: { default: EMPTY_SESSION_MENU_DATA, attribute: false },
       paneTitle: { default: undefined, attribute: false },

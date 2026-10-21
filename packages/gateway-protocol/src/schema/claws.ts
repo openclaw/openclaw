@@ -24,6 +24,7 @@ export const ClawsCatalogSearchParamsSchema = closedObject({
 export const ClawsCatalogEntrySchema = closedObject({
   packageName: ClawPackageName,
   displayName: NonEmptyString,
+  iconUrl: Type.Optional(NonEmptyString),
   summary: Type.Optional(Type.String()),
   latestVersion: Type.Optional(NonEmptyString),
   channel: Type.Union([Type.Literal("official"), Type.Literal("community")]),

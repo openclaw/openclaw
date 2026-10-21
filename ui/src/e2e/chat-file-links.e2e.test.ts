@@ -280,27 +280,35 @@ suite.define(() => {
           path: "",
         },
       };
+      const fileResponse = (content: string, hash: string) => ({
+        cases: ["README.md", "/workspace/packages/app/README.md"].map((requestPath) => ({
+          match: { path: requestPath },
+          response: {
+            root: "/workspace",
+            sessionKey,
+            file: fileInfo("README.md", {
+              previewKind: "text",
+              contentEncoding: "utf8",
+              content,
+              hash,
+              kind: "modified",
+              workspacePath: "packages/app/README.md",
+              path: requestPath.replace(/^\/workspace\//, ""),
+            }),
+          },
+        })),
+      });
       const gateway = await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, "sessions.files.set", "sessions.diff"],
-        historyMessages: [chatMessage("assistant", "Review `README.md:2`.", { timestamp: 1 })],
+        historyMessages: [
+          chatMessage(
+            "assistant",
+            "Review `README.md:2` or `/workspace/packages/app/README.md:3`.",
+            { timestamp: 1 },
+          ),
+        ],
         methodResponses: {
-          "sessions.files.get": {
-            cases: ["README.md", "/workspace/packages/app/README.md"].map((requestPath) => ({
-              match: { path: requestPath },
-              response: {
-                root: "/workspace",
-                file: fileInfo("README.md", {
-                  previewKind: "text",
-                  contentEncoding: "utf8",
-                  content: initialText,
-                  hash: "before-hash",
-                  kind: "modified",
-                  workspacePath: "packages/app/README.md",
-                  path: requestPath.replace(/^\/workspace\//, ""),
-                }),
-              },
-            })),
-          },
+          "sessions.files.get": fileResponse(initialText, "before-hash"),
           "sessions.files.list": listing,
           "sessions.files.set": {
             sessionKey,
@@ -321,7 +329,9 @@ suite.define(() => {
       await openChatSidePanelType(page, "Review");
       await gateway.waitForRequest("sessions.diff");
       await openChatSidePanelType(page, "Files");
-      await exactButton(page, "1 changed").click();
+      const workspace = page.getByRole("complementary", { name: "Session workspace", exact: true });
+      await workspace.getByRole("button", { name: "Filter files: All", exact: true }).click();
+      await workspace.getByRole("menuitemradio", { name: "Changed", exact: true }).click();
       const chatLink = page.locator('a.markdown-file-link[data-file-path="README.md"]');
       await chatLink.waitFor({ state: "visible" });
       await chatLink.click();
@@ -344,19 +354,20 @@ suite.define(() => {
       ).toMatchObject({
         path: "packages/app",
       });
-      await expect
-        .poll(() =>
-          page
-            .getByRole("group", { name: "Filter files", exact: true })
-            .getByRole("button", { name: "All", exact: true })
-            .getAttribute("aria-pressed"),
-        )
-        .toBe("true");
-      const browserRow = page
-        .locator(".chat-workspace-rail__list--browser .chat-workspace-rail__file")
-        .filter({ hasText: "README.md" });
-      await browserRow.locator(".chat-workspace-rail__file-open").click();
+      await workspace.getByRole("button", { name: "Filter files: All", exact: true }).waitFor();
+      const browserRow = workspace.getByRole("button", { name: "README.md", exact: true });
+      await browserRow.click();
       await fileView.waitFor({ state: "visible" });
+      await gateway.waitForRequest("sessions.files.get", { after: 1 });
+      expect((await gateway.getRequests("sessions.files.get"))[1]?.params).toMatchObject({
+        path: "README.md",
+      });
+      // The unified catalog keeps session origin; an authored absolute link exercises alias deduplication.
+      await page
+        .locator('a.markdown-file-link[data-file-path="/workspace/packages/app/README.md"]')
+        .click();
+      await polledAttribute(fileView.locator(".file-view__line--target"), "data-line").toBe("3");
+      await polledAttribute(browserRow, "aria-current").toBe("true");
       expect(
         await page
           .locator(".side-panel__header .tabstrip-tab")
@@ -364,19 +375,20 @@ suite.define(() => {
           .count(),
       ).toBe(1);
       const reads = await gateway.getRequests("sessions.files.get");
-      expect(reads).toHaveLength(2);
-      expect(reads[1]?.params).toMatchObject({ path: "/workspace/packages/app/README.md" });
+      expect(reads).toHaveLength(3);
+      expect(reads[2]?.params).toMatchObject({ path: "/workspace/packages/app/README.md" });
       expect(await originalEditor!.evaluate((element) => element.isConnected)).toBe(true);
       expect(await fileView.locator(".file-view__line--target").getAttribute("data-line")).toBe(
-        "2",
+        "3",
       );
       await selectFileAction(fileView, "Show in Files");
-      const search = page.locator('.chat-workspace-rail input[type="search"]');
+      await workspace.getByRole("button", { name: "Search files", exact: true }).click();
+      const search = workspace.getByRole("searchbox", { name: "Search files", exact: true });
       await search.fill("README");
       await expect
         .poll(async () => (await gateway.getRequests("sessions.files.list")).at(-1)?.params)
         .toMatchObject({ search: "README" });
-      await browserRow.locator(".chat-workspace-rail__file-open").click();
+      await browserRow.click();
       await selectFileAction(fileView, "Edit file");
       await fileView.locator(".cm-content").fill(savedText);
       await gateway.setMethodResponse("sessions.files.list", {
@@ -401,10 +413,15 @@ suite.define(() => {
       await openChatSidePanelType(page, "Files");
       await search.waitFor({ state: "visible" });
       expect(await search.inputValue()).toBe("README");
-      const metadata = page.locator(".chat-workspace-rail__file-meta");
-      await expect
-        .poll(() => metadata.allTextContents())
-        .toEqual([`${savedSize} B`, `packages/app/README.md / ${savedSize} B`]);
+      await gateway.setMethodResponse("sessions.files.get", fileResponse(savedText, "after-hash"));
+      const beforeReopen = (await gateway.getRequests("sessions.files.get")).length;
+      await browserRow.click();
+      await fileView.waitFor({ state: "visible" });
+      await selectFileAction(fileView, "Edit file");
+      await polledText(fileView.locator(".cm-content")).toContain(
+        "Saved workspace notes — café 雪 🦞.",
+      );
+      expect(await gateway.getRequests("sessions.files.get")).toHaveLength(beforeReopen + 1);
     });
   });
 
@@ -459,10 +476,10 @@ suite.define(() => {
       });
       const openPreview = async (filePath: string) => {
         await openChatSidePanelType(page, "Files");
-        const fileRow = page
-          .locator(".chat-workspace-rail__list--browser .chat-workspace-rail__file")
-          .filter({ hasText: filePath });
-        await fileRow.locator(".chat-workspace-rail__file-open").click();
+        await page
+          .getByRole("complementary", { name: "Session workspace", exact: true })
+          .getByRole("button", { name: filePath, exact: true })
+          .click();
       };
       const closePreview = async (filePath: string) => {
         await exactButton(page, `Close tab: ${filePath}`).click();
@@ -470,7 +487,6 @@ suite.define(() => {
       };
 
       await page.goto(`${suite.server.baseUrl}chat`);
-
       await openPreview("notes.txt");
       await page.locator(".sidebar-file-view").waitFor({ state: "visible" });
       expect(await page.locator(".cm-content").textContent()).toContain(
@@ -498,7 +514,7 @@ suite.define(() => {
       await status.waitFor({ state: "visible" });
       expect(await status.textContent()).toContain("Preview unavailable");
       expect(await status.textContent()).toContain("Download this file to view it on your device.");
-      expect(await fallback.getByText("unsupported-binary.bmp", { exact: true }).isVisible()).toBe(
+      expect(await fallback.getByLabel("unsupported-binary.bmp", { exact: true }).isVisible()).toBe(
         true,
       );
       expect(
@@ -590,16 +606,23 @@ suite.define(() => {
           await card.getByRole("button", { name: "Open full file" }).click();
           const fileView = page.locator(".sidebar-file-view");
           await fileView.waitFor();
-          const readingMode = fileView
-            .getByRole("button", { name: /^Reading mode:/ })
+          const sourceButton = fileView
+            .getByRole("button", { name: "Source", exact: true })
             .filter({ visible: true });
-          if (await readingMode.isVisible()) {
-            await readingMode.click();
-            await fileView
-              .getByRole("menuitemradio", { name: "Highlighted source", exact: true })
-              .click();
+          if (await sourceButton.isVisible()) {
+            await sourceButton.click();
           } else {
-            await selectFileAction(fileView, "Highlighted source");
+            const readingMode = fileView
+              .getByRole("button", { name: /^Reading mode:/ })
+              .filter({ visible: true });
+            if (await readingMode.isVisible()) {
+              await readingMode.click();
+              await fileView
+                .getByRole("menuitemradio", { name: "Highlighted source", exact: true })
+                .click();
+            } else {
+              await selectFileAction(fileView, "Highlighted source");
+            }
           }
           await fileView.locator(".cm-scroller").hover();
           await page.mouse.wheel(0, 30_000);

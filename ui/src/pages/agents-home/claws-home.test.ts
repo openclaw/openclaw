@@ -38,6 +38,7 @@ function createDetail(options: Parameters<typeof createPage>[0] = {}) {
   const find = (selector: string) => detail.querySelector<HTMLElement>(selector);
   return {
     ...fixture,
+    detail,
     find,
     calls: (method: string) => fixture.request.mock.calls.filter(([name]) => name === method),
     add: async () => {
@@ -239,3 +240,22 @@ it("requires both consents when trust and plugin review are needed", async () =>
     planIntegrity: "sha256:reviewed-plan",
   });
 });
+
+it.each(["card", "detail"])(
+  "shows Claw artwork and falls back on an image error in the %s",
+  async (surface) => {
+    const clawIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`;
+    const options = { clawIconUrl };
+    const container = surface === "card" ? createPage(options).page : createDetail(options).detail;
+    const selector = surface === "card" ? ".agents-home__claw-art" : ".plugin-catalog-detail__icon";
+    await waitForSolid(() =>
+      expect(container.querySelector(`${selector} img`)?.getAttribute("src")).toBe(clawIconUrl),
+    );
+    const image = container.querySelector(`${selector} img`)!;
+    expect(image.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(image.getAttribute("crossorigin")).toBe("anonymous");
+    image.dispatchEvent(new Event("error"));
+    await waitForSolid(() => expect(container.querySelector(`${selector} img`)).toBeNull());
+    expect(container.querySelector(`${selector} svg`)).not.toBeNull();
+  },
+);

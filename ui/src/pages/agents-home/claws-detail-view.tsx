@@ -8,6 +8,7 @@ import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "../plugins/detail-shell.tsx";
 import { PluginInstallAction } from "../plugins/install-action.tsx";
 import { renderPluginCapabilitySection, renderPublisherIdentity } from "../plugins/overview.tsx";
+import { ClawArtwork } from "./claw-artwork.tsx";
 import type { ClawAddReviewPlan } from "./claws-catalog-client.ts";
 import type { ClawsCatalogViewProps } from "./claws-catalog-view-props.ts";
 import { renderClawTrustWarning } from "./claws-trust-warning.tsx";
@@ -216,7 +217,7 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
                 backHref={pathForRoute("agents-home", view().basePath)}
                 backLabel="Agents"
                 onBack={view().onBack}
-                icon={<Icon name="box" />}
+                icon={<ClawArtwork src={detail() ? detail()?.iconUrl : selected().iconUrl} />}
                 identity={renderPublisherIdentity({
                   name:
                     publisher().ownerHandle === "openclaw" ? "OpenClaw" : publisher().ownerHandle,

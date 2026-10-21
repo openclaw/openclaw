@@ -111,14 +111,39 @@ test("sessions.create preserves creation and notices after an unknown signal out
   });
   expect(synthetic.payload?.entry?.createdActor).toBeUndefined();
 
-  for (const { actor, sandbox } of [
-    { actor: { type: "agent", id: "main" }, sandbox: undefined },
+  const isolationActor = {
+    type: "human",
+    source: "profile",
+    id: "profile-isolation-owner",
+  } as const;
+  const causalCreator = {
+    type: "human",
+    source: "profile",
+    id: "profile-delegated-creator",
+  } as const;
+  const agentActor = { type: "agent", id: "main" } as const;
+  for (const { actor, sandbox, expectedCreator, expectedStoredActor } of [
     {
-      actor: { type: "human", source: "profile", id: "profile-delegated-creator" },
+      actor: agentActor,
+      sandbox: undefined,
+      expectedCreator: agentActor,
+      expectedStoredActor: agentActor,
+    },
+    {
+      actor: isolationActor,
       sandbox: "required",
+      expectedCreator: { type: "agent" },
+      expectedStoredActor: { ...isolationActor, delegatedBy: { type: "agent" } },
+    },
+    {
+      actor: { ...isolationActor, delegatedBy: causalCreator },
+      sandbox: "required",
+      expectedCreator: causalCreator,
+      expectedStoredActor: { ...isolationActor, delegatedBy: causalCreator },
     },
   ] as const) {
-    // The required parent's creation policy survives removal of gateway.roles.
+    // Trusted creation hints retain causal attribution separately from required isolation.
+    // A selected human isolation identity alone does not prove a human initiated the work.
     const hinted = await directSessionReq<{
       key?: string;
       entry?: { createdVia?: string; createdActor?: unknown; sandbox?: "required" };
@@ -141,11 +166,15 @@ test("sessions.create preserves creation and notices after an unknown signal out
       },
     );
     expect(hinted.ok, JSON.stringify(hinted.error)).toBe(true);
-    expect(hinted.payload?.entry).toMatchObject({ createdVia: "spawn", createdActor: actor });
+    expect(hinted.payload?.entry).toMatchObject({
+      createdVia: "spawn",
+      createdActor: expectedCreator,
+    });
     expect(hinted.payload?.entry?.sandbox).toBe(sandbox);
     const hintedKey = expectDefined(hinted.payload?.key, "delegated session key");
     const stored = loadSessionEntry({ sessionKey: hintedKey, storePath });
-    expect(stored).toMatchObject({ createdVia: "spawn", createdActor: actor });
+    expect(stored?.createdVia).toBe("spawn");
+    expect(stored?.createdActor).toEqual(expectedStoredActor);
     expect(stored?.sandbox).toBe(sandbox);
   }
 });

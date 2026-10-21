@@ -208,7 +208,7 @@ suite.define(() => {
     // Desktop renders no topbar row: the sidebar owns navigation.
     await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
 
-    const layout = page.getByRole("button", { name: "Layout", exact: true });
+    const layout = page.locator(".chat-pane__identity-actions .chat-header-session-menu__trigger");
     await expect.poll(() => layout.isVisible()).toBe(true);
     await expectCount(page.locator(".chat-pane__header"), 1);
     const taskHeader = page.locator(".chat-pane__header");
@@ -296,29 +296,38 @@ suite.define(() => {
         return visible.every(Boolean);
       })
       .toBe(true);
-    // Each pane keeps a single Layout menu for its own panels and split actions.
-    await expectCount(headers.first().locator(".chat-pane__layout-menu"), 1);
+    // Each pane retains its own native session Actions; panel controls live in the frame.
+    await expectCount(headers.first().locator("openclaw-chat-header-session-menu"), 1);
     await expectCount(page.locator(".chat-workspace-rail"), 0);
 
     const cells = page.locator(".chat-split-view__cell");
     const actionRows = headers.locator(".chat-pane__actions");
-    expect(
-      await headers.first().getByRole("button", { name: "Details", exact: true }).isVisible(),
-    ).toBe(true);
-    await expect
-      .poll(() => headers.first().getByRole("button", { name: "Layout", exact: true }).isVisible())
-      .toBe(false);
-    await expect.poll(() => actionRows.last().isVisible()).toBe(true);
+    const visibleActionLabels = () =>
+      Promise.all(
+        [0, 1].map((index) =>
+          actionRows
+            .nth(index)
+            .getByRole("button")
+            .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
+        ),
+      );
+    const activeActions = expect.arrayContaining(["Details"]);
+    await expect.poll(visibleActionLabels).toEqual([["Details"], activeActions]);
+    expect(await headers.last().locator(".chat-header-session-menu__trigger").isVisible()).toBe(
+      true,
+    );
+    for (const header of await headers.all()) {
+      expect(await header.getByRole("button", { name: "Details", exact: true }).isEnabled()).toBe(
+        true,
+      );
+    }
 
     await panes.first().click({ position: { x: 20, y: 80 } });
     await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
-    await expect.poll(() => actionRows.first().isVisible()).toBe(true);
-    expect(
-      await headers.last().getByRole("button", { name: "Details", exact: true }).isVisible(),
-    ).toBe(true);
-    await expect
-      .poll(() => headers.last().getByRole("button", { name: "Layout", exact: true }).isVisible())
-      .toBe(false);
+    await expect.poll(visibleActionLabels).toEqual([activeActions, ["Details"]]);
+    expect(await headers.first().locator(".chat-header-session-menu__trigger").isVisible()).toBe(
+      true,
+    );
     const paneEmphasis = await cells.evaluateAll((nodes) =>
       nodes.map((cell) => {
         const style = getComputedStyle(cell);
@@ -338,13 +347,10 @@ suite.define(() => {
     const lastPane = page.locator(".chat-split-view__pane").last();
     await lastPane.click({ position: { x: 20, y: 80 } });
     await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
-    expect(
-      await headers.first().getByRole("button", { name: "Details", exact: true }).isVisible(),
-    ).toBe(true);
-    await expect
-      .poll(() => headers.first().getByRole("button", { name: "Layout", exact: true }).isVisible())
-      .toBe(false);
-    await expect.poll(() => actionRows.last().isVisible()).toBe(true);
+    await expect.poll(visibleActionLabels).toEqual([["Details"], activeActions]);
+    expect(await headers.last().locator(".chat-header-session-menu__trigger").isVisible()).toBe(
+      true,
+    );
     const targetHeader = headers.first();
     const headerGeometry = await headers.evaluateAll((nodes) =>
       nodes.map((header) => {
@@ -367,7 +373,8 @@ suite.define(() => {
       }),
     );
     for (const geometry of headerGeometry) {
-      expect(geometry.height).toBeGreaterThan(0);
+      expect(geometry.height).toBe(44);
+      expect(geometry.toggleReserve).toBe(32);
       expect(Math.max(geometry.left, geometry.right, geometry.gap)).toBeLessThanOrEqual(1);
     }
 

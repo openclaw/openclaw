@@ -5,6 +5,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
@@ -116,9 +117,7 @@ suite.define(() => {
           });
           await page.goto(`${suite.server.baseUrl}chat`);
           await waitForControlUiRoute(page, { routeId: "chat" });
-          const drawerToggle = page
-            .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-            .first();
+          const drawerToggle = navigationDrawerToggle(page);
           if (
             await page
               .locator(".shell")
