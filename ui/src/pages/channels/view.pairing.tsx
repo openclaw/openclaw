@@ -11,7 +11,7 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
-import type { ChannelPairingRead, ChannelsState } from "../../lib/channels/index.ts";
+import type { ChannelRead, ChannelsState } from "../../lib/channels/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -145,7 +145,7 @@ function PairingRequest(props: ChannelsProps & { request: ChannelsPairingRequest
   );
 }
 
-function PairingReadSettled(props: { receipt: ChannelPairingRead; children: JSX.Element }) {
+function PairingReadSettled(props: { receipt: ChannelRead; children: JSX.Element }) {
   const ready = createMemo(async () => {
     const error = await props.receipt.completion;
     if (error !== null) {

@@ -3,14 +3,20 @@ import { Show, onSettled, createMemo, createSignal, merge } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
 import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
 import { ChatDetailsContextContent, ChatDetailsContextSummary } from "./chat-details-context.tsx";
-import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
+import {
+  animateDetailsDesktopEntrance,
+  ChatDetailsDesktopSection,
+} from "./chat-details-desktop-section.tsx";
 import "./chat-details-environment-desktop.css";
 import type { ChatDetailsEnvironmentDesktopProps, ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatPanePlacement, createChatMachinePresentation } from "./chat-pane-placement.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type Props = { details: ChatDetailsProps; presented: boolean };
 
@@ -72,10 +78,6 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
   const [localExpanded, setLocalExpanded] = createSignal(true);
   const expanded = () => props.expanded ?? localExpanded();
   const visible = createDocumentVisibility();
-  // The checkout owner loads and publishes; this leaf only supplies visible demand.
-  const requestUncommitted = createMemo(() =>
-    props.presented && expanded() && visible() ? props.onRequestUncommitted : undefined,
-  );
   const session = () => props.details.selectedSession;
   const placement = merge(
     () => ({ session: session() }),
@@ -111,6 +113,17 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
     const result = props.uncommitted;
     return result && !result.unavailableReason && result.files.length > 0 ? result : undefined;
   };
+  const hasContent = createMemo(() =>
+    Boolean(machineMenu() || host() || workspace()?.branch || session()?.worktree || changes()),
+  );
+  // Capture cache availability before the first asynchronous arrival.
+  const [initiallyEmpty] = createSignal<boolean>((previous) => previous ?? !hasContent());
+  // Empty sections must keep reading even when the saved disclosure choice is closed.
+  const requestUncommitted = createMemo(() =>
+    props.presented && visible() && (expanded() || !hasContent())
+      ? props.onRequestUncommitted
+      : undefined,
+  );
   return [
     <Show when={requestUncommitted()} keyed>
       {(request) => {
@@ -118,109 +131,124 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
         return null;
       }}
     </Show>,
-    <ChatDetailsDesktopSection
-      section="environment"
-      title={t("chat.sessionDetails.environment")}
-      expanded={expanded()}
-      presented={props.presented}
-      onExpandedChange={(next) => {
-        if (props.expanded === undefined) {
-          setLocalExpanded(next);
-        }
-        props.onExpandedChange?.(next);
-      }}
-      metadata={
-        <Show when={!expanded()}>
-          <span class="chat-environment-desktop__summary">
-            <Show
-              when={summaryHost()}
-              fallback={
-                <Show when={workspace()?.branch}>
-                  {(branch) => {
-                    const overflow = useScrollState(true, false);
-                    return (
-                      <span ref={overflow} class="chat-environment-desktop__branch">
-                        {branch()}
-                      </span>
-                    );
-                  }}
+    <Show when={hasContent()}>
+      {(_available) => {
+        let shell!: HTMLDivElement;
+        const content = (
+          <div ref={(element) => (shell = element)} class="chat-details-desktop-environment">
+            <ChatDetailsDesktopSection
+              section="environment"
+              title={t("chat.sessionDetails.environment")}
+              expanded={expanded()}
+              presented={props.presented}
+              animateContentResize
+              onExpandedChange={(next) => {
+                if (props.expanded === undefined) {
+                  setLocalExpanded(next);
+                }
+                props.onExpandedChange?.(next);
+              }}
+              metadata={
+                <Show when={!expanded()}>
+                  <span class="chat-environment-desktop__summary">
+                    <Show
+                      when={summaryHost()}
+                      fallback={
+                        <Show when={workspace()?.branch}>
+                          {(branch) => {
+                            const overflow = useScrollState(true, false);
+                            return (
+                              <span ref={overflow} class="chat-environment-desktop__branch">
+                                {branch()}
+                              </span>
+                            );
+                          }}
+                        </Show>
+                      }
+                    >
+                      <MachineIcon />
+                      <span>{summaryHost()}</span>
+                    </Show>
+                  </span>
                 </Show>
               }
             >
-              <MachineIcon />
-              <span>{summaryHost()}</span>
-            </Show>
-          </span>
-        </Show>
-      }
-    >
-      <Show
-        when={machineMenu() && props.presented}
-        fallback={
-          <Show when={host()}>
-            <div class="chat-details__row chat-environment__row">
-              <EnvironmentAction presented={props.presented} onOpen={props.onOpenMachine}>
-                {() => (
-                  <>
-                    <MachineIcon />
-                    <span>{host()}</span>
-                  </>
+              <Show
+                when={machineMenu() && props.presented}
+                fallback={
+                  <Show when={host()}>
+                    <div class="chat-details__row chat-environment__row">
+                      <EnvironmentAction presented={props.presented} onOpen={props.onOpenMachine}>
+                        {() => (
+                          <>
+                            <MachineIcon />
+                            <span>{host()}</span>
+                          </>
+                        )}
+                      </EnvironmentAction>
+                    </div>
+                  </Show>
+                }
+              >
+                <div class="chat-environment__machine">
+                  <ChatPanePlacement
+                    {...placement}
+                    trigger={{
+                      class: "chat-details__row chat-environment__machine-trigger",
+                      label: (view) => (host() ? `${host()} · ${view.label}` : view.label),
+                      content: (view) => (
+                        <>
+                          <MachineIcon />
+                          <span>{host() ?? view.label}</span>
+                          <Icon name="moreHorizontal" />
+                        </>
+                      ),
+                    }}
+                  />
+                </div>
+              </Show>
+              <Show when={workspace()?.branch}>
+                {(branch) => (
+                  <div class="chat-details__row chat-environment__row" title={branch()}>
+                    <Icon name="gitBranch" />
+                    <span>{branch()}</span>
+                    <Show when={session()?.worktree}>
+                      <small class="chat-details__badge">{t("chat.sessionDetails.worktree")}</small>
+                    </Show>
+                  </div>
                 )}
-              </EnvironmentAction>
-            </div>
-          </Show>
-        }
-      >
-        <div class="chat-environment__machine">
-          <ChatPanePlacement
-            {...placement}
-            trigger={{
-              class: "chat-details__row chat-environment__machine-trigger",
-              label: (view) => (host() ? `${host()} · ${view.label}` : view.label),
-              content: (view) => (
-                <>
-                  <MachineIcon />
-                  <span>{host() ?? view.label}</span>
-                  <Icon name="moreHorizontal" />
-                </>
-              ),
-            }}
-          />
-        </div>
-      </Show>
-      <Show when={workspace()?.branch}>
-        {(branch) => (
-          <div class="chat-details__row chat-environment__row" title={branch()}>
-            <Icon name="gitBranch" />
-            <span>{branch()}</span>
-            <Show when={session()?.worktree}>
-              <small class="chat-details__badge">{t("chat.sessionDetails.worktree")}</small>
-            </Show>
+              </Show>
+              <Show when={session()?.worktree && !workspace()?.branch}>
+                <div class="chat-details__row chat-environment__row chat-environment__worktree">
+                  <Icon name="folder" />
+                  <span>{t("chat.sessionDetails.worktree")}</span>
+                </div>
+              </Show>
+              <Show when={changes()}>
+                <div class="chat-details__row chat-environment__row">
+                  <EnvironmentAction presented={props.presented} onOpen={props.onOpenUncommitted}>
+                    {() => (
+                      <>
+                        <Icon name="diff" />
+                        <span>{t("chat.sessionDetails.changes")}</span>
+                        <Show when={changes()}>
+                          {(result) => <EnvironmentChangeCounts result={result()} />}
+                        </Show>
+                      </>
+                    )}
+                  </EnvironmentAction>
+                </div>
+              </Show>
+            </ChatDetailsDesktopSection>
           </div>
-        )}
-      </Show>
-      <Show when={session()?.worktree && !workspace()?.branch}>
-        <div class="chat-details__row chat-environment__row chat-environment__worktree">
-          <Icon name="folder" />
-          <span>{t("chat.sessionDetails.worktree")}</span>
-        </div>
-      </Show>
-      <Show when={changes()}>
-        <div class="chat-details__row chat-environment__row">
-          <EnvironmentAction presented={props.presented} onOpen={props.onOpenUncommitted}>
-            {() => (
-              <>
-                <Icon name="diff" />
-                <span>{t("chat.sessionDetails.changes")}</span>
-                <Show when={changes()}>
-                  {(result) => <EnvironmentChangeCounts result={result()} />}
-                </Show>
-              </>
-            )}
-          </EnvironmentAction>
-        </div>
-      </Show>
-    </ChatDetailsDesktopSection>,
+        );
+        // The disclosure must restore its initial body before measuring the whole entrance.
+        onSettled(() =>
+          initiallyEmpty() && props.presented ? animateDetailsDesktopEntrance(shell) : undefined,
+        );
+        return content;
+      }}
+    </Show>,
   ];
 }
 

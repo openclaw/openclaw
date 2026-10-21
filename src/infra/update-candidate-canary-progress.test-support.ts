@@ -19,7 +19,7 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
-import { stubHealthyGateway } from "./update-candidate-canary.test-support.js";
+import { holdCanaryProgress, stubHealthyGateway } from "./update-candidate-canary.test-support.js";
 import * as candidateIo from "./update-candidate-io.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { createUpdateRun, getUpdateRunAsync } from "./update-run-ledger.js";
@@ -316,7 +316,9 @@ export function registerCanaryUncertainReceiptTests({
     "retains snapshot uncertainty after settled IO is %s",
     async (ordering) => {
       const options = canaryStateOptions(3_000);
-      const receipt = createDeferredCore();
+      const { receipt, onProgress } = holdCanaryProgress(
+        (step) => step.step === "candidate-state-snapshot",
+      );
       const operationSettled = createDeferredCore();
       const caller = new AbortController();
       const uncertain = new CommandProcessCleanupError();
@@ -352,11 +354,7 @@ export function registerCanaryUncertainReceiptTests({
           }
         });
       const onStep = vi.fn();
-      const onProgress = vi
-        .fn((step: { step: string }) =>
-          step.step === "candidate-state-snapshot" ? receipt.promise : undefined,
-        )
-        .mockImplementationOnce(() => undefined);
+      onProgress.mockImplementationOnce(() => undefined);
       const pending = validateUpdateCandidateCanary({
         ...options,
         signal: caller.signal,
@@ -440,24 +438,19 @@ export function registerCanaryUncertainReceiptTests({
 
   it("joins an uncertain cleanup progress receipt before retiring rehearsal artifacts", async () => {
     stubHealthyGateway();
-    const entered = createDeferredCore();
-    const receipt = createDeferredCore();
+    const { entered, receipt, onProgress } = holdCanaryProgress(
+      (step) => step.step === "candidate-state-cleanup" && step.status === "in_progress",
+    );
     const uncertain = new CommandProcessCleanupError();
     const remove = vi.spyOn(fs, "rm");
     const pending = validateUpdateCandidateCanary({
       ...canaryStateOptions(3_000),
-      onProgress: (step) => {
-        if (step.step === "candidate-state-cleanup" && step.status === "in_progress") {
-          entered.resolve();
-          return receipt.promise;
-        }
-        return undefined;
-      },
+      onProgress,
     });
     const rejected = expect(pending).rejects.toBe(uncertain);
     let targetStateDir: string | undefined;
     try {
-      await entered.promise;
+      await entered;
       targetStateDir = targetDirectory(mocks)!;
       expect(remove.mock.calls.some(([target]) => target === targetStateDir)).toBe(false);
       await fs.access(targetStateDir);

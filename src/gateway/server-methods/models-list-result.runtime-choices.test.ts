@@ -9,9 +9,12 @@ import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareModelsListResult } from "./models-list-result.js";
-import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
+import {
+  modelAuthStore,
+  withModelsListState,
+  WITHOUT_OPENAI_ENV_AUTH,
+} from "./models-list-result.openai-routes.test-support.js";
 
 function modelEntry(
   provider: string,
@@ -51,12 +54,11 @@ function projectorFor(
     agentId: "main",
     snapshot,
     metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
-    preparedAuthStore: {
-      version: 1,
-      profiles: provider
+    preparedAuthStore: modelAuthStore(
+      provider
         ? { [`${provider}:test`]: { type: "api_key", provider, key: "synthetic-test-key" } }
         : {},
-    },
+    ),
     ...extra,
   });
 }
@@ -133,8 +135,7 @@ function preparePicker(
 it.each([false, true, "revoked"] as const)(
   "indexes configured rows once while projecting several logical models (auth rejects: %s)",
   async (rejectAuth) => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "model-projector-rows-", agentEnv: "main" },
+    await withModelsListState(
       async (state) => {
         const provider = "projection-fixture";
         const authFailure = new Error("Configured auth read rejected");
@@ -248,6 +249,7 @@ it.each([false, true, "revoked"] as const)(
         expect(await projector.projectCatalog()).toBe(projected);
         expect(configuredRowVisits).toEqual(visitsAfterProjection);
       },
+      { agentEnv: "main" },
     );
   },
 );
@@ -255,8 +257,7 @@ it.each([false, true, "revoked"] as const)(
 it.each([true, false])(
   "isolates an OpenClaw alternative from native-first metadata (host donor: %s)",
   async (hostDonor) => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "model-picker-reverse-", agentEnv: "main" },
+    await withModelsListState(
       async (state) => {
         const provider = "picker-fixture";
         const nativeRuntime = "picker-native";
@@ -323,6 +324,7 @@ it.each([true, false])(
         expect(Value.Check(ModelChoiceSchema, scopedRow)).toBe(true);
         expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
       },
+      { agentEnv: "main" },
     );
   },
 );
@@ -336,13 +338,7 @@ it.each([
 ] as const)(
   "keeps %s/%s capabilities with session runtime %s and readiness %s",
   async (provider, runtime, runtimeOverride, initialReadiness) => {
-    await withOpenClawTestState(
-      {
-        layout: "state-only",
-        prefix: "model-picker-runtimes-",
-        agentEnv: "main",
-        env: WITHOUT_OPENAI_ENV_AUTH,
-      },
+    await withModelsListState(
       async (state) => {
         const model = "gpt-5.6-sol";
         const selectable = provider === "openai";
@@ -449,6 +445,7 @@ it.each([
           "openclaw",
         );
       },
+      { agentEnv: "main", env: WITHOUT_OPENAI_ENV_AUTH },
     );
   },
 );

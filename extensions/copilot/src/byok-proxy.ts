@@ -42,26 +42,111 @@ export async function createCopilotByokProxy(
   const bearerToken = providerConfig.bearerToken?.trim();
   const upstreamBearerAuthorization = bearerToken ? `Bearer ${bearerToken}` : undefined;
   const activeFetches = new Set<AbortController>();
-  const server = createServer((req, res) => {
-    void handleProxyRequest(req, res, {
-      acceptsAzureSdkPaths,
-      activeFetches,
-      proxyPathPrefix,
-      proxyCredential: nonce,
-      proxyCredentialHeader,
-      targetBaseUrl,
-      targetPathPrefix,
-      upstreamBearerAuthorization,
+  async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
+    const upstreamAbort = new AbortController();
+    activeFetches.add(upstreamAbort);
+    const abortUpstream = () => upstreamAbort.abort();
+    req.on("aborted", abortUpstream);
+    res.on("close", () => {
+      if (!res.writableEnded) {
+        abortUpstream();
+      }
     });
-  });
+    try {
+      const target = resolveTargetUrl(req);
+      if (
+        !target ||
+        (!target.nonceProtected &&
+          (!proxyCredentialHeader || !hasValidProxyCredential(req, proxyCredentialHeader, nonce)))
+      ) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+      const body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req);
+      guarded = await fetchWithSsrFGuard({
+        url: target.url.toString(),
+        init: {
+          method: req.method,
+          headers: buildProxyRequestHeaders(req.headers, {
+            upstreamBearerAuthorization: target.nonceProtected
+              ? upstreamBearerAuthorization
+              : undefined,
+            proxyCredentialHeader,
+          }),
+          signal: upstreamAbort.signal,
+          ...(body ? { body } : {}),
+        },
+        auditContext: "copilot-byok-provider",
+        requireHttps: true,
+      });
+      res.writeHead(
+        guarded.response.status,
+        guarded.response.statusText,
+        normalizeProxyResponseHeaders(guarded.response.headers),
+      );
+      if (!guarded.response.body) {
+        res.end();
+        return;
+      }
+      // Own errors and cancellation on both streams so interrupted responses cannot crash the host.
+      await pipeline(
+        Readable.fromWeb(guarded.response.body as unknown as NodeReadableStream<Uint8Array>),
+        res,
+      );
+    } catch (error) {
+      if (res.destroyed || res.writableEnded) {
+        return;
+      }
+      if (res.headersSent) {
+        res.destroy(error instanceof Error ? error : undefined);
+        return;
+      }
+      res.writeHead(502);
+      res.end(error instanceof Error ? error.message : "BYOK provider proxy failed");
+    } finally {
+      req.off("aborted", abortUpstream);
+      activeFetches.delete(upstreamAbort);
+      await guarded?.release().catch(() => undefined);
+    }
+  }
 
+  function resolveTargetUrl(
+    req: IncomingMessage,
+  ): { url: URL; nonceProtected: boolean } | undefined {
+    const incomingUrl = new URL(req.url ?? "/", `http://${LOOPBACK_HOST}`);
+    const nonceProtected =
+      incomingUrl.pathname === proxyPathPrefix ||
+      incomingUrl.pathname.startsWith(`${proxyPathPrefix}/`);
+    if (
+      !nonceProtected &&
+      !(
+        acceptsAzureSdkPaths &&
+        (incomingUrl.pathname === "/openai" || incomingUrl.pathname.startsWith("/openai/"))
+      )
+    ) {
+      return undefined;
+    }
+    const targetUrl = new URL(targetBaseUrl);
+    targetUrl.pathname = nonceProtected
+      ? `${targetPathPrefix}${incomingUrl.pathname.slice(proxyPathPrefix.length)}` || "/"
+      : incomingUrl.pathname;
+    for (const [key, value] of incomingUrl.searchParams) {
+      targetUrl.searchParams.append(key, value);
+    }
+    return { url: targetUrl, nonceProtected };
+  }
+
+  const server = createServer((req, res) => {
+    void handleProxyRequest(req, res);
+  });
   await once(server.listen(0, LOOPBACK_HOST), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     server.close();
     throw new Error("[copilot-attempt] failed to start BYOK network proxy");
   }
-
   const proxyBaseUrl = `http://${LOOPBACK_HOST}:${address.port}${proxyPathPrefix}`;
   const sdkBaseUrl = acceptsAzureSdkPaths
     ? `http://${LOOPBACK_HOST}:${address.port}`
@@ -91,123 +176,6 @@ export async function createCopilotByokProxy(
       });
     },
   };
-}
-
-async function handleProxyRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  params: {
-    acceptsAzureSdkPaths: boolean;
-    activeFetches: Set<AbortController>;
-    proxyPathPrefix: string;
-    proxyCredential: string;
-    proxyCredentialHeader: string | undefined;
-    targetBaseUrl: URL;
-    targetPathPrefix: string;
-    upstreamBearerAuthorization: string | undefined;
-  },
-): Promise<void> {
-  let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
-  const upstreamAbort = new AbortController();
-  params.activeFetches.add(upstreamAbort);
-  const abortUpstream = () => upstreamAbort.abort();
-  req.on("aborted", abortUpstream);
-  res.on("close", () => {
-    if (!res.writableEnded) {
-      abortUpstream();
-    }
-  });
-  try {
-    const target = resolveTargetUrl(req, params);
-    if (
-      !target ||
-      (!target.nonceProtected &&
-        (!params.proxyCredentialHeader ||
-          !hasValidProxyCredential(req, params.proxyCredentialHeader, params.proxyCredential)))
-    ) {
-      res.writeHead(404);
-      res.end("Not found");
-      return;
-    }
-    const body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req);
-    guarded = await fetchWithSsrFGuard({
-      url: target.url.toString(),
-      init: {
-        method: req.method,
-        headers: buildProxyRequestHeaders(req.headers, {
-          upstreamBearerAuthorization: target.nonceProtected
-            ? params.upstreamBearerAuthorization
-            : undefined,
-          proxyCredentialHeader: params.proxyCredentialHeader,
-        }),
-        signal: upstreamAbort.signal,
-        ...(body ? { body } : {}),
-      },
-      auditContext: "copilot-byok-provider",
-      requireHttps: true,
-    });
-    res.writeHead(
-      guarded.response.status,
-      guarded.response.statusText,
-      normalizeProxyResponseHeaders(guarded.response.headers),
-    );
-    if (!guarded.response.body) {
-      res.end();
-      return;
-    }
-    // Own errors and cancellation on both streams so interrupted responses cannot crash the host.
-    await pipeline(
-      Readable.fromWeb(guarded.response.body as unknown as NodeReadableStream<Uint8Array>),
-      res,
-    );
-  } catch (error) {
-    if (res.destroyed || res.writableEnded) {
-      return;
-    }
-    if (res.headersSent) {
-      res.destroy(error instanceof Error ? error : undefined);
-      return;
-    }
-    res.writeHead(502);
-    res.end(error instanceof Error ? error.message : "BYOK provider proxy failed");
-  } finally {
-    req.off("aborted", abortUpstream);
-    params.activeFetches.delete(upstreamAbort);
-    await guarded?.release().catch(() => undefined);
-  }
-}
-
-function resolveTargetUrl(
-  req: IncomingMessage,
-  params: {
-    acceptsAzureSdkPaths: boolean;
-    proxyPathPrefix: string;
-    targetBaseUrl: URL;
-    targetPathPrefix: string;
-  },
-): { url: URL; nonceProtected: boolean } | undefined {
-  const incomingUrl = new URL(req.url ?? "/", `http://${LOOPBACK_HOST}`);
-  const nonceProtected =
-    incomingUrl.pathname === params.proxyPathPrefix ||
-    incomingUrl.pathname.startsWith(`${params.proxyPathPrefix}/`);
-  if (
-    !nonceProtected &&
-    !(
-      params.acceptsAzureSdkPaths &&
-      (incomingUrl.pathname === "/openai" || incomingUrl.pathname.startsWith("/openai/"))
-    )
-  ) {
-    return undefined;
-  }
-  const targetUrl = new URL(params.targetBaseUrl);
-  targetUrl.pathname = nonceProtected
-    ? `${params.targetPathPrefix}${incomingUrl.pathname.slice(params.proxyPathPrefix.length)}` ||
-      "/"
-    : incomingUrl.pathname;
-  for (const [key, value] of incomingUrl.searchParams) {
-    targetUrl.searchParams.append(key, value);
-  }
-  return { url: targetUrl, nonceProtected };
 }
 
 function hasValidProxyCredential(

@@ -22,6 +22,7 @@ import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import {
   canaryOutcomeStep,
   FakeChild,
+  holdCanaryProgress,
   stubHealthyGateway,
 } from "./update-candidate-canary.test-support.js";
 import * as rehearsals from "./update-candidate-rehearsal.js";
@@ -218,18 +219,14 @@ export function registerCanaryReadinessBudgetTests(
     "joins a startup warning before more probes when %s",
     async (outcome) => {
       const probe = deferredProbe();
-      const receipt = createDeferredCore();
+      const { receipt, onProgress } = holdCanaryProgress(
+        (step) => step.step === "warning:candidate-gateway-startup",
+      );
       let current = true;
       const gateway = captureGateway();
       const fetch = stubFetch(async (url) =>
         url.endsWith("/startupz") ? probe.fetch() : Response.json({ ready: true }),
       );
-      const onProgress = vi.fn((step: { step: string }) => {
-        if (step.step === "warning:candidate-gateway-startup") {
-          return receipt.promise;
-        }
-        return undefined;
-      });
       const pending = validate({
         assertCurrent: () => {
           if (!current) {

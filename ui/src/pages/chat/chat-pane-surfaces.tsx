@@ -1,7 +1,10 @@
 import { Show, type Element } from "solid-js";
 import "../../components/modal-dialog.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { BoardSessionSurface, type BoardSessionSurfaceProps } from "./board-session-surface.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export function ChatBoardPanel(props: {
   controls?: Element;

@@ -4,16 +4,19 @@ import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import "../../../components/tooltip.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { EDITOR_IDS, EDITOR_LABELS } from "../../../lib/editor-links.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/session-panel-rail.css";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { FileCopyAction } from "./chat-file-copy.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileReaderChromeProps, FileViewControls } from "./chat-file-reader-controls.ts";
 import { WorkspaceBreadcrumb } from "./chat-session-workspace-breadcrumb.tsx";
 import type { FileReaderWorkspace } from "./chat-sidebar-view-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 registerCodeBlocksEnglish();
 registerFilePreviewEnglish();
@@ -111,6 +114,16 @@ export function DesktopFileChrome(props: FileReaderChromeProps) {
       disabled: props.controls.editing,
     }));
   const actions = (compact: boolean): MenuEntry[] => [
+    ...(props.controls.fileAttachment
+      ? [
+          {
+            id: "attach-session",
+            label: t("chat.detailPanel.attachToSession"),
+            icon: <Icon name="paperclip" />,
+            disabled: props.controls.fileAttachment.disabled,
+          },
+        ]
+      : []),
     ...(compact && props.controls.htmlPreview
       ? [
           {
@@ -197,7 +210,9 @@ export function DesktopFileChrome(props: FileReaderChromeProps) {
       : []),
   ];
   const select = (value: string) => {
-    if (value === "html-mode") {
+    if (value === "attach-session") {
+      props.controls.fileAttachment?.attach();
+    } else if (value === "html-mode") {
       props.controls.htmlPreview?.onToggle();
     } else if (value === "preview" || value === "highlighted" || value === "plain") {
       props.controls.onReadingModeChange?.(value);

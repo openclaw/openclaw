@@ -141,13 +141,22 @@ it.each([
 
 it.each(["compaction", "reset"])("keeps %s markers in the physical coordinate space", (type) => {
   const run = { runId: "run-compaction", itemId: "item-compaction" };
-  const projected = projectEntry({ type, id: "boundary", __openclaw: run }, 3, position);
-  expect(projected).toMatchObject({ role: "system" });
+  const timestamp = "2026-08-11T18:00:00.000Z";
+  const projected = projectEntry(
+    { type, id: "boundary", timestamp, tokensBefore: 100, tokensAfter: 25, __openclaw: run },
+    3,
+    position,
+  );
+  expect(projected).toMatchObject({
+    role: "system",
+    timestamp: Date.parse(timestamp),
+    content: [{ type: "text", text: type === "compaction" ? "Compaction" : "Reset" }],
+  });
   expect(metadata(projected)).toEqual({
     kind: type,
     id: "boundary",
     seq: 3,
     transcriptPosition: position,
-    ...(type === "compaction" ? run : {}),
+    ...(type === "compaction" ? { ...run, tokensBefore: 100, tokensAfter: 25 } : {}),
   });
 });

@@ -1,5 +1,15 @@
 import type { Question } from "@openclaw/gateway-protocol";
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  createStore,
+  For,
+  lazy,
+  Loading,
+  onSettled,
+  reconcile,
+  Show,
+} from "solid-js";
 import { isQuestionThumbnail } from "../../../../../packages/gateway-protocol/src/question-media.js";
 import type {
   QuestionResourceAction,
@@ -26,6 +36,10 @@ type ResourceProps = {
 
 type OperationScope = { live: boolean; abort: AbortController | undefined };
 
+const ResourcePreview = lazy(() => import("../../../components/mcp-app-view-registration.ts"), {
+  export: "McpAppView",
+});
+
 /** Local presentation only; the pending question and MCP view own all resource grants. */
 export function ChatQuestionResource(props: ResourceProps) {
   let host!: HTMLElement;
@@ -34,12 +48,9 @@ export function ChatQuestionResource(props: ResourceProps) {
   const [pendingOperation, setPendingOperation] = createSignal<AbortController>();
   const isBusy = () => Boolean(pendingOperation());
   const [error, setError] = createSignal("");
-  const [uploaded, setUploaded] = createSignal<Array<{ uri: string; name: string }>>([]);
+  const [uploaded, setUploaded] = createStore<Array<{ uri: string; name: string }>>([]);
   const [preview, setPreview] = createSignal<{
-    view?: {
-      id: string;
-      View: (typeof import("../../../components/mcp-app-view-registration.ts"))["McpAppView"];
-    };
+    view?: { id: string };
     text?: string;
     images?: string[];
   } | null>(null);
@@ -120,12 +131,12 @@ export function ChatQuestionResource(props: ResourceProps) {
           throw new Error("Invalid resource upload result");
         }
         const allUploaded = new Map(
-          [...uploaded(), ...result.resources].map((resource) => [resource.uri, resource]),
+          [...uploaded, ...result.resources].map((resource) => [resource.uri, resource]),
         );
         if (allUploaded.size > 64 || (!question.multiSelect && result.resources.length !== 1)) {
           throw new Error("Invalid resource upload count");
         }
-        setUploaded([...allUploaded.values()]);
+        setUploaded(reconcile([...allUploaded.values()], "uri"));
         const values = question.multiSelect ? new Set(props.selected) : new Set<string>();
         for (const resource of result.resources) {
           values.add(resource.uri);
@@ -133,11 +144,12 @@ export function ChatQuestionResource(props: ResourceProps) {
         dispatchSelection([...values]);
       } else if ("preview" in result) {
         if (result.preview.viewId) {
-          const { McpAppView } = await import("../../../components/mcp-app-view-registration.ts");
+          // Keep the previous preview and operation busy until its renderer is ready.
+          await ResourcePreview.preload();
           if (!current()) {
             return;
           }
-          setPreview({ view: { id: result.preview.viewId, View: McpAppView } });
+          setPreview({ view: { id: result.preview.viewId } });
         } else {
           const text = result.preview.contents?.map((entry) => entry.text ?? "").join("\n") ?? "";
           const images = result.preview.contents
@@ -175,7 +187,7 @@ export function ChatQuestionResource(props: ResourceProps) {
       const limits = resolveChatAttachmentLimits(context?.gateway.snapshot.hello?.policy);
       if (
         !limits ||
-        files.length + uploaded().length > 64 ||
+        files.length + uploaded.length > 64 ||
         admitAttachmentFiles(files, limits, 0).length !== files.length
       ) {
         throw new Error(t("chat.questions.resourceUploadTooLarge"));
@@ -209,7 +221,7 @@ export function ChatQuestionResource(props: ResourceProps) {
       <For each={[identity()]}>
         {() => {
           onSettled(() => {
-            setUploaded([]);
+            setUploaded(() => []);
           });
           return (
             <For each={[props.disabled]}>
@@ -270,7 +282,7 @@ export function ChatQuestionResource(props: ResourceProps) {
               />
             </label>
           )}
-          <For each={uploaded().filter((entry) => props.selected.has(entry.uri))}>
+          <For each={uploaded.filter((entry) => props.selected.has(entry.uri))}>
             {(entry) => (
               <div>
                 {entry.name}
@@ -309,7 +321,11 @@ export function ChatQuestionResource(props: ResourceProps) {
               )
             }
           >
-            {(view) => <view.View sessionKey={props.sessionKey} viewId={view.id} />}
+            {(view) => (
+              <Loading>
+                <ResourcePreview sessionKey={props.sessionKey} viewId={view.id} />
+              </Loading>
+            )}
           </Show>
         </div>
       )}

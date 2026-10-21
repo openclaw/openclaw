@@ -3,6 +3,7 @@ import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packa
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { shellViewport, type ShellViewportSnapshot } from "../../app/shell-viewport.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { buildCompanionQuestionPrefill } from "../../lib/chat/companion-question.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -33,6 +34,8 @@ import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   sidebarMainPanel,
 } from "./sidebar-layout.ts";
+
+registerChatSessionEnglish();
 
 export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   sidebarRegionElement: HTMLElement | null = null;

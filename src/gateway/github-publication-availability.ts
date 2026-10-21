@@ -282,11 +282,20 @@ function requirePublicationWorktreeOwner(
   loaded: PublicationSessionOwner,
   worktree: ManagedWorktreeRecord | undefined,
   expected?: ExpectedWorktree,
+  allowExistingPullRequest = false,
 ) {
   const entry = loaded.entry;
-  if (entry.worktree?.githubPullRequest) {
+  const pullRequest = entry.worktree?.githubPullRequest;
+  if (
+    pullRequest &&
+    (!allowExistingPullRequest ||
+      !pullRequest.preparedHeadCommit ||
+      pullRequest.preparedHeadCommit !== pullRequest.head.commit)
+  ) {
     throw new GitHubPublicationWorkspaceChangedError(
-      "This workspace continues an existing PR. Publishing to its original branch is not available yet; saved work was preserved.",
+      allowExistingPullRequest
+        ? "Finish preparing the original PR source before publication; saved work was preserved."
+        : "This publication path cannot update an imported PR; use shared publication after preparation.",
     );
   }
   if (
@@ -305,13 +314,13 @@ function requirePublicationWorktreeOwner(
     expected &&
     (worktree.id !== expected.worktreeId ||
       worktree.repoFingerprint !== expected.repositoryFingerprint ||
-      worktree.branch !== expected.branch)
+      (pullRequest?.head.branch ?? worktree.branch) !== expected.branch)
   ) {
     throw new GitHubPublicationWorkspaceChangedError(
       "GitHub publication workspace authority changed.",
     );
   }
-  return { loaded, worktree };
+  return { loaded, worktree, publicationBranch: pullRequest?.head.branch ?? worktree.branch };
 }
 
 function rejectChangedPublicationWorktree(error: unknown): never {
@@ -326,6 +335,7 @@ function preparePublicationWorktreeRead(
   context: OpenClawStateWorkerContext,
   readSession: () => PublicationSessionRead,
   expected?: ExpectedWorktree,
+  allowExistingPullRequest = false,
 ) {
   const identity = {
     sessionId: loaded.entry.sessionId,
@@ -363,10 +373,10 @@ function preparePublicationWorktreeRead(
       } catch (error) {
         rejectChangedPublicationWorktree(error);
       }
-      return requirePublicationWorktreeOwner(latest, worktree, selection);
+      return requirePublicationWorktreeOwner(latest, worktree, selection, allowExistingPullRequest);
     };
     return {
-      ...requirePublicationWorktreeOwner(current, worktree, selection),
+      ...requirePublicationWorktreeOwner(current, worktree, selection, allowExistingPullRequest),
       assertCurrent,
       assertRegistryCurrent: assertRow,
     };
@@ -374,7 +384,10 @@ function preparePublicationWorktreeRead(
 }
 
 export async function readGitHubPublicationWorktreeOwner(
-  params: PublicationSessionIdentity & { expected?: ExpectedWorktree },
+  params: PublicationSessionIdentity & {
+    expected?: ExpectedWorktree;
+    allowExistingPullRequest?: boolean;
+  },
 ) {
   const context = captureOpenClawStateWorkerContext();
   const session = await prepareGitHubPublicationSession(params.sessionKey, {
@@ -387,6 +400,7 @@ export async function readGitHubPublicationWorktreeOwner(
       context,
       session.readCurrent,
       params.expected,
+      params.allowExistingPullRequest,
     )();
     return { ...owner, release: session.release, [Symbol.dispose]: session.release };
   } catch (error) {
@@ -419,7 +433,11 @@ function resolveGitHubPublicationWorkspaceOwner(
 
 export async function prepareGitHubPublicationWorkspaceOwner(
   params: PublicationSessionIdentity,
-  options: { sessionTarget?: AgentRunSessionTarget; assertCurrent?: () => void } = {},
+  options: {
+    sessionTarget?: AgentRunSessionTarget;
+    assertCurrent?: () => void;
+    allowExistingPullRequest?: boolean;
+  } = {},
 ) {
   const context = captureOpenClawStateWorkerContext();
   const assertCurrent = () => {
@@ -469,7 +487,13 @@ export async function prepareGitHubPublicationWorkspaceOwner(
       throw new GitHubPublicationSessionChangedError();
     }
     const identity = { ...params, lifecycleRevision: loaded.entry.lifecycleRevision ?? null };
-    const readWorktree = preparePublicationWorktreeRead(loaded, context, session.readCurrent);
+    const readWorktree = preparePublicationWorktreeRead(
+      loaded,
+      context,
+      session.readCurrent,
+      undefined,
+      options.allowExistingPullRequest,
+    );
     const prepared = workspaceId
       ? await getSessionRepositoryWorkspaceStore().prepare(workspaceId)
       : undefined;
@@ -520,7 +544,9 @@ export async function prepareGitHubPublicationWorkspaceOwner(
 }
 
 export async function hasGitHubPublicationRepositoryWorkspace(params: PublicationSessionIdentity) {
-  const prepared = await prepareGitHubPublicationWorkspaceOwner(params);
+  const prepared = await prepareGitHubPublicationWorkspaceOwner(params, {
+    allowExistingPullRequest: true,
+  });
   using _ = { [Symbol.dispose]: () => prepared.release() };
 
   return prepared.initial.kind === "repository";
@@ -596,7 +622,10 @@ export async function readLocalGitHubPublicationWorktreeOwner(
   row: Parameters<typeof localGitHubPublicationSessionIdentity>[0],
 ) {
   const identity = await localGitHubPublicationSessionIdentity(row);
-  const owner = await readGitHubPublicationWorktreeOwner(identity);
+  const owner = await readGitHubPublicationWorktreeOwner({
+    ...identity,
+    allowExistingPullRequest: row.identity_source !== "personal",
+  });
   return {
     ...owner,
     assertCurrent: () => {
@@ -644,7 +673,7 @@ export async function hasSupportedGitHubPublicationTarget(
   const context = captureOpenClawStateWorkerContext();
   const initial = requirePublicationSessionOwner(session, readSession(), true);
   context.admission.assertCurrent();
-  if (initial.entry.archivedAt !== undefined || initial.entry.worktree?.githubPullRequest) {
+  if (initial.entry.archivedAt !== undefined) {
     return false;
   }
   const workspaceId = initial.entry.repositoryWorkspaceId;
@@ -656,8 +685,17 @@ export async function hasSupportedGitHubPublicationTarget(
   if (!initial.entry.worktree?.id) {
     return false;
   }
-  const owner = await preparePublicationWorktreeRead(initial, context, readSession)();
+  const owner = await preparePublicationWorktreeRead(
+    initial,
+    context,
+    readSession,
+    undefined,
+    true,
+  )();
   owner.assertCurrent();
+  if (initial.entry.worktree?.githubPullRequest) {
+    return true;
+  }
   const { repoRoot, repoFingerprint } = owner.worktree;
   const key = JSON.stringify([context.admission.identity.key, repoRoot, repoFingerprint]);
   const load = async () => {

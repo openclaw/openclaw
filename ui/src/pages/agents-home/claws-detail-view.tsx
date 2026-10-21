@@ -1,9 +1,10 @@
-import { For, Show } from "solid-js";
+import { Errored, For, Loading, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "../plugins/detail-shell.tsx";
 import { PluginInstallAction } from "../plugins/install-action.tsx";
@@ -66,7 +67,7 @@ function grantSummary(grants: ClawPluginGrants): string[] {
 }
 
 function ClawContents(props: { view: ClawsCatalogViewProps }) {
-  const contents = () => props.view.detail!.contents;
+  const contents = () => props.view.readDetail()!.contents;
   return (
     <>
       <ClawWorkspaceFiles
@@ -203,7 +204,6 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
           const canAdd = () =>
             view().canAdd &&
             Boolean(detail()) &&
-            !view().detailLoading &&
             !view().applying &&
             !view().consentWarning &&
             !view().reviewPlan &&
@@ -214,8 +214,8 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
                 id="claw-catalog-detail"
                 name={detail()?.agentName ?? selected().displayName}
                 summary={detail()?.agentDescription ?? selected().summary}
-                backHref={pathForRoute("agents-home", view().basePath)}
-                backLabel="Agents"
+                backHref={pathForRoute("claws", view().basePath)}
+                backLabel={t("tabs.claws")}
                 onBack={view().onBack}
                 icon={<ClawArtwork src={detail() ? detail()?.iconUrl : selected().iconUrl} />}
                 identity={renderPublisherIdentity({
@@ -239,33 +239,43 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
                 }
                 panel={
                   <>
-                    <Show when={view().detailError}>
-                      <div class="callout danger" role="alert">
-                        {view().detailError}
-                        <button
-                          type="button"
-                          class="btn btn--sm"
-                          onClick={() => view().onRetryDetail()}
+                    <For each={[view().detailRequest]}>
+                      {() => (
+                        <Errored
+                          fallback={(error) => (
+                            <div class="callout danger" role="alert">
+                              {formatUiError(error())}
+                              <button
+                                type="button"
+                                class="btn btn--sm"
+                                onClick={() => view().onRetryDetail()}
+                              >
+                                {t("clawsCatalog.retry")}
+                              </button>
+                            </div>
+                          )}
                         >
-                          {t("clawsCatalog.retry")}
-                        </button>
-                      </div>
-                    </Show>
-                    <Show when={view().detailLoading}>
-                      <section
-                        class="claws-content-skeleton"
-                        role="status"
-                        aria-label={t("clawsCatalog.contentsLoading")}
-                      >
-                        <div class="claws-content-skeleton__title skeleton" />
-                        <For each={[0, 1, 2, 3]}>
-                          {() => <div class="claws-content-skeleton__row skeleton" />}
-                        </For>
-                      </section>
-                    </Show>
-                    <Show when={detail()}>
-                      <ClawContents view={view()} />
-                    </Show>
+                          <Loading
+                            fallback={
+                              <section
+                                class="claws-content-skeleton"
+                                role="status"
+                                aria-label={t("clawsCatalog.contentsLoading")}
+                              >
+                                <div class="claws-content-skeleton__title skeleton" />
+                                <For each={[0, 1, 2, 3]}>
+                                  {() => <div class="claws-content-skeleton__row skeleton" />}
+                                </For>
+                              </section>
+                            }
+                          >
+                            <Show when={view().readDetail()}>
+                              <ClawContents view={view()} />
+                            </Show>
+                          </Loading>
+                        </Errored>
+                      )}
+                    </For>
                     <Show when={view().addError}>
                       <div class="callout danger" role="alert">
                         {view().addError}

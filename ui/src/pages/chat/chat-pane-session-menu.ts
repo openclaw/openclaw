@@ -24,6 +24,7 @@ import type * as SessionOperations from "../../components/session-organizer-oper
 import { sessionPlacementAction } from "../../components/session-placement-action.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -60,6 +61,8 @@ import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.t
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.types.ts";
 import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.ts";
+
+registerChatSessionEnglish();
 
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   private readonly headerSessionDataMemo = new ChatPaneHeaderMemo<SessionMenuData>();

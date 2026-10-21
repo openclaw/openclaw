@@ -46,8 +46,15 @@ export function getChatOutputsCount(data: ChatOutputsData): number | null {
   return data.artifacts.length + (data.dashboard === null ? 0 : 1);
 }
 
-/** The desktop host uses this same condition to omit its section heading. */
-export function isChatOutputsEmpty(data: ChatOutputsData): boolean {
+/** Optional desktop sections need content or an actionable read error, not a speculative slot. */
+export function hasChatDesktopOutputs(data: ChatOutputsData): boolean {
+  return Boolean(
+    data.artifacts?.length || data.dashboard || data.artifactsError || data.dashboardError,
+  );
+}
+
+/** The explicit mobile destination distinguishes loading from confirmed absence. */
+function isChatOutputsEmpty(data: ChatOutputsData): boolean {
   return (
     getChatOutputsCount(data) === 0 &&
     !data.artifactsLoading &&
@@ -167,7 +174,7 @@ export function ChatOutputsDesktop(props: ChatOutputsDesktopProps) {
   const visibleArtifacts = () => (props.artifacts ?? []).slice(0, props.dashboard ? 3 : 4);
   const hasMore = () => (props.artifacts?.length ?? 0) + (props.dashboard ? 1 : 0) > 4;
   return (
-    <Show when={!isChatOutputsEmpty(props)}>
+    <Show when={hasChatDesktopOutputs(props)}>
       <div class="chat-outputs chat-outputs--desktop">
         <Show when={props.dashboard}>
           {(dashboard) => <DashboardRow dashboard={dashboard()} />}

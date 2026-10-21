@@ -2622,7 +2622,10 @@ openclaw-session-menu[popover] {
   overflow-wrap: anywhere;
 }
 
-.session-menu__item--described:disabled {
+:is(.session-menu__item, .oc-menu-item).session-menu__item--described:is(
+    :disabled,
+    [aria-disabled="true"]
+  ) {
   opacity: 1;
   color: var(--muted);
 }
@@ -2783,8 +2786,7 @@ openclaw-session-menu[popover] {
 }
 
 .session-menu__icon-choice--custom svg,
-.session-menu__icon-choice--glyph svg,
-.sidebar-agent-menu__pin svg {
+.session-menu__icon-choice--glyph svg {
   width: 16px;
   height: 16px;
 }
@@ -3569,31 +3571,32 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .gateway-status__retry {
   flex: none;
   padding: 3px 8px;
-  border: 1px solid currentColor;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: inherit;
+  color: var(--text);
   font: inherit;
   cursor: var(--cursor-action);
 }
 
-.gateway-status__retry:hover:not(:disabled) {
-  background: color-mix(in srgb, currentColor 12%, transparent);
+.gateway-status__retry:hover {
+  background: var(--bg-hover);
 }
 
-.gateway-status__retry:disabled {
-  cursor: default;
-}
-
-.gateway-status__spinner {
+.gateway-status__icon {
   display: inline-flex;
-  animation: btn-spinner-spin 1s linear infinite;
+  flex: none;
+  width: calc(12px * var(--control-ui-text-scale));
+  height: calc(12px * var(--control-ui-text-scale));
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .gateway-status__spinner {
-    animation: none;
-  }
+.gateway-status__icon > :is(svg, .session-run-spinner) {
+  width: 100%;
+  height: 100%;
+}
+
+.gateway-status__icon > .session-run-spinner {
+  --accent: currentColor;
 }
 
 .gateway-status__retry:focus-visible {
@@ -3603,9 +3606,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .session-menu__color-swatch svg,
 .sidebar-gateway-check svg,
-.sidebar-build-hover-card__copy svg,
-.gateway-status__icon svg,
-.gateway-status__spinner svg {
+.sidebar-build-hover-card__copy svg {
   width: 12px;
   height: 12px;
 }
@@ -3664,9 +3665,10 @@ openclaw-tooltip.sidebar-hover-tooltip {
   margin-left: 4px;
 }
 
-.sidebar-agent-menu__agent-switch {
+.sidebar-agent-menu__agent-switch,
+.sidebar-agent-menu__create {
   flex: none;
-  min-height: 56px;
+  min-height: 44px;
   min-width: 0;
   padding: 0 !important;
   color: var(--muted) !important;
@@ -3689,10 +3691,10 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .sidebar-agent-menu__agent-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
   min-width: 0;
-  min-height: 56px;
+  min-height: 44px;
   padding: 8px;
 }
 
@@ -3863,7 +3865,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-  font-size: calc(15px * var(--control-ui-text-scale));
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 550;
 }
 
@@ -3875,54 +3877,10 @@ openclaw-tooltip.sidebar-hover-tooltip {
   gap: 6px;
 }
 
-.sidebar-agent-menu__pin {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  padding: 6px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  opacity: 0;
-  pointer-events: none;
-}
-
-.sidebar-agent-menu__pin[aria-pressed="true"] {
-  opacity: 0.75;
-  pointer-events: auto;
-}
-
-.sidebar-agent-menu__agent-switch:hover .sidebar-agent-menu__pin,
-.sidebar-agent-menu__agent-switch:focus-visible .sidebar-agent-menu__pin,
-.sidebar-agent-menu__pin:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.sidebar-agent-menu__pin:hover,
-.sidebar-agent-menu__pin:focus-visible {
-  background: var(--bg-hover);
-  color: var(--text-strong);
-}
-
-.sidebar-agent-menu__pin:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-@media (hover: none) {
-  .sidebar-agent-menu__pin {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-
 /* Only the switcher list shrinks and scrolls; the action rows stay visible. */
 .sidebar-agent-menu {
-  --agent-avatar-size: 40px;
-  --agent-avatar-glyph-size: 24px;
+  --agent-avatar-size: 28px;
+  --agent-avatar-glyph-size: 18px;
 }
 
 .oc-menu.sidebar-agent-menu {
@@ -3936,8 +3894,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-agent-menu > .sidebar-customize-menu__item,
-.sidebar-agent-menu > .sidebar-customize-menu__title,
-.sidebar-agent-menu > .sidebar-customize-menu__separator {
+.sidebar-agent-menu > .sidebar-customize-menu__title {
   flex: none;
 }
 
@@ -3951,10 +3908,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   overscroll-behavior: contain;
   scrollbar-color: color-mix(in srgb, var(--border) 72%, transparent) transparent;
   scrollbar-width: thin;
-}
-
-.sidebar-agent-menu > .sidebar-customize-menu__separator {
-  border-top-color: var(--border);
 }
 
 .sidebar-identity-menu {
@@ -4690,4 +4643,54 @@ html.openclaw-native-web-chrome
   to {
     opacity: 1;
   }
+}
+
+.sidebar-agent-menu__settings {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+}
+
+.sidebar-agent-menu__agent-switch:hover .sidebar-agent-menu__settings,
+.sidebar-agent-menu__settings:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .sidebar-agent-menu__settings {
+    opacity: 1;
+  }
+}
+
+.sidebar-agent-menu__settings:hover,
+.sidebar-agent-menu__settings:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.sidebar-agent-menu__settings:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sidebar-agent-menu__create-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--agent-avatar-size);
+  height: var(--agent-avatar-size);
+}
+
+.sidebar-agent-menu__create-icon svg {
+  width: 100%;
+  height: 100%;
+  stroke-width: 1.5;
 }

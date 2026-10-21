@@ -5,8 +5,9 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import "../../styles/chat/mobile-host.css";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
@@ -21,6 +22,8 @@ import {
   sidebarDock,
   sidebarMainPanel,
 } from "./sidebar-layout.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export function SidebarRegionView(props: SidebarRegionViewProps) {
   let shell!: HTMLElement;

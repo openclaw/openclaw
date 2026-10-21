@@ -1,4 +1,4 @@
-import { createMemo } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -104,33 +104,33 @@ function DetailHeader(
           </div>
         ) : undefined}
         <div class="cron-detail-meta">
-          {props.mode === "job" && props.selectedJob && props.canManage ? (
-            <EnabledSwitch {...props} job={props.selectedJob} />
-          ) : undefined}
+          <Show
+            when={props.mode === "job" && props.canManage ? props.selectedJob : undefined}
+            keyed
+          >
+            {(job) => <EnabledSwitch {...props} job={job} />}
+          </Show>
           <span class="cron-detail-sub">{subtitle()}</span>
           {props.selectedJob?.trigger ? <TriggerIndicator /> : undefined}
         </div>
       </div>
       <div class="cron-detail-actions">
-        {props.mode === "job" && props.selectedJob && props.canManage ? (
-          <>
-            <button
-              type="button"
-              class="btn btn--sm"
-              data-test-id="cron-run-now"
-              disabled={props.busy || !props.connected}
-              onClick={() => {
-                const job = props.selectedJob;
-                if (job) {
-                  props.onRun(job, "force");
-                }
-              }}
-            >
-              <Icon name="play" /> {t("cron.actions.runNow")}
-            </button>
-            <JobMenu {...props} job={props.selectedJob} />
-          </>
-        ) : undefined}
+        <Show when={props.mode === "job" && props.canManage ? props.selectedJob : undefined} keyed>
+          {(job) => (
+            <>
+              <button
+                type="button"
+                class="btn btn--sm"
+                data-test-id="cron-run-now"
+                disabled={props.busy || !props.connected}
+                onClick={() => props.onRun(job, "force")}
+              >
+                <Icon name="play" /> {t("cron.actions.runNow")}
+              </button>
+              <JobMenu {...props} job={job} />
+            </>
+          )}
+        </Show>
       </div>
     </div>
   );

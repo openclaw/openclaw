@@ -1,30 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createReadabilityWebContentExtractor } from "./web-content-extractor.js";
 
-const SAMPLE_HTML = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>Example Article</title>
-  </head>
-  <body>
-    <nav>
-      <ul>
-        <li><a href="/home">Home</a></li>
-        <li><a href="/about">About</a></li>
-      </ul>
-    </nav>
-    <main>
-      <article>
-        <h1>Example Article</h1>
-        <p>Main content starts here with enough words to satisfy readability.</p>
-        <p>Second paragraph for a bit more signal.</p>
-        <p><a href="../next">Continue reading</a></p>
-      </article>
-    </main>
-    <footer>Footer text</footer>
-  </body>
-</html>`;
+const SAMPLE_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Example Article</title></head><body><nav><ul><li><a href="/home">Home</a></li><li><a href="/about">About</a></li></ul></nav><main><article>
+<h1>Example Article</h1><p>Main content starts here with enough words to satisfy readability.</p><p>Second paragraph for a bit more signal.</p><p><a href="../next">Continue reading</a></p></article></main><footer>Footer text</footer></body></html>`;
 
 async function extractArticle(html: string, extractMode: "text" | "markdown" = "text") {
   const result = await createReadabilityWebContentExtractor().extract({
@@ -93,8 +71,7 @@ describe("web readability extractor", () => {
   });
 
   it("rejects excessively nested HTML before extraction", async () => {
-    const extractor = createReadabilityWebContentExtractor();
-    const result = await extractor.extract({
+    const result = await createReadabilityWebContentExtractor().extract({
       html: `${"<section>".repeat(3001)}${SAMPLE_HTML}${"</section>".repeat(3001)}`,
       url: "https://example.com/article",
       extractMode: "text",

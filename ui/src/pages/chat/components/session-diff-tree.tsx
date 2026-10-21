@@ -1,12 +1,15 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, createStore, For, Show } from "solid-js";
 import type { SessionDiffFile } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { FileDisclosure } from "./file-disclosure.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type ReviewNode = { key: string; name: string; path: string } & (
   | { kind: "file"; file: SessionDiffFile; children: [] }
@@ -120,16 +123,16 @@ export function SessionDiffTree(props: {
 }) {
   const nodes = createMemo(() => reviewTree(props.files, props.query));
   // A new search opens matching directories; local toggles survive other refreshes.
-  const [closed, setClosed] = createSignal(() => {
+  const [closed, setClosed] = createStore<Record<string, true>>(() => {
     void props.query;
-    return new Set<string>();
+    return Object.create(null);
   });
   function Rows(row: { nodes: ReviewNode[] }) {
     return (
       <ul>
         <For each={row.nodes} keyed={(node) => node.key}>
           {(node) => {
-            const expanded = () => !closed().has(node().key);
+            const expanded = () => !closed[node().key];
             return (
               <li>
                 <button
@@ -146,14 +149,13 @@ export function SessionDiffTree(props: {
                     if (file) {
                       props.onSelect(file.path);
                     } else {
-                      setClosed((previous) => {
-                        const next = new Set(previous);
-                        if (next.has(node().key)) {
-                          next.delete(node().key);
+                      setClosed((draft) => {
+                        const key = node().key;
+                        if (draft[key]) {
+                          delete draft[key];
                         } else {
-                          next.add(node().key);
+                          draft[key] = true;
                         }
-                        return next;
                       });
                     }
                   }}

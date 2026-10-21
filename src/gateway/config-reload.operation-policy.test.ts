@@ -98,6 +98,24 @@ describe("Gateway operation policy reload", () => {
       "tools.gatewayPolicy.allow",
     ],
     ["removing policy", policyConfig, { tools: {} }, "tools.gatewayPolicy"],
+    [
+      "adding automation restrictions",
+      policyConfig,
+      { tools: { gatewayPolicy: { allow: ["read"], automations: { scope: "caller" } } } },
+      "tools.gatewayPolicy.automations",
+    ],
+    [
+      "changing automation restrictions",
+      { tools: { gatewayPolicy: { allow: ["read"], automations: { allowCommandJobs: true } } } },
+      { tools: { gatewayPolicy: { allow: ["read"], automations: { allowCommandJobs: false } } } },
+      "tools.gatewayPolicy.automations.allowCommandJobs",
+    ],
+    [
+      "removing automation restrictions",
+      { tools: { gatewayPolicy: { allow: ["read"], automations: { scope: "caller" } } } },
+      policyConfig,
+      "tools.gatewayPolicy.automations",
+    ],
     ["adding tools with policy", {}, policyConfig, "tools.gatewayPolicy"],
     ["removing tools with policy", policyConfig, {}, "tools.gatewayPolicy"],
   ] satisfies [string, OpenClawConfig, OpenClawConfig, string][])(

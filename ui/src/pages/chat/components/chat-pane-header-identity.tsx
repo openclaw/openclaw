@@ -12,12 +12,13 @@ import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
 import "../../../components/workspace-icon.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending, resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -25,6 +26,8 @@ import {
 } from "../../../lib/sessions/session-key.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import type { ChatPaneHeaderProps, ChatPaneParentSession } from "./chat-pane-header.types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 function revealLabel(platform: string | null): string {
   if (platform === "darwin") {
@@ -281,9 +284,12 @@ export function ProjectCrumb(props: ChatPaneHeaderProps) {
       label={t("chat.sessionHeader.workspaceAria", { workspace: props.workspaceLabel ?? "" })}
       triggerClass={`chat-pane__workspace-chip${!copied() && !props.workspaceIcon ? " chat-pane__workspace-chip--fallback-icon" : ""}`}
       triggerAttributes={{
-        title: props.mergedChrome
-          ? undefined
-          : (props.workspaceRoot ?? props.workspaceLabel ?? undefined),
+        title:
+          props.workspaceLabel === t("sessionHovercard.workspaceLabel")
+            ? props.workspaceLabel
+            : props.mergedChrome
+              ? undefined
+              : (props.workspaceRoot ?? props.workspaceLabel ?? undefined),
       }}
       items={items()}
       onSelect={(item) => {

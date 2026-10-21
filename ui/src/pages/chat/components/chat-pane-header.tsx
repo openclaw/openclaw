@@ -13,10 +13,11 @@ import { personActivityLink } from "../../../components/person-activity-link.ts"
 import { Icon } from "../../../components/solid/icon.tsx";
 import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
-import { redactLoginFailureError } from "../../../lib/connection-hints.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import "../../../components/tooltip.ts";
+import { redactLoginFailureError } from "../../../lib/connection-hints.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
@@ -33,6 +34,8 @@ import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
 import { ChatSessionPublicIndicator, ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
 import { ContinueInTerminalDialog } from "./continue-in-terminal-dialog.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export function PaneHeaderView(props: ChatPaneHeaderPresentation) {
   return (

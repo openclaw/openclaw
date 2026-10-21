@@ -169,6 +169,35 @@ it("hides archived pages in the restored sidebar before live data arrives", asyn
   ).toEqual([true, false, false]);
 });
 
+it("sorts built-in Pages alphabetically without reordering dashboards", async () => {
+  const { host, context, dom } = await createCachedHost();
+  const dashboardKeys = ["agent:main:dashboard:zulu", "agent:main:dashboard:alpha"];
+  host.restoreSidebarSnapshot({
+    ...emptySnapshot,
+    mode: "roster",
+    navigationView: "pages",
+    pageScopeId: context.agentSelection.state.scopeId,
+    pages: snapshotSessions(
+      dashboardKeys.map((key) => projectSidebarSession({ key, label: key, hasBoard: true })),
+    ),
+  });
+  host.invalidate();
+  await host.updateComplete;
+  const entries = [...dom.all(".sidebar-pages [data-sidebar-entry]")];
+  const routes = entries
+    .map((entry) => entry.getAttribute("data-sidebar-entry"))
+    .filter((entry): entry is string => Boolean(entry?.startsWith("route:")));
+  const routeLabels = routes.map(
+    (route) => dom.query(`[data-sidebar-entry="${route}"] a`)?.textContent?.trim() ?? "",
+  );
+  expect(routeLabels.length).toBeGreaterThan(4);
+  expect(routeLabels).not.toContain("");
+  expect(routeLabels).toEqual(routeLabels.toSorted((left, right) => left.localeCompare(right)));
+  expect(entries.map((entry) => entry.getAttribute("data-sidebar-entry")).slice(-2)).toEqual(
+    dashboardKeys.map((key) => `session:${key}`),
+  );
+});
+
 it("paints the restored roster and workspace in the first sidebar update", async () => {
   const { host, dom } = await createCachedHost();
   host.sidebarAgentsMode = "chip";

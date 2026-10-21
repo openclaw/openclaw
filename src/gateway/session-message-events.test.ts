@@ -37,6 +37,7 @@ import {
   sessionClientCredentialPath,
 } from "./session-message-client.test-support.js";
 import { registerCronSessionCompletionEventTests } from "./session-message-cron.test-support.js";
+import { findWatchedPresenceEntry, getConnId } from "./session-message-presence.test-support.js";
 import { registerRecoveredSubagentSessionEventTest } from "./session-message-subagent.test-support.js";
 import { createWorkerFanoutFixture } from "./session-message-worker.test-support.js";
 import { seedCompletedSessionTranscript } from "./session-row-fixtures.test-support.js";
@@ -327,7 +328,7 @@ describe("session.message websocket events", () => {
     const watchedWs = await harness.openWs();
     const instanceId = "presence-watched-sessions";
     try {
-      await connectOk(observerWs, { scopes: ["operator.read"] });
+      const observerConnId = getConnId(await connectOk(observerWs, { scopes: ["operator.read"] }));
       const watchedHello = await connectOk(watchedWs, {
         scopes: ["operator.read"],
         client: {
@@ -343,20 +344,7 @@ describe("session.message websocket events", () => {
       ).snapshot?.stateVersion?.presence;
       expect(initialPresenceVersion).toEqual(expect.any(Number));
 
-      const findWatchedEntry = (message: unknown) => {
-        const record = requireRecord(message, "presence event");
-        if (record.event !== "presence") {
-          return undefined;
-        }
-        const payload = requireRecord(record.payload, "presence payload");
-        const presence = Array.isArray(payload.presence) ? payload.presence : [];
-        return presence.find(
-          (entry): entry is Record<string, unknown> =>
-            Boolean(entry) &&
-            typeof entry === "object" &&
-            (entry as { instanceId?: unknown }).instanceId === instanceId,
-        );
-      };
+      const findWatchedEntry = (message: unknown) => findWatchedPresenceEntry(message, instanceId);
       const declaredKeys = ["agent:main:watch-00", "agent:main:watch-01"];
       const replacementKey = "agent:main:replacement";
       const storePath = await createSessionStoreFile();
@@ -383,6 +371,7 @@ describe("session.message websocket events", () => {
       const declaredEvent = await declaredPresence;
       const declaredEntry = findWatchedEntry(declaredEvent);
       expect(declaredEntry?.watchedSessions).toEqual(declaredKeys);
+      expect(declaredEntry?.deviceId).toEqual(expect.any(String));
       const ownerProfile = (await listProfiles()).find((profile) => profile.emails.length === 0);
       expect(ownerProfile).toBeDefined();
       expect(declaredEntry?.user).toEqual({
@@ -464,19 +453,30 @@ describe("session.message websocket events", () => {
         return Array.isArray(entry?.watchedSessions) && entry.watchedSessions[0] === replacementKey;
       });
       await rpcReq(watchedWs, "sessions.viewers.set", { sessionKeys: [replacementKey] });
-      await redeclaredPresence;
+      const redeclaredEvent = await redeclaredPresence;
 
+      // The live same-device observer keeps its row; the disconnected tab is removed.
       const disconnectPresence = onceMessage(observerWs, (message) => {
-        // A live sibling with the same signed device keeps the closed tab out of the roster.
-        const record = requireRecord(message, "presence event");
-        return record.event === "presence" && findWatchedEntry(record) === undefined;
+        return (
+          message.type === "event" &&
+          message.event === "presence" &&
+          findWatchedEntry(message) === undefined
+        );
       });
       watchedWs.close();
       const disconnectedEvent = await disconnectPresence;
-      expect(findWatchedEntry(disconnectedEvent)).toBeUndefined();
-      const hiddenPresenceVersion = hiddenEvent.stateVersion?.presence;
+      expect(requireRecord(disconnectedEvent.payload, "presence payload").presence).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            connectionId: observerConnId,
+            deviceId: declaredEntry?.deviceId,
+            reason: "connect",
+          }),
+        ]),
+      );
+      const redeclaredPresenceVersion = redeclaredEvent.stateVersion?.presence;
       expect(disconnectedEvent.stateVersion?.presence).toBeGreaterThan(
-        typeof hiddenPresenceVersion === "number" ? hiddenPresenceVersion : 0,
+        typeof redeclaredPresenceVersion === "number" ? redeclaredPresenceVersion : 0,
       );
     } finally {
       observerWs.close();

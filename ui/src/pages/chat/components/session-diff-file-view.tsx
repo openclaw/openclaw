@@ -3,9 +3,10 @@ import { createMemo, For, onSettled, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { pairSessionDiffLines } from "../../../lib/chat/session-diff-split.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { createDiffPresentation } from "./chat-diff-render.solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
@@ -17,12 +18,14 @@ import { SessionDiffFileBody } from "./session-diff-render.tsx";
 import { ReviewFilename } from "./session-diff-tree.tsx";
 import type { FileView } from "./session-diff-types.ts";
 
+registerEnglishCatalog(registerChatSessionEnglish);
+
 export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
   const {
     props,
     desktop,
     mobile,
-    collapsedPaths,
+    isCollapsed,
     wordDiffs,
     selectedPath,
     motionInstant,
@@ -147,7 +150,7 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
     // The keyed list retains this owner by source, not refreshed metadata.
     const source = () => fileProps.view.source;
     const file = () => fileProps.view.file;
-    const collapsed = () => collapsedPaths().has(file().path);
+    const collapsed = () => isCollapsed(file().path);
     // The pairing budget skips collapsed files. Keep its last real result while
     // the desktop reader is still painting its exit, rather than emptying Split.
     const rows = createMemo<ReturnType<typeof pairSessionDiffLines>>(

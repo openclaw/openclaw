@@ -70,46 +70,6 @@ function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string 
   return normalizeWhatsAppTarget(params.toolContext.currentChannelId) ?? undefined;
 }
 
-function decodeUploadFileMediaPayload(params: {
-  encoded: string;
-  contentType?: string;
-  fileName?: string;
-  maxBytes?: number;
-}): {
-  buffer: Buffer;
-  contentType?: string;
-  fileName?: string;
-} {
-  const dataUrl = /^data:([^;]+);base64,(.*)$/is.exec(params.encoded.trim());
-  const payload = dataUrl?.[2] ?? params.encoded;
-  if (params.maxBytes !== undefined) {
-    // Enforce the budget before canonicalization and decode so hostile input cannot force an
-    // oversized Buffer allocation before rejection.
-    const estimatedBytes = estimateBase64DecodedBytes(payload);
-    if (estimatedBytes > params.maxBytes) {
-      throw new Error(
-        `WhatsApp upload-file buffer exceeds configured media limit (${estimatedBytes} bytes > ${params.maxBytes} bytes).`,
-      );
-    }
-  }
-  const contentType = params.contentType ?? dataUrl?.[1];
-  const canonicalPayload = canonicalizeBase64(payload);
-  if (!canonicalPayload) {
-    throw new Error("WhatsApp upload-file buffer must be valid base64 or a base64 data URL.");
-  }
-  const buffer = Buffer.from(canonicalPayload, "base64");
-  if (params.maxBytes !== undefined && buffer.byteLength > params.maxBytes) {
-    throw new Error(
-      `WhatsApp upload-file buffer exceeds configured media limit (${buffer.byteLength} bytes > ${params.maxBytes} bytes).`,
-    );
-  }
-  return {
-    buffer,
-    ...(contentType ? { contentType } : {}),
-    ...(params.fileName ? { fileName: params.fileName } : {}),
-  };
-}
-
 async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParams) {
   const mediaUrl = readUploadFileMediaSource(params.params);
   const encodedPayload = readStringParam(params.params, "buffer", { trim: false });
@@ -134,14 +94,36 @@ async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParam
     cfg: params.cfg,
     accountId: resolved.accountId,
   });
-  const mediaPayload = encodedPayload
-    ? decodeUploadFileMediaPayload({
-        encoded: encodedPayload,
-        contentType,
-        fileName,
-        maxBytes: resolveWhatsAppMediaMaxBytes(account),
-      })
-    : undefined;
+  let mediaPayload: { buffer: Buffer; contentType?: string; fileName?: string } | undefined;
+  if (encodedPayload) {
+    const maxBytes = resolveWhatsAppMediaMaxBytes(account);
+    const dataUrl = /^data:([^;]+);base64,(.*)$/is.exec(encodedPayload.trim());
+    const payload = dataUrl?.[2] ?? encodedPayload;
+    // Enforce the budget before canonicalization and decode so hostile input cannot force an
+    // oversized Buffer allocation before rejection.
+    const estimatedBytes = estimateBase64DecodedBytes(payload);
+    if (estimatedBytes > maxBytes) {
+      throw new Error(
+        `WhatsApp upload-file buffer exceeds configured media limit (${estimatedBytes} bytes > ${maxBytes} bytes).`,
+      );
+    }
+    const mediaContentType = contentType ?? dataUrl?.[1];
+    const canonicalPayload = canonicalizeBase64(payload);
+    if (!canonicalPayload) {
+      throw new Error("WhatsApp upload-file buffer must be valid base64 or a base64 data URL.");
+    }
+    const buffer = Buffer.from(canonicalPayload, "base64");
+    if (buffer.byteLength > maxBytes) {
+      throw new Error(
+        `WhatsApp upload-file buffer exceeds configured media limit (${buffer.byteLength} bytes > ${maxBytes} bytes).`,
+      );
+    }
+    mediaPayload = {
+      buffer,
+      ...(mediaContentType ? { contentType: mediaContentType } : {}),
+      ...(fileName ? { fileName } : {}),
+    };
+  }
   const result = await sendMessageWhatsApp(resolved.to, readUploadFileCaptionText(params.params), {
     verbose: false,
     cfg: params.cfg,

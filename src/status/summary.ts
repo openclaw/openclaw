@@ -50,7 +50,7 @@ import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { readOpenClawStateWalHealth } from "../state/openclaw-state-db-cache.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { buildStatusCliProjection } from "./cli-projection.js";
+import { resolveMemoryPluginStatus } from "./memory-plugin.js";
 import {
   prepareStatusSessionStores,
   STATUS_RECENT_SESSION_LIMIT,
@@ -526,7 +526,22 @@ export async function prepareStatusSummary(
               }
             : {}),
           ...(options.includeCliProjection
-            ? { cliProjection: buildStatusCliProjection(cfg, publishedAgentList) }
+            ? {
+                cliProjection: {
+                  agents: {
+                    defaultId: publishedAgentList.selectionRequired
+                      ? null
+                      : (publishedAgentList.defaultId ?? null),
+                    ownership: publishedAgentList.ownership,
+                    selectionRequired: publishedAgentList.selectionRequired,
+                    rows: publishedAgentList.agents.map(({ id, name }) =>
+                      name ? { id, name } : { id },
+                    ),
+                  },
+                  updateChannel: cfg.update?.channel ?? null,
+                  memoryPlugin: resolveMemoryPluginStatus(cfg),
+                },
+              }
             : {}),
           sqliteWal:
             sqliteWal && !includeSensitive ? { ...sqliteWal, error: undefined } : sqliteWal,

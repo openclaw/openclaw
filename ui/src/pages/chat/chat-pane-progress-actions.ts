@@ -3,9 +3,12 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+
+registerChatSessionEnglish();
 
 type ProgressActionContext = {
   state: () => ChatPageHost | undefined;

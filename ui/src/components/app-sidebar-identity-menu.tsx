@@ -9,13 +9,13 @@ import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
+import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
+import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import {
   COMMAND_VALUE_PREFIX,
   renderSidebarHelpMenu,
   selectSidebarHelpLink,
-} from "./app-sidebar-agent-menu.tsx";
-import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
-import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
+} from "./sidebar-identity-menu-links.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
 import { createMenuControls, type MenuEntry, type MenuItem } from "./solid/menu.tsx";
@@ -23,7 +23,7 @@ import "./viewer-facepile.ts";
 import { ThemeModeToggle } from "./theme-mode-toggle.tsx";
 
 type SidebarIdentityMenuParams = {
-  position: { x: number; bottom: number; width: number };
+  position: { x: number; bottom: number; width: number; placement?: "right-end" };
   anchor?: HTMLElement;
   tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   nativeGatewaySnapshot: NativeGatewaysSnapshot | null;

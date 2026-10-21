@@ -7,7 +7,10 @@ import {
   openEngineStore,
   withEngineStoreAdmission,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
-import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  encodeMemoryEmbedding,
+  isPostgresSqlConnection,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -15,8 +18,10 @@ import { afterEach, expect, it } from "vitest";
 import { memoryTextSearchSchema, memoryVectorSearchSchema } from "./manager-search-schema.js";
 import {
   MemorySourceIndexKernel,
+  memoryChunkRowId,
   readMemorySourceChunks,
   type MemorySourceIndexReplacement,
+  type MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
 import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 
@@ -145,6 +150,137 @@ it.skipIf(!connection)(
         expect(
           db.prepare("SELECT hash FROM memory_index_sources WHERE path = ?").get(value.entry.path),
         ).toEqual({ hash: "second" });
+      } finally {
+        db.exec(`DROP SCHEMA "${namespace.replaceAll('"', '""')}" CASCADE`);
+        db.close();
+      }
+    });
+  },
+);
+
+it.skipIf(!connection).each([
+  { count: 2, retainedLast: false },
+  { count: 129, retainedLast: false },
+  { count: 2, retainedLast: true },
+])(
+  "PostgreSQL: keeps the last values for repeated chunk IDs ($count rows, retained=$retainedLast)",
+  ({ count, retainedLast }) => {
+    withEngineStoreAdmission(() => {
+      const artifacts = path.join(process.cwd(), ".artifacts");
+      fs.mkdirSync(artifacts, { recursive: true });
+      const root = tempDirs.make("memory-duplicate-postgres-", artifacts);
+      using anchor = openNodeSqliteDatabase(path.join(root, "anchor.sqlite"));
+      const db = openEngineStore({
+        anchor,
+        input: { connection: connection!, schemaPrefix: "memory_duplicate_test" },
+        schema: { id: "memory_source", version: 1, sqlite: "", postgres: sourceSchema },
+        openSqlite: () => {
+          throw new Error("Unexpected SQLite bootstrap");
+        },
+        prepareAnchor: () => {},
+        inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
+      });
+      if (!isPostgresSqlConnection(db)) {
+        throw new Error("Expected PostgreSQL");
+      }
+      const namespace = String(db.prepare("SELECT current_schema() AS namespace").get()!.namespace);
+      try {
+        admitStoreSearch(db, memoryVectorSearchSchema(3), { extension: "memory.vector" });
+        const state = {
+          vector: { enabled: true, available: true },
+          fts: { enabled: false, available: false },
+          hasVectorTable: true,
+        };
+        const rows: MemorySourceIndexRow[] = Array.from({ length: count }, (_, index) => {
+          const last = index === count - 1;
+          return {
+            chunk: {
+              startLine: 1,
+              endLine: 1,
+              hash: "repeated-content",
+              text: last ? "latest text" : "earlier text",
+              importance: last ? 9 : 1,
+              triggers: last ? "latest" : "earlier",
+              projectKey: last ? "latest-project" : "earlier-project",
+              provenance: {
+                originClass: last ? "owner" : "untrusted",
+                sessionKind: last ? "interactive" : "unknown",
+                observedAt: last ? 200 : 100,
+                supersedesKey: last ? "latest-source" : "earlier-source",
+              },
+            },
+            embedding: last && !retainedLast ? [1, 0, 0] : [0, 1, 0],
+            ...(last && retainedLast ? { retained: true } : {}),
+          };
+        });
+        const header = {
+          source: "memory" as const,
+          entry: { path: "memory/repeat.md", hash: "repeated", mtimeMs: 200, size: 3200 },
+          model: "test-model",
+          now: 200,
+          vectorReady: true,
+        };
+        const failedStatements: string[] = [];
+        const events = channel("openclaw.database.statement");
+        const observe = (event: unknown) => {
+          if (isRecord(event) && event.outcome === "error" && typeof event.sql === "string") {
+            failedStatements.push(event.sql);
+          }
+        };
+        events.subscribe(observe);
+        try {
+          db.runTransaction(() => new MemorySourceIndexKernel(db, state).replaceRows(header, rows));
+        } catch (error) {
+          // Preserve the native failing statement and synthetic conflict-key inputs in CI.
+          throw new Error(
+            `${String(error)}\n${JSON.stringify({
+              header,
+              count,
+              rows: [rows[0], rows.at(-1)],
+              failedStatements,
+              id: memoryChunkRowId(
+                header.source,
+                header.entry.path,
+                {
+                  startLine: 1,
+                  endLine: 1,
+                  hash: "repeated-content",
+                },
+                header.model,
+              ),
+            })}`,
+            { cause: error },
+          );
+        } finally {
+          events.unsubscribe(observe);
+        }
+        expect(
+          db
+            .prepare(`SELECT c.text, c.updated_at, encode(c.embedding, 'hex') AS canonical_embedding,
+          v.embedding::text AS vector, m.importance, m.triggers, m.project_key,
+          p.origin_class, p.session_kind, p.observed_at, p.supersedes_key
+        FROM memory_index_chunks c
+        JOIN memory_index_chunks_vec v USING (id)
+        JOIN memory_index_chunk_recall_metadata m ON m.chunk_id = c.id
+        JOIN memory_index_chunk_provenance p ON p.chunk_id = c.id`)
+            .all(),
+        ).toEqual([
+          {
+            text: retainedLast ? "earlier text" : "latest text",
+            updated_at: 200,
+            canonical_embedding: Buffer.from(
+              encodeMemoryEmbedding(retainedLast ? [0, 1, 0] : [1, 0, 0]),
+            ).toString("hex"),
+            vector: retainedLast ? "[0,1,0]" : "[1,0,0]",
+            importance: 9,
+            triggers: "latest",
+            project_key: "latest-project",
+            origin_class: "owner",
+            session_kind: "interactive",
+            observed_at: 200,
+            supersedes_key: "latest-source",
+          },
+        ]);
       } finally {
         db.exec(`DROP SCHEMA "${namespace.replaceAll('"', '""')}" CASCADE`);
         db.close();

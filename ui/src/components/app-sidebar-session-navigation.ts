@@ -5,7 +5,6 @@ import { serializeSidebarEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createQuestionPromptState } from "../app/question-prompt.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
-import { t } from "../i18n/index.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
@@ -16,7 +15,6 @@ import {
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
 import {
   SESSION_NAVIGATION_KEY_PARAM,
-  composerDraftSearch,
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../lib/sessions/route-navigation.ts";
@@ -31,6 +29,7 @@ import {
   type SidebarHomeSession,
 } from "./app-sidebar-agent-session-rows.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
+import { resolveSidebarDisplayAgent } from "./app-sidebar-display-agent.ts";
 import {
   personalSidebarZone,
   createSidebarPinnedSessions,
@@ -54,7 +53,6 @@ import {
   findProjectedSidebarSession,
   findSidebarSessionInTree,
   projectSidebarVisibleMainSession,
-  resolveActiveSidebarAgent,
   resolveLatestSidebarAgentSession,
   resolveSidebarMainSessionKey,
   type SidebarSessionNavigationState,
@@ -120,18 +118,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     };
   }
 
-  shouldPublishSessionData(): boolean {
-    return this.sessionProjection.shouldPublishSessionData(this, {
-      snapshot: Boolean(this.sidebarSnapshot),
-      sections: () =>
-        this.zonedVisibleSections(this.selectedAgentSessionRows(this.getSessionNavigationState()))
-          .sections,
-      tree: () => this.visibleSessionTreeInOrder(),
-      catalogs: () => this.sidebarSessionCatalogs(),
-      catalogRows: this.catalogLiveRows,
-      ownerOptions: () => this.ownerOptions,
-    });
-  }
+  abstract shouldPublishSessionData(): boolean;
 
   private admittedRoster:
     | { context: ApplicationContext; collapsedAgentIds: ReadonlySet<string> }
@@ -250,7 +237,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     return personalSidebarOwnerFilterId(this);
   }
 
-  private ownerOptions: readonly SessionOwnerOption[] = [];
+  protected ownerOptions: readonly SessionOwnerOption[] = [];
 
   get sessionOwnerOptions(): readonly SessionOwnerOption[] {
     this.selectedAgentSessionRows(this.getSessionNavigationState());
@@ -468,7 +455,11 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   /** Collapsed zones keep full rows for true header counts and status dots. */
   protected zonedVisibleSections(rows: SidebarRecentSession[]): SidebarVisibleSections {
     if (this.sidebarSnapshot) {
-      return restoreSnapshotSections(this.sidebarSnapshot, this.getRouteSessionKey());
+      const model = this.sidebarSnapshot;
+      return this.sectionsMemo.read(
+        () => [model, this.getRouteSessionKey()],
+        () => restoreSnapshotSections(model, this.getRouteSessionKey()),
+      );
     }
     return memoizedSidebarSections(
       this.sectionsMemo,
@@ -479,8 +470,17 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     );
   }
 
-  reconciledSidebarZone(rows = this.selectedAgentSessionRows(this.getSessionNavigationState())) {
-    return personalSidebarZone(this, rows);
+  private readonly cachedZone = new SidebarProjectionMemo<ReturnType<typeof personalSidebarZone>>();
+
+  reconciledSidebarZone(rows?: SidebarRecentSession[]) {
+    if (this.sidebarSnapshot) {
+      return this.cachedZone.read(
+        () => [this.sidebarSnapshot, this.getRouteSessionKey()],
+        () => personalSidebarZone(this, []),
+      );
+    }
+    const liveRows = rows ?? this.selectedAgentSessionRows(this.getSessionNavigationState());
+    return personalSidebarZone(this, liveRows);
   }
 
   /** Explicit personal unpins remove a reference, never shared session metadata. */
@@ -557,10 +557,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   activeChipAgent() {
-    return resolveActiveSidebarAgent({
+    return resolveSidebarDisplayAgent({
       activeId: this.expandedAgentId(),
       roster: this.context.agents.state.agentsList?.agents ?? [],
       identities: this.context.agentIdentity.entries(),
+      pending: this.context.agents.state.pendingAgent,
+      creation: this.context.chatSubmissions.readCreate(),
+      sessionKey: this.sessionKey,
+      chipMode: this.sidebarAgentsMode === "chip",
     });
   }
 
@@ -585,35 +589,6 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
         this.onNavigate?.("appearance");
       }
     }
-  }
-
-  askAgentCapabilities(agentId: string) {
-    this.sidebarMenus.closeAgentMenu();
-    if (!this.connected) {
-      return;
-    }
-    const key = this.agentResumeKey(agentId);
-    const target = sessionNavigationTarget({
-      face: "chat",
-      sessionKey: key,
-      fallbackAgentId: agentId,
-      basePath: this.basePath,
-      row: this.findSidebarSessionByKey(key),
-      mainKey: this.sessionMainKey(),
-    });
-    runSessionNavigationIntent(this, {
-      sessionKey: key,
-      agentId,
-      face: "chat",
-      commit: () => {
-        this.setApplicationSession(key, agentId);
-        this.onNavigate?.("chat", {
-          ...target.options,
-          search: composerDraftSearch(t("chat.welcome.suggestions.whatCanYouDo")),
-        });
-        return true;
-      },
-    });
   }
 
   knownSessionGroups(): string[] {
@@ -665,8 +640,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     navigationState: SidebarSessionNavigationState,
   ): SidebarRecentSession[] {
     if (this.sidebarSnapshot) {
-      return this.sidebarSnapshot.sessions.map((row) =>
-        restoreSnapshotSession(row, this.getRouteSessionKey()),
+      const model = this.sidebarSnapshot;
+      return this.rowsMemo.read(
+        () => [model, this.getRouteSessionKey()],
+        () => model.sessions.map((row) => restoreSnapshotSession(row, this.getRouteSessionKey())),
       );
     }
     const rows = this.rowsMemo.read(
