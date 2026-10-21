@@ -16,13 +16,8 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   resolveNodeIdFromList: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/media-store", () => ({
-  readMediaBuffer: vi.fn(),
-}));
-
-vi.mock("../shared/audit.js", () => ({
-  appendFileTransferAudit: vi.fn(),
-}));
+vi.mock("openclaw/plugin-sdk/media-store", () => ({ readMediaBuffer: vi.fn() }));
+vi.mock("../shared/audit.js", () => ({ appendFileTransferAudit: vi.fn() }));
 
 function execute(input: { contentBase64?: string; sourceMediaId?: string }) {
   return createFileWriteTool().execute("tool-call-1", {
@@ -41,16 +36,20 @@ function prepareWrite(size: number, sha256 = "a".repeat(64)) {
 }
 
 describe("file_write tool", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
-  it("rejects malformed inline base64 before invoking the node", async () => {
-    await expect(execute({ contentBase64: "AAA@@@" })).rejects.toThrow(
-      "contentBase64 is not valid base64",
-    );
-    expect(callGatewayTool).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["inline", "AAA@@@"],
+    ["whitespace-heavy", " ".repeat(1024 * 1024)],
+  ])(
+    "rejects malformed %s base64 without decoding or dispatching",
+    async (_name, contentBase64) => {
+      const bufferFrom = vi.spyOn(Buffer, "from");
+      await expect(execute({ contentBase64 })).rejects.toThrow("contentBase64 is not valid base64");
+      expect(bufferFrom).not.toHaveBeenCalled();
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects oversized inline base64 before invoking the node", async () => {
     const encodedLength = Math.ceil(((FILE_WRITE_HARD_MAX_BYTES + 1) * 4) / 3);
@@ -58,15 +57,6 @@ describe("file_write tool", () => {
       `decoded content is ${FILE_WRITE_HARD_MAX_BYTES + 1} bytes; maximum is ${FILE_WRITE_HARD_MAX_BYTES} bytes (${humanSize(FILE_WRITE_HARD_MAX_BYTES)})`,
     );
 
-    expect(callGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("rejects whitespace-heavy malformed input without decoding or dispatching", async () => {
-    const bufferFrom = vi.spyOn(Buffer, "from");
-    await expect(execute({ contentBase64: " ".repeat(1024 * 1024) })).rejects.toThrow(
-      "contentBase64 is not valid base64",
-    );
-    expect(bufferFrom).not.toHaveBeenCalled();
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
