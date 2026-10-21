@@ -144,11 +144,17 @@ describe("agent event handler", () => {
 
   function createHarness(params?: AgentEventTestHarnessOptions) {
     const projection = lineageProjection;
-    return createAgentEventTestHarness({
+    const h = createAgentEventTestHarness({
       ...params,
       loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshotMock,
       persistGatewaySessionLifecycleEventForEvent: persistGatewaySessionLifecycleEventMock,
       getSessionRowProjection: () => projection,
+    });
+    return Object.assign(h, {
+      async [Symbol.asyncDispose]() {
+        await h.handler.dispose();
+        h.chatRunState.clear();
+      },
     });
   }
 
@@ -279,7 +285,7 @@ describe("agent event handler", () => {
   });
 
   it("retires tool-only widgets when a new owner reuses the run before assistant text", async () => {
-    const h = createHarness();
+    await using h = createHarness();
     const runId = "widget-owner-reuse";
     const claim = () =>
       claimOwnedRun(runId, { sessionKey: "session-widgets", isControlUiVisible: false });
@@ -312,8 +318,6 @@ describe("agent event handler", () => {
       await stop();
       releaseAgentRunContext(runId, firstClaim);
       releaseAgentRunContext(runId, currentClaim);
-      await h.handler.dispose();
-      h.chatRunState.clear();
     }
   });
 
@@ -759,61 +763,56 @@ describe("agent event handler", () => {
   ] as const)("flushes candidate and assistant progress before %s", async (_name, stream, data) => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
-    const h = createNamedHarness("candidate-boundary");
+    await using h = createNamedHarness("candidate-boundary");
     h.toolEventRecipients.add("run-candidate-boundary", "conn-tools");
 
-    try {
-      await h.sendMany([
-        ["item", answerCandidate("answer-1", "Hel")],
-        ["assistant", { text: "Hel", delta: "Hel" }],
-        ["item", answerCandidate("answer-1", "Hello")],
-        ["assistant", { text: "Hello", delta: "lo" }],
-      ]);
-      expect(h.agent().length).toBeLessThanOrEqual(2);
+    await h.sendMany([
+      ["item", answerCandidate("answer-1", "Hel")],
+      ["assistant", { text: "Hel", delta: "Hel" }],
+      ["item", answerCandidate("answer-1", "Hello")],
+      ["assistant", { text: "Hello", delta: "lo" }],
+    ]);
+    expect(h.agent().length).toBeLessThanOrEqual(2);
 
-      await h.send(stream, data, { seq: 5 });
-      const delivered = [h.broadcast, h.broadcastToConnIds]
-        .flatMap((sink) =>
-          sink.mock.calls.flatMap(([event, payload], index) =>
-            event === "agent"
-              ? [
-                  {
-                    order: expectDefined(sink.mock.invocationCallOrder[index], "agent call order"),
-                    payload: payload as AgentEventPayload,
-                  },
-                ]
-              : [],
-          ),
-        )
-        .toSorted((a, b) => a.order - b.order)
-        .map(({ payload }) => payload);
-      expect(delivered.filter((payload) => payload.seq >= 3)).toMatchObject([
-        { seq: 3, stream: "item", data: answerCandidate("answer-1", "Hello") },
-        { seq: 4, stream: "assistant", data: { text: "Hello" } },
-        { seq: 5, stream, data },
-      ]);
-      expect(
-        delivered
-          .filter((payload) => payload.seq < 5 && payload.stream === "assistant")
-          .map((payload) => payload.data.delta)
-          .join(""),
-      ).toBe("Hello");
+    await h.send(stream, data, { seq: 5 });
+    const delivered = [h.broadcast, h.broadcastToConnIds]
+      .flatMap((sink) =>
+        sink.mock.calls.flatMap(([event, payload], index) =>
+          event === "agent"
+            ? [
+                {
+                  order: expectDefined(sink.mock.invocationCallOrder[index], "agent call order"),
+                  payload: payload as AgentEventPayload,
+                },
+              ]
+            : [],
+        ),
+      )
+      .toSorted((a, b) => a.order - b.order)
+      .map(({ payload }) => payload);
+    expect(delivered.filter((payload) => payload.seq >= 3)).toMatchObject([
+      { seq: 3, stream: "item", data: answerCandidate("answer-1", "Hello") },
+      { seq: 4, stream: "assistant", data: { text: "Hello" } },
+      { seq: 5, stream, data },
+    ]);
+    expect(
+      delivered
+        .filter((payload) => payload.seq < 5 && payload.stream === "assistant")
+        .map((payload) => payload.data.delta)
+        .join(""),
+    ).toBe("Hello");
 
-      await h.finish(6);
-      const completedCalls = h.broadcast.mock.calls.length;
-      vi.advanceTimersByTime(1_000);
-      expect(h.broadcast).toHaveBeenCalledTimes(completedCalls);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      await h.handler.dispose();
-      h.chatRunState.clear();
-    }
+    await h.finish(6);
+    const completedCalls = h.broadcast.mock.calls.length;
+    vi.advanceTimersByTime(1_000);
+    expect(h.broadcast).toHaveBeenCalledTimes(completedCalls);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("isolates candidate batches across runs and releases an aborted run before session reuse", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
-    const h = createHarness();
+    await using h = createHarness();
     h.registerNamed("candidate-abort");
     h.registerNamed("candidate-sibling");
     const deliveredFor = (runId: string) =>
@@ -822,86 +821,81 @@ describe("agent event handler", () => {
         .map(([, payload]) => payload as AgentEventPayload)
         .filter((payload) => payload.runId === runId);
 
-    try {
-      for (const [runId, prefix] of [
-        ["run-candidate-abort", "Alpha"],
-        ["run-candidate-sibling", "Beta"],
-      ] as const) {
-        await h.emitMany(runId, [
-          ["item", answerCandidate("shared-item-id", prefix)],
-          ["assistant", { text: prefix, delta: prefix }],
-          ["item", answerCandidate("shared-item-id", `${prefix} tail`)],
-          ["assistant", { text: `${prefix} tail`, delta: " tail" }],
-        ]);
-      }
-      expect(h.agent().length).toBeLessThanOrEqual(4);
-      const siblingBeforeAbort = deliveredFor("client-candidate-sibling");
-      await h.emit(
-        "run-candidate-abort",
-        "item",
-        answerCandidate("shared-item-id", "Alpha tail", "superseded"),
-        {
-          seq: 5,
-        },
-      );
-      await h.emit(
-        "run-candidate-abort",
-        "lifecycle",
-        { phase: "error", aborted: true, stopReason: "rpc" },
-        { seq: 6 },
-      );
-      expect(deliveredFor("client-candidate-sibling")).toEqual(siblingBeforeAbort);
-      expect(h.chat().at(-1)?.[1]).toMatchObject({
-        runId: "client-candidate-abort",
-        state: "aborted",
-        message: { content: [{ type: "text", text: "Alpha tail" }] },
-      });
-
-      h.register("run-reuse", "session-candidate-abort", "client-reuse");
-      await h.emitMany("run-reuse", [
-        ["item", answerCandidate("shared-item-id", "Fresh")],
-        ["assistant", { text: "Fresh", delta: "Fresh" }],
-        ["item", answerCandidate("shared-item-id", "Fresh", "selected")],
-        ["lifecycle", { phase: "end" }],
+    for (const [runId, prefix] of [
+      ["run-candidate-abort", "Alpha"],
+      ["run-candidate-sibling", "Beta"],
+    ] as const) {
+      await h.emitMany(runId, [
+        ["item", answerCandidate("shared-item-id", prefix)],
+        ["assistant", { text: prefix, delta: prefix }],
+        ["item", answerCandidate("shared-item-id", `${prefix} tail`)],
+        ["assistant", { text: `${prefix} tail`, delta: " tail" }],
       ]);
-      const abortedDeliveries = deliveredFor("client-candidate-abort");
-      vi.advanceTimersByTime(75);
-      expect(deliveredFor("client-candidate-abort")).toEqual(abortedDeliveries);
-      const sibling = deliveredFor("client-candidate-sibling");
-      expect(sibling.findLast((payload) => payload.stream === "item")?.data).toEqual(
-        answerCandidate("shared-item-id", "Beta tail"),
-      );
-      expect(
-        sibling
-          .filter((payload) => payload.stream === "assistant")
-          .map((payload) => payload.data.delta)
-          .join(""),
-      ).toBe("Beta tail");
-      await h.emit(
-        "run-candidate-sibling",
-        "item",
-        answerCandidate("shared-item-id", "Beta tail", "selected"),
-        { seq: 5 },
-      );
-      await h.end("run-candidate-sibling", 6);
-      expect(
-        h
-          .chat()
-          .map(([, payload]) => payload)
-          .filter((payload) => payload.state === "final")
-          .map((payload) => [payload.runId, payload.message.content[0].text]),
-      ).toEqual([
-        ["client-reuse", "Fresh"],
-        ["client-candidate-sibling", "Beta tail"],
-      ]);
-      const completedCalls = h.broadcast.mock.calls.length;
-      vi.advanceTimersByTime(1_000);
-      expect(h.broadcast).toHaveBeenCalledTimes(completedCalls);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      await h.handler.dispose();
-      h.chatRunState.clear();
     }
+    expect(h.agent().length).toBeLessThanOrEqual(4);
+    const siblingBeforeAbort = deliveredFor("client-candidate-sibling");
+    await h.emit(
+      "run-candidate-abort",
+      "item",
+      answerCandidate("shared-item-id", "Alpha tail", "superseded"),
+      {
+        seq: 5,
+      },
+    );
+    await h.emit(
+      "run-candidate-abort",
+      "lifecycle",
+      { phase: "error", aborted: true, stopReason: "rpc" },
+      { seq: 6 },
+    );
+    expect(deliveredFor("client-candidate-sibling")).toEqual(siblingBeforeAbort);
+    expect(h.chat().at(-1)?.[1]).toMatchObject({
+      runId: "client-candidate-abort",
+      state: "aborted",
+      message: { content: [{ type: "text", text: "Alpha tail" }] },
+    });
+
+    h.register("run-reuse", "session-candidate-abort", "client-reuse");
+    await h.emitMany("run-reuse", [
+      ["item", answerCandidate("shared-item-id", "Fresh")],
+      ["assistant", { text: "Fresh", delta: "Fresh" }],
+      ["item", answerCandidate("shared-item-id", "Fresh", "selected")],
+      ["lifecycle", { phase: "end" }],
+    ]);
+    const abortedDeliveries = deliveredFor("client-candidate-abort");
+    vi.advanceTimersByTime(75);
+    expect(deliveredFor("client-candidate-abort")).toEqual(abortedDeliveries);
+    const sibling = deliveredFor("client-candidate-sibling");
+    expect(sibling.findLast((payload) => payload.stream === "item")?.data).toEqual(
+      answerCandidate("shared-item-id", "Beta tail"),
+    );
+    expect(
+      sibling
+        .filter((payload) => payload.stream === "assistant")
+        .map((payload) => payload.data.delta)
+        .join(""),
+    ).toBe("Beta tail");
+    await h.emit(
+      "run-candidate-sibling",
+      "item",
+      answerCandidate("shared-item-id", "Beta tail", "selected"),
+      { seq: 5 },
+    );
+    await h.end("run-candidate-sibling", 6);
+    expect(
+      h
+        .chat()
+        .map(([, payload]) => payload)
+        .filter((payload) => payload.state === "final")
+        .map((payload) => [payload.runId, payload.message.content[0].text]),
+    ).toEqual([
+      ["client-reuse", "Fresh"],
+      ["client-candidate-sibling", "Beta tail"],
+    ]);
+    const completedCalls = h.broadcast.mock.calls.length;
+    vi.advanceTimersByTime(1_000);
+    expect(h.broadcast).toHaveBeenCalledTimes(completedCalls);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(["thinking", "lifecycle"] as const)(
@@ -1004,40 +998,6 @@ describe("agent event handler", () => {
     h.nowSpy?.mockRestore();
   });
 
-  it("retracts a visible item with a producer-prepared empty replacement", async () => {
-    const flushMs = 0;
-
-    vi.useFakeTimers();
-    vi.setSystemTime(10_000);
-    const h = createNamedHarness("control-replacement");
-    await h.send("assistant", {
-      itemId: "answer-1",
-      text: "Provisional answer",
-    });
-    expect(h.deltas()).toEqual(["Provisional answer"]);
-    await h.send(
-      "assistant",
-      {
-        itemId: "answer-1",
-        text: "",
-      },
-      { seq: 2 },
-    );
-    vi.advanceTimersByTime(flushMs);
-    await h.finish(3);
-
-    const payloads = h.chat().map(([, payload]) => payload);
-    expect(payloads).toMatchObject([
-      { state: "delta", message: { content: [{ text: "Provisional answer" }] } },
-      { state: "delta", replace: true, deltaText: "", message: { content: [{ text: "" }] } },
-      { state: "final" },
-    ]);
-    expect(payloads.at(-1)?.message).toBeUndefined();
-    expect(h.nodeChat()).toHaveLength(payloads.length);
-    await h.handler.dispose();
-    h.chatRunState.clear();
-  });
-
   it("preserves a glued leading NO_REPLY literal in cumulative chat snapshots", async () => {
     const h = createNamedHarness("4b", {
       now: 2_250,
@@ -1092,6 +1052,9 @@ describe("agent event handler", () => {
     expect(calls).toHaveLength(3);
     expect(calls[1]?.[1]).toMatchObject({ state: "delta", ...delta });
     expect(calls[2]?.[1]).toMatchObject(final);
+    if (next.text === "") {
+      expect(calls[2]?.[1].message).toBeUndefined();
+    }
     expect(h.nodeChat()).toHaveLength(3);
     h.nowSpy?.mockRestore();
   });
@@ -2504,7 +2467,7 @@ describe("agent event handler", () => {
     async ({ stream, controlUiVisible }) => {
       vi.useFakeTimers();
       vi.setSystemTime(10_000);
-      const h = createHarness();
+      await using h = createHarness();
       const delivery = controlUiVisible ? h.broadcast : h.broadcastToConnIds;
       const claim = (runId: string) =>
         claimOwnedRun(runId, {
@@ -2582,8 +2545,6 @@ describe("agent event handler", () => {
         await stop();
         releaseAgentRunContext(retiredRunId, retiredClaim);
         releaseAgentRunContext(activeRunId, activeClaim);
-        await h.handler.dispose();
-        h.chatRunState.clear();
       }
     },
   );
@@ -2591,7 +2552,7 @@ describe("agent event handler", () => {
   it("starts fresh chat text when a new owner reuses a source run id with a queued tail", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
-    const h = createHarness();
+    await using h = createHarness();
     const runId = "run-owner-reuse";
     const claim = () =>
       claimOwnedRun(runId, { sessionKey: "session-reuse", isControlUiVisible: false });
@@ -2639,8 +2600,6 @@ describe("agent event handler", () => {
       await stop();
       releaseAgentRunContext(runId, firstClaim);
       releaseAgentRunContext(runId, currentClaim);
-      await h.handler.dispose();
-      h.chatRunState.clear();
     }
   });
 
@@ -2649,7 +2608,7 @@ describe("agent event handler", () => {
     async (change) => {
       vi.useFakeTimers();
       vi.setSystemTime(10_000);
-      const h = createHarness();
+      await using h = createHarness();
       const runId = "run-hidden-audience";
       const claimId = claimOwnedRun(runId, { sessionKey: "session-A", isControlUiVisible: false });
       h.sessionMessageSubscribers.subscribe("conn-A", "session-A");
@@ -2708,8 +2667,6 @@ describe("agent event handler", () => {
       } finally {
         await stop();
         releaseAgentRunContext(runId, claimId);
-        await h.handler.dispose();
-        h.chatRunState.clear();
       }
     },
   );

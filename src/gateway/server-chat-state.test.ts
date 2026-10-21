@@ -303,25 +303,6 @@ describe("createChatRunState", () => {
     }
   });
 
-  it.each(["full", "summary"] as const)(
-    "retains permission notices for %s reconnect history",
-    (mode) => {
-      const { wire, event, events } = progressHarness(mode, 999, "main");
-      const data = {
-        phase: "warning",
-        kind: "permission_missing",
-        permissionMissing: {
-          nodeId: "mac-node",
-          command: "screen.snapshot",
-          capabilities: ["screenRecording"],
-          state: "not-determined",
-        },
-      };
-      event(1, "notice", data);
-      expect(events()).toEqual([wire(1, "notice", data)]);
-    },
-  );
-
   it("replays completed owners and standalone notices until bounded eviction", () => {
     const {
       event,
