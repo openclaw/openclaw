@@ -113,7 +113,7 @@ function renderQueue(
     update(props);
   } else {
     const view = mountSolid(renderChatQueueSolid, props, container);
-    queues.set(container, view.update);
+    queues.set(container, (nextProps) => view.update(nextProps));
     onTestFinished(() => {
       queues.delete(container);
       view.dispose();

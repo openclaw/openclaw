@@ -104,7 +104,9 @@ describe("cli program (nodes media)", () => {
     await runNodesCommand(cameraArgs("snap", "--facing", "both"));
 
     const invokeCalls = nodeInvokeCalls();
-    const facings = invokeCalls.map((call) => call.commandParams.facing).toSorted();
+    const facings = invokeCalls
+      .map((call) => call.commandParams.facing)
+      .toSorted((a, b) => String(a).localeCompare(String(b)));
     expect(facings).toEqual(["back", "front"]);
 
     const mediaPaths = getFirstRuntimeLogLine()

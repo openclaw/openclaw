@@ -48,11 +48,11 @@ export function useSnapshotFixture(defaults: Partial<SnapshotOptions> = {}) {
   return Object.assign(paths, {
     execSource,
     snapshot,
-    query(sql: string, file = paths.targetPath) {
+    query(this: void, sql: string, file = paths.targetPath) {
       using database = new (requireNodeSqlite().DatabaseSync)(file, { readOnly: true });
       return database.prepare(sql).all();
     },
-    async expectSnapshotSuccess(options: Partial<SnapshotOptions> = {}) {
+    async expectSnapshotSuccess(this: void, options: Partial<SnapshotOptions> = {}) {
       const receipt = await snapshot(options);
       const published = await fs.readFile(options.targetPath ?? paths.targetPath);
       expect(receipt).toEqual({
@@ -63,6 +63,7 @@ export function useSnapshotFixture(defaults: Partial<SnapshotOptions> = {}) {
       return published;
     },
     async expectSnapshotFailureWithoutTarget(
+      this: void,
       pattern: RegExp,
       options: Partial<SnapshotOptions> = {},
     ) {

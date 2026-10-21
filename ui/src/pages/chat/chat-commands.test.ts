@@ -33,8 +33,10 @@ function requireCommandByName(name: string) {
 
 function resetHost(confirm: () => Promise<boolean>) {
   const reset = vi.fn();
+  const request = vi.fn();
   return {
-    client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+    request,
+    client: { request } as unknown as GatewayBrowserClient,
     connected: true,
     hello: sessionMutationGatewayHello(),
     connectionEpoch: 1,
@@ -294,7 +296,7 @@ describe("conversation reset confirmation", () => {
     host.chatRunId = command === "stop" ? "run-1" : null;
     const result = await dispatchChatSlashCommand(host as never, command, "");
     expect(result).toBe("failed");
-    expect(host.client.request).not.toHaveBeenCalled();
+    expect(host.request).not.toHaveBeenCalled();
     expect(host.sessions.reset).not.toHaveBeenCalled();
     expect(host.lastError).toBeTruthy();
   });
