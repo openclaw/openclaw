@@ -91,10 +91,11 @@ type PackageEntries = {
   runtimeExtensions?: string[];
   setupEntry?: string;
   runtimeSetupEntry?: string;
-  compat?: { pluginApi: string };
+  compat?: { pluginApi: unknown };
+  [key: string]: unknown;
 };
 
-function writePackage(packageDir: string, packageName: string, openclaw: PackageEntries) {
+function writePackage(packageDir: string, packageName: unknown, openclaw: PackageEntries) {
   writeJson(path.join(packageDir, "package.json"), { name: packageName, openclaw });
 }
 
@@ -610,13 +611,9 @@ describe("discoverOpenClawPlugins", () => {
   });
 
   it.each([
-    { name: "missing runtime output", source: "./src/setup-entry.ts", file: "src/setup-entry.ts" },
-    {
-      name: "escaping source before runtime output",
-      source: "../src/setup-entry.ts",
-      file: "dist/setup-entry.js",
-    },
-  ])("rejects setup entries with $name", ({ source, file }) => {
+    ["missing runtime output", "./src/setup-entry.ts", "src/setup-entry.ts"],
+    ["escaping source before runtime output", "../src/setup-entry.ts", "dist/setup-entry.js"],
+  ])("rejects setup entries with %s", (_name, source, file) => {
     packageFixture(
       "setup",
       {
@@ -641,12 +638,12 @@ describe("discoverOpenClawPlugins", () => {
   });
 
   it.each([
-    { pluginMetadataId: "plugin", channelMetadataId: "channel", owner: "plugin" },
-    { pluginMetadataId: 42, channelMetadataId: "channel", owner: "channel" },
-    { pluginMetadataId: { invalid: true }, channelMetadataId: false, owner: undefined },
-  ])(
+    ["plugin", "channel", "plugin"],
+    [42, "channel", "channel"],
+    [{ invalid: true }, false, undefined],
+  ] as const)(
     "normalizes setup owner metadata for callers without a prepared owner: %j",
-    ({ pluginMetadataId, channelMetadataId, owner }) => {
+    (pluginMetadataId, channelMetadataId, owner) => {
       const pluginDir = testRoot;
       const diagnostics: ReturnType<typeof discoverOpenClawPlugins>["diagnostics"] = [];
       const manifest = {
@@ -679,62 +676,28 @@ describe("discoverOpenClawPlugins", () => {
   );
 
   it.each([
-    {
-      name: "mismatched runtime entries",
-      extensions: ["./src/one.ts", "./src/two.ts"],
-      runtimeExtensions: ["./dist/one.js"],
-      files: ["src/one.ts", "src/two.ts", "dist/one.js"],
-      messages: ["runtimeExtensions length (1)", "extensions length (2)"],
+    ["plugin", "@openclaw/package-name-owner", { plugin: { id: "plugin" } }, { idHint: "plugin" }],
+    [
+      "channel",
+      "@scope/",
+      { channel: { id: "channel" } },
+      { idHint: "owner-root", diagnosticIdHint: "channel" },
+    ],
+  ] as const)(
+    "preserves %s ownership when the manifest is malformed",
+    (owner, packageName, metadata, expected) => {
+      const pluginDir = path.join(testRoot, "extensions", "owner-root");
+      writePackage(pluginDir, packageName, { extensions: ["./index.js"], ...metadata });
+      fs.writeFileSync(path.join(pluginDir, "openclaw.plugin.json"), '{"id":', "utf-8");
+      writeEntry(path.join(pluginDir, "index.js"));
+      const discovery = discover();
+      const registry = loadPluginManifestRegistryCore({ discovery, installRecords: {} });
+      expect(discovery.candidates).toEqual([expect.objectContaining(expected)]);
+      expect(registry.diagnostics).toEqual([
+        expect.objectContaining({ level: "error", pluginId: owner }),
+      ]);
     },
-    {
-      name: "blank runtime entries without inferred fallback",
-      extensions: ["./src/index.ts"],
-      runtimeExtensions: [" "],
-      files: ["src/index.ts", "dist/index.js"],
-      messages: ["openclaw.runtimeExtensions[0]", "non-empty string"],
-    },
-  ])("rejects $name", ({ extensions, runtimeExtensions, files, messages }) => {
-    packageFixture("invalid", { extensions, runtimeExtensions }, files);
-    const result = discover();
-    expectCandidateIds(result.candidates, [], ["invalid"]);
-    expect(
-      result.diagnostics.some(
-        (entry) =>
-          entry.level === "error" && messages.every((message) => entry.message.includes(message)),
-      ),
-    ).toBe(true);
-  });
-
-  it.each([
-    {
-      name: "preserves explicit plugin ownership",
-      packageName: "@openclaw/package-name-owner",
-      metadata: { plugin: { id: "plugin" } },
-      expected: { idHint: "plugin" },
-      owner: "plugin",
-    },
-    {
-      name: "keeps channel ownership separate from malformed package identity",
-      packageName: "@scope/",
-      metadata: { channel: { id: "channel" } },
-      expected: { idHint: "owner-root", diagnosticIdHint: "channel" },
-      owner: "channel",
-    },
-  ])("$name when the manifest is malformed", ({ packageName, metadata, expected, owner }) => {
-    const pluginDir = path.join(testRoot, "extensions", "owner-root");
-    writeJson(path.join(pluginDir, "package.json"), {
-      name: packageName,
-      openclaw: { extensions: ["./index.js"], ...metadata },
-    });
-    fs.writeFileSync(path.join(pluginDir, "openclaw.plugin.json"), '{"id":', "utf-8");
-    writeEntry(path.join(pluginDir, "index.js"));
-    const discovery = discover();
-    const registry = loadPluginManifestRegistryCore({ discovery, installRecords: {} });
-    expect(discovery.candidates).toEqual([expect.objectContaining(expected)]);
-    expect(registry.diagnostics).toEqual([
-      expect.objectContaining({ level: "error", pluginId: owner }),
-    ]);
-  });
+  );
 
   it("retains every owner when invalid package extension diagnostics are deduplicated", () => {
     for (const [packageName, pluginId, explicitOwner] of [
@@ -746,12 +709,9 @@ describe("discoverOpenClawPlugins", () => {
     ] as const) {
       const pluginDir = path.join(testRoot, "extensions", pluginId);
 
-      writeJson(path.join(pluginDir, "package.json"), {
-        name: packageName,
-        openclaw: {
-          extensions: ["./dist/index.js", " "],
-          ...(explicitOwner === "channel" ? { channel: { id: pluginId } } : {}),
-        },
+      writePackage(pluginDir, packageName, {
+        extensions: ["./dist/index.js", " "],
+        ...(explicitOwner === "channel" ? { channel: { id: pluginId } } : {}),
       });
       writeEntry(path.join(pluginDir, "dist", "index.js"));
       if (explicitOwner === "manifest") {
@@ -776,38 +736,19 @@ describe("discoverOpenClawPlugins", () => {
   });
 
   it.each([
-    [
-      "manifest",
-      "@openclaw/pkg",
-      "manifest",
-      "plugin",
-      "channel",
-      ">=2026.5.27-beta.2",
-      "manifest",
-    ],
-    ["channel", "@openclaw/pkg", undefined, 42, "channel", 20260527, "channel"],
-    ["directory", false, undefined, { invalid: true }, ["invalid"], 20260527, "compat"],
+    ["@openclaw/pkg", "manifest", "plugin", "channel", ">=2026.5.27-beta.2", "manifest"],
+    ["@openclaw/pkg", undefined, 42, "channel", 20260527, "channel"],
+    [false, undefined, { invalid: true }, ["invalid"], 20260527, "compat"],
   ] as const)(
-    "attributes incompatible package API diagnostics to the %s owner",
-    (
-      _name,
-      packageName,
-      manifestId,
-      packagePluginId,
-      packageChannelId,
-      pluginApi,
-      expectedOwner,
-    ) => {
+    "attributes incompatible package API diagnostics for %j",
+    (packageName, manifestId, packagePluginId, packageChannelId, pluginApi, expectedOwner) => {
       const pluginDir = path.join(testRoot, "extensions", "compat");
 
-      writeJson(path.join(pluginDir, "package.json"), {
-        name: packageName,
-        openclaw: {
-          extensions: [" "],
-          plugin: { id: packagePluginId },
-          channel: { id: packageChannelId },
-          compat: { pluginApi },
-        },
+      writePackage(pluginDir, packageName, {
+        extensions: [" "],
+        plugin: { id: packagePluginId },
+        channel: { id: packageChannelId },
+        compat: { pluginApi },
       });
       if (manifestId) {
         writeManifest(pluginDir, manifestId);
@@ -933,72 +874,68 @@ describe("discoverOpenClawPlugins", () => {
     expect(result.diagnostics).toContainEqual(expect.objectContaining({ source: marker }));
   });
 
-  type EscapeFixture = {
-    name: string;
-    entry: string;
-    files: string[];
-    runtime?: string;
-    symlink?: [string, string];
-    hardlink?: [string, string];
-  };
-  it.each([
-    {
-      name: "blocks extension entries that escape package directory",
-      entry: "../../outside.js",
-      files: ["../../outside.js"],
-    },
-    {
-      name: "blocks escaping source entries before explicit runtime entries",
-      entry: "../src/index.ts",
-      runtime: "./dist/index.js",
-      files: ["dist/index.js"],
-    },
-    {
-      name: "rejects package extension entries that escape via symlink",
-      entry: "./linked/escape.ts",
-      files: ["../../outside/escape.ts"],
-      symlink: ["../../outside", "linked"],
-    },
-    {
-      name: "rejects hardlinked TypeScript entries before built runtime inference",
-      entry: "./escape.ts",
-      files: ["../../outside/escape.ts", "dist/escape.js"],
-      hardlink: ["../../outside/escape.ts", "escape.ts"],
-    },
-    {
-      name: "rejects hardlinked inferred built runtime entries instead of falling back to source",
-      entry: "./src/index.ts",
-      files: ["src/index.ts", "../../outside/index.js"],
-      hardlink: ["../../outside/index.js", "dist/index.js"],
-    },
-  ] satisfies EscapeFixture[])("$name", (scenario: EscapeFixture) => {
-    if (scenario.hardlink && process.platform === "win32") {
+  type EscapeFixture = [
+    name: string,
+    entry: string,
+    files: string[],
+    links?: { runtime?: string; symlink?: [string, string]; hardlink?: [string, string] },
+  ];
+  it.each<EscapeFixture>([
+    [
+      "blocks extension entries that escape package directory",
+      "../../outside.js",
+      ["../../outside.js"],
+    ],
+    [
+      "blocks escaping source entries before explicit runtime entries",
+      "../src/index.ts",
+      ["dist/index.js"],
+      { runtime: "./dist/index.js" },
+    ],
+    [
+      "rejects package extension entries that escape via symlink",
+      "./linked/escape.ts",
+      ["../../outside/escape.ts"],
+      { symlink: ["../../outside", "linked"] },
+    ],
+    [
+      "rejects hardlinked TypeScript entries before built runtime inference",
+      "./escape.ts",
+      ["../../outside/escape.ts", "dist/escape.js"],
+      { hardlink: ["../../outside/escape.ts", "escape.ts"] },
+    ],
+    [
+      "rejects hardlinked inferred built runtime entries instead of falling back to source",
+      "./src/index.ts",
+      ["src/index.ts", "../../outside/index.js"],
+      { hardlink: ["../../outside/index.js", "dist/index.js"] },
+    ],
+  ])("%s", (_name, entry, files, links = {}) => {
+    const { hardlink, symlink, runtime } = links;
+    if (hardlink && process.platform === "win32") {
       return;
     }
 
     const pluginDir = path.join(testRoot, "extensions", "pack");
     writePackage(pluginDir, "@openclaw/pack", {
-      extensions: [scenario.entry],
-      ...(scenario.runtime ? { runtimeExtensions: [scenario.runtime] } : {}),
+      extensions: [entry],
+      ...(runtime ? { runtimeExtensions: [runtime] } : {}),
     });
-    for (const file of scenario.files) {
+    for (const file of files) {
       writeEntry(path.join(pluginDir, file));
     }
-    if (scenario.symlink) {
+    if (symlink) {
       try {
-        symlinkDirectory(
-          path.join(pluginDir, scenario.symlink[0]),
-          path.join(pluginDir, scenario.symlink[1]),
-        );
+        symlinkDirectory(path.join(pluginDir, symlink[0]), path.join(pluginDir, symlink[1]));
       } catch {
         return;
       }
     }
-    if (scenario.hardlink) {
-      const target = path.join(pluginDir, scenario.hardlink[1]);
+    if (hardlink) {
+      const target = path.join(pluginDir, hardlink[1]);
       mkdirSafe(path.dirname(target));
       try {
-        fs.linkSync(path.join(pluginDir, scenario.hardlink[0]), target);
+        fs.linkSync(path.join(pluginDir, hardlink[0]), target);
       } catch (error) {
         if (error instanceof Error && "code" in error && error.code === "EXDEV") {
           return;

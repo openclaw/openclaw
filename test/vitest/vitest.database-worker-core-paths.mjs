@@ -1056,7 +1056,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/snapshot/git-backup.test.ts",
   "src/snapshot/session-cold-storage-backup.test.ts",
   "src/plugins/conversation-binding.test.ts",
-  "src/plugins/conversation-binding.worker.test.ts",
   "src/plugins/conversation-binding.sqlite.test.ts",
   "src/plugins/legacy-session-surfaces.state-migration.test.ts",
   "src/state/backup-run-records.test.ts",

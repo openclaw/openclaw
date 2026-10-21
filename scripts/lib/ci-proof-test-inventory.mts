@@ -4797,7 +4797,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/plugin-sdk/persistent-dedupe.worker.test.ts",
   "src/plugin-sdk/test-helpers/temp-home.test.ts",
   "src/plugin-state/plugin-blob-store.test.ts",
-  "src/plugins/conversation-binding.worker.test.ts",
   "src/plugins/installed-plugin-index-records.test.ts",
   "src/plugins/plugin-registry-inspection.test.ts",
   "src/plugins/registry-refresh.test.ts",
