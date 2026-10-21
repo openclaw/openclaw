@@ -15,7 +15,7 @@ import { PlaceBrowser } from "../pages/new-session/place-browser.tsx";
 import "../styles/new-session.css";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { Icon } from "./solid/icon.tsx";
-import { Menu } from "./solid/menu.tsx";
+import { Menu, type MenuEntry } from "./solid/menu.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 
 registerEnglishCatalog(registerSessionOrganizationEnglish);
@@ -163,6 +163,35 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         },
       ]);
       const selectedEnvironment = () => environmentOptions()[worktree() ? 1 : 0]!;
+      const environmentItems = createMemo<MenuEntry[]>(() =>
+        environmentOptions().map((option) => ({
+          id: option.value,
+          label: `${option.label}, ${option.description}`,
+          type: "radio" as const,
+          checked: option.value === selectedEnvironment().value,
+          disabled: saving(),
+          class: "session-group-defaults__mode-option",
+          attributes: {
+            "data-environment-mode": option.value,
+            "data-selected": option.value === selectedEnvironment().value ? "" : undefined,
+            "data-initial-focus": option.value === selectedEnvironment().value ? "" : undefined,
+          },
+          icon: (
+            <span
+              class="new-session-page__target-icon session-group-defaults__mode-option-icon"
+              aria-hidden="true"
+            >
+              <Icon name={option.icon} />
+            </span>
+          ),
+          content: (
+            <span class="session-group-defaults__resolved-copy">
+              <strong>{option.label}</strong>
+              <small>{option.description}</small>
+            </span>
+          ),
+        })),
+      );
       const environmentState = () =>
         repository() === "checking"
           ? "checking"
@@ -328,35 +357,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                       label={`${t("sessionsView.groupDefaultsMode")}: ${selectedEnvironment().label}`}
                       disabled={saving()}
                       onSelect={(item) => selectWorktree(item.id === "worktree")}
-                      items={environmentOptions().map((option) => ({
-                        id: option.value,
-                        label: `${option.label}, ${option.description}`,
-                        type: "radio" as const,
-                        checked: option.value === selectedEnvironment().value,
-                        disabled: saving(),
-                        class: "session-group-defaults__mode-option",
-                        attributes: {
-                          "data-environment-mode": option.value,
-                          "data-selected":
-                            option.value === selectedEnvironment().value ? "" : undefined,
-                          "data-initial-focus":
-                            option.value === selectedEnvironment().value ? "" : undefined,
-                        },
-                        icon: (
-                          <span
-                            class="new-session-page__target-icon session-group-defaults__mode-option-icon"
-                            aria-hidden="true"
-                          >
-                            <Icon name={option.icon} />
-                          </span>
-                        ),
-                        content: (
-                          <span class="session-group-defaults__resolved-copy">
-                            <strong>{option.label}</strong>
-                            <small>{option.description}</small>
-                          </span>
-                        ),
-                      }))}
+                      items={environmentItems()}
                       trigger={
                         <>
                           <span class="new-session-page__target-icon" aria-hidden="true">

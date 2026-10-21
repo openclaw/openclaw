@@ -1,6 +1,6 @@
 import "../../styles/logs.css";
 import type { LogsTailResult } from "@openclaw/gateway-protocol";
-import { createSignal, onCleanup, onSettled } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
   beginPanelRefresh,
@@ -172,10 +172,6 @@ export function LogsPage() {
     enabled: autoFollow,
     identity: () => gateway.epoch,
   });
-  onCleanup(() => {
-    disposed = true;
-    cancelRequest();
-  });
   onSettled(() => {
     const resetContentScroll = () => {
       const content = stream?.closest<HTMLElement>(".content");
@@ -186,7 +182,12 @@ export function LogsPage() {
     };
     resetContentScroll();
     const frame = requestAnimationFrame(resetContentScroll);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      disposed = true;
+      request?.abort();
+      request = null;
+      cancelAnimationFrame(frame);
+    };
   });
 
   return (

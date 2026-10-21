@@ -8,11 +8,12 @@ import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { userProfilesDb } from "./user-profiles-internal.js";
 import type { EnterpriseGitHubIdentity } from "./user-profiles.types.js";
 
-export function selectEnterpriseGitHubIdentities(
+/** Every proof-validated Enterprise identity per profile; callers pick a host or require one. */
+export function selectVerifiedEnterpriseGitHubIdentities(
   db: EngineConnection,
   profileIds?: readonly string[],
   host?: string,
-): Map<string, EnterpriseGitHubIdentity> {
+): Map<string, EnterpriseGitHubIdentity[]> {
   if (
     profileIds?.length === 0 ||
     !tableHasColumn(db, "user_profile_identities", "verified_email_json")
@@ -46,8 +47,7 @@ export function selectEnterpriseGitHubIdentities(
         ),
     ).rows.map((row) => [row.email, row]),
   );
-  const identities = new Map<string, EnterpriseGitHubIdentity>();
-  const ambiguous = new Set<string>();
+  const identities = new Map<string, EnterpriseGitHubIdentity[]>();
   for (const row of rows) {
     const principal = parseEnterpriseGitHubPrincipal(`${row.provider}:${row.subject}`);
     const login = row.canonical_login ? normalizeGitHubLogin(row.canonical_login) : undefined;
@@ -75,18 +75,47 @@ export function selectEnterpriseGitHubIdentities(
       continue;
     }
     const email = normalizeVerifiedEmail(proof.email);
-    if (identities.has(row.profile_id)) {
-      ambiguous.add(row.profile_id);
-    }
-    identities.set(row.profile_id, {
+    const verified = identities.get(row.profile_id) ?? [];
+    verified.push({
       host: principal.host,
       accountId,
       login,
       ...(email ? { verifiedEmail: email } : {}),
     });
+    identities.set(row.profile_id, verified);
   }
-  for (const profileId of ambiguous) {
-    identities.delete(profileId);
+  return identities;
+}
+
+/** Display and credit need one identity; a profile with several verified ones shows none. */
+export function selectEnterpriseGitHubIdentities(
+  db: EngineConnection,
+  profileIds?: readonly string[],
+  host?: string,
+): Map<string, EnterpriseGitHubIdentity> {
+  return unambiguousEnterpriseGitHubIdentities(
+    selectVerifiedEnterpriseGitHubIdentities(db, profileIds, host),
+  );
+}
+
+/** Host/account pairs of verified identities, in a stable order, for catalog facts. */
+export function enterpriseGitHubAccountPairs(identities: readonly EnterpriseGitHubIdentity[]) {
+  return identities
+    .map(({ host, accountId }) => ({ host, accountId }))
+    .toSorted(
+      (left, right) => left.host.localeCompare(right.host) || left.accountId - right.accountId,
+    );
+}
+
+export function unambiguousEnterpriseGitHubIdentities(
+  verified: ReadonlyMap<string, readonly EnterpriseGitHubIdentity[]>,
+): Map<string, EnterpriseGitHubIdentity> {
+  const identities = new Map<string, EnterpriseGitHubIdentity>();
+  for (const [profileId, candidates] of verified) {
+    const [identity] = candidates;
+    if (identity && candidates.length === 1) {
+      identities.set(profileId, identity);
+    }
   }
   return identities;
 }

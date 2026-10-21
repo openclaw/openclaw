@@ -80,6 +80,10 @@ function expectHumanApprovalRoundtrip() {
     "plugin.approval.request",
     "plugin.approval.waitDecision",
   ]);
+  expect(mockCallGatewayTool.mock.calls.map(([, options]) => options)).toEqual([
+    { timeoutMs: 130_000 },
+    { timeoutMs: 130_000 },
+  ]);
 }
 
 function mockApprovalDecision(id: string, decision: "allow-once" | "allow-always" | "deny") {
@@ -134,7 +138,7 @@ function createParams() {
     requestApproval: async (request) =>
       (await callGatewayTool(
         "plugin.approval.request",
-        { timeoutMs: request.timeoutMs },
+        { timeoutMs: request.transportTimeoutMs },
         {
           pluginId: "codex",
           ...request,
@@ -146,7 +150,7 @@ function createParams() {
     waitForApproval: async (request) => {
       const result = (await callGatewayTool(
         "plugin.approval.waitDecision",
-        { timeoutMs: request.timeoutMs },
+        { timeoutMs: request.transportTimeoutMs },
         { id: request.approvalId },
       )) as { id?: string } & Partial<
         NonNullable<Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>>

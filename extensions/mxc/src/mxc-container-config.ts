@@ -27,7 +27,6 @@ type FilesystemPathSpec = {
 };
 
 type BaselineApplicationContext = {
-  projectDir: string;
   hostEnv: BaselineHostEnv;
 };
 
@@ -40,9 +39,8 @@ type MxcWorkspaceContext = {
   workspaceAccess: SandboxContext["workspaceAccess"];
 };
 
-export function resolveCurrentBaselineContext(projectDir: string): BaselineApplicationContext {
+export function resolveCurrentBaselineContext(): BaselineApplicationContext {
   return {
-    projectDir: path.resolve(projectDir),
     hostEnv: {
       SystemRoot: process.env.SystemRoot,
       WINDIR: process.env.WINDIR,
@@ -181,13 +179,6 @@ function buildFilesystemConfig(params: {
     ...protectedSkillPolicyPaths.map(optionalFilesystemPath),
   );
 
-  // Policy admission accepts only restrictToProjectDir=true.
-  const projectDirPath = params.context.projectDir;
-  if (params.workspace.workspaceAccess === "rw") {
-    readwritePathSpecs.push(requiredFilesystemPath(projectDirPath));
-  } else {
-    readonlyPathSpecs.push(requiredFilesystemPath(projectDirPath));
-  }
   readwritePathSpecs.push(requiredFilesystemPath(params.sandboxTempDir));
   readwritePathSpecs.push(
     ...params.baseline.configuredPaths.readwritePaths.map(createConfiguredFilesystemPath),
