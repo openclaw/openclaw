@@ -366,7 +366,8 @@ describe("inherited auth-profile usage persistence", () => {
     mainStore.usageStats = {
       [PRIMARY_ID]: {
         lastUsed,
-        errorCount: 2,
+        errorCount: 12,
+        failureCounts: { rate_limit: 12 },
         cooldownUntil: Date.now() + 60_000,
         cooldownReason: "rate_limit",
         cooldownClassification: "wham_token_expired",
@@ -384,10 +385,15 @@ describe("inherited auth-profile usage persistence", () => {
       lastUsed,
       errorCount: 0,
     });
-    expect(persistedMain?.usageStats?.[PRIMARY_ID]?.cooldownUntil).toBeUndefined();
-    expect(persistedMain?.usageStats?.[PRIMARY_ID]?.cooldownClassification).toBeUndefined();
+    for (const field of ["failureCounts", "cooldownUntil", "cooldownClassification"]) {
+      expect(persistedMain?.usageStats?.[PRIMARY_ID]).not.toHaveProperty(field);
+    }
     expect(childStore.usageStats?.[LOCAL_ID]?.cooldownUntil).toBe(localCooldownUntil);
-    expect(childStore.usageStats?.[PRIMARY_ID]?.cooldownUntil).toBeUndefined();
+    expect(childStore.usageStats?.[PRIMARY_ID]).toMatchObject({
+      errorCount: 0,
+      failureCounts: undefined,
+      cooldownUntil: undefined,
+    });
     const persistedChild = loadPersistedAuthProfileStore(childAgentDir);
     expect(persistedChild?.profiles[PRIMARY_ID]).toBeUndefined();
     expect(persistedChild?.usageStats?.[PRIMARY_ID]).toBeUndefined();

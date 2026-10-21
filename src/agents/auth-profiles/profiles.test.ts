@@ -671,37 +671,6 @@ describe("promoteAuthProfileInOrder", () => {
     },
   );
 
-  it("clears cooldown classification and retry backoff after a successful profile use", () =>
-    withProfileState(async ({ agentDir }) => {
-      fs.mkdirSync(agentDir, { recursive: true });
-      const profileId = "openai:default";
-      saveProfile(profileId, apiKey("openai", "sk-test"), agentDir, {
-        usageStats: {
-          [profileId]: {
-            cooldownUntil: Date.now() + 60_000,
-            cooldownReason: "rate_limit",
-            cooldownClassification: "wham_token_expired",
-            errorCount: 12,
-            failureCounts: { rate_limit: 12 },
-          },
-        },
-      });
-      const store = loadRuntime(agentDir);
-
-      await markAuthProfileSuccess({ store, provider: "openai", profileId, agentDir });
-
-      expect(store.usageStats?.[profileId]).toMatchObject({
-        errorCount: 0,
-        failureCounts: undefined,
-        cooldownUntil: undefined,
-      });
-      const persistedStats = loadPersisted(agentDir)?.usageStats?.[profileId];
-      expect(persistedStats).toMatchObject({ errorCount: 0 });
-      for (const field of ["failureCounts", "cooldownUntil", "cooldownClassification"]) {
-        expect(persistedStats).not.toHaveProperty(field);
-      }
-    }));
-
   it.each([
     { scope: "main", selected: false },
     { scope: "main", selected: true },
