@@ -34,7 +34,7 @@ describe.each(["runtime", "configured"] as const)(
       ["lookalike origin", "https://ollama.com.example.test", "high"],
     ])(
       "%s (%s → %s)",
-      async (_name, modelBaseUrl, expected, providerBaseUrl = undefined, id = "glm-5.2") => {
+      async (_name, modelBaseUrl, expected, providerBaseUrl?: string, id = "glm-5.2") => {
         fetchMock.mockResolvedValue({
           response: new Response(
             JSON.stringify({
