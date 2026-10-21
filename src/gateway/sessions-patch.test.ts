@@ -2,6 +2,7 @@
 // aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
@@ -92,7 +93,7 @@ function mainAuthOverrideStore(overrides: Partial<SessionEntry>): Record<string,
   });
 }
 
-function catalogEntry(ref: string, name?: string) {
+function catalogEntry(ref: string, metadata: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
   const separator = ref.indexOf("/");
   if (separator < 0) {
     throw new Error(`model ref must include provider: ${ref}`);
@@ -101,7 +102,8 @@ function catalogEntry(ref: string, name?: string) {
   return {
     provider: ref.slice(0, separator),
     id,
-    name: name ?? id,
+    name: id,
+    ...metadata,
   };
 }
 
@@ -114,8 +116,7 @@ function expectModelSelection(
   providerOverride: string | undefined,
   modelOverride: string | undefined,
 ) {
-  expect(entry.providerOverride).toBe(providerOverride);
-  expect(entry.modelOverride).toBe(modelOverride);
+  expect([entry.providerOverride, entry.modelOverride]).toEqual([providerOverride, modelOverride]);
 }
 
 async function applyMainModelPatch(params: {
@@ -144,18 +145,15 @@ function expectAuthOverride(
     compactionCount?: number;
   },
 ) {
-  expect(entry.authProfileOverride).toBe(expected.profile);
-  if (expected.profile === undefined) {
-    expect(entry.authProfileOverrideSource).toBeUndefined();
-    expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
-    return;
-  }
-  expect(entry.authProfileOverrideSource).toBe(expected.source ?? "user");
-  if (expected.compactionCount === undefined) {
-    expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
-  } else {
-    expect(entry.authProfileOverrideCompactionCount).toBe(expected.compactionCount);
-  }
+  expect([
+    entry.authProfileOverride,
+    entry.authProfileOverrideSource,
+    entry.authProfileOverrideCompactionCount,
+  ]).toEqual([
+    expected.profile,
+    expected.profile === undefined ? undefined : (expected.source ?? "user"),
+    expected.profile === undefined ? undefined : expected.compactionCount,
+  ]);
 }
 
 async function applySubagentModelPatch(cfg: OpenClawConfig, store: Record<string, SessionEntry>) {
@@ -349,16 +347,14 @@ describe("gateway sessions patch", () => {
     expect(idempotent.archiveReason).toBe("manual");
 
     const restored = await patchOk({
-      store: mainStoreEntry({
-        archivedAt: archived.archivedAt,
-        archivedBy,
-        archiveReason: "manual",
-      }),
+      store: { [MAIN_SESSION_KEY]: idempotent },
       patch: { key: MAIN_SESSION_KEY, archived: false, expectedSessionId: "sess" },
     });
-    expect(restored.archivedAt).toBeUndefined();
-    expect(restored.archivedBy).toBeUndefined();
-    expect(restored.archiveReason).toBeUndefined();
+    expect([restored.archivedAt, restored.archivedBy, restored.archiveReason]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
   });
 
   test.each([
@@ -1195,14 +1191,7 @@ describe("gateway sessions patch", () => {
         key: MAIN_SESSION_KEY,
         thinkingLevel: "medium",
       },
-      loadGatewayModelCatalog: async () => [
-        {
-          provider: "ollama",
-          id: "qwen3:0.6b",
-          name: "qwen3:0.6b",
-          reasoning: true,
-        },
-      ],
+      loadGatewayModelCatalog: async () => [catalogEntry("ollama/qwen3:0.6b", { reasoning: true })],
     });
 
     expect(entry.thinkingLevel).toBe("medium");
@@ -1213,9 +1202,7 @@ describe("gateway sessions patch", () => {
     async (sessionState) => {
       const cfg = modelConfig("claude-cli/claude-fable-5");
       const loadGatewayModelCatalog = async () => [
-        {
-          provider: "claude-cli",
-          id: "claude-fable-5",
+        catalogEntry("claude-cli/claude-fable-5", {
           name: "Claude Fable 5",
           contextWindow: 1_000_000,
           contextWindows: [
@@ -1223,7 +1210,7 @@ describe("gateway sessions patch", () => {
             { id: "1m", label: "1M", contextWindow: 1_000_000 },
           ],
           contextWindowDefault: "1m",
-        },
+        }),
       ];
 
       const entry = await patchOk({
@@ -1269,13 +1256,11 @@ describe("gateway sessions patch", () => {
         thinkingLevel: "medium",
       },
       loadGatewayModelCatalog: async () => [
-        {
-          provider: "anthropic",
-          id: "claude-mythos-5",
+        catalogEntry("anthropic/claude-mythos-5", {
           name: "Claude Mythos 5",
           reasoning: false,
           thinkingPolicyProvider: "claude-cli",
-        },
+        }),
       ],
     });
 
@@ -1290,13 +1275,11 @@ describe("gateway sessions patch", () => {
         thinkingLevel: "xhigh",
       },
       loadGatewayModelCatalog: async () => [
-        {
-          provider: "gmn",
-          id: "gpt-5.4",
+        catalogEntry("gmn/gpt-5.4", {
           name: "GPT 5.4 via GMN",
           reasoning: true,
           compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-        },
+        }),
       ],
     });
 
@@ -1466,7 +1449,7 @@ describe("gateway sessions patch", () => {
 
   test("preserves an incompatible stored thinkingLevel without loading the catalog for unrelated patches", async () => {
     const loadGatewayModelCatalog = vi.fn(async () => [
-      { provider: "synthetic", id: "plain", name: "plain", reasoning: false },
+      catalogEntry("synthetic/plain", { reasoning: false }),
     ]);
     const entry = await patchOk({
       cfg: modelConfig("synthetic/plain"),
@@ -1700,10 +1683,7 @@ describe("gateway sessions patch", () => {
         },
       }),
       patch: { key: MAIN_SESSION_KEY, model: "kimi-k2.6@work" },
-      loadGatewayModelCatalog: async () => [
-        { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
-        { provider: "opencode-go", id: "kimi-k2.6", name: "kimi-k2.6" },
-      ],
+      loadGatewayModelCatalog: loadCatalog(OPENAI_GPT_MODEL, "opencode-go/kimi-k2.6"),
     });
     expect(entry.providerOverride).toBe("opencode-go");
     expect(entry.modelOverride).toBe("kimi-k2.6");

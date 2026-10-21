@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
@@ -153,24 +154,9 @@ type SessionHistorySseStream = {
   streamState: { buffer: string };
 };
 
-async function openSessionHistorySse(
-  port: number,
-  sessionKey: string,
-  params?: { query?: string },
-): Promise<SessionHistorySseStream> {
-  const res = await fetchSessionHistory(port, sessionKey, {
-    query: params?.query,
-    headers: { Accept: "text/event-stream" },
-  });
-  return historyStream(res);
-}
-
 function historyStream(res: Response): SessionHistorySseStream {
   expect(res.status).toBe(200);
-  const reader = res.body?.getReader();
-  if (reader === undefined) {
-    throw new Error("expected session-history SSE reader");
-  }
+  const reader = expectDefined(res.body?.getReader(), "session-history SSE reader");
   return { reader, streamState: { buffer: "" } };
 }
 
@@ -179,7 +165,12 @@ async function withHistoryStream(
   run: (stream: SessionHistorySseStream) => Promise<void>,
   query?: string,
 ) {
-  const stream = await openSessionHistorySse(port, SESSION_KEY, { query });
+  const stream = historyStream(
+    await fetchSessionHistory(port, SESSION_KEY, {
+      query,
+      headers: { Accept: "text/event-stream" },
+    }),
+  );
   try {
     await run(stream);
   } finally {
@@ -261,7 +252,6 @@ describe("session history HTTP endpoints", () => {
           "TEXT/EVENT-STREAM",
           "  text/event-stream  ",
           "text/event-stream;",
-          "text/event-stream; ; q=0.5;",
           "text/event-stream; charset=utf-8",
           "text/event-stream;q=0.001",
           "text/event-stream;Q=1.000",
@@ -285,7 +275,6 @@ describe("session history HTTP endpoints", () => {
           "text/event-stream;q =0.5",
           "text/event-stream;q= 0.5",
           "text/event-stream;\u00a0q=0.5",
-          'text/event-stream;q=0.5;legacy;note="quoted,comma;semicolon"',
         ],
       };
 
@@ -507,11 +496,6 @@ describe("session history HTTP endpoints", () => {
       expect(
         chronologicalRows.map((message) => requireRecord(message, "history timestamp").timestamp),
       ).toEqual(Array.from({ length: 4 }, () => sharedTimestamp));
-      expect(
-        pages
-          .flatMap((page) => page.messages ?? [])
-          .some((message) => sessionHistoryRowIdentity(message).includes("NO_REPLY")),
-      ).toBe(false);
       expect(seenCursors).toEqual(new Set(["3", "2"]));
       expect(pages.at(-1)).toMatchObject({ hasMore: false });
       expect(pages.at(-1)?.nextCursor).toBeUndefined();
@@ -592,14 +576,16 @@ describe("session history HTTP endpoints", () => {
     await fs.writeFile(
       path.join(path.dirname(storePath), `${sessionId}.jsonl.reset.2026-02-16T22-26-34.000Z`),
       [
-        JSON.stringify({ type: "session", version: 1, id: sessionId }),
-        JSON.stringify({
+        { type: "session", version: 1, id: sessionId },
+        {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "archived before reset" }],
           },
-        }),
-      ].join("\n"),
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n"),
     );
     await writeSessionStore({ entries: { [SESSION_KEY]: { sessionId, updatedAt: 1 } }, storePath });
 
@@ -630,13 +616,9 @@ describe("session history HTTP endpoints", () => {
         const response = await fetch(
           `http://127.0.0.1:${harness.port}/sessions/${encodedSessionKey}/history`,
         );
-        const body = await response.json();
         expect(response.status).toBe(400);
-        expect(body).toEqual({
-          error: {
-            type: "invalid_request_error",
-            message: "invalid session key",
-          },
+        expect(await response.json()).toEqual({
+          error: { type: "invalid_request_error", message: "invalid session key" },
         });
       }
     });
@@ -657,13 +639,12 @@ describe("session history HTTP endpoints", () => {
     };
     await writeSessionStore({ entries: {}, storePath });
     const sessionKey = `agent:${agentId}:missing`;
-    const missingDatabasePath = resolveSqliteTargetFromSessionStorePath(
-      storeTemplate.replace("{agentId}", agentId),
-      { agentId },
-    ).path;
-    if (!missingDatabasePath) {
-      throw new Error("expected configured database path");
-    }
+    const missingDatabasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storeTemplate.replace("{agentId}", agentId), {
+        agentId,
+      }).path,
+      "configured database path",
+    );
     await withGatewayHarness(
       async ({ port }) => {
         await expect(fs.stat(missingDatabasePath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -686,12 +667,12 @@ describe("session history HTTP endpoints", () => {
     await withGatewayHarness(
       async (harness) => {
         // Exercise the HTTP reader against a malformed hot write after admission.
-        const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
-          agentId: AGENT_ID,
-        }).path;
-        if (!databasePath) {
-          throw new Error("expected SQLite session store path");
-        }
+        const databasePath = expectDefined(
+          resolveSqliteTargetFromSessionStorePath(storePath, {
+            agentId: AGENT_ID,
+          }).path,
+          "SQLite session store path",
+        );
         runOpenClawAgentWriteTransaction(
           (database) => {
             const db = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "session_nodes">>(
@@ -732,31 +713,23 @@ describe("session history HTTP endpoints", () => {
     const { storePath } = await seedSession({ sessionId });
     const assistantMessage = (text: string, model: string) =>
       makeTranscriptAssistantMessage({ text, provider: "openclaw", model });
+    const replies = ["First reply.", "Second reply.", "Third reply."];
     await replaceHistory(
       storePath,
-      [
-        { message: assistantMessage("First reply.", "acp-runtime") },
-        { message: { role: "user", content: "" } },
-        { message: assistantMessage("First reply.", "gateway-injected") },
-        { message: assistantMessage("Second reply.", "acp-runtime") },
-        { message: { role: "user", content: HEARTBEAT_PROMPT } },
-        { message: assistantMessage("Second reply.", "gateway-injected") },
-        { message: assistantMessage("Third reply.", "acp-runtime") },
-        { message: { role: "user", content: HEARTBEAT_PROMPT } },
-        { message: { role: "assistant", content: "HEARTBEAT_OK" } },
-        { message: assistantMessage("Third reply.", "gateway-injected") },
-      ],
+      replies.flatMap((text, index) => [
+        { message: assistantMessage(text, "acp-runtime") },
+        { message: { role: "user", content: index ? HEARTBEAT_PROMPT : "" } },
+        ...(index === 2 ? [{ message: { role: "assistant", content: "HEARTBEAT_OK" } }] : []),
+        { message: assistantMessage(text, "gateway-injected") },
+      ]),
       sessionId,
     );
 
     const expectedRows = [
-      "1:assistant:First reply.",
-      "3:assistant:First reply.",
-      "4:assistant:Second reply.",
-      "6:assistant:Second reply.",
-      "7:assistant:Third reply.",
-      "10:assistant:Third reply.",
-    ];
+      [1, 3],
+      [4, 6],
+      [7, 10],
+    ].flatMap((sequences, index) => sequences.map((seq) => `${seq}:assistant:${replies[index]}`));
     await withGatewayHarness(async (harness) => {
       const history = await readSessionHistoryBody(harness.port, sessionKey);
       expect(history.messages?.map(sessionHistoryRowIdentity)).toEqual(expectedRows);

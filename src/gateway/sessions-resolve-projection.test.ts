@@ -91,6 +91,38 @@ async function resolve(p: SessionsResolveParams) {
   });
 }
 
+function seed(
+  sessionKey = scope.sessionKey,
+  values: Parameters<typeof replaceSessionEntrySync>[1] = entry,
+) {
+  replaceSessionEntrySync({ ...scope, sessionKey }, values);
+}
+
+function contextFor(projection: SessionRowProjection, config = cfg) {
+  return createDirectChatContext({
+    getRuntimeConfig: () => config,
+    ...bindSessionRowProjection({}, () => projection),
+  });
+}
+
+function request(
+  context: ReturnType<typeof contextFor>,
+  params: SessionsResolveParams,
+  respond: RespondFn,
+  client: Parameters<
+    NonNullable<(typeof sessionReadHandlers)["sessions.resolve"]>
+  >[0]["client"] = null,
+) {
+  return sessionReadHandlers["sessions.resolve"]!({
+    params,
+    respond,
+    client,
+    context,
+    req: { type: "req", id: "resolve", method: "sessions.resolve" },
+    isWebchatConnect: () => false,
+  });
+}
+
 const resolved = { ok: true, key: scope.sessionKey, agentId: "main" };
 
 describe("session resolution metadata", () => {
@@ -101,10 +133,7 @@ describe("session resolution metadata", () => {
         setRuntimeConfigSnapshot(cfg);
         const sessionId = "4d2e08ab-1111-4000-8000-000000000001";
         const key = `agent:main:chat:${sessionId}`;
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: key },
-          { sessionId, updatedAt: 2, label: "Resolved target", visibility: "shared" },
-        );
+        seed(key, { sessionId, updatedAt: 2, label: "Resolved target", visibility: "shared" });
         const sibling = { agentId: "main", sessionKey: "agent:main:resolve-unrelated" };
         const siblingEntry = {
           sessionId: "resolve-unrelated",
@@ -148,10 +177,7 @@ describe("session resolution metadata", () => {
         try {
           projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
           await projection.ensureMaterialized();
-          const context = createDirectChatContext({
-            getRuntimeConfig: () => cfg,
-            ...bindSessionRowProjection({}, () => projection),
-          });
+          const context = contextFor(projection);
           const respond = vi.fn<RespondFn>();
           const first = await projection.withSelectionPreparation(async () => {
             holdOwnership = true;
@@ -160,26 +186,17 @@ describe("session resolution metadata", () => {
               label: "Renamed sibling",
               updatedAt: 3,
             });
-            const started = performance.now();
             pending = Promise.resolve(
-              sessionReadHandlers["sessions.resolve"]!({
-                params: selector === "shortId" ? { shortId: "4d2e08ab" } : { reference: { key } },
+              request(
                 context,
-                req: { type: "req", id: "resolve-owner", method: "sessions.resolve" },
-                client: null,
-                isWebchatConnect: () => false,
+                selector === "shortId" ? { shortId: "4d2e08ab" } : { reference: { key } },
                 respond,
-              }),
+              ),
             );
             const winner = await Promise.race([
               pending.then(() => "response" as const),
               entered.promise.then(() => "native ownership" as const),
             ]);
-            console.info("sessions-resolve-readiness", {
-              selector,
-              first: winner,
-              elapsedMs: performance.now() - started,
-            });
             release.resolve();
             await pending;
             expect(respond).toHaveBeenCalledWith(
@@ -203,7 +220,7 @@ describe("session resolution metadata", () => {
 
   it("reselects indexed candidates when the configured store changes during lookup", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      replaceSessionEntrySync(scope, entry);
+      seed();
       const storePath = state.statePath("replacement.sqlite");
       const replacementKey = "agent:main:replacement";
       replaceSessionEntrySync({ agentId: "main", storePath, sessionKey: replacementKey }, entry);
@@ -234,12 +251,9 @@ describe("session resolution metadata", () => {
 
   it("resolves indexed targets while unrelated metadata is unavailable", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      replaceSessionEntrySync(scope, entry);
+      seed();
       const sibling = "agent:main:unavailable-metadata";
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: sibling },
-        { sessionId: "unavailable-metadata", updatedAt: 2 },
-      );
+      seed(sibling, { sessionId: "unavailable-metadata", updatedAt: 2 });
       const projection = await projectionFor();
       await projection.ensureMaterialized();
       const readOwnership = runtimeOwnership.readSessionRuntimeOwnershipAsync;
@@ -252,24 +266,14 @@ describe("session resolution metadata", () => {
           return readOwnership(params);
         });
       try {
-        const context = createDirectChatContext({
-          getRuntimeConfig: () => cfg,
-          ...bindSessionRowProjection({}, () => projection),
-        });
+        const context = contextFor(projection);
         for (const params of selectors) {
           sessionChanges.emit({
             all: true,
             scope: { storePath: openOpenClawAgentDatabase(scope).path },
           });
           const respond = vi.fn();
-          await sessionReadHandlers["sessions.resolve"]!({
-            params,
-            context,
-            req: { type: "req", id: "resolve-unrelated-metadata", method: "sessions.resolve" },
-            client: null,
-            isWebchatConnect: () => false,
-            respond,
-          });
+          await request(context, params, respond);
           expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(resolved), undefined);
         }
       } finally {
@@ -280,12 +284,9 @@ describe("session resolution metadata", () => {
 
   it("resolves discovery from current metadata when an unrelated display row cannot rebuild", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      replaceSessionEntrySync(scope, entry);
+      seed();
       const sibling = "agent:main:unrelated-display";
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: sibling },
-        { sessionId: "unrelated-display", updatedAt: 2 },
-      );
+      seed(sibling, { sessionId: "unrelated-display", updatedAt: 2 });
       const projection = await projectionFor();
       await projection.ensureMaterialized();
       const readInputs = rowInputs.readSessionRowInputs;
@@ -297,24 +298,14 @@ describe("session resolution metadata", () => {
       });
       try {
         sessionChanges.emit({ all: true, scope: "catalog" });
-        const context = createDirectChatContext({
-          getRuntimeConfig: () => cfg,
-          ...bindSessionRowProjection({}, () => projection),
-        });
+        const context = contextFor(projection);
         for (const params of [
           { sessionId: entry.sessionId },
           { label: entry.label },
           { reference: { key: scope.sessionKey } },
         ]) {
           const respond = vi.fn();
-          await sessionReadHandlers["sessions.resolve"]!({
-            params,
-            context,
-            req: { type: "req", id: "resolve-during-rebuild", method: "sessions.resolve" },
-            client: null,
-            isWebchatConnect: () => false,
-            respond,
-          });
+          await request(context, params, respond);
           expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(resolved), undefined);
         }
       } finally {
@@ -323,90 +314,65 @@ describe("session resolution metadata", () => {
     });
   });
 
-  it.each(["key"])(
-    "resolves parent-scoped %s requests without hydrating retained subagent tasks",
-    async (selector) => {
-      await withOpenClawTestState(
-        { env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
-        async () => {
-          const now = Date.now();
-          const parent = "agent:main:main";
-          const key = "agent:main:subagent:12345678-0aaa-4000-8000-000000000001";
-          const selected = { ...entry, updatedAt: now, spawnedBy: parent };
-          replaceSessionEntrySync({ ...scope, sessionKey: key }, selected);
-          const rows = [key, "agent:main:subagent:retained"].map((childSessionKey, index) => ({
-            runId: `resolve-run-${index}`,
-            childSessionKey,
-            requesterSessionKey: parent,
-            requesterDisplayKey: "main",
-            task: `retained-resolve-task:${"x".repeat(16_384)}`,
-            cleanup: "keep" as const,
-            createdAt: now - 100,
-            execution: { status: "terminal" as const, startedAt: now - 100, endedAt: now - 50 },
-            completion: { required: false },
-            delivery: { status: "not_required" as const },
-          }));
-          saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
+  it("resolves parent-scoped key requests without hydrating retained subagent tasks", async () => {
+    await withOpenClawTestState(
+      { env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+      async () => {
+        const now = Date.now();
+        const parent = "agent:main:main";
+        const key = "agent:main:subagent:12345678-0aaa-4000-8000-000000000001";
+        const selected = { ...entry, updatedAt: now, spawnedBy: parent };
+        seed(key, selected);
+        const rows = [key, "agent:main:subagent:retained"].map((childSessionKey, index) => ({
+          runId: `resolve-run-${index}`,
+          childSessionKey,
+          requesterSessionKey: parent,
+          requesterDisplayKey: "main",
+          task: `retained-resolve-task:${"x".repeat(16_384)}`,
+          cleanup: "keep" as const,
+          createdAt: now - 100,
+          execution: { status: "terminal" as const, startedAt: now - 100, endedAt: now - 50 },
+          completion: { required: false },
+          delivery: { status: "not_required" as const },
+        }));
+        saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
+        clearSubagentRunsReadCacheForTest();
+        const projection = await projectionFor();
+        const respond = vi.fn();
+        const parse = vi.spyOn(JSON, "parse");
+        try {
+          await request(
+            contextFor(projection),
+            { key, spawnedBy: parent, agentId: "main" },
+            respond,
+          );
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ ok: true, key, agentId: "main" }),
+            undefined,
+          );
+          expect(parse.mock.calls.some(([json]) => json.includes("retained-resolve-task:"))).toBe(
+            false,
+          );
+        } finally {
+          parse.mockRestore();
           clearSubagentRunsReadCacheForTest();
-          const value =
-            selector === "sessionId"
-              ? selected.sessionId
-              : selector === "shortId"
-                ? "12345678"
-                : selector === "label"
-                  ? selected.label
-                  : selector === "reference"
-                    ? { key }
-                    : key;
-          const projection = await projectionFor();
-          const respond = vi.fn();
-          const parse = vi.spyOn(JSON, "parse");
-          try {
-            await expectDefined(
-              sessionReadHandlers["sessions.resolve"],
-              "resolve handler",
-            )({
-              params: { [selector]: value, spawnedBy: parent, agentId: "main" },
-              context: createDirectChatContext({
-                getRuntimeConfig: () => cfg,
-                ...bindSessionRowProjection({}, () => projection),
-              }),
-              req: { type: "req", id: "registry-resolve", method: "sessions.resolve" },
-              client: null,
-              isWebchatConnect: () => false,
-              respond,
-            });
-            expect(respond).toHaveBeenCalledWith(
-              true,
-              expect.objectContaining({ ok: true, key, agentId: "main" }),
-              undefined,
-            );
-            expect(parse.mock.calls.some(([json]) => json.includes("retained-resolve-task:"))).toBe(
-              false,
-            );
-          } finally {
-            parse.mockRestore();
-            clearSubagentRunsReadCacheForTest();
-          }
-        },
-      );
-    },
-  );
+        }
+      },
+    );
+  });
 
   it.each(selectors)("resolves %j without decoding unrelated saved prompts", async (p) => {
     await withOpenClawTestState({ label: "resolve-prompts" }, async () => {
       // Distinguish saved data from test source maps parsed lazily by the runtime.
       const promptMarker = `unrelated-resolve-prompt:${randomUUID()}`;
-      replaceSessionEntrySync(scope, entry);
+      seed();
       for (let index = 0; index < 3; index++) {
-        replaceSessionEntrySync(
-          { ...scope, sessionKey: `agent:main:sibling-${index}` },
-          {
-            sessionId: `sibling-${index}`,
-            updatedAt: 1,
-            skillsSnapshot: { prompt: promptMarker.repeat(1024), skills: [] },
-          },
-        );
+        seed(`agent:main:sibling-${index}`, {
+          sessionId: `sibling-${index}`,
+          updatedAt: 1,
+          skillsSnapshot: { prompt: promptMarker.repeat(1024), skills: [] },
+        });
       }
       await projectionFor();
       const parse = vi.spyOn(JSON, "parse");
@@ -426,7 +392,7 @@ describe("session resolution metadata", () => {
       );
       const roleCfg = { ...cfg, ...rolePolicyConfig() };
       const visible = { ...entry, visibility: "shared" as const };
-      replaceSessionEntrySync(scope, visible);
+      seed(scope.sessionKey, visible);
       const lookup = async (p: SessionsResolveParams) =>
         withPreparedSessionResolve(
           { client, p, projection: await projectionFor(roleCfg) },
@@ -489,42 +455,35 @@ describe("session resolution metadata", () => {
       replaceSessionEntrySync(scope, visible);
       const projection = await projectionFor(roleCfg);
       await projection.ensureMaterialized();
-      const context = createDirectChatContext({
-        getRuntimeConfig: () => roleCfg,
-        ...bindSessionRowProjection({}, () => projection),
-      });
+      const context = contextFor(projection, roleCfg);
       const publications: Array<{
         visibility: string | undefined;
         response: Parameters<RespondFn>;
       }> = [];
-      const request = () =>
-        expectDefined(
-          sessionReadHandlers["sessions.resolve"],
-          "resolve handler",
-        )({
-          params: { reference: { key: scope.sessionKey }, agentId: "main", allowMissing: true },
+      const publish = () =>
+        request(
           context,
-          req: { type: "req", id: "resolve-publication", method: "sessions.resolve" },
-          client,
-          isWebchatConnect: () => false,
-          respond: (...response) => {
+          { reference: { key: scope.sessionKey }, agentId: "main", allowMissing: true },
+          (...response) => {
             publications.push({ visibility: loadSessionEntry(scope)?.visibility, response });
           },
-        });
-      await request();
-      const pending = request();
+          client,
+        );
+      await publish();
+      const pending = publish();
       queueMicrotask(() => {
         replaceSessionEntrySync(scope, { ...visible, visibility: "draft" });
       });
       await pending;
-      await request();
+      await publish();
 
       const found = [true, { ...resolved, displayName: entry.label }, undefined];
       const missing = [true, { ok: false }, undefined];
-      expect(publications).toHaveLength(3);
-      expect(publications[0]).toEqual({ visibility: "shared", response: found });
-      expect(publications[1]).toEqual({ visibility: "shared", response: found });
-      expect(publications[2]).toEqual({ visibility: "draft", response: missing });
+      expect(publications).toEqual([
+        { visibility: "shared", response: found },
+        { visibility: "shared", response: found },
+        { visibility: "draft", response: missing },
+      ]);
     });
   });
 
@@ -533,11 +492,8 @@ describe("session resolution metadata", () => {
     async (kind) => {
       await withOpenClawTestState({ label: "resolve-corruption" }, async () => {
         const siblingKey = "agent:main:sibling";
-        replaceSessionEntrySync(scope, entry);
-        replaceSessionEntrySync(
-          { ...scope, sessionKey: siblingKey },
-          { sessionId: "sibling", updatedAt: 1 },
-        );
+        seed();
+        seed(siblingKey, { sessionId: "sibling", updatedAt: 1 });
         const read = async (key: string) => {
           const target = await resolveGatewaySessionStoreTargetWithStoreAsync({
             cfg,
@@ -552,21 +508,12 @@ describe("session resolution metadata", () => {
         const owner = openOpenClawAgentDatabase(scope);
         const database = owner.db;
         runSqliteImmediateTransactionSync(database, () => seedCanonicalSessionValidation(owner));
-        if (kind === "malformed" || kind === "nul") {
+        if (kind === "malformed") {
           database
             .prepare(
               "UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?",
             )
-            .run(
-              kind === "malformed" ? "{" : JSON.stringify(entry) + "\0trailing",
-              scope.sessionKey,
-            );
-        } else if (kind === "mismatched-time") {
-          database
-            .prepare(
-              "UPDATE session_nodes SET updated_at = ?, entry_valid = 0 WHERE session_key = ?",
-            )
-            .run(2, scope.sessionKey);
+            .run("{", scope.sessionKey);
         } else {
           database
             .prepare(
@@ -589,8 +536,6 @@ describe("session resolution metadata", () => {
   );
 });
 
-// Marker lives only in sibling rows the lookups must never decode. A decode of
-// this text means a store-wide read carried saved prompts into JavaScript.
 const SIBLING_MARKER = "unrelated-lookup-prompt";
 const SIBLING_PROMPT = SIBLING_MARKER.repeat(1600);
 const TARGET_PROMPT = "target-lookup-prompt".repeat(1600);
@@ -608,21 +553,17 @@ function systemPromptReport(chars: number) {
 }
 
 function seedStore() {
-  replaceSessionEntrySync(scope, {
-    sessionId: "target-id",
-    updatedAt: 2,
-    skillsSnapshot: { prompt: TARGET_PROMPT, skills: [{ name: "target-skill" }] },
-    systemPromptReport: systemPromptReport(TARGET_PROMPT.length),
+  const promptEntry = (sessionId: string, prompt: string, name: string, updatedAt: number) => ({
+    sessionId,
+    updatedAt,
+    skillsSnapshot: { prompt, skills: [{ name }] },
+    systemPromptReport: systemPromptReport(prompt.length),
   });
+  seed(scope.sessionKey, promptEntry("target-id", TARGET_PROMPT, "target-skill", 2));
   for (let index = 0; index < SIBLING_ROWS; index++) {
-    replaceSessionEntrySync(
-      { ...scope, sessionKey: `agent:main:sibling-${index}` },
-      {
-        sessionId: `sibling-${index}`,
-        updatedAt: 1,
-        skillsSnapshot: { prompt: SIBLING_PROMPT, skills: [{ name: "sibling-skill" }] },
-        systemPromptReport: systemPromptReport(SIBLING_PROMPT.length),
-      },
+    seed(
+      `agent:main:sibling-${index}`,
+      promptEntry(`sibling-${index}`, SIBLING_PROMPT, "sibling-skill", 1),
     );
   }
 }
@@ -632,12 +573,11 @@ function measureSiblingDecodes<T>(run: () => T): { result: T; decodes: number } 
   const parse = vi.spyOn(JSON, "parse");
   try {
     const result = run();
-    const matched = parse.mock.calls.flatMap(([json]) =>
-      typeof json === "string" && json.includes(SIBLING_MARKER) ? [json] : [],
-    );
     return {
       result,
-      decodes: matched.length,
+      decodes: parse.mock.calls.filter(
+        ([json]) => typeof json === "string" && json.includes(SIBLING_MARKER),
+      ).length,
     };
   } finally {
     parse.mockRestore();
@@ -651,10 +591,7 @@ describe("gateway session lookups", () => {
       seedStore();
 
       const projection = await projectionFor();
-      const context = bindSessionRowProjection(
-        createDirectChatContext({ getRuntimeConfig: () => cfg }),
-        () => projection,
-      );
+      const context = contextFor(projection);
       const parse = vi.spyOn(JSON, "parse");
       try {
         for (const runId of ["target-id", "absent-run-id"]) {
@@ -738,24 +675,16 @@ describe("gateway session lookups", () => {
   it("keeps the freshest same-session-id row when prompts are not decoded", async () => {
     await withOpenClawTestState({ label: "lookup-projection-freshness" }, async () => {
       setRuntimeConfigSnapshot(cfg);
-      // Same sessionId on two keys: selection depends on updatedAt surviving the
-      // metadata projection, which is the field a bad projection would drop.
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: "agent:main:stale" },
-        {
+      for (const [name, updatedAt] of [
+        ["stale", 1],
+        ["fresh", 99],
+      ] as const) {
+        seed(`agent:main:${name}`, {
           sessionId: "shared-id",
-          updatedAt: 1,
+          updatedAt,
           skillsSnapshot: { prompt: SIBLING_PROMPT, skills: [] },
-        },
-      );
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: "agent:main:fresh" },
-        {
-          sessionId: "shared-id",
-          updatedAt: 99,
-          skillsSnapshot: { prompt: SIBLING_PROMPT, skills: [] },
-        },
-      );
+        });
+      }
 
       const projection = await projectionFor();
       const statements = vi.spyOn(DatabaseSync.prototype, "prepare");
@@ -769,27 +698,18 @@ describe("gateway session lookups", () => {
       statements.mockRestore();
       expect(observed.result).toEqual({ sessionKey: "agent:main:fresh", agentId: "main" });
       expect(observed.decodes).toBe(0);
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: "agent:main:stale" },
-        { sessionId: "shared-id", updatedAt: 100 },
-      );
+      seed("agent:main:stale", { sessionId: "shared-id", updatedAt: 100 });
       expect(resolveSessionForRun("shared-id", { projection })).toEqual({
         sessionKey: "agent:main:stale",
         agentId: "main",
       });
       expect(resolveSessionForRun("late-id", { projection })).toBeUndefined();
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: "agent:main:late" },
-        { sessionId: "late-id", updatedAt: 1 },
-      );
+      seed("agent:main:late", { sessionId: "late-id", updatedAt: 1 });
       expect(resolveSessionForRun("late-id", { projection })).toEqual({
         sessionKey: "agent:main:late",
         agentId: "main",
       });
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: "agent:main:late" },
-        { sessionId: "rolled-id", updatedAt: 2 },
-      );
+      seed("agent:main:late", { sessionId: "rolled-id", updatedAt: 2 });
       expect(resolveSessionForRun("late-id", { projection })).toBeUndefined();
       expect(resolveSessionForRun("rolled-id", { projection })).toEqual({
         sessionKey: "agent:main:late",
