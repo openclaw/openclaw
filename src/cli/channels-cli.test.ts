@@ -14,7 +14,7 @@ const listRawChannelPluginCatalogEntriesMock = vi.hoisted(() =>
   vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
 );
 const channelsAddCommandMock = vi.hoisted(() =>
-  vi.fn<typeof import("../commands/channels.js").channelsAddCommand>(async () => undefined),
+  vi.fn<typeof import("../commands/channels/add.js").channelsAddCommand>(async () => undefined),
 );
 const channelsLogsCommandMock = vi.hoisted(() =>
   vi.fn(async (_options: { channel?: string }) => undefined),
@@ -46,11 +46,19 @@ vi.mock("../channels/plugins/catalog.js", () => ({
   listRawChannelPluginCatalogEntries: listRawChannelPluginCatalogEntriesMock,
 }));
 
-vi.mock("../commands/channels.js", () => ({
+vi.mock("../commands/channels/add.js", () => ({
   channelsAddCommand: channelsAddCommandMock,
+}));
+vi.mock("../commands/channels/logs.js", () => ({
   channelsLogsCommand: channelsLogsCommandMock,
+}));
+vi.mock("../commands/channels/resolve.js", () => ({
   channelsResolveCommand: channelsResolveCommandMock,
+}));
+vi.mock("../commands/channels/capabilities.js", () => ({
   channelsCapabilitiesCommand: channelsCapabilitiesCommandMock,
+}));
+vi.mock("../commands/channels/remove.js", () => ({
   channelsRemoveCommand: channelsRemoveCommandMock,
 }));
 

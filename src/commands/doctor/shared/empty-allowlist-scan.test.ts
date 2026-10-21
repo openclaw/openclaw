@@ -35,6 +35,31 @@ function scan(
 }
 
 describe("doctor empty allowlist policy scan", () => {
+  it.each([
+    {
+      channelName: "imessage",
+      skip: false,
+      expected: [
+        '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped. Add sender IDs to channels.imessage.groupAllowFrom, or set groupPolicy to "open".',
+      ],
+    },
+    { channelName: "zalouser", skip: true, expected: [] },
+    { channelName: "discord", skip: false, expected: [] },
+  ])(
+    "retains $channelName group warnings and subsequent plugin warnings",
+    async ({ channelName, skip, expected }) => {
+      expect(
+        await scan(
+          { [channelName]: { groupPolicy: "allowlist" } },
+          {
+            shouldSkipDefaultEmptyGroupAllowlistWarning: () => skip,
+            extraWarningsForAccount: ({ prefix }) => [`extra:${prefix}`],
+          },
+        ),
+      ).toStrictEqual([...expected, `extra:channels.${channelName}`]);
+    },
+  );
+
   it("does not warn on empty parent groupAllowFrom when active accounts have effective group allowlists", async () => {
     const warnings = await scan({
       telegram: {

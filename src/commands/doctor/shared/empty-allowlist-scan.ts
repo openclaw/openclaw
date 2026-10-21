@@ -7,14 +7,29 @@ import {
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { hasAllowFromEntries } from "./allowlist.js";
 import type { ChannelDoctorEmptyAllowlistPolicyHooks } from "./channel-doctor.js";
-import {
-  collectEmptyAllowlistPolicyWarningsForAccount,
-  resolveDoctorAccountDmAccess,
-} from "./empty-allowlist-policy.js";
 
 type ScanEmptyAllowlistPolicyWarningsParams = Partial<ChannelDoctorEmptyAllowlistPolicyHooks> & {
   doctorFixCommand: string;
 };
+
+function resolveDoctorAccountDmAccess(account: DoctorAccountRecord, parent?: DoctorAccountRecord) {
+  const dm = asNullableRecord(account.dm);
+  const parentDm = asNullableRecord(parent?.dm);
+  return {
+    dmPolicy:
+      (account.dmPolicy as string | undefined) ??
+      (dm?.policy as string | undefined) ??
+      (parent?.dmPolicy as string | undefined) ??
+      (parentDm?.policy as string | undefined) ??
+      undefined,
+    // Doctor's legacy warnings prefer top-level allowlists, including inherited ones.
+    effectiveAllowFrom:
+      (account.allowFrom as DoctorAllowFromList | undefined) ??
+      (parent?.allowFrom as DoctorAllowFromList | undefined) ??
+      (dm?.allowFrom as DoctorAllowFromList | undefined) ??
+      (parentDm?.allowFrom as DoctorAllowFromList | undefined),
+  };
+}
 
 function isActiveAccount(value: unknown): value is DoctorAccountRecord {
   return Boolean(value && typeof value === "object" && asNullableRecord(value)?.enabled !== false);
@@ -48,15 +63,42 @@ export async function scanEmptyAllowlistPolicyWarnings(
       parent,
       prefix,
     };
-    warnings.push(
-      ...collectEmptyAllowlistPolicyWarningsForAccount({
-        ...context,
-        doctorFixCommand: params.doctorFixCommand,
-        shouldSkipDefaultEmptyGroupAllowlistWarning: (accountContext) =>
-          options.suppressGroupAllowlistWarning ||
-          Boolean(params.shouldSkipDefaultEmptyGroupAllowlistWarning?.(accountContext)),
-      }),
-    );
+    if (dmPolicy === "allowlist" && !hasAllowFromEntries(effectiveAllowFrom)) {
+      warnings.push(
+        `- ${prefix}.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to ${prefix}.allowFrom, or run "${params.doctorFixCommand}" to auto-migrate from pairing store when entries exist.`,
+      );
+    }
+    const groupPolicy =
+      (account.groupPolicy as string | undefined) ??
+      (parent?.groupPolicy as string | undefined) ??
+      undefined;
+    if (
+      groupPolicy === "allowlist" &&
+      getDoctorChannelCapabilities(channelName).warnOnEmptyGroupSenderAllowlist &&
+      !(
+        channelName &&
+        (options.suppressGroupAllowlistWarning ||
+          params.shouldSkipDefaultEmptyGroupAllowlistWarning?.({ ...context }))
+      )
+    ) {
+      const rawGroupAllowFrom =
+        (account.groupAllowFrom as DoctorAllowFromList | undefined) ??
+        (parent?.groupAllowFrom as DoctorAllowFromList | undefined);
+      // Match runtime semantics: resolveGroupAllowFromSources treats empty arrays as
+      // unset and falls back to allowFrom.
+      const groupAllowFrom = hasAllowFromEntries(rawGroupAllowFrom) ? rawGroupAllowFrom : undefined;
+      const fallbackToAllowFrom =
+        getDoctorChannelCapabilities(channelName).groupAllowFromFallbackToAllowFrom;
+      const effectiveGroupAllowFrom =
+        groupAllowFrom ?? (fallbackToAllowFrom ? effectiveAllowFrom : undefined);
+      if (!hasAllowFromEntries(effectiveGroupAllowFrom)) {
+        warnings.push(
+          fallbackToAllowFrom
+            ? `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom or ${prefix}.allowFrom, or set groupPolicy to "open".`
+            : `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom, or set groupPolicy to "open".`,
+        );
+      }
+    }
     warnings.push(...(params.extraWarningsForAccount?.(context) ?? []));
   };
 
