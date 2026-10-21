@@ -86,11 +86,15 @@ it.each(["admission", "rollback"] as const)(
         container.querySelector<HTMLElementTagNameMap["openclaw-chat-page"]>("openclaw-chat-page"),
         "chat page",
       );
-      await vi.waitFor(() => expect(page.textContent).toContain("Previous transcript"));
+      await settleChatPage(page);
       const previousPane = expectDefined(
         page.querySelector<ChatPaneElement>("openclaw-chat-pane"),
         "previous pane",
       );
+      // History can wait two seconds for its initial stored snapshot before requesting startup.
+      await vi.waitFor(() => expect(previousPane.transcriptReady).toBe(true), { timeout: 5_000 });
+      await settleChatPage(page);
+      expect(page.textContent).toContain("Previous transcript");
       expect(startupKeys).toEqual([previousKey]);
       const creation = { sessionKey, admitted: false };
       context.agents.state.pendingAgent = { id: agentId, name: "New agent" };

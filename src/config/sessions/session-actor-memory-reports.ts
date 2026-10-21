@@ -309,7 +309,10 @@ export function executeSessionActorMemoryReportCommand(
             };
           }),
         );
-        state.hot.entry = projectManuallyCompactedSessionEntry(entry, command.input.nowMs);
+        state.hot.entry = projectManuallyCompactedSessionEntry(
+          state.hot.entry!,
+          command.input.nowMs,
+        );
       }
       return selected.result;
     }

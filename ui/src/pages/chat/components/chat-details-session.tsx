@@ -2,6 +2,7 @@ import { For, Show, createMemo, createSignal, createStore, onSettled } from "sol
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
@@ -194,6 +195,8 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           const owner = () => session()?.owner?.actor;
           const people = () => session()?.expandedParticipants ?? session()?.participants ?? [];
           const count = () => session()?.participantCount ?? people().length;
+          const partialPeople = () =>
+            session()?.participantCount === undefined || count() > people().length;
           const desktopPeople = createMemo(() => {
             const union = new Map<string, SessionParticipant>();
             const actors = [owner(), session()?.createdActor];
@@ -314,7 +317,9 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                         {creatorName() && (
                           <div class="chat-details__creator">
                             <span>{t("chat.sessionDetails.createdBy")}</span>
-                            <span title={creatorName()}>{creatorName()}</span>
+                            <span ref={createTextOverflow(creatorName)} title={creatorName()}>
+                              {creatorName()}
+                            </span>
                           </div>
                         )}
                       </div>
@@ -333,7 +338,13 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                             {owner() && (
                               <div class="chat-details__person">
                                 <span>{t("chat.sessionDetails.owner")}</span>
-                                <span>{owner()?.label || owner()?.id || owner()?.type}</span>
+                                <span
+                                  ref={createTextOverflow(
+                                    () => owner()?.label || owner()?.id || owner()?.type,
+                                  )}
+                                >
+                                  {owner()?.label || owner()?.id || owner()?.type}
+                                </span>
                               </div>
                             )}
                             <For each={people()}>
@@ -347,7 +358,12 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                                       profileAvatarUrl: person.avatarUrl,
                                     }}
                                   />
-                                  <span title={person.label || person.identity.id}>
+                                  <span
+                                    ref={createTextOverflow(
+                                      () => person.label || person.identity.id,
+                                    )}
+                                    title={person.label || person.identity.id}
+                                  >
                                     {person.label || person.identity.id}
                                   </span>
                                 </div>
@@ -382,6 +398,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                             <Show when={desktopPeople().length > 0}>
                               <ChatDetailsPeopleSummary
                                 people={desktopPeople()}
+                                partial={partialPeople()}
                                 expanded={sectionExpanded("people")}
                               />
                             </Show>
@@ -403,13 +420,21 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                           <Show when={creatorName() && !session()?.createdActor?.identity}>
                             <div class="chat-details__creator">
                               <span>{t("chat.sessionDetails.createdBy")}</span>
-                              <span title={creatorName()}>{creatorName()}</span>
+                              <span ref={createTextOverflow(creatorName)} title={creatorName()}>
+                                {creatorName()}
+                              </span>
                             </div>
                           </Show>
                           <Show when={owner() && !owner()?.identity}>
                             <div class="chat-details__person">
                               <span>{t("chat.sessionDetails.owner")}</span>
-                              <span>{owner()?.label || owner()?.id || owner()?.type}</span>
+                              <span
+                                ref={createTextOverflow(
+                                  () => owner()?.label || owner()?.id || owner()?.type,
+                                )}
+                              >
+                                {owner()?.label || owner()?.id || owner()?.type}
+                              </span>
                             </div>
                           </Show>
                         </ChatDetailsDesktopSection>

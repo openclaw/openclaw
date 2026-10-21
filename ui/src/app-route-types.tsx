@@ -12,11 +12,11 @@ type ForwardedRouteProps<Data> = { routeData: Data | undefined; loaderPending: b
 type SolidPageOptions<Id extends RouteId, Context, Data> = Omit<
   PageDefinition<Id, Context, unknown, Data>,
   "id" | "path" | "component"
-> & { header?: boolean };
+>;
 type SolidPageDefinition<Id extends RouteId, Context, Data> = PageDefinition<
   Id,
   Context,
-  { header: boolean; renderSolid: Component<SolidRouteProps<Data>> },
+  { renderSolid: Component<SolidRouteProps<Data>> },
   Data
 >;
 
@@ -36,13 +36,11 @@ export function defineSolidPage<Id extends RouteId, Context = unknown, Data = un
   load: () => Promise<Component | Component<ForwardedRouteProps<Data>>>,
   options: SolidPageOptions<Id, Context, Data> = {},
 ): SolidPageDefinition<Id, Context, Data> {
-  const { header = true, ...route } = options;
   return definePage({
     ...routePageSpec(id),
-    ...route,
+    ...options,
     component: () =>
       load().then((Page) => ({
-        header,
         renderSolid: (props: SolidRouteProps<Data>) => (
           <Page routeData={props.data} loaderPending={props.loaderPending} />
         ),

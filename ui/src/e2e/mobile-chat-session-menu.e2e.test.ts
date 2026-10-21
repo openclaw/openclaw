@@ -330,9 +330,7 @@ suite.define(() => {
           await host.getByRole("button", { name: /^Sharing options/ }).click();
         }
         try {
-          await sharing
-            .getByRole("heading", { name: "Message permissions", exact: true })
-            .waitFor();
+          await sharing.getByRole("heading", { name: "Session members", exact: true }).waitFor();
         } finally {
           console.info("MOBILE_SHARING_RECOVERY", {
             documentRequests,

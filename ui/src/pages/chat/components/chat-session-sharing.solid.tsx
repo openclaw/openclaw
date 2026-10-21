@@ -29,6 +29,7 @@ import {
   canManageChatSessionSharing,
   ChatSessionSharingModeIcon,
   projectChatSessionSharingRoster,
+  chatSessionMembershipLabel,
 } from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -227,11 +228,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                 />
               </Show>
               <span class="chat-pane__sharing-permission">
-                {t(
-                  isCreator()
-                    ? "chat.sessionSharing.owner"
-                    : "chat.sessionSharing.permissionUnavailable",
-                )}
+                {chatSessionMembershipLabel(isCreator(), selected())}
               </span>
               <span
                 class="chat-pane__sharing-member-check"
@@ -279,9 +276,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                         type="button"
                         class="chat-pane__sharing-person"
                         disabled={Boolean(reason() || props.state?.loading)}
-                        title={
-                          reason() ?? t("chat.sessionSharing.permissionUnavailableDescription")
-                        }
+                        title={reason()}
                       >
                         <Content />
                       </button>
@@ -304,7 +299,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
     return (
       <section class="chat-pane__sharing-section chat-pane__sharing-permissions">
         <div class="chat-pane__sharing-section-label chat-pane__sharing-search-heading">
-          <span>{t("chat.sessionSharing.messagePermissions")}</span>
+          <span>{t("chat.sessionSharing.sessionMembers")}</span>
           <Show when={people().length > 0}>
             <button
               ref={[

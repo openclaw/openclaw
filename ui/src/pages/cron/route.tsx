@@ -8,6 +8,6 @@ export const page = definePage({
   component: async () => {
     const entry = await import("./cron-page-entry.tsx");
     await entry.CronPage.preload();
-    return entry;
+    return { renderSolid: entry.renderSolid };
   },
 });

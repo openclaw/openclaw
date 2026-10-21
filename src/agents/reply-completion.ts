@@ -11,6 +11,7 @@ import {
   isInternalNonDeliveryChannel,
 } from "../utils/message-channel-constants.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 
@@ -171,6 +172,16 @@ export function resolveReplyCompletion(
         ? "missing"
         : evidence,
   };
+}
+
+/** A host claim can waive a required result; an empty model response cannot. */
+export function resolveClaimedReplyExpectation(
+  expectation: ReplyExpectation,
+  meta: { providerStarted?: boolean; terminalReply?: AgentRunTerminalReplySnapshot } | undefined,
+): ReplyExpectation {
+  return meta?.providerStarted === false && meta.terminalReply?.disposition === "silent"
+    ? "optional"
+    : expectation;
 }
 
 /** Failure to observe a send is not proof that it is safe to generate or send another reply. */
