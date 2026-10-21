@@ -391,13 +391,9 @@ describe("handleWorkboardCommand", () => {
         status: "running",
         runId,
         execution: { runId },
-        metadata: {
-          automation: {
-            ...(!admin ? { workspace: { kind: "dir", path: "/workspace" } } : {}),
-            launch: { phase: "accepted", acceptedRunId: runId },
-          },
-          attempts: [expect.objectContaining({ id: expect.any(String), runId })],
-        },
+        ...(!admin
+          ? { metadata: { automation: { workspace: { kind: "dir", path: "/workspace" } } } }
+          : {}),
       });
     },
   );

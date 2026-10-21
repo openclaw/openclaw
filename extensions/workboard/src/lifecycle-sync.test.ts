@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWorkboardAutomationNudgeService } from "./automation-nudge.js";
 import {
   execution,
+  createLinkedCard,
   lifecycleSession,
   lifecycleSnapshot,
   lifecycleFixture,
@@ -19,7 +20,6 @@ import {
   syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./lifecycle-sync.js";
-import { createLinkedCard } from "./lifecycle-sync.test-support.js";
 import { workboardSessionKeyForCard } from "./session-link.js";
 import type { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
@@ -136,14 +136,11 @@ async function nudgeFixture(
 describe("Workboard gateway lifecycle sync", () => {
   beforeEach(resetStore);
   it("uses the active service owner from a prepared plugin generation", async () => {
-    const info = vi.fn();
-    const { request, sync, stop } = await nudgeFixture(undefined, {
-      logger: { info, warn: vi.fn(), error: vi.fn() },
-    });
+    const { request, sync, stop, context } = await nudgeFixture();
     const generationService = createWorkboardAutomationNudgeService({ store });
     await sync(generationService.nudge);
     await stop();
-    expect(info).toHaveBeenCalledWith(
+    expect(context.logger.info).toHaveBeenCalledWith(
       "workboard automation nudge requested for board planning: job job-categorize-planning",
     );
     expect(request).toHaveBeenCalledExactlyOnceWith("job-categorize-planning", "if-enabled");
@@ -238,18 +235,15 @@ describe("Workboard gateway lifecycle sync", () => {
   it.each(["failure", "disabled"] as const)(
     "handles %s automation without affecting lifecycle sync",
     async (outcome) => {
-      const warn = vi.fn();
       const request =
         outcome === "failure"
           ? vi.fn().mockRejectedValue(new Error("gateway unavailable"))
           : vi.fn().mockResolvedValue({ ok: true, ran: false, reason: "disabled" });
-      const { card, sync, stop } = await nudgeFixture(request, {
-        logger: { info: vi.fn(), warn, error: vi.fn() },
-      });
+      const { card, sync, stop, context } = await nudgeFixture(request);
       await expect(sync()).resolves.toBe(1);
       await stop();
       expect((await store.get(card.id))?.status).toBe("review");
-      expect(warn).toHaveBeenCalledWith(
+      expect(context.logger.warn).toHaveBeenCalledWith(
         outcome === "failure"
           ? expect.stringContaining("workboard automation nudge failed")
           : "workboard automation nudge skipped for board planning: job job-categorize-planning disabled",
@@ -257,10 +251,14 @@ describe("Workboard gateway lifecycle sync", () => {
     },
   );
 
-  it("updates execution attempts once when duplicate failure hooks arrive", async () => {
+  it("matches run IDs and updates attempts once for duplicate failure hooks", async () => {
     const sessionKey = "agent:main:subagent:workboard-default-failure";
     const { end, read } = await runningCard(sessionKey, "run-failure");
-    const event = { runId: "run-failure", outcome: "error" as const };
+    const event = {
+      targetSessionKey: "agent:main:dashboard:other",
+      runId: "run-failure",
+      outcome: "error" as const,
+    };
 
     await end(event);
     await end(event);
@@ -291,13 +289,6 @@ describe("Workboard gateway lifecycle sync", () => {
       });
     },
   );
-
-  it("matches cards by run id", async () => {
-    const { end, read } = await linked({ runId: "run-linked" });
-    await end({ targetSessionKey: "agent:main:dashboard:other", runId: "run-linked" });
-
-    expect((await read())?.status).toBe("review");
-  });
 
   it("defers incognito failure until its session settles without exposing private content", async () => {
     const sessionKey = "agent:main:dashboard:incognito-agent-end";
@@ -463,17 +454,6 @@ describe("Workboard gateway lifecycle sync", () => {
     },
   );
 
-  it.each([undefined, "worker"])(
-    "uses suffix ownership only for agentless cards (%s)",
-    async (agentId) => {
-      const { card, read, sweep } = await linked({ agentId, boardId: "ops" });
-      const key = workboardSessionKeyForCard(card);
-      const suffix = key.slice(key.indexOf("subagent:workboard-"));
-      await sweep([lifecycleSession(`agent:other:${suffix}`, "done", card.updatedAt + 1)]);
-      expect((await read())?.status).toBe(agentId ? "running" : "review");
-    },
-  );
-
   it("does not apply a delayed terminal event from an older accepted run", async () => {
     const sessionKey = "agent:worker:subagent:workboard-default-retried";
     const { end, read } = await runningCard(sessionKey, "current-run");
@@ -488,26 +468,31 @@ describe("Workboard gateway lifecycle sync", () => {
     });
   });
 
-  it.each([false, true])(
-    "recovers an unlinked dispatcher claim only with a unique owner (ambiguous=%s)",
-    async (ambiguous) => {
-      const card = await store.create({ title: "Ambiguous accepted run", status: "ready" });
-      const acceptedSessionKey = workboardSessionKeyForCard(card);
-      const claimed = await store.claim(card.id, { ownerId: "workboard-dispatcher" });
-
-      const observedSession = (agent: string, status: Session["status"]) => ({
-        key: `agent:${agent}:${acceptedSessionKey}`,
-        status,
-        updatedAt: claimed.card.updatedAt + 1,
+  it.each([
+    [undefined, false, "review"],
+    ["worker", false, "running"],
+    [undefined, true, "running"],
+  ] as const)(
+    "recovers an unlinked claim for agent=%s only with unique ownership (ambiguous=%s)",
+    async (agentId, ambiguous, status) => {
+      const card = await store.create({
+        title: "Unlinked accepted run",
+        status: "ready",
+        agentId,
+        boardId: "ops",
       });
+      const key = workboardSessionKeyForCard(card);
+      const suffix = key.slice(key.indexOf("subagent:workboard-"));
+      const claimed = await store.claim(card.id, { ownerId: "workboard-dispatcher" });
       await runSessionSweep({
         sessions: [
-          observedSession("alpha", "done"),
-          ...(ambiguous ? [observedSession("beta", "failed")] : []),
+          lifecycleSession(`agent:alpha:${suffix}`, "done", claimed.card.updatedAt + 1),
+          ...(ambiguous
+            ? [lifecycleSession(`agent:beta:${suffix}`, "failed", claimed.card.updatedAt + 1)]
+            : []),
         ],
       });
-
-      expect((await store.get(card.id))?.status).toBe(ambiguous ? "running" : "review");
+      expect((await store.get(card.id))?.status).toBe(status);
     },
   );
 

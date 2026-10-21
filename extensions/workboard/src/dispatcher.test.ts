@@ -8,6 +8,7 @@ import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as dispatcherWorkspace from "./dispatcher-workspace.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
+import { fakeClock } from "./store-family.test-support.js";
 import type { WorkboardStore } from "./store.js";
 import { createWorktreeRuntime } from "./test/interaction-fixtures.js";
 import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
@@ -17,6 +18,7 @@ import type {
 } from "./workspace-access.js";
 
 type DispatchParams = Parameters<typeof dispatchAndStartWorkboardCards>[0];
+const fullHostAccess = { unrestricted: true } as const;
 const targetOptions = (runtime: WorkboardTargetWorkspaceRuntime, root = "/workspace") => ({
   maxStarts: 1,
   resolveAgentWorkspace: () => root,
@@ -87,7 +89,7 @@ describe("dispatchAndStartWorkboardCards", () => {
       try {
         const card = await createCard({
           ...(assignment === "assigned" ? { agentId: "worker" } : {}),
-          workspaceAccess: { unrestricted: true },
+          workspaceAccess: fullHostAccess,
           maxRetries: 1,
           metadata: { failureCount: 1 },
         });
@@ -143,7 +145,7 @@ describe("dispatchAndStartWorkboardCards", () => {
   });
 
   it("persists the resolved subagent runtime on new executions", async () => {
-    const card = await createCard({ workspaceAccess: { unrestricted: true } });
+    const card = await createCard({ workspaceAccess: fullHostAccess });
     run = vi.fn().mockResolvedValue({
       runId: "run-claude",
       runtime: {
@@ -165,61 +167,56 @@ describe("dispatchAndStartWorkboardCards", () => {
     });
   });
 
-  it("materializes managed worktrees, supplies cwd, and persists them", async () => {
-    const card = await createCard({
-      workspace: { kind: "worktree", path: "/repo", branch: "main" },
-      workspaceAccess: { unrestricted: true },
-    });
-    run = vi.fn().mockResolvedValue({ runId: "run-worktree" });
-    const worktrees = createWorktreeRuntime({
-      create: vi.fn().mockResolvedValue({
-        id: "managed-id",
-        path: "/state/worktrees/fingerprint/wb-card",
-        branch: `openclaw/wb-${card.id}`,
-      }),
-      removeIfLossless: vi.fn().mockResolvedValue(true),
-    });
-
-    await dispatch(
-      {
-        now: 10,
-        materializeWorktree: true,
-      },
-      worktrees,
-    );
-
-    expect(worktrees.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: "/repo",
-        baseRef: "main",
-        ownerKind: "workboard",
-        ownerId: card.id,
-      }),
-    );
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: "/state/worktrees/fingerprint/wb-card" }),
-    );
-    await expectStored(card.id, {
-      metadata: {
-        automation: {
-          workspace: {
-            kind: "worktree",
-            path: "/state/worktrees/fingerprint/wb-card",
-            branch: `openclaw/wb-${card.id}`,
-            sourcePath: "/repo",
-            sourceBranch: "main",
+  it.each(["main", undefined])(
+    "materializes and persists a workspace with source base %s",
+    async (sourceBranch) => {
+      const managed = "/state/worktrees/fingerprint/wb-card";
+      const card = await createCard({
+        workspace: sourceBranch
+          ? { kind: "worktree", path: "/repo", branch: sourceBranch }
+          : { kind: "worktree", path: managed, branch: "openclaw/wb-card", sourcePath: "/repo" },
+        workspaceAccess: fullHostAccess,
+      });
+      const branch = sourceBranch ? `openclaw/wb-${card.id}` : "openclaw/wb-card";
+      run = vi.fn().mockResolvedValue({ runId: "run-worktree" });
+      const worktrees = createWorktreeRuntime({
+        create: vi.fn().mockResolvedValue({ id: "managed-id", path: managed, branch }),
+        ...(sourceBranch ? { removeIfLossless: vi.fn().mockResolvedValue(true) } : {}),
+      });
+      await dispatch({ now: 10, materializeWorktree: true }, worktrees);
+      expect(worktrees.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoRoot: "/repo",
+          ownerKind: "workboard",
+          ownerId: card.id,
+          ...(sourceBranch ? { baseRef: sourceBranch } : {}),
+        }),
+      );
+      if (!sourceBranch) {
+        expect(vi.mocked(worktrees.create).mock.calls[0]?.[0]).not.toHaveProperty("baseRef");
+      }
+      expect(run).toHaveBeenCalledWith(expect.objectContaining({ cwd: managed }));
+      await expectStored(card.id, {
+        metadata: {
+          automation: {
+            workspace: {
+              kind: "worktree",
+              path: managed,
+              branch,
+              sourcePath: "/repo",
+              ...(sourceBranch ? { sourceBranch } : {}),
+            },
           },
         },
-      },
-    });
-
-    expect(worktrees.removeIfLossless).not.toHaveBeenCalled();
-  });
+      });
+      expect(worktrees.removeIfLossless).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
       name: "unsandboxed target",
-      runtime: { sandboxed: false, workspaceAccess: { unrestricted: true } },
+      runtime: { sandboxed: false, workspaceAccess: fullHostAccess },
       error: "target agent is not sandboxed for this restricted Workboard card.",
     },
     {
@@ -252,7 +249,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     const card = await rejectCard(
       { workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: false } },
       expect.stringContaining("manual movement is allowed"),
-      { workspaceAccess: { unrestricted: true } },
+      { workspaceAccess: fullHostAccess },
     );
     await expectStatus(card.id, "ready");
   });
@@ -317,7 +314,7 @@ describe("dispatchAndStartWorkboardCards", () => {
           workspaceAccess: writable,
         }),
         materializeWorktree: true,
-        workspaceAccess: { unrestricted: true },
+        workspaceAccess: fullHostAccess,
       },
       createWorktreeRuntime({
         resolveCheckoutRoot: vi.fn().mockResolvedValue("/workspace"),
@@ -336,31 +333,6 @@ describe("dispatchAndStartWorkboardCards", () => {
         },
       },
     });
-  });
-
-  it("does not reuse a generated branch as an omitted source base", async () => {
-    const card = await createCard({
-      workspace: {
-        kind: "worktree",
-        path: "/state/worktrees/fingerprint/wb-card",
-        branch: "openclaw/wb-card",
-        sourcePath: "/repo",
-      },
-      workspaceAccess: { unrestricted: true },
-    });
-    const create = vi.fn().mockResolvedValue({
-      id: "managed-id",
-      path: "/state/worktrees/fingerprint/wb-card",
-      branch: "openclaw/wb-card",
-    });
-
-    run = vi.fn().mockResolvedValue({ runId: "run-retry" });
-    await dispatch({ materializeWorktree: true }, createWorktreeRuntime({ create }));
-
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({ repoRoot: "/repo", ownerId: card.id }),
-    );
-    expect(create.mock.calls[0]?.[0]).not.toHaveProperty("baseRef");
   });
 
   it("preserves ready-card history on idle Gateway dispatch passes", async () => {
@@ -386,9 +358,9 @@ describe("dispatchAndStartWorkboardCards", () => {
     const first = await createCard({
       priority: "urgent",
       agentId: "alpha",
-      workspaceAccess: { unrestricted: true },
+      workspaceAccess: fullHostAccess,
     });
-    const second = await createCard({ agentId: "beta", workspaceAccess: { unrestricted: true } });
+    const second = await createCard({ agentId: "beta", workspaceAccess: fullHostAccess });
     run = vi.fn().mockResolvedValue({ runId: "run-shared" });
 
     const result = await dispatch({ now: 10, maxStarts: 3, ownerId: " shared-worker " });
@@ -403,7 +375,7 @@ describe("dispatchAndStartWorkboardCards", () => {
   });
   const createAuthorizedCard = (
     input: Omit<Parameters<WorkboardStore["create"]>[0], "title"> & { title?: string } = {},
-  ) => createCard({ workspaceAccess: { unrestricted: true }, ...input });
+  ) => createCard({ workspaceAccess: fullHostAccess, ...input });
   it.each([
     { name: "archived", archive: true },
     { name: "completed", status: "done" as const },
@@ -430,7 +402,7 @@ describe("dispatchAndStartWorkboardCards", () => {
       return await originalClaim(id, input, options);
     });
 
-    const result = await dispatch({ boardId: "ops", workspaceAccess: { unrestricted: true } });
+    const result = await dispatch({ boardId: "ops", workspaceAccess: fullHostAccess });
 
     expect(run).not.toHaveBeenCalled();
     expect(result).toMatchObject({
@@ -472,7 +444,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     });
     run = vi.fn().mockResolvedValue({ runId: "healthy-run" });
 
-    const result = await dispatch({ workspaceAccess: { unrestricted: true } });
+    const result = await dispatch({ workspaceAccess: fullHostAccess });
 
     expect(result.startFailures.map((failure) => failure.cardId)).toEqual([first.id, second.id]);
     expect(result.started).toMatchObject([{ cardId: healthy.id, runId: "healthy-run" }]);
@@ -513,7 +485,6 @@ describe("dispatchAndStartWorkboardCards", () => {
     });
     expect([blocked?.execution, blocked?.runId]).toEqual([undefined, undefined]);
   });
-  const fullHostAccess: WorkboardWorkspaceAccess = { unrestricted: true };
   const workspaceAccess = writable;
   const readOnlyAccess: WorkboardWorkspaceAccess = { ...workspaceAccess, writable: false };
 
@@ -608,7 +579,7 @@ describe("dispatchAndStartWorkboardCards", () => {
             priority,
             agentId: `inaccessible-worker-${index + 1}`,
             ...(stage === "missing-target"
-              ? { workspaceAccess: { unrestricted: true as const } }
+              ? { workspaceAccess: fullHostAccess }
               : { workspace: { kind: "worktree" as const, path: "/repo" } }),
           }),
         );
@@ -617,7 +588,7 @@ describe("dispatchAndStartWorkboardCards", () => {
       const rejectedIds = new Set(rejected.map((card) => card.id));
       const before = await Promise.all(rejected.map((card) => store.get(card.id)));
       const resolveAccess = dispatcherWorkspace.resolveDispatchWorkspaceAccess;
-      const resolve = vi
+      using _ = vi
         .spyOn(dispatcherWorkspace, "resolveDispatchWorkspaceAccess")
         .mockImplementation(async (params) =>
           stage !== "missing-target" || !rejectedIds.has(params.card.id)
@@ -636,37 +607,33 @@ describe("dispatchAndStartWorkboardCards", () => {
       using block = vi.spyOn(store, "block");
       using fail = vi.spyOn(store, "failPreparedLaunch");
       run = vi.fn().mockResolvedValue({ runId: "run-healthy-worker" });
-      try {
-        const result = await dispatch({ now: 10 });
-        const error =
-          stage === "missing-target"
-            ? "target agent workspace is unavailable for restricted dispatch"
-            : "card workspace authority is unknown; re-save its workspace with current permissions before dispatch.";
-        expect(result.startFailures).toEqual(
-          rejected.map((card) => ({ cardId: card.id, title: card.title, error })),
-        );
-        expect(result.started).toEqual([
-          {
-            cardId: healthy.id,
-            title: healthy.title,
-            sessionKey: expect.any(String),
-            runId: "run-healthy-worker",
-          },
-        ]);
-        for (const spy of [claim, prepare]) {
-          expect(spy.mock.calls.map(([cardId]) => cardId)).toEqual([healthy.id]);
-        }
-        expect(run).toHaveBeenCalledOnce();
-        expect(block).not.toHaveBeenCalled();
-        expect(fail).not.toHaveBeenCalled();
-        expect(await Promise.all(rejected.map((card) => store.get(card.id)))).toEqual(before);
-        await expectStored(healthy.id, {
-          status: "running",
-          execution: { runId: "run-healthy-worker" },
-        });
-      } finally {
-        resolve.mockRestore();
+      const result = await dispatch({ now: 10 });
+      const error =
+        stage === "missing-target"
+          ? "target agent workspace is unavailable for restricted dispatch"
+          : "card workspace authority is unknown; re-save its workspace with current permissions before dispatch.";
+      expect(result.startFailures).toEqual(
+        rejected.map((card) => ({ cardId: card.id, title: card.title, error })),
+      );
+      expect(result.started).toEqual([
+        {
+          cardId: healthy.id,
+          title: healthy.title,
+          sessionKey: expect.any(String),
+          runId: "run-healthy-worker",
+        },
+      ]);
+      for (const spy of [claim, prepare]) {
+        expect(spy.mock.calls.map(([cardId]) => cardId)).toEqual([healthy.id]);
       }
+      expect(run).toHaveBeenCalledOnce();
+      expect(block).not.toHaveBeenCalled();
+      expect(fail).not.toHaveBeenCalled();
+      expect(await Promise.all(rejected.map((card) => store.get(card.id)))).toEqual(before);
+      await expectStored(healthy.id, {
+        status: "running",
+        execution: { runId: "run-healthy-worker" },
+      });
     },
   );
 
@@ -700,106 +667,98 @@ describe("dispatchAndStartWorkboardCards", () => {
   it("keeps a cross-board running worker slot for a different assigned agent until its heartbeat grace expires", async () => {
     const agentId = "assigned-worker";
 
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(10_000);
-      const stale = await store.create({
-        title: "Abandoned product worker",
+    using clock = fakeClock();
+    clock.set(10_000);
+    const stale = await store.create({
+      title: "Abandoned product worker",
+      status: "running",
+      agentId,
+      boardId: "product",
+      execution: {
+        id: "stale-execution",
+        kind: "agent-session",
+        mode: "autonomous",
         status: "running",
-        agentId,
-        boardId: "product",
-        execution: {
-          id: "stale-execution",
-          kind: "agent-session",
-          mode: "autonomous",
-          status: "running",
-          startedAt: 1,
-          updatedAt: 1,
-        },
-      });
-      const claimed = await store.claim(stale.id, {
-        ownerId: "shared-worker",
-        token: "stale-token",
-        ttlSeconds: 1,
-      });
-      const ready = await createAuthorizedCard({ agentId: "shared-worker", boardId: "ops" });
-      run = vi.fn().mockResolvedValue({ runId: "run-after-grace" });
-      const expiresAt = claimed.card.metadata?.claim?.expiresAt;
-      expect(expiresAt).toBeDefined();
-      const occupied = {
-        status: "running",
-        execution: { status: "running" },
-        metadata: { claim: { ownerId: "shared-worker" } },
-      };
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    });
+    const claimed = await store.claim(stale.id, {
+      ownerId: "shared-worker",
+      token: "stale-token",
+      ttlSeconds: 1,
+    });
+    const ready = await createAuthorizedCard({ agentId: "shared-worker", boardId: "ops" });
+    run = vi.fn().mockResolvedValue({ runId: "run-after-grace" });
+    const expiresAt = claimed.card.metadata?.claim?.expiresAt;
+    expect(expiresAt).toBeDefined();
+    const occupied = {
+      status: "running",
+      execution: { status: "running" },
+      metadata: { claim: { ownerId: "shared-worker" } },
+    };
 
-      vi.setSystemTime(expiresAt! + 5 * 60 * 1000);
-      const withinGrace = await dispatch({
-        boardId: "ops",
-      });
+    clock.set(expiresAt! + 5 * 60 * 1000);
+    const withinGrace = await dispatch({
+      boardId: "ops",
+    });
 
-      expect(withinGrace.started).toEqual([]);
-      expect(run).not.toHaveBeenCalled();
-      await expectStored(stale.id, occupied);
+    expect(withinGrace.started).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+    await expectStored(stale.id, occupied);
 
-      vi.setSystemTime(expiresAt! + 5 * 60 * 1000 + 1);
-      const reclaimed = await dispatch({
-        boardId: "ops",
-      });
+    clock.set(expiresAt! + 5 * 60 * 1000 + 1);
+    const reclaimed = await dispatch({
+      boardId: "ops",
+    });
 
-      expectStarted(reclaimed, ready.id, "run-after-grace");
-      expect(run).toHaveBeenCalledOnce();
-      await expectStored(stale.id, occupied);
-    } finally {
-      vi.useRealTimers();
-    }
+    expectStarted(reclaimed, ready.id, "run-after-grace");
+    expect(run).toHaveBeenCalledOnce();
+    await expectStored(stale.id, occupied);
   });
 
   it("selects at the dispatch snapshot while claiming at current time (10000, 50000)", async () => {
     const wallClock = 10_000;
     const dispatchNow = 50_000;
 
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(wallClock);
-      const review = await store.create({
-        title: "Review claim with a deterministic expiry",
-        status: "review",
-        agentId: "shared-worker",
-        metadata: {
-          claim: {
-            ownerId: "shared-worker",
-            token: "timed-token",
-            claimedAt: 1_000,
-            lastHeartbeatAt: 1_000,
-            expiresAt: 20_000,
-          },
+    using clock = fakeClock();
+    clock.set(wallClock);
+    const review = await store.create({
+      title: "Review claim with a deterministic expiry",
+      status: "review",
+      agentId: "shared-worker",
+      metadata: {
+        claim: {
+          ownerId: "shared-worker",
+          token: "timed-token",
+          claimedAt: 1_000,
+          lastHeartbeatAt: 1_000,
+          expiresAt: 20_000,
         },
-      });
-      const ready = await createAuthorizedCard({ agentId: "shared-worker" });
-      run = vi.fn().mockResolvedValue({ runId: "run-at-dispatch-time" });
-      const claim = vi.spyOn(store, "claim");
+      },
+    });
+    const ready = await createAuthorizedCard({ agentId: "shared-worker" });
+    run = vi.fn().mockResolvedValue({ runId: "run-at-dispatch-time" });
+    const claim = vi.spyOn(store, "claim");
 
-      const result = await dispatch({ now: dispatchNow });
+    const result = await dispatch({ now: dispatchNow });
 
-      expect(claim.mock.calls.map(([id]) => id)).toEqual([ready.id]);
-      expect(run).not.toHaveBeenCalled();
-      expect(result.started).toEqual([]);
-      expect(result.startFailures).toEqual([
-        expect.objectContaining({
-          cardId: ready.id,
-          error: "Owner shared-worker already has active Workboard work.",
-        }),
-      ]);
-      const unchangedReady = await store.get(ready.id);
-      expect(unchangedReady?.status).toBe("ready");
-      expect(unchangedReady?.metadata?.claim).toBeUndefined();
-      await expectStored(review.id, {
-        status: "review",
-        metadata: { claim: review.metadata?.claim },
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(claim.mock.calls.map(([id]) => id)).toEqual([ready.id]);
+    expect(run).not.toHaveBeenCalled();
+    expect(result.started).toEqual([]);
+    expect(result.startFailures).toEqual([
+      expect.objectContaining({
+        cardId: ready.id,
+        error: "Owner shared-worker already has active Workboard work.",
+      }),
+    ]);
+    const unchangedReady = await store.get(ready.id);
+    expect(unchangedReady?.status).toBe("ready");
+    expect(unchangedReady?.metadata?.claim).toBeUndefined();
+    await expectStored(review.id, {
+      status: "review",
+      metadata: { claim: review.metadata?.claim },
+    });
   });
 
   it("replaces an expired ready-card claim with the workboard-dispatcher slot", async () => {
@@ -945,7 +904,7 @@ describe("dispatchAndStartWorkboardCards", () => {
       status: "scheduled",
       scheduledAt: now + 60_000,
       agentId: "scheduled-worker",
-      workspaceAccess: { unrestricted: true },
+      workspaceAccess: fullHostAccess,
     });
     run = vi.fn().mockResolvedValue({ runId: "scheduled-run" });
 
@@ -966,7 +925,7 @@ describe("dispatchAndStartWorkboardCards", () => {
       status: "todo",
       priority: "low",
       agentId: "target-owner",
-      workspaceAccess: { unrestricted: true },
+      workspaceAccess: fullHostAccess,
     });
     run = vi.fn().mockResolvedValue({ runId: "target-run" });
 

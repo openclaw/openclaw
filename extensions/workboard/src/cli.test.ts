@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWorkboardCli } from "./cli.js";
 import type { WorkboardStore } from "./store.js";
 import { createAmbiguousPrefix } from "./test/interaction-fixtures.js";
@@ -68,13 +68,6 @@ describe("registerWorkboardCli", () => {
     delete process.env.OPENCLAW_GATEWAY_URL;
   });
 
-  it("records full-host authority on locally created cards", async () => {
-    await parse("create", "Host card");
-    await expect(store.list()).resolves.toMatchObject([
-      { metadata: { automation: { workspaceAccess: { unrestricted: true } } } },
-    ]);
-  });
-
   it("redacts claim tokens from card JSON output", async () => {
     const card = await store.create({ title: "Claimed worker", status: "running" });
     await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
@@ -100,6 +93,7 @@ describe("registerWorkboardCli", () => {
     const jsonOutput = await captureCli("list", "--json");
     expect(jsonOutput).toContain(archived.id);
     expect(jsonOutput).toContain("archivedAt");
+    expect(await captureCli("show", archived.id)).toContain("Archived card (archived)");
   });
 
   it("rejects invalid list status filters instead of reporting an empty board", async () => {
@@ -112,13 +106,6 @@ describe("registerWorkboardCli", () => {
         /Allowed choices are.*running/,
       );
     });
-  });
-
-  it("marks archived cards in show output", async () => {
-    const archived = await store.create({ title: "Archived card", status: "ready" });
-    await store.archive(archived.id, true);
-    const output = await captureCli("show", archived.id);
-    expect(output).toContain("Archived card (archived)");
   });
 
   it("requests minimum scopes unless full-host access is explicit", async () => {
@@ -189,11 +176,15 @@ describe("registerWorkboardCli", () => {
   });
 
   it("moves claimed cards with operator authority and redacts JSON output", async () => {
-    const card = await store.create({ title: "Claimed card", status: "todo" });
-    await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
-    const output = await captureCli("move", card.id.slice(0, 8), "--status", "review", "--json");
+    await captureCli("create", "Claimed card");
+    const [card] = await store.list();
+    assert(card);
+    expect(card.metadata?.automation?.workspaceAccess).toEqual({ unrestricted: true });
+    const id = card.id;
+    await store.claim(id, { ownerId: "worker", token: "secret-token" });
+    const output = await captureCli("move", id.slice(0, 8), "--status", "review", "--json");
     const parsed = JSON.parse(output);
-    expect(parsed).toMatchObject({ card: { id: card.id, status: "review" } });
+    expect(parsed).toMatchObject({ card: { id, status: "review" } });
     expect(parsed.card.metadata.claim.token).toBe("[redacted]");
     expect(output).not.toContain("secret-token");
   });

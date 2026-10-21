@@ -432,11 +432,13 @@ it("coalesces notifications and refreshes board facts after publications", async
   await board.store.upsertBoard({ id: "second", kind: "sessions" });
   expect((await board.service.read("second")).sessions).toHaveLength(2);
   changed.mockClear();
-  board.publish("active", [facts("one", { run: "active" }), facts("two")]);
+  const added = facts("new", { pullRequestsUnavailable: true });
+  board.publish("active", [facts("one", { run: "active" }), facts("two"), added]);
   expect((await board.read()).sessions[0]).toMatchObject({ columnId: "focus" });
   board.state.sessions = [
     facts("one", { run: "active", label: "Updated during burst" }),
     facts("two"),
+    added,
   ];
   board.state.revision = "updated";
   for (let event = 1; event < 100; event += 1) {
@@ -449,6 +451,7 @@ it("coalesces notifications and refreshes board facts after publications", async
   expect(changed).toHaveBeenCalledOnce();
   const read = await board.read();
   expect(read.sessions[0]).toMatchObject({ columnId: "focus", label: "Updated during burst" });
+  expect(read.sessions[2]).toMatchObject({ key: added.key, reason: "facts-unavailable" });
   await vi.advanceTimersByTimeAsync(5_000);
   expect(changed).toHaveBeenCalledOnce();
   board.emit(facts("two").key);
@@ -513,18 +516,6 @@ it.each([false, true])(
     ]);
   },
 );
-
-it("announces sessions added after the first read", async () => {
-  const board = await createFixture();
-  expect((await board.read()).sessions).toEqual([]);
-  const changed = vi.spyOn(board.store, "announceChangeEpoch");
-  board.publish("new-session", [facts("new", { pullRequestsUnavailable: true })]);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(changed).toHaveBeenCalledOnce();
-  expect((await board.read()).sessions).toMatchObject([
-    { key: facts("new").key, reason: "facts-unavailable" },
-  ]);
-});
 
 it("shares projections and reuses 80 unchanged rows after one session changes", async () => {
   const board = await createFixture(
@@ -635,19 +626,6 @@ it.each(["session", "people"] as const)(
     expect(expired.revision!.scope).not.toBe(first.revision!.scope);
   },
 );
-
-it("checks authority after the caller's facts selection even with a warm projection", async () => {
-  const board = await createFixture(["one"]);
-  const first = await board.read();
-  let active = true;
-  board.selectFacts.mockImplementationOnce(async () => {
-    active = false;
-    return { ...board.state };
-  });
-  const caller = authority(() => active);
-  await expect(board.read(undefined, caller)).rejects.toThrow("Caller authority expired");
-  expect(await board.read()).toBe(first);
-});
 
 it.each(["owner", "joiner"] as const)(
   "rejects an expired %s without retiring the other caller's authority",

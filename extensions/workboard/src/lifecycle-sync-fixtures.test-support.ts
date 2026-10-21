@@ -1,10 +1,11 @@
-import type { WorkboardExecution } from "@openclaw/workboard-contract";
+import type { WorkboardExecution, WorkboardStatus } from "@openclaw/workboard-contract";
 import { expect, vi } from "vitest";
 import type { OpenClawPluginService } from "../api.js";
 import {
   createWorkboardLifecycleService,
   readWorkboardLifecycleSessions,
 } from "./lifecycle-sync.js";
+import type { WorkboardStore } from "./store.js";
 
 type Context = Parameters<OpenClawPluginService["start"]>[0];
 export type LifecycleSnapshot = Awaited<
@@ -109,4 +110,22 @@ export function sessionGateway(
     readSessions: (options: Parameters<typeof readWorkboardLifecycleSessions>[1]) =>
       readWorkboardLifecycleSessions({ isAvailable: async () => true, request }, options),
   };
+}
+
+export async function createLinkedCard(
+  store: WorkboardStore,
+  options: {
+    status?: WorkboardStatus;
+    sessionKey?: string;
+    runId?: string;
+    execution?: WorkboardExecution;
+    agentId?: string;
+    boardId?: string;
+  } = {},
+) {
+  return await store.create({
+    ...options,
+    title: "Gateway-owned lifecycle",
+    status: options.status ?? "running",
+  });
 }

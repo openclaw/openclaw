@@ -104,28 +104,6 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     ).toEqual([]);
   });
 
-  it("retains a real SQLite anchor and reopens the same PostgreSQL schema", async () => {
-    const dbPath = databasePath();
-    const first = await openDatabase(dbPath);
-    await first.fixture.statements([insertBoard("board", "Persisted remotely")], true);
-    const persisted = await observer.query<{ name: string }>(
-      `SELECT name FROM ${quoteIdentifier(first.schema)}.workboard_boards WHERE id = $1`,
-      ["board"],
-    );
-    expect(persisted.rows).toEqual([{ name: "Persisted remotely" }]);
-    const schema = first.schema;
-    await first.close();
-    const reopened = await openDatabase(dbPath);
-    expect(reopened.schema).toBe(schema);
-    expect(await readName(reopened.fixture, "board")).toEqual([{ name: "Persisted remotely" }]);
-    await reopened.close();
-    using anchor = new DatabaseSync(dbPath, { readOnly: true });
-    expect(anchor.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    expect(
-      anchor.prepare("SELECT name FROM sqlite_schema WHERE name = 'workboard_boards'").get(),
-    ).toBeUndefined();
-  });
-
   it("invalidates anchor revisions for attempted writes while retaining only committed rows", async () => {
     const { fixture, schema, dbPath } = await openDatabase();
     const before = readSqliteDatabaseWriteTokenForPath(dbPath);
@@ -215,12 +193,17 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     ).toEqual([[{ id: 2 }]]);
   });
 
-  it("refuses a PostgreSQL anchor when the PostgreSQL config is absent without creating SQLite data", async () => {
+  it("preserves the PostgreSQL anchor and remote rows across missing-config refusal and reopen", async () => {
     const dbPath = databasePath();
     const opened = await openDatabase(dbPath);
     const schema = opened.schema;
     await opened.fixture.statements([insertBoard("remote", "Keep remote data")], true);
     await opened.close();
+    expect(
+      await rows(`SELECT name FROM ${quoteIdentifier(schema)}.workboard_boards WHERE id = $1`, [
+        "remote",
+      ]),
+    ).toEqual([{ name: "Keep remote data" }]);
     const snapshotAnchor = () => {
       using anchor = new DatabaseSync(dbPath, { readOnly: true });
       return {
@@ -233,6 +216,10 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
           .all(),
       };
     };
+    {
+      using anchor = new DatabaseSync(dbPath, { readOnly: true });
+      expect(anchor.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    }
     const before = snapshotAnchor();
     expect(before.workboardTables).toEqual([]);
     expect(() => createWorkboardDatabase(dbPath)).toThrow(schema);

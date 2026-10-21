@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import {
   lifecycleSession,
@@ -32,65 +32,54 @@ async function beginPreparedDispatch() {
     options: { maxStarts: 1 },
   });
   const prepared = await reachedRun.promise;
-  return {
-    card,
-    dispatch,
-    prepared,
-    runResult,
-    replacementStore: new WorkboardStore(stores.cards, sqliteTestAuxStores(stores)),
+  const replacementStore = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
+  let lifecycle: ReturnType<typeof lifecycleFixture> | undefined;
+  const interrupt = async () => {
+    runResult.reject(new Error("simulated dispatcher process loss"));
+    await dispatch;
   };
-}
-
-async function rejectInterruptedDispatch(
-  interrupted: Awaited<ReturnType<typeof beginPreparedDispatch>>,
-) {
-  interrupted.runResult.reject(new Error("simulated dispatcher process loss"));
-  await interrupted.dispatch;
-}
-
-let interrupted: Awaited<ReturnType<typeof beginPreparedDispatch>>;
-let canonicalSessionKey: string;
-let lifecycle: Awaited<ReturnType<typeof sweep>> | undefined;
-const read = () => interrupted.replacementStore.get(interrupted.card.id);
-
-beforeEach(async () => {
-  interrupted = await beginPreparedDispatch();
-  canonicalSessionKey = `agent:worker:${interrupted.prepared.sessionKey}`;
-});
-afterEach(async () => {
-  try {
-    if (lifecycle) {
-      lifecycle.stop();
-    }
-  } finally {
-    try {
-      await rejectInterruptedDispatch(interrupted);
-    } finally {
-      await lifecycle?.[Symbol.asyncDispose]();
-      lifecycle = undefined;
-      await interrupted.replacementStore.close();
-    }
-  }
-});
-async function sweep({
-  sessions,
-  complete = true,
-}: Omit<LifecycleSnapshot, "complete"> & { complete?: boolean }) {
-  const readSessions = vi.fn().mockResolvedValue({ sessions, complete });
-  const active = lifecycleFixture({
-    store: interrupted.replacementStore,
-    readSessions,
-  });
-  await active.start();
-  const result = { ...active, readSessions };
-  lifecycle = result;
-  return result;
+  return {
+    prepared,
+    canonicalSessionKey: `agent:worker:${prepared.sessionKey}`,
+    read: () => replacementStore.get(card.id),
+    end: () =>
+      syncWorkboardSubagentEnded({
+        store: replacementStore,
+        event: {
+          targetSessionKey: `agent:worker:${prepared.sessionKey}`,
+          runId: "accepted-run",
+          outcome: "ok",
+        },
+      }),
+    interrupt,
+    async sweep({
+      sessions,
+      complete = true,
+    }: Omit<LifecycleSnapshot, "complete"> & { complete?: boolean }) {
+      const readSessions = vi.fn().mockResolvedValue({ sessions, complete });
+      const active = lifecycleFixture({ store: replacementStore, readSessions });
+      lifecycle = active;
+      await active.start();
+      return { ...active, readSessions };
+    },
+    async [Symbol.asyncDispose]() {
+      lifecycle?.stop();
+      try {
+        await interrupt();
+      } finally {
+        await lifecycle?.[Symbol.asyncDispose]();
+        await replacementStore.close();
+      }
+    },
+  };
 }
 
 describe("Workboard prepared launch restart recovery", () => {
   it.each(["running", "done"] as const)(
     "fails a prepared %s session without acceptance evidence",
     async (status) => {
+      await using interrupted = await beginPreparedDispatch();
+      const { read, sweep, canonicalSessionKey } = interrupted;
       const active = await sweep({ sessions: [lifecycleSession(canonicalSessionKey, status)] });
       await active.sweep();
       active.stop();
@@ -101,11 +90,13 @@ describe("Workboard prepared launch restart recovery", () => {
       if (status === "running") {
         expect((await read())?.metadata?.claim).toBeUndefined();
       }
-      await rejectInterruptedDispatch(interrupted);
+      await interrupted.interrupt();
     },
   );
 
   it("accepts a prepared launch found under its canonical post-restart session", async () => {
+    await using interrupted = await beginPreparedDispatch();
+    const { read, sweep, canonicalSessionKey } = interrupted;
     const active = await sweep({
       sessions: [lifecycleSession(canonicalSessionKey, "running", undefined, true)],
     });
@@ -129,14 +120,7 @@ describe("Workboard prepared launch restart recovery", () => {
     });
     expect(accepted?.metadata?.automation?.launch).not.toHaveProperty("acceptedRunId");
 
-    await syncWorkboardSubagentEnded({
-      store: interrupted.replacementStore,
-      event: {
-        targetSessionKey: canonicalSessionKey,
-        runId: "accepted-run",
-        outcome: "ok",
-      },
-    });
+    await interrupted.end();
     const terminal = await read();
     expect(terminal).toMatchObject({
       status: "review",
@@ -151,11 +135,13 @@ describe("Workboard prepared launch restart recovery", () => {
     expect(terminal?.metadata?.attempts?.[0]?.id).toBe(accepted?.metadata?.attempts?.[0]?.id);
 
     active.stop();
-    await rejectInterruptedDispatch(interrupted);
+    await interrupted.interrupt();
     expect((await read())?.status).toBe("review");
   });
 
   it("accepts a prepared launch from an explicit terminal session snapshot", async () => {
+    await using interrupted = await beginPreparedDispatch();
+    const { read, sweep, canonicalSessionKey } = interrupted;
     const launch = (await read())?.metadata?.automation?.launch;
     if (launch?.phase !== "prepared") {
       throw new Error("expected prepared launch");
@@ -175,12 +161,14 @@ describe("Workboard prepared launch restart recovery", () => {
         attempts: [{ status: "succeeded" }],
       },
     });
-    await rejectInterruptedDispatch(interrupted);
+    await interrupted.interrupt();
   });
 
   it.each(["incomplete", "ambiguous"] as const)(
     "keeps a prepared launch running when the post-restart snapshot is %s",
     async (snapshot) => {
+      await using interrupted = await beginPreparedDispatch();
+      const { read, sweep } = interrupted;
       const active = await sweep({
         sessions:
           snapshot === "ambiguous"
@@ -205,7 +193,7 @@ describe("Workboard prepared launch restart recovery", () => {
       });
 
       active.stop();
-      await rejectInterruptedDispatch(interrupted);
+      await interrupted.interrupt();
     },
   );
 });
