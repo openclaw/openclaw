@@ -16,20 +16,15 @@ export function deferredScope() {
   return {
     deferred: <T>(fallback: T) => {
       const pending = createDeferred<T>();
-      const release = () => pending.resolve(fallback);
-      releases.add(release);
-      return {
-        promise: pending.promise,
-        resolve: (value = fallback) => {
-          releases.delete(release);
-          pending.resolve(value);
-        },
+      const resolve = (value = fallback) => {
+        releases.delete(release);
+        pending.resolve(value);
       };
+      const release = () => resolve();
+      releases.add(release);
+      return { promise: pending.promise, resolve };
     },
-    releaseAll: () => {
-      releases.forEach((release) => release());
-      releases.clear();
-    },
+    releaseAll: () => releases.forEach((release) => release()),
   };
 }
 
@@ -143,13 +138,11 @@ export const cdp = (method: string, params?: Record<string, unknown>, tabId = 10
   ...(params === undefined ? {} : { params }),
 });
 
-export function expectType(response: unknown, type = "result") {
+export const expectType = (response: unknown, type = "result") =>
   expect(response).toMatchObject({ type });
-}
 
-export function expectUnused(...mocks: unknown[]) {
+export const expectUnused = (...mocks: unknown[]) =>
   mocks.forEach((mock) => expect(mock).not.toHaveBeenCalled());
-}
 
 export async function waitCalled(mock: unknown, ...args: unknown[]) {
   await vi.waitFor(() =>

@@ -12,17 +12,30 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function setup(accessMode: "all" | "selected") {
+type Harness = Awaited<ReturnType<typeof loadBackground>>;
+async function dispatch(
+  accessMode: "all" | "selected",
+  duringCommand: (harness: Harness) => void | Promise<unknown>,
+  method = "Network.setCacheDisabled",
+  params: Record<string, unknown> = { cacheDisabled: true },
+) {
   const harness = await loadBackground({
     storedConfig: relayConfig(accessMode),
     initialTabs: [{ id: 7, url: "https://example.com/source", groupId: 7, windowId: 1 }],
   });
   const { request } = await connectRelay(harness);
   expect(await request({ type: "attach", tabId: 7 })).toMatchObject({ type: "result" });
-  return { ...harness, request };
+  const native = harness.debuggerSendCommand.getMockImplementation()!;
+  harness.debuggerSendCommand.mockImplementation(async (source, command, args) => {
+    if (command !== method) {
+      return await native(source, command, args);
+    }
+    await duringCommand(harness);
+    return {};
+  });
+  return await request({ type: "cdp", tabId: 7, method, params });
 }
 
-type Harness = Awaited<ReturnType<typeof setup>>;
 function expectError(response: Record<string, unknown>, message?: string) {
   expect(response).toMatchObject({ type: "error", ...(message ? { message } : {}) });
   expect(response.result).toBeUndefined();
@@ -41,23 +54,6 @@ function commitDocument(harness: Harness) {
   });
 }
 
-async function dispatch(
-  harness: Harness,
-  duringCommand: () => void | Promise<unknown>,
-  method = "Network.setCacheDisabled",
-  params: Record<string, unknown> = { cacheDisabled: true },
-) {
-  const native = harness.debuggerSendCommand.getMockImplementation()!;
-  harness.debuggerSendCommand.mockImplementation(async (source, command, args) => {
-    if (command !== method) {
-      return await native(source, command, args);
-    }
-    await duringCommand();
-    return {};
-  });
-  return await harness.request({ type: "cdp", tabId: 7, method, params });
-}
-
 describe.each(["all", "selected"] as const)("network configuration in %s mode", (mode) => {
   it.each([
     { method: "Network.setCacheDisabled", params: { cacheDisabled: true } },
@@ -66,8 +62,7 @@ describe.each(["all", "selected"] as const)("network configuration in %s mode", 
   ])(
     "delivers $method after an allowed document commit during dispatch",
     async ({ method, params }) => {
-      const harness = await setup(mode);
-      expect(await dispatch(harness, () => commitDocument(harness), method, params)).toMatchObject({
+      expect(await dispatch(mode, commitDocument, method, params)).toMatchObject({
         type: "result",
         result: {},
       });
@@ -75,8 +70,7 @@ describe.each(["all", "selected"] as const)("network configuration in %s mode", 
   );
 
   it("rejects a cache-setting receipt after genuine access revocation", async () => {
-    const harness = await setup(mode);
-    const response = await dispatch(harness, () =>
+    const response = await dispatch(mode, (harness) =>
       sendRuntimeMessage(harness, {
         type: "toggleTabAccess",
         tabId: 7,
@@ -89,8 +83,7 @@ describe.each(["all", "selected"] as const)("network configuration in %s mode", 
 });
 
 it("rejects a cache-setting receipt after debugger detach", async () => {
-  const harness = await setup("selected");
-  const response = await dispatch(harness, () =>
+  const response = await dispatch("selected", (harness) =>
     harness.debuggerDetachListener?.({ tabId: 7 }, "canceled_by_user"),
   );
   expectError(response);
@@ -99,8 +92,7 @@ it("rejects a cache-setting receipt after debugger detach", async () => {
 it.each(["Network.getResponseBody", "Fetch.getResponseBody"])(
   "rejects document-sensitive %s after an allowed document commit",
   async (method) => {
-    const harness = await setup("selected");
-    const response = await dispatch(harness, () => commitDocument(harness), method, {
+    const response = await dispatch("selected", commitDocument, method, {
       requestId: "synthetic",
     });
     expectError(response, "tab 7 access was revoked");
