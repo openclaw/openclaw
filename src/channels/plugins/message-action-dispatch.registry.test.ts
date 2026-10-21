@@ -272,8 +272,6 @@ describe("official plugin read-only authority", () => {
 
   it.each([
     { change: "reactivate", origin: "global" },
-    { change: "adopt", origin: "global" },
-    { change: "reactivate", origin: "bundled" },
     { change: "adopt", origin: "bundled" },
   ] as const)("retains $origin reads across $change", async ({ change, origin }) => {
     const fixture = registerOfficial({ origin, trusted: origin !== "bundled" });

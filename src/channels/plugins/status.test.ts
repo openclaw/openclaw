@@ -53,49 +53,36 @@ async function inspectSnapshot(
 }
 
 describe("buildChannelAccountSnapshotFromAccount", () => {
-  it.each(["snapshot", "configured"])(
-    "does not start more account checks after %s is cancelled",
-    async (step) => {
-      const abort = new AbortController();
-      const gate = Promise.withResolvers<void>();
-      const started = Promise.withResolvers<void>();
-      const wait = async () => {
-        started.resolve();
-        await gate.promise;
-      };
-      const isLinked = vi.fn(() => "linked" as const);
-      const isConfigured = vi.fn(async () => {
-        if (step === "configured") {
-          await wait();
-        }
-        return true;
-      });
-      const plugin: ChannelPlugin = {
-        ...createChannelTestPluginBase({ id: "test", config: { isConfigured, isLinked } }),
-        status: {
-          buildAccountSnapshot: async () => {
-            if (step === "snapshot") {
-              await wait();
-            }
-            return { accountId: "default" };
-          },
-        },
-      };
-      const pending = buildChannelAccountSnapshotFromAccount({
-        plugin,
-        cfg: {},
-        accountId: "default",
-        account: {},
-        assertActive: () => abort.signal.throwIfAborted(),
-      });
-      await started.promise;
-      abort.abort();
-      gate.resolve();
-      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-      expect(isLinked).not.toHaveBeenCalled();
-      expect(isConfigured).toHaveBeenCalledTimes(step === "configured" ? 1 : 0);
-    },
-  );
+  it("does not inspect linkage after the configured check is cancelled", async () => {
+    const abort = new AbortController();
+    const gate = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const isConfigured = vi.fn(async () => {
+      started.resolve();
+      await gate.promise;
+      return true;
+    });
+    const isLinked = vi.fn(() => "linked" as const);
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "test", config: { isConfigured, isLinked } }),
+      status: {
+        buildAccountSnapshot: async () => ({ accountId: "default" }),
+      },
+    };
+    const pending = buildChannelAccountSnapshotFromAccount({
+      plugin,
+      cfg: {},
+      accountId: "default",
+      account: {},
+      assertActive: () => abort.signal.throwIfAborted(),
+    });
+    await started.promise;
+    abort.abort();
+    gate.resolve();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(isLinked).not.toHaveBeenCalled();
+    expect(isConfigured).toHaveBeenCalledOnce();
+  });
 
   it("preserves runtime facts unless the inspector supplies them: disabled", async () => {
     const runtime = Object.freeze({

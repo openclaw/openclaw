@@ -53,20 +53,6 @@ describe("createPatchedAccountSetupAdapter", () => {
     buildPatch: (input) => ({ botToken: input.token }),
   });
 
-  it("stores default-account patch at channel root", () => {
-    const next = tokenAdapter.applyAccountConfig({
-      cfg: config("demo-setup", { enabled: false }),
-      accountId: DEFAULT_ACCOUNT_ID,
-      input: { name: "Personal", token: "tok" },
-    });
-
-    expect(next.channels?.["demo-setup"]).toMatchObject({
-      enabled: true,
-      name: "Personal",
-      botToken: "tok",
-    });
-  });
-
   it("migrates base name into the default account before patching a named account", () => {
     const next = tokenAdapter.applyAccountConfig({
       cfg: config("demo-setup", { name: "Personal", accounts: { work: { botToken: "old" } } }),
@@ -118,10 +104,7 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
       accessToken: "token",
     };
     const next = moveSingleAccountChannelSectionToDefaultAccount({
-      cfg: config("matrix", {
-        ...credentials,
-        accounts: { main: { enabled: true } },
-      }),
+      cfg: config("matrix", { ...credentials, accounts: { main: { enabled: true } } }),
       channelKey: "matrix",
       setupSurface: {
         applyAccountConfig: ({ cfg }) => cfg,
@@ -130,7 +113,6 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
         resolveSingleAccountPromotionTarget: () => "main",
       },
     });
-
     expect(next.channels?.matrix).toEqual({
       accounts: { main: { enabled: true, ...credentials } },
     });

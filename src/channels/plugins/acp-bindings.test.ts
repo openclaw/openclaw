@@ -64,25 +64,6 @@ beforeEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 afterEach(() => clearActivePluginRegistry());
 
-it("resolves configured ACP bindings from canonical conversation refs", () => {
-  publishPlugin();
-
-  const resolved = bindingRegistry.resolveConfiguredBinding({
-    cfg: createConfig(),
-    conversation,
-  });
-
-  expect(resolved?.conversation).toEqual(conversation);
-  expect(resolved?.record.conversation.channel).toBe("discord");
-  expect(resolved?.statefulTarget).toEqual({
-    kind: "stateful",
-    driverId: "acp",
-    sessionKey: resolved?.record.targetSessionKey,
-    agentId: "codex",
-    label: undefined,
-  });
-});
-
 it("resolves wildcard binding session keys from the compiled registry", () => {
   publishPlugin();
 
@@ -100,6 +81,13 @@ it("resolves wildcard binding session keys from the compiled registry", () => {
   expect(resolved?.record).toMatchObject({
     conversation: { channel: "discord", accountId: "work" },
     metadata: { backend: "acpx" },
+  });
+  expect(resolved?.statefulTarget).toEqual({
+    kind: "stateful",
+    driverId: "acp",
+    sessionKey: resolved?.record.targetSessionKey,
+    agentId: "codex",
+    label: undefined,
   });
 });
 

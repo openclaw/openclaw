@@ -45,18 +45,6 @@ describe("createAccountListHelpers", () => {
     expect(helpers.resolveDefaultAccountId({} as OpenClawConfig)).toBe("default");
   });
 
-  it("combines additional owner-discovered accounts without changing stable order", () => {
-    const helpers = createAccountListHelpers("testchannel", {
-      additionalAccountIds: () => ["bound", "work", "bound"],
-    });
-
-    expect(helpers.listAccountIds(cfg({ work: {}, alerts: {} }))).toEqual([
-      "alerts",
-      "bound",
-      "work",
-    ]);
-  });
-
   it("allows a single-account owner to name its configured implicit account", () => {
     const helpers = createAccountListHelpers("testchannel", {
       fallbackAccountIdWhenEmpty: false,

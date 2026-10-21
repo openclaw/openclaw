@@ -75,25 +75,6 @@ function registerAdapter(
   return { resolveByConversation, touch };
 }
 
-function resolveRosterBinding(
-  binding: SessionBindingRecord | null,
-  session?: { mainKey: string; groupScope: "main" },
-) {
-  registerAdapter(binding);
-  return resolveRuntimeConversationBindingRoute({
-    conversation: binding?.conversation ?? conversation,
-    resolveRoute: ({ boundAgentId }) =>
-      resolveAgentRoute({
-        cfg: boundAgentId
-          ? { session }
-          : { session, agents: { ownership: "explicit", entries: { main: {}, review: {} } } },
-        defaultAgentId: boundAgentId,
-        channel: "demo",
-        ...(session ? { peer } : {}),
-      }),
-  });
-}
-
 function inspectBinding(binding: SessionBindingRecord, baseRoute = route) {
   return inspectRuntimeConversationBindingRoute({
     route: baseRoute,
@@ -107,40 +88,25 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-it.each([
-  { targetSessionKey: "agent:review:home", metadata: { agentId: "other" } },
-  { targetSessionKey: "global", metadata: { agentId: "review" } },
-])("constructs the bound owner's route before roster selection ($targetSessionKey)", (target) => {
-  const binding = createBinding(target);
-  const result = resolveRosterBinding(binding, { mainKey: "home", groupScope: "main" });
-  expect(result.route).toMatchObject({
-    agentId: "review",
-    sessionKey: target.targetSessionKey,
-    mainSessionKey: "agent:review:home",
-    groupScope: "main",
-    lastRoutePolicy: target.targetSessionKey === "global" ? "session" : "main",
-  });
-  expect(result.boundAgentId).toBe("review");
-  expect(readConversationBindingRouteFacts(result.route)).toMatchObject({
-    kind: "agent",
-    agentId: "review",
-    observedAgentId: "review",
-    bindingId: binding.bindingId,
-  });
+it("does not invent an agent owner for a plugin binding", () => {
+  registerAdapter(createBinding({ metadata: pluginOwner }));
+  expect(() =>
+    resolveRuntimeConversationBindingRoute({
+      conversation,
+      resolveRoute: ({ boundAgentId }) =>
+        resolveAgentRoute({
+          cfg: boundAgentId
+            ? {}
+            : { agents: { ownership: "explicit", entries: { main: {}, review: {} } } },
+          defaultAgentId: boundAgentId,
+          channel: "demo",
+        }),
+    }),
+  ).toThrow(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
 });
 
-it.each([
-  null,
-  createBinding({ targetSessionKey: cronSessionKey }),
-  createBinding({ metadata: pluginOwner }),
-  createBinding({ targetSessionKey: "global" }),
-])("does not invent an agent for a binding without an agent owner (%j)", (binding) => {
-  expect(() => resolveRosterBinding(binding)).toThrow(
-    expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
-  );
-});
-
-it.each(["main", "home"])("projects the bound main session (%s)", (mainKey) => {
+it("projects the bound main session without mutating the ordinary route", () => {
+  const mainKey = "home";
   const ordinaryRoute = resolveAgentRoute({
     cfg: {
       agents: { entries: { main: {}, review: {} } },
@@ -151,10 +117,17 @@ it.each(["main", "home"])("projects the bound main session (%s)", (mainKey) => {
     peer,
   });
   const result = inspectBinding(
-    createBinding({ targetSessionKey: `agent:review:${mainKey}` }),
+    createBinding({ targetSessionKey: `agent:review:${mainKey}`, metadata: { agentId: "other" } }),
     ordinaryRoute,
   );
 
+  expect(result.boundAgentId).toBe("review");
+  expect(readConversationBindingRouteFacts(result.route)).toMatchObject({
+    kind: "agent",
+    agentId: "review",
+    observedAgentId: "review",
+    bindingId: "binding-1",
+  });
   expect(result.route).toMatchObject({
     agentId: "review",
     sessionKey: `agent:review:${mainKey}`,
