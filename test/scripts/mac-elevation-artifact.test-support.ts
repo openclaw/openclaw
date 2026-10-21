@@ -26,6 +26,14 @@ export const addon = "lib/node_modules/native [fixture]/addon.node";
 export const library = "lib/node_modules/native [fixture]/library ERROR COFF.dylib";
 const systemPath = "/usr/bin:/bin:/usr/sbin:/sbin";
 
+export function expectExit<T extends { status: number | null; stderr: string }>(
+  result: T,
+  status: number | null = 0,
+) {
+  expect(result.status, result.stderr).toBe(status);
+  return result;
+}
+
 function digest(contents: string | Buffer) {
   return createHash("sha256").update(contents).digest("hex");
 }
