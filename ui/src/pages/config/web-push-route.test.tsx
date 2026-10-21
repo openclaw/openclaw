@@ -139,6 +139,8 @@ it("leaves the notifications route before an admitted Web Push command settles",
 
     pending.resolve();
     await waitForSolid(() => expect(capability.snapshot.loading).toBe(false));
+    expect(outlet.textContent).toContain("Usage destination");
+    expect(outlet.querySelector("openclaw-config-page")).toBeNull();
   } finally {
     pending.resolve();
     outlet.dispose();
