@@ -1,4 +1,3 @@
-// Sms tests cover secret contract plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyResolvedAssignments,
@@ -7,14 +6,25 @@ import {
 } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { describe, expect, it } from "vitest";
 import { collectRuntimeConfigAssignments } from "./secret-contract.js";
+import type { SmsChannelConfig } from "./types.js";
 
-async function resolveSmsSecretAssignments(
-  sourceConfig: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Promise<{
-  config: OpenClawConfig;
-  warnings: ReturnType<typeof createResolverContext>["warnings"];
-}> {
+const tokenRef = (id: string) => ({ source: "env", provider: "default", id }) as const;
+const sender = { enabled: true, accountSid: "AC123", fromNumber: "+15557654321" };
+const accounts = {
+  support: {
+    enabled: true,
+    accountSid: "AC456",
+    authToken: tokenRef("TWILIO_SUPPORT_TOKEN"),
+    fromNumber: "+15558675309",
+  },
+};
+const tokens = {
+  TWILIO_DEFAULT_TOKEN: "resolved-default-token",
+  TWILIO_SUPPORT_TOKEN: "resolved-support-token",
+};
+
+async function resolveSmsSecretAssignments(sms: SmsChannelConfig, env: NodeJS.ProcessEnv) {
+  const sourceConfig: OpenClawConfig = { channels: { sms } };
   const resolvedConfig: OpenClawConfig = structuredClone(sourceConfig);
   const context = createResolverContext({ sourceConfig, env });
 
@@ -40,16 +50,7 @@ async function resolveSmsSecretAssignments(
 describe("sms secret contract", () => {
   it("resolves top-level authToken SecretRefs for SMS accounts", async () => {
     const resolved = await resolveSmsSecretAssignments(
-      {
-        channels: {
-          sms: {
-            enabled: true,
-            accountSid: "AC123",
-            authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
-            fromNumber: "+15557654321",
-          },
-        },
-      } as OpenClawConfig,
+      { ...sender, authToken: tokenRef("TWILIO_AUTH_TOKEN") },
       { TWILIO_AUTH_TOKEN: "resolved-token" },
     );
 
@@ -59,28 +60,8 @@ describe("sms secret contract", () => {
 
   it("keeps top-level authToken active for an implicit default sender plus named accounts", async () => {
     const resolved = await resolveSmsSecretAssignments(
-      {
-        channels: {
-          sms: {
-            enabled: true,
-            accountSid: "AC123",
-            authToken: { source: "env", provider: "default", id: "TWILIO_DEFAULT_TOKEN" },
-            fromNumber: "+15557654321",
-            accounts: {
-              support: {
-                enabled: true,
-                accountSid: "AC456",
-                authToken: { source: "env", provider: "default", id: "TWILIO_SUPPORT_TOKEN" },
-                fromNumber: "+15558675309",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      {
-        TWILIO_DEFAULT_TOKEN: "resolved-default-token",
-        TWILIO_SUPPORT_TOKEN: "resolved-support-token",
-      },
+      { ...sender, authToken: tokenRef("TWILIO_DEFAULT_TOKEN"), accounts },
+      tokens,
     );
 
     expect(resolved.config.channels?.sms?.authToken).toBe("resolved-default-token");
@@ -92,27 +73,11 @@ describe("sms secret contract", () => {
 
   it("keeps top-level authToken active for env-backed default senders plus named accounts", async () => {
     const resolved = await resolveSmsSecretAssignments(
+      { enabled: true, authToken: tokenRef("TWILIO_DEFAULT_TOKEN"), accounts },
       {
-        channels: {
-          sms: {
-            enabled: true,
-            authToken: { source: "env", provider: "default", id: "TWILIO_DEFAULT_TOKEN" },
-            accounts: {
-              support: {
-                enabled: true,
-                accountSid: "AC456",
-                authToken: { source: "env", provider: "default", id: "TWILIO_SUPPORT_TOKEN" },
-                fromNumber: "+15558675309",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      {
+        ...tokens,
         TWILIO_ACCOUNT_SID: "AC-env",
         TWILIO_PHONE_NUMBER: "+15550001111",
-        TWILIO_DEFAULT_TOKEN: "resolved-default-token",
-        TWILIO_SUPPORT_TOKEN: "resolved-support-token",
       },
     );
 
@@ -125,21 +90,7 @@ describe("sms secret contract", () => {
 
   it("treats top-level authToken refs as inactive when all enabled accounts override them", async () => {
     const resolved = await resolveSmsSecretAssignments(
-      {
-        channels: {
-          sms: {
-            authToken: { source: "env", provider: "default", id: "UNUSED_TWILIO_TOKEN" },
-            accounts: {
-              support: {
-                enabled: true,
-                accountSid: "AC456",
-                authToken: { source: "env", provider: "default", id: "TWILIO_SUPPORT_TOKEN" },
-                fromNumber: "+15558675309",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
+      { authToken: tokenRef("UNUSED_TWILIO_TOKEN"), accounts },
       { TWILIO_SUPPORT_TOKEN: "resolved-support-token" },
     );
 
