@@ -500,16 +500,14 @@ function ProviderProfileRow(
   },
 ) {
   let rowElement!: HTMLElement;
-  let registeredId: string | undefined;
   const drag = createPointerDrag();
-  let releaseUsage: (() => void) | undefined;
-  onSettled(() => () => {
-    releaseUsage?.();
-    if (registeredId) {
-      props.rowElements.delete(registeredId);
-    }
-  });
   const profile = () => props.row.profile;
+  onSettled(() => {
+    const initialProfileId = profile().profileId;
+    const rowElements = props.rowElements;
+    rowElements.set(initialProfileId, rowElement);
+    return () => rowElements.delete(initialProfileId);
+  });
   const group = () => props.row.group;
   const provider = () => group().provider;
   const order = () => group().order;
@@ -556,11 +554,7 @@ function ProviderProfileRow(
   return (
     <div
       class="model-providers__profile"
-      ref={(element) => {
-        rowElement = element;
-        registeredId = profile().profileId;
-        props.rowElements.set(registeredId, element);
-      }}
+      ref={(element) => (rowElement = element)}
       role="listitem"
       data-profile-id={profile().profileId}
       data-profile-provider={provider()}
@@ -620,14 +614,20 @@ function ProviderProfileRow(
         ) : undefined}
       </span>
       <ProfileIdentity profile={profile()} identity={props.identity} showDetails />
-      {provider() === "openai" && profile().type !== "api_key" ? (
-        <openclaw-model-account-usage
-          ref={(element) => (releaseUsage = props.registerAccountUsage?.(element))}
-          prop:client={props.usageClient ?? null}
-          prop:agentId={props.usageAgentId ?? ""}
-          prop:profileId={profile().profileId}
-        />
-      ) : undefined}
+      <Show when={provider() === "openai" && profile().type !== "api_key"}>
+        {(_shown) => {
+          let usageElement!: ModelAccountUsageElement;
+          onSettled(() => props.registerAccountUsage?.(usageElement));
+          return (
+            <openclaw-model-account-usage
+              ref={(element) => (usageElement = element)}
+              prop:client={props.usageClient ?? null}
+              prop:agentId={props.usageAgentId ?? ""}
+              prop:profileId={profile().profileId}
+            />
+          );
+        }}
+      </Show>
       <span class="model-providers__profile-status">
         {profileStatus(profile(), props.card.catalogStatus === "auth-rejected")}
       </span>

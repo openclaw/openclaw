@@ -13,14 +13,15 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => {
   return { ...actual, callGatewayFromCli: mocks.callGatewayFromCli };
 });
 
-// mock-isolation: Exercise setup diagnostics without creating a real HTTP client.
-vi.mock("./http-client.js", () => ({
+vi.mock("./http-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-client.js")>()),
   createClickClackClient: (options: unknown) => {
     mocks.createClient(options);
     return { me: mocks.me, workspaces: mocks.workspaces };
   },
 }));
 
+import { ClickClackHttpError } from "./http-client.js";
 import { verifyClickClackAccountAfterSetup } from "./setup-verify.js";
 import type { ClickClackAccountConfig } from "./types.js";
 
@@ -72,7 +73,7 @@ describe("ClickClack post-write setup verification", () => {
 
   it.each([
     [
-      () => mocks.me.mockRejectedValue({ status: 401 }),
+      () => mocks.me.mockRejectedValue(new ClickClackHttpError(401, "unauthorized", new Headers())),
       "ClickClack rejected the bot token (401). Copy a current token and rerun setup.",
     ],
     [

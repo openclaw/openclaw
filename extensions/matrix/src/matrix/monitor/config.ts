@@ -15,7 +15,6 @@ import { isMatrixQualifiedUserId, isMatrixRoomId } from "../target-ids.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
 
 type MatrixRoomsConfig = Record<string, MatrixRoomConfig>;
-type ResolveMatrixTargetsFn = typeof resolveMatrixTargets;
 
 export type MatrixResolvedAllowlistEntry = {
   input: string;
@@ -112,7 +111,6 @@ async function resolveMatrixMonitorUserEntries(params: {
   accountId?: string | null;
   entries: Array<string | number>;
   runtime: RuntimeEnv;
-  resolveTargets: ResolveMatrixTargetsFn;
   allowNameMatching: boolean;
 }) {
   const directMatches: Array<{ input: string; resolved: boolean; id?: string }> = [];
@@ -145,7 +143,7 @@ async function resolveMatrixMonitorUserEntries(params: {
   const pendingResolved =
     pending.length === 0
       ? []
-      : await params.resolveTargets({
+      : await resolveMatrixTargets({
           cfg: params.cfg,
           accountId: params.accountId,
           inputs: pending.map((entry) => entry.query),
@@ -175,7 +173,6 @@ async function resolveMatrixMonitorUserAllowlist(params: {
   list?: Array<string | number>;
   failClosedOnUnresolved?: boolean;
   runtime: RuntimeEnv;
-  resolveTargets: ResolveMatrixTargetsFn;
 }) {
   const allowList = (params.list ?? []).map(String);
   if (allowList.length === 0) {
@@ -188,7 +185,6 @@ async function resolveMatrixMonitorUserAllowlist(params: {
     accountId: params.accountId,
     entries: allowList,
     runtime: params.runtime,
-    resolveTargets: params.resolveTargets,
     allowNameMatching,
   });
   const canonicalized = canonicalizeAllowlistWithResolvedIds({
@@ -220,7 +216,6 @@ export async function resolveMatrixMonitorLiveUserAllowlist(params: {
   failClosedOnUnresolved?: boolean;
   startupResolvedEntries?: readonly MatrixResolvedAllowlistEntry[];
   runtime: RuntimeEnv;
-  resolveTargets?: ResolveMatrixTargetsFn;
 }): Promise<string[]> {
   const liveEntries = normalizeStringEntries(params.entries);
   if (liveEntries.length === 0) {
@@ -279,7 +274,6 @@ export async function resolveMatrixMonitorLiveUserAllowlist(params: {
     accountId: params.accountId,
     entries: pending,
     runtime: params.runtime,
-    resolveTargets: params.resolveTargets ?? resolveMatrixTargets,
     allowNameMatching,
   });
   const canonicalized = canonicalizeAllowlistWithResolvedIds({
@@ -305,10 +299,7 @@ export async function resolveMatrixMonitorConfig(params: {
   groupAllowFrom?: Array<string | number>;
   roomsConfig?: MatrixRoomsConfig;
   runtime: RuntimeEnv;
-  resolveTargets?: ResolveMatrixTargetsFn;
 }) {
-  const resolveTargets = params.resolveTargets ?? resolveMatrixTargets;
-
   async function resolveMatrixMonitorRoomsConfig(): Promise<MatrixRoomsConfig | undefined> {
     const sourceRooms = params.roomsConfig;
     if (!sourceRooms || Object.keys(sourceRooms).length === 0) {
@@ -357,7 +348,7 @@ export async function resolveMatrixMonitorConfig(params: {
     }
 
     if (pending.length > 0) {
-      const resolved = await resolveTargets({
+      const resolved = await resolveMatrixTargets({
         cfg: params.cfg,
         accountId: params.accountId,
         inputs: pending.map((entry) => entry.query),
@@ -400,7 +391,6 @@ export async function resolveMatrixMonitorConfig(params: {
       accountId: params.accountId,
       entries: Array.from(roomUsers),
       runtime: params.runtime,
-      resolveTargets,
       allowNameMatching,
     });
     logMatrixAllowlistResolution({
@@ -425,7 +415,6 @@ export async function resolveMatrixMonitorConfig(params: {
       label: "matrix dm allowlist",
       list: params.allowFrom,
       runtime: params.runtime,
-      resolveTargets,
     }),
     resolveMatrixMonitorUserAllowlist({
       cfg: params.cfg,
@@ -434,7 +423,6 @@ export async function resolveMatrixMonitorConfig(params: {
       list: params.groupAllowFrom,
       failClosedOnUnresolved: true,
       runtime: params.runtime,
-      resolveTargets,
     }),
     resolveMatrixMonitorRoomsConfig(),
   ]);

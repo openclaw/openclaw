@@ -61,12 +61,6 @@ const FEISHU_TRANSCODABLE_AUDIO_EXTS = new Set([
   ".wma",
 ]);
 
-type SaveMessageResourceResult = {
-  saved: SavedMedia;
-  contentType?: string;
-  fileName?: string;
-};
-
 function createConfiguredFeishuMediaClient(params: { cfg: ClawdbotConfig; accountId?: string }) {
   const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
@@ -200,7 +194,7 @@ async function saveMessageResourceWithType(params: {
   type: FeishuMessageResourceDownloadType;
   maxBytes: number;
   originalFilename?: string;
-}): Promise<SaveMessageResourceResult> {
+}): Promise<SavedMedia> {
   const response = await params.client.im.messageResource.get({
     path: { message_id: params.messageId, file_key: params.fileKey },
     params: { type: params.type },
@@ -210,7 +204,7 @@ async function saveMessageResourceWithType(params: {
   const contentType = readHeaderValue(headers, "content-type");
   const disposition = readHeaderValue(headers, "content-disposition");
   const fileName = disposition ? decodeDispositionFileName(disposition) : undefined;
-  const saved = await saveMediaStreamWithIdleTimeout(
+  return await saveMediaStreamWithIdleTimeout(
     response.getReadableStream(),
     contentType,
     params.maxBytes,
@@ -220,7 +214,6 @@ async function saveMessageResourceWithType(params: {
         : undefined),
     FEISHU_MEDIA_HTTP_TIMEOUT_MS,
   );
-  return { saved, contentType, fileName };
 }
 
 export async function saveMessageResourceFeishu(params: {
@@ -231,7 +224,7 @@ export async function saveMessageResourceFeishu(params: {
   accountId?: string;
   maxBytes: number;
   originalFilename?: string;
-}): Promise<SaveMessageResourceResult> {
+}): Promise<SavedMedia> {
   const { cfg, messageId, fileKey, type, accountId, maxBytes, originalFilename } = params;
   const normalizedFileKey = normalizeFeishuExternalKey(fileKey);
   if (!normalizedFileKey) {

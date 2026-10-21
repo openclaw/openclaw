@@ -251,10 +251,7 @@ describe("scheduled message actions", () => {
         : {
             ok: true,
             channel: {
-              id: channelId,
-              guild_id: guildId,
-              type: 0,
-              name: "scheduled-read",
+              ...channelInfo,
               ...(action === "channel-edit" ? { topic: expectedTopic } : {}),
             },
           };

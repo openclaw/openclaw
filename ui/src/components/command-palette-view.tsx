@@ -24,6 +24,7 @@ import {
   PaletteSessionAuxiliary,
   PaletteSessionRecovery,
 } from "../pages/new-session/palette-session-draft-view.tsx";
+import { createSubmissionAction } from "../pages/new-session/submission-action.ts";
 import "../styles/command-palette.css";
 import {
   commandPaletteCategoryLabel,
@@ -395,6 +396,13 @@ function PaletteSearch(props: {
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
   let initialInput!: HTMLTextAreaElement;
   const current = () => props.readProps();
+  const error = createMemo(() => current().draft.error);
+  const saving = createSubmissionAction(
+    () => current().draft,
+    current,
+    error,
+    (failure) => current().draft.setSubmissionError(failure),
+  );
   const results = createMemo(() => resolvePaletteResults(current()));
   const hideSearch = () => results().hideSearch;
   // The collapsing search remains mounted with its last presented projection.
@@ -483,7 +491,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                     type="button"
                     class="cmd-palette__create"
                     aria-label={t("palette.startSessionBackground")}
-                    aria-busy={current().draft.submitting ? "true" : "false"}
+                    aria-busy={saving() || current().draft.submitting ? "true" : "false"}
                     disabled={current().composing || !current().draft.canSubmit}
                     onClick={() => {
                       if (!current().composing) {
@@ -537,9 +545,9 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
               <PaletteSearch readProps={search} optionElements={optionElements} />
             </div>
           </div>
-          <Show when={current().draft.error}>
+          <Show when={error()}>
             <div class="cmd-palette__creation-error" role="alert">
-              {current().draft.error}
+              {error()}
             </div>
           </Show>
           <Show when={recovery()}>

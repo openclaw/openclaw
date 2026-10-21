@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
@@ -15,6 +16,7 @@ import {
 } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import * as providerAuth from "../plugins/provider-auth-method.js";
 import type { ProviderAuthMethod } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
@@ -28,6 +30,8 @@ import {
   setUserProfileAuthLinkAsync,
 } from "../state/user-model-account-operations.js";
 import {
+  connectUserModelAccount,
+  listUserProfileAuthLinks,
   readUserModelAuthProfile,
   setUserProfileAuthLink as setLinkSync,
   updateUserModelAuthProfile,
@@ -41,7 +45,10 @@ import {
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { WizardSession } from "../wizard/session.js";
-import { ModelAccountConnectAuthorityError } from "./model-account-connect-errors.js";
+import {
+  ModelAccountConnectAuthorityError,
+  ModelAccountConnectInputError,
+} from "./model-account-connect-errors.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
 import type { RespondFn } from "./server-methods/types.js";
 import { usersAuthConnectHandlers } from "./server-methods/users-auth-connect.js";
@@ -55,15 +62,10 @@ import {
 } from "./server-plugin-in-process-dispatch.test-support.js";
 
 const resolveMethod = vi.hoisted(() => vi.fn());
-const runAuth = vi.hoisted(() => vi.fn());
 vi.mock("../plugins/personal-account-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/personal-account-auth.js")>()),
   listPersonalAccountAuthChoices: () => [],
   resolvePersonalAccountAuthMethod: resolveMethod,
-}));
-vi.mock("../plugins/provider-auth-method.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/provider-auth-method.js")>()),
-  runProviderPluginAuthMethodUnpersisted: runAuth,
 }));
 
 afterEach(() => vi.restoreAllMocks());
@@ -74,6 +76,50 @@ const credential: AuthProfileCredential = {
   token: "synthetic-private-account-token",
 };
 const authority = { assertCurrent() {} };
+const accountOwner = (email: string) => ({
+  owner: ensureProfileForEmail(email).id,
+  ...authority,
+});
+const tokenCredential = (token: string) => ({
+  type: "token" as const,
+  provider: "synthetic",
+  token,
+});
+const linked = (authProfileId: string) => ({ links: [{ provider: "synthetic", authProfileId }] });
+function withService(
+  run: (service: ReturnType<typeof createModelAccountConnectService>) => Promise<void>,
+  onChanged?: () => void,
+) {
+  return withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const service = createModelAccountConnectService({ getConfig: () => ({}), onChanged });
+    try {
+      await run(service);
+    } finally {
+      await service.stop();
+    }
+  });
+}
+
+function observeWizardSettlement(signal: AbortSignal) {
+  let settled = createDeferredCore();
+  // oxlint-disable-next-line typescript/unbound-method -- The intercepted Wizard remains the receiver.
+  const cancel = WizardSession.prototype.cancel;
+  const observer = vi.spyOn(WizardSession.prototype, "cancel").mockImplementation(function (
+    this: WizardSession,
+  ) {
+    settled.resolve(this.whenSettled());
+    return cancel.call(this);
+  });
+  return {
+    reset: () => {
+      settled = createDeferredCore();
+    },
+    wait: () => withinTest(settled.promise, signal),
+    checkpoint: (gate: Promise<void>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(gate, settled.promise, message), signal),
+    [Symbol.dispose]: () => observer.mockRestore(),
+  };
+}
 const connectAccount = (
   ownerProfileId: string,
   overrides: Partial<Parameters<typeof connectUserModelAccountAsync>[0]> = {},
@@ -173,6 +219,147 @@ async function callAccount(
   expect(respond).toHaveBeenCalledTimes(1);
   return respond;
 }
+
+it("keeps synchronous account methods owner-authorized and immediately persisted", async () =>
+  withService(async (service) => {
+    const { owner } = accountOwner("compat-owner@example.test");
+    const other = accountOwner("compat-other@example.test");
+    let live = true;
+    const action = {
+      owner,
+      assertCurrent() {
+        if (!live) {
+          throw new ModelAccountConnectAuthorityError();
+        }
+      },
+    };
+    const compatCredential = tokenCredential("synthetic-compat-token");
+    const connect = () =>
+      connectUserModelAccount({
+        ownerProfileId: owner,
+        credential: compatCredential,
+        assertCurrent() {},
+      }).authProfileId;
+    const first = connect();
+    const second = connect();
+    expect(service.listLinks(action)).toMatchObject(linked(second));
+    expect(service.unlink(action, "synthetic")).toEqual({ links: [] });
+    expect(listUserProfileAuthLinks(owner)).toEqual([]);
+    expect(service.link(action, first)).toMatchObject(linked(first));
+    expect(listUserProfileAuthLinks(owner)).toMatchObject([{ authProfileId: first }]);
+    expect(service.select(action, second)).toMatchObject(linked(second));
+    expect(listUserProfileAuthLinks(owner)).toMatchObject([{ authProfileId: second }]);
+    const inventory = service.list(action);
+    expect(inventory).toMatchObject({
+      profileId: owner,
+      accounts: expect.arrayContaining([
+        expect.objectContaining({ authProfileId: first, selected: false }),
+        expect.objectContaining({ authProfileId: second, selected: true }),
+      ]),
+      links: [{ provider: "synthetic", authProfileId: second }],
+    });
+    expect(JSON.stringify(inventory)).not.toContain(compatCredential.token);
+    expect(readUserModelAuthProfile(first)?.credential).toEqual(compatCredential);
+    expect(service.list(other)).toEqual({ profileId: other.owner, accounts: [], links: [] });
+    expect(() => service.link(other, first)).toThrow(ModelAccountConnectInputError);
+    expect(() => service.select(other, first)).toThrow(ModelAccountConnectInputError);
+    expect(listUserProfileAuthLinks(other.owner)).toEqual([]);
+    expect(service.status(action, "missing-connect")).toEqual({ status: "expired" });
+    expect(service.cancel(action, "missing-connect")).toEqual({ status: "expired" });
+
+    live = false;
+    for (const invoke of [
+      () => service.listLinks(action),
+      () => service.link(action, first),
+      () => service.unlink(action, "synthetic"),
+      () => service.list(action),
+      () => service.select(action, first),
+      () => service.status(action, "missing-connect"),
+      () => service.cancel(action, "missing-connect"),
+    ]) {
+      expect(invoke).toThrow(ModelAccountConnectAuthorityError);
+    }
+    expect(listUserProfileAuthLinks(owner)).toMatchObject([{ authProfileId: second }]);
+  }));
+
+it("keeps synchronous sign-in states private to their owner", async ({ signal }) => {
+  const connected = createDeferredCore();
+  const signinToken = "synthetic-compat-signin-token";
+  await withService(async (service) => {
+    const action = accountOwner("compat-signin@example.test");
+    const other = accountOwner("compat-stranger@example.test");
+    let prompted = createDeferredCore();
+    using settlement = observeWizardSettlement(signal);
+    const method: ProviderAuthMethod = {
+      id: "token",
+      label: "Synthetic token",
+      kind: "token",
+      async run(context) {
+        const answer = context.prompter.text({ message: "Synthetic token", sensitive: true });
+        prompted.resolve();
+        const token = await answer;
+        return {
+          profiles: [{ profileId: "ignored-shared-id", credential: tokenCredential(token) }],
+        };
+      },
+    };
+    resolveMethod.mockResolvedValue(method);
+    const waitFor = (gate: Promise<void>) =>
+      settlement.checkpoint(gate, "Personal sign-in settled before reaching its client checkpoint");
+    const startPending = async () => {
+      prompted = createDeferredCore();
+      settlement.reset();
+      const flow = await service.start(action, "synthetic", "token");
+      await waitFor(prompted.promise);
+      const pending = service.status(action, flow.connectId);
+      expect(pending).toMatchObject({
+        status: "pending",
+        step: { type: "text", sensitive: true },
+      });
+      assert(pending.status === "pending" && pending.step, "Expected pending sign-in step");
+      return { ...flow, stepId: pending.step.id };
+    };
+    const cancelled = await startPending();
+    expect(service.status(other, cancelled.connectId)).toEqual({ status: "expired" });
+    expect(service.cancel(other, cancelled.connectId)).toEqual({ status: "expired" });
+    expect(service.status(action, cancelled.connectId)).toMatchObject({ status: "pending" });
+    expect(service.cancel(action, cancelled.connectId)).toEqual({ status: "cancelled" });
+    await settlement.wait();
+    expect(service.status(action, cancelled.connectId)).toEqual({ status: "cancelled" });
+    expect(listUserProfileAuthLinks(action.owner)).toEqual([]);
+
+    const expired = await startPending();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(expired.expiresAtMs + 1);
+    try {
+      expect(service.status(action, expired.connectId)).toEqual({ status: "expired" });
+      expect(service.cancel(action, expired.connectId)).toEqual({ status: "expired" });
+    } finally {
+      clock.mockRestore();
+    }
+    await settlement.wait();
+
+    const successful = await startPending();
+    await service.answer(action, successful.connectId, successful.stepId, signinToken);
+    await waitFor(connected.promise);
+    await settlement.wait();
+    const result = service.status(action, successful.connectId);
+    expect(result).toMatchObject({
+      status: "connected",
+      authProfileId: expect.any(String),
+      links: [{ provider: "synthetic" }],
+    });
+    assert(result.status === "connected", "Expected connected account result");
+    expect(readUserModelAuthProfile(result.authProfileId)?.credential).toEqual(
+      tokenCredential(signinToken),
+    );
+    expect(service.unlink(action, "synthetic")).toEqual({ links: [] });
+    const replay = { status: "connected", authProfileId: result.authProfileId, links: [] };
+    expect(service.status(action, successful.connectId)).toEqual(replay);
+    expect(service.cancel(action, successful.connectId)).toEqual(replay);
+    expect(service.status(other, successful.connectId)).toEqual({ status: "expired" });
+    expect(JSON.stringify(result)).not.toContain(signinToken);
+  }, connected.resolve);
+});
 
 it("prepares cold personal account policy with GitHub assignments and current role authority", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -302,7 +489,7 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
     const clients = new Set([client]);
     const context = accountContext(client, undefined, () => clients.has(client));
     const changed = createDeferredCore();
-    const settled = createDeferredCore();
+    const settlement = observeWizardSettlement(signal);
     const committed = createDeferredCore();
     const deliverCommit = createDeferredCore();
     probe.command(stateWorker, async (command, executeOptions, scope) => {
@@ -313,14 +500,6 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
       }
       return result;
     });
-    // oxlint-disable-next-line typescript/unbound-method -- The call below retains the intercepted Wizard as receiver.
-    const cancel = WizardSession.prototype.cancel;
-    const cancellation = vi.spyOn(WizardSession.prototype, "cancel").mockImplementation(function (
-      this: WizardSession,
-    ) {
-      settled.resolve(this.whenSettled());
-      return cancel.call(this);
-    });
     const authMethod: ProviderAuthMethod = {
       id: "token",
       label: "Synthetic token",
@@ -328,7 +507,9 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
       run: async () => ({ profiles: [] }),
     };
     resolveMethod.mockResolvedValue(authMethod);
-    runAuth.mockResolvedValue({ profiles: [{ profileId: "ignored-shared-id", credential }] });
+    vi.spyOn(providerAuth, "runProviderPluginAuthMethodUnpersisted").mockResolvedValue({
+      profiles: [{ profileId: "ignored-shared-id", credential }],
+    });
     const service = createModelAccountConnectService({
       getConfig: () => ({}),
       onChanged: changed.resolve,
@@ -350,25 +531,17 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
       if (!isRecord(started) || typeof started.connectId !== "string") {
         throw new Error("personal account sign-in did not start");
       }
-      await withinTest(
-        awaitGateBeforeSettlement(
-          committed.promise,
-          settled.promise,
-          "Personal account sign-in settled before committing",
-        ),
-        signal,
+      await settlement.checkpoint(
+        committed.promise,
+        "Personal account sign-in settled before committing",
       );
       expect(await rpc("users.authConnect.cancel", { connectId: started.connectId })).toEqual({
         status: "cancelled",
       });
       deliverCommit.resolve();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          changed.promise,
-          settled.promise,
-          "Personal account sign-in settled without publishing a connected account",
-        ),
-        signal,
+      await settlement.checkpoint(
+        changed.promise,
+        "Personal account sign-in settled without publishing a connected account",
       );
       const connected = await rpc("users.authConnect.status", { connectId: started.connectId });
       if (
@@ -409,7 +582,7 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
     } finally {
       deliverCommit.resolve();
       sql.restore();
-      cancellation.mockRestore();
+      settlement[Symbol.dispose]();
       await service.stop();
     }
   }));
@@ -474,30 +647,26 @@ it.each(["transaction", "commit"] as const)(
     withAccount("refused-account@example.test", async (owner) => {
       let live = true;
       const observed: string[] = [];
-      const admission = observeAccountAdmission((stage) => {
+      using _ = observeAccountAdmission((stage) => {
         observed.push(stage);
         if (stage === refusalStage) {
           live = false;
         }
       });
-      try {
-        await expect(
-          connectAccount(owner, {
-            assertCurrent() {
-              if (!live) {
-                throw new ModelAccountConnectAuthorityError();
-              }
-            },
-          }),
-        ).rejects.toBeInstanceOf(ModelAccountConnectAuthorityError);
-        expect(observed).toEqual(
-          refusalStage === "transaction" ? ["transaction"] : ["transaction", "commit"],
-        );
-        expect(await listUserModelAccountsAsync({ profileId: owner })).toEqual({ accounts: [] });
-        expect(await listUserProfileAuthLinksAsync(owner)).toEqual([]);
-      } finally {
-        admission.mockRestore();
-      }
+      await expect(
+        connectAccount(owner, {
+          assertCurrent() {
+            if (!live) {
+              throw new ModelAccountConnectAuthorityError();
+            }
+          },
+        }),
+      ).rejects.toBeInstanceOf(ModelAccountConnectAuthorityError);
+      expect(observed).toEqual(
+        refusalStage === "transaction" ? ["transaction"] : ["transaction", "commit"],
+      );
+      expect(await listUserModelAccountsAsync({ profileId: owner })).toEqual({ accounts: [] });
+      expect(await listUserProfileAuthLinksAsync(owner)).toEqual([]);
     }),
 );
 
@@ -507,40 +676,36 @@ it.each(["credential", "selection"] as const)(
     withAccount("replacement-account@example.test", async (owner) => {
       const first = await connectAccount(owner);
       const order: string[] = [];
-      const admission = observeAccountAdmission((stage) => order.push(stage));
-      try {
-        const result = await connectAccount(owner, {
-          credential: { ...credential, token: "synthetic-reconnected-token" },
-          matchesCredential(current) {
-            expect(current).toEqual(credential);
-            order.push("compare");
-            // A real competing commit here also proves the provider callback does not hold BEGIN.
-            if (race === "credential") {
-              updateUserModelAuthProfile(first.authProfileId, (profile) => {
-                profile.credential = { ...credential, token: "synthetic-concurrent-refresh" };
-                return true;
-              });
-            } else if (race === "selection") {
-              setLinkSync({
-                profileId: owner,
-                provider: "synthetic",
-                authProfileId: "synthetic:shared",
-              });
-            }
-            return true;
-          },
-        });
-        expect(order).toEqual(["compare", "transaction", "commit"]);
-        expect(result.authProfileId).not.toBe(first.authProfileId);
-        expect(readUserModelAuthProfile(first.authProfileId)?.credential).toEqual({
-          ...credential,
-          token: race === "credential" ? "synthetic-concurrent-refresh" : credential.token,
-        });
-        expect((await listUserModelAccountsAsync({ profileId: owner })).accounts).toHaveLength(2);
-        await expectLinked(owner, result.authProfileId);
-      } finally {
-        admission.mockRestore();
-      }
+      using _ = observeAccountAdmission((stage) => order.push(stage));
+      const result = await connectAccount(owner, {
+        credential: { ...credential, token: "synthetic-reconnected-token" },
+        matchesCredential(current) {
+          expect(current).toEqual(credential);
+          order.push("compare");
+          // A real competing commit here also proves the provider callback does not hold BEGIN.
+          if (race === "credential") {
+            updateUserModelAuthProfile(first.authProfileId, (profile) => {
+              profile.credential = { ...credential, token: "synthetic-concurrent-refresh" };
+              return true;
+            });
+          } else if (race === "selection") {
+            setLinkSync({
+              profileId: owner,
+              provider: "synthetic",
+              authProfileId: "synthetic:shared",
+            });
+          }
+          return true;
+        },
+      });
+      expect(order).toEqual(["compare", "transaction", "commit"]);
+      expect(result.authProfileId).not.toBe(first.authProfileId);
+      expect(readUserModelAuthProfile(first.authProfileId)?.credential).toEqual({
+        ...credential,
+        token: race === "credential" ? "synthetic-concurrent-refresh" : credential.token,
+      });
+      expect((await listUserModelAccountsAsync({ profileId: owner })).accounts).toHaveLength(2);
+      await expectLinked(owner, result.authProfileId);
     }),
 );
 

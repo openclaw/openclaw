@@ -230,20 +230,16 @@ describe("legacy node-host Doctor migration", () => {
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
   });
 
-  it("fails before mutation when the source changes after parsing or before claim", async () => {
-    const first = await legacyFixture();
-    const afterParse = await first.migrate({
-      beforeVerify: () => fs.appendFileSync(first.sourcePath, "\n"),
-    });
-    expect(afterParse.warnings[0]).toContain("source changed after Doctor loaded it");
-    expect(readCanonicalRow(first.env)).toBeUndefined();
-    const second = await legacyFixture();
-    const beforeClaim = await second.migrate({
-      beforeClaim: () => fs.appendFileSync(second.sourcePath, "\n"),
-    });
-    expect(beforeClaim.warnings[0]).toContain("source changed before Doctor could claim it");
-    expect(readCanonicalRow(second.env)).toBeUndefined();
-    expect(fs.existsSync(second.sourcePath)).toBe(true);
+  it.each([
+    ["beforeVerify", "source changed after Doctor loaded it"],
+    ["beforeClaim", "source changed before Doctor could claim it"],
+  ] as const)("fails before mutation when source changes at %s", async (hook, warning) => {
+    const { env, sourcePath, migrate } = await legacyFixture();
+    expect(
+      (await migrate({ [hook]: () => fs.appendFileSync(sourcePath, "\n") })).warnings[0],
+    ).toContain(warning);
+    expect(readCanonicalRow(env)).toBeUndefined();
+    expect(fs.existsSync(sourcePath)).toBe(true);
   });
 
   it("retains a fixed claim on cleanup failure and retries idempotently", async () => {

@@ -69,6 +69,16 @@ function setupChannel(
   return { id, setup: { fields } };
 }
 
+type SetupField = NonNullable<PluginPackageChannel["setup"]>["fields"][number];
+function setupField(
+  key: string,
+  kind: "string" | "boolean",
+  flags: string,
+  extra: Partial<SetupField["cli"]> = {},
+): SetupField {
+  return { key, kind, cli: { flags, description: key, ...extra } };
+}
+
 const signalTransport = {
   key: "signalTransport",
   kind: "choice",
@@ -79,11 +89,7 @@ const matrixChannel = {
   id: "matrix",
   cliAddOptions: [{ flags: "--homeserver <url>", description: "Matrix homeserver URL" }],
 };
-const telegramChannel = setupChannel("telegram", {
-  key: "token",
-  kind: "string",
-  cli: { flags: "--token <token>", description: "Telegram bot token" },
-});
+const telegramChannel = setupChannel("telegram", setupField("token", "string", "--token <token>"));
 const legacyArgs = ["channels", "add", "--channel", "legacy-chat", "--token", "test-token"];
 function legacyChannel(
   flags: string,
@@ -105,7 +111,10 @@ function getChannelAddOptionFlags(program: Command): string[] {
   return add?.options.map((option) => option.flags) ?? [];
 }
 
-async function runChannelsCli(args: string[], program = new Command().name("openclaw")) {
+async function runChannelsCli(
+  args: string[],
+  program = new Command().name("openclaw").enablePositionalOptions().exitOverride(),
+) {
   await registerChannelsCli(program, ["node", "openclaw", ...args]);
   await program.parseAsync(args, { from: "user" });
   return program;
@@ -154,10 +163,7 @@ describe("registerChannelsCli", () => {
       if (leafAccount !== undefined) {
         args.push("--account", leafAccount);
       }
-      await runChannelsCli(
-        args,
-        new Command().name("openclaw").enablePositionalOptions().exitOverride(),
-      );
+      await runChannelsCli(args);
 
       const options =
         leaf === "list"
@@ -168,10 +174,7 @@ describe("registerChannelsCli", () => {
   );
 
   it("distinguishes an explicit all channels logs filter", async () => {
-    await runChannelsCli(
-      ["channels", "logs", "--channel", "all"],
-      new Command().name("openclaw").exitOverride(),
-    );
+    await runChannelsCli(["channels", "logs", "--channel", "all"]);
     const optionsCall = channelsLogsCommandMock.mock.calls[0];
     expect(optionsCall).toBeDefined();
     expect(optionsCall![0]?.channel).toBe("all");
@@ -189,10 +192,7 @@ describe("registerChannelsCli", () => {
     if (leaf === "resolve") {
       args.push("room");
     }
-    await runChannelsCli(
-      args,
-      new Command().name("openclaw").enablePositionalOptions().exitOverride(),
-    );
+    await runChannelsCli(args);
 
     const command = {
       add: channelsAddCommandMock,
@@ -207,39 +207,10 @@ describe("registerChannelsCli", () => {
     );
   });
 
-  it("projects channel-owned setup fields into Commander options", async () => {
-    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
-      setupChannel("signal", signalTransport, {
-        key: "autoDiscover",
-        kind: "boolean",
-        cli: {
-          flags: "--auto-discover",
-          negatedFlags: "--no-auto-discover",
-          description: "Discover channels automatically",
-        },
-      }),
-    ]);
-    process.argv = ["node", "openclaw", "channels", "add", "--channel", "signal", "--help"];
-    const program = new Command().name("openclaw");
-
-    await registerChannelsCli(program);
-
-    expect(getChannelAddOptionFlags(program)).toContain("--signal-transport <kind>");
-    expect(getChannelAddOptionFlags(program)).toContain("--no-auto-discover");
-  });
-
   it("switches the env-backed add hint only for a selected channel without --use-env", async () => {
     listBundledPackageChannelMetadataMock.mockReturnValue([
-      setupChannel("telegram", {
-        key: "useEnv",
-        kind: "boolean",
-        cli: { flags: "--use-env", description: "Use Telegram environment credentials" },
-      }),
-      setupChannel("signal", {
-        key: "httpUrl",
-        kind: "string",
-        cli: { flags: "--http-url <url>", description: "Signal HTTP service URL" },
-      }),
+      setupChannel("telegram", setupField("useEnv", "boolean", "--use-env")),
+      setupChannel("signal", setupField("httpUrl", "string", "--http-url <url>")),
       { id: "irc", cliAddOptions: [{ flags: "--token <token>", description: "IRC token" }] },
     ]);
     const registeredFlags = async (channelId: string) => {
@@ -285,27 +256,26 @@ describe("registerChannelsCli", () => {
 
   it("forwards only explicitly supplied setup options", async () => {
     listBundledPackageChannelMetadataMock.mockReturnValueOnce([
-      setupChannel("signal", signalTransport, {
-        key: "useEnv",
-        kind: "boolean",
-        cli: {
-          flags: "--use-env",
-          description: "Use environment credentials",
-          defaultValue: false,
-        },
-      }),
+      setupChannel(
+        "signal",
+        signalTransport,
+        setupField("useEnv", "boolean", "--use-env", { defaultValue: false }),
+        setupField("autoDiscover", "boolean", "--auto-discover", {
+          negatedFlags: "--no-auto-discover",
+        }),
+      ),
     ]);
 
-    await runChannelsCli([
-      "channels",
-      "add",
-      "--channel",
-      "signal",
-      "--signal-transport",
-      "container",
-    ]);
+    await runChannelsCli(
+      "channels add --channel signal --signal-transport container --no-auto-discover".split(" "),
+    );
 
-    expectAddCall({ channel: "signal", signalTransport: "container", agent: undefined });
+    expectAddCall({
+      channel: "signal",
+      signalTransport: "container",
+      autoDiscover: false,
+      agent: undefined,
+    });
   });
 
   it.each([
@@ -369,16 +339,8 @@ describe("registerChannelsCli", () => {
 
   it("keeps conflicting all-channel flag arities before a positional channel ambiguous", async () => {
     listBundledPackageChannelMetadataMock.mockReturnValueOnce([
-      setupChannel("chat-a", {
-        key: "mode",
-        kind: "string",
-        cli: { flags: "--mode <mode>", description: "Chat A mode" },
-      }),
-      setupChannel("telegram", {
-        key: "mode",
-        kind: "boolean",
-        cli: { flags: "--mode", description: "Enable Telegram mode" },
-      }),
+      setupChannel("chat-a", setupField("mode", "string", "--mode <mode>")),
+      setupChannel("telegram", setupField("mode", "boolean", "--mode")),
     ]);
 
     const args = ["channels", "add", "--mode", "telegram"];

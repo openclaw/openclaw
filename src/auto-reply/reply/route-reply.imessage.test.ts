@@ -87,23 +87,22 @@ describe("routed iMessage reply threading", () => {
     ).toEqual([ids[0], undefined]);
   });
 
-  it.each([
-    { mode: "first", expected: ["question-guid", undefined, undefined] },
-    { mode: "all", expected: ["question-guid", "question-guid", "question-guid"] },
-  ] as const)(
-    "preserves $mode consumption at the delivery boundary",
-    async ({ mode, expected }) => {
+  it.each(["first", "all"] as const)(
+    "preserves %s policy at the delivery boundary",
+    async (mode) => {
       const sent = await route({ text: "Answer" }, "question-guid", mode);
       assert(sent);
-      assert(sent.payloads[0]);
-      expect(sent).toMatchObject({ replyToId: "question-guid", replyToMode: mode });
-      expect(sent.payloads[0].replyToId).toBeUndefined();
+      expect(sent).toMatchObject({
+        replyToId: "question-guid",
+        replyToMode: mode,
+        payloads: [{ replyToId: undefined }],
+      });
       const policy = createReplyToDeliveryPolicy(sent);
-      const resolved = policy.resolveCurrentReplyTo(sent.payloads[0]);
+      const resolved = policy.resolveCurrentReplyTo(sent.payloads[0]!);
       expect(resolved).toEqual({ replyToId: "question-guid", source: "implicit" });
       const target = { replyToId: resolved.replyToId, replyToIdSource: resolved.source };
       expect([1, 2, 3].map(() => policy.applyReplyToConsumption(target).replyToId)).toEqual(
-        expected,
+        mode === "all" ? Array(3).fill("question-guid") : ["question-guid", undefined, undefined],
       );
     },
   );

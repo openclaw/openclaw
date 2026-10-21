@@ -31,6 +31,9 @@ export function buildMultiResult(sessions: SessionsListResult["sessions"]): Sess
 export function buildProps(result: SessionsListResult): SessionsProps {
   return {
     loading: false,
+    detailsRead: () => undefined,
+    detailsReadKey: () => null,
+    onRetryDetails: () => undefined,
     refreshing: false,
     refreshDisabled: false,
     agentId: "main",

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
@@ -97,6 +98,13 @@ afterEach(() => {
   cleanupSolid();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it("names the page with a level-one heading", async () => {
+  const { page } = await setup(vi.fn().mockResolvedValue(tail(1, ["one"])));
+  expect(getQueriesForElement(page.container).getByRole("heading", { level: 1 }).textContent).toBe(
+    "Logs",
+  );
 });
 
 it.each([{ lines: [] }, { lines: ["next line"] }])(

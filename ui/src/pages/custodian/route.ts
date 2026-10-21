@@ -20,7 +20,6 @@ export const page = definePage({
   }),
   component: () =>
     import("./custodian-page.tsx").then((module) => ({
-      header: true,
       renderSolid: (props: SolidRouteProps<CustodianRouteData>) =>
         createComponent(module.CustodianRoute, {
           get data() {

@@ -28,6 +28,12 @@ function linkDependencies(root: string) {
   fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
 }
 
+function git(root: string, args: string[]) {
+  const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  return result.stdout.trim();
+}
+
 function makeFixture(name: string, config?: unknown, copyConfig = !config) {
   const root = fs.realpathSync(createTempDir(`openclaw-oxlint-${name}-`));
   const write = (file: string, content: string) => writeFixture(root, file, content);
@@ -616,6 +622,38 @@ describe("oxlint config", () => {
         });
       }
     }
+  });
+
+  it("keeps untouched limits advisory for release-version-only manifest changes", () => {
+    const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
+    const { root, write, json } = makeFixture("release-version-scope", config);
+    linkDependencies(root);
+    write("src/changed.ts", "export const changed = [\n  0,\n  1,\n];\n");
+    write("src/untouched.ts", "export const untouched = [\n  0,\n  1,\n];\n");
+    json("package.json", { name: "fixture", version: "2026.10.10-beta.3" });
+    git(root, ["init", "--quiet"]);
+    git(root, ["add", "."]);
+    git(root, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "--quiet",
+      "-m",
+      "base",
+    ]);
+    const base = git(root, ["rev-parse", "HEAD"]);
+    json("package.json", { name: "fixture", version: "2026.10.10-beta.4" });
+
+    const result = runFocused(root, ["src/changed.ts", "src/untouched.ts"], {
+      GITHUB_ACTIONS: "false",
+      OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(["package.json", "src/changed.ts"]),
+      OPENCLAW_OXLINT_CHANGED_BASE: base,
+    });
+    const report = parseReport(checked(result, 1));
+    expect(byFile(report, "src/changed.ts")[0]?.severity).toBe("error");
+    expect(byFile(report, "src/untouched.ts")[0]?.severity).toBe("warning");
   });
 
   it("preserves native config validation locally and in Actions", () => {

@@ -6,6 +6,7 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
+import { settleWithCleanup } from "../infra/error-graph-internal.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { ensureGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -50,7 +51,7 @@ export async function runLocalAgentCommand<TResult>(params: {
   if (!existingHost) {
     host.bindScheduler(scheduler);
   }
-  const [outcome] = await Promise.allSettled([
+  return settleWithCleanup(
     host.run(async () => {
       const resolvedDeps = await measureAgentStartup("command-dependencies", () =>
         resolveAgentCommandDeps(params.deps),
@@ -141,24 +142,12 @@ export async function runLocalAgentCommand<TResult>(params: {
         ),
       );
     }),
-  ]);
-  try {
-    if (!existingHost) {
-      await scheduler.stop();
-      await host.close();
-    }
-  } catch (error) {
-    if (outcome.status === "rejected") {
-      throw new AggregateError(
-        [outcome.reason, error],
-        "Local agent command and resource cleanup failed.",
-        { cause: error },
-      );
-    }
-    throw error;
-  }
-  if (outcome.status === "rejected") {
-    throw outcome.reason;
-  }
-  return outcome.value;
+    async () => {
+      if (!existingHost) {
+        await scheduler.stop();
+        await host.close();
+      }
+    },
+    "Local agent command and resource cleanup failed.",
+  );
 }

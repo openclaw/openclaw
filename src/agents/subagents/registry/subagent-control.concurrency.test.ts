@@ -8,7 +8,6 @@ import {
   withinTest,
 } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import * as controllerLifecycle from "../../../sessions/session-controller.lifecycle.js";
 import {
@@ -41,8 +40,7 @@ import {
 import * as nativeControl from "./subagent-control.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { markSubagentRunTerminated, registerSubagentRun } from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { markSubagentRunTerminated } from "./subagent-registry.js";
 import { finalizeInterruptedSubagentRun } from "./subagent-registry.test-helpers.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
@@ -552,28 +550,11 @@ it.for(["before capacity release", "after interrupt"] as const)(
 );
 
 it("full child Stop preserves later and foreign sources while joining captured queue cleanup", async () => {
-  const sessionKey = "agent:main:subagent:captured-queue";
-  const sessionId = "captured-queue-session";
-  const runId = "captured-queue-run";
-  const storePath = await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey,
-    defaultSessionId: sessionId,
-    lifecycleRevision: "captured-queue-revision",
-  });
-  await registerSubagentRun({
-    runId,
-    childSessionKey: sessionKey,
-    childAgentId: "main",
-    sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", storePath, sessionKey })?.entry,
-    requesterSessionKey: "agent:main:main",
-    requesterAgentId: "main",
-    requesterDisplayKey: "main",
-    task: "captured queue",
-    cleanup: "keep",
-    expectsCompletionMessage: false,
-  });
+  const { sessionKey, sessionId, storePath } = await seed(
+    "captured-queue",
+    { runId: "captured-queue-run", requesterDisplayKey: "main", task: "captured queue" },
+    "captured-queue-revision",
+  );
   const target = captureSessionTarget({
     storeScope: storePath,
     sessionKey,

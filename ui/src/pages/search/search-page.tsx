@@ -1,6 +1,15 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { Show, createMemo, createSignal, onCleanup } from "solid-js";
+import {
+  Errored,
+  Loading,
+  Show,
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  onCleanup,
+} from "solid-js";
 import type {
   WebSearchStatusParams,
   WebSearchStatusResult,
@@ -44,10 +53,13 @@ export function SearchPage() {
   const context = useApplication();
   let disposed = false;
   const active = () => !disposed;
+  // Accepted data keeps the editable controls mounted through refreshes and failures.
   const [result, setResult] = createSignal<WebSearchStatusResult | null>(null);
-  const [error, setError] = createSignal("");
+  const [loadRequest, setLoadRequest] = createSignal<{ promise: Promise<void> } | null>(null);
+  const loadCompletion = createMemo(() => loadRequest()?.promise.then(() => null) ?? null);
+  // isPending's first-use runtime hooks eagerly link the shared Markdown/menu chunk.
   const [loading, setLoading] = createSignal(false);
-  const [testing, setTesting] = createSignal(false);
+  const [testing, setTesting] = createOptimistic(false);
   const [testResult, setTestResult] = createSignal<WebSearchTestResult | null>(null);
   const [testError, setTestError] = createSignal("");
   const [models, setModels] = createSignal<ModelCatalogEntry[]>([]);
@@ -60,7 +72,7 @@ export function SearchPage() {
   // Capture the initial receipt before the Gateway binding admits its first load.
   let configRevision = searchConfigRevision(context.runtimeConfig.state);
   let loadingActive = false;
-  let testingActive = false;
+  let activeTest: ReturnType<typeof Promise.withResolvers<void>> | undefined;
   let queryInput: HTMLInputElement | undefined;
   let resetModelOnConnect = false;
   const runtimeView = projectRuntimeConfig(context.runtimeConfig);
@@ -106,7 +118,9 @@ export function SearchPage() {
   });
 
   function invalidateTest() {
-    testingActive = false;
+    const previous = activeTest;
+    activeTest = undefined;
+    previous?.resolve();
     setTestResult(null);
     setTestError("");
   }
@@ -114,7 +128,6 @@ export function SearchPage() {
   function invalidate() {
     invalidateTest();
     setResult(null);
-    setError("");
     setModels([]);
   }
 
@@ -153,19 +166,20 @@ export function SearchPage() {
     return configState.configLoading || configState.configSaving || configState.configApplying;
   }
 
-  async function load(modelValue = model()) {
+  function load(modelValue = model()): Promise<void> {
     const scope = gateway.capture();
     if (!scope || loadingActive) {
-      return;
+      return Promise.resolve();
     }
     invalidateTest();
     loadingActive = true;
     setLoading(true);
-    setError("");
     const selected = selection(modelValue);
+    let requestedConfigRevision = configRevision;
     const current = () =>
       active() &&
       gateway.isCurrent(scope) &&
+      requestedConfigRevision === configRevision &&
       JSON.stringify(selection()) === JSON.stringify(selected);
     if (canEdit()) {
       const runtime = context.runtimeConfig;
@@ -174,43 +188,51 @@ export function SearchPage() {
         .then(() => runtime.ensureSchemaLoaded())
         .catch(() => undefined);
     }
-    try {
-      const catalog = await loadModelCatalog(scope.client, { agentId: selected.agentId }).catch(
-        () => null,
-      );
-      if (!current()) {
-        return;
-      }
-      const status = await scope.client.request<WebSearchStatusResult>(
-        "webSearch.status",
-        selected,
-      );
-      if (current()) {
-        setModels(catalog?.models ?? []);
-        setResult(status);
-        if (!status.providers.some((provider) => provider.id === setupProvider())) {
-          const preferred = status.provider ?? status.route.provider;
-          setSetupProvider(
-            status.providers.find((provider) => provider.id === preferred)?.id ??
-              status.providers.find((provider) => provider.available && provider.configured)?.id ??
-              status.providers.toSorted((a, b) => a.label.localeCompare(b.label))[0]?.id ??
-              "",
-          );
+    const request = (async () => {
+      try {
+        const catalog = await loadModelCatalog(scope.client, { agentId: selected.agentId }).catch(
+          () => null,
+        );
+        // Search config scopes the status request, not the agent's catalog read.
+        requestedConfigRevision = configRevision;
+        if (!current()) {
+          return;
+        }
+        const status = await scope.client.request<WebSearchStatusResult>(
+          "webSearch.status",
+          selected,
+        );
+        if (current()) {
+          setModels(catalog?.models ?? []);
+          setResult(status);
+          if (!status.providers.some((provider) => provider.id === setupProvider())) {
+            const preferred = status.provider ?? status.route.provider;
+            setSetupProvider(
+              status.providers.find((provider) => provider.id === preferred)?.id ??
+                status.providers.find((provider) => provider.available && provider.configured)
+                  ?.id ??
+                status.providers.toSorted((a, b) => a.label.localeCompare(b.label))[0]?.id ??
+                "",
+            );
+          }
+        }
+      } catch (cause) {
+        if (current()) {
+          throw cause;
+        }
+      } finally {
+        loadingActive = false;
+        if (active()) {
+          setLoading(false);
+          if (!current() && gateway.connected) {
+            void load();
+          }
         }
       }
-    } catch (cause) {
-      if (active()) {
-        setError(formatUiError(cause));
-      }
-    } finally {
-      loadingActive = false;
-      if (active()) {
-        setLoading(false);
-        if (!current() && gateway.connected) {
-          void load();
-        }
-      }
-    }
+    })();
+    setLoadRequest({ promise: request });
+    // The native read owns error presentation; imperative callers only await settlement.
+    return request.catch(() => undefined);
   }
 
   async function patch(
@@ -250,6 +272,11 @@ export function SearchPage() {
     }
   }
 
+  const presentTest = action(function* (completed: Promise<void>) {
+    setTesting(true);
+    yield completed;
+  });
+
   async function test(scope: GatewayConnectionScope | null) {
     const queryText = (queryInput?.value ?? query()).trim();
     const runtime = context.runtimeConfig;
@@ -260,40 +287,47 @@ export function SearchPage() {
       !queryText ||
       queryText.length > 500 ||
       !(result()?.testProvider || result()?.route.testable) ||
-      testingActive ||
+      activeTest ||
       !isSearchConfigSettled(runtime.state) ||
       loadingActive
     ) {
       return;
     }
     const selected = selection();
-    const current = () =>
+    const presentation = Promise.withResolvers<void>();
+    const current = (): boolean =>
+      activeTest === presentation &&
       active() &&
       gateway.isCurrent(scope) &&
       JSON.stringify(selection()) === JSON.stringify(selected);
-    testingActive = true;
-    setTesting(true);
-    setTestResult(null);
-    setTestError("");
-    try {
-      const response = await scope.client.request<WebSearchTestResult>("webSearch.test", {
-        ...selected,
-        ...(result()?.testProvider ? { providerId: result()!.testProvider!.id } : {}),
-        query: queryText,
-      });
-      if (current()) {
-        setTestResult(response);
+    // Duplicate admission stays synchronous, before opening a presentation transaction.
+    activeTest = presentation;
+    const completed = (async () => {
+      try {
+        const response = await scope.client.request<WebSearchTestResult>("webSearch.test", {
+          ...selected,
+          ...(result()?.testProvider ? { providerId: result()!.testProvider!.id } : {}),
+          query: queryText,
+        });
+        if (current()) {
+          setTestError("");
+          setTestResult(response);
+        }
+      } catch (cause) {
+        if (current()) {
+          setTestResult(null);
+          setTestError(formatUiError(cause));
+        }
+      } finally {
+        if (activeTest === presentation) {
+          activeTest = undefined;
+        }
+        presentation.resolve();
       }
-    } catch (cause) {
-      if (current()) {
-        setTestError(formatUiError(cause));
-      }
-    } finally {
-      testingActive = false;
-      if (active()) {
-        setTesting(false);
-      }
-    }
+    })();
+    // Flush the query draft before the action can hold its opening tick.
+    await Promise.resolve();
+    return current() ? presentTest(presentation.promise) : completed;
   }
 
   const configState = () => runtimeView.read().state;
@@ -339,16 +373,17 @@ export function SearchPage() {
         : "ok";
   };
   const health = () => {
-    const failed = testError() || testResult()?.status === "error";
+    const last = testing() ? null : testResult();
+    const failed = !testing() && (testError() || last?.status === "error");
     return {
-      kind: failed ? ("danger" as const) : testResult() ? ("ok" as const) : ("muted" as const),
+      kind: failed ? ("danger" as const) : last ? ("ok" as const) : ("muted" as const),
       label: t(
-        `searchPage.${testing() ? "testing" : failed ? "failure" : testResult() ? "success" : "untested"}`,
+        `searchPage.${testing() ? "testing" : failed ? "failure" : last ? "success" : "untested"}`,
       ),
     };
   };
   const healthDescription = () => {
-    const last = testResult();
+    const last = testing() ? null : testResult();
     return last
       ? `${last.provider} · ${t("searchPage.duration", { ms: String(last.latencyMs) })}${last.cached ? ` · ${t("searchPage.cached")}` : ""}`
       : undefined;
@@ -366,14 +401,24 @@ export function SearchPage() {
       <SettingsWorkspace>
         <SettingsPage>
           {!gateway.connected ? <SettingsEmpty message={t("searchPage.offline")} /> : undefined}
-          {error() ? (
-            <div role="alert" class="callout danger">
-              {error()}
-              <button class="btn btn--sm" onClick={() => void load()}>
-                {t("common.retry")}
-              </button>
-            </div>
-          ) : undefined}
+          <Show when={loadRequest()} keyed>
+            {(request) => (
+              <Errored
+                fallback={(error) =>
+                  gateway.connected ? (
+                    <div role="alert" class="callout danger">
+                      {formatUiError(error())}
+                      <button class="btn btn--sm" onClick={() => void load()}>
+                        {t("common.retry")}
+                      </button>
+                    </div>
+                  ) : undefined
+                }
+              >
+                <Loading on={request}>{loadCompletion()}</Loading>
+              </Errored>
+            )}
+          </Show>
           {configState().lastError ? (
             <div role="alert" class="callout danger">
               {configState().lastError}
@@ -557,7 +602,7 @@ export function SearchPage() {
                       />
                     </Show>
                   </SettingsSection>
-                  {renderSearchTestResult(testResult(), testError())}
+                  {!testing() && renderSearchTestResult(testResult(), testError())}
                   <SettingsSection
                     title={t("searchPage.setup")}
                     description={t("searchPage.setupHint")}
