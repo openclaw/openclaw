@@ -17,7 +17,6 @@ afterEach(() => vi.restoreAllMocks());
 function holdCaptureReply(boundary: "cold" | "write") {
   const held = createDeferredCore();
   let selected: { worker: Worker; id: number } | undefined;
-  let captured = false;
   let publish: (() => void) | undefined;
   // oxlint-disable-next-line typescript/unbound-method -- The original receiver is restored below.
   const nativePost = Worker.prototype.postMessage;
@@ -26,17 +25,15 @@ function holdCaptureReply(boundary: "cold" | "write") {
     request: SqliteWorkerRequest,
     transferList,
   ) {
-    if (!captured) {
-      const command: unknown = request.type === "execute" ? deserialize(request.input) : undefined;
-      if (
-        (boundary === "cold" && request.type === "open") ||
-        (boundary === "write" &&
-          isRecord(command) &&
-          command.type === "capture.recordEventWithPayload")
-      ) {
-        captured = true;
-        selected = { worker: this, id: request.id };
-      }
+    const command: unknown = request.type === "execute" ? deserialize(request.input) : undefined;
+    if (
+      (boundary === "cold" && request.type === "open") ||
+      (boundary === "write" &&
+        isRecord(command) &&
+        command.type === "capture.recordEventWithPayload")
+    ) {
+      selected = { worker: this, id: request.id };
+      posts.mockRestore();
     }
     return nativePost.call(this, request, transferList);
   });
@@ -78,8 +75,8 @@ it.each([
   { boundary: "write", payloadKind: "two-byte string" },
 ] as const)(
   "charges queued $payloadKind bytes while $boundary admission is blocked and returns credits after settlement",
-  async ({ boundary, payloadKind }) => {
-    await withOpenClawTestState(
+  async ({ boundary, payloadKind }) =>
+    withOpenClawTestState(
       { scenario: "external-service", label: "capture-input-admission" },
       async (state) => {
         const settings = {
@@ -91,6 +88,7 @@ it.each([
         const otherInputs = [64, 64, 64, 59].map((size) =>
           reserveSqliteWorkerInputPreparation(size * MIB),
         );
+        const releaseInputs = () => otherInputs.forEach((input) => input.release());
         const data =
           payloadKind === "Buffer" ? Buffer.alloc(2 * MIB, "a") : "a".repeat(MIB - 1) + "\u0100";
         const expectedDigest = digest(data);
@@ -134,9 +132,7 @@ it.each([
           );
           const recovered = reserveSqliteWorkerInputPreparation(5 * MIB);
           recovered.release();
-          for (const input of otherInputs) {
-            input.release();
-          }
+          releaseInputs();
           const reader = await acquireDebugProxyCaptureStoreAsync({ env: state.env });
           try {
             const events = (await reader.store.getSessionEvents(settings.sessionId)).toReversed();
@@ -154,13 +150,10 @@ it.each([
           }
         } finally {
           hold.release();
-          for (const input of otherInputs) {
-            input.release();
-          }
+          releaseInputs();
           await Promise.allSettled(pending);
           await Promise.allSettled([finalizeDebugProxyCaptureAsync(settings)]);
         }
       },
-    );
-  },
+    ),
 );

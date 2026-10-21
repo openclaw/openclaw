@@ -132,17 +132,14 @@ it("settles accepted capture and reports lost terminal writes after canonical re
     },
     settings,
   );
-  let captureSettled = false;
-  const settled = () => {
-    captureSettled = true;
-  };
+  const settled = vi.fn();
   void capturing.then(settled, settled);
 
   try {
     await Promise.all([requestAccepted.promise, bodyRegistered.promise]);
     expect(fixture.events).toHaveLength(1);
     expect(fixture.events[0]?.kind).toBe("request");
-    expect(captureSettled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
     fixture.retired = true;
 
     const finalizationError = await finalizeDebugProxyCaptureAsync(settings).then(
@@ -152,7 +149,7 @@ it("settles accepted capture and reports lost terminal writes after canonical re
     expect(finalizationError).toBeInstanceOf(AggregateError);
     expect(containedErrors(finalizationError)).toContain(fixture.lostTerminal);
     expect(fixture.completedBodies).toBe(1);
-    expect(captureSettled).toBe(true);
+    expect(settled).toHaveBeenCalledOnce();
     await expect(capturing).rejects.toBe(fixture.lostTerminal);
     expect(fixture.endSessions).toBe(0);
     expect(fixture.acquisitions).toBe(1);
