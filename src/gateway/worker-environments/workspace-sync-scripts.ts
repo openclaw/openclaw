@@ -597,9 +597,9 @@ async function main() {
 export function createRemoteWorkspaceManifestScript(
   maxHashMemoBytes = MAX_WORKSPACE_HASH_MEMO_BYTES,
 ): string {
-  return String.raw`const MAX_WORKSPACE_HASH_MEMO_BYTES = ${maxHashMemoBytes};
+  return String.raw`let manifestInput;
+const MAX_WORKSPACE_HASH_MEMO_BYTES = ${maxHashMemoBytes};
 ${WORKSPACE_MANIFEST_PROGRAM}
-let manifestInput;
 function readManifestInput() {
   if (manifestInput === undefined) manifestInput = fs.readFileSync(0, "utf8");
   return manifestInput;
