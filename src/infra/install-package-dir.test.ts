@@ -556,40 +556,33 @@ describe("installPackageDir", () => {
     vi.stubEnv("npm_config_location", "global");
     vi.stubEnv("NPM_CONFIG_PREFIX", path.join(fixtureRoot, "global-prefix-uppercase"));
     vi.stubEnv("npm_config_prefix", path.join(fixtureRoot, "global-prefix"));
-    vi.mocked(runCommandWithTimeout).mockResolvedValue(npmSuccess);
-
-    expect(await installPackageDir(installOptions)).toEqual({ ok: true });
-    const expectedArgv = expectedNpmCommand([
-      "install",
-      "--omit=dev",
-      "--loglevel=error",
-      "--ignore-scripts",
-      "--workspaces=false",
-    ]);
-    const call = vi
-      .mocked(runCommandWithTimeout)
-      .mock.calls.toReversed()
-      .find(
-        ([argv, options]) =>
-          JSON.stringify(argv) === JSON.stringify(expectedArgv) &&
-          typeof options !== "number" &&
-          options.env?.npm_config_global === "false",
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+      expect(argv).toEqual(
+        expectedNpmCommand(
+          "install --omit=dev --loglevel=error --ignore-scripts --workspaces=false".split(" "),
+        ),
       );
-    const options = call?.[1];
-    if (!options || typeof options === "number") {
-      throw new Error("Expected project-local npm install call");
-    }
-    const env = options.env ?? {};
-    expect(env).toMatchObject({
-      npm_config_global: "false",
-      npm_config_location: "project",
-      npm_config_package_lock: "false",
-      npm_config_save: "false",
+      if (typeof options === "number") {
+        throw new Error("Expected project-local npm install options");
+      }
+      expect(options.env).toMatchObject({
+        npm_config_global: "false",
+        npm_config_location: "project",
+        npm_config_package_lock: "false",
+        npm_config_save: "false",
+      });
+      for (const key of [
+        "NPM_CONFIG_GLOBAL",
+        "NPM_CONFIG_LOCATION",
+        "NPM_CONFIG_PREFIX",
+        "npm_config_prefix",
+      ]) {
+        expect(options.env).not.toHaveProperty(key);
+      }
+      return npmSuccess;
     });
-    expect("NPM_CONFIG_GLOBAL" in env).toBe(false);
-    expect("NPM_CONFIG_LOCATION" in env).toBe(false);
-    expect("NPM_CONFIG_PREFIX" in env).toBe(false);
-    expect("npm_config_prefix" in env).toBe(false);
+    expect(await installPackageDir(installOptions)).toEqual({ ok: true });
+    expect(runCommandWithTimeout).toHaveBeenCalledOnce();
   });
 
   it.each(["exit", "throw"] as const)(

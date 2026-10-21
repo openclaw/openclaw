@@ -470,11 +470,11 @@ describe("fs-safe", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "does not unlink out-of-root file when symlink retarget races remove",
-    async () => {
+  it.runIf(process.platform !== "win32").each(["remove", "mkdir"] as const)(
+    "does not mutate outside the root when symlink retarget races %s",
+    async (operation) => {
       const { root, outside, slot, outsideTarget } = await setupSymlinkWriteRaceFixture({
-        seedInsideTarget: true,
+        seedInsideTarget: operation === "remove",
       });
 
       await withRealpathSymlinkRebindRace({
@@ -484,37 +484,20 @@ describe("fs-safe", () => {
         symlinkTarget: outside,
         timing: "before-realpath",
         run: async () => {
+          const rootFs = await openRoot(root);
           await expectRejectCode(
-            (await openRoot(root)).remove(path.join("slot", "target.txt")),
-            /path-alias|not-found/,
+            operation === "remove"
+              ? rootFs.remove(path.join("slot", "target.txt"))
+              : rootFs.mkdir(path.join("slot", "nested", "deep")),
+            operation === "remove" ? /path-alias|not-found/ : "path-alias",
           );
         },
       });
-
-      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("X".repeat(4096));
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "does not create out-of-root directories when symlink retarget races mkdir",
-    async () => {
-      const { root, outside, slot } = await setupSymlinkWriteRaceFixture();
-
-      await withRealpathSymlinkRebindRace({
-        realpathApi: "native-sync",
-        shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot")),
-        symlinkPath: slot,
-        symlinkTarget: outside,
-        timing: "before-realpath",
-        run: async () => {
-          await expectRejectCode(
-            (await openRoot(root)).mkdir(path.join("slot", "nested", "deep")),
-            "path-alias",
-          );
-        },
-      });
-
-      await expectRejectCode(fs.stat(path.join(outside, "nested")), "ENOENT");
+      if (operation === "remove") {
+        await expectContents(outsideTarget, "X".repeat(4096));
+      } else {
+        await expectRejectCode(fs.stat(path.join(outside, "nested")), "ENOENT");
+      }
     },
   );
 

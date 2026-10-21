@@ -168,34 +168,25 @@ describe("resolveNpmSpecMetadata", () => {
     });
   });
 
-  describe("registry selectors", () => {
-    const name = "example-plugin";
-    it.each([
-      { versions: ["1.0.0"], array: false, version: "1.0.0" },
-      { versions: ["1.0.0"], array: true, version: "1.0.0" },
-      { versions: ["2.9.0", "2.1.0"], array: true, version: "2.9.0" },
-    ])("resolves v2 from $versions (array=$array)", async ({ versions, array, version }) => {
+  it.each([
+    { selector: "v2", versions: ["1.0.0"], array: false, version: "1.0.0" },
+    { selector: "v2", versions: ["1.0.0"], array: true, version: "1.0.0" },
+    { selector: "v2", versions: ["2.9.0", "2.1.0"], array: true, version: "2.9.0" },
+    { selector: "^2", versions: ["1.0.0"], array: true, version: undefined },
+    { selector: "2.0.0", versions: ["1.0.0"], array: true, version: undefined },
+  ])(
+    "resolves $selector from $versions (array=$array)",
+    async ({ selector, versions, array, version }) => {
+      const name = "example-plugin";
       const entries = versions.map((entryVersion) => ({ name, version: entryVersion }));
       mockPackCommandResult({ stdout: JSON.stringify(array ? entries : entries[0]) });
-      await expect(resolveNpmSpecMetadata({ spec: `${name}@v2` })).resolves.toMatchObject({
-        ok: true,
-        metadata: { name, version, resolvedSpec: `${name}@${version}` },
-      });
-    });
-
-    it.each(["^2", "2.0.0"])(
-      "rejects a singleton outside the non-tag selector %s",
-      async (selector) => {
-        mockPackCommandResult({ stdout: JSON.stringify([{ name, version: "1.0.0" }]) });
-        await expect(
-          resolveNpmSpecMetadata({ spec: `${name}@${selector}` }),
-        ).resolves.toMatchObject({
-          ok: false,
-          category: "metadata-env",
-        });
-      },
-    );
-  });
+      await expect(resolveNpmSpecMetadata({ spec: `${name}@${selector}` })).resolves.toMatchObject(
+        version
+          ? { ok: true, metadata: { name, version, resolvedSpec: `${name}@${version}` } }
+          : { ok: false, category: "metadata-env" },
+      );
+    },
+  );
 
   it("reports which required metadata fields are missing", async () => {
     mockPackCommandResult({ stdout: JSON.stringify({ version: "2026.6.11" }) });

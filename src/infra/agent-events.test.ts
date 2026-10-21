@@ -946,6 +946,13 @@ describe("agent event routing after cancellation", () => {
 });
 
 describe("live agent model projection", () => {
+  const sessionIdentity = { agentId: "main", sessionId: "model-session" };
+  const modelScope = {
+    ...sessionIdentity,
+    sessionKey: "agent:main:chat",
+    projectSessionActive: true,
+  } satisfies AgentRunContext;
+
   test("projects only the executing model for an unscoped session key", () => {
     const scope = { agentId: "main", sessionId: "session", sessionKey: "global" };
     claimRun("admission", scope);
@@ -978,26 +985,17 @@ describe("live agent model projection", () => {
 
   test("projects model events only into their current run owner", () => {
     const runId = "model-run";
-    registerRun(runId, {
-      agentId: "main",
-      sessionKey: "agent:main:chat",
-      sessionId: "model-session",
-      projectSessionActive: true,
-    });
+    registerRun(runId, modelScope);
     const owner = getRun(runId)!;
     const generation = readGeneration();
-    emitModel(runId, owner, "primary", "first");
-    expect(getRun(runId)).toMatchObject({
-      activeModel: { provider: "primary", model: "first" },
-    });
-    expect(resolveProjectedAgentRunModel({ agentId: "main", sessionId: "model-session" })).toEqual({
-      provider: "primary",
-      model: "first",
-    });
-    emitModel(runId, owner, "fallback", "second");
-    expect(getRun(runId)).toMatchObject({
-      activeModel: { provider: "fallback", model: "second" },
-    });
+    for (const [provider, model] of [
+      ["primary", "first"],
+      ["fallback", "second"],
+    ] as const) {
+      emitModel(runId, owner, provider, model);
+      expect(getRun(runId)?.activeModel).toEqual({ provider, model });
+      expect(resolveProjectedAgentRunModel(sessionIdentity)).toEqual({ provider, model });
+    }
     emitModel(runId, owner, null, null);
     expect(getRun(runId)).not.toHaveProperty("activeModel");
 
@@ -1015,16 +1013,10 @@ describe("live agent model projection", () => {
 
   test("ignores model callbacks from a replaced run in the same lifecycle generation", () => {
     const runId = "reused-model-run";
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:chat",
-      sessionId: "model-session",
-      projectSessionActive: true,
-    };
-    registerRun(runId, scope);
+    registerRun(runId, modelScope);
     const replaced = getRun(runId)!;
     clearRun(runId);
-    registerRun(runId, scope);
+    registerRun(runId, modelScope);
     const replacement = getRun(runId)!;
     emitModel(runId, replacement, "current-provider", "current-model");
 
@@ -1034,12 +1026,8 @@ describe("live agent model projection", () => {
       data: { phase: "model", provider: "unscoped-provider", model: "unscoped-model" },
     });
 
-    for (const data of [
-      { phase: "model", provider: "stale-provider", model: "stale-model" },
-      { phase: "model", provider: null, model: null },
-    ] as const) {
-      emitAgentEventForRunContext({ runId, stream: "lifecycle", data }, replaced);
-    }
+    emitModel(runId, replaced, "stale-provider", "stale-model");
+    emitModel(runId, replaced, null, null);
 
     expect(getRun(runId)).toMatchObject({
       activeModel: { provider: "current-provider", model: "current-model" },

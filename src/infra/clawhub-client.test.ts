@@ -249,29 +249,21 @@ function retryResponse(first: Response | Error, retryRateLimit = false) {
   return { result, request, delays };
 }
 
-it("ignores fractional Retry-After delay-seconds values", async () => {
-  const { result, delays } = retryResponse(
-    new Response("limited", {
-      status: 503,
-      headers: { "Retry-After": "1.5" },
-    }),
-  );
-  expect(await (await result).response.text()).toBe("ok");
-  expect(delays).toEqual([1_000]);
-});
-
-it("honors a valid HTTP-date Retry-After through the shared parser", async () => {
+it.each([
+  ["ignores fractional delay-seconds", "1.5", 1_000],
+  ["honors a valid HTTP-date", "Tue, 02 Mar 2027 23:59:35 GMT", 5_000],
+] as const)("Retry-After %s through the shared parser", async (_name, retryAfter, delay) => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2027-03-02T23:59:30.000Z"));
   try {
     const { result, delays } = retryResponse(
       new Response("limited", {
         status: 503,
-        headers: { "Retry-After": "Tue, 02 Mar 2027 23:59:35 GMT" },
+        headers: { "Retry-After": retryAfter },
       }),
     );
     expect(await (await result).response.text()).toBe("ok");
-    expect(delays).toEqual([5_000]);
+    expect(delays).toEqual([delay]);
   } finally {
     vi.useRealTimers();
   }
