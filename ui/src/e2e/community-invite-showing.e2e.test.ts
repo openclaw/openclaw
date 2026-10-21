@@ -12,6 +12,7 @@ import {
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI community card E2E",
@@ -48,6 +49,7 @@ suite.define(() => {
             await page.goto(url);
             if (mobile) {
               await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+              await waitForMobileSidebarDrawerOpen(page);
             }
             const card = page.locator(".community-invite-card");
             const close = card.getByRole("button", { name: "Dismiss and don't show again" });
