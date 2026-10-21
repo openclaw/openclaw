@@ -39,9 +39,7 @@ describe("iMessage outbound session routing", () => {
     ["chat_guid:iMessage;+;chat123", false],
     ["chat_identifier:team-thread", false],
   ] as const)("reports canonical identity for %s", async (target, exact) => {
-    const route = await routeTo(target);
-
-    expect(route?.recipientSessionExact).toBe(exact);
+    expect(await routeTo(target)).toMatchObject({ recipientSessionExact: exact });
   });
 
   it.each([
@@ -51,12 +49,10 @@ describe("iMessage outbound session routing", () => {
     ["explicit identifier send", "chat_identifier:+15551234567", true],
   ] as const)("keeps a %s on the direct session", async (_name, target, explicit) => {
     const cfg = { session: { dmScope: "per-channel-peer" as const } };
-    const resolvedTarget = explicit ? await resolveTarget(target, cfg) : undefined;
     if (explicit) {
-      expect(resolvedTarget).toMatchObject({ to: target, kind: "user" });
+      expect(await resolveTarget(target, cfg)).toMatchObject({ to: target, kind: "user" });
     }
-    const route = await routeTo(target, cfg);
-    expect(route).toMatchObject({
+    expect(await routeTo(target, cfg)).toMatchObject({
       sessionKey: "agent:main:imessage:direct:+15551234567",
       peer: { kind: "direct", id: "+15551234567" },
       chatType: "direct",
@@ -103,26 +99,18 @@ describe("iMessage outbound session routing", () => {
   });
 
   it.each([
-    ["defaults to auto", {}, "+15551234567", "auto"],
-    ["uses configured SMS", { channels: { imessage: { service: "sms" } } }, "+15551234567", "sms"],
-    [
-      "keeps explicit SMS authoritative",
-      { channels: { imessage: { service: "imessage" } } },
-      "sms:+15551234567",
-      "sms",
-    ],
-    [
-      "keeps explicit auto authoritative",
-      { channels: { imessage: { service: "sms" } } },
-      "auto:+15551234567",
-      "auto",
-    ],
-  ] as const)("%s", async (_label, cfg, target, expectedService) => {
-    const route = await routeTo(target, cfg);
-
-    expect(route).toMatchObject({
-      from: `${expectedService}:+15551234567`,
-      to: `${expectedService}:+15551234567`,
-    });
-  });
+    [undefined, "+15551234567", "auto"],
+    ["sms", "+15551234567", "sms"],
+    ["imessage", "sms:+15551234567", "sms"],
+    ["sms", "auto:+15551234567", "auto"],
+  ] as const)(
+    "routes configured %s target %s using %s",
+    async (service, target, expectedService) => {
+      const cfg = service ? { channels: { imessage: { service } } } : {};
+      expect(await routeTo(target, cfg)).toMatchObject({
+        from: `${expectedService}:+15551234567`,
+        to: `${expectedService}:+15551234567`,
+      });
+    },
+  );
 });

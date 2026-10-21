@@ -113,15 +113,10 @@ describe("parseIMessageAllowFromEntries", () => {
     });
   });
 
-  it("returns validation errors for chat target entries", () => {
-    expect(parseIMessageAllowFromEntries("chat_id:123")).toEqual({
+  it.each(["chat_id:123", "imessage:chat_id:123"])("rejects chat target entry %s", (entry) => {
+    expect(parseIMessageAllowFromEntries(entry)).toEqual({
       entries: [],
-      error: "iMessage allowFrom entries must be sender handles: chat_id:123",
-    });
-
-    expect(parseIMessageAllowFromEntries("imessage:chat_id:123")).toEqual({
-      entries: [],
-      error: "iMessage allowFrom entries must be sender handles: imessage:chat_id:123",
+      error: `iMessage allowFrom entries must be sender handles: ${entry}`,
     });
   });
 });
