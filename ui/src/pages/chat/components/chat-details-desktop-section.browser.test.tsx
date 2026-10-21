@@ -104,3 +104,32 @@ it("reverses a pointer collapse, accommodates new content, and settles when park
   expect(disclosure.open).toBe(false);
   expect(disclosure.getAnimations({ subtree: true })).toHaveLength(0);
 });
+
+it("opens from the collapsed height and reverses from the visible height", async () => {
+  const { disclosure, summary } = mount(false);
+  const body = disclosure.querySelector<HTMLElement>(".chat-details-desktop-section__body")!;
+  await userEvent.click(summary);
+  flush();
+  const opening = body.getAnimations()[0]!;
+  opening.pause();
+  opening.currentTime = 0;
+  expect(body.getBoundingClientRect().height).toBe(0);
+  opening.currentTime = Number(opening.effect!.getTiming().duration) / 2;
+  const visibleHeight = body.getBoundingClientRect().height;
+  expect(visibleHeight).toBeGreaterThan(0);
+  expect(visibleHeight).toBeLessThan(80);
+
+  await userEvent.click(summary);
+  flush();
+  const closing = body.getAnimations()[0]!;
+  closing.pause();
+  closing.currentTime = 0;
+  expect(body.getBoundingClientRect().height).toBeCloseTo(visibleHeight, 0);
+  const finished = new Promise<void>((resolve) => {
+    closing.addEventListener("finish", () => resolve(), { once: true });
+  });
+  closing.finish();
+  await finished;
+  expect(disclosure.open).toBe(false);
+  expect(body.style.height).toBe("");
+});
