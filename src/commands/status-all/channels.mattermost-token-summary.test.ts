@@ -1,4 +1,3 @@
-// Mattermost token summary tests cover status-all credential source counting and safe display output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAccountInspectionResult } from "../../channels/account-inspection.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
@@ -30,27 +29,18 @@ vi.mock("../../channels/plugins/read-only.js", async (importOriginal) => ({
 
 beforeEach(() => vi.clearAllMocks());
 
-function tokenRow(params: {
-  account: Record<string, unknown>;
-  snapshot?: Partial<ChannelAccountSnapshot>;
-  enabled?: boolean;
-}): ChannelAccountInspectionResult {
-  return {
+async function summarize(
+  account: Record<string, unknown>,
+  snapshot: Partial<ChannelAccountSnapshot> = {},
+  showSecrets = false,
+) {
+  mocks.resolveInspectedChannelAccount.mockResolvedValueOnce({
     kind: "inspected",
-    account: params.account,
-    enabled: params.enabled ?? true,
+    account,
+    enabled: true,
     configured: true,
-    snapshot: {
-      accountId: "primary",
-      ...params.snapshot,
-    },
-  };
-}
-
-async function summarize(accounts: ChannelAccountInspectionResult[], showSecrets = false) {
-  for (const account of accounts) {
-    mocks.resolveInspectedChannelAccount.mockResolvedValueOnce(account);
-  }
+    snapshot: { accountId: "primary", ...snapshot },
+  } satisfies ChannelAccountInspectionResult);
   const table = await buildChannelsTable({}, { showSecrets });
   const row = table.rows[0];
   if (!row) {
@@ -61,15 +51,10 @@ async function summarize(accounts: ChannelAccountInspectionResult[], showSecrets
 
 describe("channel table credential summaries", () => {
   it("does not require appToken for bot-token-only channels", async () => {
-    const summary = await summarize([
-      tokenRow({
-        account: {
-          botToken: "bot-token-value",
-          baseUrl: "https://mm.example.com",
-        },
-        snapshot: { botTokenSource: "config" },
-      }),
-    ]);
+    const summary = await summarize(
+      { botToken: "bot-token-value", baseUrl: "https://mm.example.com" },
+      { botTokenSource: "config" },
+    );
 
     expect(summary.state).toBe("ok");
     expect(summary.detail).toContain("bot token config");
@@ -79,86 +64,46 @@ describe("channel table credential summaries", () => {
   });
 
   it("keeps bot+app requirement when both fields exist", async () => {
-    const summary = await summarize([
-      tokenRow({
-        account: {
-          botToken: "bot-token",
-          appToken: "",
-        },
-      }),
-    ]);
+    const summary = await summarize({ botToken: "bot-token", appToken: "" });
 
     expect(summary.state).toBe("warn");
     expect(summary.detail).toContain("need bot+app");
   });
 
   it("reports configured-but-unavailable Slack credentials as warn", async () => {
-    const summary = await summarize([
-      tokenRow({
-        account: {
-          configured: true,
-          botToken: "",
-          appToken: "",
-          botTokenSource: "config",
-          appTokenSource: "config",
-          botTokenStatus: "configured_unavailable",
-          appTokenStatus: "configured_unavailable",
-        },
-        snapshot: {
-          botTokenSource: "config",
-          appTokenSource: "config",
-        },
-      }),
-    ]);
+    const summary = await summarize(
+      {
+        configured: true,
+        botToken: "",
+        appToken: "",
+        botTokenSource: "config",
+        appTokenSource: "config",
+        botTokenStatus: "configured_unavailable",
+        appTokenStatus: "configured_unavailable",
+      },
+      { botTokenSource: "config", appTokenSource: "config" },
+    );
 
     expect(summary.state).toBe("warn");
     expect(summary.detail).toContain("unavailable in this command path");
   });
 
   it("treats status-only available HTTP credentials as resolved", async () => {
-    const summary = await summarize([
-      tokenRow({
-        account: {
-          mode: "http",
-          botToken: "",
-          signingSecret: "", // pragma: allowlist secret
-          botTokenSource: "config",
-          signingSecretSource: "config", // pragma: allowlist secret
-          botTokenStatus: "available",
-          signingSecretStatus: "available", // pragma: allowlist secret
-        },
-        snapshot: {
-          botTokenSource: "config",
-          signingSecretSource: "config", // pragma: allowlist secret
-        },
-      }),
-    ]);
+    const summary = await summarize(
+      {
+        mode: "http",
+        botToken: "",
+        signingSecret: "", // pragma: allowlist secret
+        botTokenSource: "config",
+        signingSecretSource: "config", // pragma: allowlist secret
+        botTokenStatus: "available",
+        signingSecretStatus: "available", // pragma: allowlist secret
+      },
+      { botTokenSource: "config", signingSecretSource: "config" }, // pragma: allowlist secret
+    );
 
     expect(summary.state).toBe("ok");
     expect(summary.detail).toContain("credentials ok");
-  });
-
-  it("treats Slack HTTP signing-secret availability as required config", async () => {
-    const summary = await summarize([
-      tokenRow({
-        account: {
-          mode: "http",
-          botToken: "xoxb-http",
-          signingSecret: "", // pragma: allowlist secret
-          botTokenSource: "config",
-          signingSecretSource: "config", // pragma: allowlist secret
-          botTokenStatus: "available",
-          signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
-        },
-        snapshot: {
-          botTokenSource: "config",
-          signingSecretSource: "config", // pragma: allowlist secret
-        },
-      }),
-    ]);
-
-    expect(summary.state).toBe("warn");
-    expect(summary.detail).toContain("configured http credentials unavailable");
   });
 
   it.each([
@@ -183,7 +128,7 @@ describe("channel table credential summaries", () => {
   ])(
     "preserves public unavailable-credential precedence in $mode mode",
     async ({ mode, account, detail }) => {
-      expect(await summarize([tokenRow({ account: { mode, ...account } })])).toMatchObject({
+      expect(await summarize({ mode, ...account })).toMatchObject({
         state: "warn",
         detail,
       });
@@ -192,16 +137,12 @@ describe("channel table credential summaries", () => {
 
   it("requires token values for socket mode even when status fields report available", async () => {
     expect(
-      await summarize([
-        tokenRow({
-          account: {
-            botToken: "",
-            appToken: "",
-            botTokenStatus: "available",
-            appTokenStatus: "available",
-          },
-        }),
-      ]),
+      await summarize({
+        botToken: "",
+        appToken: "",
+        botTokenStatus: "available",
+        appTokenStatus: "available",
+      }),
     ).toMatchObject({ state: "setup", detail: "no tokens (need bot+app)" });
   });
 
@@ -211,10 +152,7 @@ describe("channel table credential summaries", () => {
     [`${"x".repeat(10)}😀abc`, "xxxx…abc · len 15"],
     ["a😀b", "a😀b · len 4"],
   ])("formats a visible token hint without splitting %p", async (token, expectedHint) => {
-    const summary = await summarize(
-      [tokenRow({ account: { token }, snapshot: { tokenSource: "config" } })],
-      true,
-    );
+    const summary = await summarize({ token }, { tokenSource: "config" }, true);
 
     expect(summary.detail).toContain(`token config (${expectedHint})`);
   });

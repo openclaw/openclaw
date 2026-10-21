@@ -17,25 +17,20 @@ import {
 import { createTestConfigSnapshot } from "../test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  renderTable: vi.fn<typeof import("../../../packages/terminal-core/src/table.js").renderTable>(
-    ({ rows }) => rows.map((row) => Object.values(row).join(": ")).join("\n"),
-  ),
+  renderTable: vi.fn<typeof import("../../../packages/terminal-core/src/table.js").renderTable>(),
   collectStatusScanOverview: vi.fn(),
   resolveStatusServiceSummaries: vi.fn(),
   resolveNodeOnlyGatewayInfo: vi.fn(),
   progress: { setLabel: vi.fn(), tick: vi.fn(), setPercent: vi.fn(), done: vi.fn() },
-  history: vi.fn<typeof import("../../infra/update-run-reader.js").getUpdateRunHistoryStatusAsync>(
-    async () => ({}),
-  ),
+  history:
+    vi.fn<typeof import("../../infra/update-run-reader.js").getUpdateRunHistoryStatusAsync>(),
   getUpdateRun: vi.fn<(runId: string) => UpdateRunRecord | undefined>(),
-  readRestartSentinelReadOnly: vi.fn<() => Promise<{ payload: RestartSentinelPayload } | null>>(
-    async () => null,
-  ),
+  readRestartSentinelReadOnly: vi.fn<() => Promise<{ payload: RestartSentinelPayload } | null>>(),
   buildStatusAllOverviewRows: vi.fn<
     typeof import("../status-overview-rows.ts").buildStatusAllOverviewRows
   >(() => []),
   readConfigFileSnapshot: vi.fn<typeof import("../../config/config.js").readConfigFileSnapshot>(),
-  inspectPortUsage: vi.fn<() => Promise<PortUsage | null>>(async () => null),
+  inspectPortUsage: vi.fn<() => Promise<PortUsage | null>>(),
   resolveGatewayBindHost: vi.fn(async () => "127.0.0.1"),
   resolveStatusGatewayDiagnosticsSafe:
     vi.fn<typeof import("../status-runtime-shared.ts").resolveStatusGatewayDiagnosticsSafe>(),
@@ -43,17 +38,16 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../status-runtime-shared.ts").resolveStatusGatewayHealthSafe>(),
   resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
   loadExecApprovalsReadOnly: vi.fn(() => ({ version: 1, agents: {} })),
-  buildWorkspaceSkillReadiness: vi.fn<
-    typeof import("../../skills/discovery/status.js").buildWorkspaceSkillReadiness
-  >(() => ({ workspaceDir: "/tmp/mock-skills", eligible: 0, missing: 0 })),
+  buildWorkspaceSkillReadiness:
+    vi.fn<typeof import("../../skills/discovery/status.js").buildWorkspaceSkillReadiness>(),
   resolveStatusSummaryFromOverview: vi.fn(async (_params: unknown) => ({})),
   resolveStatusAllConnectionDetails: vi.fn(() => ""),
   resolveGatewayLogPaths:
     vi.fn<typeof import("../../daemon/restart-logs.js").resolveGatewayLogPaths>(),
   resolveGatewaySupervisorLogPaths:
     vi.fn<typeof import("../../daemon/restart-logs.js").resolveGatewaySupervisorLogPaths>(),
-  resolveGatewayRestartLogPath: vi.fn(() => "/tmp/fixture-restart.log"),
-  readFileTailLines: vi.fn<typeof import("./gateway.js").readFileTailLines>(async () => []),
+  resolveGatewayRestartLogPath: vi.fn<() => string>(),
+  readFileTailLines: vi.fn<typeof import("./gateway.js").readFileTailLines>(),
 }));
 
 export { mocks };
@@ -252,7 +246,5 @@ export function setupStatusAllReportTest() {
     mocks.resolveStatusGatewayHealthSafe.mockReset().mockResolvedValue(createStatusHealth());
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.restoreAllMocks());
 }
