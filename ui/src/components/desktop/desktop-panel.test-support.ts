@@ -47,15 +47,15 @@ export function createConnectionHandle(overrides: Partial<DesktopConnectionHandl
   } satisfies DesktopConnectionHandle;
 }
 
-function query<T extends Element>(panel: Panel, selector: string): T {
-  return expectDefined(panel.querySelector<T>(selector), `Desktop element: ${selector}`);
-}
-
 export function clickPanelButton(panel: Panel, selector = ".desktop-environment button") {
-  query<HTMLButtonElement>(panel, selector).click();
+  expectDefined(
+    panel.querySelector<HTMLButtonElement>(selector),
+    `Desktop element: ${selector}`,
+  ).click();
 }
 
-export const sizingMenu = (panel: Panel) => query<HTMLSelectElement>(panel, ".desktop-sizing");
+export const sizingMenu = (panel: Panel) =>
+  expectDefined(panel.querySelector<HTMLSelectElement>(".desktop-sizing"), "Desktop sizing menu");
 
 export function selectSizing(panel: Panel, mode: string): void {
   const menu = sizingMenu(panel);

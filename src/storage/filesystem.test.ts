@@ -10,7 +10,11 @@ const backends: StorageBackend[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     try {
-      await Promise.all(backends.splice(0).map((backend) => backend.close?.()));
+      await Promise.all(
+        backends.splice(0).map(async (backend) => {
+          await backend.close?.();
+        }),
+      );
     } finally {
       cleanup();
     }
