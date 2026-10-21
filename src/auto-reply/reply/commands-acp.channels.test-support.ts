@@ -1,4 +1,3 @@
-import type { ChannelCommandConversationContext } from "../../channels/plugins/types.adapters.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -6,45 +5,41 @@ import {
 } from "../../test-utils/channel-plugins.js";
 
 type Conversation = { conversationId: string; parentConversationId?: string };
-type Resolver = (params: ChannelCommandConversationContext) => Conversation | null;
-
-function commandTarget({
-  originatingTo,
-  commandTo,
-  fallbackTo,
-}: ChannelCommandConversationContext) {
-  return [originatingTo, commandTo, fallbackTo].find((target) => target?.trim())?.trim();
-}
-
-function channel<T extends object>(id: string, label: string, resolve: Resolver, extra: T) {
+function channel<T extends object>(
+  id: string,
+  conversations: Record<string, Conversation>,
+  extra: T,
+) {
   return {
     pluginId: id,
     source: "test",
     plugin: {
-      ...createChannelTestPluginBase({ id, label }),
-      bindings: { resolveCommandConversation: resolve },
+      ...createChannelTestPluginBase({ id }),
+      bindings: {
+        resolveCommandConversation: (params: { originatingTo?: string; threadId?: string }) =>
+          conversations[`${params.originatingTo}/${params.threadId ?? ""}`] ?? null,
+      },
       ...extra,
     },
   };
 }
 
-// These adapters cover the synthetic conversation shapes used by this suite;
-// channel parsers and command-context precedence have their own owner tests.
+// Fixed adapter outputs, not copies of channel parsers. The context owner tests
+// cover which command/message facts reach a plugin; these tests consume its result.
 export function setMinimalAcpCommandRegistryForTests(): void {
   setActivePluginRegistry(
     createTestRegistry([
       channel(
         "telegram",
-        "Telegram",
-        (params) => {
-          const chatId = commandTarget(params)?.replace(/^telegram:/i, "");
-          if (!chatId || (!params.threadId && chatId.startsWith("-"))) {
-            return null;
-          }
-          return {
-            conversationId: params.threadId ? `${chatId}:topic:${params.threadId}` : chatId,
-            parentConversationId: chatId,
-          };
+        {
+          "telegram:-1003841603622/498": {
+            conversationId: "-1003841603622:topic:498",
+            parentConversationId: "-1003841603622",
+          },
+          "telegram:123456789/": {
+            conversationId: "123456789",
+            parentConversationId: "123456789",
+          },
         },
         {
           conversationBindings: {
@@ -56,7 +51,8 @@ export function setMinimalAcpCommandRegistryForTests(): void {
               operation: "acp-spawn";
               conversation: Conversation;
             }) =>
-              operation === "acp-spawn" && conversation.conversationId.includes(":topic:")
+              operation === "acp-spawn" &&
+              conversation.conversationId === "-1003841603622:topic:498"
                 ? { delivery: { pin: { enabled: true } } }
                 : null,
           },
@@ -64,41 +60,17 @@ export function setMinimalAcpCommandRegistryForTests(): void {
       ),
       channel(
         "discord",
-        "Discord",
-        (params) => {
-          const target = commandTarget(params);
-          const parent = target?.startsWith("channel:") ? target : undefined;
-          return params.threadId
-            ? {
-                conversationId: params.threadId,
-                ...(parent ? { parentConversationId: parent } : {}),
-              }
-            : parent
-              ? { conversationId: parent }
-              : null;
+        {
+          "channel:parent-1/": { conversationId: "channel:parent-1" },
+          "channel:parent-1/thread-1": {
+            conversationId: "thread-1",
+            parentConversationId: "channel:parent-1",
+          },
         },
         { conversationBindings: { defaultTopLevelPlacement: "child" } },
       ),
-      channel(
-        "slack",
-        "Slack",
-        (params) => {
-          const conversationId = commandTarget(params);
-          return conversationId ? { conversationId } : null;
-        },
-        {},
-      ),
-      channel(
-        "matrix",
-        "Matrix",
-        (params) => {
-          const roomId = commandTarget(params)?.replace(/^room:/i, "");
-          return params.threadId && roomId
-            ? { conversationId: params.threadId, parentConversationId: roomId }
-            : null;
-        },
-        { conversationBindings: { defaultTopLevelPlacement: "child" } },
-      ),
+      channel("slack", { "user:U123/": { conversationId: "user:U123" } }, {}),
+      channel("matrix", {}, { conversationBindings: { defaultTopLevelPlacement: "child" } }),
     ]),
   );
 }

@@ -44,36 +44,34 @@ const hoisted = vi.hoisted(() => ({
   runTurnMock: vi.fn(),
   cancelMock: vi.fn(),
   closeMock: vi.fn(),
-  getCapabilitiesMock: vi.fn(),
   getStatusMock: vi.fn(),
   setModeMock: vi.fn(),
   setConfigOptionMock: vi.fn(),
   updateSessionRuntimeOptionsMock: vi.fn(),
   updateSessionEntryMock:
     vi.fn<typeof import("../../config/sessions/session-accessor.js").updateSessionEntry>(),
-  doctorMock: vi.fn(),
 }));
 
 vi.mock("../../acp/control-plane/spawn.js", () => ({
-  cleanupFailedAcpSpawn: (args: unknown) => hoisted.cleanupFailedAcpSpawnMock(args),
+  cleanupFailedAcpSpawn: hoisted.cleanupFailedAcpSpawnMock,
 }));
 
 vi.mock("../../gateway/call.js", () => ({
-  callGateway: (args: unknown) => hoisted.callGatewayMock(args),
+  callGateway: hoisted.callGatewayMock,
 }));
 
 vi.mock("../../acp/runtime/registry.js", () => ({
-  requireAcpRuntimeBackend: (id?: string) => hoisted.requireAcpRuntimeBackendMock(id),
-  getAcpRuntimeBackend: (id?: string) => hoisted.getAcpRuntimeBackendMock(id),
+  requireAcpRuntimeBackend: hoisted.requireAcpRuntimeBackendMock,
+  getAcpRuntimeBackend: hoisted.getAcpRuntimeBackendMock,
 }));
 
 vi.mock("../../acp/runtime/session-meta.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../acp/runtime/session-meta.js")>()),
-  listAcpSessionEntries: (args: unknown) => hoisted.listAcpSessionEntriesMock(args),
-  readAcpSessionEntry: (args: unknown) => hoisted.readAcpSessionEntryMock(args),
+  listAcpSessionEntries: hoisted.listAcpSessionEntriesMock,
+  readAcpSessionEntry: hoisted.readAcpSessionEntryMock,
   readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsyncMock,
-  upsertAcpSessionMeta: (args: unknown) => hoisted.upsertAcpSessionMetaMock(args),
-  resolveSessionStorePathForAcp: (args: unknown) => hoisted.resolveSessionStorePathForAcpMock(args),
+  upsertAcpSessionMeta: hoisted.upsertAcpSessionMetaMock,
+  resolveSessionStorePathForAcp: hoisted.resolveSessionStorePathForAcpMock,
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
@@ -154,11 +152,6 @@ const runtimeBackend = {
   runtime: {
     ensureSession: hoisted.ensureSessionMock,
     runTurn: hoisted.runTurnMock,
-    getCapabilities: hoisted.getCapabilitiesMock,
-    getStatus: hoisted.getStatusMock,
-    setMode: hoisted.setModeMock,
-    setConfigOption: hoisted.setConfigOptionMock,
-    doctor: hoisted.doctorMock,
     cancel: hoisted.cancelMock,
     close: hoisted.closeMock,
   },
@@ -328,9 +321,6 @@ describe("/acp command", () => {
     });
     hoisted.cancelMock.mockResolvedValue(undefined);
     hoisted.closeMock.mockResolvedValue({ runtimeClosed: true, metaCleared: true });
-    hoisted.getCapabilitiesMock.mockResolvedValue({
-      controls: ["session/set_mode", "session/set_config_option", "session/status"],
-    });
     hoisted.getStatusMock.mockResolvedValue({
       summary: "status=alive sessionId=sid-1 pid=1234",
       details: { status: "alive", sessionId: "sid-1", pid: 1234 },
@@ -338,10 +328,6 @@ describe("/acp command", () => {
     hoisted.setModeMock.mockResolvedValue(undefined);
     hoisted.setConfigOptionMock.mockResolvedValue(undefined);
     hoisted.updateSessionRuntimeOptionsMock.mockResolvedValue(undefined);
-    hoisted.doctorMock.mockResolvedValue({
-      ok: true,
-      message: "acpx command available",
-    });
 
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue(runtimeBackend);
     hoisted.getAcpRuntimeBackendMock.mockReturnValue(runtimeBackend);
@@ -923,16 +909,7 @@ describe("/acp command", () => {
     expect(hoisted.listAcpSessionEntriesMock).not.toHaveBeenCalled();
   });
 
-  it("tolerates Date-invalid ACP status timestamps", async () => {
-    mockBoundThreadSession({ acp: { lastActivityAt: 8_700_000_000_000_000 } });
-
-    const result = await runThreadAcpCommand("/acp status", baseCfg);
-
-    expectReplyText(result, "ACP status:", "lastActivityAt: n/a");
-    expect(result?.reply?.text).not.toContain("taskUpdatedAt:");
-  });
-
-  it("sanitizes leaked task and runtime details in ACP status output", async () => {
+  it("renders invalid timestamps and sanitizes leaked task and runtime details in ACP status", async () => {
     const leakedDetails = [
       "OpenClaw runtime context (internal):",
       "This context is runtime-generated, not user-authored. Keep internal details private.",
@@ -942,6 +919,7 @@ describe("/acp command", () => {
     ].join("\n");
     mockBoundThreadSession({
       acp: {
+        lastActivityAt: 8_700_000_000_000_000,
         identity: {
           state: "resolved",
           source: "status",
@@ -964,6 +942,8 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("agent session id: codex-sid-1");
     expect(result?.reply?.text).toContain("acpx session id: acpx-sid-1");
     expect(result?.reply?.text).toContain("capabilities:");
+    expect(result?.reply?.text).toContain("lastActivityAt: n/a");
+    expect(result?.reply?.text).not.toContain("taskUpdatedAt:");
     expect(result?.reply?.text).not.toContain("OpenClaw runtime context (internal):");
     expect(result?.reply?.text).not.toContain("Internal task completion event");
     expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
@@ -995,26 +975,26 @@ describe("/acp command", () => {
     }
   });
 
-  it("updates ACP config options and keeps cwd local when using /acp set", async () => {
-    mockBoundThreadSession();
-
-    const setModel = await runThreadAcpCommand("/acp set model gpt-5.4", baseCfg);
-    expectMockCallFields(hoisted.setConfigOptionMock, {
-      key: "model",
-      value: "gpt-5.4",
-    });
-    expect(setModel?.reply?.text).toContain("Updated ACP config option");
-
-    hoisted.setConfigOptionMock.mockClear();
-    const setCwd = await runThreadAcpCommand("/acp set cwd /tmp/worktree", baseCfg);
-    expect(hoisted.setConfigOptionMock).not.toHaveBeenCalled();
-    expect(setCwd?.reply?.text).toContain("Updated ACP cwd");
-  });
-
   it.each([
     {
+      action: "set model",
+      value: "gpt-5.4",
+      effectiveOptions: { model: "gpt-5.4" },
+      managerMock: hoisted.setConfigOptionMock,
+      managerInput: { key: "model", value: "gpt-5.4" },
+      expectedText: `✅ Updated ACP config option for ${defaultAcpSessionKey}: model=gpt-5.4. Effective options: model=gpt-5.4`,
+    },
+    {
+      action: "set cwd",
+      value: "/tmp/worktree",
+      effectiveOptions: { cwd: "/tmp/worktree" },
+      managerMock: hoisted.updateSessionRuntimeOptionsMock,
+      managerInput: { patch: { cwd: "/tmp/worktree" } },
+      expectedText: `✅ Updated ACP cwd for ${defaultAcpSessionKey}: /tmp/worktree. Effective options: cwd=/tmp/worktree`,
+    },
+    {
       action: "cwd",
-      command: "/acp cwd /tmp/worktree",
+      value: "/tmp/worktree",
       effectiveOptions: { cwd: "/tmp/worktree" },
       managerMock: hoisted.updateSessionRuntimeOptionsMock,
       managerInput: { patch: { cwd: "/tmp/worktree" } },
@@ -1022,7 +1002,7 @@ describe("/acp command", () => {
     },
     {
       action: "permissions",
-      command: "/acp permissions approve-all",
+      value: "approve-all",
       effectiveOptions: { permissionProfile: "approve-all" },
       managerMock: hoisted.setConfigOptionMock,
       managerInput: { key: "approval_policy", value: "approve-all" },
@@ -1030,17 +1010,17 @@ describe("/acp command", () => {
     },
     {
       action: "timeout",
-      command: "/acp timeout 120",
+      value: "120",
       effectiveOptions: { timeoutSeconds: 120 },
       managerMock: hoisted.setConfigOptionMock,
       managerInput: { key: "timeout", value: "120" },
       expectedText: `✅ Updated ACP timeout for ${defaultAcpSessionKey}: 120s. Effective options: timeoutSeconds=120`,
     },
-  ])("updates ACP $action through the dedicated runtime-option action", async (testCase) => {
+  ])("routes ACP $action to its runtime-option owner", async (testCase) => {
     mockBoundThreadSession();
     testCase.managerMock.mockResolvedValueOnce(testCase.effectiveOptions);
 
-    const result = await runThreadAcpCommand(testCase.command, baseCfg);
+    const result = await runThreadAcpCommand(`/acp ${testCase.action} ${testCase.value}`, baseCfg);
 
     expect(result?.reply?.text).toBe(testCase.expectedText);
     expectMockCallFields(testCase.managerMock, {
