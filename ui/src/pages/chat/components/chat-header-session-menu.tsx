@@ -137,7 +137,7 @@ function ChatHeaderSessionMenuContent(
   const preparation = () => liveProps.prewarm;
   const presented = () => open() || (liveProps.mobilePageOpen ?? false);
   const presentation = createParkedProjection(() => ({ ...liveProps }), presented, preparation);
-  const props = createProjection(presentation, {}, { key: "id" });
+  const props = createProjection(presentation, undefined, { key: "id" });
   const controls = createMenuControls();
   let menu: MenuHandle | undefined;
   let stopShortcut: (() => void) | undefined;

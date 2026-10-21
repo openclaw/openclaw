@@ -54,6 +54,7 @@ function hostOptions(frame: HTMLIFrameElement, overrides: Partial<HostOptions> =
   return {
     frame,
     widget: widget(),
+    documentActive: true,
     sandboxOrigin: "https://sandbox.example",
     sandboxUrl: SANDBOX_URL,
     sourceOrigin: "https://gateway.example",
@@ -186,6 +187,23 @@ afterEach(() => {
 });
 
 describe("BoardWidgetSandboxHost", () => {
+  it("loads a ticketed document before connecting without accepting bridge requests", async () => {
+    const client = { request: vi.fn(async () => ({ ok: true })) };
+    const { frame, host, options, fetchMock } = await readyHost({ connected: false, client });
+    onTestFinished(() => host.dispose());
+    const channel = new MessageChannel();
+    onTestFinished(() => channel.port2.close());
+    channel.port2.start();
+    sendWindowMessage(host, frame, { type: "openclaw:widget-bridge-port-offer" }, [channel.port1]);
+
+    await expect(
+      sendBridgeRequest(channel.port2, bridgeRequest("before-hello")),
+    ).resolves.toMatchObject({ ok: false, error: "Gateway unavailable" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(options.onLoaded).toHaveBeenCalledOnce();
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
   it("fetches ticketed HTML while the proxy starts and delivers it only after readiness", async () => {
     const { frame, host, options, fetchMock, postMessage } = createHost({
       client: { request: vi.fn(async () => ({ ok: true })) },
@@ -460,7 +478,7 @@ describe("BoardWidgetSandboxHost", () => {
       bridgePort.postMessage(bridgeRequest("old-client"), []);
       await vi.waitFor(() => expect(oldClient.request).toHaveBeenCalledOnce());
       if (change === "reconnected") {
-        host.update({ ...options, connected: false });
+        host.update({ ...options, connected: false, documentActive: false });
       }
       host.update({ ...options, client: newClient, connected: true });
       await vi.waitFor(() =>

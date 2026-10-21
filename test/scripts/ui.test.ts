@@ -438,7 +438,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 export async function runnerImport() {
-  return { module: { refreshControlUiBuildOutput() {}, resolveControlUiBuildInfo() { return {}; } } };
+  return { module: {
+    refreshControlUiBuildOutput(out) { fs.writeFileSync(path.join(out, "index.html"), "refreshed identity"); },
+    resolveControlUiBuildInfo() { return {}; },
+  } };
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const out = process.argv[process.argv.indexOf("--outDir") + 1];
@@ -461,7 +464,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       return result.stdout;
     };
     expect(run()).toContain("fixture-bundler-ran");
+    const cachedHtml = path.join(
+      root,
+      cacheRoot === "explicit" ? "cache" : ".artifacts/build-all-cache",
+      "ui_build/outputs/index.html",
+    );
+    const cachedSource = fs.readFileSync(cachedHtml, "utf8");
     expect(run()).toContain("reused content cache");
+    expect(fs.readFileSync(path.join(root, "dist/control-ui/index.html"), "utf8")).toBe(
+      "refreshed identity",
+    );
+    expect(fs.readFileSync(cachedHtml, "utf8")).toBe(cachedSource);
     const plugin = path.join(root, "extensions/new-board");
     fs.mkdirSync(plugin);
     writeFiles(plugin, {

@@ -20,13 +20,25 @@ beforeAll(() => {
   runner = path.join(scripts, "test-database-conformance.mjs");
   copyFileSync("scripts/test-database-conformance.mjs", runner);
   copyFileSync(
-    "scripts/lib/weighted-test-shards.mts",
-    path.join(scripts, "lib/weighted-test-shards.mts"),
+    "scripts/lib/postgres-conformance-shards.mts",
+    path.join(scripts, "lib/postgres-conformance-shards.mts"),
   );
-  const targetSeconds = Object.fromEntries(
-    engineFiles.map((file, index) => [`src/infra/database-engine/${file}`, 900 - index * 100]),
+  const files = Object.fromEntries(
+    engineFiles.map((file, index) => [
+      `src/infra/database-engine/${file}`,
+      { group: "infra", seconds: 900 - index * 100 },
+    ]),
   );
-  write("../config/postgres-conformance-timings.json", JSON.stringify({ targetSeconds }));
+  write(
+    "../config/postgres-conformance-timings.json",
+    JSON.stringify({
+      files,
+      workers: 1,
+      preparationSeconds: { base: 0, runtime: 0 },
+      groupSeconds: {},
+      runtimeTargets: [],
+    }),
+  );
   for (const file of [
     ...engineFiles.map((engineFile) => `../src/infra/database-engine/${engineFile}`),
     "tsx.mjs",

@@ -3,7 +3,7 @@
 // config form draft so the embedded schema editor below stays in sync.
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { createSignal, onCleanup } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
@@ -281,11 +281,7 @@ export type TalkSettingsPageProps = {
 };
 
 function createTalkSettings(context: ApplicationContext, props: TalkSettingsPageProps) {
-  // Connection setup can publish the initial loading state inside the page owner.
-  const [catalog, setCatalog] = createSignal<TalkCatalogState>(
-    { kind: "unavailable" },
-    { ownedWrite: true },
-  );
+  const [catalog, setCatalog] = createSignal<TalkCatalogState>({ kind: "unavailable" });
   const [modelDefaultResetIntent, setModelDefaultResetIntent] =
     createSignal<ModelDefaultResetIntent | null>(null);
   let connectionValue: CatalogConnection | null = null;
@@ -526,20 +522,22 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       runtimeConfig.removeFormValue(["talk", "realtime", "consultRouting"]);
     }
   }
-  const stops = [
-    // Retire catalog reads on every connection transition, even within one render.
-    context.gateway.subscribe(() => syncCatalog(catalogConnection(context.gateway))),
-    // Config receipts acknowledge model resets and admit a fresh catalog read.
-    context.runtimeConfig.subscribe(() =>
-      refreshCatalogOnConfigChange(context.runtimeConfig.state),
-    ),
-    listen(window, "focus", refreshOnFocus),
-  ];
-  syncCatalog(catalogConnection(context.gateway));
-  refreshCatalogOnConfigChange(context.runtimeConfig.state);
-  onCleanup(() => {
-    stops.forEach((stop) => stop());
-    connectionValue = null;
+  onSettled(() => {
+    const stops = [
+      // Retire catalog reads on every connection transition, even within one render.
+      context.gateway.subscribe(() => syncCatalog(catalogConnection(context.gateway))),
+      // Config receipts acknowledge model resets and admit a fresh catalog read.
+      context.runtimeConfig.subscribe(() =>
+        refreshCatalogOnConfigChange(context.runtimeConfig.state),
+      ),
+      listen(window, "focus", refreshOnFocus),
+    ];
+    syncCatalog(catalogConnection(context.gateway));
+    refreshCatalogOnConfigChange(context.runtimeConfig.state);
+    return () => {
+      connectionValue = null;
+      stops.forEach((stop) => stop());
+    };
   });
   return { catalog, modelDefaultResetIntent, changeModel, changeVoice, changeProvider };
 }
@@ -553,9 +551,7 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
   const device = context.nativeDeviceSettings
     ? projectNativeDeviceSettings(context.nativeDeviceSettings)
     : undefined;
-  onCleanup(() => {
-    voiceWake.flush();
-  });
+  onSettled(() => () => voiceWake.flush());
   return (
     <openclaw-talk-settings>
       <Talk

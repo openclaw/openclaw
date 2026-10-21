@@ -6,6 +6,7 @@ import { GCProfiler, getHeapStatistics } from "node:v8";
 import workerThreads, {
   isMainThread,
   MessagePort,
+  parentPort,
   threadId,
   type Transferable,
 } from "node:worker_threads";
@@ -139,47 +140,95 @@ if (
     }
   };
   const observed = new WeakSet<MessagePort>();
-  // Keep the original receiver when the benchmark forwards through call/apply.
-  // oxlint-disable-next-line typescript/unbound-method
-  const on = MessagePort.prototype.on;
-  MessagePort.prototype.on = function (...args: Parameters<MessagePort["on"]>) {
-    if (args[0] === "message" && !observed.has(this)) {
-      observed.add(this);
-      on.call(this, "message", (message: unknown) => {
-        if (
-          !message ||
-          typeof message !== "object" ||
-          !("input" in message) ||
-          "responseId" in message ||
-          !("taskId" in message) ||
-          typeof message.taskId !== "number"
-        ) {
-          return;
-        }
-        const input = message.input;
-        if (
-          !input ||
-          typeof input !== "object" ||
-          !("kind" in input) ||
-          typeof input.kind !== "string"
-        ) {
-          return;
-        }
-        drainGc();
-        const before = sample();
-        active = {
-          taskId: message.taskId,
-          kind: kinds.has(input.kind) ? input.kind : "other",
-          startedAt: performance.now(),
-          before,
-          observedPeakHeapUsed: before.heapUsed,
-          parsedBytes: 0,
-          majorGcCount: 0,
-        };
-      });
+  const observePort = (port: MessagePort) => {
+    if (observed.has(port)) {
+      return;
     }
-    return on.apply(this, args);
+    observed.add(port);
+    port.on("message", (message: unknown) => {
+      if (
+        !message ||
+        typeof message !== "object" ||
+        !("input" in message) ||
+        "responseId" in message ||
+        !("taskId" in message) ||
+        typeof message.taskId !== "number"
+      ) {
+        return;
+      }
+      const input = message.input;
+      if (
+        !input ||
+        typeof input !== "object" ||
+        !("kind" in input) ||
+        typeof input.kind !== "string"
+      ) {
+        return;
+      }
+      drainGc();
+      const before = sample();
+      active = {
+        taskId: message.taskId,
+        kind: kinds.has(input.kind) ? input.kind : "other",
+        startedAt: performance.now(),
+        before,
+        observedPeakHeapUsed: before.heapUsed,
+        parsedBytes: 0,
+        majorGcCount: 0,
+      };
+    });
+    const post = port.postMessage.bind(port);
+    port.postMessage = (
+      ...args: [
+        message: unknown,
+        options?: Parameters<MessagePort["postMessage"]>[1] | Transferable[],
+      ]
+    ) => {
+      const message: unknown = args[0];
+      if (
+        active &&
+        message &&
+        typeof message === "object" &&
+        "taskId" in message &&
+        message.taskId === active.taskId &&
+        "status" in message &&
+        (message.status === "ok" || message.status === "failed")
+      ) {
+        drainGc();
+        const after = sample();
+        write({
+          kind: active.kind,
+          status: message.status,
+          elapsedMs: performance.now() - active.startedAt,
+          before: active.before,
+          after,
+          observedPeakHeapUsed: Math.max(active.observedPeakHeapUsed, after.heapUsed),
+          parsedBytes: active.parsedBytes,
+          majorGcCount: active.majorGcCount,
+          postMajorGcOldGenerationBytes: active.postMajorGcOldGenerationBytes,
+        });
+        active = undefined;
+      }
+      return Reflect.apply(post, undefined, args);
+    };
   };
+  // Observe the startup port before the worker entry attaches its listener, then
+  // follow the task port it transfers. Each native method keeps its own receiver.
+  if (parentPort) {
+    observePort(parentPort);
+    parentPort.on("message", (message: unknown) => {
+      if (
+        message &&
+        typeof message === "object" &&
+        "type" in message &&
+        message.type === "openclaw.worker-task-port" &&
+        "port" in message &&
+        message.port instanceof MessagePort
+      ) {
+        observePort(message.port);
+      }
+    });
+  }
   const parse = JSON.parse;
   JSON.parse = function (...args: [text: string, reviver?: Parameters<typeof JSON.parse>[1]]) {
     const value = Reflect.apply(parse, undefined, args);
@@ -191,42 +240,6 @@ if (
       );
     }
     return value;
-  };
-  // Keep the original receiver when the benchmark forwards through apply.
-  // oxlint-disable-next-line typescript/unbound-method
-  const post = MessagePort.prototype.postMessage;
-  MessagePort.prototype.postMessage = function (
-    ...args: [
-      message: unknown,
-      options?: Parameters<MessagePort["postMessage"]>[1] | Transferable[],
-    ]
-  ) {
-    const message: unknown = args[0];
-    if (
-      active &&
-      message &&
-      typeof message === "object" &&
-      "taskId" in message &&
-      message.taskId === active.taskId &&
-      "status" in message &&
-      (message.status === "ok" || message.status === "failed")
-    ) {
-      drainGc();
-      const after = sample();
-      write({
-        kind: active.kind,
-        status: message.status,
-        elapsedMs: performance.now() - active.startedAt,
-        before: active.before,
-        after,
-        observedPeakHeapUsed: Math.max(active.observedPeakHeapUsed, after.heapUsed),
-        parsedBytes: active.parsedBytes,
-        majorGcCount: active.majorGcCount,
-        postMajorGcOldGenerationBytes: active.postMajorGcOldGenerationBytes,
-      });
-      active = undefined;
-    }
-    return Reflect.apply(post, this, args);
   };
   setInterval(() => {
     drainGc();

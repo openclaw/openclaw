@@ -1511,6 +1511,82 @@ production services. Stop your own Gateway, then remove your sandbox after
 recording results. Local validation is limited to changed-file format/lint and
 focused tests; PR CI owns broad gates.
 
+## Operator authority allocations
+
+`operator-authority-measure.ts` isolates five real synchronous authority owners:
+`auth-policy`, `retained-grant`, `model-execution`, `admitted-run`, and
+`transcript-guard`. Its synthetic non-owner operator has an explicitly required
+access-policy plugin, registered
+through `createApi(...).registerGatewayAccessPolicy(...)` with the normal plugin
+instance invocation wrappers. Setup authorizes and resumes the grant once;
+rechecks use the retained authority, as the recovery owner does. The fixture
+exposes no other plugin runtime capabilities and starts no Gateway or services.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/operator-authority-measure.ts \
+  --scenario model-execution --iterations 20000 --warmup 5000 \
+  --revision <commit-sha> --output /path/to/authority.json
+```
+
+The JSON records estimated allocated bytes per check, elapsed and main-thread CPU
+nanoseconds per check, and auth-policy, resume-owner, plugin-authorize,
+plugin-resume, and plugin-assert counts. Setup and warmup are excluded. Allocation
+uses V8 sampling at 32 KiB with both collected-object flags enabled; the report
+is allocation churn, not retained-heap delta. Raw profiles accompany `--output`,
+and the report includes the fifteen largest allocation sites with eight-frame
+stacks. A post-capture positive control requires grant revocation to fail the
+very next retained-authority check.
+
+Use at least five simultaneous baseline/candidate pairs on the approved
+benchmark host, with one `--scenario` and the same future `--start-at <epoch-ms>`
+per pair. Alternate the assigned CPU halves under the exclusive measurement
+lock. Compare median paired differences with spread; warm both sides identically.
+Builds belong outside the measurement window. The source can also be bundled
+with esbuild for the host, preserving Node built-ins and installed dependencies;
+use the same bundler options and dependency tree for both revisions.
+
+These are owner-check denominators. `model-execution` calls the real bound model
+assertion; `admitted-run` uses `prepareSystemAgentRunAdmission`, admission, and the
+real admitted-run active assertion. `transcript-guard` captures the real owned
+transcript assertion with that admitted run as its commit guard, without writing
+storage. None is a model turn, tool step, transcript append, or measured production
+frequency. Derive those counts from an instrumented
+Gateway turn separately. This probe does not include profile-database access,
+other access policies, contextual-ingress callbacks, or transport allocation.
+
+For real turn counts, add `--operator-access-policy` to the existing streaming
+driver's `chat.send --stress-tools` scenario. A small isolated fixture is enough
+to exercise this path before the larger deployment-shaped comparison:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
+  --state-dir /path/to/new-authority-state --sessions 1 --runs 0 --approvals 0 \
+  --cron 0 --projects 1 --transcript-mib 1 --port 41481
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/new-authority-state --entry src/entry.ts \
+  --port 41481 --mock-port 41482 --scenario chat.send --stress-tools \
+  --operator-access-policy --rounds 1 --chunks 10 --chunk-interval-ms 1
+```
+
+This option enables a synthetic required access-policy plugin and authenticates
+a non-owner operator through a loopback trusted proxy. The plugin rejects owner
+identity, checks the synthetic email, and records live authorize, resume, and
+assert callbacks. The normal code-mode tool runs `read` and `exec` against the
+fixture. Each measured round reports plugin assertions per completed turn, per
+`after_tool_call` completion, and per unique committed message sequence observed
+through `onSessionTranscriptUpdate`. Raw transcript-update counts are separate:
+they are not all transcript writes or synchronous precommit checks. These ratios
+normalize the full turn window; they do not attribute each check to one tool or
+append. Standalone host auth-policy invocations are not counted by the plugin.
+
+The mode permits only `chat.send --stress-tools`, with its one client and one
+active turn, and rejects background RPC polling. Counter start/stop uses private
+child IPC outside allocation capture. Add `--allocations` for whole-workload
+sampled bytes divided by policy assertions; this includes normal turn work and
+counter hooks, and is not isolated bytes allocated by one assertion. Use matched
+instrumentation and the same paired host procedure for comparisons. The tiny
+fixture proves the path, not deployment capacity or production recheck rates.
+
 ## Allocated bytes per RPC or turn
 
 Use the same owned Gateway driver with `--allocations` and a named `--scenario`:

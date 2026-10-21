@@ -73,7 +73,6 @@ overrides:
   "@anthropic-ai/vertex-sdk@0.20.4>google-auth-library": 11.3.0
   "@opentelemetry/core": 2.12.0
   "@opentelemetry/propagator-jaeger": 2.12.0
-  "@solidjs/vite-plugin@3.0.0-next.49>@solidjs/babel-plugin": 2.0.0-rc.14
   "@aws-sdk/core": 3.978.3
   "@aws-sdk/credential-provider-node": 3.972.86
   "@aws-sdk/xml-builder": 3.972.41

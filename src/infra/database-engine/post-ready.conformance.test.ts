@@ -9,7 +9,10 @@ import { makeStore } from "../../cron/store.test-support.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { getCanonicalUserPreferences } from "../../state/user-preferences.js";
+import {
+  getCanonicalUserPreferences,
+  setCanonicalUserPreferences,
+} from "../../state/user-preferences.js";
 import { setAvatar } from "../../state/user-profile-writes.worker.js";
 import { createProfileAvatarReader } from "../../state/user-profiles-avatar.js";
 import { ensureUserProfileRoleSchema } from "../../state/user-profiles-schema.js";
@@ -23,7 +26,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
   (engine) => {
     const fixture = useMixedAgentPair(engine, engine);
 
-    it("reads operator preferences with absent and binary profile avatars", async () => {
+    it("reads and updates operator preferences with absent and binary profile avatars", async () => {
       const profile = admit(() => {
         const owner = ensureGatewayOwnerProfile("Synthetic operator");
         ensureUserProfileRoleSchema({});
@@ -36,6 +39,21 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       await expect(getCanonicalUserPreferences(profile.id)).resolves.toEqual(preferences);
       const avatar = await createProfileAvatarReader(profile.id).inspect();
       await expect(avatar.loadBytes()).resolves.toMatchObject({ bytes, mime: "image/png" });
+      const set = (entries: Record<string, unknown>, expectedEntries?: Record<string, unknown>) =>
+        setCanonicalUserPreferences(profile.id, entries, { expectedEntries });
+      expect(await set({ accent: "blue" })).toMatchObject({ ok: true });
+      expect(await set({ accent: null }, { accent: "blue" })).toMatchObject({ ok: true });
+      await expect(getCanonicalUserPreferences(profile.id)).resolves.toEqual(preferences);
+      expect(await set({}, { accent: null })).toMatchObject({ ok: true });
+      expect(await set({ accent: "green" })).toMatchObject({ ok: true });
+      expect(await set({ accent: null }, { accent: "blue" })).toMatchObject({
+        ok: false,
+        error: { code: "conflict" },
+      });
+      await expect(getCanonicalUserPreferences(profile.id)).resolves.toEqual({
+        profileId: profile.id,
+        entries: { accent: "green" },
+      });
     });
 
     it("reads cold placement projections and committed turn claims", async () => {

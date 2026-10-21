@@ -229,6 +229,7 @@ suite.define(() => {
         await panels.click();
         await composer.waitFor({ state: "hidden" });
         await panels.click();
+        await composer.waitFor();
         expect(await composer.inputValue()).toBe("Let's review the eight remaining changes.");
         // The mobile dock keeps the conversation available and retains the saved desktop layout.
         await page.setViewportSize({ width: 390, height: 844 });

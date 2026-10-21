@@ -409,7 +409,7 @@ export function buildGatewayBenchChildArgs(
   entry: string,
   port: number,
   nodeOptions: string[] = [],
-  authMode: "none" | "token" = "none",
+  authMode: "none" | "token" | "trusted-proxy" = "none",
 ): string[] {
   return [
     ...nodeOptions,

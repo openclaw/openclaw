@@ -437,7 +437,7 @@ describe("slackOutbound sendPayload", () => {
         { type: "section", text: { text: "Choose an action" } },
       ],
     });
-    expect(segments[1]).toEqual({ kind: "text", text: "- Status: `/status`", mrkdwn: false });
+    expect(segments[1]).toEqual({ kind: "text", text: "- Status: `/status`" });
   });
 
   it("renders typed URL and web-app buttons as native Slack links", async () => {
