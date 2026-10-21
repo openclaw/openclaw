@@ -164,11 +164,13 @@ describe.runIf(process.platform !== "win32")("sandbox fs bridge local backend e2
       pinnedPath: path.join(realDir, "note.txt"),
       policyPath: path.join(realDir, "note.txt"),
     });
-    await bridge.writeFile({
-      filePath: "alias/note.txt",
-      data: "pinned-write",
-      pinnedPath: writeTarget.pinnedPath,
-    });
+    await expect(
+      bridge.createFileExclusive!({
+        filePath: "alias/note.txt",
+        data: "pinned-write",
+        pinnedPath: writeTarget.pinnedPath,
+      }),
+    ).resolves.toBe("created");
     await expectContents("real/note.txt", "pinned-write");
 
     // Post-authorization alias swap: the pinned write cannot be redirected.

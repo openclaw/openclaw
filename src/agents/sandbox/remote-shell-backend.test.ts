@@ -310,6 +310,20 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
       },
     );
 
+    it("validates real workspace and agent directories without creating missing paths", async () => {
+      const fixture = await createFixture();
+      const backend = await fixture.createBackend("source one");
+      await run(backend);
+      for (const root of [backend.workdir, path.join(path.dirname(backend.workdir), "agent")]) {
+        const workdir = path.join(root, "src");
+        await fs.mkdir(workdir);
+        await expect(backend.validateWorkdir?.(workdir)).resolves.toBe(await fs.realpath(workdir));
+      }
+      const missing = path.join(backend.workdir, "missing");
+      await expect(backend.validateWorkdir?.(missing)).resolves.toBeNull();
+      await expect(fs.stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
     it("adopts existing unmarked remote workspaces without reseeding them", async () => {
       const fixture = await createFixture();
       const backend = await fixture.createBackend("source");

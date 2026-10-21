@@ -30,6 +30,11 @@ export const reservation: SandboxPersistentExecReservation = {
   containerName: "fixture-container",
   containerStartedAt: "2026-01-01T00:00:00.000Z",
 };
+
+export function reservationFor(attempt: number, sourceIdentity = reservation.sourceIdentity) {
+  const attemptId = `00000000-0000-4000-8000-${String(attempt).padStart(12, "0")}`;
+  return { ...reservation, sourceIdentity, attemptId };
+}
 export const registryEntry = {
   containerName: reservation.containerName,
   backendId: "docker",

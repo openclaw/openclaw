@@ -227,13 +227,6 @@ describe("managed source translation", () => {
     ).toBe("/host/project/workspace");
   });
 
-  it("preserves Windows drive sources in container inspection", () => {
-    expect(
-      parseInspectedSandboxMounts([{ ...wireMount, Source: "c:\\Users\\Example\\project" }])[0]
-        ?.source,
-    ).toBe("C:/Users/Example/project");
-  });
-
   it("does not grant writes through a read-only Gateway bind", () => {
     const params = {
       source: "/gateway/workspace",

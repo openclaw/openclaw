@@ -21,6 +21,7 @@ import {
   receipt,
   registryEntry,
   reservation,
+  reservationFor,
   retained as accepted,
   setProcessOwner,
 } from "./persistent-exec.test-helpers.js";
@@ -92,14 +93,7 @@ it("serializes reservation, rejects stale effects and releases only durably conf
   const competing = createSandboxPersistentExecStore();
   const [first, second] = await Promise.all([
     store.reserve(reservation, assertCurrent),
-    competing.reserve(
-      {
-        ...reservation,
-        sourceIdentity: "replacement",
-        attemptId: "00000000-0000-4000-8000-000000000002",
-      },
-      assertCurrent,
-    ),
+    competing.reserve(reservationFor(2, "replacement"), assertCurrent),
   ]);
   expect(Number(first.ok) + Number(second.ok)).toBe(1);
   const writer = first.ok ? store : competing;
@@ -140,16 +134,10 @@ it("serializes reservation, rejects stale effects and releases only durably conf
   await expect(writer.removeConfirmed(expected(uncertain))).rejects.toThrow(
     "cleanup has not been confirmed",
   );
-  expect(
-    await writer.reserve(
-      {
-        ...reservation,
-        sourceIdentity: "new-source",
-        attemptId: "00000000-0000-4000-8000-000000000003",
-      },
-      assertCurrent,
-    ),
-  ).toEqual({ ok: false, current: uncertain });
+  expect(await writer.reserve(reservationFor(3, "new-source"), assertCurrent)).toEqual({
+    ok: false,
+    current: uncertain,
+  });
   await expect(writer.transition({ ...expected(uncertain), phase: "stopped" })).rejects.toThrow(
     "Invalid persistent sandbox custody transition",
   );
@@ -161,12 +149,7 @@ it("serializes reservation, rejects stale effects and releases only durably conf
     await writer.removeConfirmed(expected(stopped), { requireWorkspaceBinding: true }),
   ).toEqual({ ok: true, current: null });
   await expect(writer.assertCustodyCurrent(prepared)).rejects.toThrow("workspace custody changed");
-  const successor = accepted(
-    await writer.reserve(
-      { ...reservation, attemptId: "00000000-0000-4000-8000-000000000004" },
-      assertCurrent,
-    ),
-  );
+  const successor = accepted(await writer.reserve(reservationFor(4), assertCurrent));
   await expect(writer.assertCustodyCurrent(prepared)).rejects.toThrow("workspace custody changed");
   expect(await writer.removeConfirmed(expected(stopped))).toEqual({
     ok: false,
@@ -206,13 +189,9 @@ it("checks the canonical cron source before admission and during execution witho
   ).rejects.toThrow("workspace binding changed");
   expect(await store.list()).toEqual([stopped]);
   await store.removeConfirmed(expected(stopped));
-  await expect(
-    store.reserve(
-      { ...reservation, attemptId: "00000000-0000-4000-8000-000000000005" },
-      assertCurrent,
-      source,
-    ),
-  ).rejects.toThrow("no longer authorized");
+  await expect(store.reserve(reservationFor(5), assertCurrent, source)).rejects.toThrow(
+    "no longer authorized",
+  );
   expect(await store.list()).toEqual([]);
 });
 
@@ -248,12 +227,7 @@ it("refuses launch after registry removal intent while retaining cleanup authori
   ).rejects.toThrow("being removed");
   const stopped = accepted(await confirmStopped(store, reserved));
   await store.removeConfirmed(expected(stopped));
-  await expect(
-    store.reserve(
-      { ...reservation, attemptId: "00000000-0000-4000-8000-000000000005" },
-      assertCurrent,
-    ),
-  ).rejects.toThrow("being removed");
+  await expect(store.reserve(reservationFor(5), assertCurrent)).rejects.toThrow("being removed");
   expect(await store.list()).toEqual([]);
 });
 

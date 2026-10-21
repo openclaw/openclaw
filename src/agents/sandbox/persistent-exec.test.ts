@@ -136,26 +136,16 @@ async function fixture() {
   const exited = createDeferredCore<SandboxPersistentExecStopped>();
   const preparation = {
     receipt,
-    start: vi.fn<SandboxPersistentExecPreparation["start"]>().mockImplementation(async (admit) => {
-      await admit();
-    }),
-    checkCurrent: vi
-      .fn<SandboxPersistentExecPreparation["checkCurrent"]>()
-      .mockResolvedValue(undefined),
+    start: vi.fn<SandboxPersistentExecPreparation["start"]>(async (admit) => await admit()),
+    checkCurrent: vi.fn<SandboxPersistentExecPreparation["checkCurrent"]>(async () => {}),
     stopped: exited.promise,
-    stop: vi
-      .fn<SandboxPersistentExecPreparation["stop"]>()
-      .mockImplementation(async () => stopped(receipt)),
+    stop: vi.fn<SandboxPersistentExecPreparation["stop"]>(async () => stopped(receipt)),
   };
-  const prepare = vi
-    .fn<SandboxPersistentExecCapability["prepare"]>()
-    .mockImplementation(async ({ attemptId }) => {
-      receipt.attemptId = attemptId;
-      return preparation;
-    });
-  const finalize = vi
-    .fn<NonNullable<SandboxBackendHandle["finalizeExec"]>>()
-    .mockResolvedValue(undefined);
+  const prepare = vi.fn<SandboxPersistentExecCapability["prepare"]>(async ({ attemptId }) => {
+    receipt.attemptId = attemptId;
+    return preparation;
+  });
+  const finalize = vi.fn<NonNullable<SandboxBackendHandle["finalizeExec"]>>(async () => {});
   const backend: SandboxBackendHandle = {
     id: "docker",
     runtimeId: registry.containerName,
@@ -215,6 +205,15 @@ async function fixture() {
     releaseAuthority,
   };
   const start = (overrides: Partial<StartInput> = {}) => owner.start({ ...input, ...overrides });
+  const cancel = async (kind: "caller" | "retirement", message: string) => {
+    if (kind === "caller") {
+      controller.abort(new Error(message));
+    } else {
+      await expect(
+        settleSandboxPersistentExecsForRetirement({ containerName: registry.containerName }),
+      ).resolves.toEqual({ unresolved: [], localOwnerKeys: [] });
+    }
+  };
   const seedCustody = async (phase: "reserved" | "running" | "stopped") => {
     let record = retained(
       await store.reserve(
@@ -257,6 +256,7 @@ async function fixture() {
     input,
     exited,
     start,
+    cancel,
     seedCustody,
     expectCustody,
     expectReleased,
@@ -430,19 +430,11 @@ it.each(["caller", "retirement"] as const)(
     const starting = f.start();
     await entered.promise;
     const rejected = expect(starting).rejects.toThrow(/cancelled/);
-    const retiring =
-      cancellation === "retirement"
-        ? settleSandboxPersistentExecsForRetirement({ containerName: f.registry.containerName })
-        : undefined;
-    if (cancellation === "caller") {
-      f.controller.abort(new Error("creator cancelled"));
-    }
+    const cancelled = f.cancel(cancellation, "creator cancelled");
     expect(f.preparation.stop).not.toHaveBeenCalled();
     prepared.resolve(f.preparation);
     await rejected;
-    if (retiring) {
-      await expect(retiring).resolves.toEqual({ unresolved: [], localOwnerKeys: [] });
-    }
+    await cancelled;
     expect(f.preparation.start).not.toHaveBeenCalled();
     expect(f.preparation.stop).toHaveBeenCalledTimes(1);
     await f.expectReleased();
@@ -480,17 +472,9 @@ it.each(["caller", "retirement"] as const)(
     );
     await entered.promise;
     await f.expectCustody({ phase: "running", receipt: f.receipt });
-    const retiring =
-      cancellation === "retirement"
-        ? settleSandboxPersistentExecsForRetirement({ containerName: f.registry.containerName })
-        : undefined;
-    if (cancellation === "caller") {
-      f.controller.abort(new Error("stream stop requested"));
-    }
+    const cancelled = f.cancel(cancellation, "stream stop requested");
     await rejected;
-    if (retiring) {
-      await expect(retiring).resolves.toEqual({ unresolved: [], localOwnerKeys: [] });
-    }
+    await cancelled;
     expect(f.preparation.stop).toHaveBeenCalledOnce();
     await f.expectReleased();
   },
