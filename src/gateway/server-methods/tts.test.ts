@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import type { TtsSynthesisResult } from "../../tts/tts-runtime-types.js";
 import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 import { ttsHandlers } from "./tts.js";
 
@@ -26,22 +27,13 @@ const mocks = vi.hoisted(() => ({
   resolveTtsProviderOrder: vi.fn(() => ["openai"]),
   resolveExplicitTtsOverridesAsync: vi.fn(() => ({})),
   resolveTtsConfig: vi.fn(() => ({ maxTextLength: 4096 })),
-  synthesizeSpeech: vi.fn(
-    async (): Promise<{
-      success: boolean;
-      audioBuffer?: Buffer;
-      provider?: string;
-      outputFormat?: string;
-      fileExtension?: string;
-      error?: string;
-    }> => ({
-      success: true,
-      audioBuffer: Buffer.from([1, 2, 3]),
-      provider: "openai",
-      outputFormat: "mp3",
-      fileExtension: ".mp3",
-    }),
-  ),
+  synthesizeSpeech: vi.fn(async (): Promise<TtsSynthesisResult> => ({
+    success: true,
+    audioBuffer: Buffer.from([1, 2, 3]),
+    provider: "openai",
+    outputFormat: "mp3",
+    fileExtension: ".mp3",
+  })),
   textToSpeech: vi.fn(async () => ({
     success: true,
     audioPath: "/tmp/tts.mp3",
@@ -134,6 +126,10 @@ function makeProvider(id: string, label: string, configured: boolean, autoSelect
   };
 }
 
+function expectProviderResponse(respond: ReturnType<typeof vi.fn>, payload: object) {
+  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(payload));
+}
+
 describe("ttsHandlers", () => {
   beforeEach(() => {
     setActiveDegradedSecretOwners([]);
@@ -167,10 +163,7 @@ describe("ttsHandlers", () => {
       expect(mocks.isTtsProviderConfiguredAsync.mock.calls.map((call) => call[1])).toEqual(
         providers,
       );
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ [providerField]: "google" }),
-      );
+      expectProviderResponse(respond, { [providerField]: "google" });
       if (method === "tts.providers") {
         expect(respond).toHaveBeenCalledWith(true, {
           active: "google",
@@ -216,17 +209,14 @@ describe("ttsHandlers", () => {
       providers[1],
       "voice-model-only",
     ]);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        fallbackProvider: "voice-model-only",
-        fallbackProviders: ["voice-model-only"],
-        providerStates: [
-          { id: "openai", label: "OpenAI", configured: true },
-          { id: "google", label: "Google", configured: false },
-        ],
-      }),
-    );
+    expectProviderResponse(respond, {
+      fallbackProvider: "voice-model-only",
+      fallbackProviders: ["voice-model-only"],
+      providerStates: [
+        { id: "openai", label: "OpenAI", configured: true },
+        { id: "google", label: "Google", configured: false },
+      ],
+    });
   });
 
   it.each(["tts.status", "tts.providers"] as const)(
@@ -247,14 +237,11 @@ describe("ttsHandlers", () => {
       });
       const respond = await callTts(method, {});
 
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          [method === "tts.status" ? "providerStates" : "providers"]: [
-            expect.objectContaining({ id: "gradium", configured: false }),
-          ],
-        }),
-      );
+      expectProviderResponse(respond, {
+        [method === "tts.status" ? "providerStates" : "providers"]: [
+          expect.objectContaining({ id: "gradium", configured: false }),
+        ],
+      });
       expect(invalidProvider.isConfigured).not.toHaveBeenCalled();
     },
   );
@@ -289,25 +276,13 @@ describe("ttsHandlers", () => {
     });
   });
 
-  it("tts.speak rejects blank text without synthesizing", async () => {
-    const respond = await callTts("tts.speak", { text: "   " });
-
-    expectGatewayErrorResponse(respond, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: "tts.speak requires text",
-    });
-    expect(mocks.synthesizeSpeech).not.toHaveBeenCalled();
-  });
-
-  it("tts.speak rejects text above the configured max length", async () => {
+  it.each([
+    ["   ", "tts.speak requires text"],
+    ["This text is definitely too long.", "tts.speak text too long (33 chars, max 10)"],
+  ])("tts.speak rejects invalid text %j without synthesizing", async (text, message) => {
     mocks.resolveTtsConfig.mockReturnValue({ maxTextLength: 10 });
-
-    const respond = await callTts("tts.speak", { text: "This text is definitely too long." });
-
-    expectGatewayErrorResponse(respond, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: "tts.speak text too long (33 chars, max 10)",
-    });
+    const respond = await callTts("tts.speak", { text });
+    expectGatewayErrorResponse(respond, { code: ErrorCodes.INVALID_REQUEST, message });
     expect(mocks.synthesizeSpeech).not.toHaveBeenCalled();
   });
 

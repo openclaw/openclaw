@@ -1,6 +1,7 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const unavailable = vi.hoisted(() => () => {
@@ -91,11 +92,7 @@ async function invoke(
 }
 
 function expectInvalid(respond: ReturnType<typeof vi.fn>) {
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "INVALID_REQUEST" }),
-  );
+  expectRpcError(respond, { code: "INVALID_REQUEST" });
 }
 
 describe("lazy core handler families", () => {
@@ -128,11 +125,7 @@ describe("lazy core handler families", () => {
       });
 
       if (errorCode) {
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: errorCode }),
-        );
+        expectRpcError(respond, { code: errorCode });
         expect(broadcast).not.toHaveBeenCalled();
       } else {
         const payload = {
@@ -140,7 +133,7 @@ describe("lazy core handler families", () => {
           phase: params.phase ?? null,
           ts: expect.any(Number),
         };
-        expect(respond).toHaveBeenCalledWith(true, payload, undefined);
+        expectRpcResult(respond, payload);
         expect(broadcast).toHaveBeenCalledWith("talk.mode", payload, { dropIfSlow: true });
       }
     },
@@ -159,11 +152,7 @@ describe("lazy core handler families", () => {
       { context: { getRuntimeConfig: () => ({}) } as never },
     );
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ agentId: "main" }),
-      undefined,
-    );
+    expectRpcResult(respond, expect.objectContaining({ agentId: "main" }));
     expect(runStackLoaded).not.toHaveBeenCalled();
   });
 

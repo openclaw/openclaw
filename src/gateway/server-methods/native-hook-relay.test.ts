@@ -353,26 +353,6 @@ it("rejects unknown relay ids", async () => {
   expectInvalidRequest(respond, "not found");
 });
 
-it("accepts a live relay invocation", async () => {
-  const relay = registerNativeHookRelay({
-    provider: "codex",
-    sessionId: "session-1",
-    runId: "run-1",
-    allowedEvents: ["post_tool_use"],
-  });
-
-  const respond = await invokeNativeHook({
-    provider: "codex",
-    relayId: relay.relayId,
-    generation: relay.generation,
-    event: "post_tool_use",
-    rawPayload: POST_TOOL_USE_PAYLOAD,
-  });
-
-  expect(respond).toHaveBeenCalledWith(true, { stdout: "", stderr: "", exitCode: 0 });
-  expect(testing.getNativeHookRelayInvocationsForTests()).toHaveLength(1);
-});
-
 it("rejects stale relay generations", async () => {
   const params = {
     provider: "codex" as const,

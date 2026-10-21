@@ -25,18 +25,21 @@ const runEvent = {
   agentId: "main",
   runId: "run-1",
 };
-const messageEvent = {
+const messageMetadata = {
   ...eventMetadata,
+  kind: "message",
+  status: "succeeded",
+  channel: "telegram",
+  conversationKind: "direct",
+};
+const messageEvent = {
+  ...messageMetadata,
   eventId: "event-message-1",
   sequence: 11,
   sourceSequence: 3,
   occurredAt: 101,
-  kind: "message",
   action: "message.outbound.finished",
-  status: "succeeded",
   direction: "outbound",
-  channel: "telegram",
-  conversationKind: "direct",
   outcome: "sent",
   deliveryKind: "text",
   durationMs: 12,
@@ -52,8 +55,12 @@ const unknownIdentity = {
 };
 const unknownCoverage = { state: "unknown", missingEvidence: ["run.record"] };
 
-function expectInvalid(respond: ReturnType<typeof vi.fn>) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+function expectInvalid(respond: ReturnType<typeof vi.fn>, message?: unknown) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    message === undefined ? expect.any(Object) : expect.objectContaining({ message }),
+  );
 }
 
 async function runAuditHandler(
@@ -162,19 +169,15 @@ describe("audit gateway methods", () => {
     listAuditEvents.mockReturnValue({
       events: [
         {
-          ...eventMetadata,
+          ...messageMetadata,
           eventId: "event-message-2",
           sequence: 12,
           sourceSequence: 4,
           occurredAt: 102,
-          kind: "message",
           action: "message.inbound.processed",
-          status: "succeeded",
           actorType: "channel_sender",
           actorId: accountRef,
           direction: "inbound",
-          channel: "telegram",
-          conversationKind: "direct",
           outcome: "completed",
         },
       ],
@@ -206,13 +209,7 @@ describe("audit gateway methods", () => {
     async (params) => {
       const respond = await runAuditHandler("audit.activity.list", params);
 
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          message: expect.stringContaining("invalid audit.activity.list filters"),
-        }),
-      );
+      expectInvalid(respond, expect.stringContaining("invalid audit.activity.list filters"));
       expect(listAuditEvents).not.toHaveBeenCalled();
     },
   );
@@ -239,7 +236,8 @@ describe("audit gateway methods", () => {
   });
 
   it("serializes only the safe decision projection", async () => {
-    const secret = (field: string) => `SYNTHETIC_PRIVATE_${field}`;
+    const secrets = (...fields: string[]) =>
+      Object.fromEntries(fields.map((field) => [field, `SYNTHETIC_PRIVATE_${field}`]));
     inspectExecutionIdentityRun.mockReturnValueOnce({
       schemaVersion: 1,
       run: { runId: "run-1", executionId: "execution-1", status: "known" },
@@ -247,34 +245,24 @@ describe("audit gateway methods", () => {
       decisions: [
         {
           schemaVersion: 1,
-          receiptId: secret("receipt"),
-          contextId: secret("context"),
-          executionId: secret("execution"),
-          runId: secret("run"),
-          actionId: secret("eventId"),
+          ...secrets("receiptId", "contextId", "executionId", "runId", "actionId"),
           occurredAt: 1,
           action: {
             family: "tool",
             operation: "execute",
-            resourceRef: secret("resource"),
-            targetRef: secret("target"),
-            summary: secret("generic"),
+            ...secrets("resourceRef", "targetRef", "summary"),
           },
-          decision: { outcome: "allowed", reasonCode: secret("reason") },
+          decision: { outcome: "allowed", ...secrets("reasonCode") },
           enforcement: {
             coverageState: "enforced",
-            evaluatorRef: secret("evaluator"),
-            policyRefs: [secret("policy")],
-            grantRefs: [secret("grant")],
+            ...secrets("evaluatorRef"),
+            policyRefs: ["SYNTHETIC_PRIVATE_policy"],
+            grantRefs: ["SYNTHETIC_PRIVATE_grant"],
             contextFieldsUsed: [],
           },
-          source: {
-            owner: secret("owner"),
-            recordRef: secret("resolutionRef"),
-            decisionBoundary: secret("record"),
-          },
+          source: secrets("owner", "recordRef", "decisionBoundary"),
           missingEvidence: [],
-          remediation: [{ code: secret("remediationCode"), text: secret("remediationText") }],
+          remediation: [secrets("code", "text")],
         },
       ],
       decisionDisplays: [],
@@ -336,12 +324,9 @@ describe("audit gateway methods", () => {
       runId: "run-1",
       decisionCursor: "a:2000:42",
     });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: "decision cursor is no longer retained; restart inspection without --cursor",
-      }),
+    expectInvalid(
+      respond,
+      "decision cursor is no longer retained; restart inspection without --cursor",
     );
   });
 });
