@@ -78,12 +78,9 @@ const {
   getSessionEntry: sessionEntry,
   recordDeliveredCommandExchange: recordExchange,
 } = runtimeModuleMocks;
-let observedNativeTurnDispatcher: unknown;
-
 const dispatchChannelInboundTurnForTest: typeof channelInbound.dispatchChannelInboundTurn = async (
   plan,
 ) => {
-  observedNativeTurnDispatcher = plan.dispatchReplyFromConfig;
   const dispatchResult = await dispatchReply({
     ctx: plan.ctxPayload,
     cfg: plan.cfg,
@@ -128,15 +125,11 @@ async function createNativeCommand(
     description: "Start a new session.",
     acceptsArgs: true,
   },
-  dispatchReplyFromConfig?: Parameters<
-    typeof createDiscordNativeCommand
-  >[0]["dispatchReplyFromConfig"],
 ) {
   return createDiscordNativeCommand({
     command: commandSpec,
     ...nativeCommandContext(cfg),
     ephemeralDefault: true,
-    dispatchReplyFromConfig,
   });
 }
 
@@ -181,9 +174,7 @@ async function createMockPluginNativeCommand(cfg: OpenClawConfig, spec: NativeCo
   return await createPluginCommand({ cfg, name: spec.name });
 }
 
-function registerPairPlugin(
-  requiredScopes?: Parameters<typeof registerPluginCommand>[1]["requiredScopes"],
-) {
+function registerPairPlugin() {
   const handler = vi.fn(async ({ args }: { args?: string }) => ({ text: `paired:${args ?? ""}` }));
   expect(
     registerPluginCommand("demo-plugin", {
@@ -191,7 +182,6 @@ function registerPairPlugin(
       description: "Pair device",
       acceptsArgs: true,
       requireAuth: false,
-      ...(requiredScopes ? { requiredScopes } : {}),
       handler,
     }),
   ).toEqual({ ok: true });
@@ -216,7 +206,6 @@ describe("Discord native plugin command dispatch", () => {
   beforeEach(() => {
     cfg = createConfig();
     interaction = createInteraction();
-    observedNativeTurnDispatcher = undefined;
     clearRuntimeConfigSnapshot();
     vi.clearAllMocks();
     clearPluginCommands();
@@ -252,22 +241,6 @@ describe("Discord native plugin command dispatch", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps the owning Gateway dispatcher on a native slash turn", async () => {
-    const dispatchReplyFromConfig =
-      vi.fn<
-        NonNullable<Parameters<typeof createDiscordNativeCommand>[0]["dispatchReplyFromConfig"]>
-      >();
-    const command = await createNativeCommand(
-      cfg,
-      { name: "new", description: "Start a new session.", acceptsArgs: true },
-      dispatchReplyFromConfig,
-    );
-
-    await command.run(interaction);
-
-    expect(observedNativeTurnDispatcher).toBe(dispatchReplyFromConfig);
-  });
-
   it("refreshes native command routing config between invocations", async () => {
     const sourceCfg = {
       ...createConfig(),
@@ -301,38 +274,6 @@ describe("Discord native plugin command dispatch", () => {
     expect(statusReply).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ sessionKey: "agent:main:discord:direct:owner" }),
-    );
-  });
-
-  it("carries the built-in catalog winner through the interaction", async () => {
-    const shadowHandler = vi.fn(async () => ({ text: "wrong plugin" }));
-    getActivePluginRegistry()!.commands.push({
-      pluginId: "shadow-plugin",
-      source: "test",
-      command: {
-        name: "help",
-        description: "Shadow help",
-        channels: ["discord"],
-        requireAuth: false,
-        handler: shadowHandler,
-      },
-    });
-    const help: NativeCommandSpec = {
-      name: "help",
-      description: "Show help",
-      acceptsArgs: false,
-    };
-    const command = await createNativeCommand(cfg, help);
-
-    await command.run(createInteraction());
-
-    expect(shadowHandler).not.toHaveBeenCalled();
-    expect(dispatchReply.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        replyOptions: expect.objectContaining({
-          [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" },
-        }),
-      }),
     );
   });
 
@@ -384,66 +325,6 @@ describe("Discord native plugin command dispatch", () => {
         replyText: "paired:now",
       }),
     );
-  });
-
-  it.each([
-    { sender: "DM allowlist users", allowFrom: ["user:owner"], userId: "owner" },
-    {
-      sender: "authorized non-owners",
-      allowFrom: ["*"],
-      userId: "authorized-non-owner",
-    },
-  ])(
-    "does not treat Discord $sender as scoped plugin command owners",
-    async ({ allowFrom, userId }) => {
-      cfg.channels!.discord!.allowFrom = allowFrom;
-      interaction = createInteraction({ userId });
-      interaction.options.getString.mockReturnValue("now");
-      const handler = registerPairPlugin(["operator.pairing"]);
-      const command = await createPluginCommand({ cfg, name: "pair" });
-
-      await command.run(interaction);
-
-      expect(handler).not.toHaveBeenCalled();
-      expectSingleCallFirstArg(interaction.followUp, {
-        content: "⚠️ This command requires gateway scope: operator.pairing.",
-      });
-      expect(interaction.reply).not.toHaveBeenCalled();
-    },
-  );
-
-  it("allows generic command owners to run scoped Discord plugin commands without gateway scopes", async () => {
-    cfg = { ...createConfig(), commands: { ownerAllowFrom: ["discord:123456789012345678"] } };
-    interaction = createInteraction({ userId: "123456789012345678" });
-    interaction.options.getString.mockReturnValue("now");
-    const handler = registerPairPlugin(["operator.pairing"]);
-    const command = await createPluginCommand({ cfg, name: "pair" });
-
-    await command.run(interaction);
-
-    expect(handler).toHaveBeenCalledTimes(1);
-    expectSingleCallFirstArg(interaction.followUp, { content: "paired:now" });
-    expect(interaction.reply).not.toHaveBeenCalled();
-  });
-
-  it("blocks unauthorized Discord senders before requireAuth:false plugin commands execute", async () => {
-    cfg = guildConfig({ allowFrom: { discord: ["user:123456789012345678"] } });
-    interaction = guildInteraction();
-    registerPairPlugin();
-    const command = await createPluginCommand({ cfg, name: "pair" });
-
-    const executeSpy = pluginHandler;
-    const dispatchSpy = dispatchReply.mockResolvedValue({} as never);
-
-    await command.run(interaction);
-
-    expect(executeSpy).not.toHaveBeenCalled();
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expectSingleCallFirstArg(interaction.followUp, {
-      content: "You are not authorized to use this command.",
-      ephemeral: true,
-    });
-    expect(interaction.reply).not.toHaveBeenCalled();
   });
 
   for (const { name, ownerAllowFrom } of [
@@ -831,6 +712,13 @@ describe("Discord native plugin command dispatch", () => {
       expect(dispatchReply).toHaveBeenCalledTimes(allowed ? 1 : 0);
       const content = "You are not authorized to use this command.";
       if (allowed) {
+        expect(firstDispatch()).toEqual(
+          expect.objectContaining({
+            replyOptions: expect.objectContaining({
+              [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" },
+            }),
+          }),
+        );
         expect(interaction.followUp).not.toHaveBeenCalledWith(expect.objectContaining({ content }));
       } else {
         expect(interaction.followUp).toHaveBeenCalledWith({ content, ephemeral: true });

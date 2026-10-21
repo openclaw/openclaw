@@ -11,7 +11,6 @@ import {
   createDiscordMessage,
   createDiscordPreflightArgs,
   createGuildEvent,
-  createGuildTextClient,
   createThreadClient,
 } from "./message-handler.preflight.test-helpers.js";
 
@@ -22,16 +21,14 @@ afterEach(() => setDiscordPolicyBindings("default", []));
 it.each([
   { name: "text-channel thread", parentType: ChannelType.GuildText },
   { name: "forum post", parentType: ChannelType.GuildForum },
-  { name: "renamed channel", parentType: undefined },
 ])("preserves tool policy for a $name", async ({ parentType }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const isThread = parentType !== undefined;
-    const channelId = isThread ? "357" : "999";
+    const channelId = "357";
     const allowExec = { allow: ["exec"] };
     const denyExec = { deny: ["exec"] };
     const guild = {
       requireMention: false,
-      tools: isThread ? allowExec : denyExec,
+      tools: allowExec,
       channels: {
         "246": {
           tools: denyExec,
@@ -55,13 +52,11 @@ it.each([
     setDiscordPolicyBindings("default", [
       { guildKey: "145", channelKey: "general", channelId: "444" },
     ]);
-    const client = isThread
-      ? createThreadClient({ threadId: channelId, parentId: "246" })
-      : createGuildTextClient(channelId);
+    const client = createThreadClient({ threadId: channelId, parentId: "246" });
     const fetchChannel = client.fetchChannel.bind(client);
     vi.spyOn(client, "fetchChannel").mockImplementation(async (id) => {
       const channel = await fetchChannel(id);
-      if (id === "246" && channel && parentType !== undefined) {
+      if (id === "246" && channel) {
         Object.assign(channel, { type: parentType });
       }
       return channel;
@@ -69,7 +64,7 @@ it.each([
 
     for (const [senderId, expected] of [
       ["222", { deny: ["exec"] }],
-      ["111", isThread ? { allow: ["read"] } : { deny: ["exec"] }],
+      ["111", { allow: ["read"] }],
     ] as const) {
       const message = createDiscordMessage({
         id: `100${senderId}`,

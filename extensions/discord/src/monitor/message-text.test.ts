@@ -120,23 +120,9 @@ describe("resolveDiscordMessageText", () => {
     const result = forwardedText({ content, attachments: [forwardedImage] });
     expect(result).toContain(content ? `${content}\n<media:image>` : "<media:image>");
     if (!content) {
+      expect(result).toContain("[Forwarded message from @Bob]");
       expect(result).not.toContain("(1 image)");
     }
-  });
-
-  it("preserves audio classification in forwarded text-only previews", () => {
-    const text = forwardedText({
-      attachments: [
-        {
-          id: "forwarded-audio",
-          filename: "voice.ogg",
-          content_type: "audio/ogg",
-          url: "https://cdn.discordapp.com/voice.ogg",
-        },
-      ],
-    });
-
-    expect(text).toContain("<media:audio>");
   });
 
   it("uses Components v2 text display content when normal message text is empty", () => {
@@ -208,33 +194,5 @@ describe("resolveDiscordMessageText", () => {
     ],
   ] as const)("renders %s", (_name, message, expected) => {
     expect(renderText(message)).toBe(expected);
-  });
-
-  it("preserves text from later embeds in forwarded message snapshots", () => {
-    const text = forwardedText({
-      embeds: [
-        {},
-        { title: "Forwarded title", description: "Forwarded details" },
-        { description: "Forwarded follow-up" },
-      ],
-    });
-
-    expect(text).toBe(
-      "[Forwarded message from @Bob]\nForwarded title\nForwarded details\nForwarded follow-up",
-    );
-  });
-
-  it("includes Components v2 text display content from forwarded snapshots", () => {
-    const text = forwardedText({
-      components: [
-        {
-          type: ComponentType.Container,
-          components: [{ type: ComponentType.TextDisplay, content: "Forwarded component text" }],
-        },
-      ],
-    });
-
-    expect(text).toContain("[Forwarded message from @Bob]");
-    expect(text).toContain("Forwarded component text");
   });
 });

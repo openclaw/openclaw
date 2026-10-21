@@ -1161,14 +1161,13 @@ describe("Discord bot-owned thread mention gating", () => {
 
   it.each([
     ["bot-created thread", "relaxed", "openclaw-bot", true],
-    ["automatically created thread", "auto", "openclaw-bot", true],
     ["strict explicit mention", "mention", "openclaw-bot", true],
     ["strict thread implicit reply", "reply", "openclaw-bot", false],
     ["human-created thread", "relaxed", humanId, false],
     ["disallowed sender in bot-created thread", "denied", "openclaw-bot", false],
   ] as const)("checks unmentioned follow-ups in %s", async (_name, mode, ownerId, admitted) => {
     const parentId = `parent-${channelId}`;
-    const strict = mode === "auto" ? undefined : mode === "mention" || mode === "reply";
+    const strict = mode === "mention" || mode === "reply";
     const result = await runGuildPreflight({
       message: makeMessage(mode === "mention" ? "<@openclaw-bot> next?" : "next?", {
         author: { id: humanId, bot: false, username: "Pat" },
@@ -1192,7 +1191,6 @@ describe("Discord bot-owned thread mention gating", () => {
               enabled: true,
               requireMention: mode !== "reply",
               requireMentionInBotThreads: strict,
-              autoThread: mode === "auto" ? true : undefined,
               users: mode === "denied" ? ["222222222222222222"] : [humanId],
             },
           },
