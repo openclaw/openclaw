@@ -28,6 +28,13 @@ accepted source revision and whether it came from a Gateway write or a file edit
 Later hot-reloadable writes do not erase a committed restart requirement while
 its application is pending.
 
+A restart-required `config.patch` or `config.apply` acknowledges managed restart
+admission before the Gateway emits the restart. Accepted save responses join the
+existing work-drain budget: normal restarts wait for them, while a response that
+never finishes cannot block forced recovery after the deadline. A forced restart
+logs unfinished config responses. Success confirms admission, not that the new
+process is already running; use `config.get` after reconnecting to confirm it.
+
 If restart preparation or signal delivery fails, the Gateway logs the failure
 and leaves the restart pending without retrying automatically. Correct the
 reported problem, then reapply the config or restart the Gateway manually.

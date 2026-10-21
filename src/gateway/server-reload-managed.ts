@@ -266,6 +266,7 @@ export function startManagedGatewayConfigReloader(
       // the admission edge, then roll it back if this restart is rejected.
       transactionOwnership.publishRuntimeEnv();
       restartTransaction = requestGatewayRestart(plan, preparedRuntimeConfig, {
+        responseSettled: transactionOwnership.responseSettled,
         prepareRuntimeConfig: () =>
           prepareRestartRuntimeConfig(preparedRuntimeConfig, sourceConfig, transactionOwnership),
       });

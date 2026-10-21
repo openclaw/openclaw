@@ -41,6 +41,8 @@ class GatewayRestartTransaction {
   private restartDeferral: RestartDeferralHandle | null = null;
   private operation: GatewayRestartOperation | undefined;
   private deferredHash: string | null = null;
+  // Watcher echoes and newer writes cannot retire earlier accepted responses.
+  private responseSettled: Promise<void> | undefined;
 
   readonly hasOutstandingGatewayRestart = () =>
     !this.stopped &&
@@ -96,6 +98,17 @@ class GatewayRestartTransaction {
     if (this.isStopped()) {
       return { status: "recovery-pending", settle: () => {} };
     }
+    if (options?.responseSettled) {
+      const responseSettled = Promise.all([this.responseSettled, options.responseSettled]).then(
+        () => {},
+      );
+      this.responseSettled = responseSettled;
+      void responseSettled.then(() => {
+        if (this.responseSettled === responseSettled) {
+          this.responseSettled = undefined;
+        }
+      });
+    }
     this.supersedeRequest();
     const transaction: GatewayRestartOperation = { kind: "request", state: "pending" };
     this.operation = transaction;
@@ -112,6 +125,7 @@ class GatewayRestartTransaction {
 
   stop(): void {
     this.stopped = true;
+    this.responseSettled = undefined;
     this.supersedeRequest();
   }
 
@@ -176,7 +190,12 @@ class GatewayRestartTransaction {
 
     const active = this.options.getActiveCounts();
 
-    if (active.totalActive > 0 || options?.prepareRuntimeConfig || params.assertRestartReady) {
+    if (
+      active.totalActive > 0 ||
+      this.responseSettled ||
+      options?.prepareRuntimeConfig ||
+      params.assertRestartReady
+    ) {
       if (active.totalActive > 0) {
         const initialDetails = this.options.formatActiveDetails(active);
         params.logReload.warn(
@@ -188,7 +207,10 @@ class GatewayRestartTransaction {
 
       // Timeout and failed checks leave a live deferral owned by this request.
       this.restartDeferral = deferGatewayRestartUntilIdle({
-        getPendingCount: () => this.options.getActiveCounts().totalActive,
+        // Acknowledgements share the existing work-drain deadline. Never await
+        // them in preparation, where they could strand forced recovery forever.
+        getPendingCount: () =>
+          this.options.getActiveCounts().totalActive + (this.responseSettled ? 1 : 0),
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(undefined),
         timeoutIntent: { force: true, reason: "config reload forced restart" },
         reason: restartReason,
@@ -222,7 +244,11 @@ class GatewayRestartTransaction {
                 "gateway restart recovery emission failed; reapply the config or restart the Gateway manually",
               );
             } else {
-              params.logReload.info("all operations and replies completed; restarting gateway now");
+              params.logReload.info(
+                intent?.force
+                  ? "restart deferral deadline reached; restarting gateway now"
+                  : "all operations and replies completed; restarting gateway now",
+              );
             }
             return emitResult;
           },
@@ -239,7 +265,7 @@ class GatewayRestartTransaction {
           onTimeout: (_pending, elapsedMs) => {
             // Keep the handle until preparation settles or the request is cancelled.
             params.logReload.warn(
-              `restart timeout after ${elapsedMs}ms with ${this.options.formatDeferredWorkStatus("still active")}; forcing restart`,
+              `restart timeout after ${elapsedMs}ms with ${this.responseSettled ? "unfinished config response; " : ""}${this.options.formatDeferredWorkStatus("still active")}; forcing restart`,
             );
           },
           onCheckError: (err) => {

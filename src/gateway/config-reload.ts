@@ -19,11 +19,7 @@ import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { hashRuntimeConfigValue, resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
 import type { RuntimeConfigSnapshotRefreshOptions } from "../config/runtime-snapshot.js";
-import {
-  getRuntimeConfigWriteApplication,
-  type RuntimeConfigWriteApplicationClaim,
-  type RuntimeConfigWriteApplicationStatus,
-} from "../config/runtime-write-application.js";
+import { getRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import { createConfigSource, configSourceSnapshotsMatch } from "../config/source.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduledJob } from "../infra/gateway-scheduler.js";
@@ -64,6 +60,13 @@ import type {
   GatewayConfigReloader,
   GatewayHotReloadApplication,
 } from "./config-reload-status.types.js";
+import {
+  candidateApplications,
+  candidateResponseSettled,
+  createObservedCandidate,
+  settleCandidateApplications,
+  transferCandidateApplications,
+} from "./config-reload-write-receipts.js";
 import type {
   GatewayConfigReloadTransactionOwnership,
   GatewayConfigReloaderOptions,
@@ -92,68 +95,6 @@ function isConfigReloadSuperseded(error: unknown): boolean {
       ? error.cause
       : error;
   return cause instanceof GatewayConfigReloadSupersededError;
-}
-
-function candidateApplications(candidate: GatewayConfigReloadCandidate | null | undefined) {
-  return [candidate?.application, ...(candidate?.carriedApplications ?? [])].filter(
-    (application): application is RuntimeConfigWriteApplicationClaim => application !== undefined,
-  );
-}
-
-function settleCandidateApplications(
-  candidate: GatewayConfigReloadCandidate | null | undefined,
-  status: RuntimeConfigWriteApplicationStatus,
-) {
-  for (const application of candidateApplications(candidate)) {
-    // A canonical reread may already contain an external writer's replacement.
-    application.settle(
-      status === "applied" &&
-        candidate &&
-        application.isCarriedBy?.(candidate.compareConfig) === false
-        ? "superseded"
-        : status,
-    );
-  }
-}
-
-function transferCandidateApplications(
-  candidate: GatewayConfigReloadCandidate | null,
-  nextConfig: OpenClawConfig | undefined,
-): RuntimeConfigWriteApplicationClaim[] {
-  const carried: RuntimeConfigWriteApplicationClaim[] = [];
-  for (const application of candidateApplications(candidate)) {
-    if (nextConfig && application.isCarriedBy?.(nextConfig)) {
-      carried.push(application);
-    } else {
-      application.settle("superseded");
-    }
-  }
-  if (candidate) {
-    delete candidate.application;
-    delete candidate.carriedApplications;
-  }
-  return carried;
-}
-
-function createObservedCandidate(
-  snapshot: ConfigFileSnapshot,
-  epoch: number,
-  previous: (GatewayConfigReloadCandidate | null)[],
-): GatewayConfigReloadCandidate | null {
-  const carriedApplications = [...new Set(previous)].flatMap((candidate) =>
-    transferCandidateApplications(candidate, snapshot.valid ? snapshot.sourceConfig : undefined),
-  );
-  return carriedApplications.length > 0
-    ? {
-        config: snapshot.config,
-        compareConfig: snapshot.sourceConfig,
-        persistedHash: snapshot.hash,
-        snapshot,
-        epoch,
-        origin: "file",
-        carriedApplications,
-      }
-    : null;
 }
 
 export function startGatewayConfigReloader(
@@ -435,6 +376,7 @@ export function startGatewayConfigReloader(
       reapplyRuntimeOverlays: preparedCandidate?.reapplyRuntimeOverlays ?? ((config) => config),
       ...(preparedCandidate?.runtimeEnv ? { runtimeEnv: preparedCandidate.runtimeEnv } : {}),
       ...(runtimeRefresh ? { runtimeRefresh } : {}),
+      responseSettled: candidateResponseSettled(candidate),
       publishRuntimeEnv: () => {
         assertCurrent();
         if (runtimeEnvCommitted) {

@@ -12,7 +12,10 @@ import {
 
 const readConfigFileSnapshotForWriteMock = vi.fn();
 const writeConfigFileMock = vi.fn();
-const runtimeApplication = { claimed: true };
+const runtimeApplication: { claimed: boolean; status: "applied" | "restart-pending" } = {
+  claimed: true,
+  status: "applied",
+};
 const validateConfigObjectWithPluginsMock = vi.fn();
 const prepareSecretsRuntimeSnapshotMock = vi.fn();
 const scheduleGatewayRestartMock = vi.fn(() => ({
@@ -34,7 +37,9 @@ vi.mock("../../config/config.js", async () => {
     replaceConfigFile: async (params: { sourceConfig: OpenClawConfig; writeOptions?: object }) => {
       await writeConfigFileMock(params.sourceConfig, params.writeOptions);
       if (params.writeOptions && runtimeApplication.claimed) {
-        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
+        getRuntimeConfigWriteApplication(params.writeOptions)
+          ?.claim()
+          ?.settle(runtimeApplication.status);
       }
       return {
         path: "/tmp/openclaw.json",
@@ -150,6 +155,7 @@ afterEach(() => vi.clearAllMocks());
 
 beforeEach(() => {
   runtimeApplication.claimed = true;
+  runtimeApplication.status = "applied";
   validateConfigObjectWithPluginsMock.mockImplementation((config: OpenClawConfig) => ({
     ok: true,
     config,
@@ -278,6 +284,7 @@ describe("config shared auth disconnects", () => {
           const previous = { gateway: { auth: { mode, [mode]: "old-credential" } } };
           const nextMode = changesMode ? (mode === "token" ? "password" : "token") : mode;
           const next = { gateway: { auth: { mode: nextMode, [nextMode]: "new-credential" } } };
+          runtimeApplication.status = changesMode ? "restart-pending" : "applied";
           mockPreviousConfig(previous);
           const { respond, disconnectClientsUsingSharedGatewayAuth } = await runWrite(method, next);
           expect(respond.mock.calls[0]).toMatchObject([
@@ -288,9 +295,7 @@ describe("config shared auth disconnects", () => {
             },
             undefined,
           ]);
-          expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(
-            changesMode ? 1 : 0,
-          );
+          expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
         }
       }
     },

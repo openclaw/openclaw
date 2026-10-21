@@ -59,6 +59,8 @@ export type GatewayRestartTransactionResult = {
 };
 
 export type GatewayRestartRequestOptions = {
+  /** Waits for the initiating RPC response within the existing restart deferral budget. */
+  responseSettled?: Promise<void>;
   prepareRuntimeConfig?: () => Promise<OpenClawConfig>;
 };
 

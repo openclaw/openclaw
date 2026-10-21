@@ -10,6 +10,7 @@ import {
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import type { GatewayRestartRequestOptions } from "./server-reload-contracts.js";
@@ -91,6 +92,71 @@ afterEach(() => {
   restartModule.resetGatewayRestartStateForInProcessRestart();
   resetGatewayWorkAdmission();
   vi.useRealTimers();
+});
+
+describe("config response restart deferral", () => {
+  it.each([0, 1])(
+    "forces a stalled config response at the deadline with %s other operations",
+    async (otherWork) => {
+      const response = createDeferredCore();
+      const coordinator = createCoordinator(
+        {},
+        {
+          getActiveCounts: () => ({ ...zeroActiveCounts, totalActive: otherWork }),
+        },
+      );
+      coordinator.requestGatewayRestart(restartPlan, {}, { responseSettled: response.promise });
+
+      await vi.advanceTimersByTimeAsync(299_500);
+      expect(coordinator.requestRecoveryRestart).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(coordinator.requestRecoveryRestart).toHaveBeenCalledExactlyOnceWith(
+        "config reload: gateway.port",
+        { force: true, reason: "config reload forced restart", waitMs: 300_000 },
+      );
+      expect(coordinator.logReload.warn).toHaveBeenCalledWith(
+        expect.stringContaining("unfinished config response"),
+      );
+      response.resolve();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(coordinator.requestRecoveryRestart).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "waits for all accepted responses across supersession=%s",
+    async (supersede) => {
+      const response = createDeferredCore();
+      const coordinator = createCoordinator();
+      coordinator.requestGatewayRestart(restartPlan, {}, { responseSettled: response.promise });
+      if (supersede) {
+        coordinator.pauseGatewayRestartForConfigCandidate();
+        coordinator.requestGatewayRestart(restartPlan, {}, { responseSettled: Promise.resolve() });
+      }
+      await vi.advanceTimersByTimeAsync(500);
+      expect(coordinator.requestRecoveryRestart).not.toHaveBeenCalled();
+
+      response.resolve();
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(coordinator.requestRecoveryRestart).toHaveBeenCalledExactlyOnceWith(
+        "config reload: gateway.port",
+        undefined,
+      );
+    },
+  );
+
+  it("cancels response deferral on stop without a stale emission", async () => {
+    const response = createDeferredCore();
+    const coordinator = createCoordinator();
+    coordinator.requestGatewayRestart(restartPlan, {}, { responseSettled: response.promise });
+    await vi.advanceTimersByTimeAsync(500);
+    coordinator.stopRestartRetries();
+    response.resolve();
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(coordinator.requestRecoveryRestart).not.toHaveBeenCalled();
+  });
 });
 
 describe("gateway restart readiness preflight", () => {

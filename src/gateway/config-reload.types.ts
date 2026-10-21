@@ -35,6 +35,7 @@ export type GatewayConfigReloadTransactionOwnership = {
   reapplyRuntimeOverlays: (config: OpenClawConfig) => OpenClawConfig;
   runtimeEnv?: NonNullable<ConfigWriteNotification["preparedCandidate"]>["runtimeEnv"];
   runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
+  responseSettled?: Promise<void>;
 };
 
 type PreparedGatewayConfigCandidate = {

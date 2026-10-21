@@ -274,11 +274,12 @@ describe("policy writer response ownership", () => {
   it("keeps only accepted config.patch results, then closes after the last result", async () => {
     const fixture = createFixture();
     const writers = ["first", "second"].map((id) => Object.assign(createRequestGate(), { id }));
+    const settled = vi.fn();
     const read = createRequestGate();
     runtime.handler.mockImplementation(async ({ req, respond }) => {
       const writer = writers.find(({ id }) => id === req.id);
       if (writer) {
-        holdGatewayPolicyResponse(respond);
+        void holdGatewayPolicyResponse(respond)?.settled.then(settled);
         await writer.wait();
         respond(true, { committed: req.id });
       } else {
@@ -297,6 +298,7 @@ describe("policy writer response ownership", () => {
       read.release();
       await dispatches[0];
       expect(fixture.harness.send).not.toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
       for (const [index, writer] of writers.entries()) {
         expect(fixture.socketClose).not.toHaveBeenCalled();
         writer.release();
@@ -305,6 +307,8 @@ describe("policy writer response ownership", () => {
       }
       await fixture.closed.promise;
       expect(fixture.socketClose).toHaveBeenCalledOnce();
+      expect(settled).toHaveBeenCalledTimes(writers.length);
+      expect(fixture.harness.send).toHaveBeenCalledBefore(settled);
     } finally {
       read.release();
       for (const writer of writers) {

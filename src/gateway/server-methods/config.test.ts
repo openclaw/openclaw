@@ -220,7 +220,7 @@ it.each([
 );
 it.each([
   { method: "config.patch", outcome: "applied-restart-required" },
-  { method: "config.apply", outcome: "restart-pending" },
+  { method: "config.apply", outcome: "applied-restart-required" },
 ] as const)(
   "reports $method $outcome without misrepresenting active config",
   async ({ method, outcome }) => {
@@ -239,23 +239,43 @@ it.each([
     });
     await operation;
 
-    const expectedMessage =
-      outcome === "restart-pending" ? "accepted for restart" : "updated the active Gateway";
+    const expectedMessage = "updated the active Gateway";
     const message = expect.stringContaining(expectedMessage);
     expect(harness.respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({ code: "UNAVAILABLE", message }),
     );
-    const excludedMessages =
-      outcome === "restart-pending"
-        ? ["updated the active Gateway", "recovery restart", "reapply"]
-        : ["was not applied", "reapply"];
+    const excludedMessages = ["was not applied", "reapply"];
     for (const excluded of excludedMessages) {
       expectFailure(harness.respond, expect.not.stringContaining(excluded));
     }
     expectFailure(harness.respond, expect.stringContaining("wait for the Gateway to restart"));
     expect(harness.respond).toHaveBeenCalledOnce();
+    expect(queueFollowUp).toHaveBeenCalledOnce();
+  },
+);
+it.each(["config.patch", "config.apply"] as const)(
+  "acknowledges %s after managed restart admission",
+  async (method) => {
+    const queueFollowUp = vi.fn();
+    configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
+      path: "/tmp/openclaw.json",
+      config: { gateway: { port: 18_790 } },
+      hash: "restart-hash",
+      application: Promise.resolve("restart-pending"),
+      queueFollowUp,
+    });
+    const { harness, operation } = startConfigWrite(method, {
+      raw: { gateway: { port: 18_790 } },
+      baseHash: "base-hash",
+    });
+    await operation;
+    expect(harness.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, hash: "restart-hash" }),
+      undefined,
+    );
     expect(queueFollowUp).toHaveBeenCalledOnce();
   },
 );

@@ -16,13 +16,16 @@ import {
   verifyDeviceToken,
 } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
+import { resetGatewayRestartStateForInProcessRestart } from "../infra/restart.js";
 import { resetLogger } from "../logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import type { GatewayServerOptions } from "./server-public.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -66,13 +69,19 @@ describe("gateway shared auth rotation", () => {
         await server?.close();
         server = undefined;
       },
+      // The fixture observes emission without starting a successor process.
+      () => resetGatewayRestartStateForInProcessRestart(),
+      () => resetGatewayWorkAdmission(),
       () => state.cleanup(),
       () => resetLogger(),
       () => clearPluginMetadataLifecycleCaches(),
     );
   });
 
-  async function startGateway(token: GatewayAuthConfig["token"] = OLD_TOKEN) {
+  async function startGateway(
+    token: GatewayAuthConfig["token"] = OLD_TOKEN,
+    hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"],
+  ) {
     await state.writeConfig({
       gateway: {
         mode: "local",
@@ -84,7 +93,7 @@ describe("gateway shared auth rotation", () => {
       logging: { level: "silent", consoleLevel: "silent" },
       agents: { defaults: { workspace: state.workspaceDir } },
     });
-    server = await startGatewayServerCore(port, { controlUiEnabled: false });
+    server = await startGatewayServerCore(port, { controlUiEnabled: false, hotReloadRecovery });
     await server.startupSettled;
   }
 
@@ -218,6 +227,41 @@ describe("gateway shared auth rotation", () => {
     await rotateSharedToken(connection.client);
     await expectAuthChangedClose(connection);
   });
+
+  it.each(["config.patch", "config.apply"] as const)(
+    "acknowledges restart admission before auth close and emission for %s",
+    async (method) => {
+      const events: string[] = [];
+      const emitted = createDeferredCore();
+      await startGateway(OLD_TOKEN, () => {
+        events.push("restart-emission");
+        emitted.resolve();
+        return { status: "emitted" };
+      });
+      const connection = await connect({ token: OLD_TOKEN });
+      const before = await connection.client.request<ConfigSnapshot>("config.get");
+      void connection.closed.then(() => events.push("auth-close"));
+      const gateway = {
+        ...before.config.gateway,
+        port: await getFreePort(),
+        auth: { mode: "token", token: NEW_TOKEN },
+      };
+      const ack = await connection.client.request<ConfigAck>(method, {
+        baseHash: before.hash,
+        raw: JSON.stringify(
+          method === "config.apply" ? { ...before.config, gateway } : { gateway },
+        ),
+      });
+      events.push("success-response");
+      expect(ack).toMatchObject({
+        hash: expect.any(String),
+        sentinel: { payload: { stats: { requiresRestart: true } } },
+      });
+      await expectAuthChangedClose(connection);
+      await emitted.promise;
+      expect(events).toEqual(["success-response", "auth-close", "restart-emission"]);
+    },
+  );
 
   it("keeps existing device-token websocket sessions connected after shared token rotation", async () => {
     await startGateway();

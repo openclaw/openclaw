@@ -67,7 +67,7 @@ it("awaits transcript additions and title edits only when the reload owner can a
       ...params,
       changedPaths: [...params.changedPaths, "gateway.port"],
     }),
-  ).toBe(false);
+  ).toBe(true);
   expect(
     shouldAwaitGatewayConfigApplication({
       ...params,
