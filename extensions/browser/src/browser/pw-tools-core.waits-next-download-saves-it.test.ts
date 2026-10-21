@@ -6,30 +6,21 @@ import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitStarted } from "./pw-tools-core.guard-test-support.js";
-import {
-  getPwToolsCoreSessionMocks,
-  getPwToolsCoreNavigationGuardMocks,
-  installPwToolsCoreTestHooks,
-  setPwToolsCoreCurrentPage,
-  setPwToolsCoreCurrentRefLocator,
-} from "./pw-tools-core.test-harness.js";
+import * as sessionHarness from "./pw-tools-core.test-harness.js";
 
 const tmpDirMocks = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDir: vi.fn(() => "/tmp/openclaw"),
 }));
-const chromeMocks = vi.hoisted(() => ({
+vi.mock("./chrome.js", () => ({
   getChromeWebSocketEndpoint: vi.fn(async () => ({
     url: "ws://127.0.0.1/devtools/browser/mock",
   })),
 }));
-const clientFetchMocks = vi.hoisted(() => ({
+vi.mock("./client-fetch.js", () => ({
   resolveBrowserRateLimitMessage: vi.fn(() => undefined),
 }));
-vi.mock("./chrome.js", () => chromeMocks);
-vi.mock("./client-fetch.js", () => clientFetchMocks);
-
-const sessionMocks = getPwToolsCoreSessionMocks();
-const navigationGuardMocks = getPwToolsCoreNavigationGuardMocks();
+const sessionMocks = sessionHarness.getPwToolsCoreSessionMocks();
+const navigationGuardMocks = sessionHarness.getPwToolsCoreNavigationGuardMocks();
 
 const tmpDirModule = await import("openclaw/plugin-sdk/temp-path");
 vi.spyOn(tmpDirModule, "resolvePreferredOpenClawTmpDir").mockImplementation(
@@ -59,12 +50,10 @@ function downloadEvent(
 }
 
 describe("pw-tools-core", () => {
-  installPwToolsCoreTestHooks();
+  sessionHarness.installPwToolsCoreTestHooks();
 
   beforeEach(() => {
-    for (const fn of Object.values({ ...tmpDirMocks, ...chromeMocks, ...clientFetchMocks })) {
-      fn.mockClear();
-    }
+    tmpDirMocks.resolvePreferredOpenClawTmpDir.mockClear();
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw");
   });
 
@@ -93,7 +82,10 @@ describe("pw-tools-core", () => {
 
   function createDownloadEventHarness() {
     const events = new EventEmitter();
-    setPwToolsCoreCurrentPage({ on: events.on.bind(events), off: events.off.bind(events) });
+    sessionHarness.setPwToolsCoreCurrentPage({
+      on: events.on.bind(events),
+      off: events.off.bind(events),
+    });
     return {
       trigger: (download: unknown) => events.emit("download", download),
       expectArmed: () => expect(events.listenerCount("download")).toBeGreaterThan(0),
@@ -208,7 +200,7 @@ describe("pw-tools-core", () => {
         current = false;
         clicked.resolve();
       });
-      setPwToolsCoreCurrentRefLocator({ click });
+      sessionHarness.setPwToolsCoreCurrentRefLocator({ click });
 
       const saveAs = writer("report-content");
       const download = downloadEvent(saveAs, "report.pdf");
@@ -259,7 +251,7 @@ describe("pw-tools-core", () => {
         const saveAs = vi.fn(async () => {});
         const cancel = vi.fn(async () => {});
         const click = vi.fn(async () => {});
-        setPwToolsCoreCurrentRefLocator({ click });
+        sessionHarness.setPwToolsCoreCurrentRefLocator({ click });
         navigationGuardMocks.assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
           new Error("browser navigation blocked by policy"),
         );
@@ -341,23 +333,15 @@ describe("pw-tools-core", () => {
     harness.trigger(downloadEvent(saveAs, "../../../../etc/passwd", "https://example.com/evil"));
     const res = await pending;
     const outPath = requireSaveAsPath(saveAs);
-    expect(typeof outPath).toBe("string");
     const expectedRootedDownloadsDir = await fs.realpath(
       path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),
     );
     const relativeStagedPath = path.relative(expectedRootedDownloadsDir, outPath);
     expect(relativeStagedPath.startsWith(`..${path.sep}`)).toBe(false);
     expect(path.isAbsolute(relativeStagedPath)).toBe(false);
-    await expectPathMissing(path.dirname(outPath));
     await expect(fs.realpath(path.dirname(res.path))).resolves.toBe(expectedRootedDownloadsDir);
-    expect(path.basename(outPath)).toContain(path.basename(res.path));
-    expect(path.basename(outPath)).toMatch(/\.part$/);
     expect(path.basename(res.path)).toMatch(/-passwd$/);
-    await expectPathMissing(outPath);
-    await expect(fs.readFile(res.path, "utf8")).resolves.toBe("download-content");
-    expect(path.normalize(res.path)).toContain(
-      path.normalize(`${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`),
-    );
+    await expectAtomicDownloadSave({ saveAs, targetPath: res.path, content: "download-content" });
   });
 
   it.runIf(process.platform !== "win32")(
