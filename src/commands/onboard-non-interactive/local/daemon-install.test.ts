@@ -1,4 +1,8 @@
+// Non-interactive daemon install tests cover gateway service planning, token resolution, and systemd handling.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { installGatewayDaemonNonInteractive } from "./daemon-install.js";
 
 const readDaemonRuntimePinForInstall = vi.hoisted(() =>
@@ -24,7 +28,9 @@ vi.mock("../../daemon-install-helpers.js", () => ({
   gatewayInstallErrorHint,
 }));
 
-vi.mock("../../gateway-install-token.js", () => ({ resolveGatewayInstallToken }));
+vi.mock("../../gateway-install-token.js", () => ({
+  resolveGatewayInstallToken,
+}));
 
 vi.mock("../../../daemon/service.js", () => ({
   resolveGatewayService: vi.fn(() => ({
@@ -33,29 +39,27 @@ vi.mock("../../../daemon/service.js", () => ({
   })),
 }));
 
-vi.mock("../../../daemon/systemd.js", () => ({ isSystemdUserServiceAvailable }));
-vi.mock("../../daemon-runtime.js", () => ({ DEFAULT_GATEWAY_DAEMON_RUNTIME: "node" }));
-vi.mock("../../systemd-linger.js", () => ({ ensureSystemdUserLingerNonInteractive }));
+vi.mock("../../../daemon/systemd.js", () => ({
+  isSystemdUserServiceAvailable,
+}));
+
+vi.mock("../../daemon-runtime.js", () => ({
+  DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
+}));
+
+vi.mock("../../systemd-linger.js", () => ({
+  ensureSystemdUserLingerNonInteractive,
+}));
 
 describe("installGatewayDaemonNonInteractive", () => {
-  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-  const install = (
-    overrides: Partial<Parameters<typeof installGatewayDaemonNonInteractive>[0]> = {},
-  ) =>
-    installGatewayDaemonNonInteractive({
-      nextConfig: {},
-      opts: { installDaemon: true },
-      runtime,
-      port: 18789,
-      ...overrides,
-    });
-
   beforeEach(() => {
     vi.clearAllMocks();
     readDaemonRuntimePinForInstall.mockReturnValue({ revision: "empty", stored: false });
     serviceReadCommand.mockResolvedValue(null);
     isSystemdUserServiceAvailable.mockResolvedValue(true);
-    resolveGatewayInstallToken.mockResolvedValue({ warnings: [] });
+    resolveGatewayInstallToken.mockResolvedValue({
+      warnings: [],
+    });
     buildGatewayInstallPlan.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "run"],
       workingDirectory: "/tmp",
@@ -64,6 +68,7 @@ describe("installGatewayDaemonNonInteractive", () => {
   });
 
   it("preserves stored heap controls without passing plaintext tokens for SecretRef-managed install", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const managedDefinition = {
       programArguments: [
         "/usr/bin/node",
@@ -82,28 +87,51 @@ describe("installGatewayDaemonNonInteractive", () => {
     };
     serviceReadCommand.mockResolvedValue(existingCommand);
 
-    await install({
+    await installGatewayDaemonNonInteractive({
       nextConfig: {
         gateway: {
           auth: {
             mode: "token",
-            token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+            token: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_TOKEN",
+            },
           },
         },
-      },
+      } as OpenClawConfig,
+      opts: { installDaemon: true },
+      runtime,
+      port: 18789,
     });
 
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
-    expect(buildGatewayInstallPlan).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ existingCommand }),
+    expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
+    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingCommand,
+      }),
     );
     expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
-    expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("token");
+    expect(
+      "token" in
+        expectDefined(
+          buildGatewayInstallPlan.mock.calls[0],
+          "buildGatewayInstallPlan.mock.calls[0] test invariant",
+        )[0],
+    ).toBe(false);
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 
   it("forwards Bun as the explicit daemon runtime", async () => {
-    await install({ opts: { installDaemon: true, daemonRuntime: "bun" } });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await installGatewayDaemonNonInteractive({
+      nextConfig: {} as OpenClawConfig,
+      opts: { installDaemon: true, daemonRuntime: "bun" },
+      runtime,
+      port: 18789,
+    });
 
     expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
       expect.objectContaining({ runtime: "bun" }),
@@ -116,39 +144,65 @@ describe("installGatewayDaemonNonInteractive", () => {
       unavailableReason: "gateway.auth.token SecretRef is configured but unresolved (boom).",
       warnings: [],
     });
-    await install();
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
-      "Gateway install blocked: gateway.auth.token SecretRef is configured but unresolved (boom). Fix gateway auth config/token input and rerun setup.",
-    );
+    await installGatewayDaemonNonInteractive({
+      nextConfig: {} as OpenClawConfig,
+      opts: { installDaemon: true },
+      runtime,
+      port: 18789,
+    });
+
+    expect(runtime.error.mock.calls).toEqual([
+      [
+        "Gateway install blocked: gateway.auth.token SecretRef is configured but unresolved (boom). Fix gateway auth config/token input and rerun setup.",
+      ],
+    ]);
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(buildGatewayInstallPlan).not.toHaveBeenCalled();
     expect(serviceInstall).not.toHaveBeenCalled();
   });
 
   it("returns a skipped result when Linux user systemd is unavailable", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const originalPlatform = process.platform;
 
     isSystemdUserServiceAvailable.mockResolvedValue(false);
-    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "linux",
+    });
 
     try {
-      expect(await install()).toEqual({
+      const result = await installGatewayDaemonNonInteractive({
+        nextConfig: {} as OpenClawConfig,
+        opts: { installDaemon: true },
+        runtime,
+        port: 18789,
+      });
+
+      expect(result).toEqual({
         installed: false,
         skippedReason: "systemd-user-unavailable",
       });
-      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
-        "Systemd user services are unavailable; skipping service install. Use a direct shell run (`openclaw gateway run`) or rerun without --install-daemon on this session.",
-      );
+      expect(runtime.log.mock.calls).toEqual([
+        [
+          "Systemd user services are unavailable; skipping service install. Use a direct shell run (`openclaw gateway run`) or rerun without --install-daemon on this session.",
+        ],
+      ]);
       expect(buildGatewayInstallPlan).not.toHaveBeenCalled();
       expect(serviceInstall).not.toHaveBeenCalled();
     } finally {
-      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: originalPlatform,
+      });
     }
   });
   it.each([undefined, "node", "bun"] as const)(
     "carries installed pin intent through setup (explicit=%s)",
     async (daemonRuntime) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const pin = { runtime: "bun", path: "/opt/pinned/bun" } as const;
       const expected = { revision: "installed-pin", stored: true, pin };
       const existingCommand = {
@@ -157,7 +211,12 @@ describe("installGatewayDaemonNonInteractive", () => {
       };
       serviceReadCommand.mockResolvedValue(existingCommand);
       readDaemonRuntimePinForInstall.mockReturnValue(expected);
-      await install({ opts: { installDaemon: true, daemonRuntime } });
+      await installGatewayDaemonNonInteractive({
+        nextConfig: {},
+        opts: { installDaemon: true, daemonRuntime },
+        runtime,
+        port: 18789,
+      });
       expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
         expect.objectContaining({
           runtime: daemonRuntime ?? "bun",
