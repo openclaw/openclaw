@@ -36,6 +36,11 @@ import {
   isWorkflowDispatch,
   ghField,
 } from "./full-release-validation-at-sha.test-support.js";
+import { publicationSelectionFixture } from "./full-release-validation-state.test-support.js";
+
+function rejectArgs(args: string[], error: string) {
+  expect(() => parseArgs(args)).toThrow(error);
+}
 
 describe("full-release-validation-at-sha", () => {
   it("rejects a missing purpose before remote creation on supporting tooling", () => {
@@ -131,24 +136,21 @@ describe("full-release-validation-at-sha", () => {
       provider: "anthropic",
       release_profile: "full",
     });
-    expect(() => parseArgs(["--", "-f"])).toThrow("-f requires a value");
+    rejectArgs(["--", "-f"], "-f requires a value");
   });
 
   it("requires an exact Tooling SHA for protected workflow tags", () => {
     const trustedTag = `release-publish/${"a".repeat(12)}-123`;
-    expect(() => parseArgs(["--trusted-workflow-ref", trustedTag])).toThrow(
-      "explicit full Tooling SHA",
+    rejectArgs(["--trusted-workflow-ref", trustedTag], "explicit full Tooling SHA");
+    rejectArgs(
+      ["--workflow-sha", "a".repeat(40), "--trusted-workflow-ref", "release/2026.8.1"],
+      "protected release-publish",
     );
-    expect(() =>
-      parseArgs(["--workflow-sha", "a".repeat(40), "--trusted-workflow-ref", "release/2026.8.1"]),
-    ).toThrow("protected release-publish");
   });
 
   it("rejects retry groups that are not controller APIs", () => {
-    expect(() => parseArgs(["-f", "rerun_group=release-checks"])).toThrow(
-      "rerun_group must be one of",
-    );
-    expect(() => parseArgs(["-f", "rerun_group=qa"])).toThrow("rerun_group must be one of");
+    rejectArgs(["-f", "rerun_group=release-checks"], "rerun_group must be one of");
+    rejectArgs(["-f", "rerun_group=qa"], "rerun_group must be one of");
     expect(parseArgs(["-f", "rerun_group=qa-parity"]).inputs.rerun_group).toBe("qa-parity");
   });
 
@@ -162,15 +164,13 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it("rejects missing option values", () => {
-    expect(() => parseArgs(["--sha", "--dry-run"])).toThrow("--sha requires a value");
-    expect(() => parseArgs(["--sha", "-h"])).toThrow("--sha requires a value");
-    expect(() => parseArgs(["--workflow-sha", "--dry-run"])).toThrow(
-      "--workflow-sha requires a value",
-    );
-    expect(() => parseArgs(["--workflow-sha", "-h"])).toThrow("--workflow-sha requires a value");
-    expect(() => parseArgs(["--target-ref", "--dry-run"])).toThrow("--target-ref requires a value");
-    expect(() => parseArgs(["-f", "--dry-run"])).toThrow("-f requires a value");
-    expect(() => parseArgs(["-f", "-h"])).toThrow("-f requires a value");
+    rejectArgs(["--sha", "--dry-run"], "--sha requires a value");
+    rejectArgs(["--sha", "-h"], "--sha requires a value");
+    rejectArgs(["--workflow-sha", "--dry-run"], "--workflow-sha requires a value");
+    rejectArgs(["--workflow-sha", "-h"], "--workflow-sha requires a value");
+    rejectArgs(["--target-ref", "--dry-run"], "--target-ref requires a value");
+    rejectArgs(["-f", "--dry-run"], "-f requires a value");
+    rejectArgs(["-f", "-h"], "-f requires a value");
   });
 
   it("accepts only canonical release branch or tag context", () => {
@@ -193,21 +193,21 @@ describe("full-release-validation-at-sha", () => {
       "refs/tags/release/2026.7.1",
       "refs/heads/v2026.7.1",
     ]) {
-      expect(() => parseArgs(["--target-ref", ref])).toThrow(
-        "canonical OpenClaw release branch or tag",
-      );
+      rejectArgs(["--target-ref", ref], "canonical OpenClaw release branch or tag");
     }
     expect(parseArgs(["--target-ref", "release/2026.7.1"])).toMatchObject({
       trustedWorkflowRef: "candidate",
       workflowSha: "",
       admissionWorkflowRef: "main",
     });
-    expect(() =>
-      parseArgs(["--target-ref", "release/2026.7.1", "--trusted-workflow-ref", "main"]),
-    ).toThrow("requires --workflow-sha with an explicit full Tooling SHA");
-    expect(() =>
-      parseArgs(["--target-ref", "release/2026.7.1", "--workflow-sha", "origin/main"]),
-    ).toThrow("explicit full Tooling SHA");
+    rejectArgs(
+      ["--target-ref", "release/2026.7.1", "--trusted-workflow-ref", "main"],
+      "requires --workflow-sha with an explicit full Tooling SHA",
+    );
+    rejectArgs(
+      ["--target-ref", "release/2026.7.1", "--workflow-sha", "origin/main"],
+      "explicit full Tooling SHA",
+    );
   });
 
   it("requires a same-source base tag only when a correction uses base-version packages", () => {
@@ -294,31 +294,22 @@ describe("full-release-validation-at-sha", () => {
 
   it("allows exact-target reuse to be disabled for a forced fresh run", () => {
     expect(parseArgs(["-f", "reuse_evidence=false"]).inputs.reuse_evidence).toBe("false");
-    expect(() => parseArgs(["-f", "reuse_evidence=maybe"])).toThrow(
-      "reuse_evidence must be true or false",
-    );
+    rejectArgs(["-f", "reuse_evidence=maybe"], "reuse_evidence must be true or false");
     expect(parseArgs(["-f", "fail_fast=true"]).inputs.fail_fast).toBe("true");
-    expect(() => parseArgs(["-f", "fail_fast=maybe"])).toThrow("fail_fast must be true or false");
-    expect(() => parseArgs(["-f", "release_profile=minimum"])).toThrow(
-      "release_profile must be beta, stable, or full",
-    );
-    expect(() => parseArgs(["-f", "allow_unreleased_changelog=maybe"])).toThrow(
+    rejectArgs(["-f", "fail_fast=maybe"], "fail_fast must be true or false");
+    rejectArgs(["-f", "release_profile=minimum"], "release_profile must be beta, stable, or full");
+    rejectArgs(
+      ["-f", "allow_unreleased_changelog=maybe"],
       "allow_unreleased_changelog must be true or false",
     );
   });
 
   it("reserves immutable candidate identity inputs for the resolved --sha", () => {
-    expect(() => parseArgs(["-f", "ref=other"])).toThrow("reserves the ref input");
-    expect(() => parseArgs(["--", "ref=other"])).toThrow("reserves the ref input");
-    expect(() => parseArgs(["-f", `expected_sha=${"a".repeat(40)}`])).toThrow(
-      "reserves expected_sha",
-    );
-    expect(() => parseArgs(["--", `expected_sha=${"a".repeat(40)}`])).toThrow(
-      "reserves expected_sha",
-    );
-    expect(() => parseArgs(["-f", "trusted_workflow_json={}"])).toThrow(
-      "reserves trusted_workflow_json",
-    );
+    rejectArgs(["-f", "ref=other"], "reserves the ref input");
+    rejectArgs(["--", "ref=other"], "reserves the ref input");
+    rejectArgs(["-f", `expected_sha=${"a".repeat(40)}`], "reserves expected_sha");
+    rejectArgs(["--", `expected_sha=${"a".repeat(40)}`], "reserves expected_sha");
+    rejectArgs(["-f", "trusted_workflow_json={}"], "reserves trusted_workflow_json");
   });
 
   it("validates direct and reused runs through the strict evidence verifier", () => {
@@ -1411,11 +1402,8 @@ describe("full-release-validation-at-sha", () => {
           ? [
               "-f",
               `publication_selection_json=${JSON.stringify({
-                route: "normal",
+                ...publicationSelectionFixture(),
                 npmDistTag: "beta",
-                publishOpenclawNpm: true,
-                pluginPublishScope: "all-publishable",
-                plugins: [],
               })}`,
             ]
           : []),

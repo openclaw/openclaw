@@ -36,6 +36,10 @@ import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
+import {
+  publicationSelectionFixture,
+  publicationSourceEnv,
+} from "./full-release-validation-state.test-support.js";
 import { preparedScriptWrapperPreload } from "./prepared-script-wrapper.test-support.js";
 import {
   SOURCE_ADMISSION_PATHS as toolingPaths,
@@ -154,13 +158,7 @@ beforeAll(async () => {
   toolingTemplate = { loose: prepared, packed };
 });
 
-const selection = {
-  route: "normal",
-  npmDistTag: "latest",
-  publishOpenclawNpm: true,
-  pluginPublishScope: "all-publishable",
-  plugins: [],
-};
+const selection = publicationSelectionFixture();
 const windowsSelection = {
   ...selection,
   windowsNodeTag: "v0.5.0",
@@ -2413,23 +2411,23 @@ describe("publication source intent and durable binding", () => {
         validationPurpose: "diagnostic",
         publicationSelection: null,
       };
-      const environment = {
-        PUBLICATION_INPUTS_JSON: JSON.stringify({
+      const environment = publicationSourceEnv(
+        {
           trusted_workflow_json: JSON.stringify(diagnosticIntent),
           ref: "main",
           release_profile: "full",
-        }),
-        PUBLICATION_TOOLING_JSON: JSON.stringify({
-          fullRef: "refs/heads/main",
-          sha: "a".repeat(40),
-        }),
-        PUBLICATION_TARGET_SHA: "b".repeat(40),
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        GITHUB_REF: "refs/heads/main",
-        GITHUB_SHA: "a".repeat(40),
-        GITHUB_RUN_ID: "123",
-        GITHUB_RUN_ATTEMPT: "1",
-      };
+          rerun_group: undefined,
+        },
+        {
+          PUBLICATION_TARGET_CONTEXT: undefined,
+          PUBLICATION_TOOLING_JSON: JSON.stringify({
+            fullRef: "refs/heads/main",
+            sha: "a".repeat(40),
+          }),
+          GITHUB_REF: "refs/heads/main",
+          GITHUB_RUN_ID: "123",
+        },
+      );
       const request = publicationSourceRequest(environment);
       expect(() =>
         publicationSourceRequest({
