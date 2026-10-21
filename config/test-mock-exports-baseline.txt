@@ -1103,7 +1103,6 @@
 ["extensions/telegram/src/bot/delivery.resolve-media-retry.test.ts","openclaw/plugin-sdk/file-access-runtime","c1fcf510912f75f7b56facbfcfb50e99b9c42a1c748545b9698901068ac1ef02",1]
 ["extensions/telegram/src/channel.resolve-targets.test.ts","./api-fetch.js","d5f67bd1001449392ee29031c23c554021e2605f680f52af4fc6d559b3a6ff02",1]
 ["extensions/telegram/src/doctor.test.ts","openclaw/plugin-sdk/runtime","decd43ff40f775ecec3595d737437c6639a0d34f2cb77fc98993ba5c509f558f",1]
-["extensions/telegram/src/fetch.capture.test.ts","openclaw/plugin-sdk/proxy-capture","36c3aecef9a16f023cd38badc639c352a5d0959acc2d3529f81a09831a224737",1]
 ["extensions/telegram/src/monitor.test.ts","./fetch.js","8d74fb228a131f8454476099906daf4fb8291596ae6b30d3aab2668806b6261c",1]
 ["extensions/telegram/src/monitor.test.ts","./polling-session.js","854bfb820bff3ae3d3d94fc277108e5a617ac63fc6366febc0f8fb06a0e433bc",1]
 ["extensions/telegram/src/monitor.test.ts","./runtime.js","b033b8ab2238ef0760595a5a5f6b6da6d1ec84bed0c1a96da06a919d0b771925",1]
