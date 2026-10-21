@@ -404,7 +404,7 @@ suite.define(() => {
           }
         } catch (error) {
           await captureControlUiE2eFailureDiagnostics(page, {
-            error,
+            error: error instanceof Error ? error : new Error(String(error)),
             label: "Control UI native embed settings E2E",
           });
           throw error;
