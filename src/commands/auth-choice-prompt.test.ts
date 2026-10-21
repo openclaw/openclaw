@@ -1,24 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter, WizardSelectParams } from "../wizard/prompts.js";
+import {
+  buildAuthChoiceGroups,
+  formatAuthChoiceChoicesForCli,
+  isFeaturedAuthChoiceGroup,
+} from "./auth-choice-options.js";
 import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
-import { isKeepCurrentAuthChoice, promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
+import {
+  isKeepCurrentAuthChoice,
+  promptAuthChoiceGrouped as promptGrouped,
+} from "./auth-choice-prompt.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
-const buildAuthChoiceGroups = vi.hoisted(() => vi.fn());
-const compareAuthChoiceGroups = vi.hoisted(() =>
-  vi.fn((a: AuthChoiceGroup, b: AuthChoiceGroup) => a.label.localeCompare(b.label)),
-);
-const isFeaturedAuthChoiceGroup = vi.hoisted(() =>
-  vi.fn((group: AuthChoiceGroup) =>
-    ["openai", "anthropic", "xai", "google", "openrouter"].includes(group.value),
-  ),
-);
-
-vi.mock("./auth-choice-options.js", () => ({
-  buildAuthChoiceGroups,
-  compareAuthChoiceGroups,
-  isFeaturedAuthChoiceGroup,
+type ResolveFlows =
+  typeof import("../flows/provider-flow.js").resolveProviderSetupFlowContributions;
+type Flow = ReturnType<ResolveFlows>[number];
+const resolveProviderSetupFlowContributions = vi.hoisted(() => vi.fn<ResolveFlows>(() => []));
+vi.mock("../flows/provider-flow.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/provider-flow.js")>()),
+  resolveProviderSetupFlowContributions,
 }));
+let fixtureChoices: string[] = [];
 
 function authChoiceGroup(
   value: string,
@@ -49,10 +51,18 @@ function openAIGroup(): AuthChoiceGroup {
 }
 
 function mockGroups(groups: AuthChoiceGroup[]) {
-  buildAuthChoiceGroups.mockReturnValue({
-    groups,
-    skipOption: { value: "skip", label: "Skip for now" },
-  });
+  const flows = groups.flatMap((group) =>
+    group.options.map((option) => ({
+      providerId: group.providerIds?.[0] ?? group.value,
+      option: { ...option, group: { id: group.value, label: group.label, hint: group.hint } },
+    })),
+  );
+  fixtureChoices = flows.map(({ option }) => option.value);
+  resolveProviderSetupFlowContributions.mockReturnValue(flows);
+}
+
+function promptAuthChoiceGrouped(params: Parameters<typeof promptGrouped>[0]) {
+  return promptGrouped({ allowedChoices: new Set(fixtureChoices), ...params });
 }
 
 function scriptedPrompter(steps: Array<string | readonly [message: string, answer: string]>) {
@@ -76,18 +86,25 @@ function optionValues(prompt: WizardSelectParams<unknown> | undefined) {
   return prompt?.options.map((option) => option.value);
 }
 
+function flow(providerId: string, label: string, value = providerId, groupId = providerId): Flow {
+  return { providerId, option: { value, label, group: { id: groupId, label } } };
+}
+
 describe("promptAuthChoiceGrouped", () => {
   beforeEach(() => {
-    buildAuthChoiceGroups.mockReset();
-    compareAuthChoiceGroups
-      .mockReset()
-      .mockImplementation((a, b) => a.label.localeCompare(b.label));
-    isFeaturedAuthChoiceGroup.mockClear();
+    resolveProviderSetupFlowContributions.mockReset();
   });
 
   it("marks the configured provider and offers keep current config first", async () => {
+    const openai = openAIGroup();
+    openai.options.push({
+      value: "openai-device-code",
+      label: "ChatGPT Device Pairing",
+      assistantVisibility: "manual-only",
+      assistantPriority: -10,
+    });
     mockGroups([
-      openAIGroup(),
+      openai,
       {
         ...authChoiceGroup("anthropic", "Anthropic", [["apiKey", "Anthropic API Key"]], true),
         providerIds: ["anthropic"],
@@ -102,6 +119,7 @@ describe("promptAuthChoiceGrouped", () => {
       prompter,
       includeSkip: true,
       allowKeepCurrentProvider: true,
+      assistantVisibleOnly: false,
       config: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
     });
 
@@ -118,6 +136,7 @@ describe("promptAuthChoiceGrouped", () => {
     });
     expect(optionValues(prompts[1])).toEqual([
       "__keep-current",
+      "openai-device-code",
       "openai",
       "openai-api-key",
       "__back",
@@ -125,15 +144,6 @@ describe("promptAuthChoiceGrouped", () => {
   });
 
   it("filters guided choices while keeping featured providers and grouped methods", async () => {
-    const featuredOrder = new Map([
-      ["openai", 0],
-      ["anthropic", 1],
-    ]);
-    compareAuthChoiceGroups.mockImplementation((a, b) => {
-      const priorityA = featuredOrder.get(a.value) ?? Number.POSITIVE_INFINITY;
-      const priorityB = featuredOrder.get(b.value) ?? Number.POSITIVE_INFINITY;
-      return priorityA - priorityB || a.label.localeCompare(b.label);
-    });
     mockGroups([
       authChoiceGroup("minimax", "MiniMax", [
         ["minimax-global-oauth", "MiniMax OAuth (Global)"],
@@ -165,7 +175,7 @@ describe("promptAuthChoiceGrouped", () => {
 
     expect(optionValues(prompts[0])).toEqual(["openai", "anthropic", "__more", "skip"]);
     expect(optionValues(prompts[1])).toEqual(["meta", "minimax", "__back"]);
-    expect(optionValues(prompts[2])).toEqual(["minimax-global-oauth", "minimax-cn-api", "__back"]);
+    expect(optionValues(prompts[2])).toEqual(["minimax-cn-api", "minimax-global-oauth", "__back"]);
     expect(result).toBe("minimax-cn-api");
   });
 
@@ -197,8 +207,8 @@ describe("promptAuthChoiceGrouped", () => {
     expect(optionValues(prompts[0])).toEqual([
       "detected-ai",
       "recommended-ai",
-      "anthropic",
       "openai",
+      "anthropic",
       "__more",
       "skip",
     ]);
@@ -211,13 +221,15 @@ describe("promptAuthChoiceGrouped", () => {
   });
 
   it("marks a detected provider in the provider picker", async () => {
-    mockGroups([authChoiceGroup("ollama", "Ollama", [["ollama", "Ollama"]])]);
+    const ollama = authChoiceGroup("ollama", "Ollama", [["ollama", "Ollama"]]);
+    ollama.options[0]!.assistantVisibility = "detected-only";
+    mockGroups([ollama, openAIGroup()]);
     const { prompter, prompts } = scriptedPrompter(["skip"]);
 
     await promptAuthChoiceGrouped({
       prompter,
       includeSkip: true,
-      detectedProviderIds: new Set(["ollama"]),
+      detectedProviderIds: new Set(["OLLAMA"]),
     });
 
     expect(prompts[0]?.options).toContainEqual({
@@ -225,6 +237,91 @@ describe("promptAuthChoiceGrouped", () => {
       label: "Ollama (detected)",
       hint: undefined,
     });
+    expect(optionValues(prompts[0])).toContain("openai");
+  });
+
+  it("orders common provider groups before the alphabetical remainder", () => {
+    resolveProviderSetupFlowContributions.mockReturnValue([
+      ...(
+        [
+          ["google", "Google"],
+          ["xai", "xAI (Grok)"],
+          ["litellm", "LiteLLM"],
+          ["openai", "OpenAI"],
+          ["anthropic", "Anthropic"],
+          ["byteplus", "BytePlus"],
+          ["openrouter", "OpenRouter"],
+        ] as const
+      ).map(([id, label]) => flow(id, label)),
+      {
+        ...flow("meta", "Meta"),
+        option: { ...flow("meta", "Meta").option, onboardingFeatured: true },
+      },
+    ]);
+    const { groups } = buildAuthChoiceGroups({ includeSkip: false });
+    expect(groups.map(({ label }) => label)).toEqual([
+      "OpenAI",
+      "OpenRouter",
+      "xAI (Grok)",
+      "Google",
+      "Anthropic",
+      "BytePlus",
+      "Custom Provider",
+      "LiteLLM",
+      "Meta",
+    ]);
+    expect(groups.filter(isFeaturedAuthChoiceGroup).map(({ label }) => label)).toEqual([
+      "OpenAI",
+      "OpenRouter",
+      "xAI (Grok)",
+      "Google",
+      "Anthropic",
+    ]);
+  });
+
+  it("groups OpenCode Zen and Go under one entry", () => {
+    resolveProviderSetupFlowContributions.mockReturnValue([
+      flow("opencode", "OpenCode", "opencode-zen"),
+      flow("opencode-go", "OpenCode", "opencode-go", "opencode"),
+    ]);
+    const { groups } = buildAuthChoiceGroups({ includeSkip: false });
+    expect(
+      groups.find(({ value }) => value === "opencode")?.options.map(({ value }) => value),
+    ).toEqual(expect.arrayContaining(["opencode-zen", "opencode-go"]));
+  });
+
+  it("keeps media auth choices in CLI help but outside the interactive picker", () => {
+    const text = [flow("openai", "OpenAI", "openai-api-key"), flow("ollama", "Ollama")];
+    const media = ["fal", "vydra", "openrouter"].map((id) => flow(id, id, `${id}-api-key`));
+    const local = ["local-image-runtime", "local-music-runtime"].map((id) => flow(id, id));
+    resolveProviderSetupFlowContributions
+      .mockReturnValueOnce(text)
+      .mockReturnValueOnce([...text, ...media, ...local]);
+    const { groups, skipOption } = buildAuthChoiceGroups({
+      includeSkip: true,
+      assistantVisibleOnly: false,
+    });
+    const values = [
+      ...groups.flatMap(({ options }) => options.map(({ value }) => value)),
+      skipOption?.value,
+    ];
+    const cli = formatAuthChoiceChoicesForCli().split("|");
+    expect(values).toEqual(expect.arrayContaining(["openai-api-key", "ollama", "skip"]));
+    expect(
+      values.filter((value) => [...media, ...local].some(({ option }) => option.value === value)),
+    ).toEqual([]);
+    expect(cli).toEqual(
+      expect.arrayContaining([
+        "openai-api-key",
+        "fal-api-key",
+        "vydra-api-key",
+        "openrouter-api-key",
+      ]),
+    );
+    expect(cli.filter((value) => value === "fal-api-key")).toHaveLength(1);
+    expect(
+      resolveProviderSetupFlowContributions.mock.calls.map(([params]) => params?.scope),
+    ).toEqual(["text-inference", "all"]);
   });
 
   it.each([

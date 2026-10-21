@@ -1,6 +1,8 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createTestWizardPrompter } from "../test-utils/plugin-setup-wizard.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 import { committedConfigFiles } from "./committed-config.test-support.js";
 
 const wizardTestMocks = vi.hoisted(() => {
@@ -287,16 +289,12 @@ export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
   wizardTestMocks.resolveLocalControlUiProbeLinks.mockReturnValue(links);
   wizardTestMocks.resolveAdvertisedControlUiLinks.mockResolvedValue(links);
   wizardTestMocks.summarizeExistingConfig.mockReturnValue("");
-  wizardTestMocks.createClackPrompter.mockReturnValue({
-    intro: vi.fn(async () => {}),
-    outro: vi.fn(async () => {}),
-    note: vi.fn(async () => {}),
-    select: vi.fn(async () => "firecrawl"),
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => ""),
-    confirm: vi.fn(async () => true),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-  });
+  wizardTestMocks.createClackPrompter.mockReturnValue(
+    createTestWizardPrompter({
+      select: vi.fn<WizardPrompter["select"]>().mockResolvedValue("firecrawl"),
+      confirm: vi.fn(async () => true),
+    }),
+  );
 }
 
 export function queueWizardTestPrompts(params: {

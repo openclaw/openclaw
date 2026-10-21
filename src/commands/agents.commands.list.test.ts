@@ -1,9 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import type { IdentityConfig } from "../config/types.js";
+import * as channelExposure from "../channels/plugins/exposure.js";
+import * as channelIds from "../channels/plugins/index.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { AgentRouteBinding, IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAccountListHelpers } from "../plugin-sdk/account-helpers.js";
+import { createScopedChannelConfigBase } from "../plugin-sdk/channel-config-helpers.js";
+import * as configuredChannelIds from "../plugins/channel-plugin-ids.js";
+import * as externalPluginRepairs from "../plugins/official-external-plugin-repair-hints.js";
+import type { OfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
+import { normalizeAccountId } from "../routing/account-id.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { defaultRuntime } from "../runtime.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
@@ -233,4 +242,291 @@ describe("agentsListCommand", () => {
       });
     },
   );
+});
+
+type Plugin = ChannelPlugin<ChannelAccountSnapshot>;
+const fail = (message: string): never => {
+  throw new Error(message);
+};
+const providerMocks = {
+  ...mocks,
+  summaryIsDefault: true,
+  normalize: vi.fn((value: unknown) =>
+    typeof value === "string" && value.trim().length > 0 ? value : null,
+  ),
+  configuredChannels: vi.fn<() => string[]>(() => []),
+  repairs: vi.fn<() => OfficialExternalPluginRepairHint[]>(() => []),
+};
+async function listProviders(cfg: OpenClawConfig = {}, bindings: AgentRouteBinding[] = []) {
+  mocks.config.mockResolvedValue({
+    ...cfg,
+    bindings,
+    agents: {
+      ownership: "explicit",
+      ...(providerMocks.summaryIsDefault
+        ? { defaults: { systemAgent: { agentId: "proof" } } }
+        : {}),
+      entries: { proof: { workspace: "/fixture", agentDir: "/fixture/agent" } },
+    },
+  });
+  return (await list({ bindings: true, json: true })).json;
+}
+
+const plugin = (
+  id: string,
+  config: Partial<Plugin["config"]> = {},
+  accounts: ChannelAccountSnapshot[] = [{ accountId: "default" }],
+): Plugin => ({
+  id,
+  meta: { id, label: id, selectionLabel: id, docsPath: `/channels/${id}`, blurb: "Fixture" },
+  capabilities: { chatTypes: ["direct"] },
+  config: {
+    listAccountIds: () => accounts.map((account) => account.accountId),
+    resolveAccount: (_cfg, accountId) =>
+      accounts.find((entry) => entry.accountId === (accountId ?? "default")) ??
+      fail("Unexpected fixture account"),
+    describeAccount: (account) => account,
+    ...config,
+  },
+});
+const makeAccount = (accountId: string, fields: Partial<ChannelAccountSnapshot> = {}) => ({
+  accountId,
+  enabled: true,
+  configured: true,
+  ...fields,
+});
+const repairHint = "Install the official Feishu plugin.";
+const feishuRepair: OfficialExternalPluginRepairHint = {
+  channelId: "feishu",
+  pluginId: "feishu",
+  label: "Feishu",
+  installSpec: "@openclaw/feishu",
+  installCommand: "openclaw plugins install @openclaw/feishu",
+  doctorFixCommand: "openclaw doctor --fix",
+  repairHint,
+};
+const route = (channel: string, accountId?: string): AgentRouteBinding => ({
+  agentId: "proof",
+  match: { channel, accountId },
+});
+function configureDisplayPlugins() {
+  const telegram = plugin("telegram", {}, [
+    makeAccount("default", { name: "Default", configured: false }),
+    makeAccount("alpha", { name: "Alpha" }),
+    makeAccount("beta", { name: "Beta", enabled: false, configured: false }),
+  ]);
+  telegram.meta.label = "Telegram";
+  const imessage = plugin("imessage", {}, [makeAccount("Alpha", { name: "Work" })]);
+  imessage.meta.label = "iMessage";
+  providerMocks.plugins.mockReturnValue([telegram, imessage]);
+  providerMocks.configuredChannels.mockReturnValue(["feishu"]);
+  providerMocks.repairs.mockReturnValue([feishuRepair]);
+}
+
+describe("agent provider inventories", () => {
+  afterEach(() => vi.restoreAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(channelIds, "normalizeChannelId").mockImplementation(providerMocks.normalize);
+    vi.spyOn(channelExposure, "isChannelVisibleInConfiguredLists").mockReturnValue(true);
+    vi.spyOn(configuredChannelIds, "listExplicitConfiguredChannelIdsForConfig").mockImplementation(
+      providerMocks.configuredChannels,
+    );
+    vi.spyOn(
+      externalPluginRepairs,
+      "resolveMissingOfficialExternalChannelPluginRepairHints",
+    ).mockImplementation(providerMocks.repairs);
+    mocks.provenance.mockResolvedValue([]);
+    mocks.displayProvenance.mockResolvedValue([]);
+    providerMocks.plugins.mockReturnValue([]);
+    providerMocks.configuredChannels.mockReturnValue([]);
+    providerMocks.repairs.mockReturnValue([]);
+    providerMocks.normalize.mockReset();
+    providerMocks.summaryIsDefault = true;
+  });
+
+  it("builds a read-only mixed account inventory without exposing unavailable credentials", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        imessage: { accounts: { Alpha: { name: "Alias" }, alpha: { name: "Exact" }, Secret: {} } },
+      },
+    };
+    const inspectAccount = vi.fn(() => makeAccount("default", { linked: true, name: "Work" }));
+    const resolveAccount = vi.fn(() => fail("must inspect read-only accounts"));
+    const isLinked = vi.fn(() => fail("linkage unavailable"));
+    const resolveAccountState = vi.fn(() => "enabled" as const);
+    const calls: Array<string | null | undefined> = [];
+    const resolveRawAccount = (config: OpenClawConfig, requestedId?: string | null) => {
+      calls.push(requestedId);
+      if (requestedId === "Secret") {
+        throw new Error("unresolved SecretRef: PRIVATE_PROVIDER_TOKEN");
+      }
+      const accountId = normalizeAccountId(requestedId);
+      const account = resolveAccountEntry(config.channels?.imessage?.accounts, accountId);
+      return makeAccount(accountId, { name: account?.name, enabled: account?.enabled !== false });
+    };
+    const accountHelpers = createAccountListHelpers("imessage");
+    const raw = plugin(
+      "imessage",
+      createScopedChannelConfigBase({
+        sectionKey: "imessage",
+        listAccountIds: accountHelpers.listAccountIds,
+        defaultAccountId: accountHelpers.resolveDefaultAccountId,
+        resolveAccount: resolveRawAccount,
+        clearBaseFields: [],
+      }),
+      [],
+    );
+    providerMocks.plugins.mockReturnValue([
+      plugin("workchat", { inspectAccount, resolveAccount }),
+      plugin(
+        "prepared",
+        {
+          resolveAccount,
+          resolveAccountAsync: async () => makeAccount("work", { name: "Prepared" }),
+        },
+        [{ accountId: "work" }],
+      ),
+      plugin("telegram", { isConfigured: () => false }, [
+        makeAccount("default", { tokenStatus: "configured_unavailable" }),
+      ]),
+      plugin(
+        "slack",
+        {
+          isConfigured: (account) => account.accountId === "optional",
+          describeAccount: (account) =>
+            makeAccount(account.accountId, { configured: account.accountId !== "unavailable" }),
+        },
+        [
+          makeAccount("optional", { userTokenStatus: "configured_unavailable" }),
+          makeAccount("missing", {
+            configured: false,
+            botTokenStatus: "configured_unavailable",
+            appTokenStatus: "missing",
+          }),
+          makeAccount("unavailable", {
+            botTokenStatus: "configured_unavailable",
+            appTokenStatus: "available",
+          }),
+        ],
+      ),
+      plugin("quietchat", { describeAccount: undefined, isConfigured: () => false, isLinked }, [
+        { accountId: "default", enabled: true },
+      ]),
+      {
+        ...plugin("legacychat", { describeAccount: undefined, isConfigured: () => true }, [
+          makeAccount("default"),
+        ]),
+        status: { resolveAccountState },
+      },
+      plugin("disabledchat", {}, [makeAccount("default", { enabled: false, configured: false })]),
+      raw,
+    ]);
+    providerMocks.configuredChannels.mockReturnValue(["telegram", "feishu"]);
+    providerMocks.repairs.mockReturnValue([feishuRepair]);
+
+    const bindings = providerMocks.plugins().map((entry) => route(entry.id, "*"));
+    bindings.push(route("feishu"));
+    providerMocks.plugins.mockClear();
+    const output = await listProviders(cfg, bindings);
+    expect(output).toMatchObject([
+      {
+        providers: [
+          "workchat default (Work): linked",
+          "prepared work (Prepared): configured",
+          "telegram default: configured unavailable",
+          "slack optional: configured",
+          "slack missing: not configured",
+          "slack unavailable: configured unavailable",
+          "quietchat default: not configured",
+          "legacychat default: enabled",
+          "disabledchat default: disabled",
+          "imessage alpha (Exact): configured",
+          "imessage Secret: configured unavailable",
+          "Feishu default: missing plugin - Install the official Feishu plugin.",
+        ],
+      },
+    ]);
+    expect(JSON.stringify(output)).not.toContain("PRIVATE_PROVIDER_TOKEN");
+    expect(resolveAccount).not.toHaveBeenCalled();
+    expect(inspectAccount).toHaveBeenCalledWith(expect.objectContaining(cfg), "default");
+    expect(isLinked).not.toHaveBeenCalled();
+    expect(resolveAccountState).toHaveBeenCalledOnce();
+    expect(calls).toEqual(raw.config.listAccountIds(cfg));
+    expect(cfg.channels?.imessage?.accounts?.Alpha?.name).toBe("Alias");
+    expect(providerMocks.repairs).toHaveBeenCalledWith({
+      config: expect.objectContaining(cfg),
+      channelIds: ["feishu"],
+    });
+    expect(providerMocks.plugins).toHaveBeenCalledOnce();
+    expect(providerMocks.plugins).toHaveBeenCalledWith(expect.objectContaining(cfg), {
+      includeSetupFallbackPlugins: false,
+    });
+  });
+
+  it("rethrows unexpected account resolution errors", async () => {
+    providerMocks.plugins.mockReturnValue([
+      plugin("quietchat", {
+        resolveAccount: () => fail("plugin crash"),
+      }),
+    ]);
+    await expect(listProviders()).rejects.toThrow("plugin crash");
+  });
+
+  it("renders canonical account scopes, deduplicating aliases without merging wildcard diagnostics", async () => {
+    providerMocks.normalize.mockImplementation((value) =>
+      typeof value === "string" && value !== "feishu" ? value : null,
+    );
+    configureDisplayPlugins();
+    const bindings = [
+      ...[undefined, " \t ", "default", " ALPHA ", " * ", "absent"].map((id) =>
+        route("telegram", id),
+      ),
+      ...["*", "alpha", "Alpha"].map((id) => route("imessage", id)),
+      ...["*", "default"].map((id) => route("signal", id)),
+      ...["*", undefined].map((id) => route("feishu", id)),
+    ];
+    expect(await listProviders({}, bindings)).toMatchObject([
+      {
+        routes: [
+          ...["default", "alpha", "*", "absent"].map((id) => `Telegram ${id}`),
+          ...["*", "alpha"].map((id) => `iMessage ${id}`),
+          ...["signal", "Feishu"].flatMap((label) =>
+            ["*", "default"].map((id) => `${label} ${id}`),
+          ),
+        ],
+        providers: [
+          "Telegram default (Default): not configured",
+          "Telegram alpha (Alpha): configured",
+          "Telegram beta (Beta): disabled",
+          "Telegram absent: unknown",
+          "iMessage Alpha (Work): configured",
+          "signal *: unknown",
+          "signal default: unknown",
+          "Feishu *: missing plugin - Install the official Feishu plugin.",
+          "Feishu default: missing plugin - Install the official Feishu plugin.",
+        ],
+      },
+    ]);
+  });
+
+  it.each([false, true])("filters unbound inventory for default=%s", async (summaryIsDefault) => {
+    providerMocks.summaryIsDefault = summaryIsDefault;
+    configureDisplayPlugins();
+    const output = await listProviders();
+    expect(output).toMatchObject([
+      summaryIsDefault
+        ? {
+            providers: [
+              "Telegram alpha (Alpha): configured",
+              "iMessage Alpha (Work): configured",
+              "Feishu default: missing plugin - Install the official Feishu plugin.",
+            ],
+          }
+        : { id: "proof" },
+    ]);
+    if (!summaryIsDefault) {
+      expect(output).not.toHaveProperty("0.providers");
+    }
+  });
 });

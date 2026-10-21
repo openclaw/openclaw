@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
+import { sessionsCompactCommand } from "./sessions-compact.js";
 import { sessionsLifecycleCommand } from "./sessions-lifecycle.js";
 
 const mocks = vi.hoisted(() => ({
@@ -63,6 +64,10 @@ function respond(...values: unknown[]) {
   }
 }
 
+function prepareDelete(key: string, extra = {}, session = {}) {
+  respond(described(key, "session-1", session), deleted(key, extra));
+}
+
 describe("sessions lifecycle commands", () => {
   let runtime: ReturnType<typeof createNonExitingRuntimeEnv>;
   const run = (
@@ -77,6 +82,11 @@ describe("sessions lifecycle commands", () => {
     expect(mocks.callGateway).toHaveBeenNthCalledWith(index, method, expect.any(Object), params, {
       defaultTimeoutMs: 10 * 60_000,
     });
+  const joinedArgs = (channel: "log" | "error") =>
+    vi
+      .mocked(runtime[channel])
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
 
   afterEach(() => vi.unstubAllEnvs());
 
@@ -271,10 +281,7 @@ describe("sessions lifecycle commands", () => {
       agents: { entries: { main: {}, work: {} } },
       gateway: { mode: "remote", remote: { url: "ws://configured-gateway.test" } },
     });
-    respond(
-      described(key, "session-1", { agentId: "work" }),
-      deleted(key, { archived: ["/gateway/archive"] }),
-    );
+    prepareDelete(key, { archived: ["/gateway/archive"] }, { agentId: "work" });
 
     await run("delete", { keys: [key], yes: true, url });
 
@@ -296,10 +303,7 @@ describe("sessions lifecycle commands", () => {
     async (json) => {
       const key = "agent:work:notes\u001b[2J\nnext";
       const archived = "/gateway/notes\u001b]2;changed\u0007\rnext";
-      respond(
-        described(key, "session-1", { agentId: "work" }),
-        deleted(key, { archived: [archived] }),
-      );
+      prepareDelete(key, { archived: [archived] }, { agentId: "work" });
 
       await run("delete", { keys: [key], yes: true, json });
 
@@ -324,7 +328,7 @@ describe("sessions lifecycle commands", () => {
   );
 
   it("does not guess an owner when the Gateway omits its optional agent field", async () => {
-    respond(described("unknown", "session-1"), deleted("unknown", { archived: ["/archive"] }));
+    prepareDelete("unknown", { archived: ["/archive"] });
 
     await run("delete", { keys: ["unknown"], yes: true });
 
@@ -338,18 +342,15 @@ describe("sessions lifecycle commands", () => {
   });
 
   it("prints the preserved worktree cleanup reason without claiming source changes", async () => {
-    respond(
-      described("agent:main:active", "session-1"),
-      deleted("agent:main:active", {
-        archived: [],
-        worktreePreserved: {
-          id: "wt-1",
-          branch: "openclaw/active",
-          path: "/worktree",
-          reason: "cleanup-failed",
-        },
-      }),
-    );
+    prepareDelete("agent:main:active", {
+      archived: [],
+      worktreePreserved: {
+        id: "wt-1",
+        branch: "openclaw/active",
+        path: "/worktree",
+        reason: "cleanup-failed",
+      },
+    });
 
     await run("delete", { keys: ["agent:main:active"], yes: true });
 
@@ -457,5 +458,111 @@ describe("sessions lifecycle commands", () => {
       ]),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  describe("sessionsCompactCommand", () => {
+    const compact = (
+      opts: Parameters<typeof sessionsCompactCommand>[0] = { key: "agent:main:main" },
+    ) => sessionsCompactCommand(opts, runtime);
+
+    it.each(["compacted", "pending", "noop", "failed", "throw"])(
+      "escapes terminal controls in %s output without changing RPC input",
+      async (outcome) => {
+        const key = "agent:main:notes\u001b[2J\nnext";
+        const reason = "detail\u001b]2;changed\u0007\rnext";
+        if (outcome === "throw") {
+          mocks.callGateway.mockRejectedValueOnce(new Error(reason));
+        } else {
+          respond({
+            ok: outcome !== "failed",
+            key,
+            compacted: outcome === "compacted",
+            reason,
+            result: { details: { pending: outcome === "pending" } },
+          });
+        }
+        await compact({ key });
+        expect(mocks.callGateway.mock.calls[0]?.[2]).toEqual({ key });
+        const output = `${joinedArgs("log")}${joinedArgs("error")}`;
+        for (const control of ["\u0007", "\u001b", "\r", "\n"]) {
+          expect(output).not.toContain(control);
+        }
+        if (outcome !== "throw") {
+          expect(output).toContain("agent:main:notes\\nnext");
+        }
+        if (["noop", "failed", "throw"].includes(outcome)) {
+          expect(output).toContain("detail\\rnext");
+        }
+        if (["failed", "throw"].includes(outcome)) {
+          expect(runtime.exit).toHaveBeenCalledWith(1);
+          expect(joinedArgs("error")).toContain("Compaction failed");
+        }
+        if (outcome === "pending") {
+          expect(runtime.exit).not.toHaveBeenCalled();
+          expect(output).toContain("pending");
+          expect(output).not.toContain("No compaction needed");
+        }
+      },
+    );
+
+    it("preserves raw result values in JSON output", async () => {
+      const payload = {
+        ok: false,
+        key: "agent:main:notes\u001b[2J\nnext",
+        reason: "detail\u001b]2;changed\u0007\rnext",
+      };
+      respond(payload);
+      await compact({ key: payload.key, json: true });
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(payload, 2);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    });
+
+    it("rejects a blank agent before calling the Gateway", async () => {
+      await expect(compact({ key: "agent:main:main", agent: "" })).rejects.toThrow(
+        "--agent must not be blank",
+      );
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])(
+      "prints successful compaction and its degradation warning (%s)",
+      async (qualityDegraded) => {
+        respond({
+          ok: true,
+          key: "agent:main:main",
+          compacted: true,
+          result: { tokensBefore: 243868, tokensAfter: 34941, details: { qualityDegraded } },
+        });
+        await compact();
+        expect(runtime.exit).not.toHaveBeenCalled();
+        expect(mocks.callGateway.mock.calls[0]?.[1]).toMatchObject({ timeout: null });
+        const logged = joinedArgs("log");
+        expect(logged).toContain("243868");
+        expect(logged).toContain("34941");
+        expect(logged.includes("degraded summary")).toBe(qualityDegraded);
+        if (qualityDegraded) {
+          expect(logged).toContain("Older details, exact identifiers, or pending requests");
+          expect(logged).toContain("/new or a larger model");
+        }
+      },
+    );
+
+    it("exits non-zero when the gateway response omits explicit success", async () => {
+      respond({ key: "agent:main:main", compacted: false });
+      await compact();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(joinedArgs("error")).toContain("Compaction failed");
+    });
+
+    it("forwards agentId and maxLines to the RPC params", async () => {
+      respond({ ok: true, key: "agent:work:main", compacted: true, kept: 200 });
+      await compact({ key: "agent:work:main", agent: "work", maxLines: 200 });
+      expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith(
+        "sessions.compact",
+        expect.anything(),
+        { key: "agent:work:main", agentId: "work", maxLines: 200 },
+        expect.anything(),
+      );
+    });
   });
 });
