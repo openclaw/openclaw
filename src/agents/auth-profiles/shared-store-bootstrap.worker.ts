@@ -18,7 +18,6 @@ import type { WorkerOperationContext } from "../../state/worker-operation-regist
 import { parseSharedAuthStoreOwnership } from "./path-resolve.js";
 import {
   hasPendingSharedAuthCleanupInDatabase,
-  inspectSharedAuthLegacyRowsReadOnly,
   readSharedAuthLegacyRowsFromDatabase,
   SHARED_AUTH_STORE_MIGRATION_KIND,
 } from "./shared-store-bootstrap.js";
@@ -164,12 +163,32 @@ export function bootstrapSharedAuthStoreInWorker(
         ) {
           return commit(false);
         }
-        assertDatabasePathIdentity(input.fallbackSourcePath, input.fallbackSourceIdentity);
-        const fallbackRows = inspectSharedAuthLegacyRowsReadOnly(input.fallbackSourcePath);
-        if (fallbackRows.store || fallbackRows.state) {
+        const fallbackPath = input.fallbackSourcePath;
+        const fallbackIdentity = input.fallbackSourceIdentity;
+        let fallbackAnchor: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+        try {
+          // Main still backs inherited reads until ownership flips. Hold its existing-file
+          // writer reservation through the shared commit so a foreign writer cannot make
+          // the emptiness decision stale.
+          fallbackAnchor = openNodeSqliteDatabase(resolveExistingSqliteFileUri(fallbackPath));
+          return runSqliteImmediateTransactionSync(
+            fallbackAnchor,
+            () => {
+              assertDatabasePathIdentity(fallbackPath, fallbackIdentity);
+              const fallbackRows = readSharedAuthLegacyRowsFromDatabase(fallbackAnchor!);
+              if (fallbackRows.store || fallbackRows.state) {
+                return commit(false);
+              }
+              return commit(true, fallbackPath);
+            },
+            { operationLabel: "auth-profiles.bootstrap-fallback-source" },
+          );
+        } catch {
+          // Leave unreadable fallback state to Doctor rather than flipping ownership past it.
           return commit(false);
+        } finally {
+          fallbackAnchor?.close();
         }
-        return commit(true, input.fallbackSourcePath);
       }
       return commit(true);
     };

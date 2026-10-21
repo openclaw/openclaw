@@ -215,6 +215,38 @@ it("holds an empty legacy source against a foreign writer through shared commit 
   }
 });
 
+it("holds an empty main fallback against a foreign writer through shared commit", async () => {
+  const ownerDir = path.join(stateDir, "agents", "ops", "agent");
+  const ownerPath = sqlite.resolveAuthProfileDatabasePath(ownerDir);
+  openOpenClawAgentDatabase({ agentId: "ops", path: ownerPath, env });
+  openOpenClawAgentDatabase({ agentId: "main", path: sourcePath, env });
+  const config = {
+    agents: {
+      defaults: { authInheritance: { agentId: "ops" } },
+      entries: { main: {}, ops: {} },
+    },
+  };
+  setRuntimeConfigSnapshot(config, config);
+  await prepareActor();
+  const foreign = new DatabaseSync(sourcePath);
+  let blocked = 0;
+  probe.admission(admission, (request, grant, admit) => {
+    if (request.stage === "transaction" || request.stage === "commit") {
+      expect(() => foreign.exec("BEGIN IMMEDIATE")).toThrow(/locked/i);
+      blocked++;
+    }
+    admit(request, grant);
+  });
+  try {
+    await prepare();
+    expect(blocked).toBe(2);
+    expect(ownership()).toEqual(committedOwner);
+    foreign.exec("BEGIN IMMEDIATE; ROLLBACK");
+  } finally {
+    foreign.close();
+  }
+});
+
 it("fences replacement of the selected legacy source", async () => {
   await prepareActor();
   interceptBootstrap((execute) => {
