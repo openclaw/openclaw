@@ -10,6 +10,7 @@ import {
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { createTelegramDirectAvatarResolver } from "./bot-message-avatar.js";
@@ -473,9 +474,10 @@ export const createTelegramMessageProcessor = (
         }
         return await settle(result, "terminal");
       };
-      // The participant is the ingress ownership boundary. Direct and buffered
-      // callers both return when it is durably adopted or terminally rejected.
-      void run();
+      // Ingress returns at adoption; dispatch still owns draft cleanup and fallback delivery.
+      void runDetachedWebhookWork(run).catch((error: unknown) =>
+        settle({ kind: "failed-retryable", error }, "terminal"),
+      );
       return await participant.task;
     }
 
