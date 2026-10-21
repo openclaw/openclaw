@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { get } from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -83,6 +84,7 @@ test("reuses verified Access identity across a document reload and WebSocket hel
             event.type === "diagnostic.phase.completed" &&
             event.name === "control-ui.document.auth_grants"
           ) {
+            assert(typeof event.durationMs === "number", "Document phase duration is required");
             phases.push(event.durationMs);
           }
         },
@@ -143,6 +145,7 @@ test("reuses verified Access identity across a document reload and WebSocket hel
           expect(started).toBeGreaterThan(0);
           expect(hello.ok, JSON.stringify(hello.error)).toBe(true);
           await waitForDiagnosticEventsDrained();
+          expect(phases).toHaveLength(3);
           const wsCalls = transport.mock.calls.length - coldCalls - documentCalls - entryCalls;
           console.info(
             "IDENTITY_NETWORK_SAMPLE",
