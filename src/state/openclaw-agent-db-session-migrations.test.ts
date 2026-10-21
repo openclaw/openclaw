@@ -10,6 +10,7 @@ import {
   migrateConversationDeliveryTargetColumn,
 } from "./openclaw-agent-db-session-migrations.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { expectRow, expectRows } from "./openclaw-state-db-fixtures.test-support.js";
 
 const deliveryContext = (channel: string, to: string) => ({ channel, accountId: "default", to });
 
@@ -117,23 +118,19 @@ describe("agent DB conversation migration", () => {
     const currentRoute = route("current-write");
     update("route_context_json = ?", route("candidate-write"));
     update("route_context_json = ?, last_seen_at = ?", currentRoute, 1);
-    expect(
-      database
-        .prepare(
-          "SELECT route_context_json FROM session_conversations WHERE session_id = 'session-a'",
-        )
-        .get(),
-    ).toEqual({ route_context_json: currentRoute });
+    expectRow(
+      database,
+      "SELECT route_context_json FROM session_conversations WHERE session_id = 'session-a'",
+      { route_context_json: currentRoute },
+    );
     update("last_seen_at = ?", 1);
 
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
-    expect(
-      database
-        .prepare(
-          "SELECT route_context_json, last_seen_at FROM session_conversations WHERE session_id = 'session-a'",
-        )
-        .get(),
-    ).toEqual({ route_context_json: null, last_seen_at: 1 });
+    expectRow(database, "PRAGMA user_version", { user_version: 17 });
+    expectRow(
+      database,
+      "SELECT route_context_json, last_seen_at FROM session_conversations WHERE session_id = 'session-a'",
+      { route_context_json: null, last_seen_at: 1 },
+    );
   });
 
   it("backfills direct addresses and keeps shared-main peers as participants", () => {
@@ -211,16 +208,12 @@ describe("agent DB conversation migration", () => {
 
     backfillSessionConversations(database);
 
-    expect(
-      database
-        .prepare(
-          `SELECT sc.session_id, sc.role, c.kind, c.peer_id, c.delivery_target
+    expectRows(
+      database,
+      `SELECT sc.session_id, sc.role, c.kind, c.peer_id, c.delivery_target
            FROM session_conversations sc
            JOIN conversations c ON c.conversation_id = sc.conversation_id
            ORDER BY sc.session_id, sc.role, c.peer_id`,
-        )
-        .all(),
-    ).toEqual(
       [
         ["channel-case", "primary", "channel", "ops-room", "channel:ops-room"],
         ["dedicated", "primary", "direct", "peer-a", "reef:peer-a"],
@@ -237,47 +230,43 @@ describe("agent DB conversation migration", () => {
         delivery_target,
       })),
     );
-    expect(
-      database
-        .prepare(
-          `SELECT c.conversation_id, c.parent_conversation_id, c.thread_id
+    expectRow(
+      database,
+      `SELECT c.conversation_id, c.parent_conversation_id, c.thread_id
            FROM session_conversations sc
            JOIN conversations c ON c.conversation_id = sc.conversation_id
            WHERE sc.session_id = 'thread-case'`,
-        )
-        .get(),
-    ).toEqual({
-      conversation_id: buildConversationRef({
-        channel: "discord",
-        accountId: "default",
-        kind: "channel",
-        peerId: "ops-room",
-        threadId: "user-context",
-      }),
-      parent_conversation_id: null,
-      thread_id: "user-context",
-    });
-    expect(
-      database
-        .prepare(
-          `SELECT s.session_id, s.primary_conversation_id, c.peer_id
+      {
+        conversation_id: buildConversationRef({
+          channel: "discord",
+          accountId: "default",
+          kind: "channel",
+          peerId: "ops-room",
+          threadId: "user-context",
+        }),
+        parent_conversation_id: null,
+        thread_id: "user-context",
+      },
+    );
+    expectRows(
+      database,
+      `SELECT s.session_id, s.primary_conversation_id, c.peer_id
            FROM sessions s
            JOIN conversations c ON c.conversation_id = s.primary_conversation_id
            WHERE s.session_id IN ('shared', 'dedicated') ORDER BY s.session_id`,
-        )
-        .all(),
-    ).toEqual([
-      {
-        session_id: "dedicated",
-        primary_conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
-        peer_id: "peer-a",
-      },
-      {
-        session_id: "shared",
-        primary_conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
-        peer_id: "shared-ops",
-      },
-    ]);
+      [
+        {
+          session_id: "dedicated",
+          primary_conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
+          peer_id: "peer-a",
+        },
+        {
+          session_id: "shared",
+          primary_conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
+          peer_id: "shared-ops",
+        },
+      ],
+    );
   });
 
   it("drops v8 conversation rows whose exact delivery target cannot be reconstructed", () => {
@@ -310,29 +299,25 @@ describe("agent DB conversation migration", () => {
     migrateConversationDeliveryTargetColumn(database);
     backfillSessionConversations(database);
 
-    expect(
-      database
-        .prepare(
-          "SELECT conversation_id, delivery_target FROM conversations ORDER BY conversation_id",
-        )
-        .all(),
-    ).toEqual([
-      {
-        conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
-        delivery_target: "reef:peer-a",
-      },
-    ]);
-    expect(
-      database
-        .prepare("SELECT primary_conversation_id FROM sessions WHERE session_id = 'orphaned'")
-        .get(),
-    ).toEqual({ primary_conversation_id: null });
-    expect(
-      database
-        .prepare(
-          "SELECT COUNT(*) AS count FROM session_conversations WHERE session_id = 'orphaned'",
-        )
-        .get(),
-    ).toEqual({ count: 0 });
+    expectRows(
+      database,
+      "SELECT conversation_id, delivery_target FROM conversations ORDER BY conversation_id",
+      [
+        {
+          conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
+          delivery_target: "reef:peer-a",
+        },
+      ],
+    );
+    expectRow(
+      database,
+      "SELECT primary_conversation_id FROM sessions WHERE session_id = 'orphaned'",
+      { primary_conversation_id: null },
+    );
+    expectRow(
+      database,
+      "SELECT COUNT(*) AS count FROM session_conversations WHERE session_id = 'orphaned'",
+      { count: 0 },
+    );
   });
 });
