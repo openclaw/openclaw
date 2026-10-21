@@ -384,15 +384,15 @@ fi
   });
 
   it.each([false, true])(
-    "keeps failure status and JSON bytes while offering human support (json=%s)",
+    "rejects unknown arguments with preserved status and JSON bytes (json=%s)",
     (json) => {
-      const result = runInstallCliShell(`JSON=${json ? 1 : 0}\nfail "Synthetic install failure"`);
+      const result = runInstallCliShell(`main ${json ? "--json " : ""}--synthetic-invalid`);
       expect(result.status).toBe(1);
       expect(result.stderr).toBe("");
       expect(result.stdout).toBe(
         json
-          ? '{"event":"error","message":"Synthetic install failure"}\n'
-          : "ERROR: Synthetic install failure\nSupport: https://community.openclaw.ai/\n",
+          ? '{"event":"error","message":"Unknown option: --synthetic-invalid"}\n'
+          : "ERROR: Unknown option: --synthetic-invalid\nSupport: https://community.openclaw.ai/\n",
       );
     },
   );
