@@ -113,7 +113,7 @@ export async function sanitizeDiagnosticHeapProfile(
   // Bound uninterrupted work without cloning the raw profile into another isolate.
   let work = 0;
   for (const { source, parent } of pending) {
-    if (++work % 256 === 0) {
+    if (++work % 1024 === 0) {
       await nextTurn();
     }
     const { callFrame, redacted } = sanitizeDiagnosticProfileFrame(source.callFrame, packageRoot);
@@ -135,7 +135,7 @@ export async function sanitizeDiagnosticHeapProfile(
     parent?.node.children.push(node);
     for (const child of source.children) {
       pending.push({ source: child, parent: row });
-      if (++work % 256 === 0) {
+      if (++work % 1024 === 0) {
         await nextTurn();
       }
     }
@@ -145,7 +145,7 @@ export async function sanitizeDiagnosticHeapProfile(
   let unattributedSampleCount = 0;
   let unattributedSampleBytes = 0;
   for (const sample of samples) {
-    if (++work % 256 === 0) {
+    if (++work % 1024 === 0) {
       await nextTurn();
     }
     const row = rows.get(sample.nodeId);
@@ -162,7 +162,7 @@ export async function sanitizeDiagnosticHeapProfile(
   const ordered = [...rows.values()];
   rows.clear();
   for (let index = ordered.length - 1; index >= 0; index--) {
-    if (++work % 256 === 0) {
+    if (++work % 1024 === 0) {
       await nextTurn();
     }
     const row = ordered[index]!;
@@ -189,8 +189,9 @@ export async function sanitizeDiagnosticHeapProfile(
   // Intern exact sanitized frames so each stack key need not repeat their JSON.
   const frameIds = new Map<string, number>();
   const groups = new Map<string, AllocationSummary>();
+  const stackIds: number[] = [];
   for (const row of ordered) {
-    if (++work % 256 === 0) {
+    if (++work % 1024 === 0) {
       await nextTurn();
     }
     const frameKey = JSON.stringify(row.node.callFrame);
@@ -206,11 +207,13 @@ export async function sanitizeDiagnosticHeapProfile(
     }
     const selfBytes = row.node.selfSize;
     const stack: AllocationSummary["stack"] = [row.node.callFrame];
-    let key = String(frameId);
+    stackIds.length = 0;
+    stackIds.push(frameId);
     for (let parent = row.parent; parent && stack.length < 8; parent = parent.parent) {
       stack.push(parent.node.callFrame);
-      key += `,${parent.frameId}`;
+      stackIds.push(parent.frameId);
     }
+    const key = stackIds.join(",");
     const group = groups.get(key);
     if (group) {
       group.selfBytes += selfBytes;
@@ -225,7 +228,7 @@ export async function sanitizeDiagnosticHeapProfile(
   const result: HeapProfileResult = { ...common, truncated: true, summary: [] };
   let bytes = Buffer.byteLength(JSON.stringify(result));
   for (const row of await sortAllocationSummaries(groups.values())) {
-    if (++work % 256 === 0) {
+    if (++work % 1024 === 0) {
       await nextTurn();
     }
     const extra = Buffer.byteLength(JSON.stringify(row)) + Number(result.summary.length > 0);
