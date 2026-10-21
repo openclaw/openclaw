@@ -42,6 +42,58 @@ function failedRun() {
   return createUpdateRunFixture({ status: "failed", phase: "finished", reason: "build-failed" });
 }
 
+const checkFailure = {
+  mode: "manual",
+  tone: "warn",
+  text: "Could not check for updates: timeout",
+} as const;
+const restartPending =
+  "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.";
+const gitSchedule = (git: NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>) =>
+  ({ channel: "dev", autoEnabled: false, install: { kind: "git", git } }) as const;
+
+function statusCase(
+  name: string,
+  props: UpdatesViewOverrides,
+  expected: Partial<{
+    status: string;
+    tone: string;
+    disabled: boolean;
+    label: string;
+    title: string;
+  }> = {},
+) {
+  return {
+    name,
+    props,
+    status: "Update available v2026.8.2",
+    tone: "accent",
+    disabled: false,
+    label: "Update now",
+    title: "",
+    ...expected,
+  };
+}
+
+function failedGitCheck(status: "behind" | "diverged") {
+  return statusCase(
+    `failed check with a previously confirmed ${status} checkout update`,
+    {
+      configObject: { update: { channel: "dev", checkOnStart: false } },
+      update: {
+        updateSchedule: gitSchedule({
+          status,
+          commitsBehind: 3,
+          ...(status === "diverged" ? { commitsAhead: 1 } : {}),
+        }),
+        updateAvailable: null,
+        updateStatusCheckBanner: checkFailure,
+      },
+    },
+    { status: checkFailure.text, tone: "warn" },
+  );
+}
+
 function gitUpdate(git: NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>) {
   return {
     updateSchedule: { channel: "dev", autoEnabled: false, install: { kind: "git", git } },
@@ -109,172 +161,75 @@ describe("renderUpdates", () => {
   );
 
   it.each([
-    {
-      name: "checking",
-      props: { update: { updateStatusRefreshing: true } },
-      status: "Checking for updates…",
-      tone: "muted",
-      label: "Update now",
-      disabled: true,
-      title: "Checking for updates…",
-    },
-    {
-      name: "updating while a check is pending",
-      props: { updateBusy: true, update: { updateStatusRefreshing: true } },
-      status: "Update available v2026.8.2",
-      tone: "accent",
-      label: "Updating…",
-      disabled: true,
-      title: "",
-    },
-    {
-      name: "failed check with a known update",
-      props: {
-        update: {
-          updateStatusCheckBanner: {
-            mode: "manual",
-            tone: "warn",
-            text: "Could not check for updates: timeout",
-          },
-        },
+    statusCase(
+      "checking",
+      { update: { updateStatusRefreshing: true } },
+      {
+        status: "Checking for updates…",
+        tone: "muted",
+        disabled: true,
+        title: "Checking for updates…",
       },
-      status: "Could not check for updates: timeout",
-      tone: "warn",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "failed check with a previously confirmed checkout update",
-      props: {
-        configObject: { update: { channel: "dev", checkOnStart: false } },
-        update: {
-          updateSchedule: {
-            channel: "dev",
-            autoEnabled: false,
-            install: { kind: "git", git: { status: "behind", commitsBehind: 3 } },
-          },
-          updateAvailable: null,
-          updateStatusCheckBanner: {
-            mode: "manual",
-            tone: "warn",
-            text: "Could not check for updates: timeout",
-          },
-        },
-      },
-      status: "Could not check for updates: timeout",
-      tone: "warn",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "failed check with a previously confirmed diverged checkout update",
-      props: {
-        configObject: { update: { channel: "dev", checkOnStart: false } },
-        update: {
-          updateSchedule: {
-            channel: "dev",
-            autoEnabled: false,
-            install: {
-              kind: "git",
-              git: { status: "diverged", commitsAhead: 1, commitsBehind: 3 },
-            },
-          },
-          updateAvailable: null,
-          updateStatusCheckBanner: {
-            mode: "manual",
-            tone: "warn",
-            text: "Could not check for updates: timeout",
-          },
-        },
-      },
-      status: "Could not check for updates: timeout",
-      tone: "warn",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "failed check without a known update",
-      props: {
+    ),
+    statusCase(
+      "updating while a check is pending",
+      { updateBusy: true, update: { updateStatusRefreshing: true } },
+      { disabled: true, label: "Updating…" },
+    ),
+    statusCase(
+      "failed check with a known update",
+      { update: { updateStatusCheckBanner: checkFailure } },
+      { status: checkFailure.text, tone: "warn" },
+    ),
+    failedGitCheck("behind"),
+    failedGitCheck("diverged"),
+    statusCase(
+      "failed check without a known update",
+      {
         update: {
           updateSchedule: null,
           updateAvailable: null,
-          updateStatusCheckBanner: {
-            mode: "manual",
-            tone: "warn",
-            text: "Could not check for updates: timeout",
-          },
+          updateStatusCheckBanner: checkFailure,
         },
       },
-      status: "Could not check for updates: timeout",
-      tone: "warn",
-      label: "Update now",
-      disabled: true,
-      title: "Check for updates successfully before starting an update.",
-    },
-    {
-      name: "up to date",
-      props: {
+      {
+        status: checkFailure.text,
+        tone: "warn",
+        disabled: true,
+        title: "Check for updates successfully before starting an update.",
+      },
+    ),
+    statusCase(
+      "up to date",
+      {
         update: {
           updateSchedule: { channel: "stable", autoEnabled: false, install: { kind: "package" } },
           updateAvailable: null,
         },
       },
-      status: "Up to date",
-      tone: "ok",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "update available",
-      props: {},
-      status: "Update available v2026.8.2",
-      tone: "accent",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "real update failure",
-      props: {
-        update: { updateStatusBanner: { tone: "danger", text: "Update error: build failed" } },
-      },
-      status: "Update error: build failed",
-      tone: "danger",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "restart pending",
-      props: {
-        updateBusy: true,
+      { status: "Up to date", tone: "ok" },
+    ),
+    statusCase("update available", {}),
+    statusCase(
+      "real update failure",
+      {
         update: {
-          updateStatusBanner: {
-            tone: "info",
-            text: "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
-          },
+          updateStatusBanner: { tone: "danger", text: "Update error: build failed" },
         },
       },
-      status:
-        "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
-      tone: "accent",
-      label: "Updating…",
-      disabled: true,
-      title: "",
-    },
-  ] satisfies Array<{
-    name: string;
-    props: UpdatesViewOverrides;
-    status: string;
-    tone: string;
-    label: string;
-    disabled: boolean;
-    title: string;
-  }>)("distinguishes $name", ({ props, status, tone, label, disabled, title }) => {
+      { status: "Update error: build failed", tone: "danger" },
+    ),
+    statusCase(
+      "restart pending",
+      {
+        updateBusy: true,
+        update: {
+          updateStatusBanner: { tone: "info", text: restartPending },
+        },
+      },
+      { status: restartPending, disabled: true, label: "Updating…" },
+    ),
+  ])("distinguishes $name", ({ props, status, tone, label, disabled, title }) => {
     const onCheckStatus = vi.fn(async () => true);
     renderUpdates({ ...props, onCheckStatus });
     const statusRow = row("Status");
@@ -810,49 +765,41 @@ describe("renderUpdates", () => {
     expect(onReportFailure).toHaveBeenCalledExactlyOnceWith(run.runId);
   });
 
-  it("renders a prefilled issue without exposing a server-local path", () => {
-    const run = failedRun();
-    renderUpdates({
-      update: {
-        updateRun: run,
-        reportableUpdateFailureId: run.runId,
-        updateFailureReportNotice: {
-          attemptId: run.runId,
-          result: {
-            status: "fallback",
-            fallbackUrl: "https://github.com/openclaw/openclaw/issues/new?title=update",
-            message: "gh is not authenticated",
+  it.each([
+    ["fallback", "Review and submit the prefilled issue in your browser."],
+    ["pending", "may have completed"],
+  ] as const)(
+    "renders a %s issue submission without leaking a path or replay link",
+    (status, message) => {
+      const run = failedRun();
+      renderUpdates({
+        update: {
+          updateRun: run,
+          reportableUpdateFailureId: run.runId,
+          updateFailureReportNotice: {
+            attemptId: run.runId,
+            result:
+              status === "fallback"
+                ? {
+                    status,
+                    fallbackUrl: "https://github.com/openclaw/openclaw/issues/new?title=update",
+                    message: "gh is not authenticated",
+                  }
+                : { status, message: "GitHub issue submission may have completed." },
           },
         },
-      },
-    });
+      });
 
-    const report = row("Failure report");
-    expect(report.textContent).toContain("Review and submit the prefilled issue in your browser.");
-    expect(report.textContent).not.toContain("/private/report.md");
-    expect(report.querySelector("a")?.getAttribute("href")).toContain("issues/new");
-  });
-
-  it("renders an ambiguous submission as pending without a replay link", () => {
-    const run = failedRun();
-    renderUpdates({
-      update: {
-        updateRun: run,
-        reportableUpdateFailureId: run.runId,
-        updateFailureReportNotice: {
-          attemptId: run.runId,
-          result: {
-            status: "pending",
-            message: "GitHub issue submission may have completed.",
-          },
-        },
-      },
-    });
-
-    const report = row("Failure report");
-    expect(report.textContent).toContain("may have completed");
-    expect(report.querySelector("a")).toBeNull();
-  });
+      const report = row("Failure report");
+      expect(report.textContent).toContain(message);
+      expect(report.textContent).not.toContain("/private/report.md");
+      if (status === "fallback") {
+        expect(report.querySelector("a")?.getAttribute("href")).toContain("issues/new");
+      } else {
+        expect(report.querySelector("a")).toBeNull();
+      }
+    },
+  );
 
   it("keeps read-only facts visible while locking controls for non-admins", () => {
     renderUpdates({ canAdmin: false, canUpdate: false, configBusy: true });

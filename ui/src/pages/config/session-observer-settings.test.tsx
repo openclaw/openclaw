@@ -8,6 +8,22 @@ import {
 } from "./session-observer-settings.ts";
 import { SidebarPreferencesSection } from "./view-appearance-preferences.tsx";
 
+function renderObserver(overrides: Partial<Parameters<typeof SidebarPreferencesSection>[0]>) {
+  return mountSolid(() =>
+    SidebarPreferencesSection({
+      ...baseProps(),
+      sessionObserverEnabled: true,
+      sessionObserverUtilityModel: undefined,
+      sessionObserverModels: [],
+      sessionObserverModelsUnavailable: false,
+      sessionObserverDisabled: false,
+      setSessionObserverEnabled: () => undefined,
+      setSessionObserverUtilityModel: () => undefined,
+      ...overrides,
+    }),
+  ).container;
+}
+
 describe("session observer settings patches", () => {
   it("uses null to restore the default toggle and false to opt out", () => {
     expect(buildSessionObserverTogglePatch(true)).toEqual({
@@ -50,22 +66,11 @@ describe("session observer settings patches", () => {
   });
 
   it("keeps auto and disabled selectable when explicit models are unavailable", async () => {
-    const container = document.createElement("div");
-    mountSolid(
-      () =>
-        SidebarPreferencesSection({
-          ...baseProps(),
-          sessionObserverEnabled: true,
-          sessionObserverUtilityModel: undefined,
-          sessionObserverResolvedModel: { status: "unavailable" },
-          sessionObserverModels: [{ id: "gpt-mini", name: "GPT Mini", provider: "openai" }],
-          sessionObserverModelsUnavailable: true,
-          sessionObserverDisabled: false,
-          setSessionObserverEnabled: () => undefined,
-          setSessionObserverUtilityModel: () => undefined,
-        }),
-      { container },
-    );
+    const container = renderObserver({
+      sessionObserverResolvedModel: { status: "unavailable" },
+      sessionObserverModels: [{ id: "gpt-mini", name: "GPT Mini", provider: "openai" }],
+      sessionObserverModelsUnavailable: true,
+    });
 
     await updatePickers(container);
     const select = container.querySelector<HTMLElement>(
@@ -115,22 +120,9 @@ describe("session observer settings patches", () => {
     ],
     ["anthropic/claude-haiku-4-5", undefined, "auto (anthropic/claude-haiku-4-5)"],
   ] as const)("names the resolved small model's route for %s on %o", (model, runtime, expected) => {
-    const container = document.createElement("div");
-    mountSolid(
-      () =>
-        SidebarPreferencesSection({
-          ...baseProps(),
-          sessionObserverEnabled: true,
-          sessionObserverUtilityModel: undefined,
-          sessionObserverResolvedModel: { status: "auto", model, ...(runtime ? { runtime } : {}) },
-          sessionObserverModels: [],
-          sessionObserverModelsUnavailable: false,
-          sessionObserverDisabled: false,
-          setSessionObserverEnabled: () => undefined,
-          setSessionObserverUtilityModel: () => undefined,
-        }),
-      { container },
-    );
+    const container = renderObserver({
+      sessionObserverResolvedModel: { status: "auto", model, ...(runtime ? { runtime } : {}) },
+    });
     expect(container.textContent).toContain(expected);
   });
 });

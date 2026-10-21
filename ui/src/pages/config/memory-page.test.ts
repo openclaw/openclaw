@@ -205,10 +205,11 @@ it("recovers a catalog failure without replacing the Dreaming draft", async () =
 
 it("retains catalog controls during a plugin publication refresh", async () => {
   const refresh = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+  const engines = [engine("memory-core", true), engine("memory-lancedb", true)];
   const { element, publishPluginGeneration } = createPage({
     listCatalog: (call) =>
       call === 0
-        ? Promise.resolve({ plugins: [engine("memory-core", true), addon("active-memory", true)] })
+        ? Promise.resolve({ plugins: [...engines, addon("active-memory", true)] })
         : refresh.promise,
   });
   await waitAddon(element, "Active memory", true);
@@ -217,15 +218,25 @@ it("retains catalog controls during a plugin publication refresh", async () => {
   engineControl!.focus();
 
   publishPluginGeneration(1);
+  element.configObject = { plugins: { slots: { memory: "memory-lancedb" } } };
   flush();
   expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
   expect(addonSwitch(element, "Active memory")).toBe(addonControl);
   expect(document.activeElement).toBe(engineControl);
 
-  refresh.resolve({ plugins: [engine("memory-core", true), addon("active-memory", false)] });
+  refresh.resolve({
+    plugins: [
+      engine("memory-core", false),
+      engine("memory-lancedb", false),
+      addon("active-memory", false),
+    ],
+  });
   await waitAddon(element, "Active memory", false);
+  expect(activeEngine(element)).toBe("memory-lancedb");
+  expect(element.textContent).toContain("This engine is disabled");
   expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
   expect(addonSwitch(element, "Active memory")).toBe(addonControl);
+  expect(document.activeElement).toBe(engineControl);
 });
 
 it("falls back to read-only add-on status rows without operator.admin", async () => {

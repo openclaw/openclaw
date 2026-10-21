@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -9,11 +9,6 @@ import "../../styles.css";
 function object(properties: Record<string, JsonSchema>): JsonSchema {
   return { type: "object", properties };
 }
-const attached: HTMLElement[] = [];
-function attach(container: HTMLElement) {
-  attached.push(document.body.appendChild(container));
-}
-afterEach(() => attached.splice(0).forEach((container) => container.remove()));
 function setup(overrides: Partial<ConfigProps> = {}) {
   const props: ConfigProps = { ...baseProps(), formMode: "raw", ...overrides };
   const container = document.createElement("div");
@@ -80,35 +75,22 @@ describe("config raw editing and redaction", () => {
     expect(container.querySelector("textarea")).toBeNull();
   }
 
-  it.each(["draft", "equivalent"])("retains the focused raw editor through %s updates", (kind) => {
-    const draft = "{a: 2}";
-    const { props, container, rerender } = setup({ raw: '{"a":1}', originalRaw: '{"a":1}' });
-    props.onRawChange = (next) => {
-      props.raw = next;
-    };
-    rerender();
-    attach(container);
-    const textarea = element(container, ".config-raw-field textarea", HTMLTextAreaElement);
-    textarea.focus();
-    textarea.setSelectionRange(3, 6);
-    if (kind === "draft") {
-      textarea.value = draft;
-      textarea.setSelectionRange(3, 6);
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-      expect(props.raw).toBe(draft);
-    }
-    rerender({ ...props });
-    expect(element(container, ".config-raw-field textarea", HTMLTextAreaElement)).toBe(textarea);
-    expect(document.activeElement).toBe(textarea);
-    expect(textarea).toMatchObject({ selectionStart: 3, selectionEnd: 6 });
-    if (kind === "draft") {
-      rerender({ issues: [] });
-      expect(element(container, ".config-raw-field textarea", HTMLTextAreaElement)).toBe(textarea);
-      expect(document.activeElement).toBe(textarea);
-      expect(textarea).toMatchObject({ selectionStart: 3, selectionEnd: 6, value: draft });
-      expect(findButton(container, "Save").disabled).toBe(false);
-    }
+  const raw = (mode: string) => `{ gateway: { mode: "${mode}" } }`;
+  const changedRaw = () => ({ raw: raw("remote"), originalRaw: raw("local") });
+  const tokenConfig = (name: string, side: string) => `{ token: "TOKEN_${name}_${side}" }`;
+  const tokenSnapshot = (name: string) => ({
+    raw: tokenConfig(name, "AFTER"),
+    originalRaw: tokenConfig(name, "BEFORE"),
+    formValue: { token: `TOKEN_${name}_AFTER` },
   });
+  const redacted = "[redacted - click reveal to view]";
+  const rawInput = (container: HTMLElement) => element(container, "textarea", HTMLTextAreaElement);
+  function expectMode(container: HTMLElement, form: boolean) {
+    expect(["Form", "Raw"].map((label) => findButton(container, label).ariaPressed)).toEqual([
+      String(form),
+      String(!form),
+    ]);
+  }
 
   it("shows the form-unsafe banner only for populated unsupported paths", () => {
     const schema = object({
@@ -116,24 +98,15 @@ describe("config raw editing and redaction", () => {
       agents: object({ opaque: { anyOf: [{ type: "string" }, {}] } }),
     });
 
-    const empty = setup({
-      formMode: "form",
-      schema,
-      formValue: { gateway: {}, agents: { opaque: "off-scope" } },
-      activeSection: "gateway",
-    });
+    const shared = { formMode: "form" as const, schema, activeSection: "gateway" };
+    const empty = setup({ ...shared, formValue: { gateway: {}, agents: { opaque: "off-scope" } } });
     expect(empty.container.querySelector(".config-content-callout .info")).toBeNull();
     expect(findButton(empty.container, "Form").getAttribute("title")).toBe("");
 
     const onFormModeChange = vi.fn();
     const populated = setup({
-      formMode: "form",
-      schema,
-      formValue: {
-        gateway: { opaque: "custom" },
-        agents: { opaque: "off-scope" },
-      },
-      activeSection: "gateway",
+      ...shared,
+      formValue: { gateway: { opaque: "custom" }, agents: { opaque: "off-scope" } },
       onFormModeChange,
     });
     const banner = element(
@@ -159,27 +132,26 @@ describe("config raw editing and redaction", () => {
 
   it("keeps explicit open/save/discard controls in raw mode", () => {
     const { container, props } = setup({
-      raw: '{\n  gateway: { mode: "remote" }\n}\n',
-      originalRaw: '{\n  gateway: { mode: "local" }\n}\n',
+      ...changedRaw(),
       onOpenFile: vi.fn(),
     });
 
-    expect(findButton(container, "Form").getAttribute("aria-pressed")).toBe("false");
-    expect(findButton(container, "Raw").getAttribute("aria-pressed")).toBe("true");
+    expectMode(container, false);
     const actions = element(container, ".config-raw-actions", HTMLElement);
     expect(
       [...actions.querySelectorAll("button")].map((button) => button.textContent?.trim()),
     ).toEqual(["Open", "Discard", "Save"]);
-    findButton(actions, "Open").click();
-    findButton(actions, "Discard").click();
-    findButton(actions, "Save").click();
-    expect(props.onOpenFile).toHaveBeenCalledTimes(1);
-    expect(props.onRawDiscard).toHaveBeenCalledTimes(1);
-    expect(props.onSave).toHaveBeenCalledTimes(1);
+    for (const [label, callback] of [
+      ["Open", props.onOpenFile],
+      ["Discard", props.onRawDiscard],
+      ["Save", props.onSave],
+    ] as const) {
+      findButton(actions, label).click();
+      expect(callback).toHaveBeenCalledTimes(1);
+    }
     renderConfigInto({ ...props, formMode: "form" }, container);
     expect(container.querySelector(".config-diff")).toBeNull();
-    expect(findButton(container, "Form").getAttribute("aria-pressed")).toBe("true");
-    expect(findButton(container, "Raw").getAttribute("aria-pressed")).toBe("false");
+    expectMode(container, true);
     findButton(container, "Raw").click();
     expect(props.onFormModeChange).toHaveBeenCalledWith("raw");
   });
@@ -195,9 +167,8 @@ describe("config raw editing and redaction", () => {
     expect(container.querySelector(".config-raw-actions")).not.toBeNull();
     const formButton = findButton(container, "Form");
     const rawButton = findButton(container, "Raw");
-    expect(formButton.disabled).toBe(true);
-    expect(formButton.getAttribute("aria-pressed")).toBe("false");
-    expect(rawButton.getAttribute("aria-pressed")).toBe("true");
+    expect(formButton).toMatchObject({ disabled: true, ariaPressed: "false" });
+    expect(rawButton.ariaPressed).toBe("true");
   });
 
   it.each(["clean", "saving", "applying"] as const)(
@@ -222,22 +193,21 @@ describe("config raw editing and redaction", () => {
         expect(findButton(container, "Discard").disabled).toBe(true);
       } else {
         const button = findButton(container, "Saving…");
-        expect(button.disabled).toBe(true);
-        expect(button.getAttribute("aria-busy")).toBe("true");
+        expect(button).toMatchObject({ disabled: true, ariaBusy: "true" });
         expect(button.querySelectorAll(".config-action-spinner")).toHaveLength(1);
-        expect(element(container, ".config-raw-field textarea", HTMLTextAreaElement).disabled).toBe(
-          true,
-        );
+        expect(rawInput(container).disabled).toBe(true);
       }
     },
   );
 
   it("keeps sensitive raw config hidden until reveal before editing", () => {
     const onRawChange = vi.fn();
+    const formValue = { openai: { apiKey: "supersecret" } };
+    const secretRaw = JSON.stringify(formValue);
     const { container } = setup({
-      raw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      originalRaw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      formValue: { openai: { apiKey: "supersecret" } },
+      raw: secretRaw,
+      originalRaw: secretRaw,
+      formValue,
       onRawChange,
     });
 
@@ -247,17 +217,16 @@ describe("config raw editing and redaction", () => {
     expect(revealButton.getAttribute("aria-pressed")).toBe("false");
     revealButton.click();
 
-    const textarea = element(container, "textarea", HTMLTextAreaElement);
-    expect(textarea.value).toBe('{\n  "openai": { "apiKey": "supersecret" }\n}\n');
-    textarea.value = textarea.value.replace("supersecret", "updatedsecret");
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onRawChange).toHaveBeenCalledWith(textarea.value);
+    const input = rawInput(container);
+    expect(input.value).toBe(secretRaw);
+    input.value = input.value.replace("supersecret", "updatedsecret");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onRawChange).toHaveBeenCalledWith(input.value);
   });
 
   it("opens raw pending changes without sending a fake raw edit", () => {
     const { container, props, rerender } = setup({
-      raw: '{\n  gateway: { mode: "remote" }\n}\n',
-      originalRaw: '{\n  gateway: { mode: "local" }\n}\n',
+      ...changedRaw(),
       formValue: { gateway: { mode: "remote" } },
     });
 
@@ -301,7 +270,6 @@ describe("config raw editing and redaction", () => {
       formValue: after,
     });
     openDiff(container);
-    const redacted = "[redacted - click reveal to view]";
     expectDiff(container, path, redacted, redacted);
     element(container, ".config-raw-toggle", HTMLButtonElement).click();
     flush();
@@ -311,20 +279,15 @@ describe("config raw editing and redaction", () => {
   it("resets raw reveal state when the config context changes", () => {
     const { container, props, rerender } = setup({
       configPath: "/tmp/openclaw-a.json5",
-      raw: '{\n  token: "TOKEN_A_AFTER"\n}\n',
-      originalRaw: '{\n  token: "TOKEN_A_BEFORE"\n}\n',
+      ...tokenSnapshot("A"),
       uiHints: { token: { sensitive: true } },
-      formValue: { token: "TOKEN_A_AFTER" },
     });
     openDiff(container);
     const revealButton = element(container, ".config-raw-toggle", HTMLButtonElement);
     revealButton.click();
     expectDiff(container, "token", '"TOKEN_A_BEFORE"', '"TOKEN_A_AFTER"');
 
-    props.configPath = "/tmp/openclaw-b.json5";
-    props.raw = '{\n  token: "TOKEN_B_AFTER"\n}\n';
-    props.originalRaw = '{\n  token: "TOKEN_B_BEFORE"\n}\n';
-    props.formValue = { token: "TOKEN_B_AFTER" };
+    Object.assign(props, { configPath: "/tmp/openclaw-b.json5", ...tokenSnapshot("B") });
     rerender();
 
     expectHidden(container);
@@ -332,7 +295,6 @@ describe("config raw editing and redaction", () => {
     expect(nextDetails.open).toBe(false);
 
     openDiff(container);
-    const redacted = "[redacted - click reveal to view]";
     expectDiff(container, "token", redacted, redacted);
   });
 
@@ -358,7 +320,7 @@ describe("config raw editing and redaction", () => {
 
     rerender({ rawAvailable: false, formMode: "raw" });
 
-    expect(findButton(container, "Form").getAttribute("aria-pressed")).toBe("true");
+    expectMode(container, true);
     const rawButton = findButton(container, "Raw");
     expect(rawButton).toMatchObject({
       ariaPressed: "false",

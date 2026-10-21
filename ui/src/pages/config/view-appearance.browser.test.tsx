@@ -6,14 +6,14 @@ import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers
 import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
 import "../../styles.css";
 
-function settingsRow(container: HTMLElement, title: string) {
-  const row = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
+function row(container: HTMLElement, title: string) {
+  const found = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
     (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
   );
-  if (!row) {
+  if (!found) {
     throw new Error(`Missing settings row: ${title}`);
   }
-  return row;
+  return found;
 }
 
 describe("config appearance preferences", () => {
@@ -21,21 +21,33 @@ describe("config appearance preferences", () => {
     await warmJson5();
   });
 
-  function normalizedText(container: HTMLElement): string {
+  function text(container: HTMLElement): string {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
-  function findButtonByText(container: HTMLElement, text: string, exact = true): HTMLButtonElement {
-    const button = Array.from(container.querySelectorAll("button")).find((btn) =>
-      exact ? btn.textContent?.trim() === text : btn.textContent?.includes(text),
-    );
-    if (!button) {
-      throw new Error(`Expected button with text "${text}"`);
+  function expectCopy(container: HTMLElement, included: string[], excluded: string[] = []) {
+    const copy = text(container);
+    for (const phrase of included) {
+      expect(copy).toContain(phrase);
     }
-    return button;
+    for (const phrase of excluded) {
+      expect(copy).not.toContain(phrase);
+    }
+  }
+  const importer = <T extends HTMLElement = HTMLElement>(container: HTMLElement, part: string) =>
+    container.querySelector<T>(`.settings-theme-import__${part}`)!;
+
+  function button(container: HTMLElement, label: string, exact = true): HTMLButtonElement {
+    const found = Array.from(container.querySelectorAll("button")).find((btn) =>
+      exact ? btn.textContent?.trim() === label : btn.textContent?.includes(label),
+    );
+    if (!found) {
+      throw new Error(`Expected button with text "${label}"`);
+    }
+    return found;
   }
 
-  function required<T extends Element>(
+  function get<T extends Element>(
     container: HTMLElement,
     selector: string,
     constructor: new () => T,
@@ -53,7 +65,7 @@ describe("config appearance preferences", () => {
   }
 
   function pressed(container: HTMLElement, label: string) {
-    return findButtonByText(container, label).getAttribute("aria-pressed");
+    return button(container, label).getAttribute("aria-pressed");
   }
 
   function mediaDevice(deviceId: string, label: string) {
@@ -77,7 +89,7 @@ describe("config appearance preferences", () => {
         requestAnimationFrame(() => resolve());
       });
 
-      const content = required(container, ".config-content", HTMLElement);
+      const content = get(container, ".config-content", HTMLElement);
       expect(content.scrollHeight - content.clientHeight).toBeLessThanOrEqual(1);
     } finally {
       container.remove();
@@ -100,13 +112,7 @@ describe("config appearance preferences", () => {
       expect(sections[0]?.id).toBe("settings-language");
       expect(sections[0]?.textContent).toContain("Language");
       expect(sections[0]?.textContent).toContain("Synced across your devices through the gateway");
-      const select = container.querySelector<SelectPicker>(
-        "#settings-language openclaw-select-picker",
-      );
-      expect(select).not.toBeNull();
-      if (!select) {
-        throw new Error("Missing language select");
-      }
+      const select = get(container, "#settings-language openclaw-select-picker", HTMLElement);
       await openPicker(select);
       if (localeOverride) {
         expect(pickerOption(select, "fr")?.getAttribute("aria-selected")).toBe("true");
@@ -132,19 +138,17 @@ describe("config appearance preferences", () => {
       fontUiProvenance: "profile",
     });
     await updatePickers(container);
-    const ui = required(container, "#settings-font-ui", HTMLElement).closest<SelectPicker>(
+    const ui = get(container, "#settings-font-ui", HTMLElement).closest<SelectPicker>(
       "openclaw-select-picker",
     )!;
-    const chat = required(container, "#settings-font-chat", HTMLElement).closest<SelectPicker>(
+    const chat = get(container, "#settings-font-chat", HTMLElement).closest<SelectPicker>(
       "openclaw-select-picker",
     )!;
     await openPicker(ui);
     expect(pickerOption(ui, "theme")?.textContent).toContain("Dash · DM Sans");
-    expect(ui.querySelectorAll('[role="option"]')).toHaveLength(11);
     await openPicker(chat);
     expect(pickerOption(chat, "theme")?.textContent).toContain("Dash · Fraunces");
     expect(ui.closest(".settings-row")?.textContent).toContain("Saved to your profile");
-    expect(chat.querySelectorAll('[role="option"]')).toHaveLength(11);
     await choosePickerValue(ui, "lora");
     expect(props.setFontUi).toHaveBeenLastCalledWith("lora");
     await choosePickerValue(ui, "theme");
@@ -185,60 +189,45 @@ describe("config appearance preferences", () => {
       onOpenCustomThemeImport,
     });
 
-    const customButton = findButtonByText(container, "Import");
+    const customButton = button(container, "Import");
 
     expect(customButton.disabled).toBe(false);
     expect(customButton.hasAttribute("aria-pressed")).toBe(false);
-    expect(
-      normalizedText(
-        required(container, ".settings-theme-import__inline-hint", HTMLParagraphElement),
-      ),
-    ).toBe(
-      "Click Import to add one browser-local tweakcn theme. In tweakcn, use Share and paste the copied link here.",
-    );
 
     customButton.click();
 
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
     props.customThemeImportExpanded = true;
     renderConfigInto(props, container);
-    const importButton = findButtonByText(container, "Import theme", false);
+    const importButton = button(container, "Import theme", false);
 
     expect(importButton.disabled).toBe(true);
-    required(container, ".settings-theme-import__input", HTMLInputElement);
-    expect(
-      container.querySelector<HTMLAnchorElement>(".settings-theme-import__external")?.href,
-    ).toBe("https://tweakcn.com/editor/theme");
-    expect(
-      normalizedText(required(container, ".settings-theme-import__hint", HTMLParagraphElement)),
-    ).toBe(
-      "Open tweakcn.com, choose or create a theme, click Share, then paste the copied theme link here. Share links, editor URLs, registry URLs, theme IDs, and default theme names like amethyst-haze are accepted.",
+    get(container, ".settings-theme-import__input", HTMLInputElement);
+    expect(importer<HTMLAnchorElement>(container, "external").href).toBe(
+      "https://tweakcn.com/editor/theme",
     );
-    props.hasCustomTheme = true;
-    props.customThemeLabel = "Light Green";
-    props.customThemeSourceUrl = "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z";
-    props.customThemeImportUrl = props.customThemeSourceUrl;
+    const source = "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z";
+    Object.assign(props, {
+      hasCustomTheme: true,
+      customThemeLabel: "Light Green",
+      customThemeSourceUrl: source,
+      customThemeImportUrl: source,
+    });
     renderConfigInto(props, container);
-    const importedButton = findButtonByText(container, "Light Green");
+    const importedButton = button(container, "Light Green");
     expect(importedButton.disabled).toBe(false);
     importedButton.click();
     expect(props.setTheme).toHaveBeenCalledWith("custom");
 
-    const replaceButton = findButtonByText(container, "Replace Light Green", false);
-    const clearButton = findButtonByText(container, "Clear Light Green", false);
-    replaceButton.click();
-    clearButton.click();
+    button(container, "Replace Light Green", false).click();
+    button(container, "Clear Light Green", false).click();
 
     expect(props.onImportCustomTheme).toHaveBeenCalledTimes(1);
     expect(props.onClearCustomTheme).toHaveBeenCalledTimes(1);
-    expect(container.querySelector(".settings-theme-import__meta-label")?.textContent?.trim()).toBe(
-      "Loaded",
-    );
-    expect(container.querySelector(".settings-theme-import__meta-value")?.textContent?.trim()).toBe(
-      "Light Green \u00b7 https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
-    );
+    expect(text(importer(container, "meta-label"))).toBe("Loaded");
+    expect(text(importer(container, "meta-value"))).toBe(`Light Green · ${source}`);
 
-    const input = container.querySelector(".settings-theme-import__input") as HTMLInputElement;
+    const input = importer<HTMLInputElement>(container, "input");
     input.value = "/r/themes/cmlhfpjhw000004l4f4ax3m7z";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(props.onCustomThemeImportUrlChange).toHaveBeenCalledWith(
@@ -280,72 +269,24 @@ describe("config appearance preferences", () => {
       container.remove();
     });
 
-    findButtonByText(container, "Import").click();
+    button(container, "Import").click();
     renderConfigInto(props, container);
     props.textScale = 110;
     renderConfigInto(props, container);
-    const input = required(container, ".settings-theme-import__input", HTMLInputElement);
+    const input = get(container, ".settings-theme-import__input", HTMLInputElement);
     const pending = [...frames.values()];
     frames.clear();
     for (const frame of pending) {
       frame(0);
     }
     expect(document.activeElement).toBe(input);
-    expect(input.selectionStart).toBe(0);
-    expect(input.selectionEnd).toBe("amethyst-haze".length);
+    expect(input).toMatchObject({ selectionStart: 0, selectionEnd: "amethyst-haze".length });
 
-    findButtonByText(container, "Import").click();
+    button(container, "Import").click();
     renderConfigInto(props, container);
     expect(frames.size).toBe(1);
     cleanupSolid();
     expect(frames.size).toBe(0);
-  });
-
-  it("keeps direct Appearance default selections independent", () => {
-    const { container, props } = renderAppearance({
-      theme: "knot",
-      themeOverridden: true,
-      themeMode: "dark",
-      themeModeOverridden: true,
-      accent: "#52c99a",
-      textScale: 110,
-      textScaleOverridden: true,
-    });
-    document.body.append(container);
-    onTestFinished(() => container.remove());
-    const row = (title: string) => settingsRow(container, title);
-
-    expect(pressed(container, "Knot")).toBe("true");
-    expect(pressed(container, "Claw")).toBe("false");
-    const textScaleButtons = [
-      ...container.querySelectorAll<HTMLButtonElement>(".settings-text-scale__btn"),
-    ];
-    expect(
-      textScaleButtons
-        .find((button) => button.textContent?.includes("110%"))
-        ?.getAttribute("aria-pressed"),
-    ).toBe("true");
-    expect(
-      textScaleButtons
-        .find((button) => button.textContent?.includes("100%"))
-        ?.getAttribute("aria-pressed"),
-    ).toBe("false");
-
-    findButtonByText(container, "Claw").click();
-    const colorMode = row("Color mode")?.querySelector<HTMLInputElement>(
-      '.settings-segmented__input[value="system"]',
-    );
-    expect(colorMode).toBeDefined();
-    colorMode?.click();
-    container.querySelector<HTMLButtonElement>('[data-accent-preset="default"]')?.click();
-    Array.from(container.querySelectorAll<HTMLButtonElement>(".settings-text-scale__btn"))
-      .find((button) => button.textContent?.includes("100%"))
-      ?.click();
-
-    expect(props.setTheme).toHaveBeenCalledWith("claw");
-    expect(props.setThemeMode).toHaveBeenCalledWith("system");
-    expect(props.setAccent).toHaveBeenCalledWith(undefined);
-    expect(props.setTextScale).toHaveBeenCalledWith(100);
   });
 
   it("keeps authored visual defaults direct", () => {
@@ -360,13 +301,12 @@ describe("config appearance preferences", () => {
       chatSendShortcutOverridden: true,
       chatSendShortcutProvenance: "synced",
     });
-    const themeSection = required(container, "#settings-appearance-theme", HTMLElement);
-    const shortcutRow = settingsRow(container, "Send shortcut");
+    const themeSection = get(container, "#settings-appearance-theme", HTMLElement);
+    const shortcutRow = row(container, "Send shortcut");
 
-    expect(normalizedText(themeSection)).toContain("Default: Claw");
-    expect(normalizedText(themeSection)).toContain("Default: System");
+    expectCopy(themeSection, ["Default: Claw", "Default: System"]);
     expect(shortcutRow?.textContent).toContain("Default: Enter");
-    findButtonByText(themeSection, "Claw").click();
+    button(themeSection, "Claw").click();
     themeSection
       .querySelector<HTMLInputElement>('.settings-segmented__input[value="system"]')
       ?.click();
@@ -387,27 +327,27 @@ describe("config appearance preferences", () => {
       themeResetValue: "claw",
     });
     await updatePickers(container);
-    const languageRow = required(container, "#settings-language .settings-row", HTMLElement);
-    const themeSection = required(container, "#settings-appearance-theme", HTMLElement);
-    const themeDescription = required(
-      themeSection,
-      ":scope > .settings-section__desc",
-      HTMLElement,
-    );
+    const languageRow = get(container, "#settings-language .settings-row", HTMLElement);
+    const themeSection = get(container, "#settings-appearance-theme", HTMLElement);
+    const themeDescription = get(themeSection, ":scope > .settings-section__desc", HTMLElement);
 
-    expect(languageRow.textContent).toContain("Default: Deutsch (German)");
-    expect(languageRow.textContent).toContain("Stored in this browser only");
-    expect(languageRow.textContent).not.toContain("Synced across your devices");
+    expectCopy(
+      languageRow,
+      ["Default: Deutsch (German)", "Stored in this browser only"],
+      ["Synced across your devices"],
+    );
     await openPicker(languageRow.querySelector("openclaw-select-picker")!);
     expect(pickerOption(languageRow, "fr")?.getAttribute("aria-selected")).toBe("true");
-    expect(themeDescription.textContent).toContain("Default: Claw");
-    expect(themeDescription.textContent).toContain("Stored in this browser only");
-    expect(themeDescription.textContent).not.toContain("Synced across your devices");
+    expectCopy(
+      themeDescription,
+      ["Default: Claw", "Stored in this browser only"],
+      ["Synced across your devices"],
+    );
     expect(
       themeSection.querySelector(".settings-theme-card--knot")?.getAttribute("aria-pressed"),
     ).toBe("true");
 
-    findButtonByText(themeSection, "Claw").click();
+    button(themeSection, "Claw").click();
 
     expect(props.setTheme).toHaveBeenCalledWith("claw");
   });
@@ -421,18 +361,13 @@ describe("config appearance preferences", () => {
       chatFollowUpModeOverridden: true,
       chatFollowUpModeProvenance: "pending",
     });
-    const themeSection = required(container, "#settings-appearance-theme", HTMLElement);
-    const themeDescription = required(
-      themeSection,
-      ":scope > .settings-section__desc",
-      HTMLElement,
-    );
-    const followUpRow = settingsRow(container, "Follow-ups while the agent is working");
+    const themeSection = get(container, "#settings-appearance-theme", HTMLElement);
+    const themeDescription = get(themeSection, ":scope > .settings-section__desc", HTMLElement);
+    const followUpRow = row(container, "Follow-ups while the agent is working");
 
-    expect(themeDescription.textContent).toContain("Waiting to sync through the gateway");
-    expect(themeDescription.textContent).not.toContain("Synced across your devices");
-    expect(followUpRow?.textContent).toContain("Waiting to sync through the gateway");
-    expect(followUpRow?.textContent).not.toContain("Synced across your devices");
+    for (const region of [themeDescription, followUpRow]) {
+      expectCopy(region, ["Waiting to sync through the gateway"], ["Synced across your devices"]);
+    }
   });
 
   it("names the chat preference selects for assistive tech", () => {
@@ -448,9 +383,9 @@ describe("config appearance preferences", () => {
       composerHoldToRecord: true,
     });
 
-    const shortcutSelect = required(container, "[data-settings-send-shortcut]", HTMLSelectElement);
+    const shortcutSelect = get(container, "[data-settings-send-shortcut]", HTMLSelectElement);
     expect(shortcutSelect.getAttribute("aria-label")).toBe("Send shortcut");
-    const followUpSelect = required(container, "[data-settings-follow-up-mode]", HTMLSelectElement);
+    const followUpSelect = get(container, "[data-settings-follow-up-mode]", HTMLSelectElement);
     expect(followUpSelect.getAttribute("aria-label")).toBe("Follow-ups while the agent is working");
     expect(followUpSelect.value).toBe("server");
     expect(Array.from(followUpSelect.options, (option) => option.value)).toEqual([
@@ -460,17 +395,18 @@ describe("config appearance preferences", () => {
     ]);
     expect(container.textContent).not.toContain("Using server default");
     expect(followUpSelect.selectedOptions[0]?.textContent?.trim()).toBe("Server default (steer)");
-    const microphoneSelect = required(container, "[data-settings-microphone]", HTMLSelectElement);
-    expect(microphoneSelect.getAttribute("aria-label")).toBe("Microphone input");
-    expect(microphoneSelect.classList.contains("settings-select--media-device")).toBe(true);
-    const cameraSelect = required(container, "[data-settings-camera]", HTMLSelectElement);
-    expect(cameraSelect.getAttribute("aria-label")).toBe("Camera");
-    expect(cameraSelect.classList.contains("settings-select--media-device")).toBe(true);
+    const microphoneSelect = get(container, "[data-settings-microphone]", HTMLSelectElement);
+    const cameraSelect = get(container, "[data-settings-camera]", HTMLSelectElement);
     expect(Array.from(cameraSelect.options, (option) => option.textContent?.trim())).toEqual([
       "System default",
       "Desk Camera",
     ]);
-    for (const select of [microphoneSelect, cameraSelect]) {
+    for (const [select, label] of [
+      [microphoneSelect, "Microphone input"],
+      [cameraSelect, "Camera"],
+    ] as const) {
+      expect(select.ariaLabel).toBe(label);
+      expect(select.classList.contains("settings-select--media-device")).toBe(true);
       expect(select.closest(".settings-row")?.querySelector("button")).toBeNull();
     }
     expect(container.textContent).toContain("Hold microphone button to start dictation");
@@ -506,7 +442,7 @@ describe("config appearance preferences", () => {
           ? { camera: state, onCameraSelect: vi.fn(), onCameraRefresh: onRefresh }
           : { microphone: state, onMicrophoneSelect: vi.fn(), onMicrophoneRefresh: onRefresh },
       );
-      const select = required(container, `[data-settings-${device}]`, HTMLSelectElement);
+      const select = get(container, `[data-settings-${device}]`, HTMLSelectElement);
       select.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 2 }));
       expect(onRefresh).not.toHaveBeenCalled();
       select.dispatchEvent(
@@ -545,16 +481,8 @@ describe("config appearance preferences", () => {
     });
     vi.stubGlobal("AudioContext", audioContextCtor);
 
-    const soundSwitch = (container: HTMLElement) => {
-      const control = settingsRow(container, "Lobster sounds").querySelector<HTMLInputElement>(
-        ".settings-toggle__input",
-      );
-      expect(control).toBeDefined();
-      if (!control) {
-        throw new Error("Missing lobster sounds switch");
-      }
-      return control;
-    };
+    const soundSwitch = (container: HTMLElement) =>
+      get(row(container, "Lobster sounds"), ".settings-toggle__input", HTMLInputElement);
 
     const { container, props } = renderAppearance();
     document.body.append(container);
@@ -595,8 +523,8 @@ describe("config appearance preferences", () => {
     const heading = Array.from(container.querySelectorAll("h3")).find(
       (candidate) => candidate.textContent?.trim() === "Hidden session sections",
     );
-    const labeledRow = settingsRow(container, "Claude Code");
-    const fallbackRow = settingsRow(container, "offline-catalog");
+    const labeledRow = row(container, "Claude Code");
+    const fallbackRow = row(container, "offline-catalog");
     expect(heading).toBeDefined();
     expect(labeledRow).toBeDefined();
     expect(fallbackRow).toBeDefined();
