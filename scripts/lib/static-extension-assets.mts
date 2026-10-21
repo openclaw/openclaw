@@ -18,7 +18,6 @@ type StaticExtensionAssetParams = {
   env?: NodeJS.ProcessEnv;
   includeExternalPlugins?: boolean;
   assets?: StaticExtensionAsset[];
-  warn?: (message: string) => void;
 };
 
 export function shouldCopyStaticExtensionAssets(
@@ -297,6 +296,12 @@ export function resolveStaticExtensionAssetSource(
   );
 }
 
+function missingDeclaredStaticAssetError(sources: string[]) {
+  return new Error(
+    sources.map((src) => `declared static extension asset is missing: ${src}`).join("\n"),
+  );
+}
+
 function copyStaticExtensionAssetFiles(params: StaticExtensionAssetParams, runtimeRoot?: string) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
@@ -307,7 +312,7 @@ function copyStaticExtensionAssetFiles(params: StaticExtensionAssetParams, runti
     runtimeRoot === undefined
       ? (params.assets ?? discoverStaticExtensionAssets({ rootDir, fs: fsImpl, env: params.env }))
       : discoverStaticExtensionRuntimeOverlayAssets({ ...params, rootDir, fs: fsImpl });
-  const warn = params.warn ?? console.warn;
+  const missing: string[] = [];
   for (const asset of assets) {
     const { src, dest } = asset;
     const normalizedDest = toPosixPath(dest);
@@ -333,8 +338,11 @@ function copyStaticExtensionAssetFiles(params: StaticExtensionAssetParams, runti
       }
       fsImpl.copyFileSync(copySourcePath, destPath);
     } else {
-      warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);
+      missing.push(src);
     }
+  }
+  if (missing.length > 0) {
+    throw missingDeclaredStaticAssetError(missing);
   }
 }
 
