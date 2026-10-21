@@ -113,7 +113,7 @@ export async function createAdminIngressFixture(
         },
       }),
     );
-    return await host.buildContext({ ...message, channelIngress: ingress });
+    return host.buildContext({ ...message, channelIngress: ingress });
   };
   return {
     cfg,

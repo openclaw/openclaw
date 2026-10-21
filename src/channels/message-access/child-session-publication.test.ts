@@ -49,7 +49,7 @@ async function fixture(kind = "public") {
         kind === "absent" ? undefined : { audience: "public", assertCurrent },
     }),
   );
-  const context = await host.buildContext({
+  const context = host.buildContext({
     ...message,
     route: {
       agentId: "main",
