@@ -80,7 +80,11 @@ const runVitest = "scripts/run-vitest.mts";
 const scoped = (file: string) => file.replace("extensions/", "");
 const excludeQa = (transform = (file: string) => file) =>
   qaRuntimeConsumers.flatMap((file) => ["--exclude", transform(file)]);
+const excludeConsumers = (config: string) =>
+  listVitestRuntimeConsumerFiles([configPath(config)]).flatMap((file) => ["--exclude", file]);
 const noExit = async () => {};
+const configArgs = (config: string, ...args: string[]) => ["--config", configPath(config), ...args];
+const runConfig = (config: string, ...args: string[]) => ["run", ...configArgs(config, ...args)];
 function stubEnv(values: Record<string, string>) {
   for (const [name, value] of Object.entries(values)) {
     vi.stubEnv(name, value);
@@ -236,28 +240,17 @@ describe("CLI runtime admission", () => {
     [[ordinaryQa]],
     [["run", "src/utils"], true],
     [["watch", "src/config"], true],
-    [["--config", configPath("cli")]],
+    [configArgs("cli")],
+    [configArgs("cli-process", ...excludeConsumers("cli-process"))],
     [
-      [
-        "--config",
-        configPath("cli-process"),
-        ...listVitestRuntimeConsumerFiles([configPath("cli-process")]).flatMap((file) => [
-          "--exclude",
-          file,
-        ]),
-      ],
-    ],
-    [
-      [
-        "--config",
-        configPath("gateway-server"),
-        "--exclude",
-        "server.acp-native-model.product.test.ts",
-        "--exclude",
-        "server-sidecar-retention.test.ts",
-        "--exclude",
-        "server.config-patch.test.ts",
-      ],
+      configArgs(
+        "gateway-server",
+        ...[
+          "server.acp-native-model.product.test.ts",
+          "server-sidecar-retention.test.ts",
+          "server.config-patch.test.ts",
+        ].flatMap((file) => ["--exclude", file]),
+      ),
     ],
     [["--config", "vitest.config.ts", "suite-process-lifecycle", "--exclude", scoped(lifecycle)]],
     [excludeQa(scoped)],
@@ -286,13 +279,13 @@ cp.spawn = (bin, args, options) => spawn(process.execPath, ['-e',
   args.includes('scripts/prepare-vitest-runtime.mjs') ? 'process.exit(91)' : ''], options);
 syncFixtureBuiltinExports();\n`,
         );
-        const configArgs =
+        const defaultConfigArgs =
           implicitRoot || args.includes("--config") ? [] : ["--config", configPath("extension-qa")];
         let child: ChildProcess | undefined;
         await lifetime.track(
           runCliCommand({
             bin: process.execPath,
-            args: ["--import", preload, "scripts/run-vitest.mts", ...configArgs, ...args],
+            args: ["--import", preload, "scripts/run-vitest.mts", ...defaultConfigArgs, ...args],
             env: testRunnerFixtureEnv(),
             stdio: "ignore",
             signal,
@@ -320,50 +313,31 @@ syncFixtureBuiltinExports();\n`,
     [
       "CLI process selective exclusion",
       runVitest,
-      [
-        "run",
-        "--config",
-        configPath("cli-process"),
-        "--exclude",
-        "src/cli/update-dry-run-state.process.test.ts",
-      ],
+      runConfig("cli-process", "--exclude", "src/cli/update-dry-run-state.process.test.ts"),
       "runtime",
     ],
     [
       "Codex delivery QA runtime",
       runVitest,
-      [
-        "run",
-        "--config",
-        configPath("infra"),
-        "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
-      ],
+      runConfig("infra", "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts"),
       "private-qa",
     ],
     [
       "Gateway server selective exclusion",
       runVitest,
-      [
-        "run",
-        "--config",
-        configPath("gateway-server"),
-        "--exclude",
-        "server-sidecar-retention.test.ts",
-      ],
+      runConfig("gateway-server", "--exclude", "server-sidecar-retention.test.ts"),
       "runtime",
     ],
     [
       "Windows cron process identity",
       runVitest,
-      [
-        "run",
-        "--config",
-        configPath("gateway-database-workers"),
+      runConfig(
+        "gateway-database-workers",
         "src/gateway/gateway-cron-process-identity.windows.test.ts",
-      ],
+      ),
       "runtime",
     ],
-    ["aggregate config", runVitest, ["run", "--config", configPath("full-extensions")]],
+    ["aggregate config", runVitest, runConfig("full-extensions")],
   ] as const)(
     "blocks %s CLI readers until successful build and preserves SIGTERM",
     async ([_name, script, args, mode = "private-qa"], { signal, onTestFinished }) => {
