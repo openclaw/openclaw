@@ -3,13 +3,14 @@ import { expect, it } from "vitest";
 import {
   parseWorkerWorkspaceManifest,
   parseWorkerWorkspaceReconciliationPlan,
-  serializeWorkerWorkspaceManifest,
+  serializeWorkerWorkspaceManifest as serializeManifest,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 
 const sha256 = "a".repeat(64);
 const file = { path: "file", type: "file" as const, mode: 0o644, size: 0, sha256 };
 const manifestRef = (raw: string) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
-const manifest = { version: 1, baseCommit: null, entries: [file] };
+const manifest = { version: 1 as const, baseCommit: null, entries: [file] };
 const journal = {
   version: 1,
   temporaryNonce: "a".repeat(32),
@@ -42,61 +43,49 @@ function rejectsEntry(value: unknown, error: string) {
   expect(() => readJournal({ ...journal, baseEntries: [value] })).toThrow(error);
 }
 
-it("prunes cache-only ancestors while preserving original empty directories", () => {
-  const directories = [
-    ".artifacts",
-    ".artifacts/vitest-worker-cache",
-    ".local",
-    ".local/share",
-    ".local/share/pnpm",
-    ".local/share/pnpm/store",
-    "empty",
-    "nested",
-    "nested/empty",
-  ];
-  const entries = [
-    namedFile(".artifacts/vitest-worker-cache/out.js"),
-    namedFile(".local/share/pnpm/store/content"),
-    file,
-  ];
-  const original = {
-    ...manifest,
-    entries: [...directories.map(directory), ...entries].toSorted((left, right) =>
-      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
-    ),
-  };
-  const expected = { ...manifest, directories: ["empty", "nested", "nested/empty"] };
-  const serialized = serializeWorkerWorkspaceManifest({ ...manifest, entries, directories });
-  for (const value of [original, JSON.parse(serialized)]) {
-    expect(readManifest(value)).toEqual(expected);
-  }
-});
-
-it("applies the local build-cache policy only with trusted input context", () => {
+it.each([false, true])("projects caches using trusted input context: %s", (trusted) => {
   const authored = ".artifacts/build-all-cache/authored.txt";
   const generated = ".artifacts/build-cache-inputs/compile.json";
-  const value = {
-    ...manifest,
-    entries: [
-      directory(".artifacts"),
-      directory(".artifacts/build-all-cache"),
-      namedFile(authored),
-      directory(".artifacts/build-cache-inputs"),
-      namedFile(generated),
-      file,
-    ],
-    // Receipt contents cannot supply their own input-custody facts.
-    buildCacheInputs: [generated],
-  };
-  const raw = JSON.stringify(value);
+  const emptyDirectories = ["empty", "nested", "nested/empty"];
+  const paths = [
+    ".artifacts/vitest-worker-cache/out.js",
+    ".local/share/pnpm/store/content",
+    authored,
+    generated,
+    "file",
+  ];
+  const directories = [
+    ...new Set([
+      ...paths.flatMap((name) => [...workspacePathAncestors(name)]),
+      ...emptyDirectories,
+    ]),
+  ];
+  const entries = paths.map(namedFile);
+  const rawEntries = [...directories.map(directory), ...entries].toSorted((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
+  // Receipt contents cannot supply their own input-custody facts.
+  const raw = JSON.stringify({ ...manifest, entries: rawEntries, buildCacheInputs: [generated] });
   const ref = manifestRef(raw);
-  const ordinary = parseWorkerWorkspaceManifest(raw, ref);
-  expect(ordinary.entries.map((entry) => entry.path)).toEqual([authored, generated, "file"]);
-  expect(ordinary.buildCacheInputs).toBeUndefined();
-  const local = parseWorkerWorkspaceManifest(raw, ref, [authored]);
-  expect(local.entries.map((entry) => entry.path)).toEqual([authored, "file"]);
-  expect(JSON.parse(serializeWorkerWorkspaceManifest(local)).buildCacheInputs).toBeUndefined();
-  expect(() => parseWorkerWorkspaceManifest(raw + " ", ref, [authored])).toThrow("digest");
+  const buildCacheInputs = trusted ? [authored] : undefined;
+  const expected = {
+    ...manifest,
+    entries: (trusted ? [authored, "file"] : [authored, generated, "file"]).map(namedFile),
+    directories: [
+      ".artifacts",
+      ".artifacts/build-all-cache",
+      ...(trusted ? [] : [".artifacts/build-cache-inputs"]),
+      ...emptyDirectories,
+    ],
+  };
+  expect(parseWorkerWorkspaceManifest(raw, ref, buildCacheInputs)).toEqual({
+    ...expected,
+    ...(trusted ? { buildCacheInputs } : {}),
+  });
+  const serialized = serializeManifest({ ...manifest, entries, directories, buildCacheInputs });
+  expect(readManifest(JSON.parse(serialized))).toEqual(expected);
+  expect(JSON.parse(serialized).buildCacheInputs).toBeUndefined();
+  expect(() => parseWorkerWorkspaceManifest(raw + " ", ref, buildCacheInputs)).toThrow("digest");
 });
 
 it("requires non-array records for manifests, journals, and entries", () => {

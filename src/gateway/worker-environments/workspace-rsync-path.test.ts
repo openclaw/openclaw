@@ -7,7 +7,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { prepareLocalWorkspaceRsyncReceiver } from "./tunnel.test-support.js";
 import {
   createWorkerWorkspaceRsyncReceiverPathFactory,
-  WORKER_WORKSPACE_RSYNC_DESTINATION,
+  WORKER_WORKSPACE_RSYNC_DESTINATION as destination,
   workerAcceptedWorkspaceRsyncReceiverPath,
   workerWorkspaceRsyncReceiverEntryPath,
 } from "./workspace-sync-helpers.js";
@@ -29,16 +29,14 @@ it
   async (mode) => {
     const directory = mode === "workspace-root";
     const root = path.join(tempDirs.make("openclaw-rsync-path-"), "paths with spaces");
-    const homePath = path.join(root, "remote home");
-    const workspacePath = path.join(homePath, ".openclaw-worker/workspaces/env/session/1");
-    const source = path.join(root, directory ? "source dir" : "input.bin");
+    let home = path.join(root, "remote home");
+    let workspace = path.join(home, ".openclaw-worker/workspaces/env/session/1");
+    const payload = directory ? "source dir/payload.txt" : "input.bin";
+    const source = path.join(root, directory ? path.dirname(payload) : payload);
     const tools = tempDirs.make("openclaw-rsync-tools-");
-    const sshArgvPath = path.join(root, "ssh-argv");
-    const receiverArgvPath = path.join(root, "receiver-argv");
-    await fs.mkdir(workspacePath, { recursive: true });
+    await fs.mkdir(workspace, { recursive: true });
     await fs.mkdir(tools, { recursive: true });
-    const home = await fs.realpath(homePath);
-    const workspace = await fs.realpath(workspacePath);
+    [home, workspace] = await Promise.all([fs.realpath(home), fs.realpath(workspace)]);
     const nonce = "b".repeat(32);
     const receiverEntryPath = workerWorkspaceRsyncReceiverEntryPath("a".repeat(64));
     await prepareLocalWorkspaceRsyncReceiver(path.join(home, receiverEntryPath));
@@ -82,52 +80,32 @@ it
           })(mode);
 
     const contents = `received through ${mode}\n`;
-    await writeWorkspaceFiles(root, {
-      [directory ? "source dir/payload.txt" : "input.bin"]: contents,
-    });
-    const result = await runCommandWithTimeout(
-      [
-        rsync,
-        "--archive",
-        "--checksum",
-        `--rsync-path=${receiverCommand}`,
-        "-e",
-        fakeSsh,
-        "--",
-        directory ? `${source}/` : source,
-        `test:${WORKER_WORKSPACE_RSYNC_DESTINATION}`,
-      ],
-      {
-        timeoutMs: 30_000,
-        baseEnv: {
-          ...process.env,
-          HOME: home,
-          PATH: `${tools}:${process.env.PATH ?? ""}`,
-          OPENCLAW_TEST_REAL_RSYNC: rsync,
-          OPENCLAW_TEST_RECEIVER_ARGV: receiverArgvPath,
-          OPENCLAW_TEST_SSH_ARGV: sshArgvPath,
-        },
-      },
-    );
+    await writeWorkspaceFiles(root, { [payload]: contents });
+    const baseEnv = {
+      ...process.env,
+      HOME: home,
+      PATH: `${tools}:${process.env.PATH ?? ""}`,
+      OPENCLAW_TEST_REAL_RSYNC: rsync,
+      OPENCLAW_TEST_RECEIVER_ARGV: path.join(root, "receiver-argv"),
+      OPENCLAW_TEST_SSH_ARGV: path.join(root, "ssh-argv"),
+    };
+    const argv = [rsync, "--archive", "--checksum"];
+    argv.push(`--rsync-path=${receiverCommand}`, "-e", fakeSsh, "--");
+    argv.push(directory ? `${source}/` : source, `test:${destination}`);
+    const result = await runCommandWithTimeout(argv, { timeoutMs: 30_000, baseEnv });
     expect(result).toMatchObject({ termination: "exit", code: 0 });
     const receivedPath =
-      mode === "workspace-root"
-        ? path.join(receiverTarget, "payload.txt")
-        : mode === "accepted-next"
-          ? path.join(receiverTarget, path.basename(source))
-          : receiverTarget;
+      mode === "git-pack" ? receiverTarget : path.join(receiverTarget, path.basename(payload));
     await expect(fs.readFile(receivedPath, "utf8")).resolves.toBe(contents);
 
-    const sshArgv = await readArgv(sshArgvPath);
+    const sshArgv = await readArgv(baseEnv.OPENCLAW_TEST_SSH_ARGV);
     expect(sshArgv.join(" ")).toMatch(
       /^node [A-Za-z0-9_./-]+ (?:workspace-root|git-pack|accepted-next) [A-Za-z0-9_-]+ [a-f0-9]{32} --server /u,
     );
-    expect(sshArgv.at(-1)).toBe(WORKER_WORKSPACE_RSYNC_DESTINATION);
+    expect(sshArgv.at(-1)).toBe(destination);
     expect(sshArgv.join(" ")).not.toContain(workspace);
-    const receiverArgv = await readArgv(receiverArgvPath);
+    const receiverArgv = await readArgv(baseEnv.OPENCLAW_TEST_RECEIVER_ARGV);
     expect(receiverArgv.at(-1)).toBe(receiverTarget);
-    await expect(
-      fs.access(path.join(home, WORKER_WORKSPACE_RSYNC_DESTINATION)),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.join(home, destination))).rejects.toMatchObject({ code: "ENOENT" });
   },
 );

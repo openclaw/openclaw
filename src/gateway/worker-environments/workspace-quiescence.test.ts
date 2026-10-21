@@ -1,11 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { result } from "./bootstrap.test-support.js";
 import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
-
-function commandResult(stdout = "") {
-  return { stdout, stderr: "", code: 0, signal: null, killed: false, termination: "exit" as const };
-}
 
 type QuiescenceOptions = Parameters<typeof createWorkerWorkspaceQuiescence>[0];
 function quiescence(
@@ -29,7 +26,7 @@ it.each(["transport", "acknowledgement", "cleanup", "owner-closed", "legacy"] as
         if (failure === "cleanup") {
           throw new Error("recovery unavailable");
         }
-        return commandResult();
+        return result();
       }
       if (failure === "owner-closed") {
         owner.abort();
@@ -37,7 +34,7 @@ it.each(["transport", "acknowledgement", "cleanup", "owner-closed", "legacy"] as
       if (failure !== "acknowledgement") {
         throw new Error("acquisition response lost");
       }
-      return commandResult("not an acknowledgement");
+      return result({ stdout: "not an acknowledgement" });
     });
     const acquiring = quiescence(runWorkspaceCommand, {
       ownerSignal: owner.signal,
@@ -77,9 +74,9 @@ it.each([false, true])(
     const runWorkspaceCommand = vi.fn(async (command: { argv: readonly string[] }) => {
       if (command.argv.includes("final")) {
         await renewalBlocked;
-        return commandResult(`renewed ${nonce}\n`);
+        return result({ stdout: `renewed ${nonce}\n` });
       }
-      return commandResult(`quiesced ${nonce}\n`);
+      return result({ stdout: `quiesced ${nonce}\n` });
     });
     const lease = await quiescence(runWorkspaceCommand, { ownerSignal: owner.signal })(
       String.raw`C:\workspace`,
@@ -104,7 +101,7 @@ it("releases locally when the owner closes before acquisition acknowledges", asy
   const owner = new AbortController();
   const runWorkspaceCommand = vi.fn(async () => {
     owner.abort();
-    return commandResult(`quiesced ${"e".repeat(32)}\n`);
+    return result({ stdout: `quiesced ${"e".repeat(32)}\n` });
   });
   const lease = await quiescence(runWorkspaceCommand, { ownerSignal: owner.signal })("/workspace");
 
@@ -128,7 +125,7 @@ it.each([
       if (command.argv[4] === nonce && ++releaseAttempts === 1) {
         throw new Error("remote connection interrupted");
       }
-      return commandResult(releaseAttempts === 0 ? `quiesced ${nonce}\n` : "");
+      return result({ stdout: releaseAttempts === 0 ? `quiesced ${nonce}\n` : "" });
     });
     const lease = await quiescence(runWorkspaceCommand, { sharedHost })(remoteWorkspaceDir);
     const resumeConcurrently = () => Promise.all([lease.resume(), lease.resume()]);
