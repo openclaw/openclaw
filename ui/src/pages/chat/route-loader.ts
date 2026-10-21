@@ -1,4 +1,4 @@
-import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
+import type { RouteLoaderOptions, RouteLocation, RouteMatch } from "@openclaw/uirouter";
 import { notFound } from "@openclaw/uirouter";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import { pathForSession } from "../../app-session-path-builder.ts";
@@ -622,4 +622,43 @@ export async function loadSessionPage(
     }
   }
   return result;
+}
+
+/** The loader owns authoritative replacement of cached or reconnected routes. */
+export async function verifyChatSessionRoute(
+  context: ApplicationContext,
+  target: Pick<RouteMatch, "data" | "location" | "abortController">,
+  verifySession: boolean,
+  current: () => boolean,
+  revalidate: () => Promise<unknown>,
+): Promise<void> {
+  // SAFETY: Only chat/dashboard matches loaded here reach this owner.
+  const data = target.data as ChatRouteData | undefined;
+  if (
+    !current() ||
+    data?.kind !== "session" ||
+    (!verifySession && !data.sessionResolutionFromCache)
+  ) {
+    return;
+  }
+  const reference = sessionRouteTargetFromLocation(context, target.location)?.target;
+  // Home and explicit literal creation routes need not exist in storage.
+  if (
+    !reference ||
+    !(reference.kind === "short" || (reference.kind === "literal" && reference.slugCandidate))
+  ) {
+    return;
+  }
+  if (data.sessionResolutionFromCache === "snapshot") {
+    await revalidate();
+    return;
+  }
+  const resolution = await querySessionReference(
+    context,
+    { key: data.sessionKey, agentId: reference.agentId },
+    target.abortController.signal,
+  );
+  if (resolution?.kind === "not-found" && current()) {
+    await revalidate();
+  }
 }

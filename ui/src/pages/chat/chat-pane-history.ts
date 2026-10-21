@@ -614,7 +614,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
 
   protected async forkFromMessage(entryId: string): Promise<void> {
     const scope = this.captureConnectionScope();
-    if (!scope || scope.state.isRouteSessionPending?.()) {
+    if (!scope) {
       return;
     }
     const state = scope.state;

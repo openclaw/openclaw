@@ -174,7 +174,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     machineName?: string,
   ): Promise<void> {
     const scope = this.captureConnectionScope();
-    if (!scope || this.routeResolutionPending) {
+    if (!scope) {
       return;
     }
     const pendingProperty = {
@@ -202,7 +202,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       row,
       currentRow: () => (this.state ? selectedChatSessionRow(this.state) : undefined),
       fallbackAgentId: resolveChatAgentId(scope.state),
-      isCurrent: () => !this.routeResolutionPending && this.ownsHeaderOutcomeScope(scope),
+      isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       publishError: (error: unknown) => this.publishHeaderError(error, scope.headerOutcomeOwner),
       reconcileMutation: (agentId?: string | null) => scope.sessions.reconcileMutation(agentId),
     };

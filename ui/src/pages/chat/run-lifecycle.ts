@@ -132,7 +132,6 @@ type ReconcileOptions = {
 };
 
 type ChatAbortRunState = ChatAbortTargetState & {
-  isRouteSessionPending?: () => boolean;
   client: GatewayBrowserClient | null;
   connected: boolean;
   lastError?: string | null;
@@ -352,7 +351,7 @@ async function abortChatRun(state: ChatAbortRunState, intent?: ChatAbortIntent, 
 export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boolean> {
   const intent = host.pendingAbort;
   const client = host.client;
-  if (!intent || !client || !host.connected || host.isRouteSessionPending?.()) {
+  if (!intent || !client || !host.connected) {
     return false;
   }
   const recoveryScope =
@@ -405,10 +404,6 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
 }
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions): Promise<void> {
-  if (host.isRouteSessionPending?.()) {
-    setChatError(host, t("chat.thread.loading"));
-    return;
-  }
   chatOutboxOwner(host).admissions.cancelRequests(
     host,
     resolveUiConversationIdentity(host, host.sessionKey),

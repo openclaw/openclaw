@@ -200,21 +200,6 @@ const mutations = [
 ] as const;
 
 describe("public session sharing", () => {
-  it.each(mutations)("holds $name mutations before route confirmation", async ({ invoke }) => {
-    const request = vi.fn(async (method: string) =>
-      method === "session.members.listEvidence" ? sharingResult(sessionRow()) : {},
-    );
-    const { pane } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture({
-        reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-      }),
-    });
-    pane.routeResolutionPending = true;
-    expect(await invoke(pane, sessionRow())).toEqual({ status: "unavailable" });
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it.each(["operator.sessions.read", "operator.sessions.write"])(
     "does not publish sharing hydration while rendering a header with %s",
     (scope) => {

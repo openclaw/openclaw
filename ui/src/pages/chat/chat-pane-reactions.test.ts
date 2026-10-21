@@ -127,19 +127,6 @@ function fixture(
 }
 
 describe("pane reaction ownership", () => {
-  it("holds reactions on an unconfirmed route while preserving the confirmed path", async () => {
-    const { pane, writes } = fixture(
-      Promise.resolve({ sessionId: "session-1", reactions: {} }),
-      Promise.resolve({ messageId: "message-1", reactions: [] }),
-    );
-    pane.routeResolutionPending = true;
-    await pane.setMessageReaction("message-1", "👍", false);
-    expect(writes).toEqual([]);
-    pane.routeResolutionPending = false;
-    await pane.setMessageReaction("message-1", "👍", false);
-    expect(writes).toHaveLength(1);
-  });
-
   it.each(["list", "set"] as const)(
     "retains live events over an older %s response",
     async (operation) => {

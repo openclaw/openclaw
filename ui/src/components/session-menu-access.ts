@@ -27,13 +27,9 @@ export function sessionMenuReasons(params: {
   cloudWorkerStopAction?: CloudWorkerStopAction | null;
   placementRow?: GatewaySessionRow;
   requiredProfile?: string;
-  routePending?: boolean;
 }): Partial<Record<SessionMenuActionKind, string>> {
   const { snapshot, session, batchRows = null, cloudWorkerStopAction } = params;
   const reason = (request: SessionMethodAccessRequest) => {
-    if (params.routePending) {
-      return t("chat.thread.loading");
-    }
     const access = readSessionMethodAccess(snapshot, request);
     return access.allowed ? undefined : access.reason;
   };
@@ -100,11 +96,9 @@ export function sessionMenuReasons(params: {
         params: { parentSessionKey: session.key, fork: true },
       });
   const cloudWorkerStopReason = cloudWorkerStopAction ? reason(cloudWorkerStopAction) : undefined;
-  const placementReason = params.routePending
-    ? t("chat.thread.loading")
-    : params.placementRow
-      ? sessionPlacementActionReason(snapshot, params.placementRow, params.requiredProfile)
-      : undefined;
+  const placementReason = params.placementRow
+    ? sessionPlacementActionReason(snapshot, params.placementRow, params.requiredProfile)
+    : undefined;
   return {
     ...(placementReason ? { "move-session": placementReason } : {}),
     ...(snoozeReason ? { snooze: snoozeReason, wake: snoozeReason } : {}),

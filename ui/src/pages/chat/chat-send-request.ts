@@ -39,13 +39,13 @@ export async function requestChatSend(
     expectedLeafEntryId?: string | null;
   },
 ): Promise<ChatSendAck> {
-  if (state.isRouteSessionPending?.()) {
-    throw new Error(t("chat.thread.loading"));
-  }
   if (params.attachments?.length) {
     assertUploadsEnabled(state.uploadConfig);
   }
   const sessionKey = params.sessionKey ?? state.sessionKey;
+  if (sessionKey === state.sessionKey && state.isRouteSessionPending?.()) {
+    throw new Error(t("chat.thread.loading"));
+  }
   const selectedAgentId = params.agentId
     ? normalizeAgentId(params.agentId)
     : resolveUiSelectedSessionAgentId(state);

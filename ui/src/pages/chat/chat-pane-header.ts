@@ -209,7 +209,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const branchSwitchAccess = readChatSessionActionAccess(
       this.context.gateway.snapshot,
       Boolean(this.state?.chatRunId),
-      { routePending: this.routeResolutionPending },
     ).branchSwitch;
     const branchSwitchDisabledReason =
       this.state && this.isCurrentSessionArchived(this.state)
@@ -221,7 +220,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             : null;
     const sharingSnapshot = this.context.gateway.snapshot;
     const renameAccess = row
-      ? this.readHeaderSessionMethodAccess({
+      ? readSessionMethodAccess(this.context.gateway.snapshot, {
           method: "sessions.patch",
           params: { key: row.key, label: null },
           sessionScope: true,
@@ -249,7 +248,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const sessionActionDisabledReasons = row
       ? sessionMenuReasons({
           snapshot: this.context.gateway.snapshot,
-          routePending: this.routeResolutionPending,
           placementRow: row,
           requiredProfile:
             this.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
@@ -257,7 +255,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         })
       : {};
     const assignmentAccess = row
-      ? this.readHeaderSessionMethodAccess({
+      ? readSessionMethodAccess(this.context.gateway.snapshot, {
           method: "sessions.assignOwner",
           params: {
             key: row.key,
@@ -436,7 +434,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       const access = readChatSessionActionAccess(
         this.context.gateway.snapshot,
         Boolean(this.state?.chatRunId),
-        { routePending: this.routeResolutionPending },
       ).branchSwitch;
       if (!access.allowed) {
         this.publishHeaderError(access.reason);

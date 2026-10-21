@@ -64,9 +64,6 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       requiredScope: "operator.read",
     });
     const writeReason = (method: string) => {
-      if (this.routeResolutionPending) {
-        return t("chat.thread.loading");
-      }
       const access = readSessionMethodAccess(snapshot, { method, requiredScope: "operator.write" });
       return access.allowed ? undefined : access.reason;
     };
@@ -125,7 +122,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
   protected readonly clearSessionCompanion = async (): Promise<boolean> => {
     const scope = this.captureConnectionScope();
     const key = scope?.state.sessionKey;
-    if (this.routeResolutionPending || !scope || !key) {
+    if (!scope || !key) {
       return false;
     }
     const agentId = resolveChatAgentId(scope.state);
@@ -315,11 +312,10 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     const scope = this.captureConnectionScope();
     const currentRow = scope ? this.currentSessionSharingRow(scope, row) : null;
     const expectedSessionId = currentRow?.sessionId;
-    if (this.routeResolutionPending || !scope || !currentRow || !expectedSessionId) {
+    if (!scope || !currentRow || !expectedSessionId) {
       return { status: "unavailable" };
     }
     const access = () =>
-      !this.routeResolutionPending &&
       readSessionMethodAccess(scope.context.gateway.snapshot, {
         method: "session.publicShare.set",
         requiredScope: "operator.write",
@@ -439,7 +435,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
   ): Promise<ChatSessionSharingOutcome> {
     const scope = this.captureConnectionScope();
     const currentRow = scope ? this.currentSessionSharingRow(scope, row) : null;
-    if (this.routeResolutionPending || !scope || !currentRow) {
+    if (!scope || !currentRow) {
       return { status: "unavailable" };
     }
     if ("visibility" in change && change.visibility === currentRow.visibility) {

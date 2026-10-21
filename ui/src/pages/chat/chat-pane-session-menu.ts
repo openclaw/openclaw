@@ -32,10 +32,7 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
-import {
-  readSessionMethodAccess,
-  type SessionMethodAccessRequest,
-} from "../../lib/session-method-access.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -60,7 +57,6 @@ import {
   renameSession,
 } from "./chat-pane-session-metadata-patch.ts";
 import { chatSessionPresentationTitle } from "./chat-pane-session-presentation.ts";
-import { holdPendingChatSessionAccess } from "./chat-session-action-access.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.types.ts";
@@ -87,7 +83,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
 
   protected canArchiveHeaderSession(row: GatewaySessionRow): boolean {
     return (
-      !this.routeResolutionPending &&
       !row.archived &&
       !this.context.sessions.archiveVisibility(row.key) &&
       canArchiveSessionRow(
@@ -244,10 +239,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         return;
       }
       togglePinnedSession(this.context.navigation, current.key);
-      return;
-    }
-    if (this.routeResolutionPending) {
-      this.publishHeaderError(t("chat.thread.loading"));
       return;
     }
     if (action.kind === "new-group") {
@@ -484,9 +475,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   private captureHeaderSessionActionScope(
     allowDeferred = false,
   ): (SidebarSessionMutationScope & { signal: AbortSignal }) | null {
-    if (this.routeResolutionPending) {
-      return null;
-    }
     return captureSessionMutationScope(this.context, {
       epoch: this.connectionGeneration,
       allowDeferred,
@@ -496,23 +484,12 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   private isHeaderSessionActionCurrent(scope: SidebarSessionMutationScope, owner: string): boolean {
-    return (
-      !this.routeResolutionPending &&
-      this.ownsHeaderOutcome(owner) &&
-      isSessionMutationScopeCurrent(this.context, scope)
-    );
-  }
-
-  protected readHeaderSessionMethodAccess(request: SessionMethodAccessRequest) {
-    return holdPendingChatSessionAccess(
-      readSessionMethodAccess(this.context.gateway.snapshot, request),
-      this.routeResolutionPending,
-    );
+    return this.ownsHeaderOutcome(owner) && isSessionMutationScopeCurrent(this.context, scope);
   }
 
   protected beginHeaderRename(row: GatewaySessionRow): void {
     const header = this.headerPresentation;
-    const access = this.readHeaderSessionMethodAccess({
+    const access = readSessionMethodAccess(this.context.gateway.snapshot, {
       method: "sessions.patch",
       params: { key: row.key, label: null },
       sessionScope: true,
@@ -536,7 +513,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
 
   protected commitHeaderRename(): void {
     const session = this.headerPresentation.renameSession;
-    if (!session || this.routeResolutionPending) {
+    if (!session) {
       return;
     }
     const snapshot = this.context.gateway.snapshot;
@@ -553,7 +530,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!state || !patch) {
       return;
     }
-    const access = this.readHeaderSessionMethodAccess({
+    const access = readSessionMethodAccess(this.context.gateway.snapshot, {
       method: "sessions.patch",
       params: { key: session.key, ...patch },
       sessionScope: true,

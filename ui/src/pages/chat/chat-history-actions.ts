@@ -37,7 +37,7 @@ export function cancelPendingQueuedChatInput(state: ChatHistoryHost, id: string)
   if (!view || !input?.runId) {
     return false;
   }
-  if (state.isRouteSessionPending?.() || !client || !state.connected) {
+  if (!client || !state.connected) {
     return true;
   }
   const connectionIsCurrent = captureChatConnectionOwner(state);
@@ -125,7 +125,7 @@ function clearPostResetBranchPrecondition(
 export async function clearChatHistory(
   state: ClearChatHistoryState,
 ): Promise<ClearChatHistoryResult> {
-  if (!state.client || !state.connected || state.isRouteSessionPending?.()) {
+  if (!state.client || !state.connected) {
     return "failed";
   }
   const client = state.client;
@@ -230,7 +230,7 @@ export async function rewindChatHistory(
   entryId: string,
   attachmentReads: Pick<ChatAttachmentReadLifecycle, "abortReads" | "readSignal">,
 ): Promise<{ editorText?: string } | null> {
-  if (!state.client || !state.connected || state.isRouteSessionPending?.()) {
+  if (!state.client || !state.connected) {
     return null;
   }
   const { sessionKey, agentParams, connectionIsCurrent, viewMatches, viewIsCurrent } =
@@ -296,7 +296,7 @@ export async function switchChatHistoryBranch(
   state: SwitchChatHistoryBranchState,
   leafEntryId: string,
 ): Promise<boolean> {
-  if (!state.client || !state.connected || state.isRouteSessionPending?.()) {
+  if (!state.client || !state.connected) {
     return false;
   }
   const { sessionKey, agentParams, viewMatches, viewIsCurrent } = captureChatHistoryView(state);

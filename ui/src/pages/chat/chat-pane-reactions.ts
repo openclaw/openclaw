@@ -49,7 +49,6 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
   protected canReactToCurrentSession(): boolean {
     const state = this.state;
     return Boolean(
-      !this.routeResolutionPending &&
       state &&
       canReactToSession(this.context.gateway.snapshot, selectedChatSessionRow(state), {
         archived: this.isCurrentSessionArchived(state),
@@ -206,7 +205,6 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       ...scopedAgentParamsForSession(state, sessionKey),
     };
     const ownsTarget = () =>
-      !this.routeResolutionPending &&
       generation === this.reactionGeneration &&
       this.context === context &&
       this.state === state &&
@@ -218,9 +216,6 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
     const key = `reaction:${sessionKey}:${messageId}:${emoji}`;
     let pending: PendingReaction | undefined;
     const run = async (requestClient: NonNullable<typeof client>) => {
-      if (this.routeResolutionPending) {
-        return;
-      }
       const publicationScope = deferredOwner ? this.captureConnectionScope() : scope;
       const revision = this.reactionRevisions.get(messageId) ?? 0;
       const operation = Symbol("reaction");

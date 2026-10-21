@@ -291,11 +291,6 @@ export async function startApplicationRouter(
         target: NonNullable<ReturnType<typeof currentTarget>>,
         verifySession: boolean,
       ) => {
-        // SAFETY: The caller accepts only chat/dashboard matches, both loaded by loadChatRoute.
-        const data = target.data as ChatRouteData | undefined;
-        if (data?.kind !== "session" || (!verifySession && !data.sessionResolutionFromCache)) {
-          return;
-        }
         const { client, hello } = context.gateway.snapshot;
         const scope = gatewayPresentationScope(context.gateway);
         const current = () =>
@@ -307,38 +302,10 @@ export async function startApplicationRouter(
           currentTarget()?.abortController === target.abortController &&
           router.getState().pendingMatches.length === 0;
         try {
-          const { sessionRouteTargetFromLocation } = await import("./pages/chat/route-loader.ts");
-          if (!current()) {
-            return;
-          }
-          const reference = sessionRouteTargetFromLocation(context, target.location)?.target;
-          // Home and explicit literal creation routes need not exist in storage.
-          if (
-            !reference ||
-            !(
-              reference.kind === "short" ||
-              (reference.kind === "literal" && reference.slugCandidate)
-            )
-          ) {
-            return;
-          }
-          if (data.sessionResolutionFromCache === "snapshot") {
-            await router.revalidate(context, target.routeId);
-            return;
-          }
-          const { querySessionReference } =
-            await import("./pages/chat/route-loader-session-reference.ts");
-          if (!current()) {
-            return;
-          }
-          const resolution = await querySessionReference(
-            context,
-            { key: data.sessionKey, agentId: reference.agentId },
-            target.abortController.signal,
+          const { verifyChatSessionRoute } = await import("./pages/chat/route-loader.ts");
+          await verifyChatSessionRoute(context, target, verifySession, current, () =>
+            router.revalidate(context, target.routeId),
           );
-          if (resolution?.kind === "not-found" && current()) {
-            await router.revalidate(context, target.routeId);
-          }
         } catch {
           // Failed discovery is not deletion; keep the established conversation.
         }

@@ -19,10 +19,7 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 
-type ChatPickerPatchHost = SessionScopeHost & {
-  sessions: SessionCapability;
-  isRouteSessionPending?: () => boolean;
-};
+type ChatPickerPatchHost = SessionScopeHost & { sessions: SessionCapability };
 type ChatCommandSettingsContext = {
   sessions: SessionCapability;
   defaultAgentId?: string;
@@ -134,8 +131,7 @@ export function patchChatSessionSettings(
     agentId: options.agentId,
     expectedSessionId: options.expectedSessionId,
     ownsModelOverride: options.ownsModelOverride,
-    canDispatch: () =>
-      !host.isRouteSessionPending?.() && (!canDispatch || canDispatch(receipt.read())),
+    canDispatch: canDispatch ? () => canDispatch(receipt.read()) : undefined,
     onConfirmed: receipt.confirm,
     onRejected: (error) => options.onRejected?.(error, receipt.read()),
     waitFor,

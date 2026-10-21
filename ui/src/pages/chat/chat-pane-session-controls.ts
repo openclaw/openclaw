@@ -20,10 +20,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
-import {
-  holdPendingChatSessionAccess,
-  readChatSessionActionAccess,
-} from "./chat-session-action-access.ts";
+import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -96,12 +93,9 @@ export function readChatPaneMutationAccess(
   snapshot: ApplicationGatewaySnapshot,
   sessionKey: string,
   session?: GatewaySessionRow,
-  routePending = false,
 ) {
-  const readAccess = (request: Parameters<typeof readSessionMethodAccess>[1]) =>
-    holdPendingChatSessionAccess(readSessionMethodAccess(snapshot, request), routePending);
   const scopedPatchAccess = (patch: SessionPatch) =>
-    readAccess({
+    readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, ...patch },
       sessionScope: true,
@@ -110,7 +104,7 @@ export function readChatPaneMutationAccess(
   return {
     model: scopedPatchAccess({ model: null }),
     effort: scopedPatchAccess({ thinkingLevel: null }),
-    contextWindow: readAccess({
+    contextWindow: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, contextWindow: null },
     }),
@@ -197,7 +191,6 @@ export function renderChatPaneComposerControls(params: {
     );
   };
   const canPatch = (patch: SessionPatch, targetSessionKey = sessionKey) =>
-    !state.isRouteSessionPending?.() &&
     areUiSessionKeysEquivalent(targetSessionKey, sessionKey) &&
     ownsSelection() &&
     readSessionMethodAccess(
@@ -462,7 +455,6 @@ export function createChatPaneSessionActionCallbacks(params: {
     const snapshot = params.getSnapshot();
     const hasLocalRun = Boolean(state.chatRunId);
     const access = readChatSessionActionAccess(snapshot, hasLocalRun, {
-      routePending: state.isRouteSessionPending?.(),
       session: selectedChatSessionRow(state),
       sessionAbortable: state.chatRunSessionAbortable === true,
     });

@@ -305,7 +305,7 @@ export function createPageState(
   };
   attachChatRealtimeActions(
     state,
-    () => !state.isRouteSessionPending?.() && !chatProviderReviewRow(state)?.providerReview,
+    () => !chatProviderReviewRow(state)?.providerReview,
     (message, runId) =>
       requestChatSend(state, {
         message,

@@ -52,7 +52,6 @@ export function bindChatPageSession(
 
 export function canCreateChatSession(state: ChatPageHost) {
   return (
-    !state.isRouteSessionPending?.() &&
     !state.chatLoading &&
     !state.chatSending &&
     !state.chatRunId &&
