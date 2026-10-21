@@ -37,7 +37,10 @@ type ThinkingProvenanceCase = [
 let configOverride: Record<string, unknown>;
 let resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
-const automatic = { requesterThinkingLevel: "high", requesterThinkingExplicit: false };
+const automatic: SpawnSubagentTestContext = {
+  requesterThinkingLevel: "high",
+  requesterThinkingExplicit: false,
+};
 
 const thinkingCases: readonly ThinkingProvenanceCase[] = [
   [

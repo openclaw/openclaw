@@ -42,9 +42,9 @@ describe("publishProfile", () => {
 
   it("uses current time when lastPublishedAt is in the past", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1705320000000);
-    vi.spyOn(pool, "publish").mockReturnValue([Promise.resolve("saved")]);
+    const publishSpy = vi.spyOn(pool, "publish").mockReturnValue([Promise.resolve("saved")]);
     await publish(["wss://relay.example"], 1705320000 - 3600);
-    expect(pool.publish).toHaveBeenCalledWith(
+    expect(publishSpy).toHaveBeenCalledWith(
       ["wss://relay.example"],
       expect.objectContaining({ created_at: 1705320000 }),
     );

@@ -62,12 +62,12 @@ async function retireManager() {
   const transport = await attachFakeTransport(manager);
   const cleanup = createDeferred<void>();
   const disconnect = manager.disconnectAll.bind(manager);
-  vi.spyOn(manager, "disconnectAll").mockImplementation(async () => {
+  const disconnectSpy = vi.spyOn(manager, "disconnectAll").mockImplementation(async () => {
     await disconnect();
     await cleanup.promise;
   });
   const removal = removeClientManager("default");
-  return { manager, transport, cleanup, removal };
+  return { manager, transport, cleanup, removal, disconnectSpy };
 }
 
 describe("client manager registry", () => {
@@ -85,8 +85,8 @@ describe("client manager registry", () => {
   it.each(["resolves", "rejects"] as const)(
     "retires managers immediately and preserves replacements when cleanup %s",
     async (outcome) => {
-      const { manager, transport, cleanup, removal } = retired!;
-      expect(manager.disconnectAll).toHaveBeenCalledOnce();
+      const { manager, transport, cleanup, removal, disconnectSpy } = retired!;
+      expect(disconnectSpy).toHaveBeenCalledOnce();
       expect(transport.quit).toHaveBeenCalledOnce();
       expect(getClientManager("default")).toBeUndefined();
 

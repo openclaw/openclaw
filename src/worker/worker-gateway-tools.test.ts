@@ -1,4 +1,3 @@
-import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
 import type {
   WorkerGatewayToolResponseFrame,
@@ -127,6 +126,7 @@ it("rejects non-object arguments and surfaces Gateway failures", async () => {
     error: {
       code: "INVALID_REQUEST",
       message: "Worker tool authority is no longer current.",
+      details: { reason: "method-not-allowed" },
     },
   });
   await expect(tool!.execute("stale", {})).rejects.toThrow("no longer current");
@@ -134,10 +134,12 @@ it("rejects non-object arguments and surfaces Gateway failures", async () => {
 
 it("preserves remote failures through Tool Search while validating successful results", async () => {
   const { surface, client, result } = fixture();
-  surface.tools[0]!.definition.outputSchema = Type.Object(
-    { status: Type.Literal("sent") },
-    { additionalProperties: false },
-  );
+  surface.tools[0]!.definition.outputSchema = {
+    type: "object",
+    properties: { status: { type: "string", const: "sent" } },
+    required: ["status"],
+    additionalProperties: false,
+  };
   const catalogRef = createToolSearchCatalogRef();
   registerHeadlessToolSearchCatalog({
     catalogRef,

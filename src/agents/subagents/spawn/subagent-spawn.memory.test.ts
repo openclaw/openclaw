@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 
@@ -59,7 +60,7 @@ it.each([
       updatedAt: 1,
       incognito: true,
       skillLibrarySelections: [{ ...skill }],
-    };
+    } satisfies InternalSessionEntry;
     await expect(
       actor.storage!.mutate({ type: "session.entry.create", input: { entry } }, authority),
     ).resolves.toMatchObject({ kind: "committed" });
