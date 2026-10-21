@@ -150,7 +150,10 @@ export function createComposerMobileInteraction(
       containsComposed(composerInput() ?? undefined, target) || ownedOverlay(target);
     // Floating cards share the gesture surface without starting editor interaction.
     const insideComposer = (target: Node | null) =>
-      containsComposed(shell(), target) || ownedOverlay(target, shell());
+      containsComposed(shell(), target) ||
+      // Collapsing on pointerdown would move Latest before its click can activate.
+      containsComposed(props.getScrollToLatestElement?.() ?? undefined, target) ||
+      ownedOverlay(target, shell());
     const editable = (target: Node | null) =>
       target instanceof Element &&
       target.matches(

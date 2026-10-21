@@ -307,7 +307,7 @@ suite.define(() => {
           // Both desktop presentations hug content within the conversation frame.
           expect(Math.abs(bounds!.y - (frame!.y + 8))).toBeLessThanOrEqual(1);
           expect(
-            Math.abs(bounds!.x + bounds!.width - (frame!.x + frame!.width - 8)),
+            Math.abs(bounds!.x + bounds!.width - (frame!.x + frame!.width - 13)),
           ).toBeLessThanOrEqual(1);
           expect(bounds!.height).toBeLessThanOrEqual(frame!.height - 16 + 1);
           expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(frame!.y + frame!.height - 8 + 1);

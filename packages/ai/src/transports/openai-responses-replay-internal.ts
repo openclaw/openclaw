@@ -146,7 +146,7 @@ export async function resolveNextResponsesEncryptedContentAttempt<
 >(
   attempt: ResponsesEncryptedContentAttempt<TRequest>,
   error: unknown,
-  options?: { buildFullHistoryRequest?: () => TRequest | Promise<TRequest> },
+  options: { buildFullHistoryRequest: () => TRequest | Promise<TRequest> },
 ): Promise<ResponsesEncryptedContentAttempt<TRequest> | undefined> {
   const orphanedFunctionOutput = isOrphanedFunctionCallOutputError(error);
   if (
@@ -170,9 +170,7 @@ export async function resolveNextResponsesEncryptedContentAttempt<
   }
   // Filtering the already-pruned checkpoint request would leave a context-blind
   // suffix. Rebuild full history lazily, then preserve any earlier reasoning strip.
-  let compactionStripped = options?.buildFullHistoryRequest
-    ? await options.buildFullHistoryRequest()
-    : locallyStripped;
+  let compactionStripped = await options.buildFullHistoryRequest();
   compactionStripped = stripResponsesRequestCompaction(compactionStripped);
   if (attempt.kind === "reasoning-stripped") {
     compactionStripped = stripResponsesRequestEncryptedReasoning(compactionStripped);
@@ -201,7 +199,7 @@ export async function createResponsesStreamWithRecovery(params: {
     response: Response;
     attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>;
   }) => AsyncIterable<unknown>;
-  buildFullHistoryRequest?: () =>
+  buildFullHistoryRequest: () =>
     | OpenAIResponsesRequestParams
     | Promise<OpenAIResponsesRequestParams>;
 }): Promise<{
@@ -364,9 +362,7 @@ export async function createResponsesStreamWithRecovery(params: {
           isPreviousResponseRejection(error as { code?: unknown; param?: unknown })
         ) {
           const request = {
-            ...(params.buildFullHistoryRequest
-              ? await params.buildFullHistoryRequest()
-              : attempt.request),
+            ...(await params.buildFullHistoryRequest()),
           };
           delete request.previous_response_id;
           nextAttempt = { kind: "continuation-rejected", request };

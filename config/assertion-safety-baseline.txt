@@ -635,7 +635,7 @@ extensions/qa-lab/src/live-transports/slack/slack-live.observations.ts	6
 extensions/qa-lab/src/live-transports/slack/slack-live.scenario-implementations.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/scenario-environment.ts	3
-extensions/qa-lab/src/live-transports/whatsapp/scenario-runtime.ts	3
+extensions/qa-lab/src/live-transports/whatsapp/scenario-runtime.ts	2
 extensions/qa-lab/src/mantis/crabbox-runtime.ts	2
 extensions/qa-lab/src/mantis/discord-smoke.runtime.ts	3
 extensions/qa-lab/src/mantis/run.runtime.ts	1
@@ -991,7 +991,6 @@ packages/gateway-protocol/src/protocol-validator.ts	1
 packages/gateway-protocol/src/schema/audit-activity.ts	1
 packages/gateway-protocol/src/schema/devices.ts	1
 packages/gateway-protocol/src/schema/failover-reason.ts	1
-packages/gateway-protocol/src/schema/protocol-schema-composer.ts	1
 packages/gateway-protocol/src/startup-unavailable.ts	3
 packages/llm-core/src/utils/diagnostics.ts	1
 packages/llm-core/src/utils/event-stream.ts	1
@@ -1314,7 +1313,7 @@ src/agents/tool-search-transcript.ts	1
 src/agents/tools-effective-inventory-build.ts	2
 src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agents-wait-tool.ts	1
-src/agents/tools/ask-user-tool.ts	3
+src/agents/tools/ask-user-tool.ts	2
 src/agents/tools/chat-history-text.ts	1
 src/agents/tools/common.ts	2
 src/agents/tools/computer-tool-node.ts	1
@@ -1583,7 +1582,6 @@ src/commands/doctor-session-incognito-key-repair-state.ts	4
 src/commands/doctor-session-snapshots.ts	3
 src/commands/doctor-session-sqlite-recover-report.ts	1
 src/commands/doctor-session-transcript-headers.ts	2
-src/commands/doctor-session-transcript-labels.ts	1
 src/commands/doctor-session-transcripts.ts	1
 src/commands/doctor-skills.ts	1
 src/commands/doctor-sqlite-compact.ts	1

@@ -1215,9 +1215,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readAuthProfileRows"],
+        operations: ["readAuthProfileRows", "readAuthProfileJsonCellTexts"],
         evidence:
-          "Only auth-profiles/store.worker.ts, plugin-model-catalog.worker.ts, and sqlite-readonly-native-payload.ts's auth-profile-rows worker call this batched reader; synchronous SDK cell readers remain T1.",
+          "Auth-profile inspection workers and the shared/agent usage workers call these paired readers; synchronous SDK cell readers remain T1.",
       },
     ],
   ],
@@ -3854,10 +3854,8 @@ function findCalls(source) {
   return calls;
 }
 
-export function inventory(root = defaultRoot, ref = "", staged = false) {
-  using parser = createNativeTypeScriptParser({ cwd: root });
+export function loadInventorySources(root = defaultRoot, ref = "", staged = false) {
   const roots = ["src", "extensions", "packages", "scripts"];
-  const pattern = new RegExp([...primitives.keys()].join("|"));
   const snapshot = ref !== "" || staged;
   const result = spawnSync(
     snapshot ? "git" : "rg",
@@ -3885,9 +3883,19 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
         !excluded.test(file) &&
         !testSuites.has(file),
     );
-  const texts = snapshot
+  return snapshot
     ? loadRatchetSources(root, sourceFiles, ref)
     : new Map(sourceFiles.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
+}
+
+export function inventory(
+  root = defaultRoot,
+  ref = "",
+  staged = false,
+  texts = loadInventorySources(root, ref, staged),
+) {
+  using parser = createNativeTypeScriptParser({ cwd: root });
+  const pattern = new RegExp([...primitives.keys()].join("|"));
   const compatibility = inspectDatabaseWorkerBoundaries(
     root,
     texts,
@@ -3902,7 +3910,7 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
         compatibility.violations.join("\n"),
     );
   }
-  const files = sourceFiles.filter((file) => pattern.test(texts.get(file)));
+  const files = [...texts.keys()].filter((file) => pattern.test(texts.get(file)));
   const sources = parser.parseSourceFiles(
     files.map((fileName) => ({ fileName, text: texts.get(fileName) })),
   );

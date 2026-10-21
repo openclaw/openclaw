@@ -300,6 +300,48 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
   },
 );
 
+it("publishes a new revision for plugin-owned navigation mutations before notifying readers", async () => {
+  const navigation = { id: "board", label: "Workboard", page: { id: "board" } };
+  const completed = createDeferred();
+  const context = connectedContext(
+    {
+      gatewayUrl: localGateway(),
+      request: async (method) =>
+        method === "plugins.controlUi.list" ? catalog([pluginDescriptor()]) : { ok: true },
+    },
+    configForRuntime(),
+  );
+  vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
+    const host = createControlUiPluginHost(getContext, runtime, owner);
+    host.ui.registerNavigation(navigation);
+    return Object.assign(owner, { host });
+  });
+  const runtime = runtimeFor(context);
+  expect(runtime.revision).toBe(0);
+  runtime.subscribe(() => {
+    if (runtime.registryStatus === "complete") {
+      completed.resolve();
+    }
+  });
+  runtime.start();
+  await completed.promise;
+  const registration = runtime.registrations("navigation")[0]!;
+  const previousRevision = runtime.revision;
+  const observed: { revision: number; label: string | undefined }[] = [];
+  runtime.subscribe(() =>
+    observed.push({
+      revision: runtime.revision,
+      label: runtime.registrations("navigation")[0]?.value.label,
+    }),
+  );
+
+  navigation.label = "Updated board";
+  registration.host.ui.invalidate();
+
+  expect(runtime.registrations("navigation")[0]?.value).toBe(navigation);
+  expect(observed).toEqual([{ revision: previousRevision + 1, label: "Updated board" }]);
+});
+
 it.each([
   {
     scenario: "cross-origin native plugin",

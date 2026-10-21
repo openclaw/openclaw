@@ -377,6 +377,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onTranscriptAnnouncementRef: this.registerTranscriptAnnouncement,
       onComposerShellRef: this.registerComposerShell,
       onComposerFloatRef: this.registerComposerFloat,
+      onActivityPillsLayout: this.onActivityPillsLayout,
       onScrollPortRef: this.mobileScrollFades.register,
       paneId: this.presentationId,
       sessionKey: state.sessionKey,

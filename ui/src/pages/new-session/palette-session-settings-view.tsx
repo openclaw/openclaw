@@ -276,13 +276,13 @@ export function PaletteSessionSettingsView(properties: {
   }
 
   function SettingsSummary() {
-    onCleanup(() => {
-      readAgentControls = undefined;
-    });
     onSettled(() => {
       if (focusTarget === "workspace") {
         focusTargets.workspace?.focus({ preventScroll: true });
       }
+      return () => {
+        readAgentControls = undefined;
+      };
     });
     const place = () => properties.options.draft.place;
     const workspace = nativeListener("click", (event) => showPlaces(true, event.detail > 0));

@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import path from "node:path";
-import { getEnvironmentData } from "node:worker_threads";
-import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { assertCompactionPathAlias } from "../../config/sessions/compaction-pathalias.test-support.js";
 import { readPreparedSessionEntryChange } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
@@ -33,47 +29,29 @@ import { resetDatabaseEngineSelectionForTest } from "../database-engine/context.
 import { getPostgresPhysicalFactsForPath } from "../database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "../database-engine/registry.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
+import { usePostgresTestHarness } from "./postgres.test-support.js";
 
-const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
-const connection = typeof configured === "string" ? configured : undefined;
-const prefix = `publication_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+const harness = usePostgresTestHarness("publication");
+const { connection, prefix, client, directories } = harness;
 let root: string;
 let rootPath: string;
-let client: pg.Client;
 let owners: Awaited<ReturnType<typeof loadOwners>>;
 let database: ReturnType<typeof owners.openOpenClawAgentDatabase>;
 if (connection) {
   owners = await loadOwners();
 }
-const directories = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(async () => {
-    if (!connection) {
-      return;
-    }
-    try {
-      if (database) {
-        withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
-      }
-      if (root) {
-        await owners.cleanupSessionStateForTest({ stateDir: root, rootPath });
-      }
-      if (client) {
-        const schemas = await client.query<{ nspname: string }>(
-          "SELECT nspname FROM pg_namespace WHERE left(nspname, $1) = $2",
-          [prefix.length + 1, `${prefix}_`],
-        );
-        for (const { nspname } of schemas.rows) {
-          await client.query(`DROP SCHEMA "${nspname.replaceAll('"', '""')}" CASCADE`);
-        }
-      }
-    } finally {
-      await client?.end();
-      resetDatabaseEngineSelectionForTest();
-      vi.unstubAllEnvs();
-      cleanup();
-    }
-  }),
-);
+harness.onClose(async () => {
+  if (database) {
+    withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
+  }
+  if (root) {
+    await owners.cleanupSessionStateForTest({ stateDir: root, rootPath });
+  }
+});
+harness.onReset(() => {
+  resetDatabaseEngineSelectionForTest();
+  vi.unstubAllEnvs();
+});
 
 function scopeFor(name: string) {
   return {
@@ -108,7 +86,20 @@ function observeEntries(sessionKey: string) {
       }
     }
   });
-  return { entries, stop };
+  return { entries, stop, [Symbol.dispose]: stop };
+}
+
+function withoutSql(body: () => void) {
+  const statements: unknown[] = [];
+  const sql = channel("openclaw.database.statement");
+  const record = (value: unknown) => statements.push(value);
+  sql.subscribe(record);
+  try {
+    body();
+  } finally {
+    sql.unsubscribe(record);
+  }
+  expect(statements).toEqual([]);
 }
 
 describe.skipIf(!connection)("PostgreSQL committed session publications", () => {
@@ -120,8 +111,6 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
       effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
       postgres: { connection: connection!, schemaPrefix: prefix },
     });
-    client = new pg.Client({ connectionString: connection });
-    await client.connect();
     await client.query("CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public");
     database = withEngineStoreAdmission(() =>
       owners.openOpenClawAgentDatabase({ agentId: "main" }),
@@ -142,10 +131,7 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
         env: { OPENCLAW_STATE_DIR: root },
       };
       await assertCompactionPathAlias(
-        {
-          ...canonical,
-          storePath: database.path,
-        },
+        { ...canonical, storePath: database.path },
         canonical,
         refusal,
       );
@@ -190,33 +176,30 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
         { message: { role: "user", content: "Synthetic retained transcript" }, now: 2 },
       );
       const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
-      actor = captureDurableSessionActor({
+      const currentActor = captureDurableSessionActor({
         database: { agentId: "main", path: database.path },
         target,
         lifetime: authority,
       });
-      expect((await actor.read(authority)).entry?.label).toBe("before");
+      actor = currentActor;
+      expect((await currentActor.read(authority)).entry?.label).toBe("before");
       observed.entries.length = 0;
       await owners.upsertSessionEntryCore(scope, { label: "after" });
       const published = observed.entries.findLast((entry) => entry.fullEntry?.label === "after");
       assert(published, "The committed replacement must publish its complete entry");
-      const admission = getPostgresPhysicalFactsForPath(database.path);
-      assert(admission);
+      const facts = getPostgresPhysicalFactsForPath(database.path);
+      assert(facts);
       expect(published.source.admission).toEqual({
         engine: "postgres",
-        namespace: admission.namespace,
-        storeId: admission.storeId,
-        admissionId: admission.admissionId,
+        namespace: facts.namespace,
+        storeId: facts.storeId,
+        admissionId: facts.admissionId,
       });
       expect(published.actorPostimage?.entry?.label).toBe("after");
       expect(published.actorPostimage?.writeToken).toBeTypeOf("string");
       expect(published.fullEntry?.skillsSnapshot?.prompt).toBe("Synthetic persisted prompt");
 
-      const statements: unknown[] = [];
-      const sql = channel("openclaw.database.statement");
-      const record = (value: unknown) => statements.push(value);
-      sql.subscribe(record);
-      try {
+      withoutSql(() => {
         expect(isSessionEntryPublicationAdmissionCurrent(published.source)).toBe(true);
         expect(isSessionEntryPublicationSourceCurrent(published.source)).toBe(true);
         expect(readSessionActorEntryFacts(target)?.entry?.label).toBe("after");
@@ -224,11 +207,8 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
           readSessionActorRowFacts({ path: database.path, sessionKey: scope.sessionKey })?.entry
             .label,
         ).toBe("after");
-        expect(actor.snapshot(authority)?.entry?.label).toBe("after");
-      } finally {
-        sql.unsubscribe(record);
-      }
-      expect(statements).toEqual([]);
+        expect(currentActor.snapshot(authority)?.entry?.label).toBe("after");
+      });
 
       await owners.upsertSessionEntryCore(scope, { label: "newer" });
       expect(isSessionEntryPublicationSourceCurrent(published.source)).toBe(false);
@@ -253,12 +233,12 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
         updatedAt: 1,
         label: "before",
       });
-      const observed = observeEntries(scope.sessionKey);
+      using observed = observeEntries(scope.sessionKey);
       const db = database.db;
       assert(isPostgresSqlConnection(db));
       const failure = new Error(`Synthetic ${outcome}`);
       const exec = db.exec.bind(db);
-      const delivery =
+      using delivery =
         outcome === "unknown commit"
           ? vi.spyOn(db, "exec").mockImplementation((sql) => {
               exec(sql);
@@ -267,34 +247,30 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
               }
             })
           : undefined;
-      try {
-        expect(() =>
-          withEngineStoreAdmission(() =>
-            owners.runOpenClawAgentWriteTransaction(
-              (current) => {
-                writeSessionEntry(current, scope.sessionKey, {
-                  sessionId: scope.sessionKey,
-                  updatedAt: 2,
-                  label: "candidate",
-                });
-                if (outcome === "rollback") {
-                  throw failure;
-                }
-              },
-              { agentId: "main", path: database.path },
-            ),
+      expect(() =>
+        withEngineStoreAdmission(() =>
+          owners.runOpenClawAgentWriteTransaction(
+            (current) => {
+              writeSessionEntry(current, scope.sessionKey, {
+                sessionId: scope.sessionKey,
+                updatedAt: 2,
+                label: "candidate",
+              });
+              if (outcome === "rollback") {
+                throw failure;
+              }
+            },
+            { agentId: "main", path: database.path },
           ),
-        ).toThrow(failure.message);
-        expect(observed.entries).toEqual([]);
-        expect(readSessionActorEntryFacts(target)?.entry?.label).not.toBe("candidate");
-      } finally {
-        delivery?.mockRestore();
-        observed.stop();
-      }
-      const admission = getPostgresPhysicalFactsForPath(database.path);
-      assert(admission);
+        ),
+      ).toThrow(failure.message);
+      expect(observed.entries).toEqual([]);
+      expect(readSessionActorEntryFacts(target)?.entry?.label).not.toBe("candidate");
+      delivery?.mockRestore();
+      const facts = getPostgresPhysicalFactsForPath(database.path);
+      assert(facts);
       const persisted = await client.query<{ entry_json: string }>(
-        `SELECT entry_json FROM "${admission.namespace.replaceAll('"', '""')}".session_nodes WHERE session_key = $1`,
+        `SELECT entry_json FROM "${facts.namespace.replaceAll('"', '""')}".session_nodes WHERE session_key = $1`,
         [scope.sessionKey],
       );
       expect(JSON.parse(persisted.rows[0]!.entry_json)).toMatchObject({
@@ -305,22 +281,15 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
 
   it("rejects incomplete or mismatched PG admission without querying the database", async () => {
     const scope = scopeFor("identity");
-    const observed = observeEntries(scope.sessionKey);
-    let source: SessionEntryPublicationSource;
-    try {
-      await owners.upsertSessionEntryCore(scope, {
-        sessionId: "publication-identity",
-        updatedAt: 1,
-        label: "committed",
-      });
-      const published = observed.entries.findLast(
-        (entry) => entry.fullEntry?.label === "committed",
-      );
-      assert(published?.source.admission);
-      source = published.source;
-    } finally {
-      observed.stop();
-    }
+    using observed = observeEntries(scope.sessionKey);
+    await owners.upsertSessionEntryCore(scope, {
+      sessionId: "publication-identity",
+      updatedAt: 1,
+      label: "committed",
+    });
+    const published = observed.entries.findLast((entry) => entry.fullEntry?.label === "committed");
+    assert(published?.source.admission);
+    const source = published.source;
     assert(source.admission);
     const admission = source.admission;
     const invalid: SessionEntryPublicationSource[] = [{ ...source, admission: undefined }];
@@ -330,11 +299,7 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
         admission: { ...admission, [field]: `different-${field}` },
       });
     }
-    const statements: unknown[] = [];
-    const sql = channel("openclaw.database.statement");
-    const record = (value: unknown) => statements.push(value);
-    sql.subscribe(record);
-    try {
+    withoutSql(() => {
       expect(isSessionEntryPublicationSourceCurrent(source)).toBe(true);
       for (const candidate of invalid) {
         expect(isSessionEntryPublicationAdmissionCurrent(candidate)).toBe(false);
@@ -343,9 +308,6 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
       expect(isSessionEntryPublicationSourceCurrent({ ...source, writeToken: undefined })).toBe(
         false,
       );
-    } finally {
-      sql.unsubscribe(record);
-    }
-    expect(statements).toEqual([]);
+    });
   });
 });

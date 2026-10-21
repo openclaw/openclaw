@@ -277,7 +277,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
                 Boolean(props.deleteArchivedDisabledReason)
               }
               title={props.deleteArchivedDisabledReason}
-              onClick={props.onDeleteAllArchived}
+              onClick={() => props.onDeleteAllArchived()}
             >
               <Icon name="trash" /> {t("sessionsView.deleteAllArchived")}
             </button>

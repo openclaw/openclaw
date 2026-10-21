@@ -502,7 +502,7 @@ it.each([false, true])(
   "keeps row facepiles idle with unchanged inputs (owner: %s), while admitting new presence",
   async (withOwner) => {
     const { host, container, dom } = createHost();
-    const session = projectSidebarSession({
+    let session = projectSidebarSession({
       key: "agent:main:thread",
       owner: withOwner
         ? { actor: { type: "human", id: "ada", identity: { type: "profile", id: "ada" } } }
@@ -548,8 +548,9 @@ it.each([false, true])(
       withOwner ? undefined : "ada",
     );
 
-    session.owner = {
-      actor: { type: "human", id: "bea", identity: { type: "profile", id: "bea" } },
+    session = {
+      ...session,
+      owner: { actor: { type: "human", id: "bea", identity: { type: "profile", id: "bea" } } },
     };
     update();
     await facepile.updateComplete;

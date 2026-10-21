@@ -84,6 +84,54 @@ function harness() {
 afterEach(() => vi.useRealTimers());
 
 describe("narration delivery through the Gateway broadcaster", () => {
+  it.each(["agent", "session.tool"])(
+    "omits unused tool bodies from %s narration while preserving full subscribers",
+    (event) => {
+      const h = harness();
+      const data = {
+        phase: "result",
+        name: "exec",
+        toolCallId: "tool-1",
+        parentToolCallId: "parent-1",
+        hideFromChannelProgress: true,
+        isError: true,
+        args: { command: "synthetic command" },
+        diff: "streamed input",
+        partialResult: { content: [{ type: "text", text: "partial output" }] },
+        result: { content: [{ type: "text", text: "complete output" }] },
+      };
+      const payload = { sessionKey: key, runId: "run", stream: "tool", data };
+      const publish = () => h.broadcast(event, payload);
+      publish();
+      expect(h.narration.frames[0]?.payload).toEqual({
+        ...payload,
+        data: {
+          phase: "result",
+          name: "exec",
+          toolCallId: "tool-1",
+          parentToolCallId: "parent-1",
+          hideFromChannelProgress: true,
+          isError: true,
+        },
+      });
+      expect(h.foreground.frames[0]?.payload).toEqual(payload);
+      // Opening chat admits full delivery before its history snapshot; closing
+      // it restores narration while the sidebar's independent lease remains.
+      h.subscribers.subscribe("narration", key, { subscriptionId: "chat" });
+      publish();
+      expect(h.narration.frames[1]?.payload).toEqual(payload);
+      h.subscribers.unsubscribe("narration", key, "chat");
+      publish();
+      expect(h.narration.frames[2]?.payload).toEqual(h.narration.frames[0]?.payload);
+      expect(h.narration.frames.map(({ seq }) => seq)).toEqual([1, 2, 3]);
+      expect(h.foreground.frames.map(({ payload: received }) => received)).toEqual([
+        payload,
+        payload,
+        payload,
+      ]);
+    },
+  );
+
   it("paces background snapshots while preserving full foreground and lifecycle streams", () => {
     const h = harness();
     const deadlines = vi.spyOn(globalThis, "setTimeout");

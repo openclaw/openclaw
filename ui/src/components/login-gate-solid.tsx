@@ -8,7 +8,7 @@ import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import "../lib/toast-host.ts";
+import "../lib/toast-host.tsx";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
@@ -288,7 +288,7 @@ function StatusBody(
               type="button"
               class="btn primary login-gate__failure-refresh"
               disabled={props.refreshState === "pending"}
-              onClick={props.onRefresh}
+              onClick={() => props.onRefresh()}
             >
               {props.refreshState === "pending"
                 ? t("common.refreshing")

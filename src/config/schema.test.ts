@@ -226,6 +226,36 @@ describe("config schema", () => {
     }
   });
 
+  it("requires explicit shared identity and pinned issuers for enterprise MCP", () => {
+    const enterprise = {
+      identity: "shared",
+      idpIssuer: "https://idp.example.com",
+      idpClientId: "client",
+      idpClientSecret: "${IDP_SECRET}",
+      resourceIssuer: "https://auth.example.com",
+      resourceClientId: "resource-client",
+      resourceClientSecret: "${RESOURCE_SECRET}",
+      scope: "mcp.read",
+      redirectUrl: "http://localhost:3097/callback",
+    };
+    const server = { url: mcpUrl, transport: "streamable-http", auth: "enterprise", enterprise };
+    expect(OpenClawSchema.safeParse(mcpConfig(server)).success).toBe(true);
+    for (const invalid of [
+      { ...server, enterprise: { ...enterprise, identity: undefined } },
+      { ...server, enterprise: { ...enterprise, identity: "per-requester" } },
+      { ...server, enterprise: { ...enterprise, resourceIssuer: "http://auth.example.com" } },
+      { ...server, enterprise: { ...enterprise, idpIssuer: "not-a-url" } },
+      { ...server, enterprise: { ...enterprise, resourceIssuer: "not-a-url" } },
+      { ...server, enterprise: { ...enterprise, redirectUrl: "https://example.com/callback" } },
+      { ...server, enterprise: { ...enterprise, redirectUrl: "localhost:3097/callback" } },
+      { ...server, enterprise: { ...enterprise, redirectUrl: "http://127.0.0.2/callback" } },
+      { ...server, oauth: { scope: "mcp.read" } },
+      { ...server, command: "other-mcp" },
+    ]) {
+      expect(OpenClawSchema.safeParse(mcpConfig(invalid)).success).toBe(false);
+    }
+  });
+
   it("requires a bare HTTPS Gateway public origin except on loopback", () => {
     for (const publicOrigin of [
       "https://gateway.example.com",

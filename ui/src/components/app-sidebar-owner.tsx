@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createRoot, onSettled, runWithOwner, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
@@ -74,21 +74,15 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   override readonly sessionOrganizer = new SessionOrganizer(this, () => this.invalidate());
   // Native sidebar custody outlives provider/view roots.
-  private readonly menuRoot = runWithOwner(null, () =>
-    createRoot((dispose) => ({
-      menus: createSidebarMenus({
-        host: this,
-        element: this.hostElement,
-        commit: () => {
-          this.invalidate();
-          return this.updateComplete;
-        },
-      }),
-      dispose,
-    })),
-  );
-  override readonly sidebarMenus = this.menuRoot.menus;
-  readonly disposeMenus = this.menuRoot.dispose;
+  override readonly sidebarMenus = createSidebarMenus({
+    host: this,
+    element: this.hostElement,
+    commit: () => {
+      this.invalidate();
+      return this.updateComplete;
+    },
+  });
+  readonly disposeMenus = this.sidebarMenus.dispose;
   readonly people = new SidebarPeoplePreferences(() => this.invalidate());
   peopleView?: ReturnType<typeof createSidebarPeople>;
   // A connected host retains its pending boot read when Solid recreates the view.

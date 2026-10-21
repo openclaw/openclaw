@@ -760,7 +760,9 @@ jobs:
                             depth=2, blobless=True, retry_failures=True)
                   except (FetchTimeout, GitFailure):
                       raise GitFailure(1)
-              run_git(workspace, "checkout", "--detach", "refs/remotes/origin/checkout")
+              # Materialize the full planner input tree with bounded checkout parallelism.
+              checkout_options = ("-c", "checkout.workers=2") if kind == "preflight" else ()
+              run_git(workspace, *checkout_options, "checkout", "--detach", "refs/remotes/origin/checkout")
 
 
           def checkout_harness(sha):
@@ -2886,17 +2888,22 @@ jobs:
           fi
           source .ci-harness/scripts/ci-collect-checks.sh
           prepare_ratchet_base_args "$base_ref"
-          run_check max-lines pnpm check:max-lines-ratchet "${ratchet_base_args[@]}"
-          if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
-            run_check line-cap pnpm check:line-cap-ratchet "${ratchet_base_args[@]}"
+          if has_package_script check:baseline-ratchets; then
+            run_check baseline-ratchets pnpm check:baseline-ratchets "${ratchet_base_args[@]}"
+          else
+            # Frozen targets retain their original commands and parsers.
+            run_check max-lines pnpm check:max-lines-ratchet "${ratchet_base_args[@]}"
+            if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
+              run_check line-cap pnpm check:line-cap-ratchet "${ratchet_base_args[@]}"
+            fi
+            run_check assertion-safety pnpm check:assertion-safety "${ratchet_base_args[@]}"
+            run_check database-worker pnpm check:database-worker-ratchet "${ratchet_base_args[@]}"
+            run_check database-dialect pnpm check:database-dialect-ratchet "${ratchet_base_args[@]}"
+            run_check timeout-race pnpm check:test-timeout-race-ratchet "${ratchet_base_args[@]}"
+            run_check mock-exports pnpm check:test-mock-exports "${ratchet_base_args[@]}"
+            run_check config-docs pnpm config:docs:check
+            run_check plugin-inventory pnpm plugins:inventory:check
           fi
-          run_check assertion-safety pnpm check:assertion-safety "${ratchet_base_args[@]}"
-          run_check database-worker pnpm check:database-worker-ratchet "${ratchet_base_args[@]}"
-          run_check database-dialect pnpm check:database-dialect-ratchet "${ratchet_base_args[@]}"
-          run_check timeout-race pnpm check:test-timeout-race-ratchet "${ratchet_base_args[@]}"
-          run_check mock-exports pnpm check:test-mock-exports "${ratchet_base_args[@]}"
-          run_check config-docs pnpm config:docs:check
-          run_check plugin-inventory pnpm plugins:inventory:check
           finish_checks
 
   checks-fast-core:
@@ -5496,19 +5503,6 @@ jobs:
             exit 1
           fi
 
-      - name: Swift lint
-        if: ${{ !cancelled() && steps.ios-swift-tools.outcome == 'success' && (matrix.phase == 'smoke' || matrix.phase == 'tests') }}
-        run: |
-          source .ci-harness/scripts/ci-collect-checks.sh
-          if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
-            run_check "iOS Swift lint" ./scripts/lint-swift.sh ios
-            run_check "iOS Swift format" ./scripts/format-swift.sh ios
-          else
-            # Frozen release targets before the iOS lint lane have no equivalent target-owned step.
-            echo "Swift lint wrappers are absent; skipping iOS lint for this frozen target."
-          fi
-          finish_checks
-
       - name: Configure iOS build and report simulator selection
         id: ios-configure
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.node-env.outcome == 'success' && (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true' }}
@@ -5613,6 +5607,21 @@ jobs:
                   print(log.read(), flush=True)
                   print(f"iOS build and simulator preparation: {time.monotonic() - started:.1f}s", flush=True)
           PY
+
+      - name: Swift lint
+        # Successful current builds already run both checks in Xcode's prebuild phases.
+        # Preserve standalone diagnostics when a build fails/skips or uses a frozen project.
+        if: ${{ !cancelled() && steps.ios-swift-tools.outcome == 'success' && (matrix.phase == 'smoke' || matrix.phase == 'tests') && (env.HISTORICAL_TARGET == 'true' || env.IOS_FROZEN_TARGET == 'true' || steps.ios-app-build.outcome != 'success') }}
+        run: |
+          source .ci-harness/scripts/ci-collect-checks.sh
+          if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
+            run_check "iOS Swift lint" ./scripts/lint-swift.sh ios
+            run_check "iOS Swift format" ./scripts/format-swift.sh ios
+          else
+            # Frozen release targets before the iOS lint lane have no equivalent target-owned step.
+            echo "Swift lint wrappers are absent; skipping iOS lint for this frozen target."
+          fi
+          finish_checks
 
       - name: Build iOS app (Release)
         if: ${{ !cancelled() && steps.ios-swift-tools.outcome == 'success' && (steps.watch-rust-toolchain.outcome == 'success' || steps.watch-rust-toolchain.outcome == 'skipped') && matrix.phase == 'release' }}

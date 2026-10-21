@@ -1,5 +1,5 @@
 import { createComponent, flush } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../../api/types.ts";
@@ -279,6 +279,57 @@ describe("session workspace state", () => {
     expect(state.sessionWorkspaceState).toBe(replacementWorkspace);
     expect(state.sessionWorkspaceState?.list).toBe(replacementContents);
     expect(resolveSessionDiffSidebarContent(state)).not.toBe(oldDiff);
+  });
+
+  it("retains uncommitted changes while computing and retires retries with visible demand", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const result = {
+      sessionKey: "agent:main:current",
+      files: [{ path: "changed.ts", status: "modified", additions: 2, deletions: 1 }],
+      additions: 2,
+      deletions: 1,
+    };
+    const computing = { ...result, files: [], additions: 0, deletions: 0, computing: true };
+    const request = vi.fn().mockResolvedValueOnce(computing).mockResolvedValue(result);
+    const state = createLoadingHost(
+      {},
+      {
+        client: { request },
+        hello: gatewayHelloForMethods(["sessions.diff"]),
+      },
+    );
+    const content = resolveSessionDiffSidebarContent(state);
+    if (content?.kind !== "session-diff") {
+      throw new Error("Expected a diff owner");
+    }
+    const stop = content.requestUncommitted?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(content.uncommitted).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(content.uncommitted).toBe(result);
+    if (stop) {
+      stop();
+    }
+    request.mockResolvedValue(computing);
+    const stopRefresh = content.requestUncommitted?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(content.uncommitted).toBe(result);
+    if (stopRefresh) {
+      stopRefresh();
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(request).toHaveBeenCalledTimes(3);
+
+    content.requestUncommitted?.();
+    await vi.advanceTimersByTimeAsync(0);
+    state.connectionEpoch += 1;
+    resolveSessionDiffSidebarContent(state);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(content.uncommitted).toBe(result);
   });
 
   it("retries a pending visible reload without publishing a retired load failure", async () => {

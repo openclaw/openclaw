@@ -33,9 +33,11 @@ from the complete chat and new-session boot totals. Those route totals include
 the entry assets and the route's measured immediate dynamic imports, counting
 each asset once even when both preload lists reference it. Moving an existing
 boot import into the first request wave therefore remains visible in the byte
-accounting. Initial-entry JavaScript is capped at 339,000 B gzip with one startup
-CSS request. Complete boot JavaScript is capped at 1,550,000 B gzip for chat and
-1,130,000 B gzip for New Session, including the initial-entry assets.
+accounting. Initial-entry JavaScript uses the committed gzip baseline plus the
+checker's growth and build-variance allowances; the baseline itself may not exceed
+325,000 B. Startup CSS is limited to one request. Complete boot JavaScript is capped
+at 1,500,000 B gzip for chat and 1,035,000 B gzip for New Session, including the
+initial-entry assets.
 JSON5 remains in its own lazy chunk so snapshot validation cannot pull the raw
 configuration parser into chat boot. Syntax highlighting and its language grammars
 load on the first code block; code stays escaped and copyable while they load or
@@ -47,10 +49,9 @@ both builds contain route preload templates. Older builds report that comparison
 as unavailable, so use a cold-load network capture to compare their complete boot
 cost.
 
-JavaScript is limited to 9 initial-entry requests, 29 complete chat boot requests,
-and 24 complete New Session boot requests. Each cap leaves two requests above the
-measured build to catch facade regressions caused by top-level await disabling
-chunk optimization. `pnpm ui:check-performance` enforces the route byte and request
+JavaScript is limited to 9 initial-entry requests, 27 complete chat boot requests,
+and 22 complete New Session boot requests. These caps catch facade regressions
+caused by top-level await disabling chunk optimization. `pnpm ui:check-performance` enforces the route byte and request
 limits locally and in CI; `pnpm ui:build` reports them without rejecting the build.
 Worker scripts and other URL assets remain available in the offline cache without
 being modulepreloaded into the document.

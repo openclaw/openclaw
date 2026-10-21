@@ -65,7 +65,10 @@ type AuditErrorCode = OnePasswordErrorCode | AuditInternalErrorCode;
 
 type BrokerStores = {
   audit: PluginStateKeyedStore<AuditRow>;
-  grants: PluginStateKeyedStore<StandingGrant>;
+  grants: Pick<
+    PluginStateKeyedStore<StandingGrant, 2>,
+    "register" | "lookup" | "lookupMany" | "entries" | "delete"
+  >;
   pending: PluginStateKeyedStore<PendingAuthorization>;
 };
 
@@ -390,19 +393,12 @@ export class OnePasswordBroker {
     let grants: Array<StandingGrant | undefined> = [];
     if (agentId) {
       const keys = items.map(([slug]) => standingGrantKey(agentId, slug));
-      if (this.stores.grants.lookupMany) {
-        grants = (await this.stores.grants.lookupMany(keys)).map((result) => {
-          if (!result.ok) {
-            throw result.error;
-          }
-          return result.value;
-        });
-      } else {
-        const entries = new Map(
-          (await this.stores.grants.entries()).map((entry) => [entry.key, entry.value]),
-        );
-        grants = keys.map((key) => entries.get(key));
-      }
+      grants = (await this.stores.grants.lookupMany(keys)).map((result) => {
+        if (!result.ok) {
+          throw result.error;
+        }
+        return result.value;
+      });
     }
     const now = Date.now();
     return items.map(([slug, item], index) => {

@@ -40,6 +40,7 @@ export function resolveSessionWorkspaceDiff(
         sessionKey,
         ...(agentId ? { agentId } : {}),
         ...scope,
+        poll: true,
       });
       if (scope.scope !== "uncommitted") {
         return request;
@@ -55,23 +56,39 @@ export function resolveSessionWorkspaceDiff(
       return uncommittedLoad;
     },
     requestUncommitted: () => {
-      const current = workspace.diffContent;
-      if (
-        !state.connected ||
-        !isCurrentSessionWorkspace(state, workspace) ||
-        current?.kind !== "session-diff" ||
-        current.load !== content.load
-      ) {
-        return;
-      }
-      // Renewed visible demand revalidates even clean/unavailable results: external
-      // edits need not emit a session event. Ordinary renders keep this callback stable.
-      void content.load({ scope: "uncommitted" }).catch(() => {});
+      let active = true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const refresh = async () => {
+        const current = workspace.diffContent;
+        if (
+          !active ||
+          !state.connected ||
+          !isCurrentSessionWorkspace(state, workspace) ||
+          current?.kind !== "session-diff" ||
+          current.load !== content.load
+        ) {
+          return;
+        }
+        try {
+          const result = await content.load({ scope: "uncommitted" });
+          if (active && result.computing) {
+            timer = setTimeout(() => void refresh(), 500);
+          }
+        } catch {
+          // A later visible demand retries errors; only computing responses poll.
+        }
+      };
+      void refresh();
+      return () => {
+        active = false;
+        clearTimeout(timer);
+      };
     },
     onResult: ({ owner, scope, result }) => {
       const current = workspace.diffContent;
       if (
         owner !== workspace ||
+        result.computing ||
         scope.scope !== "uncommitted" ||
         !isCurrentSessionWorkspace(state, workspace) ||
         current?.kind !== "session-diff" ||
