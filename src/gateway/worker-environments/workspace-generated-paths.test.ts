@@ -30,6 +30,8 @@ const packageCaches = [
   ".cache/bun-transpiler/compiled.pile",
   ".artifacts/vitest-worker-cache/run-cache-0/outputs/dist/worker.js",
   ".artifacts/vitest-shard-timings.json",
+  ".artifacts/build-all-cache/compile/outputs/dist/output.js",
+  ".artifacts/build-cache-inputs/compile.json",
 ];
 const workerPackage = ".artifacts/vitest-workers/run-cache-0/package.json";
 const lock = ".artifacts/dist-artifacts.lock/owner.json";
@@ -42,8 +44,6 @@ const userFiles = {
   [`${stagedRoot}/.gitignore`]: STAGED_INPUT_GITIGNORE,
   [`${stagedRoot}/.local/share/pnpm/store/input.txt`]: "staged input\n",
   ".artifacts/report.md": "user report\n",
-  ".artifacts/build-all-cache/authored.txt": "original input\n",
-  ".artifacts/build-cache-inputs/authored.json": "original input\n",
   ".artifacts/vitest-worker-cache-notes.md": "user notes\n",
   ".artifacts/vitest-shard-timings.json-notes": "user notes\n",
   "fixtures/.artifacts/vitest-worker-cache/input.js": "nested user fixture\n",
@@ -140,6 +140,61 @@ it("excludes only generated runtime roots from capture and transfer", async () =
     }
   }
 });
+
+it.skipIf(process.platform === "win32")(
+  "excludes unreadable exact build-cache roots without hiding useful artifacts",
+  async () => {
+    const { workspace, runManifest, manifestRoot } = await createScriptWorkspace(
+      tempDirs.make("workspace-unreadable-build-caches-"),
+    );
+    const buildCaches = [
+      ".artifacts/build-all-cache/compile/outputs/dist/output.js",
+      ".artifacts/build-cache-inputs/compile.json",
+    ];
+    const useful = {
+      ".artifacts/report.md": "useful report\n",
+      "fixtures/.artifacts/build-all-cache/input.js": "nested fixture\n",
+      "fixtures/.artifacts/build-cache-inputs/input.json": "nested fixture\n",
+      "source.ts": "source\n",
+    };
+    await writeWorkspaceFiles(workspace, {
+      ...useful,
+      ...Object.fromEntries(buildCaches.map((name) => [name, "disposable cache\n"])),
+    });
+    for (const name of buildCaches) {
+      await fs.chmod(path.join(workspace, name), 0);
+    }
+    try {
+      const local = await readActualWorkspaceManifestImpl({ root: workspace, baseCommit: null });
+      expect(local.manifest.entries.map((entry) => entry.path).toSorted()).toEqual(
+        Object.keys(useful).toSorted(),
+      );
+      const remote = await runManifest(["", "all"]);
+      expect(remote.code, remote.stderr).toBe(0);
+      const captured = JSON.parse(
+        await fs.readFile(path.join(manifestRoot, `${remote.stdout.trim().slice(7)}.json`), "utf8"),
+      ) as { entries: Array<{ path: string; type: string }> };
+      expect(
+        captured.entries
+          .filter((entry) => entry.type !== "directory")
+          .map((entry) => entry.path)
+          .toSorted(),
+      ).toEqual(Object.keys(useful).toSorted());
+
+      await fs.chmod(path.join(workspace, ".artifacts/report.md"), 0);
+      await expect(
+        readActualWorkspaceManifestImpl({ root: workspace, baseCommit: null }),
+      ).rejects.toThrow("EACCES");
+      const failed = await runManifest(["", "all"]);
+      expect(failed.code).not.toBe(0);
+      expect(failed.stderr).toContain("EACCES");
+    } finally {
+      for (const name of [...buildCaches, ".artifacts/report.md"]) {
+        await fs.chmod(path.join(workspace, name), 0o644);
+      }
+    }
+  },
+);
 
 it("omits cache-only ancestry from remote capture while retaining empty directories", async () => {
   const { workspace, runManifest, manifestRoot } = await createScriptWorkspace(

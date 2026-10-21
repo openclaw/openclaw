@@ -307,11 +307,7 @@ export async function readActualWorkspaceManifestImpl(params: {
     derivedOnlyDirectories: ReadonlySet<string>,
   ): Promise<"included" | "derived-only" | "absent"> => {
     if (
-      isDerivedWorkspacePath(
-        relative,
-        retained.has(relative) || (await isStagedInput(relative)),
-        params.buildCacheInputs !== undefined,
-      )
+      isDerivedWorkspacePath(relative, retained.has(relative) || (await isStagedInput(relative)))
     ) {
       return "derived-only";
     }
@@ -337,11 +333,7 @@ export async function readActualWorkspaceManifestImpl(params: {
         scanSignal.throwIfAborted();
         const child = `${relative}/${entry.name}`;
         if (
-          isDerivedWorkspacePath(
-            child,
-            retained.has(child) || (await isStagedInput(child)),
-            params.buildCacheInputs !== undefined,
-          ) ||
+          isDerivedWorkspacePath(child, retained.has(child) || (await isStagedInput(child))) ||
           derivedOnlyDirectories.has(child)
         ) {
           hasDerivedEntry = true;
@@ -371,11 +363,7 @@ export async function readActualWorkspaceManifestImpl(params: {
         continue;
       }
       if (
-        isDerivedWorkspacePath(
-          relative,
-          retained.has(relative) || (await isStagedInput(relative)),
-          params.buildCacheInputs !== undefined,
-        )
+        isDerivedWorkspacePath(relative, retained.has(relative) || (await isStagedInput(relative)))
       ) {
         hasDerivedEntry = true;
         continue;

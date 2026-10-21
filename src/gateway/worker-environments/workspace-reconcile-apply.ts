@@ -261,7 +261,6 @@ export async function applyStagedWorkerWorkspace(params: {
         appliedEntries,
         async (entryPath) => Boolean(buildCacheInputs?.has(entryPath)) || (await staged(entryPath)),
         params.assertCurrent,
-        buildCacheInputs !== undefined,
       );
       await applyWorkspacePatch({
         root,

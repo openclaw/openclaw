@@ -92,13 +92,14 @@ reconcile, including nested paths and explicit staged inputs; an ignore
 rule alone does not make a file disposable. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
 
-Local managed guest workspaces also exclude disposable `.artifacts/build-all-cache/`
-build snapshots and `.artifacts/build-cache-inputs/` temporary receipts. Original
-inputs admitted from the host source or its Git index remain protected even within
+Workspace capture, transfer, manifest projection, and recovery also exclude
+disposable `.artifacts/build-all-cache/` build snapshots and
+`.artifacts/build-cache-inputs/` temporary receipts. Local managed guest workspaces
+preserve original inputs admitted from the host source or its Git index even within
 those roots. Guest Git metadata cannot admit generated files as original inputs.
 The same input custody applies during capture, synchronization and recovery without
-changing saved manifest bytes. This build-cache policy does not change native-node
-or SSH workspace synchronization. Older archives can lack the original index
+changing saved manifest bytes. Other `.artifacts/` files still reconcile, including
+ordinary reports and nested fixtures. Older archives can lack the original index
 membership of saved files. Exact cache-root paths in the owned archive remain
 restored inputs; new generated paths under the same directories are still excluded.
 An ambiguous older cache file may therefore remain preserved.

@@ -49,7 +49,6 @@ export function manifestNodes(manifest: WorkerWorkspaceManifest) {
       !isDerivedWorkspacePath(
         directory,
         retained.has(directory) || isStagedInputPath(directory, staged),
-        manifest.buildCacheInputs !== undefined,
       )
     ) {
       nodes.set(directory, { path: directory, type: "directory" });
@@ -60,7 +59,6 @@ export function manifestNodes(manifest: WorkerWorkspaceManifest) {
       !isDerivedWorkspacePath(
         entry.path,
         retained.has(entry.path) || isStagedInputPath(entry.path, staged),
-        manifest.buildCacheInputs !== undefined,
       )
     ) {
       nodes.set(entry.path, entry);
