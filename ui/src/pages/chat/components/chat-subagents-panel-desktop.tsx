@@ -266,9 +266,9 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
         <Show
           when={props.rows.length}
           fallback={
-            (props.loading || props.hasResult) && (
+            (props.loading || (props.hasResult && !props.error)) && (
               <Show
-                when={props.loading && !props.hasResult}
+                when={props.loading}
                 fallback={
                   <div class="chat-subagents__empty" role="status">
                     {t("chat.subagentsPanel.empty")}

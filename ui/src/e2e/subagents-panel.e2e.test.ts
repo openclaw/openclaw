@@ -6,10 +6,9 @@ import {
   controlUiBundledGatewayUrl,
   controlUiSessionUrl,
   installMockGateway,
-  pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
-import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   expectAbsent,
   expectNoRequests,
@@ -397,46 +396,9 @@ suite.define(() => {
           .waitFor();
         expect(await panel.getByText(persistent.label, { exact: true }).count()).toBe(0);
         await expect
-          .poll(() => tooltipTitleText(row.locator(".subagents-desktop__open")))
+          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
           .toContain("2 calls");
 
-        await page.clock.install();
-        await pauseVirtualClock(page);
-        const panelQuery = {
-          spawnedBy: parent.key,
-          limit: 100,
-          includeGlobal: false,
-          includeUnknown: false,
-        };
-        expect((await gateway.getRequests("sessions.list", panelQuery)).length).toBeGreaterThan(0);
-        const beforeRead = await gateway.deferNext("sessions.list", panelQuery);
-        await gateway.emitGatewayEvent("sessions.changed", {
-          reason: "sharing",
-          sessionKey: parent.key,
-        });
-        await page.clock.runFor(5_000);
-        await gateway.waitForRequest("sessions.list", {
-          after: beforeRead,
-          match: panelQuery,
-        });
-        await gateway.rejectDeferred(
-          "sessions.list",
-          {
-            code: "UNAVAILABLE",
-            message: "Child list temporarily unavailable",
-            retryable: true,
-          },
-          { match: panelQuery },
-        );
-        await panel.getByText("Child list temporarily unavailable", { exact: false }).waitFor();
-        expect(await panel.locator(".subagents-desktop__row").count()).toBe(5);
-        await panel.getByRole("button", { name: "Retry", exact: true }).click();
-        await panel
-          .getByText("Child list temporarily unavailable", { exact: false })
-          .waitFor({ state: "hidden" });
-        await page.clock.resume();
-        // Keep the shared tooltip active while live activity replaces its title source.
-        await row.locator(".subagents-desktop__open").hover();
         const activity = {
           sessionKey: child.key,
           agentId: "main",
@@ -457,10 +419,10 @@ suite.define(() => {
         };
         await gateway.emitGatewayEvent("agent", activity);
         await expect
-          .poll(() => tooltipTitleText(row.locator(".subagents-desktop__open")))
+          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
           .toContain("Reading notice component");
         await gateway.emitGatewayEvent("agent", activity);
-        expect(await tooltipTitleText(row.locator(".subagents-desktop__open"))).toContain(
+        expect(await row.locator(".subagents-desktop__open").getAttribute("title")).toContain(
           "2 calls",
         );
         await gateway.emitGatewayEvent("agent", {
@@ -475,10 +437,10 @@ suite.define(() => {
         const otherRow = panel.locator(`[data-session-key="${other.key}"]`);
         await otherRow.locator(".subagents-desktop__open").waitFor();
         await expect
-          .poll(() => tooltipTitleText(otherRow.locator(".subagents-desktop__open")))
+          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
           .toContain("Retry failed benchmark targets");
         await expect
-          .poll(() => tooltipTitleText(otherRow.locator(".subagents-desktop__open")))
+          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
           .toContain("1+ calls");
         expect(await row.locator(".subagents-desktop__avatar").count()).toBe(1);
 

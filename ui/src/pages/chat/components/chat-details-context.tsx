@@ -9,6 +9,7 @@ import {
   lazy,
   onSettled,
 } from "solid-js";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
@@ -164,7 +165,15 @@ export function ChatDetailsContextContent(props: ChatDetailsContextContentProps)
               props.presented && props.details.pullRequestsGateway && props.details.selectedSession
             }
           >
-            <Loading fallback={null}>
+            <Loading
+              fallback={
+                <PanelLoadingSkeleton
+                  variant="file-list"
+                  label={t("chat.sessionDetails.contextLoading")}
+                  compact
+                />
+              }
+            >
               <ChatContextBreakdown
                 desktop={props.desktop}
                 gateway={props.details.pullRequestsGateway!}

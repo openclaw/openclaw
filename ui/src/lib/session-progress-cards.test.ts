@@ -17,10 +17,7 @@ import {
   createProgressCard,
   sessionKey,
 } from "./session-progress-cards.test-support.ts";
-import {
-  readSessionProgressCard,
-  sessionProgressCardsForGateway,
-} from "./session-progress-cards.ts";
+import { sessionProgressCardsForGateway } from "./session-progress-cards.ts";
 
 const target = { sessionKey };
 
@@ -159,33 +156,6 @@ describe("session progress card read recovery", () => {
     },
   );
 
-  it("reports persistent read failures after two attempts and clears them on a successful read", async () => {
-    vi.useFakeTimers();
-    const { gateway, request, emitChange } = createGateway();
-    const card = createProgressCard(1);
-    request.mockResolvedValue({ card });
-    const { store } = watchCards(gateway);
-    await store.load(target);
-    const failure = new Error("Temporary read failure");
-    request.mockRejectedValue(failure);
-    emitChange(sessionKey, 2);
-    await expect(store.load(target)).rejects.toBe(failure);
-    expect(store.getError(target)).toBe("unavailable");
-    expect(store.getPersistentError(target)).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(store.getPersistentError(target)).toBe("unavailable");
-    expect(store.get(target)).toBe(card);
-    request.mockResolvedValue({ card });
-    await store.load(target);
-    expect(store.getPersistentError(target)).toBeUndefined();
-    expect(vi.getTimerCount()).toBe(0);
-    request.mockRejectedValue(failure);
-    emitChange(sessionKey, 3);
-    await expect(store.load(target)).rejects.toBe(failure);
-    expect(store.getPersistentError(target)).toBeUndefined();
-    expect(request.mock.calls.every(([method]) => method === "progressCard.get")).toBe(true);
-  });
-
   it.each(["hidden", "unwatched", "offline", "denied"] as const)(
     "retires pending read recovery when %s",
     async (boundary) => {
@@ -211,7 +181,7 @@ describe("session progress card read recovery", () => {
         request.mockRejectedValueOnce(denied);
         await expect(store.load(target)).rejects.toBe(denied);
         expect(store.get(target)).toBeNull();
-        expect(store.getPersistentError(target)).toBe("access-denied");
+        expect(store.getError(target)).toBe("access-denied");
       }
       const count = request.mock.calls.length;
       await vi.advanceTimersByTimeAsync(60_000);
@@ -537,14 +507,11 @@ describe("session progress card Gateway response boundary", () => {
       if (method === "progressCard.get") {
         emitChange(sessionKey, 2);
         await expect(store.load(target)).rejects.toBe(error);
-        expect(store.getError(target)).toBe(denied ? "access-denied" : "unavailable");
       } else {
         await expect(store.dismiss(target, displayed)).rejects.toBe(error);
       }
       expect(store.get(target)).toEqual(denied ? null : card);
-      expect(readSessionProgressCard(store, target).persistentError).toBe(
-        denied ? "access-denied" : method === "progressCard.put" ? "clear-failed" : undefined,
-      );
+      expect(store.getError(target)).toBe(denied ? "access-denied" : "unavailable");
       expect(store.get(sibling)).toEqual(siblingCard);
       const restored = { ...card, revision: 2, markdown: "Refreshed progress" };
       request.mockResolvedValueOnce({ card: restored });

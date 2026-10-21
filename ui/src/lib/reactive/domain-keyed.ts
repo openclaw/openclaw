@@ -33,7 +33,6 @@ export function projectProgressCard(source: () => ProgressCardProjectionSource) 
       previous.card === next.card &&
       previous.lifetime === next.lifetime &&
       previous.error === next.error &&
-      previous.persistentError === next.persistentError &&
       previous.refreshState === next.refreshState,
   });
   createEffect(binding, (next) => {

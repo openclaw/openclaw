@@ -478,8 +478,6 @@ export const en: TranslationMap & {
     detailsEmptyDescription: "Progress saved by this session appears here.",
     showInChat: "Show in chat",
     widgetUnavailable: "Session progress is unavailable.",
-    readUnavailable: "Couldn't load task progress. Try again.",
-    readUpdateUnavailable: "Couldn't update task progress. Your saved progress is still shown.",
     widgetAccessDenied: "Select a session you can access or change sharing for this session.",
     countLabel: "{completed} of {total} completed",
     activity: {

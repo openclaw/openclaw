@@ -121,8 +121,6 @@ const enChatSession = {
       contextEstimate:
         "Last saved prompt · token sizes estimated from characters. Messages include other untracked context.",
       contextLoading: "Loading context breakdown…",
-      contextUpdateError:
-        "Could not update the context breakdown. Showing the last available report.",
       contextError: "Couldn't load the context breakdown. Try refreshing.",
       contextOffline: "Connect to the Gateway to load the context breakdown.",
       contextUnavailable: "No matching context report. Send a message to capture one.",

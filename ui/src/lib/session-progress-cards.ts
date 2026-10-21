@@ -46,15 +46,12 @@ type ProgressCardEntry = {
   refreshPending?: boolean;
   card?: ProgressCard | null;
   error?: SessionProgressCardLoadError;
-  errorMethod?: "get" | "put";
   load?: Promise<ProgressCard | null>;
   refresh?: ProgressCardRefresh;
   readRetry?: ReturnType<typeof createGatewayRetryOwner>;
-  readFailures?: number;
 };
 
 type SessionProgressCardLoadError = "access-denied" | "unavailable";
-export type SessionProgressCardError = SessionProgressCardLoadError | "clear-failed";
 
 type ProgressCardWatchOptions = {
   /** Gates automatic reads only; inactive watches still retain and invalidate their cache. */
@@ -77,7 +74,6 @@ export type SessionProgressCardStore = {
   get: (target: ProgressCardGetParams) => ProgressCard | null | undefined;
   getLifetime: (target: ProgressCardGetParams) => object | undefined;
   getError: (target: ProgressCardGetParams) => SessionProgressCardLoadError | undefined;
-  getPersistentError: (target: ProgressCardGetParams) => SessionProgressCardError | undefined;
   subscribe: (listener: () => void) => () => void;
 };
 
@@ -91,7 +87,6 @@ export function readSessionProgressCard(
     loading: card === undefined,
     lifetime: target ? store?.getLifetime(target) : undefined,
     error: target ? store?.getError(target) : undefined,
-    persistentError: target ? store?.getPersistentError(target) : undefined,
     refreshState: target ? store?.getRefreshState(target) : undefined,
   };
 }
@@ -208,8 +203,6 @@ export function sessionProgressCardsForGateway(
   const retireEntry = (entry: ProgressCardEntry) => {
     retireRefresh(entry);
     entry.readRetry?.reset();
-    delete entry.readFailures;
-    delete entry.errorMethod;
   };
   const cancelInactiveReadRetries = () => {
     const admitted = watchedTargets(true);
@@ -231,11 +224,7 @@ export function sessionProgressCardsForGateway(
       error instanceof GatewayProtocolRequestError &&
       ((isRecord(error.details) && error.details.code === "SESSION_PARTICIPATION_REQUIRED") ||
         (method === "get" && error.gatewayCode === "FORBIDDEN"));
-    if (method === "get") {
-      entry.readFailures = (entry.readFailures ?? 0) + 1;
-    }
     entry.error = accessDenied ? "access-denied" : "unavailable";
-    entry.errorMethod = method;
     entry.dirty = true;
     if (accessDenied) {
       entry.readRetry?.reset();
@@ -293,13 +282,11 @@ export function sessionProgressCardsForGateway(
           return null;
         }
         entry.readRetry?.reset();
-        entry.readFailures = 0;
         entry.card = card;
         delete entry.hydratedScope;
         acceptLifetime(resolved.key, entry.target, card);
         entry.dirty = entry.refreshPending === true;
         delete entry.error;
-        delete entry.errorMethod;
         reconcileRefresh(entry);
         notify();
         return card;
@@ -444,7 +431,6 @@ export function sessionProgressCardsForGateway(
       }
       entry.dirty = true;
       delete entry.error;
-      delete entry.errorMethod;
       if (entry.load) {
         entry.refreshPending = true;
         continue;
@@ -638,7 +624,6 @@ export function sessionProgressCardsForGateway(
         acceptLifetime(resolved.key, entry.target, resultCard);
         entry.dirty = false;
         delete entry.error;
-        delete entry.errorMethod;
         remember(resolved.key, entry);
         notify();
       }
@@ -653,18 +638,6 @@ export function sessionProgressCardsForGateway(
       return lifetimes.get(resolveTarget(target).key)?.token;
     },
     getError: (target) => entries.get(resolveTarget(target).key)?.error,
-    getPersistentError: (target) => {
-      const entry = entries.get(resolveTarget(target).key);
-      if (entry?.error === "unavailable") {
-        if (entry.errorMethod === "put") {
-          return "clear-failed";
-        }
-        if ((entry.readFailures ?? 0) < 2) {
-          return undefined;
-        }
-      }
-      return entry?.error;
-    },
     subscribe: (listener) => {
       listeners.add(listener);
       attach();

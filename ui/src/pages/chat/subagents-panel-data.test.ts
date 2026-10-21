@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
@@ -239,10 +238,7 @@ describe("Subagents panel data ownership", () => {
     const f = fixture(
       (params) => {
         if (denied && params.spawnedBy) {
-          throw new GatewayProtocolRequestError({
-            code: "FORBIDDEN",
-            message: "Session read access denied",
-          });
+          throw new Error("Session read access denied");
         }
         return page(params.spawnedBy ? [row] : []);
       },
@@ -256,34 +252,6 @@ describe("Subagents panel data ownership", () => {
     expect(f.data.rows).toEqual([]);
     expect(f.data.error).toContain("Session read access denied");
     expect(f.subscriptions.has(row.key)).toBe(false);
-  });
-
-  it("retains child rows and metrics while a failed read recovers automatically", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
-    const row = child("retained");
-    let fail = false;
-    const f = fixture(
-      (params) => {
-        if (params.spawnedBy && fail) {
-          fail = false;
-          throw new Error("Temporary connection failure");
-        }
-        return page(params.spawnedBy ? [row] : []);
-      },
-      () => history(row, 3),
-    );
-    await ready(f, () => view(f)?.callCount?.count === 3);
-    fail = true;
-    await f.data.refresh();
-    expect(view(f)?.session.key).toBe(row.key);
-    expect(view(f)?.callCount).toEqual({ count: 3, exact: true });
-    expect(f.data.error).toContain("Temporary connection failure");
-    await vi.advanceTimersByTimeAsync(65_000);
-    expect(f.data.error).toBeNull();
-    expect(view(f)?.callCount).toEqual({ count: 3, exact: true });
   });
 
   it.each([undefined, "parallel-audits"])(

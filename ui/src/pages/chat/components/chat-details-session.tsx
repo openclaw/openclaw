@@ -19,7 +19,7 @@ import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsContext, ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import { ChatDetailsPeople, ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
-import { ChatDetailsProgress, TaskProgressError } from "./chat-details-progress.tsx";
+import { ChatDetailsProgress } from "./chat-details-progress.tsx";
 import type {
   ChatDetailsDesktopSectionId,
   ChatDetailsOutputs,
@@ -669,15 +669,11 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
           onHideProgress={props.onHideProgress}
         />
       </Show>
-      <TaskProgressError
-        error={
-          props.props?.progressCardError === "unavailable"
-            ? undefined
-            : props.props?.progressCardError
-        }
-        hasCard={Boolean(props.props?.progressCard)}
-        onRetry={props.props?.onRetryProgressCard}
-      />
+      <Show when={!props.props?.progressCard && props.props?.progressCardError === "access-denied"}>
+        <div class="chat-details__muted" role="status">
+          {t("sessionProgressCard.widgetAccessDenied")}
+        </div>
+      </Show>
     </ChatDetailsDesktopBody>
   );
 }

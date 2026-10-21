@@ -95,11 +95,6 @@ suite.define(() => {
           message: "Still temporarily unavailable",
         });
         expect(await retry.count()).toBe(0);
-        expect(
-          await progressSurface
-            .getByText("Couldn't load task progress. Try again.", { exact: true })
-            .count(),
-        ).toBe(0);
         await gateway.deferNext("progressCard.get");
         await page.clock.runFor(60_000);
         expect(await gateway.getRequests("progressCard.get")).toHaveLength(5);
@@ -290,11 +285,6 @@ suite.define(() => {
           if (outcome === "error") {
             expect(
               await page.getByText("Session progress is unavailable.", { exact: true }).count(),
-            ).toBe(0);
-            expect(
-              await page
-                .getByText("Couldn't load task progress. Try again.", { exact: true })
-                .count(),
             ).toBe(0);
           }
         }

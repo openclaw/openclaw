@@ -270,9 +270,9 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
                 )
               }
               empty={
-                (data().loading || data().hasResult) && (
+                (data().loading || (data().hasResult && !data().error)) && (
                   <Show
-                    when={data().loading && !data().hasResult}
+                    when={data().loading}
                     fallback={
                       <div class="chat-subagents__empty" role="status">
                         {t("chat.subagentsPanel.empty")}
@@ -322,9 +322,9 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
                 <Show
                   when={data().rows.length}
                   fallback={
-                    (data().loading || data().hasResult) && (
+                    (data().loading || (data().hasResult && !data().error)) && (
                       <Show
-                        when={data().loading && !data().hasResult}
+                        when={data().loading}
                         fallback={
                           <div class="chat-subagents__empty" role="status">
                             {t("chat.subagentsPanel.empty")}

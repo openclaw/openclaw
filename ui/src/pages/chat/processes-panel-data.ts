@@ -22,7 +22,7 @@ const REFRESH_INTERVAL_MS = 60_000;
 type ProcessesPanelInput = { sessionKey: string; agentId: string; presented: boolean };
 type ProcessSnapshot = Pick<
   ProcessObservation,
-  "rows" | "loading" | "hasResult" | "truncated" | "error" | "errorKind" | "stopping"
+  "rows" | "loading" | "hasResult" | "truncated" | "error" | "readError" | "errorKind" | "stopping"
 >;
 const EMPTY_PROCESSES: ProcessSnapshot = {
   rows: [],
@@ -30,6 +30,7 @@ const EMPTY_PROCESSES: ProcessSnapshot = {
   hasResult: false,
   truncated: false,
   error: null,
+  readError: null,
   errorKind: null,
   stopping: new Set(),
 };
@@ -113,7 +114,7 @@ class ProcessObservation {
   loading = false;
   hasResult = false;
   truncated = false;
-  private readError: string | null = null;
+  readError: string | null = null;
   private readDenied = false;
   private actionError: string | null = null;
   private actionInstanceId: string | null = null;
@@ -243,8 +244,6 @@ class ProcessObservation {
     this.refreshAgain = false;
     this.clearTimer();
     this.loading = true;
-    this.readError = null;
-    this.readDenied = false;
     this.changed();
     const pending = scope.client
       .request<SessionsProcessesListResult>("sessions.processes.list", this.target())
@@ -252,6 +251,8 @@ class ProcessObservation {
         if (!this.current(generation)) {
           return;
         }
+        this.readError = null;
+        this.readDenied = false;
         this.sessionId = result.sessionId;
         this.rows = result.processes;
         this.truncated = result.truncated;

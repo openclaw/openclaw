@@ -1,17 +1,13 @@
-import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import type { JSX } from "@solidjs/web";
-import { For, Loading, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { For, Loading, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import type { SessionSystemPromptReport } from "../../../../../src/config/sessions/session-system-prompt-report.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
-import { createGatewayRetryOwner } from "../../../lib/gateway-retry.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
 import {
   areUiSessionKeysEquivalent,
   scopedSessionArtifactKey,
@@ -204,71 +200,44 @@ export function ChatContextBreakdown(props: {
 }) {
   const gateway = createMemo(() => projectGateway(props.gateway));
   const [revision, setRevision] = createSignal(0);
-  const visible = createDocumentVisibility();
-  const retry = createGatewayRetryOwner();
-  const identity = createMemo(
+  const target = createMemo(
     () => {
       const connection = gateway().read();
       return {
-        client: connection.snapshot.client,
-        scope: gatewayPresentationScope(props.gateway),
+        client: connection.snapshot.phase === "connected" ? connection.snapshot.client : null,
         connectionRevision: connection.connectionRevision,
         key: scopedSessionArtifactKey(props.session.key, props.agentId),
         sessionId: props.session.sessionId,
         model: props.session.activeModel || props.session.model,
         provider: props.session.modelProvider,
-        agentId: props.agentId,
+        revision: revision(),
+        used: props.used,
       };
     },
     {
       equals: (a, b) =>
         a.client === b.client &&
-        a.scope === b.scope &&
         a.connectionRevision === b.connectionRevision &&
         a.key === b.key &&
         a.sessionId === b.sessionId &&
         a.model === b.model &&
         a.provider === b.provider &&
-        a.agentId === b.agentId,
+        a.revision === b.revision &&
+        a.used === b.used,
     },
   );
-  const target = createMemo(() => ({
-    identity: identity(),
-    connected: gateway().read().snapshot.phase === "connected" && visible(),
-    revision: revision(),
-    used: props.used,
-  }));
-  let retained:
-    | { identity: ReturnType<typeof identity>; report: SessionSystemPromptReport | null }
-    | undefined;
-  let retryIdentity: ReturnType<typeof identity> | undefined;
-  let manualRefresh = false;
-  let manualFailureIdentity: ReturnType<typeof identity> | undefined;
   const result = createMemo(
     async (): Promise<{
       report: SessionSystemPromptReport | null;
-      request: ReturnType<typeof target>;
       failed?: boolean;
       offline?: boolean;
-      denied?: boolean;
-      manualFailed?: boolean;
-      hasResult?: boolean;
     }> => {
-      const request = target();
-      const current = request.identity;
+      const current = target();
+      if (!current.client) {
+        return { report: null, offline: true };
+      }
       const controller = new AbortController();
       onCleanup(() => controller.abort());
-      const manual = manualRefresh;
-      manualRefresh = false;
-      if (!request.connected || !current.client) {
-        return {
-          request,
-          report: retained?.identity === current ? retained.report : null,
-          hasResult: retained?.identity === current,
-          offline: true,
-          manualFailed: manualFailureIdentity === current,
-        };
-      }
       try {
         // Context reports are independent of the usage date range. Keep this
         // existing single-session read bounded to today's usage, not its history.
@@ -280,13 +249,10 @@ export function ChatContextBreakdown(props: {
             endDate: today,
             timeZone: "utc",
             scope: "instance",
-            agentId: current.agentId,
+            agentId: props.agentId,
           },
           { key: current.key, includeContextWeight: true, signal: controller.signal },
         );
-        if (!controller.signal.aborted) {
-          manualFailureIdentity = undefined;
-        }
         const row = response.sessions.find((entry) =>
           areUiSessionKeysEquivalent(entry.key, current.key),
         );
@@ -299,56 +265,36 @@ export function ChatContextBreakdown(props: {
           (report.model && current.model && report.model !== current.model) ||
           (report.provider && current.provider && report.provider !== current.provider)
         ) {
-          if (!controller.signal.aborted) {
-            retained = { identity: current, report: null };
-          }
-          return { request, report: null, hasResult: true };
+          return { report: null };
         }
-        if (!controller.signal.aborted) {
-          retained = { identity: current, report };
-        }
-        return { request, report, hasResult: true };
-      } catch (error) {
-        const denied =
-          error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
-        if (!controller.signal.aborted) {
-          if (denied) {
-            retained = undefined;
-            manualFailureIdentity = undefined;
-          } else if (manual) {
-            manualFailureIdentity = current;
-          }
-        }
-        return {
-          request,
-          report: !denied && retained?.identity === current ? retained.report : null,
-          failed: true,
-          denied,
-          manualFailed: manualFailureIdentity === current,
-          hasResult: !denied && retained?.identity === current,
-        };
+        return { report };
+      } catch {
+        return { report: null, failed: true };
       }
     },
   );
-  const recovery = createMemo(() => ({ current: target(), outcome: result() }));
   return (
     <div class="chat-context">
-      <Loading on={identity()} fallback={null}>
+      <Loading
+        on={target()}
+        fallback={
+          <p class="chat-context__note" role="status">
+            {t("chat.sessionDetails.contextLoading")}
+          </p>
+        }
+      >
         <Show
           when={result().report}
           fallback={
-            <>
-              <Show when={result().hasResult}>
-                <p class="chat-context__note" role="status">
-                  {t("chat.sessionDetails.contextUnavailable")}
-                </p>
-              </Show>
-              <Show when={result().denied || result().manualFailed}>
-                <p class="chat-context__note" role="status">
-                  {t("chat.sessionDetails.contextError")}
-                </p>
-              </Show>
-            </>
+            <p class="chat-context__note" role="status">
+              {t(
+                result().offline
+                  ? "chat.sessionDetails.contextOffline"
+                  : result().failed
+                    ? "chat.sessionDetails.contextError"
+                    : "chat.sessionDetails.contextUnavailable",
+              )}
+            </p>
           }
         >
           {(report) => {
@@ -410,49 +356,16 @@ export function ChatContextBreakdown(props: {
                     </div>
                   </details>
                 </Show>
-                <Show when={result().manualFailed}>
-                  <p class="chat-context__note" role="status">
-                    {t("chat.sessionDetails.contextUpdateError")}
-                  </p>
-                </Show>
                 <p class="chat-context__note">{t("chat.sessionDetails.contextEstimate")}</p>
               </>
             );
-          }}
-        </Show>
-        <Show when={recovery()} keyed>
-          {({ current, outcome }) => {
-            onSettled(() => {
-              if (current !== outcome.request) {
-                return () => retry.cancel();
-              }
-              if (retryIdentity !== current.identity) {
-                retry.reset();
-                retryIdentity = current.identity;
-              }
-              if (outcome.failed && !outcome.denied && current.connected) {
-                retry.schedule(() => {
-                  if (target() === current) {
-                    setRevision((value) => value + 1);
-                  }
-                });
-              } else {
-                retry.reset();
-              }
-              return () => retry.cancel();
-            });
-            return null;
           }}
         </Show>
       </Loading>
       <button
         type="button"
         class="chat-context__refresh"
-        disabled={gateway().read().snapshot.phase !== "connected"}
-        onClick={() => {
-          manualRefresh = true;
-          setRevision((value) => value + 1);
-        }}
+        onClick={() => setRevision((value) => value + 1)}
       >
         <Icon name="refresh" />
         {t("common.refresh")}

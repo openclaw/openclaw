@@ -15,7 +15,6 @@ import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import type { SessionProgressCardError } from "../../../lib/session-progress-cards.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -107,42 +106,10 @@ export function ChatDetailsProgress(props: Props) {
   );
 }
 
-/** Read recovery and clear failures retain their distinct operation feedback. */
-export function TaskProgressError(props: {
-  error?: SessionProgressCardError;
-  hasCard?: boolean;
-  onRetry?: () => void;
-  class?: string;
-}) {
-  return (
-    <Show when={props.error}>
-      <div class={props.class ?? "chat-details__muted"} role="status">
-        <span>
-          {t(
-            props.error === "access-denied"
-              ? "sessionProgressCard.widgetAccessDenied"
-              : props.error === "clear-failed"
-                ? "sessionProgressCard.clearFailed"
-                : props.hasCard
-                  ? "sessionProgressCard.readUpdateUnavailable"
-                  : "sessionProgressCard.readUnavailable",
-          )}
-        </span>{" "}
-        <Show when={props.error === "unavailable" && props.onRetry}>
-          <button class="btn btn--sm" type="button" onClick={() => props.onRetry?.()}>
-            {t("common.retry")}
-          </button>
-        </Show>
-      </div>
-    </Show>
-  );
-}
-
 export type MobileTaskProgressProps = Omit<ProgressDetailsContentProps, "card"> & {
   card: ProgressDetailsContentProps["card"] | null | undefined;
   initialLoading: boolean;
-  error?: SessionProgressCardError;
-  onRetry?: () => void;
+  error?: "access-denied" | "unavailable";
   presented: boolean;
   refreshAction?: SessionProgressCardRefreshAction;
   showTaskProgress: boolean;
@@ -177,7 +144,13 @@ export function MobileTaskProgressContent(props: MobileTaskProgressProps) {
                 />
               }
             >
-              <TaskProgressError error={props.error} onRetry={props.onRetry} />
+              <div class="chat-details__muted" role="status">
+                {t(
+                  props.error === "access-denied"
+                    ? "sessionProgressCard.widgetAccessDenied"
+                    : "sessionProgressCard.widgetUnavailable",
+                )}
+              </div>
             </Show>
           </Show>
         }
@@ -190,7 +163,6 @@ export function MobileTaskProgressContent(props: MobileTaskProgressProps) {
               disabled={!props.presented}
             />
             <ProgressDetailsContent {...props} card={card()} />
-            <TaskProgressError error={props.error} hasCard onRetry={props.onRetry} />
           </>
         )}
       </Show>

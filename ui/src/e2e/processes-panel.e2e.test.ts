@@ -95,26 +95,6 @@ suite.define(() => {
         await panel.getByText(process.name, { exact: true }).waitFor();
         const request = await gateway.waitForRequest("sessions.processes.list");
         expect(request.params).toMatchObject({ key });
-        const beforeRead = await gateway.deferNext("sessions.processes.list");
-        await gateway.emitGatewayEvent("sessions.processes.changed", {
-          sessionKey: key,
-          agentId: "main",
-        });
-        await gateway.waitForRequest("sessions.processes.list", { after: beforeRead });
-        await gateway.rejectDeferred("sessions.processes.list", {
-          code: "UNAVAILABLE",
-          message: "Connection temporarily unavailable",
-          retryable: true,
-        });
-        await panel.getByText("Connection temporarily unavailable", { exact: false }).waitFor();
-        expect(await panel.getByText(process.name, { exact: true }).count()).toBe(1);
-        await gateway.emitGatewayEvent("sessions.processes.changed", {
-          sessionKey: key,
-          agentId: "main",
-        });
-        await panel
-          .getByText("Connection temporarily unavailable", { exact: false })
-          .waitFor({ state: "hidden" });
         const finishedToggle = panel.getByRole("button", { name: /^Finished\s*1$/ });
         const finishedRow = panel.getByRole("button", { name: finishedProcess.name, exact: true });
         await finishedToggle.waitFor();

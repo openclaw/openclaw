@@ -395,38 +395,3 @@ it("dismisses only the current mobile branch after explicit activation", async (
     view.unmount();
   }
 });
-
-it.each(["root", "task-progress"] as const)(
-  "keeps failed clear feedback distinct from read recovery on %s",
-  (kind) => {
-    const view = mountSolid(() => (
-      <ChatDetailsMobileContent
-        details={details({
-          progressCard: {
-            sessionKey: "agent:main:details",
-            revision: 1,
-            updatedAt: 1,
-            steps: [{ step: "Review the saved result", status: "in_progress" }],
-          },
-          progressCardError: "clear-failed",
-          onRetryProgressCard: vi.fn(),
-        })}
-        presented
-        page={
-          kind === "root"
-            ? { kind: "root", content: rootContent() }
-            : {
-                kind: "task-progress",
-                content: { showTaskProgress: true, onShowTaskProgressChange: vi.fn() },
-              }
-        }
-      />
-    ));
-    expect(view.getByText("Review the saved result")).toBeTruthy();
-    expect(view.getByText("Could not clear saved progress card.")).toBeTruthy();
-    expect(view.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(
-      view.queryByText("Couldn't update task progress. Your saved progress is still shown."),
-    ).toBeNull();
-  },
-);
