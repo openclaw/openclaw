@@ -1,39 +1,33 @@
-// Custom editor tests cover TUI editor key handling and cursor behavior.
 import { CombinedAutocompleteProvider, type TUI } from "@earendil-works/pi-tui";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "../commands.js";
 import { editorTheme } from "../theme/theme.js";
 import { CustomEditor } from "./custom-editor.js";
 
-function createEditor() {
-  return new CustomEditor({ requestRender: vi.fn() } as unknown as TUI, editorTheme);
-}
-
-function createAutocompleteEditor() {
-  const editor = createEditor();
-  const commands = getSlashCommands();
-  editor.setAutocompleteProvider(new CombinedAutocompleteProvider(commands, process.cwd()));
-  editor.shouldSubmitAutocomplete = (text) => shouldSubmitExactArgumentCompletion(text, commands);
-  return editor;
-}
-
-async function typeText(editor: CustomEditor, text: string) {
-  for (const character of text) {
-    editor.handleInput(character);
-  }
-  await vi.waitFor(() => expect(editor.isShowingAutocomplete()).toBe(true));
-}
-
 describe("CustomEditor", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
+  let editor: CustomEditor;
+  let onSubmit: ReturnType<typeof vi.fn>;
+  let onCtrlD: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    editor = new CustomEditor({ requestRender: vi.fn() } as unknown as TUI, editorTheme);
+    editor.onSubmit = onSubmit = vi.fn();
+    editor.onCtrlD = onCtrlD = vi.fn();
   });
+  afterEach(() => vi.restoreAllMocks());
+
+  async function complete(text: string) {
+    const commands = getSlashCommands();
+    editor.setAutocompleteProvider(new CombinedAutocompleteProvider(commands, process.cwd()));
+    editor.shouldSubmitAutocomplete = (value) =>
+      shouldSubmitExactArgumentCompletion(value, commands);
+    for (const character of text) {
+      editor.handleInput(character);
+    }
+    await vi.waitFor(() => expect(editor.isShowingAutocomplete()).toBe(true));
+    editor.handleInput("\r");
+  }
 
   it("uses Ctrl+D to request exit only when the editor is empty", () => {
-    const editor = createEditor();
-    const onCtrlD = vi.fn();
-    editor.onCtrlD = onCtrlD;
-
     editor.handleInput("\u0004");
 
     expect(onCtrlD).toHaveBeenCalledTimes(1);
@@ -41,9 +35,6 @@ describe("CustomEditor", () => {
   });
 
   it("Ctrl+D deletes a complete grapheme without exiting nonempty input", () => {
-    const editor = createEditor();
-    const onCtrlD = vi.fn();
-    editor.onCtrlD = onCtrlD;
     editor.setText("a👨‍👩‍👧‍👦b");
     editor.handleInput("\u001b[D");
     editor.handleInput("\u001b[D");
@@ -54,8 +45,6 @@ describe("CustomEditor", () => {
   });
 
   it("inserts German AltGr printable Kitty CSI-u input", () => {
-    const editor = createEditor();
-
     editor.handleInput("\u001b[64::113;7u");
     editor.handleInput("\u001b[8364::101;7u");
 
@@ -63,8 +52,6 @@ describe("CustomEditor", () => {
   });
 
   it("ignores printable Kitty key release events", () => {
-    const editor = createEditor();
-
     editor.handleInput("\u001b[214;1u");
     editor.handleInput("\u001b[214;1:3u");
 
@@ -72,49 +59,29 @@ describe("CustomEditor", () => {
   });
 
   it("submits an exact sole argument completion with one Enter", async () => {
-    const editor = createAutocompleteEditor();
-    const onSubmit = vi.fn();
-    editor.onSubmit = onSubmit;
-    await typeText(editor, "/think high");
-
-    editor.handleInput("\r");
+    await complete("/think high");
 
     expect(onSubmit).toHaveBeenCalledWith("/think high");
     expect(editor.getText()).toBe("");
   });
 
   it("keeps Enter as completion acceptance when multiple arguments match", async () => {
-    const editor = createAutocompleteEditor();
-    const onSubmit = vi.fn();
-    editor.onSubmit = onSubmit;
-    await typeText(editor, "/fast o");
-
-    editor.handleInput("\r");
+    await complete("/fast o");
 
     expect(onSubmit).not.toHaveBeenCalled();
     expect(editor.getText()).toBe("/fast on");
   });
 
   it("completes and submits /help with one Enter", async () => {
-    const editor = createAutocompleteEditor();
-    const onSubmit = vi.fn();
-    editor.onSubmit = onSubmit;
-    await typeText(editor, "/help");
-
-    editor.handleInput("\r");
+    await complete("/help");
 
     expect(onSubmit).toHaveBeenCalledWith("/help");
   });
 
   it("preserves multiline boundaries around an accepted command completion", async () => {
-    const editor = createAutocompleteEditor();
-    const onSubmit = vi.fn();
-    editor.onSubmit = onSubmit;
     editor.setText("\n");
     editor.handleInput("\u001b[A");
-    await typeText(editor, "/hel");
-
-    editor.handleInput("\r");
+    await complete("/hel");
 
     expect(onSubmit).toHaveBeenCalledExactlyOnceWith("/help\n");
   });
