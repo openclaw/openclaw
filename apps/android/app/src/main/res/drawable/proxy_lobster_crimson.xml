@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Source-derived Lobsterdex artwork from ui/src/components/lobster-pet-look.ts and sprites. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="48dp" android:height="42dp" android:viewportWidth="120" android:viewportHeight="105">
+  <path android:pathData="M46 14 Q38 4 31 7" android:fillColor="#00000000" android:strokeColor="#ff4f40" android:strokeWidth="4" android:strokeLineCap="round" />
+  <path android:pathData="M74 14 Q82 4 89 7" android:fillColor="#00000000" android:strokeColor="#ff4f40" android:strokeWidth="4" android:strokeLineCap="round" />
+  <path android:pathData="M20 42 C5 37 0 47 5 57 C10 67 20 62 25 52 C28 45 25 42 20 42 Z" android:fillColor="#ff775f" />
+  <path android:pathData="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z" android:fillColor="#ff775f" />
+  <path android:pathData="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" android:fillColor="#ff4f40" />
+  <path android:pathData="M 28.0 28.0 A 20.0 11.0 0 1 0 68.0 28.0 A 20.0 11.0 0 1 0 28.0 28.0 Z" android:fillColor="#ffffff" android:fillAlpha="0.1" android:strokeAlpha="0.1" />
+  <path android:pathData="M 39.5 32.0 A 5.5 5.5 0 1 0 50.5 32.0 A 5.5 5.5 0 1 0 39.5 32.0 Z" android:fillColor="#0a1014" />
+  <path android:pathData="M 69.5 32.0 A 5.5 5.5 0 1 0 80.5 32.0 A 5.5 5.5 0 1 0 69.5 32.0 Z" android:fillColor="#0a1014" />
+  <path android:pathData="M 44.3 30.5 A 2.2 2.2 0 1 0 48.7 30.5 A 2.2 2.2 0 1 0 44.3 30.5 Z" android:fillColor="#00e5cc" />
+  <path android:pathData="M 74.3 30.5 A 2.2 2.2 0 1 0 78.7 30.5 A 2.2 2.2 0 1 0 74.3 30.5 Z" android:fillColor="#00e5cc" />
+</vector>

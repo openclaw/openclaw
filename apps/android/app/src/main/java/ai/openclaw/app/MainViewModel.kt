@@ -28,6 +28,9 @@ import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.runCatchingCancellable
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayMediaKind
+import ai.openclaw.app.gateway.GatewayProxyCredentials
+import ai.openclaw.app.gateway.GatewayProxyPrincipal
+import ai.openclaw.app.gateway.GatewayProxySaveResult
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
@@ -35,6 +38,7 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.ui.GatewayConnectPlan
+import ai.openclaw.app.ui.GatewayProxyAuthAction
 import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.ui.SettingsRoute
 import ai.openclaw.app.ui.chat.ChatComposerSendStartResult
@@ -44,6 +48,7 @@ import ai.openclaw.app.ui.chat.chatComposerTextDraftsFromSnapshot
 import ai.openclaw.app.ui.chat.matchesSession
 import ai.openclaw.app.ui.chat.shouldMigrateComposerDraft
 import ai.openclaw.app.ui.chat.toOutgoingAttachment
+import ai.openclaw.app.ui.gatewayProxyAccountLockedMessage
 import ai.openclaw.app.voice.AndroidAudioInputSession
 import ai.openclaw.app.voice.AudioInputDeviceOption
 import ai.openclaw.app.voice.TalkFailureNotice
@@ -318,7 +323,9 @@ class MainViewModel internal constructor(
   private val requestedSettingsRouteState = MutableStateFlow<SettingsRoute?>(null)
   internal val requestedSettingsRoute: StateFlow<SettingsRoute?> get() = requestedSettingsRouteState
 
-  internal class GatewayAdditionRequest
+  internal class GatewayAdditionRequest {
+    val proxySaveFailure = MutableStateFlow<GatewayProxySaveResult?>(null)
+  }
 
   private val gatewayAdditionRequestState = MutableStateFlow<GatewayAdditionRequest?>(null)
   internal val gatewayAdditionRequest: StateFlow<GatewayAdditionRequest?> = gatewayAdditionRequestState
@@ -791,6 +798,23 @@ class MainViewModel internal constructor(
     chatBrowserDismissalsState.update { dismissals -> dismissals.filterKeys { !matches(it) } }
   }
 
+  internal fun hasGatewayProxyCredentials(stableId: String): Boolean = prefs.hasGatewayProxyCredentials(stableId)
+
+  internal fun gatewayProxyPrincipal(stableId: String): GatewayProxyPrincipal? = prefs.gatewayProxyPrincipal(stableId)
+
+  internal suspend fun saveGatewayProxyCredentials(
+    endpoint: GatewayEndpoint,
+    credentials: GatewayProxyCredentials?,
+  ): GatewayProxySaveResult =
+    withContext(Dispatchers.Default) {
+      val sequence = gatewayConfigOperationSeq.incrementAndGet()
+      gatewayConfigOperationMutex.withLock {
+        ensureRuntime().updateGatewayProxyCredentials(endpoint, credentials) {
+          sequence == gatewayConfigOperationSeq.get()
+        }
+      }
+    }
+
   internal fun saveGatewayConfigAndConnect(
     plan: GatewayConnectPlan,
     addition: GatewayAdditionRequest? = null,
@@ -800,9 +824,15 @@ class MainViewModel internal constructor(
     // Opening, editing, scanning, and dismissing the dialog never reach this boundary.
     launchGatewayConnectionOperation(
       quickSwitch = addition != null,
-      onAdmitted = { addition?.let(::dismissGatewayAddition) },
     ) { runtime, operation ->
+      addition?.proxySaveFailure?.value = null
       val config = plan.config
+      if (config.setupExpiresAtMs?.let { it <= System.currentTimeMillis() } == true) {
+        withContext(Dispatchers.Main) {
+          Toast.makeText(nodeApp, nativeString("Setup code has expired. Create a new setup code."), Toast.LENGTH_LONG).show()
+        }
+        return@launchGatewayConnectionOperation
+      }
       val endpoint =
         GatewayEndpoint.manual(
           host = config.host,
@@ -810,16 +840,34 @@ class MainViewModel internal constructor(
           tlsEnabled = config.tls,
           contextPath = config.contextPath,
         )
+      val proxyCredentials = (plan.proxyAuthAction as? GatewayProxyAuthAction.Save)?.credentials
+      // Checked before setup-auth replacement can clear anything; the durable write rechecks.
+      if (prefs.gatewayProxyPrincipal(endpoint.stableId)?.admits(proxyCredentials) == false) {
+        withContext(Dispatchers.Main) {
+          Toast.makeText(nodeApp, gatewayProxyAccountLockedMessage(), Toast.LENGTH_LONG).show()
+        }
+        return@launchGatewayConnectionOperation
+      }
       val targetAlreadyPaired =
         prefs.gatewayRegistry.entries.value
           .any { it.stableId == endpoint.stableId }
       if (addition != null && targetAlreadyPaired) {
-        // Adding an existing target selects it; replacing its credentials belongs to Manage Gateways.
+        // Keep the confirmed form and its staged login until persistence succeeds.
+        if (plan.proxyAuthAction != GatewayProxyAuthAction.Keep) {
+          val result = runtime.updateGatewayProxyCredentials(endpoint, proxyCredentials, operation)
+          if (result != GatewayProxySaveResult.SAVED) {
+            if (operation() && gatewayAdditionRequestState.value === addition) addition.proxySaveFailure.value = result
+            return@launchGatewayConnectionOperation
+          }
+        }
+        dismissGatewayAddition(addition)
+        // Adding an existing target selects it; Gateway credential replacement belongs to Manage Gateways.
         if (runtime.switchToGateway(endpoint.stableId, operation) == GatewayTargetSelection.Unavailable) {
           showUnavailableGateway(operation)
         }
         return@launchGatewayConnectionOperation
       }
+      addition?.let(::dismissGatewayAddition)
       val blankCredentials = config.token.isEmpty() && config.bootstrapToken.isEmpty() && config.password.isEmpty()
       val preservesPairedTarget =
         targetAlreadyPaired && blankCredentials && plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_ENDPOINT
@@ -831,6 +879,7 @@ class MainViewModel internal constructor(
             NodeRuntime.GatewayConnectAuth(
               token = config.token.ifEmpty { null },
               bootstrapToken = config.bootstrapToken.ifEmpty { null },
+              bootstrapExpiresAtMs = config.setupExpiresAtMs,
               password = config.password.ifEmpty { null },
             )
           } else {
@@ -838,6 +887,12 @@ class MainViewModel internal constructor(
           },
         operation = operation,
         replaceAuth = replacesSavedAuth,
+        persistProxyAuth =
+          if (plan.proxyAuthAction == GatewayProxyAuthAction.Keep) {
+            null
+          } else {
+            { check(prefs.saveGatewayProxyCredentials(endpoint, proxyCredentials) == GatewayProxySaveResult.SAVED) }
+          },
         clearComposer = { clearChatComposerGateway(endpoint.stableId) },
       ) {
         prefs.setManualEnabled(true)
@@ -852,6 +907,7 @@ class MainViewModel internal constructor(
             stableId = endpoint.stableId,
             token = config.token,
             bootstrapToken = config.bootstrapToken,
+            bootstrapExpiresAtMs = config.setupExpiresAtMs,
             password = config.password,
           )
         }
@@ -1332,7 +1388,6 @@ class MainViewModel internal constructor(
 
   private fun launchGatewayConnectionOperation(
     quickSwitch: Boolean = false,
-    onAdmitted: () -> Unit = {},
     action: suspend (NodeRuntime, NodeRuntime.GatewayConnectionOperation) -> Unit,
   ) {
     val createIntent = {
@@ -1361,7 +1416,6 @@ class MainViewModel internal constructor(
         return@launch
       }
       try {
-        onAdmitted()
         withContext(Dispatchers.Default) {
           gatewayConfigOperationMutex.withLock {
             if (operation()) action(runtime, operation)

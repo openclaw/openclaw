@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.gateway.GatewayProxyCredentials
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import ai.openclaw.app.gateway.normalizeGatewayContextPath
 import ai.openclaw.app.i18n.NativeText
@@ -8,6 +9,8 @@ import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.node.parseJsonParamsObject
 import ai.openclaw.app.nonBlankString
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import java.net.URI
 import java.util.Base64
 import java.util.Locale
@@ -38,6 +41,7 @@ internal data class GatewaySetupCode(
   val bootstrapToken: String?,
   val token: String?,
   val password: String?,
+  val expiresAtMs: Long? = null,
 )
 
 /** Final gateway connection fields selected from setup-code or manual UI input. */
@@ -49,6 +53,7 @@ internal data class GatewayConnectConfig(
   val token: String,
   val password: String,
   val contextPath: String = "",
+  val setupExpiresAtMs: Long? = null,
 )
 
 /** How a connection attempt may update credentials already owned by the runtime. */
@@ -59,10 +64,21 @@ internal enum class GatewaySavedAuthAction {
   REPLACE_SETUP,
 }
 
+internal sealed interface GatewayProxyAuthAction {
+  data object Keep : GatewayProxyAuthAction
+
+  data object Remove : GatewayProxyAuthAction
+
+  class Save(
+    val credentials: GatewayProxyCredentials,
+  ) : GatewayProxyAuthAction
+}
+
 /** Endpoint plus the credential ownership decision applied by MainViewModel. */
 internal data class GatewayConnectPlan(
   val config: GatewayConnectConfig,
   val savedAuthAction: GatewaySavedAuthAction,
+  val proxyAuthAction: GatewayProxyAuthAction = GatewayProxyAuthAction.Keep,
 )
 
 /** Validation reason used by setup, QR, and manual endpoint copy. */
@@ -143,6 +159,7 @@ internal fun resolveGatewayConnectConfig(
     } else {
       null
     }
+  if (setup?.expiresAtMs?.let { it <= System.currentTimeMillis() } == true) return null
   val url = setup?.url ?: composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput) ?: return null
   val parsed = parseGatewayEndpointResult(url).config ?: return null
   val bootstrapToken: String
@@ -178,6 +195,7 @@ internal fun resolveGatewayConnectConfig(
     port = parsed.port,
     tls = parsed.tls,
     contextPath = parsed.contextPath,
+    setupExpiresAtMs = setup?.expiresAtMs,
     bootstrapToken = bootstrapToken,
     token = token,
     password = password,
@@ -313,7 +331,11 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
     val bootstrapToken = obj.nonBlankString("bootstrapToken")
     val token = obj.nonBlankString("token")
     val password = obj.nonBlankString("password")
-    GatewaySetupCode(url = url, bootstrapToken = bootstrapToken, token = token, password = password)
+    val expiresAtMs =
+      obj["expiresAtMs"]?.let { value ->
+        value.jsonPrimitive.longOrNull?.takeIf { it > 0 } ?: return null
+      }
+    GatewaySetupCode(url = url, bootstrapToken = bootstrapToken, token = token, password = password, expiresAtMs = expiresAtMs)
   } catch (_: IllegalArgumentException) {
     null
   }

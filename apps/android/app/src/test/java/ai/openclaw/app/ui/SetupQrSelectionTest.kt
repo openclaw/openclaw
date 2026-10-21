@@ -11,6 +11,7 @@ import ai.openclaw.app.bindNodeRuntimeTestFixture
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.drainWithMainLooper
 import ai.openclaw.app.ui.design.ClawDesignTheme
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -23,10 +24,16 @@ import android.net.Uri
 import android.os.Looper
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.ComponentDialog
 import androidx.activity.compose.LocalActivity
+import androidx.camera.core.Camera
+import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageInfo
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.UseCase
+import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.collectAsState
@@ -47,10 +54,13 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.concurrent.futures.ResolvableFuture
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.TaskCompletionSource
+import com.google.common.util.concurrent.ListenableFuture
 import com.google.mlkit.common.sdkinternal.MlKitContext
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -76,9 +86,12 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowDialog
 import org.robolectric.util.ReflectionHelpers
 import java.io.File
 import java.util.Base64
+import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Scanner output is external I/O; selection, validation, callbacks and review UI are production. */
@@ -86,7 +99,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 @Config(
   sdk = [34],
   qualifiers = "w412dp-h900dp-mdpi",
-  shadows = [SetupQrScannerFactory::class, SetupQrInputImage::class],
+  shadows = [
+    SetupQrScannerFactory::class,
+    SetupQrInputImage::class,
+    SetupQrCameraProvider::class,
+    SetupQrCameraProviderFactory::class,
+    SetupQrImageAnalysis::class,
+  ],
 )
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class SetupQrSelectionTest {
@@ -126,6 +145,7 @@ class SetupQrSelectionTest {
     store.put("qr-selection", model)
     model.enterScreenshotFixtureMode(AndroidScreenshotScene.Chat)
     SetupQrScannerFactory.scanner = scanner
+    SetupQrCameraProvider.analysis = null
     animatorScale = Settings.Global.getString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE)
     Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
   }
@@ -205,6 +225,81 @@ class SetupQrSelectionTest {
   }
 
   @Test
+  @androidx.annotation.OptIn(ExperimentalGetImage::class)
+  fun onboardingCameraCanScanAgainAfterCancelAndBackDismissal() {
+    shadowOf(app).grantPermissions(Manifest.permission.CAMERA)
+    runtime.prepareForGatewaySetup()
+    val savedGateways = prefs.gatewayRegistry.entries.value
+    val handoff = model.gatewayConnectionHandoff.value
+    val manualHost = model.manualHost.value
+    composeRule.setContent {
+      activity = requireNotNull(LocalActivity.current) as ComponentActivity
+      if (mounted.value) {
+        ClawDesignTheme(dark = true) {
+          Box(Modifier.fillMaxSize().testTag("onboarding-qr-proof")) { OnboardingFlow(model) }
+        }
+      }
+    }
+    composeRule.onNodeWithText("Continue").performClick()
+    composeRule.onNodeWithText("Scan QR or setup code").performClick()
+
+    ImageReader.newInstance(2, 2, PixelFormat.RGBA_8888, 1).use { reader ->
+      val surface = reader.surface
+      val canvas = surface.lockCanvas(null)
+      canvas.drawColor(Color.WHITE)
+      surface.unlockCanvasAndPost(canvas)
+      checkNotNull(reader.acquireNextImage()).use { image ->
+        // Reuse one composition/runtime for both dismissal paths, then scan once more
+        // after Back. Only camera binding and decoded ML Kit output are substituted.
+        for (dismissal in listOf("cancel", "back", "rescan")) {
+          composeRule.onNodeWithText("Scan QR code").performScrollTo().performClick()
+          composeRule.onNodeWithText("Align the QR code inside the square.").assertIsDisplayed()
+          val result = TaskCompletionSource<List<Barcode>>()
+          results.addLast(result)
+          var closed = 0
+          val proxy =
+            object : ImageProxy by ReflectionHelpers.createNullProxy(ImageProxy::class.java) {
+              override fun getImage(): Image = image
+
+              override fun getImageInfo(): ImageInfo = ReflectionHelpers.createNullProxy(ImageInfo::class.java)
+
+              override fun close() {
+                closed++
+              }
+            }
+          composeRule.runOnIdle {
+            val analysis = checkNotNull(SetupQrCameraProvider.analysis)
+            // Invoke the exact analyzer registered by QrCameraPreview, including its
+            // remembered handledScan/scanActive state and real OnboardingFlow callback.
+            checkNotNull(Shadow.extract<SetupQrImageAnalysis>(analysis).analyzer).analyze(proxy)
+            result.setResult(listOf(barcode(setupCode("wss://$dismissal.invalid/openclaw"))))
+          }
+          composeRule.onNodeWithText("Connect to this Gateway?").assertIsDisplayed()
+          composeRule.onNodeWithText("https://$dismissal.invalid:443/openclaw").assertIsDisplayed()
+          assertEquals("The CameraX frame must be released", 1, closed)
+          if (dismissal == "back") {
+            composeRule.runOnIdle {
+              (checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog).onBackPressedDispatcher.onBackPressed()
+            }
+          } else {
+            composeRule.onNodeWithText("Cancel").performClick()
+          }
+          if (dismissal != "rescan") capture("onboarding-camera-$dismissal")
+          composeRule.onNodeWithText("Connect to this Gateway?").assertDoesNotExist()
+          composeRule.onNodeWithText("Scan QR code").assertIsDisplayed()
+          composeRule.onNodeWithText("Align the QR code inside the square.").assertDoesNotExist()
+          composeRule.runOnIdle {
+            assertEquals("Review cancellation must not save a gateway", savedGateways, prefs.gatewayRegistry.entries.value)
+            assertEquals("Review cancellation must not connect", handoff, model.gatewayConnectionHandoff.value)
+            assertEquals(manualHost, model.manualHost.value)
+            assertFalse(tlsAttempt.isCompleted)
+          }
+        }
+      }
+    }
+  }
+
+  @Test
   fun galleryKeepsInvalidImageErrorsThenReviewsALaterValidCandidateWithoutConnecting() {
     model.openGatewayAddition()
     composeRule.setContent {
@@ -255,6 +350,9 @@ class SetupQrSelectionTest {
   @Test
   fun onboardingGalleryRetriesInvalidImageThenUsesALaterValidCandidate() {
     runtime.prepareForGatewaySetup()
+    val savedGateways = prefs.gatewayRegistry.entries.value
+    val handoff = model.gatewayConnectionHandoff.value
+    val manualHost = model.manualHost.value
     composeRule.setContent {
       activity = requireNotNull(LocalActivity.current) as ComponentActivity
       if (mounted.value) {
@@ -279,6 +377,15 @@ class SetupQrSelectionTest {
     )
     capture("onboarding-mixed-candidates")
     composeRule.onNodeWithText("QR code not accepted").assertDoesNotExist()
+    composeRule.onNodeWithText("Connect to this Gateway?").assertIsDisplayed()
+    composeRule.onNodeWithText("https://onboarding.invalid:443/openclaw").assertIsDisplayed()
+    composeRule.runOnIdle {
+      assertEquals("Scanning must not save a gateway", savedGateways, prefs.gatewayRegistry.entries.value)
+      assertEquals("Scanning must not start a connection", handoff, model.gatewayConnectionHandoff.value)
+      assertEquals(manualHost, model.manualHost.value)
+      assertFalse(tlsAttempt.isCompleted)
+    }
+    composeRule.onNodeWithText("Connect").performClick()
     composeRule.onNodeWithText("Pair Gateway").assertIsDisplayed()
     drainWithMainLooper {
       withTimeout(5_000) { assertEquals("onboarding.invalid" to 443, tlsAttempt.await()) }
@@ -292,6 +399,43 @@ class SetupQrSelectionTest {
       assertEquals(true, saved.tls)
       assertEquals("/openclaw", saved.contextPath)
       assertFalse("A pending fixture TLS probe must not connect to a gateway", model.gatewayConnectionDisplay.value.isConnected)
+    }
+  }
+
+  @Test
+  fun onboardingExpiredGalleryCodeShowsErrorThenAcceptsAnotherImage() {
+    runtime.prepareForGatewaySetup()
+    val savedGateways = prefs.gatewayRegistry.entries.value
+    val handoff = model.gatewayConnectionHandoff.value
+    composeRule.setContent {
+      activity = requireNotNull(LocalActivity.current) as ComponentActivity
+      if (mounted.value) {
+        ClawDesignTheme(dark = true) {
+          Box(Modifier.fillMaxSize().testTag("onboarding-qr-proof")) { OnboardingFlow(model) }
+        }
+      }
+    }
+    composeRule.onNodeWithText("Continue").performClick()
+    composeRule.onNodeWithText("Scan QR or setup code").performClick()
+    val expired = Base64.getUrlEncoder().withoutPadding().encodeToString("""{"url":"wss://expired.invalid","bootstrapToken":"expired-setup","expiresAtMs":1}""".toByteArray())
+    chooseImage(expired, scroll = false)
+    // Export before the assertion so the original's silently unchanged setup screen is retained.
+    capture("onboarding-expired-gallery")
+    composeRule.onNodeWithText("Setup code expired. Generate a fresh code with openclaw qr.").assertIsDisplayed()
+    composeRule.onNodeWithText("Choose another image").assertIsEnabled()
+    composeRule.runOnIdle {
+      assertEquals(savedGateways, prefs.gatewayRegistry.entries.value)
+      assertEquals(handoff, model.gatewayConnectionHandoff.value)
+      assertFalse(tlsAttempt.isCompleted)
+    }
+    chooseImage(setupCode("wss://replacement.invalid/openclaw"), action = "Choose another image")
+    composeRule.onNodeWithText("QR code not accepted").assertDoesNotExist()
+    composeRule.onNodeWithText("Connect to this Gateway?").assertIsDisplayed()
+    composeRule.onNodeWithText("https://replacement.invalid:443/openclaw").assertIsDisplayed()
+    composeRule.runOnIdle {
+      assertEquals(savedGateways, prefs.gatewayRegistry.entries.value)
+      assertEquals(handoff, model.gatewayConnectionHandoff.value)
+      assertFalse(tlsAttempt.isCompleted)
     }
   }
 
@@ -380,5 +524,63 @@ class SetupQrInputImage {
     ): InputImage = placeholder()
 
     private fun placeholder(): InputImage = InputImage.fromBitmap(Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888), 0)
+  }
+}
+
+/** CameraX hardware is external; preserve the production use cases and registered analyzer. */
+@Implements(value = ProcessCameraProvider::class, isInAndroidSdk = false)
+class SetupQrCameraProvider {
+  companion object {
+    var analysis: ImageAnalysis? = null
+  }
+
+  @Implementation
+  @Suppress("UNUSED_PARAMETER")
+  fun hasCamera(selector: CameraSelector): Boolean = true
+
+  @Implementation
+  @Suppress("UNUSED_PARAMETER")
+  fun bindToLifecycle(
+    owner: LifecycleOwner,
+    selector: CameraSelector,
+    vararg useCases: UseCase,
+  ): Camera {
+    analysis = useCases.filterIsInstance<ImageAnalysis>().single()
+    return ReflectionHelpers.createNullProxy(Camera::class.java)
+  }
+
+  @Implementation
+  @Suppress("UNUSED_PARAMETER")
+  fun unbind(vararg useCases: UseCase) {
+    analysis = null
+  }
+}
+
+@Implements(className = "androidx.camera.lifecycle.ProcessCameraProvider\$Companion", isInAndroidSdk = false)
+class SetupQrCameraProviderFactory {
+  @Implementation
+  @Suppress("UNUSED_PARAMETER")
+  fun getInstance(context: Context): ListenableFuture<ProcessCameraProvider> =
+    ResolvableFuture.create<ProcessCameraProvider>().apply {
+      set(Shadow.newInstanceOf(ProcessCameraProvider::class.java))
+    }
+}
+
+@Implements(value = ImageAnalysis::class, isInAndroidSdk = false)
+class SetupQrImageAnalysis {
+  var analyzer: ImageAnalysis.Analyzer? = null
+
+  @Implementation
+  @Suppress("UNUSED_PARAMETER")
+  fun setAnalyzer(
+    executor: Executor,
+    analyzer: ImageAnalysis.Analyzer,
+  ) {
+    this.analyzer = analyzer
+  }
+
+  @Implementation
+  fun clearAnalyzer() {
+    analyzer = null
   }
 }
