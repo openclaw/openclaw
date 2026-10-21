@@ -2255,7 +2255,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/config/sessions/session-canonical-validation-readiness.test.ts",
   "src/config/sessions/session-cold-storage.admission.test.ts",
   "src/config/sessions/session-cold-storage.lifecycle.test.ts",
-  "src/config/sessions/session-cold-storage.sync-write.test.ts",
   "src/config/sessions/session-cold-storage.test.ts",
   "src/config/sessions/session-cold-storage.transcript-turn.test.ts",
   "src/config/sessions/session-history-archive-pruning.admission.test.ts",
