@@ -51,8 +51,9 @@ describe("image generation credential availability", () => {
         });
         assert(tool);
 
-        const before = await tool.execute("list-before-auth-save", { action: "list" });
-        expect(before.details).toMatchObject({
+        expect(
+          (await tool.execute("list-before-auth-save", { action: "list" })).details,
+        ).toMatchObject({
           providers: [{ id: "fixture-image", configured: false }],
         });
 
@@ -65,8 +66,9 @@ describe("image generation credential availability", () => {
           }),
         );
 
-        const after = await tool.execute("list-after-auth-save", { action: "list" });
-        expect(after.details).toMatchObject({
+        expect(
+          (await tool.execute("list-after-auth-save", { action: "list" })).details,
+        ).toMatchObject({
           providers: [{ id: "fixture-image", configured: true }],
         });
       } finally {
@@ -87,20 +89,11 @@ describe("image generation credential availability", () => {
     (authFlow, extraCredential, pinned, available) => {
       withEnv({ OPENAI_API_KEY: undefined, OPENAI_API_KEYS: undefined }, () => {
         const oauth = createOAuthRefreshCredential({ expires: Date.now() + 3_600_000 });
+        const openai = { baseUrl: "https://api.openai.com/v1", apiKey: "openai:siwc", models: [] };
         const tool = createImageGenerateTool({
           config: {
             plugins: { allow: ["openai"] },
-            models: pinned
-              ? {
-                  providers: {
-                    openai: {
-                      baseUrl: "https://api.openai.com/v1",
-                      apiKey: "openai:siwc",
-                      models: [],
-                    },
-                  },
-                }
-              : undefined,
+            models: pinned ? { providers: { openai } } : undefined,
           },
           authProfileStore: createAuthProfileStoreFixture({
             "openai:siwc": { ...oauth, authFlow },

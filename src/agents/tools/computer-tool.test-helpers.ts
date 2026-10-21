@@ -1,10 +1,8 @@
 import { assert, vi } from "vitest";
 import type {
-  ComputerActResult,
   ComputerUseCapabilityDescriptor,
   ComputerUseV2ActionName,
 } from "../../plugins/computer-use-contract.js";
-import type { ComputerToolTransport } from "./computer-tool-shared.js";
 
 const mocks = vi.hoisted(() => ({
   listNodesMock: vi.fn(),
@@ -70,45 +68,6 @@ export function v2Descriptor(
 
 export type ComputerTool = ReturnType<typeof createComputerTool>;
 export type ComputerToolOptions = NonNullable<Parameters<typeof createComputerTool>[0]>;
-
-export function sessionTransport(
-  actions?: ComputerUseV2ActionName[],
-  invoke: ComputerToolTransport["invoke"] = async () => undefined,
-): ComputerToolTransport {
-  return {
-    ...(actions ? { computerUse: v2Descriptor(actions) } : {}),
-    resolveNode: async () => ({ nodeId: "session-desktop" }),
-    invoke,
-  };
-}
-
-export function useActions(actions: ComputerUseV2ActionName[]) {
-  listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
-}
-
-export function mockComputerAct(
-  observe: (params: Record<string, unknown> | undefined) => unknown = () => ({
-    payload: { ok: true },
-  }),
-  screenshot: () => unknown = screenshotPayload,
-) {
-  callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
-    const request = body as ComputerActBody;
-    return request.command === COMPUTER_ACT_COMMAND ? observe(request.params) : screenshot();
-  });
-}
-
-export function windowObservation(
-  observationId: string,
-  observation: Partial<NonNullable<ComputerActResult["observation"]>> = {},
-  coordinateSpace = "image-pixels",
-): ComputerActResult {
-  return {
-    ok: true,
-    observation: { kind: "window", observationId, ...observation },
-    details: { coordinateSpace },
-  };
-}
 export type ComputerActBody = {
   nodeId?: string;
   command?: string;

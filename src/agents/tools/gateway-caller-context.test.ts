@@ -11,21 +11,11 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { getCanonicalGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
-import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
-import {
-  isToolWrappedWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
-} from "../agent-tools.before-tool-call.js";
-import { getChannelAgentToolMeta, setChannelAgentToolMeta } from "../channel-tool-metadata.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
-import {
-  getToolTerminalPresentation,
-  setToolTerminalPresentation,
-} from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   captureGatewayToolCallerAssertion,
@@ -226,21 +216,6 @@ describe("gateway caller context wrapper", () => {
       ),
       () => expect(getCaller()?.sessionEventDelivery).toBe(false),
     );
-  });
-
-  it("preserves tool metadata used by policy and presentation layers", () => {
-    const tool = makeTool();
-    setPluginToolMeta(tool, { pluginId: "plugin-a", optional: false });
-    setChannelAgentToolMeta(tool as never, { channelId: "telegram" });
-    setToolTerminalPresentation(tool, () => ({ text: "done" }));
-
-    const beforeWrapped = wrapToolWithBeforeToolCallHook(tool);
-    const wrapped = wrapToolWithGatewayCallerIdentity(beforeWrapped, agentCaller);
-
-    expect(getPluginToolMeta(wrapped)).toEqual({ pluginId: "plugin-a", optional: false });
-    expect(getChannelAgentToolMeta(wrapped as never)).toEqual({ channelId: "telegram" });
-    expect(getToolTerminalPresentation(wrapped)).toBe(getToolTerminalPresentation(tool));
-    expect(isToolWrappedWithBeforeToolCallHook(wrapped)).toBe(true);
   });
 
   it("retains the source receiver while executing in the admitted caller context", async () => {

@@ -1,22 +1,10 @@
 import { expect, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as defaults from "../../media-understanding/defaults.js";
-import type {
-  resolveAutoMediaKeyProviders,
-  resolveDefaultMediaModel,
-} from "../../media-understanding/defaults.js";
 import * as descriptions from "../../media-understanding/image-runtime.js";
 import * as registry from "../../media-understanding/provider-registry.js";
-import type {
-  buildMediaUnderstandingRegistry,
-  getMediaUnderstandingProvider,
-} from "../../media-understanding/provider-registry.js";
 import * as media from "../../media/web-media.js";
-import type {
-  describeImageWithModel,
-  describeImagesWithModel,
-  MediaUnderstandingProvider,
-} from "../../plugin-sdk/media-understanding.js";
+import type { MediaUnderstandingProvider } from "../../plugin-sdk/media-understanding.js";
 import * as capabilities from "../../plugins/capability-provider-runtime.js";
 import * as models from "../embedded-agent-runner/model.js";
 import {
@@ -41,16 +29,12 @@ export function expectToolText(result: unknown, text: string): void {
   expect(content.some((block) => block.type === "text" && block.text === text)).toBe(true);
 }
 
-function requireImageTool<T>(tool: T | null | undefined): T {
-  expect(typeof (tool as { execute?: unknown } | null | undefined)?.execute).toBe("function");
+export function createRequiredImageTool(args: Parameters<typeof createImageTool>[0]) {
+  const tool = createImageTool(args);
   if (!tool) {
     throw new Error("expected image tool");
   }
   return tool;
-}
-
-export function createRequiredImageTool(args: Parameters<typeof createImageTool>[0]) {
-  return requireImageTool(createImageTool(args));
 }
 
 export async function executeImplicitImageTool(
@@ -77,16 +61,13 @@ export async function executeImplicitImageTool(
     provider.mockRestore();
     describe.mockRestore();
   });
-  const tool = createRequiredImageTool(options);
-  const result = await tool.execute("implicit-image", {
+  const result = await createRequiredImageTool(options).execute("implicit-image", {
     prompt: "Inspect this image.",
     path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
   });
   expectToolText(result, "inspected");
   return { result, requests };
 }
-
-type ResolveModelAsync = (typeof import("../embedded-agent-runner/model.js"))["resolveModelAsync"];
 
 type ImageWebMediaRuntime = {
   loadWebMedia(
@@ -113,13 +94,13 @@ export function createImageWebMediaRuntime(
 }
 
 type ImageToolProviderDeps = {
-  buildProviderRegistry: typeof buildMediaUnderstandingRegistry;
-  getMediaUnderstandingProvider: typeof getMediaUnderstandingProvider;
-  describeImageWithModel: typeof describeImageWithModel;
-  describeImagesWithModel: typeof describeImagesWithModel;
-  resolveAutoMediaKeyProviders: typeof resolveAutoMediaKeyProviders;
-  resolveDefaultMediaModel: typeof resolveDefaultMediaModel;
-  resolveModelAsync: ResolveModelAsync;
+  buildProviderRegistry: typeof registry.buildMediaUnderstandingRegistry;
+  getMediaUnderstandingProvider: typeof registry.getMediaUnderstandingProvider;
+  describeImageWithModel: typeof descriptions.describeImageWithModel;
+  describeImagesWithModel: typeof descriptions.describeImagesWithModel;
+  resolveAutoMediaKeyProviders: typeof defaults.resolveAutoMediaKeyProviders;
+  resolveDefaultMediaModel: typeof defaults.resolveDefaultMediaModel;
+  resolveModelAsync: typeof models.resolveModelAsync;
   resolveRegisteredMediaUnderstandingProvider(params: {
     providerId: string;
     cfg?: OpenClawConfig;
@@ -130,9 +111,12 @@ type ImageToolProviderDeps = {
 
 const restoreSpies: Array<() => void> = [];
 
-function mockDependency<T>(value: T | undefined, install: (value: T) => { mockRestore(): void }) {
+function mockDependency<T>(
+  value: T | undefined,
+  create: () => { mockImplementation(value: T): { mockRestore(): void } },
+) {
   if (value) {
-    const spy = install(value);
+    const spy = create().mockImplementation(value);
     restoreSpies.push(() => spy.mockRestore());
   }
 }
@@ -144,29 +128,27 @@ function setProviderDepsForTest(overrides?: Partial<ImageToolProviderDeps>): voi
   if (!overrides) {
     return;
   }
-  mockDependency(overrides.buildProviderRegistry, (fn) =>
-    vi.spyOn(registry, "buildMediaUnderstandingRegistry").mockImplementation(fn),
+  mockDependency(overrides.buildProviderRegistry, () =>
+    vi.spyOn(registry, "buildMediaUnderstandingRegistry"),
   );
-  mockDependency(overrides.getMediaUnderstandingProvider, (fn) =>
-    vi.spyOn(registry, "getMediaUnderstandingProvider").mockImplementation(fn),
+  mockDependency(overrides.getMediaUnderstandingProvider, () =>
+    vi.spyOn(registry, "getMediaUnderstandingProvider"),
   );
-  mockDependency(overrides.describeImageWithModel, (fn) =>
-    vi.spyOn(descriptions, "describeImageWithModel").mockImplementation(fn),
+  mockDependency(overrides.describeImageWithModel, () =>
+    vi.spyOn(descriptions, "describeImageWithModel"),
   );
-  mockDependency(overrides.describeImagesWithModel, (fn) =>
-    vi.spyOn(descriptions, "describeImagesWithModel").mockImplementation(fn),
+  mockDependency(overrides.describeImagesWithModel, () =>
+    vi.spyOn(descriptions, "describeImagesWithModel"),
   );
-  mockDependency(overrides.resolveAutoMediaKeyProviders, (fn) =>
-    vi.spyOn(defaults, "resolveAutoMediaKeyProviders").mockImplementation(fn),
+  mockDependency(overrides.resolveAutoMediaKeyProviders, () =>
+    vi.spyOn(defaults, "resolveAutoMediaKeyProviders"),
   );
-  mockDependency(overrides.resolveDefaultMediaModel, (fn) =>
-    vi.spyOn(defaults, "resolveDefaultMediaModel").mockImplementation(fn),
+  mockDependency(overrides.resolveDefaultMediaModel, () =>
+    vi.spyOn(defaults, "resolveDefaultMediaModel"),
   );
-  mockDependency(overrides.resolveModelAsync, (fn) =>
-    vi.spyOn(models, "resolveModelAsync").mockImplementation(fn),
-  );
-  mockDependency(overrides.resolveImageCompressionPolicy, (fn) =>
-    vi.spyOn(execution, "prepareImageCompressionPolicy").mockImplementation(fn),
+  mockDependency(overrides.resolveModelAsync, () => vi.spyOn(models, "resolveModelAsync"));
+  mockDependency(overrides.resolveImageCompressionPolicy, () =>
+    vi.spyOn(execution, "prepareImageCompressionPolicy"),
   );
   if (overrides.resolveRegisteredMediaUnderstandingProvider) {
     const resolve = overrides.resolveRegisteredMediaUnderstandingProvider;
@@ -220,15 +202,11 @@ export function createMinimaxImageConfig(): OpenClawConfig {
         imageModel: { primary: "minimax/MiniMax-VL-01" },
       },
     },
-    plugins: {
-      entries: {
-        minimax: { enabled: true },
-      },
-    },
+    plugins: { entries: { minimax: { enabled: true } } },
   };
 }
 
-export const resolveConfiguredImageModelForTest: ResolveModelAsync = async (
+export const resolveConfiguredImageModelForTest: typeof models.resolveModelAsync = async (
   provider,
   model,
   _agentDir,

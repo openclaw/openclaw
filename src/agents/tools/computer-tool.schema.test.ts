@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -19,20 +18,28 @@ import {
   listNodesMock,
   loadPairedComputerUseAvailabilityForSurface,
   macComputerNode,
-  mockComputerAct,
   readActionEnum,
   readFrameId,
   readLastComputerActParams,
   resetComputerToolMocks,
-  sessionTransport,
+  screenshotPayload,
   sleepMock,
   TINY_PNG_BASE64,
-  useActions,
   v2Descriptor,
-  windowObservation,
 } from "./computer-tool.test-helpers.js";
 
 beforeEach(resetComputerToolMocks);
+
+function useActions(actions: ComputerUseV2ActionName[]) {
+  listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
+}
+
+function mockComputerAct(observe: (params: Record<string, unknown> | undefined) => unknown) {
+  callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
+    const request = body as ComputerActBody;
+    return request.command === COMPUTER_ACT_COMMAND ? observe(request.params) : screenshotPayload();
+  });
+}
 
 async function expectForwarded(
   tool: ReturnType<typeof createComputerTool>,
@@ -42,6 +49,14 @@ async function expectForwarded(
   const expected = { ...params };
   await tool.execute(id, params);
   expect(readLastComputerActParams()).toEqual(expected);
+}
+
+function sessionTransport(actions?: ComputerUseV2ActionName[]) {
+  return {
+    ...(actions ? { computerUse: v2Descriptor(actions) } : {}),
+    resolveNode: async () => ({ nodeId: "session-desktop" }),
+    invoke: async () => undefined,
+  };
 }
 
 // Frozen from v2026.9.4 src/plugins/computer-use-contract.ts, including actionObject fields.
@@ -66,7 +81,11 @@ describe("createComputerTool v2 execution", () => {
   it.each(["screenshot", "wait"] as const)(
     "rejects a targeted %s before desktop capture",
     async (action) => {
-      useActions(["screenshot", "get_window_state", "get_browser_state"]);
+      listNodesMock.mockResolvedValue([
+        macComputerNode({
+          computerUse: v2Descriptor(["screenshot", "get_window_state", "get_browser_state"]),
+        }),
+      ]);
       const tool = createVisionComputerTool();
       for (const reference of [
         "windowRef",
@@ -86,7 +105,7 @@ describe("createComputerTool v2 execution", () => {
 
   it("derives local wait from the selected node screenshot capability", async () => {
     const actions: ComputerUseV2ActionName[] = ["screenshot", "list_apps", "get_window_state"];
-    useActions(actions);
+    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
     const tool = createVisionComputerTool();
     expect(tool.description).not.toContain("get_window_state");
 
@@ -218,7 +237,7 @@ describe("createComputerTool v2 execution", () => {
       "browser_download",
       "start_recording",
     ];
-    useActions(actions);
+    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
 
     const withoutCleanup = createVisionComputerTool();
     await withoutCleanup.execute("bind-without-cleanup", { action: "screenshot" });
@@ -267,15 +286,17 @@ describe("createComputerTool v2 execution", () => {
       useActions(["get_window_state", "left_click", "left_click_drag", "zoom"]);
       const bounds = { x: 1920, y: 300, width: 400, height: 200 };
       const observation = {
+        kind: "window",
         base64: createSolidPngBuffer(width, height, { r: 70, g: 125, b: 180 }).toString("base64"),
-        format: "png" as const,
+        format: "png",
         width,
         height,
+        observationId: "observation-1",
         elements: [{ elementRef: "element-1", role: "button", label: "Save", bounds }],
       };
       mockComputerAct((params) =>
         params?.action === "get_window_state"
-          ? { payload: windowObservation("observation-1", observation, coordinateSpace) }
+          ? { payload: { ok: true, observation, details: { coordinateSpace } } }
           : { payload: { ok: true } },
       );
       const tool = createVisionComputerTool();
@@ -284,14 +305,14 @@ describe("createComputerTool v2 execution", () => {
         action: "get_window_state",
         windowRef: refs.windowRef,
       });
-      const image = expectDefined(
-        result.content.find((block) => block.type === "image"),
-        "image",
-      );
-      const dimensions = expectDefined(
-        await getImageMetadata(Buffer.from(image.data, "base64")),
-        "dimensions",
-      );
+      const image = result.content.find((block) => block.type === "image");
+      if (!image) {
+        throw new Error("Missing delivered observation image");
+      }
+      const dimensions = await getImageMetadata(Buffer.from(image.data, "base64"));
+      if (!dimensions) {
+        throw new Error("Missing delivered image dimensions");
+      }
       expect(result.details).toMatchObject({
         result: { observation: { ...dimensions, elements: [{ bounds }] } },
       });
@@ -336,12 +357,18 @@ describe("createComputerTool v2 execution", () => {
           throw new Error("Released node rejected get_window_state params");
         }
         return {
-          payload: windowObservation("released-observation", {
-            base64: createSolidPngBuffer(2, 1, { r: 70, g: 125, b: 180 }).toString("base64"),
-            format: "png",
-            width: 2,
-            height: 1,
-          }),
+          payload: {
+            ok: true,
+            observation: {
+              kind: "window",
+              base64: createSolidPngBuffer(2, 1, { r: 70, g: 125, b: 180 }).toString("base64"),
+              format: "png",
+              width: 2,
+              height: 1,
+              observationId: "released-observation",
+            },
+            details: { coordinateSpace: "image-pixels" },
+          },
         };
       });
       const tool = createVisionComputerTool();
@@ -370,13 +397,21 @@ describe("createComputerTool v2 execution", () => {
   it.each(["invalid", "omitted"] as const)(
     "rejects pixel input for an %s observation image but keeps element refs",
     async (image) => {
-      useActions(["get_window_state", "left_click"]);
+      listNodesMock.mockResolvedValue([
+        macComputerNode({ computerUse: v2Descriptor(["get_window_state", "left_click"]) }),
+      ]);
       callGatewayToolMock.mockResolvedValue({
-        payload: windowObservation("observation-1", {
-          ...(image === "invalid" ? { base64: "invalid!" } : {}),
-          width: 1568,
-          height: 784,
-        }),
+        payload: {
+          ok: true,
+          observation: {
+            kind: "window",
+            ...(image === "invalid" ? { base64: "invalid!" } : {}),
+            width: 1568,
+            height: 784,
+            observationId: "observation-1",
+          },
+          details: { coordinateSpace: "image-pixels" },
+        },
       });
       const tool = createVisionComputerTool();
       const refs = { windowRef: "window-1", observationId: "observation-1" };
@@ -394,19 +429,10 @@ describe("createComputerTool v2 execution", () => {
         tool.execute("pixels", { action: "left_click", ...refs, coordinate: [600, 300] }),
       ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
       expect(callGatewayToolMock).not.toHaveBeenCalled();
-      await tool.execute("element", {
+      await tool.execute("element", { action: "left_click", ...refs, elementRef: "element-1" });
+      expect(readLastComputerActParams("left_click")).toMatchObject({
         action: "left_click",
-        ...refs,
         elementRef: "element-1",
-        deliveryMode: "background",
-      });
-      expect(readLastComputerActParams("left_click")).toEqual({
-        action: "left_click",
-        screenIndex: 0,
-        refWidth: EFFECTIVE_REF_WIDTH,
-        ...refs,
-        elementRef: "element-1",
-        deliveryMode: "background",
       });
     },
   );
@@ -439,8 +465,14 @@ describe("createComputerTool v2 execution", () => {
   it.each(["inspect", "accept"])(
     "captures an after-image only for a dialog mutation: %s",
     async (dialogAction) => {
-      useActions(["browser_dialog"]);
-      mockComputerAct(() => ({ payload: { ok: true, effect: "confirmed" } }));
+      listNodesMock.mockResolvedValue([
+        macComputerNode({ computerUse: v2Descriptor(["browser_dialog"]) }),
+      ]);
+      callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
+        (body as ComputerActBody).command === COMPUTER_ACT_COMMAND
+          ? { payload: { ok: true, effect: "confirmed" } }
+          : screenshotPayload(),
+      );
       await createVisionComputerTool().execute("dialog", {
         action: "browser_dialog",
         browserRef: "browser-1",
@@ -498,6 +530,37 @@ describe("createComputerTool v2 execution", () => {
     });
   });
 
+  it("routes an observation-bound element click without requiring coordinates", async () => {
+    useActions(["get_window_state", "left_click"]);
+    mockComputerAct((params) => ({
+      payload:
+        params?.action === "get_window_state"
+          ? { ok: true, observation: { kind: "window", observationId: "observation-1" } }
+          : { ok: true, effect: "confirmed" },
+    }));
+    const tool = createVisionComputerTool();
+    await tool.execute("observe", { action: "get_window_state", windowRef: "window-1" });
+
+    await expect(
+      tool.execute("click", {
+        action: "left_click",
+        windowRef: "window-1",
+        elementRef: "element-1",
+        observationId: "observation-1",
+        deliveryMode: "background",
+      }),
+    ).resolves.toBeDefined();
+    expect(readLastComputerActParams("left_click")).toEqual({
+      action: "left_click",
+      screenIndex: 0,
+      refWidth: EFFECTIVE_REF_WIDTH,
+      windowRef: "window-1",
+      elementRef: "element-1",
+      observationId: "observation-1",
+      deliveryMode: "background",
+    });
+  });
+
   it("maps the recording family through opaque resource parameters", async () => {
     useActions(["get_recording_state", "start_recording", "stop_recording", "replay_trajectory"]);
     const tool = createVisionComputerTool({ registerRunCleanup: () => {} });
@@ -545,7 +608,11 @@ describe("createComputerTool v2 execution", () => {
 describe("createComputerTool schema", () => {
   it("reuses schemas by action values and isolates later capability edits", () => {
     const capabilities = v2Descriptor(["list_windows"]);
-    const transport = { ...sessionTransport(), computerUse: capabilities };
+    const transport = {
+      computerUse: capabilities,
+      resolveNode: async () => ({ nodeId: "session-desktop" }),
+      invoke: async () => undefined,
+    };
     const first = createComputerTool({ transport });
     const next = createComputerTool({
       transport: {
@@ -605,7 +672,11 @@ describe("createComputerTool schema", () => {
     ["no screenshot", ["list_windows"]],
   ] as const)("preserves the effective action list with %s", (_name, actions) => {
     const tool = createComputerTool({
-      transport: sessionTransport([...actions]),
+      transport: {
+        computerUse: v2Descriptor([...actions]),
+        resolveNode: async () => ({ nodeId: "session-desktop" }),
+        invoke: async () => undefined,
+      },
     });
     expect(readActionEnum(tool)).toEqual(
       actions.some((action) => action === "screenshot") ? [...actions, "take_control"] : actions,
@@ -644,7 +715,11 @@ describe("createComputerTool schema", () => {
 
   it("explains browser discovery and required reference pairs before execution", () => {
     const tool = createComputerTool({
-      transport: sessionTransport(["list_windows", "get_browser_state", "browser_prepare"]),
+      transport: {
+        computerUse: v2Descriptor(["list_windows", "get_browser_state", "browser_prepare"]),
+        resolveNode: async () => ({ nodeId: "session-desktop" }),
+        invoke: async () => undefined,
+      },
     });
     for (const [field, prerequisites] of [
       ["windowRef", ["list_windows", "browser_prepare", "required", "get_browser_state"]],
@@ -727,6 +802,20 @@ function screenshotToolResult(data = TINY_PNG_BASE64) {
 }
 
 describe("computer screenshot context binding", () => {
+  it("expires coordinates once the final context drops the tracked image", () => {
+    const contextEpoch = trackedContextEpoch(0);
+
+    expect(
+      invalidateComputerFrameIfMissing({
+        contextEpoch,
+        messages: [computerToolResult("shot-1", [{ type: "text", text: "compacted" }])],
+      }),
+    ).toBe(true);
+    expect(contextEpoch).toEqual({ value: 1 });
+    expect(invalidateComputerFrameIfMissing({ contextEpoch, messages: [] })).toBe(false);
+    expect(contextEpoch.value).toBe(1);
+  });
+
   it("tracks the original image across deduplication and redelivers after context pruning", async () => {
     const contextEpoch = { value: 0 };
     const tool = createVisionComputerTool({ contextEpoch });
@@ -755,8 +844,6 @@ describe("computer screenshot context binding", () => {
       }),
     ).toBe(true);
     expect(contextEpoch).toEqual({ value: 1 });
-    expect(invalidateComputerFrameIfMissing({ contextEpoch, messages: [] })).toBe(false);
-    expect(contextEpoch.value).toBe(1);
 
     const redelivered = await tool.execute("shot-3", { action: "screenshot" });
 

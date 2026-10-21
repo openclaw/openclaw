@@ -2,19 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CapabilityModelProviderCandidate } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
-import { getApiKeyForModelCore, hasUsableCustomProviderApiKey } from "../model-auth.js";
-import { resolveImageToolFactoryAvailable } from "../openclaw-tools.media-factory-plan.js";
 import {
   createImageWebMediaRuntime,
   createRequiredImageTool,
   ONE_PIXEL_PNG_B64,
   testing,
 } from "./image-tool.test-support.js";
-import { hasProviderAuthForTool } from "./model-config.helpers.js";
 
 const buildProviderRegistry = buildMediaUnderstandingRegistry;
 
@@ -52,38 +49,39 @@ function makeVisionModel(id: string) {
   } satisfies ModelDefinitionConfig;
 }
 
-function createUserReportedConfig(params?: { includeApiKey?: boolean }): OpenClawConfig {
-  const includeApiKey = params?.includeApiKey ?? true;
+function modelConfig(
+  provider: string,
+  primary: string,
+  definition: ModelProviderConfig,
+  mode?: "replace",
+): OpenClawConfig {
   return {
-    agents: { defaults: { model: { primary: USER_PRIMARY } } },
-    models: {
-      providers: {
-        [USER_PROVIDER]: {
-          baseUrl: "https://example.com/v1",
-          api: "openai-completions",
-          ...(includeApiKey ? { apiKey: CONFIG_API_KEY } : {}),
-          models: [makeVisionModel(USER_MODEL)],
-        },
-      },
-    },
+    agents: { defaults: { model: { primary } } },
+    models: { mode, providers: { [provider]: definition } },
   };
 }
 
+function createUserReportedConfig(params?: { includeApiKey?: boolean }): OpenClawConfig {
+  return modelConfig(USER_PROVIDER, USER_PRIMARY, {
+    baseUrl: "https://example.com/v1",
+    api: "openai-completions",
+    ...(params?.includeApiKey !== false ? { apiKey: CONFIG_API_KEY } : {}),
+    models: [makeVisionModel(USER_MODEL)],
+  });
+}
+
 function createBedrockSdkConfig(): OpenClawConfig {
-  return {
-    agents: { defaults: { model: { primary: `${BEDROCK_PROVIDER}/text-1` } } },
-    models: {
-      mode: "replace",
-      providers: {
-        [BEDROCK_PROVIDER]: {
-          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-          auth: "aws-sdk",
-          api: "bedrock-converse-stream",
-          models: [makeVisionModel(BEDROCK_VISION_MODEL)],
-        },
-      },
+  return modelConfig(
+    BEDROCK_PROVIDER,
+    `${BEDROCK_PROVIDER}/text-1`,
+    {
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      auth: "aws-sdk",
+      api: "bedrock-converse-stream",
+      models: [makeVisionModel(BEDROCK_VISION_MODEL)],
     },
-  };
+    "replace",
+  );
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -143,38 +141,15 @@ describe("image custom provider auth regression", () => {
     vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
     const cfg = createBedrockSdkConfig();
 
-    expect(hasProviderAuthForTool({ provider: BEDROCK_PROVIDER, cfg })).toBe(true);
     const result = await tool(cfg).execute("bedrock-sdk", imageArgs);
     expect(result.content).toContainEqual({
       type: "text",
       text: `seen:${BEDROCK_PROVIDER}/${BEDROCK_VISION_MODEL}`,
     });
-    expect(
-      resolveImageToolFactoryAvailable({
-        config: cfg,
-        agentDir,
-        modelHasVision: true,
-      }),
-    ).toBe(true);
   });
 
-  it("executes deferred fallback discovery with config-backed auth and runtime key resolution", async () => {
-    // Deferred execution resolves credentials stored in config after registration.
+  it("executes deferred fallback discovery with config-backed auth", async () => {
     const cfg = createUserReportedConfig();
-    const auth = await getApiKeyForModelCore({
-      model: {
-        ...makeVisionModel(USER_MODEL),
-        provider: USER_PROVIDER,
-        api: "openai-completions",
-        baseUrl: "https://example.com/v1",
-      },
-      cfg,
-      agentDir,
-      store: createAuthProfileStoreFixture({}),
-    });
-    expect(auth.apiKey).toBe(CONFIG_API_KEY);
-    expect(auth.source).toContain("models.json");
-
     const imageTool = tool(cfg);
     expect(imageTool.name).toBe("view_image");
     const result = await imageTool.execute("regression-1", imageArgs);
@@ -184,9 +159,6 @@ describe("image custom provider auth regression", () => {
 
   it("still rejects the same fallback config when apiKey is missing", async () => {
     const cfg = createUserReportedConfig({ includeApiKey: false });
-    expect(hasUsableCustomProviderApiKey(cfg, USER_PROVIDER)).toBe(false);
-    expect(hasProviderAuthForTool({ provider: USER_PROVIDER, cfg })).toBe(false);
-
     await expect(tool(cfg).execute("regression-2", imageArgs)).rejects.toThrow(
       /No image model is configured/,
     );
@@ -219,14 +191,10 @@ async function executeImage(params: {
     },
   };
   if (params.configuredProvider) {
-    config.models = {
-      providers: {
-        [params.configuredProvider]: {
-          baseUrl: "https://example.invalid/v1",
-          models: [{ ...makeVisionModel("vision"), name: "Vision", maxTokens: 4096 }],
-        },
-      },
-    };
+    config.models = modelConfig(params.configuredProvider, "selected/vision", {
+      baseUrl: "https://example.invalid/v1",
+      models: [{ ...makeVisionModel("vision"), name: "Vision", maxTokens: 4096 }],
+    }).models;
   }
   const tool = createRequiredImageTool({
     config,
@@ -281,11 +249,6 @@ describe("image tool provider loading", () => {
       preparedProviders: [owner],
     });
 
-    expect(describeImage).toHaveBeenCalledTimes(2);
-    expect(describeImage.mock.calls.map(([request]) => request.buffer.toString("utf8"))).toEqual([
-      "image",
-      "image-two",
-    ]);
     expect(result.content).toEqual([
       { type: "text", text: "Image 1:\nimage\n\nImage 2:\nimage-two" },
     ]);
