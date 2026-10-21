@@ -105,6 +105,7 @@ export function createWorkboardSqliteStores(options: {
     readWriteToken: () => readSqliteDatabaseWriteTokenForPath(databasePath),
     cards: {
       register: bindOperation("cards.register", true),
+      refreshDiagnostics: bindOperation("cards.refreshDiagnostics", true),
       registerIfAbsent: bindOperation("cards.registerIfAbsent", true),
       registerIfUpdatedAt: bindOperation("cards.registerIfUpdatedAt", true),
       claimIfOwnerAvailable: bindOperation("cards.claimIfOwnerAvailable", true),

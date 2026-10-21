@@ -1,5 +1,5 @@
 import type { SQLInputValue } from "node:sqlite";
-import type { WorkboardCard } from "@openclaw/workboard-contract";
+import type { WorkboardCard, WorkboardDiagnostic } from "@openclaw/workboard-contract";
 import {
   compileSqliteQueryBindings,
   executeSqliteQueryTakeFirstSync,
@@ -220,17 +220,7 @@ export function insertCard(db: WorkboardSqlConnection, card: WorkboardCard): voi
     note: (entry) => bindNull(entry.note),
     created_at: (entry) => entry.createdAt,
   });
-  insertChildren(db, "workboard_card_diagnostics", card.id, metadata?.diagnostics, {
-    card_id: () => card.id,
-    kind: (entry) => entry.kind,
-    severity: (entry) => entry.severity,
-    title: (entry) => entry.title,
-    detail: (entry) => entry.detail,
-    first_seen_at: (entry) => entry.firstSeenAt,
-    last_seen_at: (entry) => entry.lastSeenAt,
-    count: (entry) => entry.count,
-    actions_json: (entry) => JSON.stringify(entry.actions),
-  });
+  writeCardDiagnostics(db, card.id, metadata?.diagnostics);
   insertChildren(db, "workboard_card_notifications", card.id, metadata?.notifications, {
     id: (entry) => entry.id,
     card_id: () => card.id,
@@ -269,4 +259,22 @@ export function insertCard(db: WorkboardSqlConnection, card: WorkboardCard): voi
     );
     db.prepare(compiled.sql).run(...bind());
   }
+}
+
+export function writeCardDiagnostics(
+  db: WorkboardSqlConnection,
+  cardId: string,
+  diagnostics: readonly WorkboardDiagnostic[] | undefined,
+): void {
+  insertChildren(db, "workboard_card_diagnostics", cardId, diagnostics, {
+    card_id: () => cardId,
+    kind: (entry) => entry.kind,
+    severity: (entry) => entry.severity,
+    title: (entry) => entry.title,
+    detail: (entry) => entry.detail,
+    first_seen_at: (entry) => entry.firstSeenAt,
+    last_seen_at: (entry) => entry.lastSeenAt,
+    count: (entry) => entry.count,
+    actions_json: (entry) => JSON.stringify(entry.actions),
+  });
 }

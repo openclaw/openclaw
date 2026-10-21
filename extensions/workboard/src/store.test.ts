@@ -59,6 +59,7 @@ function createPausedCardStore(delegate: WorkboardCardStore) {
   };
   return {
     store: {
+      refreshDiagnostics: (key, now) => delegate.refreshDiagnostics(key, now),
       async register(key, value) {
         await beforeWrite();
         await delegate.register(key, value);
@@ -2169,7 +2170,7 @@ describe("WorkboardStore", () => {
 
     expect(diagnostics.count).toBeGreaterThanOrEqual(4);
     const diagnosedReady = await store.get(ready.id);
-    expect(diagnosedReady?.updatedAt).toBeGreaterThan(ready.updatedAt);
+    expect(diagnosedReady?.updatedAt).toBe(ready.updatedAt);
     expect(diagnosedReady).toMatchObject({
       metadata: { diagnostics: [expect.objectContaining({ kind: "stranded_ready" })] },
     });

@@ -25,6 +25,7 @@ export function createSqliteWorkerBackend(
     ) => WorkboardSqliteOperations[K]["output"];
   } = {
     "cards.register": kernel.cards.register.bind(kernel.cards),
+    "cards.refreshDiagnostics": kernel.cards.refreshDiagnostics.bind(kernel.cards),
     "cards.registerIfAbsent": kernel.cards.registerIfAbsent.bind(kernel.cards),
     "cards.registerIfUpdatedAt": kernel.cards.registerIfUpdatedAt.bind(kernel.cards),
     "cards.claimIfOwnerAvailable": kernel.cards.claimIfOwnerAvailable.bind(kernel.cards),

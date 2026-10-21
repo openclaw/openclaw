@@ -116,6 +116,7 @@ export type WorkboardCardStore = Omit<WorkboardKeyedStore, "entries"> & {
   entries(
     scope?: WorkboardCardReadScope,
   ): Promise<Array<{ key: string; value: PersistedWorkboardCard }>>;
+  refreshDiagnostics(key: string, now: number): Promise<WorkboardCard | undefined>;
   registerIfAbsent(key: string, value: PersistedWorkboardCard): Promise<boolean>;
   registerIfUpdatedAt(
     key: string,

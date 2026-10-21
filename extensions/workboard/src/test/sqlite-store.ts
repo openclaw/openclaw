@@ -61,6 +61,7 @@ function withCardHooks(
       await options.beforeCardLookup?.(key);
       return cards.lookup(key);
     },
+    refreshDiagnostics: (key, now) => cards.refreshDiagnostics(key, now),
     delete: (key) => cards.delete(key),
     deleteIfUpdatedAt: (key, expectedUpdatedAt) => cards.deleteIfUpdatedAt(key, expectedUpdatedAt),
     entries: (scope) => cards.entries(scope),

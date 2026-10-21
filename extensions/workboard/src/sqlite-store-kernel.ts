@@ -47,13 +47,21 @@ import {
 import { createWorkboardDatabase, type WorkboardSqlConnection } from "./sqlite-store-schema.js";
 import { readSessionLinkedCardIds } from "./sqlite-store-session-links.js";
 import { WorkboardSqliteSessionsBoardStore } from "./sqlite-store-sessions-board.js";
-import { bindNull, insertCard, prepareWorkboardUpsert } from "./sqlite-store-write.js";
 import {
+  bindNull,
+  insertCard,
+  prepareWorkboardUpsert,
+  writeCardDiagnostics,
+} from "./sqlite-store-write.js";
+import { computeCardDiagnostics, mergeDiagnostics } from "./store-card-helpers.js";
+import {
+  MAX_CARD_METADATA_BYTES,
   MAX_WORKER_CONTEXT_PARENTS,
   MAX_WORKER_CONTEXT_RECENT_CARDS,
   workboardCardConsumesOwnerSlot,
   workboardCardSlotOwner,
 } from "./store-constants.js";
+import { metadataByteSize } from "./store-normalizers.js";
 
 type SyncStore<T> = {
   [K in keyof T]: T[K] extends (...args: infer A) => Promise<infer R> ? (...args: A) => R : never;
@@ -87,6 +95,31 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
         .where("id", "=", key),
     );
     return current !== undefined && numberValue(current, "updated_at") === expectedUpdatedAt;
+  }
+
+  refreshDiagnostics(key: string, now: number): WorkboardCard | undefined {
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      const card = this.lookup(key)?.card;
+      if (!card || card.metadata?.archivedAt) {
+        return undefined;
+      }
+      let diagnostics = mergeDiagnostics(
+        card.metadata?.diagnostics,
+        computeCardDiagnostics(card, now),
+      );
+      if (diagnostics.length === 0 && !card.metadata?.diagnostics?.length) {
+        return undefined;
+      }
+      // Observations own only diagnostics; never evict card activity to fit them.
+      while (
+        diagnostics.length > 0 &&
+        metadataByteSize({ ...card.metadata, diagnostics }) > MAX_CARD_METADATA_BYTES
+      ) {
+        diagnostics = diagnostics.slice(1);
+      }
+      writeCardDiagnostics(this.db, key, diagnostics);
+      return { ...card, metadata: { ...card.metadata, diagnostics } };
+    });
   }
 
   register(_key: string, value: PersistedWorkboardCard): void {

@@ -949,7 +949,7 @@ export function metadataIsEmpty(metadata: WorkboardMetadata | undefined): boolea
   return !metadata || Object.keys(metadata).length === 0;
 }
 
-function metadataByteSize(metadata: WorkboardMetadata): number {
+export function metadataByteSize(metadata: WorkboardMetadata): number {
   return Buffer.byteLength(JSON.stringify(metadata), "utf8");
 }
 

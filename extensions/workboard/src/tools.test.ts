@@ -21,6 +21,56 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
+  it("refreshes diagnostics without making inactive cards look edited", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const cards = await Promise.all([
+      store.create({ title: "Waiting", status: "ready", agentId: "main" }),
+      store.create({ title: "Blocked", status: "blocked" }),
+      store.create({ title: "Finished", status: "done" }),
+    ]);
+    const list = expectDefined(
+      createWorkboardTools({ store }).find((tool) => tool.name === "workboard_list"),
+      "Workboard list",
+    );
+    const now = Math.max(...cards.map((card) => card.updatedAt)) + 2 * 24 * 60 * 60 * 1000;
+    using clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    for (let observation = 1; observation <= 2; observation++) {
+      const result = readPayload(
+        await list.execute(`diagnostics-${observation}`, { refreshDiagnostics: true }),
+      );
+      for (const [index, card] of cards.entries()) {
+        const current = await store.get(card.id);
+        expect(current).toMatchObject({ updatedAt: card.updatedAt, events: card.events });
+        expect(result.cards).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: card.id,
+              updatedAt: card.updatedAt,
+              diagnostics: [expect.objectContaining({ count: observation })],
+            }),
+          ]),
+        );
+        expect(current?.metadata?.diagnostics).toEqual([
+          expect.objectContaining({
+            kind: ["stranded_ready", "blocked_too_long", "missing_proof"][index],
+            count: observation,
+            firstSeenAt: now,
+            lastSeenAt: now + observation - 1,
+          }),
+        ]);
+      }
+      clock.mockReturnValue(now + observation);
+    }
+    const edited = await store.update(cards[0]!.id, { notes: "Operator update" });
+    expect(edited.updatedAt).toBeGreaterThan(cards[0]!.updatedAt);
+    expect(edited.events?.length).toBeGreaterThan(cards[0]!.events?.length ?? 0);
+    await list.execute("after-edit", { refreshDiagnostics: true });
+    expect((await store.get(edited.id))?.metadata?.diagnostics).toBeUndefined();
+    const archived = await store.archive(cards[1]!.id, true);
+    await list.execute("after-archive", { refreshDiagnostics: true });
+    expect(await store.get(archived.id)).toEqual(archived);
+  });
+
   it("passes live invocation authority through the default-on Sessions board factory", async () => {
     const store = createWorkboardSqliteTestStore();
     await startEmptySessionsBoardService(store);

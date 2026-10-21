@@ -134,6 +134,8 @@ export class WorkboardStoreRuntime {
   protected trackCardStore(store: WorkboardCardStore): WorkboardCardStore {
     return {
       ...this.track(store),
+      refreshDiagnostics: (key, now) =>
+        this.trackMutation(() => store.refreshDiagnostics(key, now)),
       entries: (scope) => this.runOperation(() => store.entries(scope)),
       registerIfAbsent: (key, value) =>
         this.trackMutation(() => store.registerIfAbsent(key, value)),

@@ -39,6 +39,7 @@ export function createKernelStores(
     close: async () => kernel.close(),
     cards: {
       ...asyncKeyedStore(kernel.cards),
+      refreshDiagnostics: async (...args) => kernel.cards.refreshDiagnostics(...args),
       entries: async (scope) => kernel.cards.entries(scope),
       registerIfAbsent: async (...args) => kernel.cards.registerIfAbsent(...args),
       registerIfUpdatedAt: async (...args) => kernel.cards.registerIfUpdatedAt(...args),
