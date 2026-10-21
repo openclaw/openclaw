@@ -179,6 +179,32 @@ describe("native overlay presentation", () => {
     },
   );
 
+  it("preserves a consumer height budget when its stylesheet loads before the overlay", async () => {
+    await page.viewport(800, 700);
+    const style = document.createElement("style");
+    style.textContent = ".oc-menu.consumer-sized-menu { max-height: 500px; }";
+    document.head.prepend(style);
+    try {
+      mountMenu({
+        placement: "right-start",
+        panelClass: "consumer-sized-menu",
+        items: Array.from({ length: 24 }, (_, index) => ({
+          id: `action-${index}`,
+          label: `Action ${index + 1}`,
+        })),
+      });
+      Object.assign(trigger().style, { position: "fixed", left: "200px", top: "50px" });
+      await openMenu();
+      expect(expectWithinViewport(surface()).height).toBe(500);
+      await userEvent.keyboard("{End}");
+      expect(document.activeElement).toBe(item("Action 24"));
+      const last = item("Action 24").getBoundingClientRect();
+      expect(last.bottom).toBeLessThanOrEqual(surface().getBoundingClientRect().bottom);
+    } finally {
+      style.remove();
+    }
+  });
+
   it.each([
     ["ltr", "bottom"],
     ["rtl", "bottom"],
