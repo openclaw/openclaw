@@ -1355,6 +1355,14 @@ openclaw-toast-host[data-toast-placement="shell"]
   }
 }
 
+.app-toast--top-center {
+  left: 50%;
+  right: auto;
+  width: max-content;
+  max-width: min(370px, calc(100vw - 32px));
+  transform: translateX(-50%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .app-toast--bottom,
   .app-toast--anchored,

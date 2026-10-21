@@ -11,7 +11,7 @@ export type ToastOptions = {
   /** Positions a compact toast at the top center of the owning surface. */
   anchor?: Element;
   /** Bottom placement suits settings feedback without covering the page heading. */
-  placement?: "top" | "bottom";
+  placement?: "top" | "top-center" | "bottom";
   icon?: IconName;
   /** Agent identity shown for session notifications, using the shared avatar loader. */
   avatar?: AgentIdentity;

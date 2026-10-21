@@ -1,4 +1,4 @@
-import { createMemo, For, lazy, Loading, Show } from "solid-js";
+import { createMemo, lazy, Loading, Show } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ChatAttachmentRead } from "./chat-attachment-reads.ts";
@@ -31,7 +31,7 @@ export function AttachmentReadStatus(props: { pendingReads: number }) {
 
 export type AttachmentPreviewEntry = Pick<
   ChatAttachmentRead,
-  "attachment" | "state" | "progress" | "preparation" | "errorMessage"
+  "attachment" | "state" | "progress" | "preparation"
 > & {
   read: ChatAttachmentRead;
 };
@@ -51,30 +51,13 @@ export function AttachmentPreview(
       state: read.state,
       progress: read.progress,
       preparation: read.preparation,
-      errorMessage: read.errorMessage,
     }));
   });
-  const failures = createMemo(() => entries().filter((entry) => entry.state === "error"));
   return (
     <Show when={entries().length > 0}>
       <Loading>
         <AttachmentPreviewStrip entries={entries()} controls={props} />
       </Loading>
-      <Show when={failures().length > 0}>
-        <div class="chat-attachment-failures" role="alert">
-          <For each={failures()} keyed={(entry) => entry.attachment.id}>
-            {(entry) => (
-              <div>
-                {t(entry().errorMessage ?? "chat.attachments.readFailed", {
-                  names: entry().attachment.fileName ?? t("chat.attachments.attachedFile"),
-                  more: "",
-                })}
-              </div>
-            )}
-          </For>
-          <div class="chat-attachment-failures__help">{t("chat.attachments.retryHelp")}</div>
-        </div>
-      </Show>
     </Show>
   );
 }

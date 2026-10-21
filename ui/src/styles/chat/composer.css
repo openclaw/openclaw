@@ -1552,31 +1552,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   }
 }
 
-.chat-attachment-failures {
-  margin: 0 var(--chat-composer-editor-inset-inline) var(--chat-composer-editor-inset-block);
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--danger) 8%, transparent);
-  color: var(--danger);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
-.chat-attachment-failures__help {
-  margin-block-start: 4px;
-  color: var(--text);
-}
-
-.chat-attachment-error {
-  display: grid;
-  width: 100%;
-  height: 100%;
-  place-items: center;
-  border-radius: inherit;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .chat-attachment-loading,
   .chat-attachment-loading > span {
