@@ -557,7 +557,7 @@ function DestinationGroup(props: {
                     <span class="session-move__radio" aria-hidden="true" />
                   </button>
                   <Show when={configuration()}>
-                    {(renderConfig) => renderConfig()(row().profile!)}
+                    {(renderConfig) => <>{renderConfig()(row().profile!)}</>}
                   </Show>
                 </div>
               );
