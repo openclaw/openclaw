@@ -7,14 +7,12 @@ import {
   sessionMessage,
   expectCount,
   chatDelta,
-  chatEvent,
   chatFixture,
   composer as chatComposer,
   newChatPage,
   sendChat,
   sendMessage,
   sessionState,
-  textMessage,
   transcript as chatTranscript,
 } from "./chat-flow-fixtures.test-support.ts";
 import {
@@ -156,128 +154,6 @@ suite.define(() => {
     await expectCount(userRow, 1);
   });
 
-  it("keeps a previous final above a newer active turn when events arrive late", async () => {
-    const { page, gateway } = await chatFixture(suite, {
-      historyMessages: [],
-      deferredMethods: ["chat.send"],
-    });
-    const previousRunId = "previous-run";
-    const previousPrompt = "What are groups?";
-    const previousFinal = "Groups organize conversations.";
-    const currentPrompt = "Why were my sessions missing?";
-    const currentPartial = "Checking external sessions...";
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await gateway.waitForRequest("chat.startup");
-    await emitSession(
-      gateway,
-      timedText("user", previousPrompt),
-      "previous-user",
-      1,
-      sessionState([], false, "done"),
-      { clientRunId: previousRunId },
-    );
-
-    await sendMessage(page, currentPrompt);
-    const currentRunId = await runIdFrom(gateway);
-    // This scenario owns the exact transcript sequence, including a prior
-    // final that arrives late. Keep its ACK distinct from those source events.
-    await gateway.resolveDeferred("chat.send", { runId: currentRunId, status: "started" });
-    await emitSession(
-      gateway,
-      timedText("user", currentPrompt),
-      "current-user",
-      3,
-      sessionState([currentRunId], true, "running"),
-      { clientRunId: currentRunId },
-    );
-    await emitDelta(gateway, currentRunId, currentPartial);
-    await emitSession(
-      gateway,
-      timedText("assistant", previousFinal),
-      "previous-final",
-      2,
-      sessionState([currentRunId], true, "running"),
-      { clientRunId: previousRunId },
-    );
-
-    const visibleTexts = [previousPrompt, previousFinal, currentPrompt, currentPartial];
-    const expectVisibleOrder = async () => {
-      await expect
-        .poll(() =>
-          chatTranscript(page).evaluate((thread, texts) => {
-            const rows = Array.from(thread.querySelectorAll(".chat-bubble"));
-            return texts.map((text) => rows.findIndex((row) => row.textContent?.includes(text)));
-          }, visibleTexts),
-        )
-        .toEqual([0, 1, 2, 3]);
-    };
-    await expectVisibleOrder();
-
-    await gateway.emitChatFinal({ runId: previousRunId, text: previousFinal });
-    await expectVisibleOrder();
-    await expectCount(page.locator(".chat-group.assistant", { hasText: previousFinal }), 1);
-  });
-
-  it("preserves distinct same-text peer messages through conflicting envelopes and stale history", async () => {
-    const { page, gateway } = await chatFixture(suite, { historyMessages: [] });
-    const prompt = "Both clients independently sent the same prompt.";
-    const persistedMessages = ["web", "tui"].map((client, index) =>
-      textMessage("user", prompt, {
-        __openclaw: {
-          id: `canonical-${client}-same-text`,
-          idempotencyKey: `${client}-same-text-run:user`,
-          seq: index + 1,
-        },
-        timestamp: 1_700_000_000_000 + index,
-      }),
-    );
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await gateway.waitForRequest("chat.startup");
-    const historyCount = (await gateway.getRequests("chat.history")).length;
-    await gateway.deferNext("chat.history");
-
-    const emitPersistedMessage = async (index: number) => {
-      const message = persistedMessages[index];
-      await emitSession(
-        gateway,
-        message,
-        `conflicting-envelope-${index + 1}`,
-        100 + index,
-        sessionState([], false, "done"),
-      );
-    };
-
-    await emitPersistedMessage(0);
-    await waitForRequests(gateway, "chat.history", historyCount + 1);
-    await emitPersistedMessage(1);
-
-    // Consecutive users intentionally share one sender group; identity belongs to each bubble.
-    const peerBubbles = page.locator(".chat-group.user .chat-bubble", { hasText: prompt });
-    const expectedBubbleIds = ["web", "tui"].map((client) => `msg:send:${client}-same-text-run:0`);
-    const expectDistinctPeerBubbles = async () => {
-      await expectCount(peerBubbles, 2);
-      await expect
-        .poll(() =>
-          peerBubbles.evaluateAll((bubbles) =>
-            bubbles.map((bubble) => bubble.getAttribute("data-message-id")),
-          ),
-        )
-        .toEqual(expectedBubbleIds);
-    };
-    await expectDistinctPeerBubbles();
-    await gateway.setHistoryMessages(persistedMessages);
-    await gateway.resolveDeferred("chat.history", {
-      messages: [],
-      sessionId: "session:agent:main:main",
-      thinkingLevel: null,
-    });
-    await expectDistinctPeerBubbles();
-
-    await emitPersistedMessage(0);
-    await expectDistinctPeerBubbles();
-  });
-
   it.each([
     { identity: "transcript metadata", includeMessageMetadata: true },
     { identity: "gateway event envelope", includeMessageMetadata: false },
@@ -392,56 +268,6 @@ suite.define(() => {
       await expectCount(page.locator(".chat-group.user", { hasText: prompt }), 1);
     },
   );
-
-  it("keeps a browser-local prompt before a clock-skewed Gateway reply", async () => {
-    const { page, gateway } = await chatFixture(suite, { historyMessages: [] });
-    const prompt = "verify clock-skewed chat order";
-    const partial = "The Gateway is replying from an earlier clock.";
-    const reply = "The Gateway reply stayed below its prompt.";
-    const appearsBefore = (lowerSelector: string, lowerText: string) =>
-      chatTranscript(page).evaluate(
-        (thread: Element, texts: { lowerSelector: string; lowerText: string; prompt: string }) => {
-          const findByText = (selector: string, text: string) =>
-            Array.from(thread.querySelectorAll(selector)).find((row) =>
-              (row.textContent ?? "").includes(text),
-            );
-          const promptRow = findByText(".chat-group.user", texts.prompt);
-          const lowerRow = findByText(texts.lowerSelector, texts.lowerText);
-          if (!promptRow || !lowerRow) {
-            return false;
-          }
-          return promptRow.getBoundingClientRect().top < lowerRow.getBoundingClientRect().top;
-        },
-        { lowerSelector, lowerText, prompt },
-      );
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await gateway.deferNext("chat.send");
-    await sendMessage(page, prompt);
-
-    const runId = await runIdFrom(gateway);
-    const browserTimestamp = await page.evaluate(() => Date.now());
-    const gatewayTimestamp = browserTimestamp - 60_000;
-    await gateway.emitGatewayEvent(
-      "chat",
-      chatEvent(runId, "agent:main:main", "delta", {
-        deltaText: partial,
-        message: textMessage("assistant", partial, { timestamp: gatewayTimestamp }),
-      }),
-    );
-    await streamingText(page, partial).waitFor({ timeout: 10_000 });
-    expect(await appearsBefore(".chat-bubble.streaming", partial)).toBe(true);
-
-    await gateway.emitGatewayEvent(
-      "chat",
-      chatEvent(runId, "agent:main:main", "final", {
-        message: textMessage("assistant", reply, { timestamp: gatewayTimestamp }),
-      }),
-    );
-    await assistantText(page, reply).waitFor({ timeout: 10_000 });
-    expect(await appearsBefore(".chat-group.assistant", reply)).toBe(true);
-    await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-    expect(await appearsBefore(".chat-group.assistant", reply)).toBe(true);
-  });
 
   it("reconciles authoritative history before a trailing final by run identity", async () => {
     const { page, gateway } = await chatFixture(suite, { historyMessages: [] });

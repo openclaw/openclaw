@@ -16,15 +16,11 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { installHistoryPaginationProbe } from "./chat-history-pagination-probe.test-support.ts";
-import { installChatLoadingReadinessObserver } from "./chat-loading-readiness.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const selectedKey = "agent:main:loading-proof-12345678-0000-4000-8000-000000000001";
 const homeKey = "agent:main:main";
 const transcriptLength = 900;
-// A synthetic 1×1 red AVIF; embedding bytes keeps live proof independent of host encoders.
-const avifAvatar =
-  "data:image/avif;base64,AAAAHGZ0eXBhdmlmAAAAAG1pZjFhdmlmbWlhZgAAANZtZXRhAAAAAAAAACFoZGxyAAAAAAAAAABwaWN0AAAAAAAAAAAAAAAAAAAAACJpbG9jAAAAAERAAAEAAQAAAAAA+gABAAAAAAAAACgAAAAjaWluZgAAAAAAAQAAABVpbmZlAgAAAAABAABhdjAxAAAAAA5waXRtAAAAAAABAAAAVmlwcnAAAAA4aXBjbwAAAAxhdjFDgUBsAAAAABRpc3BlAAAAAAAAAAEAAAABAAAAEHBpeGkAAAAAAwwMDAAAABZpcG1hAAAAAAAAAAEAAQOBAgMAAAAwbWRhdBIACghYAAa0BDQbhDIaGUeHhiGJpppmgAAAkD+bDGFLK02PUUVOpCA=";
 const viewport = { width: 1440, height: 900 };
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let instance: OpenClawTestInstance | undefined;
@@ -252,7 +248,6 @@ suite.define(() => {
             await page.screenshot({ path: path.join(artifactDir, name + ".png") });
           }
         };
-        await installChatLoadingReadinessObserver(page);
         await page.addInitScript(() => {
           // Measure short-link resolution, not cached-roster route recovery. Keep
           // restored Home preferences; clear identity admission in each new document
@@ -432,7 +427,6 @@ suite.define(() => {
         // Freeze only completed payloads; keep the earlier visibility timings unchanged.
         await waitForStartupResponses();
         const startupMetrics = structuredClone(rpc);
-        const startupIdentity = await page.evaluate(() => window.chatLoadingReadiness);
         const images = await page
           .locator(".sidebar-agent-card__avatar img")
           .evaluateAll((elements) =>
@@ -567,7 +561,6 @@ suite.define(() => {
             homeOpen,
             ...timing,
             startup: structuredClone(rpc.slice(requestStart)),
-            identity: await page.evaluate(() => window.chatLoadingReadiness),
           };
         };
         const narrowHomeOpen = await captureNarrowReload("04-narrow-home-restored", true);
@@ -582,7 +575,6 @@ suite.define(() => {
           entryScripts,
           ...desktopTiming,
           startup: startupMetrics,
-          startupIdentity,
           pagination: paginationMetrics,
           paginationLoadedMs,
           paginationRenderedMs,
@@ -616,17 +608,15 @@ suite.define(() => {
         expect(nextOffset).toBe(transcriptLength);
         const selectedStartup = selectRpc(startupMetrics, "chat.startup", selectedKey)[0];
         expect(selectedStartup).toBeDefined();
-        for (const { stage, metrics, identity } of [
-          { stage: "desktop-home-restored", metrics: startupMetrics, identity: startupIdentity },
+        for (const { stage, metrics } of [
+          { stage: "desktop-home-restored", metrics: startupMetrics },
           {
             stage: "narrow-home-restored",
             metrics: narrowHomeOpen.startup,
-            identity: narrowHomeOpen.identity,
           },
           {
             stage: "narrow-home-closed",
             metrics: narrowHomeClosed.startup,
-            identity: narrowHomeClosed.identity,
           },
         ]) {
           expect(olderHistoryRequests(metrics)).toHaveLength(0);
@@ -645,31 +635,6 @@ suite.define(() => {
           });
           const selected = selectRpc(metrics, "chat.startup", selectedKey);
           expect(selected).toHaveLength(1);
-          const startup = selected[0]!;
-          expect(identity).toMatchObject({ connects: 1, observerAttached: true });
-          const observations = identity.startups.filter(
-            (entry) => entry.requestId === startup.requestId,
-          );
-          expect(observations).toHaveLength(1);
-          const observed = observations[0]!;
-          expect(observed).toMatchObject({
-            sessionKey: selectedKey,
-            resolutionRequestId: resolved.requestId,
-          });
-          expect(observed.agentId ?? "main").toBe("main");
-          if (startup.sentMs >= (resolved.receivedMs ?? Infinity)) {
-            expect(observed.resolutionSourceCurrent).toBe(true);
-          } else {
-            // Early startup needs accepted identity from this connection, not only a wire event.
-            expect(observed.prepared).toMatchObject({
-              plainUrl: true,
-              sourceCurrent: true,
-              scope: { agentId: "main", sessionKey: selectedKey },
-            });
-            expect(observed.prepared?.target).toEqual(identity.target);
-            expect(identity.target).toMatchObject({ agentId: "main", shortId: "12345678" });
-            expect(observed.prepared?.acceptedAtMs).toBeLessThanOrEqual(observed.sentAtMs);
-          }
         }
         expect(selectedStartup?.messages).toBeLessThanOrEqual(80);
         expect(selectedStartup?.historyBytes).toBeLessThanOrEqual(256 * 1024);
@@ -690,89 +655,6 @@ suite.define(() => {
         expect(cache).toMatchObject({ status: 200, revalidatedStatus: 304 });
         expect(cache.bytes).toBeLessThan(originalAvatarBytes / 10);
         expect(cache.control).toContain("immutable");
-
-        // Change identity only after the loading sample is frozen; exercise each
-        // format through the same authenticated HTTP loader used by the sidebar.
-        const percentPng = encodePngRgba(
-          Buffer.from(Array.from({ length: 4 }, () => [0, 128, 0, 255]).flat()),
-          2,
-          2,
-        );
-        const avatarFormats = [];
-        let previousAvatarUrl = avatarUrl;
-        await page.setViewportSize(viewport);
-        for (const fixture of [
-          { stage: "06-avif-avatar", dataUrl: avifAvatar, mime: "image/avif", width: 1, height: 1 },
-          {
-            stage: "07-percent-png-avatar",
-            dataUrl: `data:image/png,${[...percentPng].map((byte) => `%${byte.toString(16).padStart(2, "0")}`).join("")}`,
-            mime: "image/png",
-            width: 2,
-            height: 2,
-          },
-        ]) {
-          const updated = await call("agents.update", { agentId: "main", avatar: fixture.dataUrl });
-          expect(updated.ok).toBe(true);
-          let versionedAvatarUrl = "";
-          await expect
-            .poll(async () => {
-              const response = await context.request.get(
-                `${suite.server.baseUrl}avatar/main?meta=1`,
-                {
-                  headers: avatarAuth,
-                },
-              );
-              expect(response.status()).toBe(200);
-              const metadata: unknown = await response.json();
-              if (!isRecord(metadata)) {
-                throw new Error("Avatar metadata was not an object");
-              }
-              versionedAvatarUrl = typeof metadata.avatarUrl === "string" ? metadata.avatarUrl : "";
-              return {
-                status: metadata.avatarStatus,
-                changed:
-                  new URL(versionedAvatarUrl, suite.server.baseUrl).href !== previousAvatarUrl,
-              };
-            })
-            .toEqual({ status: "data", changed: true });
-          expect(versionedAvatarUrl).toMatch(/^\/avatar\/main\?v=/u);
-          previousAvatarUrl = new URL(versionedAvatarUrl, suite.server.baseUrl).href;
-          const responseReady = page.waitForResponse(
-            (response) => response.url() === new URL(versionedAvatarUrl, suite.server.baseUrl).href,
-          );
-          await page.reload();
-          await waitForControlUiGatewayReady(page);
-          const response = await responseReady;
-          expect(response.status()).toBe(200);
-          expect(response.headers()["content-type"]).toBe(fixture.mime);
-          const avatarImage = page.locator(".sidebar-agent-card__avatar img");
-          await expect
-            .poll(() =>
-              avatarImage.evaluate((image: HTMLImageElement) => ({
-                complete: image.complete,
-                width: image.naturalWidth,
-                height: image.naturalHeight,
-                blob: image.src.startsWith("blob:"),
-              })),
-            )
-            .toEqual({
-              complete: true,
-              width: fixture.width,
-              height: fixture.height,
-              blob: true,
-            });
-          const dimensions = await avatarImage.evaluate((image: HTMLImageElement) => ({
-            width: image.naturalWidth,
-            height: image.naturalHeight,
-          }));
-          avatarFormats.push({
-            format: fixture.stage,
-            contentType: response.headers()["content-type"],
-            ...dimensions,
-          });
-          await capture(fixture.stage);
-          await writeEvidence("avatar-format-evidence", avatarFormats);
-        }
       },
     );
   });

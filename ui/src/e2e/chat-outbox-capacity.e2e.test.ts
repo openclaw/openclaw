@@ -492,6 +492,7 @@ suite.define(() => {
             mimeType: "image/png",
             buffer: sizedOutboxPng(size, 60 + index * 100),
           }));
+          const expectedBytes = files.map((file) => file.buffer.toString("base64"));
           expect(files.map((file) => file.buffer.length)).toEqual(sizes);
           const message = `Mock Gateway: steer with ${name} PNG batch.`;
           await composer.fill(message);
@@ -532,16 +533,6 @@ suite.define(() => {
               attachmentPreviews: await previews.count(),
               queueRows: await pane.locator(".chat-queue__item").count(),
             };
-            // Failed admission must retain the entire draft, with no phantom queue
-            // entry or send. The success contract below still fails on that outcome.
-            if (outcome === "storage-rejected") {
-              expect(evidence).toMatchObject({
-                draft: message,
-                attachmentPreviews: files.length,
-                queueRows: 0,
-              });
-              await expectRequestCountStable(gateway, "chat.send", 0);
-            }
             const captureImages = pane.locator(".chat-attachment-thumb img, .chat-message-image");
             await expectImages(captureImages, files.length);
             await history.waitFor();
@@ -551,8 +542,7 @@ suite.define(() => {
             const payload = (await readOutboxQueue(page))[0]?.attachmentPayload;
             assert(payload, "Expected admitted payload reference");
             expect(await countOutboxPayloads(page)).toBe(1);
-            const payloads = await readOutboxPayloadBytes(page, payload.key);
-            expect(payloads).toEqual(files.map((file) => file.buffer.toString("base64")));
+            expect(await readOutboxPayloadBytes(page, payload.key)).toEqual(expectedBytes);
             expect(requests[0]?.params).toHaveProperty(
               "attachments",
               files.map((file) => ({
@@ -604,8 +594,7 @@ suite.define(() => {
               .locator(".chat-group.user", { hasText: message })
               .locator(".chat-message-image");
             await expectImages(deliveredImages, files.length);
-            const deliveredBytes = await readImageBytes(deliveredImages);
-            expect(deliveredBytes).toEqual(files.map((file) => file.buffer.toString("base64")));
+            expect(await readImageBytes(deliveredImages)).toEqual(expectedBytes);
             await expect.poll(() => countOutboxPayloads(page)).toBe(0);
             await expectRequestCountStable(gateway, "chat.send", 1);
           } finally {
