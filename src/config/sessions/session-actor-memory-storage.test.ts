@@ -1,12 +1,8 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type {
-  SessionActor,
-  SessionActorAuthority,
-  SessionActorStorage,
-} from "./session-actor-contract.js";
-import { createMemorySessionActorOwner } from "./session-actor-memory.js";
+import type { SessionActor, SessionActorStorage } from "./session-actor-contract.js";
+import { authority, memoryOwnerFixture } from "./session-actor-memory-family.test-support.js";
 import type {
   SessionActorStorageReads,
   SessionActorStorageWrites,
@@ -26,31 +22,20 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   }),
 }));
 
-const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
-const lifetime = { assertCurrent() {}, assertReadable() {} };
 const sessionKey = "agent:main:dashboard:incognito-storage";
 const siblingKey = "agent:main:dashboard:incognito-sibling";
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
-afterEach(() => {
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
-});
+const openFixture = memoryOwnerFixture({ agentId: "main", path: "/synthetic/incognito" });
 
 function storage(actor: SessionActor): SessionActorStorage {
   assert(actor.storage, "Memory actor has no storage capability");
   return actor.storage;
 }
 async function fixture(seed = false) {
-  const owner = createMemorySessionActorOwner({ agentId: "main", path: "/synthetic/incognito" });
-  owners.push(owner);
-  const acquire = (key = sessionKey) =>
-    owner.acquire({ database: owner.identity, sessionKey: key }, lifetime);
-  const actor = await acquire();
+  const current = await openFixture(sessionKey);
   if (seed) {
-    await create(storage(actor));
+    await create(current.store);
   }
-  return { owner, acquire, actor, store: storage(actor) };
+  return current;
 }
 function create(
   store: SessionActorStorage,

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openContextEngineTurnOutboxWorkerStore } from "../../agents/harness/context-engine-turn-outbox-store.js";
 import { drainContextEngineTurnOutbox } from "../../agents/harness/context-engine-turn-outbox.js";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -16,14 +16,18 @@ import {
 } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import { appendTranscriptMessage, upsertSessionEntryCore } from "./session-accessor.js";
-import type { SessionActorAuthority } from "./session-actor-contract.js";
 import { createSessionActorMemoryConversations } from "./session-actor-memory-conversation-contract.js";
+import {
+  actorLifetime as actorAuthority,
+  authority,
+  memoryOwnerFixture,
+  type MemoryOwner,
+} from "./session-actor-memory-family.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { failSessionActorMemoryPublication } from "./session-actor-memory-publication.test-support.js";
 import { mutateSessionActorMemorySideEffects } from "./session-actor-memory-side-effects.js";
 import { createSessionActorMemoryState } from "./session-actor-memory-state.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
-import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import type {
   SessionActorStorageOutcome,
@@ -44,8 +48,6 @@ vi.mock("node:worker_threads", async (original) => ({
   }),
 }));
 
-const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
 const env = { OPENCLAW_STATE_DIR: "/synthetic/side-data" };
 const location = {
   agentId: "main",
@@ -53,27 +55,17 @@ const location = {
 };
 const filter = { engineId: "test", isHeartbeat: false };
 const publishLimits = { maxEvents: 10, maxBytes: 10_000 };
-const actorAuthority = { assertCurrent() {}, assertReadable() {} };
-afterEach(() => {
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
-  memorySessionActorOwners.reset();
-});
+const openFixture = memoryOwnerFixture(location, () => memorySessionActorOwners.reset());
 
 function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
   assert(outcome.kind === "committed", "Expected a committed storage command");
   return outcome.value;
 }
 
-async function fixture(suffix = "one", owner = createMemorySessionActorOwner(location)) {
-  if (!owners.includes(owner)) {
-    owners.push(owner);
-  }
+async function fixture(suffix = "one", existingOwner?: MemoryOwner) {
   const sessionKey = `agent:main:dashboard:incognito-side-${suffix}`;
   const sessionId = `session-${suffix}`;
-  const actor = await owner.acquire({ database: owner.identity, sessionKey }, actorAuthority);
-  const storage = actor.storage!;
+  const { owner, actor, store: storage } = await openFixture(sessionKey, existingOwner);
   const binding = { ...location, actor, authority };
   const storageScope = {
     agentId: location.agentId,

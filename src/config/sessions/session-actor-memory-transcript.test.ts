@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type {
   SessionActorAppend,
-  SessionActorAuthority,
   SessionActorOutcome,
   SessionActorReceipt,
 } from "./session-actor-contract.js";
-import { createMemorySessionActorOwner } from "./session-actor-memory.js";
+import { authority, memoryOwnerFixture } from "./session-actor-memory-family.test-support.js";
 import type { SessionPendingInputWorkerFacts } from "./session-pending-input.types.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
@@ -16,13 +15,7 @@ const sessionKey = "agent:main:dashboard:incognito-transcript-test";
 const sessionId = "session-1";
 const path = ":memory:transcript-test";
 const scope = { agentId: "main", storePath: path, sessionKey, sessionId };
-const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
-afterEach(() => {
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
-});
+const openFixture = memoryOwnerFixture({ agentId: "main", path });
 
 function committed<Value>(outcome: SessionActorOutcome<Value>) {
   assert(outcome.kind === "committed", "Expected a committed command");
@@ -30,6 +23,7 @@ function committed<Value>(outcome: SessionActorOutcome<Value>) {
 }
 
 type MetadataInput = Extract<SessionActorAppend, { kind: "metadata" }>["input"];
+type TurnMessages = SessionTurnPlan["options"]["messages"];
 function messageInput(
   id: string,
   parentId: string,
@@ -86,7 +80,7 @@ function pendingFacts(
 }
 
 function turn(
-  messages: SessionTurnPlan["options"]["messages"],
+  messages: TurnMessages[number][] | TurnMessages[number],
   options: Partial<SessionTurnPlan["options"]> = {},
 ): SessionTurnPlan {
   return {
@@ -95,7 +89,7 @@ function turn(
     options: {
       expectedSessionId: sessionId,
       sessionFile: "/synthetic/transcript",
-      messages,
+      messages: Array.isArray(messages) ? messages : [messages],
       ...options,
     },
   };
@@ -105,12 +99,7 @@ async function fixture(
   initialEntry: Partial<InternalSessionEntry> = {},
   cliWriter?: SessionTurnPlan["cliWriter"],
 ) {
-  const owner = createMemorySessionActorOwner({ agentId: "main", path });
-  owners.push(owner);
-  const actor = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    { assertCurrent() {}, assertReadable() {} },
-  );
+  const { actor } = await openFixture(sessionKey);
   committed(
     await actor.acceptInput(
       {
@@ -120,13 +109,11 @@ async function fixture(
         lifecycle: {},
         turn: {
           ...turn(
-            [
-              {
-                message: { role: "user", content: "Hello", timestamp: 1 },
-                eventId: "user-1",
-                now: 1,
-              },
-            ],
+            {
+              message: { role: "user", content: "Hello", timestamp: 1 },
+              eventId: "user-1",
+              now: 1,
+            },
             {
               initialSessionEntry: { sessionId, incognito: true, updatedAt: 1, ...initialEntry },
             },
@@ -219,7 +206,7 @@ describe("memory actor transcript", () => {
   it("commits initial metadata after a sibling write and rolls back an incomplete pair", async () => {
     const { actor, metadata, write } = await fixture();
     const beforeSibling = actor.snapshot(authority)!.transcript.version;
-    await write([{ message: { role: "assistant", content: "Sibling" }, eventId: "sibling" }]);
+    await write({ message: { role: "assistant", content: "Sibling" }, eventId: "sibling" });
     const beforePair = actor.snapshot(authority)!.transcript.version;
     const initialModel = {
       type: "model_change" as const,
@@ -269,33 +256,27 @@ describe("memory actor transcript", () => {
     const original = { role: "assistant", content: "Original", idempotencyKey: "prepared" };
     const accepted = { ...original, content: "Prepared" };
     const before = actor.snapshot(authority)!.transcript.version;
-    await write([
-      {
-        message: original,
-        eventId: "prepared-1",
-        preparationVersion: before,
-        preparedMessage: { prepared: true, message: accepted },
+    await write({
+      message: original,
+      eventId: "prepared-1",
+      preparationVersion: before,
+      preparedMessage: { prepared: true, message: accepted },
+    });
+    const replay = await write({
+      message: original,
+      preparationVersion: before,
+      preparedMessage: {
+        prepared: true,
+        message: { ...original, content: "Must not replace the accepted message" },
       },
-    ]);
-    const replay = await write([
-      {
-        message: original,
-        preparationVersion: before,
-        preparedMessage: {
-          prepared: true,
-          message: { ...original, content: "Must not replace the accepted message" },
-        },
-      },
-    ]);
+    });
     expectMessage(replay.receipt, false, "prepared-1", accepted);
-    const skipped = await write([
-      {
-        message: { ...original, idempotencyKey: "suppressed" },
-        preparationVersion: before,
-        preparedMessage: { prepared: true, message: undefined },
-        expectedTranscript: before,
-      },
-    ]);
+    const skipped = await write({
+      message: { ...original, idempotencyKey: "suppressed" },
+      preparationVersion: before,
+      preparedMessage: { prepared: true, message: undefined },
+      expectedTranscript: before,
+    });
     expect(skipped.receipt.transcript.appendedMessages).toEqual([]);
     expect(skipped.receipt.transcript.after).toEqual(replay.receipt.transcript.after);
   });
@@ -311,15 +292,13 @@ describe("memory actor transcript", () => {
     const custody = pendingFacts(message, "input-2");
     committed(await stage("stage", custody));
     const plan = {
-      ...turn([
-        {
-          message: { ...message, content: "New host candidate" },
-          preparedMessage: {
-            prepared: false,
-            message: { ...message, content: "New prepared candidate" },
-          },
+      ...turn({
+        message: { ...message, content: "New host candidate" },
+        preparedMessage: {
+          prepared: false,
+          message: { ...message, content: "New prepared candidate" },
         },
-      ]),
+      }),
       custody,
     };
     const snapshot = actor.snapshot(authority);
@@ -345,7 +324,7 @@ describe("memory actor transcript", () => {
     expectMessage(replay.receipt, false, "input-2", message);
     expectPending(replay.receipt, "input-2", []);
     const relocation = {
-      ...turn([{ message, eventId: "relocated", idempotencyLookup: "caller-checked" }]),
+      ...turn({ message, eventId: "relocated", idempotencyLookup: "caller-checked" }),
       custody,
       relocation: "input-2",
     };
@@ -370,7 +349,7 @@ describe("memory actor transcript", () => {
     };
     const source = pendingFacts(message, "source-input", "collected-transcript");
     committed(await stage("stage-collected", source));
-    const plan = { ...turn([{ message }]), custody: { ...source, sources: [source] } };
+    const plan = { ...turn({ message }), custody: { ...source, sources: [source] } };
     const first = committed(await append(plan));
     expectPending(first.receipt, "collected-transcript", ["source-input"]);
     const replay = committed(await append(plan));
@@ -382,24 +361,20 @@ describe("memory actor transcript", () => {
   it("rebases active appends, preserves explicit branches, and rolls back a mixed atomic batch", async () => {
     const { actor, append, write } = await fixture();
     const firstMessage = { role: "assistant", content: "First", idempotencyKey: "first" };
-    await write([{ message: firstMessage, eventId: "first", parentId: "user-1" }]);
-    const rebased = await write([
-      {
-        message: { role: "assistant", content: "Rebased" },
-        eventId: "rebased",
-        parentId: "user-1",
-        appendIntent: "active-branch",
-      },
-    ]);
+    await write({ message: firstMessage, eventId: "first", parentId: "user-1" });
+    const rebased = await write({
+      message: { role: "assistant", content: "Rebased" },
+      eventId: "rebased",
+      parentId: "user-1",
+      appendIntent: "active-branch",
+    });
     expect(rebased.receipt.transcript.appendedMessages[0]?.effectiveParentId).toBe("first");
     expect(rebased.value).toMatchObject({ sequences: [3] });
-    const branched = await write([
-      {
-        message: { role: "assistant", content: "Branch" },
-        eventId: "branch",
-        parentId: "user-1",
-      },
-    ]);
+    const branched = await write({
+      message: { role: "assistant", content: "Branch" },
+      eventId: "branch",
+      parentId: "user-1",
+    });
     expect(branched.value).toMatchObject({ sequences: [2] });
     expect(actor.snapshot(authority)?.transcript.anchors.map((entry) => entry.entryId)).toEqual([
       "user-1",
@@ -444,15 +419,15 @@ describe("memory actor transcript", () => {
     );
     expect(actor.snapshot(authority)?.entry?.cliHistoryBoundary).toMatchObject({ maxSeq: 1 });
     const message = { role: "assistant", content: "CLI output" };
-    committed(await append({ ...turn([{ message, eventId: "cli-2" }]), cliWriter: writer }));
+    committed(await append({ ...turn({ message, eventId: "cli-2" }), cliWriter: writer }));
     expect(actor.snapshot(authority)?.entry?.cliHistoryBoundary).toMatchObject({ maxSeq: 2 });
     committed(
       await append({
-        ...turn([{ message, eventId: "other-account" }]),
+        ...turn({ message, eventId: "other-account" }),
         cliWriter: { ...writer, authFingerprint: "b".repeat(64) },
       }),
     );
-    committed(await append({ ...turn([{ message, eventId: "after-gap" }]), cliWriter: writer }));
+    committed(await append({ ...turn({ message, eventId: "after-gap" }), cliWriter: writer }));
     expect(actor.snapshot(authority)?.entry?.cliHistoryBoundary).toMatchObject({ maxSeq: 2 });
     expect(actor.snapshot(authority)?.transcript.anchors.at(-1)?.entryId).toBe("after-gap");
   });
@@ -460,12 +435,10 @@ describe("memory actor transcript", () => {
   it("commits a Goal with its admission turn and replays the receipt without another user message", async () => {
     const { actor, append } = await fixture();
     const plan = turn(
-      [
-        {
-          message: { role: "user", content: "Work on this Goal", idempotencyKey: "goal-input" },
-          eventId: "goal-input",
-        },
-      ],
+      {
+        message: { role: "user", content: "Work on this Goal", idempotencyKey: "goal-input" },
+        eventId: "goal-input",
+      },
       {
         preparedGoalId: "goal-1",
         sessionTurnMutation: {

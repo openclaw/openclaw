@@ -7,7 +7,6 @@ import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-tur
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
-import type { SessionActivitySummaryBatchResult } from "./activity-summary-source.types.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
@@ -16,6 +15,7 @@ import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-wr
 import type { SessionTranscriptTurnMessageAppend } from "./session-accessor.types.js";
 import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
+import { summaryFacts, transcriptTurnCommand } from "./session-actor-transcript.test-support.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
@@ -66,40 +66,13 @@ function appendMessage(
   commandId = eventId,
 ) {
   return actor.appendToolResult(
-    {
-      commandId,
-      phaseId: "turn",
-      turn: {
-        agentId: scope.agentId,
-        sessionKey: scope.sessionKey,
-        options: {
-          expectedSessionId: scope.sessionId,
-          sessionFile: "synthetic.jsonl",
-          messages: [{ eventId, message, now }],
-        },
-      },
-    },
+    transcriptTurnCommand(scope, commandId, [{ eventId, message, now }]),
     authority,
   );
 }
 
-function summaryFacts(source: SessionActivitySummaryBatchResult) {
-  assert(source, "Expected an activity summary source");
-  return {
-    previous: source.previous,
-    watermark: source.watermark,
-    covered: source.covered,
-    omitted: source.omitted,
-    totalMessages: source.snapshot.totalMessages,
-    activeLeafEntryId: source.snapshot.activeLeafEntryId,
-    generation: source.snapshot.snapshot.generation,
-    events: source.page.events.map(({ event }) => event),
-    scannedMessages: source.page.scannedMessages,
-  };
-}
-
-it("reuses durable summaries and accounting while refreshing transcript writes and resets", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+it("reuses durable summaries and accounting while refreshing transcript writes and resets", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     await captureRuntimeConfigAsyncReader()();
     const fixture = createSessionCompoundWorkerFixture();
     const scope = { ...fixture.scope, env };
@@ -513,11 +486,10 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
       discoveryReads.mockRestore();
       await actor.release();
     }
-  });
-});
+  }));
 
-it("slides durable context within its bounds and reloads only when an admission outlives resident coverage", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+it("slides durable context within its bounds and reloads only when an admission outlives resident coverage", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const fixture = createSessionCompoundWorkerFixture();
     const scope = { ...fixture.scope, env };
     const limits = { maxBytes: 4096, maxEvents: 3 };
@@ -660,5 +632,4 @@ it("slides durable context within its bounds and reloads only when an admission 
       historyReads.mockRestore();
       await actor.release();
     }
-  });
-});
+  }));
