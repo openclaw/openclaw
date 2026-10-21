@@ -26,6 +26,7 @@
   "node_modules/@solidjs/signals/dist/prod/core/lanes.js",
   "node_modules/@solidjs/signals/dist/prod/core/owner.js",
   "node_modules/@solidjs/signals/dist/prod/core/scheduler.js",
+  "node_modules/@solidjs/signals/dist/prod/core/verdict.js",
   "node_modules/@solidjs/signals/dist/prod/flatten.js",
   "node_modules/@solidjs/signals/dist/prod/map.js",
   "node_modules/@solidjs/signals/dist/prod/signals.js",

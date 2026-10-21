@@ -25,8 +25,6 @@ import {
 } from "../sqlite-database-admission.js";
 import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
 import { SqliteWorkerError } from "../sqlite-worker-contract.js";
-import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
-import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
 import { recordWorkerMessage } from "../worker-message-metrics.js";
 import { takeIdlePostgresBridge, retainIdlePostgresBridge } from "./idle-bridges.js";
 import {
@@ -268,14 +266,10 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       this.pendingWrite = true;
       beginSqliteDatabaseWrite(sqlPublicationAnchor(this), mutation === "unscoped");
     }
-    const autocommitWrite = !wasTransaction && mutated;
     if (!this.isTransaction && (mutated || wasTransaction)) {
       withSqlitePostCommitPublications(sqlPublicationAnchor(this), () => {
         // No pending mutation means no receipt, including empty writable transactions.
         this.finishWrite();
-        if (autocommitWrite && currentSqliteWorkerOperationAdmission.getStore()?.active) {
-          deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(this), {});
-        }
       });
     }
     this.outcomeUnknown = !this.isTransaction;
